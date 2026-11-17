@@ -65,6 +65,40 @@ fn gone(pid: i32) -> bool {
     process_state(pid).is_empty()
 }
 
+/// This Facade's version, the workspace's: the builds the tests make are named from it, so a
+/// release that changes the version changes none of them.
+const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
+/// The numbers of this Facade's version: major, minor and patch.
+fn version() -> [u64; 3] {
+    let numbers: Vec<u64> = CURRENT
+        .split(['.', '-', '+'])
+        .take(3)
+        .map(|number| number.parse().expect("a version number"))
+        .collect();
+    [numbers[0], numbers[1], numbers[2]]
+}
+
+/// A version newer than this Facade's: its next patch.
+fn newer() -> String {
+    let [major, minor, patch] = version();
+    format!("{major}.{minor}.{}", patch + 1)
+}
+
+/// A version older than this Facade's.
+fn older() -> String {
+    match version() {
+        [major, minor, patch] if patch > 0 => format!("{major}.{minor}.{}", patch - 1),
+        [major, minor, _] if minor > 0 => format!("{major}.{}.0", minor - 1),
+        [major, _, _] => format!("{}.0.0", major - 1),
+    }
+}
+
+/// A pre-release of this Facade's version.
+fn pre_release() -> String {
+    format!("{CURRENT}-rc1")
+}
+
 /// The keeper as its lock records it: its process ID and birth value.
 fn keeper(home: &TestHome) -> facade_base::process::ProcessIdentity {
     let (pid, birth) = home
@@ -320,7 +354,7 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     let (w1, w2) = (home.start_fake("w1"), home.start_fake("w2"));
     let (before, daemon) = (keeper(&home), home.daemon_pid().unwrap());
     // A build older than the one before, unchanged for an hour.
-    let older = home.path.join("core/bin/0.1.9");
+    let older = home.path.join(format!("core/bin/{}", older()));
     std::fs::create_dir_all(&older).unwrap();
     std::fs::write(older.join(program_name("facade")), "").unwrap();
     let hour_ago = std::time::SystemTime::now() - secs(3600);
@@ -349,7 +383,7 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
             .collect::<std::collections::BTreeSet<_>>()
     };
     let files = screen_files();
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let listed = home
         .command(&program)
         .arg("list")
@@ -364,7 +398,10 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
         home.keeper_log()
     );
     assert!(
-        said.starts_with("facade: Facade 0.2.1 took over from 0.2.0; 2 agents kept running ("),
+        said.starts_with(&format!(
+            "facade: Facade {} took over from {CURRENT}; 2 agents kept running (",
+            newer()
+        )),
         "{said}"
     );
     assert!(
@@ -379,7 +416,11 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
             hello["keeper"]["pid"].as_u64(),
             hello["keeper"]["build"].as_str()
         ),
-        (Some("0.2.1"), Some(before.pid as u64), Some("0.2.0")),
+        (
+            Some(newer().as_str()),
+            Some(before.pid as u64),
+            Some(CURRENT)
+        ),
         "the keeper stays as it was: {hello}"
     );
     assert_ne!(
@@ -408,7 +449,7 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     home.start_fake("w3");
     assert_eq!(
         launcher_build(&home.path).as_deref(),
-        Some("0.2.1"),
+        Some(newer().as_str()),
         "{}",
         home.keeper_log()
     );
@@ -434,7 +475,7 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     // Healthy, the new build keeps the one before it, and an older one goes.
     assert!(
         home.path
-            .join("core/bin/0.2.0")
+            .join(format!("core/bin/{CURRENT}"))
             .join(program_name("facade"))
             .exists()
             && !older.exists(),
@@ -466,7 +507,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
         .spawn()
         .unwrap();
     home.wait_for_gate("command-connected");
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let asking = home
         .command(&program)
         .arg("list")
@@ -486,7 +527,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     assert!(sent.status.success(), "{}{}", stdout(&sent), stderr(&sent));
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
@@ -526,7 +567,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
         .unwrap();
     // The agent is held as its message's Enter goes, and the daemon before hands over meanwhile.
     home.wait_for_gate("message-enter");
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let asking = home
         .command(&program)
         .arg("list")
@@ -538,7 +579,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     assert!(
         wait_until(secs(10), || home
             .daemon_log()
-            .contains("handing over to build 0.2.1")),
+            .contains(&format!("handing over to build {}", newer()))),
         "{}",
         home.daemon_log()
     );
@@ -548,7 +589,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     assert!(sent.status.success(), "{}{}", stdout(&sent), stderr(&sent));
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
@@ -613,7 +654,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
             == 1
     };
     assert!(wait_until(secs(10), kept), "the send waits on the draft");
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let asking = home
         .command(&program)
         .arg("list")
@@ -644,7 +685,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     assert!(sent.status.success(), "{}{}", stdout(&sent), stderr(&sent));
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
@@ -728,7 +769,7 @@ fn start_asking_from_its_screen(home: &TestHome, name: &str) {
 fn an_agent_asking_from_its_screen_still_waits_for_the_person_after_a_takeover() {
     let home = TestHome::new("askstakeover");
     start_asking_from_its_screen(&home, "ada");
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let listed = home
         .command(&program)
         .arg("list")
@@ -736,7 +777,7 @@ fn an_agent_asking_from_its_screen_still_waits_for_the_person_after_a_takeover()
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
@@ -790,7 +831,7 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
             .collect::<std::collections::BTreeSet<_>>()
     };
     let files = screen_files();
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let asking = home
         .command(&program)
         .arg("list")
@@ -804,7 +845,7 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
     home.release_gate("agent-quiesce");
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
@@ -831,7 +872,7 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
         programs.display(),
         home.path_with_test_programs()
     );
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     // Starts Antigravity by `facade`, one build's program, in a home with none of the person's
     // settings.
     let own = home.project.parent().unwrap().join("home");
@@ -862,7 +903,11 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
     let plugin = home.project.join(".agents/plugins/facade");
     let version = || std::fs::read_to_string(plugin.join("plugin.json")).unwrap_or_default();
     start(&test_binaries().facade, "ada");
-    assert!(version().contains("Facade core 0.2.0"), "{}", version());
+    assert!(
+        version().contains(&format!("Facade core {CURRENT}")),
+        "{}",
+        version()
+    );
     let listed = home
         .command(&program)
         .arg("list")
@@ -870,24 +915,24 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
     assert!(
-        version().contains("Facade core 0.2.0"),
+        version().contains(&format!("Facade core {CURRENT}")),
         "the run keeps its plugin: {}",
         version()
     );
     start(&program, "bea");
     assert!(
-        version().contains("Facade core 0.2.0"),
+        version().contains(&format!("Facade core {CURRENT}")),
         "a start beside the run leaves it: {}",
         version()
     );
     stop("ada");
     assert!(
-        version().contains("Facade core 0.2.0"),
+        version().contains(&format!("Facade core {CURRENT}")),
         "bea's run uses it still: {}",
         version()
     );
@@ -899,7 +944,7 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
     );
     start(&program, "cy");
     assert!(
-        version().contains("Facade core 0.2.1"),
+        version().contains(&format!("Facade core {}", newer())),
         "the next start places the new build's: {}",
         version()
     );
@@ -948,7 +993,7 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
             == 2
     };
     assert!(wait_until(secs(10), kept), "both sends wait on the draft");
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let listed = home
         .command(&program)
         .arg("list")
@@ -956,13 +1001,16 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
     // The drain does not wait for the sends: the old daemon ends well within its 3 seconds of
     // handing over.
-    let handing = logged_at(&home.daemon_log(), "handing over to build 0.2.1");
+    let handing = logged_at(
+        &home.daemon_log(),
+        &format!("handing over to build {}", newer()),
+    );
     let ended = millis_between(handing, logged_at(&home.keeper_log(), "ended with code 0"));
     assert!(
         ended < 2500,
@@ -993,13 +1041,13 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
     );
 }
 
-/// A running Facade whose version is a pre-release, such as 0.2.0-rc1, is taken over by no build: a
-/// command of 0.2.0 asks nothing, says nothing, and works with it. The command and the daemon
-/// decide by one rule.
+/// A running Facade whose version is a pre-release of this version, such as this version with
+/// `-rc1`, is taken over by no build: a command of this version asks nothing, says nothing, and
+/// works with it. The command and the daemon decide by one rule.
 #[test]
 fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     let home = TestHome::new("prerelease");
-    let candidate = program_of_build(&home, "0.2.0-rc1");
+    let candidate = program_of_build(&home, &pre_release());
     let detached = home
         .command(&candidate)
         .args(["daemon", "--detach"])
@@ -1007,7 +1055,7 @@ fn a_pre_release_that_runs_is_taken_over_by_no_build() {
         .output()
         .unwrap();
     assert!(detached.status.success(), "{}", stderr(&detached));
-    assert_eq!(home.hello_result().unwrap()["build"], "0.2.0-rc1");
+    assert_eq!(home.hello_result().unwrap()["build"], pre_release());
     let listed = home
         .command(&test_binaries().facade)
         .arg("list")
@@ -1021,7 +1069,7 @@ fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     );
     assert_eq!(
         home.hello_result().unwrap()["build"],
-        "0.2.0-rc1",
+        pre_release(),
         "nothing taken over"
     );
 }
@@ -1035,14 +1083,19 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
     let (before, daemon) = (keeper(&home), home.daemon_pid().unwrap());
     let launcher = launcher_build(&home.path).expect("the launchers point at a build");
     let mut wire = connect(&home);
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     for (build, why) in [
         (
-            "0.2.0",
-            "0.2.0 is of this Facade's own version, 0.2.0: builds of one version do not take over \
-             from each other",
+            CURRENT.to_string(),
+            format!(
+                "{CURRENT} is of this Facade's own version, {CURRENT}: builds of one version do not \
+                 take over from each other"
+            ),
         ),
-        ("0.1.9", "0.1.9 is not newer than this Facade, 0.2.0"),
+        (
+            older(),
+            format!("{} is not newer than this Facade, {CURRENT}", older()),
+        ),
     ] {
         let args = json!({
             "program": program, "build": build, "daemon_protocol": [1, 1],
@@ -1057,7 +1110,7 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
                 answer["error"]["data"]["reason"].as_str(),
                 answer["error"]["message"].as_str()
             ),
-            (Some("refused"), Some(why)),
+            (Some("refused"), Some(why.as_str())),
             "{answer}"
         );
     }
@@ -1101,7 +1154,7 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
         "{:?}",
         home.submitted_messages()
     );
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let asking = home
         .command(&program)
         .arg("list")
@@ -1131,12 +1184,15 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains("took over from 0.2.0; 1 agent kept running"),
+            && stderr(&listed).contains(&format!("took over from {CURRENT}; 1 agent kept running")),
         "{}",
         stderr(&listed)
     );
     assert!(
-        term.wait_for_output(secs(10), "Facade 0.2.1 takes over; reconnecting"),
+        term.wait_for_output(
+            secs(10),
+            &format!("Facade {} takes over; reconnecting", newer())
+        ),
         "{}",
         term.text()
     );
@@ -1168,7 +1224,7 @@ fn an_older_build_s_command_and_server_work_with_the_running_facade() {
     let home = TestHome::new("olderbuild");
     home.start_fake("w1");
     let (before, daemon) = (keeper(&home), home.daemon_pid().unwrap());
-    let program = program_of_build(&home, "0.1.9");
+    let program = program_of_build(&home, &older());
     let listed = home
         .command(&program)
         .arg("list")
@@ -1186,14 +1242,14 @@ fn an_older_build_s_command_and_server_work_with_the_running_facade() {
         &home,
         "a1",
         &[
-            ("FACADE_TEST_BUILD", "0.1.9"),
+            ("FACADE_TEST_BUILD", &older()),
             ("FACADE_TEST_PROGRAM", &mcp),
         ],
     );
     let listed = server.call("list_agents", json!({}));
     assert_eq!(listed["status"], "success", "{listed}");
     assert_eq!((keeper(&home), home.daemon_pid()), (before, Some(daemon)));
-    assert_eq!(home.hello_result().unwrap()["build"], "0.2.0");
+    assert_eq!(home.hello_result().unwrap()["build"], CURRENT);
 }
 
 /// Messages sent without pause through facade-mcp and `facade send` while a newer Facade takes over
@@ -1259,7 +1315,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         wait_until(secs(10), kept),
         "both messages to {held} wait on its draft"
     );
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let sending = AtomicBool::new(true);
     let (listed, by_tool, by_command) = std::thread::scope(|scope| {
         let tool = scope.spawn(|| {
@@ -1302,7 +1358,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         (listed, tool.join().unwrap(), command.join().unwrap())
     });
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
@@ -1395,7 +1451,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         agents.iter().all(|agent| alive(&agent.process)),
         "every CLI runs on"
     );
-    for build in ["0.2.0", "0.2.1"] {
+    for build in [CURRENT.to_string(), newer()] {
         let program = home
             .path
             .join("core")
@@ -1414,7 +1470,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
     let hello = home.hello_result().unwrap();
     assert_eq!(
         (hello["keeper"]["pid"].as_u64(), hello["build"].as_str()),
-        (Some(before.pid as u64), Some("0.2.1"))
+        (Some(before.pid as u64), Some(newer().as_str()))
     );
     assert_ne!(hello["pid"].as_i64(), Some(daemon as i64));
 }
@@ -1458,7 +1514,7 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     for gate in gates {
         home.wait_for_gate(gate);
     }
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let asking = run(&program, &["list"]);
     home.wait_for_gate("upgrade-draining");
     home.release_gate("upgrade-draining");
@@ -1482,11 +1538,11 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     }
     let asked = asking.wait_with_output().unwrap();
     assert!(
-        asked.status.success() && stderr(&asked).contains("took over from 0.2.0"),
+        asked.status.success() && stderr(&asked).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&asked)
     );
-    assert_eq!(home.hello_result().unwrap()["build"], "0.2.1");
+    assert_eq!(home.hello_result().unwrap()["build"], newer());
     let state = |name: &str| home.list_line(name).unwrap_or_default();
     assert!(
         !state("started").contains("ended") && state("stopped").contains("ended: stopped"),
@@ -1550,7 +1606,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         let pid = run(&name)["pid"].as_i64().unwrap() as i32;
         runs.push((cli, name, process_identity(pid)));
     }
-    let program = program_of_build(&home, "0.2.1");
+    let program = program_of_build(&home, &newer());
     let listed = home
         .command(&program)
         .arg("list")
@@ -1558,7 +1614,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains("took over from 0.2.0"),
+        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
         "{}",
         stderr(&listed)
     );
@@ -1574,7 +1630,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             run(name)
         );
     }
-    assert_eq!(home.hello_result().unwrap()["build"], "0.2.1");
+    assert_eq!(home.hello_result().unwrap()["build"], newer());
     // What each run was given, its arguments, its environment and its files, names Facade's
     // programs by their launchers only.
     let mut hooks = Vec::new();
@@ -1608,9 +1664,9 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         }
         let files = given.len() - before_files;
         for text in &given {
-            for build in ["0.2.0", "0.2.1"] {
+            for build in [CURRENT.to_string(), newer()] {
                 assert!(
-                    !text.contains(&bin.join(build).display().to_string()),
+                    !text.contains(&bin.join(&build).display().to_string()),
                     "{cli}'s run names build {build}'s folder: {text}"
                 );
             }
@@ -1634,7 +1690,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
                 .map(|line| (cli.to_string(), name.clone(), line)),
         );
     }
-    let launcher = || launcher_build(&home.path).as_deref() == Some("0.2.1");
+    let launcher = || launcher_build(&home.path).as_deref() == Some(newer().as_str());
     assert!(
         wait_until(secs(15), launcher),
         "{:?}\n{}",
@@ -1644,9 +1700,9 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     // The person deletes the build before; the servers that started from it run on, and the hooks
     // run the new build. Windows deletes no program while it runs, so there the build stays.
     #[cfg(unix)]
-    std::fs::remove_dir_all(bin.join("0.2.0")).unwrap();
+    std::fs::remove_dir_all(bin.join(CURRENT)).unwrap();
     assert!(!hooks.is_empty(), "no run's hook runs Facade's launcher");
-    let ran = home.folder().join("build-0.2.1/ran.log");
+    let ran = home.folder().join(format!("build-{}/ran.log", newer()));
     let hooks_ran = || {
         std::fs::read_to_string(&ran)
             .unwrap_or_default()
@@ -1750,7 +1806,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         }
         if matches!(cli.as_str(), "codex" | "muse") {
             assert!(
-                own(skill).ends_with("Written by Facade core 0.2.0.\n"),
+                own(skill).ends_with(&format!("Written by Facade core {CURRENT}.\n")),
                 "{cli}'s skill is the build before's: {}",
                 own(skill)
             );

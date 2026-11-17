@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -13,7 +14,7 @@ import { PLACEHOLDERS } from '../clis/describe';
 import { VendorHistory } from '../clis/history';
 import { ConversationFile } from '../record/conversations';
 import { WorkspacePins } from './pins';
-import { isDamagedWindowIdentity, isUnreadableWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { isDamagedWindowIdentity, isUnreadableWindowIdentity, WINDOW_TERMINALS_COMMAND, type WindowIdentity } from '../base/windowIdentity';
 import { createToolServices } from '../contract/tools';
 import { deliveryReceipt } from '../contract/facts';
 import { AgentService } from '../core/agents';
@@ -31,7 +32,7 @@ import { AgentExecution } from './execution/agentExecution';
 import { RECONCILE_MS } from './execution/executionSession';
 import { AgentLog } from '../record/log';
 import { MessageFile } from '../record/messages';
-import { facadeHome } from '../record/paths';
+import { facadeHome, facadeRoot } from '../record/paths';
 import { pruneResults, writeResult } from '../record/results';
 import { instructionsFor, launchContextText } from '../schema/instructions';
 import { RetainedFile } from '../record/retained';
@@ -57,6 +58,10 @@ import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch, watchSettingsFile } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
+import { chooseEngine, oldRunsRunning, retireWhenDone, rustEngineSetting, watchRustEngineSetting } from './engine';
+import { activateRust } from './rust/index';
+import { FACADE_PROGRAM } from './rust/types';
+import { facadeInTerminals } from './rust/environment';
 
 declare const FACADE_TEST_MODE: boolean;
 
@@ -157,14 +162,27 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		const missing = showComponentMissing(context, session);
 		return async () => missing.dispose();
 	}
-	// Remote workspace transitions replace the session ID and workspace state. The local component carries the native window's
-	// identity; a different window cannot acquire that identity merely by opening the same folders or a copied workspace file.
-	const folders = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.toString());
-	const uri = workspaceUri();
-	const kept = context.workspaceState.get<unknown>(WORKSPACE_KEY);
-	const record = workspaceRecord(uri, home, kept, { token: identity.token, folders });
-	const handedOver = record.handedOver;
-	const claim = nextOwnerClaim(record.key, home);
+	// One engine for this window, chosen now and kept until it reloads: core where it can run, else the extension's own
+	context.subscriptions.push(watchRustEngineSetting());
+	// Whether core could run this window but the old engine still has runs: only then does a reload switch it, once they are gone
+	let switchable = rustEngineSetting() === 'auto' && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
+	if (await chooseEngine(context, home) === 'rust') {
+		try {
+			return await activateRust(context, {
+				root: facadeRoot(), home, identity,
+				keep: log => { const opened = openWorkspaceRecord(context, home, identity); return { state: keepWorkspaceState(context, home, identity, opened, log).workspaceState, key: opened.record.key, claim: opened.claim, handedOver: opened.record.key === opened.handedOver }; },
+				openSettings: async () => { await openSettingsOf(context.extension.id); },
+				openSettingsFile: settings => registerOpenSettingsFile(settings)
+			});
+		} catch (err) {
+			switchable = false;
+			// A core that cannot run here - WSL 1, a container that forbids process descriptors - leaves this window on the old engine
+			void vscode.commands.executeCommand('setContext', 'facade.engine', 'old');
+			void vscode.window.showWarningMessage(vscode.l10n.t("Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.", messageOf(err), 'facade.rustEngine'));
+		}
+	}
+	facadeInTerminals(context.environmentVariableCollection, undefined);
+	const { folders, uri, record, handedOver, claim } = openWorkspaceRecord(context, home, identity);
 	const terminalOwner = { session, claim };
 	if (await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...terminalOwner, kind: 'activate', handedOver: record.key === handedOver }) !== true) {
 		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
@@ -172,24 +190,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const agentLog = new AgentLog(record.dir);
 	let eventContext: Readonly<Record<string, unknown>> = {};
 	const log: LogPort = { event: text => agentLog.event(text), fact: (event, fields) => agentLog.fact(event, { ...eventContext, ...fields }) };
-	// A proven handover or an exact-URI takeover uses the shared owner's state, including in a fresh profile. A stale
-	// Memento at a previously visited destination cannot overwrite the current order and choices beside those runs.
-	const carried = record.key === handedOver || record.binding.key === record.key;
-	if (carried) {
-		log.event(`This window claims its agents and saved workspace state again for ${uri}.`);
-	}
-	const writeIfOwned = (write: () => void) => writeAsOwner(claim, home, write);
-	// The exact saved URI follows a proven handover; stale local state cannot overwrite a concurrent canonical move.
-	writeIfOwned(() => keepWorkspaceUri(uri, record, home));
-	const workspaceState = new KeptWorkspaceState(context.workspaceState, path.join(record.dir, 'workspace-state.json'), carried, text => log.event(text), writeIfOwned);
-	try {
-		writeIfOwned(() => keepWindowKey(identity.token, record.key, folders, home, Date.now(), uri));
-	} catch (err) {
-		log.event(`Could not note which agents this window claims: ${messageOf(err)}`);
-	}
-	if (workspaceState.get(WORKSPACE_KEY) !== record.key) {
-		void Promise.resolve(workspaceState.update(WORKSPACE_KEY, record.key)).catch(err => log.event(`Could not keep the workspace's key: ${messageOf(err)}`));
-	}
+	const { workspaceState, writeIfOwned } = keepWorkspaceState(context, home, identity, { folders, uri, record, handedOver, claim }, log);
 	const locations = createLocationService(workspaceState, log);
 	const execution = new AgentExecution({
 		owner: record.key,
@@ -293,6 +294,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		warmUp: (run, warmUp): Promise<void> => input.warmUp(run, warmUp),
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`
 	});
+	// Under `auto`, the person's starts here stop once no run of the old engine is left: a reload switches this window
+	const retired = switchable ? retireWhenDone(agents, () => oldRunsRunning(home), log) : undefined;
+	const uiAgents = retired?.agents ?? agents;
 	// This window's address for the tools: it may change on reload, while its runs keep their IDs (ARCHITECTURE-2.2)
 	// The name of a window that has no folder or workspace open, as agents and message headers name it
 	const window = { id: network.self, label: vscode.workspace.name ?? vscode.l10n.t('Window') };
@@ -304,7 +308,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		get: run => agents.get(run),
 		inspectInput: (run, adapter) => execution.inspectInput(run, adapter),
 		typeText: (run, text, enter, lead) => execution.typeText(run, text, enter, lead),
-		pressKeys: (run, keys) => execution.pressKeys(run, keys),
+		pressKeys: (run, keys, unlessTyped) => execution.pressKeys(run, keys, unlessTyped),
 		readScreen: (run, lines) => execution.readScreen(run, lines),
 		log: text => log.event(text)
 	});
@@ -358,7 +362,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	// restores again, one restore at a time: no started agent is left out (RULES-4.1)
 	void ready.then(async () => {
 		try { await locations.refresh(); } catch (err) { log.event(`Could not refresh locations before restoring pins: ${messageOf(err)}`); }
-		if (!disposed) { await agents.restorePins(); }
+		if (!disposed) { await uiAgents.restorePins(); }
 	}).catch(err => log.event(`Could not restore pinned agents: ${messageOf(err)}`));
 	let restoring: Promise<unknown> = ready;
 	const found = execution.onDidFindRuns(() => {
@@ -435,7 +439,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		settingsChanged,
 		...watchSettingsFile(settings.file, () => { scanLocations(); settingsChanged.fire(); }),
 		...registerUi({
-			agents,
+			agents: uiAgents,
 			// Open Settings and New Agent's gear: the editor's Settings at Facade Code's section, whose Edit in facade.json link opens the
 			// file (CONFIGURATION-1.2)
 			openSettings: async () => {
@@ -460,28 +464,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			motion: reduced => execution.systemMotion(reduced),
 			...(identity.remote ? { remote: identity.remote } : {})
 		}),
-		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
-		// The link of Facade's item in the editor's Settings: the settings file, made first where there is none (CONFIGURATION-1.2, 1.3)
-		vscode.commands.registerCommand(COMMANDS.openSettingsFile, async () => {
-			const generated = settings.ensure();
-			if (generated.kind === 'failed') {
-				void vscode.window.showErrorMessage(reasonText(generated.problem.said, generated.problem.text));
-				return;
-			}
-			if (generated.kind === 'conflict') {
-				void vscode.window.showErrorMessage(notMadeText(settings.shown, generated.problems));
-				// The old values to fix are the editor's own settings: on this computer, or the remote machine's (CONFIGURATION-6.2)
-				await vscode.commands.executeCommand(vscode.env.remoteName ? 'workbench.action.openRemoteSettingsFile' : 'workbench.action.openSettingsJson');
-				return;
-			}
-			try {
-				await vscode.window.showTextDocument(vscode.Uri.file(settings.file), { preview: false });
-			} catch (err) {
-				// A file the editor cannot open - a folder of its name, one it may not read - is said with why (CONFIGURATION-1.2)
-				// {0} is the settings file; {1} the editor's reason
-				void vscode.window.showErrorMessage(vscode.l10n.t("{0} could not be opened: {1}", settings.shown, messageOf(err)));
-			}
-		}),
+		...registerWorktreeCommands({ locations, worktrees, agents: uiAgents, notifyError: (text, options) => human.error(text, options), log }),
+		registerOpenSettingsFile(settings),
 		registerShowLaunch(clis, locations, log, settings, identity.remote),
 		registerAgentsLog(agentLog.file),
 		contact,
@@ -510,12 +494,77 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		tools.dispose();
 		attention.dispose();
 		messages.dispose();
+		retired?.dispose();
 		agents.dispose();
 		// One that throws does not keep the rest open (ARCHITECTURE-2.4)
 		disposeAll(disposables, err => log.event(`Could not dispose part of the window: ${messageOf(err)}`));
 		locations.dispose();
 		execution.dispose();
 	};
+}
+
+/** The record this window's workspace is kept under, found or made for its folders (ARCHITECTURE-2.2, 3.1). */
+function openWorkspaceRecord(context: vscode.ExtensionContext, home: string, identity: WindowIdentity) {
+	// Remote workspace transitions replace the session ID and workspace state. The local component carries the native window's
+	// identity; a different window cannot acquire that identity merely by opening the same folders or a copied workspace file.
+	const folders = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.toString());
+	const uri = workspaceUri();
+	const kept = context.workspaceState.get<unknown>(WORKSPACE_KEY);
+	const record = workspaceRecord(uri, home, kept, { token: identity.token, folders });
+	const handedOver = record.handedOver;
+	const claim = nextOwnerClaim(record.key, home);
+	return { folders, uri, record, handedOver, claim };
+}
+
+/**
+ * The window's workspace state, kept beside its record too, so that Pins, order and choices follow the workspace when a folder
+ * window becomes a workspace or another window takes it over (ARCHITECTURE-2.2, 3.1).
+ */
+function keepWorkspaceState(context: vscode.ExtensionContext, home: string, identity: WindowIdentity, opened: ReturnType<typeof openWorkspaceRecord>, log: LogPort) {
+	const { folders, uri, record, handedOver, claim } = opened;
+	// A proven handover or an exact-URI takeover uses the shared owner's state, including in a fresh profile. A stale
+	// Memento at a previously visited destination cannot overwrite the current order and choices beside those runs.
+	const carried = record.key === handedOver || record.binding.key === record.key;
+	if (carried) {
+		log.event(`This window claims its agents and saved workspace state again for ${uri}.`);
+	}
+	const writeIfOwned = (write: () => void) => writeAsOwner(claim, home, write);
+	// The exact saved URI follows a proven handover; stale local state cannot overwrite a concurrent canonical move.
+	writeIfOwned(() => keepWorkspaceUri(uri, record, home));
+	const workspaceState = new KeptWorkspaceState(context.workspaceState, path.join(record.dir, 'workspace-state.json'), carried, text => log.event(text), writeIfOwned);
+	try {
+		writeIfOwned(() => keepWindowKey(identity.token, record.key, folders, home, Date.now(), uri));
+	} catch (err) {
+		log.event(`Could not note which agents this window claims: ${messageOf(err)}`);
+	}
+	if (workspaceState.get(WORKSPACE_KEY) !== record.key) {
+		void Promise.resolve(workspaceState.update(WORKSPACE_KEY, record.key)).catch(err => log.event(`Could not keep the workspace's key: ${messageOf(err)}`));
+	}
+	return { workspaceState, writeIfOwned };
+}
+
+/** The link of Facade's item in the editor's Settings: the settings file, made first where there is none (CONFIGURATION-1.2, 1.3). */
+function registerOpenSettingsFile(settings: FacadeSettings): vscode.Disposable {
+	return vscode.commands.registerCommand(COMMANDS.openSettingsFile, async () => {
+		const generated = settings.ensure();
+		if (generated.kind === 'failed') {
+			void vscode.window.showErrorMessage(reasonText(generated.problem.said, generated.problem.text));
+			return;
+		}
+		if (generated.kind === 'conflict') {
+			void vscode.window.showErrorMessage(notMadeText(settings.shown, generated.problems));
+			// The old values to fix are the editor's own settings: on this computer, or the remote machine's (CONFIGURATION-6.2)
+			await vscode.commands.executeCommand(vscode.env.remoteName ? 'workbench.action.openRemoteSettingsFile' : 'workbench.action.openSettingsJson');
+			return;
+		}
+		try {
+			await vscode.window.showTextDocument(vscode.Uri.file(settings.file), { preview: false });
+		} catch (err) {
+			// A file the editor cannot open - a folder of its name, one it may not read - is said with why (CONFIGURATION-1.2)
+			// {0} is the settings file; {1} the editor's reason
+			void vscode.window.showErrorMessage(vscode.l10n.t("{0} could not be opened: {1}", settings.shown, messageOf(err)));
+		}
+	});
 }
 
 /**

@@ -4,6 +4,7 @@
 //! reads `unknown`. A reading comes from the screen alone and never means that input may be typed.
 
 mod paste;
+mod probe;
 
 use facade_base::daemon::{HiddenRows, InputInfo, InputState};
 use facade_screen::{ScreenView, VisibleCell};
@@ -12,6 +13,7 @@ use regex::Regex;
 use crate::{BoxInput, Editor, Frame, InputRule, Menu, Prompt, Scrolled};
 
 pub use paste::{is_own_draft, is_same_draft, settle_time, with_paste_text};
+pub use probe::{ProbeVerdict, restored, shape_of, space_taken, verdict_of};
 
 /// Reads the input box `rule` describes from `view`. Never waits. An open synchronized update, a
 /// cursor off the screen, or a hidden terminal cursor where the CLI draws no cursor of its own
@@ -27,12 +29,54 @@ pub fn read_input(rule: &InputRule, view: &ScreenView) -> InputInfo {
 /// A draft whose rows the reader cannot tell apart has no text. The text stays inside Facade:
 /// inspect never shows it and nothing saves it.
 pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<String>) {
+    let read = read_box(rule, view);
+    (read.info, read.draft)
+}
+
+/// An input box as its reader found it: what [`read_draft`] gives, with its first row and whether
+/// that row may be a hint or a draft.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoxReading {
+    pub info: InputInfo,
+    pub draft: Option<String>,
+    /// The input's first row and the cursor, where the reader found the input.
+    pub line: Option<InputLine>,
+    /// Unknown only because its first row, alone in the input with the cursor where it starts, is
+    /// colored text that may be a hint or a draft: a space typed and taken back tells them apart.
+    pub unsure: bool,
+}
+
+/// An input's first row from the column its input starts at to its last cell that draws
+/// something, and the cursor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputLine {
+    pub row: usize,
+    pub start: usize,
+    pub cells: Vec<LineCell>,
+    /// A row of the input under the first draws something.
+    pub rest: bool,
+    /// Column and row.
+    pub cursor: (usize, usize),
+}
+
+/// One cell of an input's first row.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LineCell {
+    pub text: String,
+    pub dim: bool,
+    pub colored: bool,
+}
+
+/// Reads the input box as [`read_draft`] does, with its first row and whether it is unsure of it.
+pub fn read_box(rule: &InputRule, view: &ScreenView) -> BoxReading {
     let screen = Screen::new(view, rule.menus());
     let Reading {
         state,
         evidence,
         hidden,
         draft,
+        line,
+        unsure,
     } = screen.read(rule, view);
     let info = InputInfo {
         state,
@@ -40,7 +84,12 @@ pub fn read_draft(rule: &InputRule, view: &ScreenView) -> (InputInfo, Option<Str
         mechanism: Some(rule.mechanism()),
         hidden,
     };
-    (info, draft)
+    BoxReading {
+        info,
+        draft,
+        line,
+        unsure,
+    }
 }
 
 /// What a reader found, before the rule's mechanism is added.
@@ -50,6 +99,17 @@ struct Reading {
     hidden: Option<HiddenRows>,
     /// The draft as its rows draw it.
     draft: Option<String>,
+    line: Option<InputLine>,
+    unsure: bool,
+}
+
+impl Reading {
+    fn with_line(self, line: InputLine) -> Reading {
+        Reading {
+            line: Some(line),
+            ..self
+        }
+    }
 }
 
 fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
@@ -58,6 +118,38 @@ fn reading(state: InputState, evidence: impl Into<String>) -> Reading {
         evidence: evidence.into(),
         hidden: None,
         draft: None,
+        line: None,
+        unsure: false,
+    }
+}
+
+/// The input line of `cells`, row `row` from column `start`, `rest` saying whether the input's
+/// other rows draw something.
+fn line_of(
+    cells: &Cells,
+    row: usize,
+    start: usize,
+    rest: bool,
+    cursor: (usize, usize),
+) -> InputLine {
+    let from: Vec<&VisibleCell> = cells.iter().filter(|cell| cell.column >= start).collect();
+    let end = from
+        .iter()
+        .rposition(|cell| draws(cell))
+        .map_or(0, |at| at + 1);
+    InputLine {
+        row,
+        start,
+        rest,
+        cursor,
+        cells: from[..end]
+            .iter()
+            .map(|cell| LineCell {
+                text: cell.text.clone(),
+                dim: cell.dim,
+                colored: cell.colored,
+            })
+            .collect(),
     }
 }
 
@@ -109,7 +201,7 @@ fn all_space(cells: &Cells) -> bool {
     cells.iter().all(|cell| !draws(cell))
 }
 
-/// Text a person or the CLI wrote, as opposed to a dim placeholder.
+/// Text a person or the CLI wrote, as opposed to a dim hint.
 fn written(cell: &VisibleCell) -> bool {
     draws(cell) && !cell.dim
 }
@@ -118,8 +210,8 @@ fn holds_writing(lines: &[&Cells]) -> bool {
     lines.iter().any(|line| line.iter().any(written))
 }
 
-/// Dim and coloured text only, with some coloured: a hint some CLIs draw where their input starts,
-/// which a coloured draft looks just like.
+/// Dim and colored text only, with some colored: a hint some CLIs draw where their input starts,
+/// which a colored draft looks just like until a space typed and taken back tells them apart.
 fn hint_like(cells: &Cells) -> bool {
     let colored = |cell: &VisibleCell| written(cell) && cell.colored;
     cells.iter().any(colored)
@@ -281,9 +373,22 @@ impl<'a> Screen<'a> {
     }
 
     /// The input box that starts on row `prompt`, after the prompt and its gap, and ends before
-    /// row `end`. Written text anywhere is a draft; at most a dim placeholder on the prompt row,
-    /// with the cursor where the input starts, is empty.
+    /// row `end`. Written text anywhere is a draft; at most a dim hint on the prompt row, with the
+    /// cursor where the input starts, is empty. The reading comes with the prompt row.
     fn after_prompt(&self, prompt: usize, end: usize, what: &str, scrolled: &Scrolled) -> Reading {
+        let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
+        let line = line_of(self.row(prompt), prompt, 2, !rest_blank, self.cursor);
+        self.prompt_reading(prompt, end, what, scrolled)
+            .with_line(line)
+    }
+
+    fn prompt_reading(
+        &self,
+        prompt: usize,
+        end: usize,
+        what: &str,
+        scrolled: &Scrolled,
+    ) -> Reading {
         let place = format!("{what} at {}", row_span(prompt + 1, end));
         // Wrapped rows start under the prompt's two columns.
         let lines: Vec<&Cells> = (prompt..end).map(|y| self.from(y, 2)).collect();
@@ -291,9 +396,12 @@ impl<'a> Screen<'a> {
         let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
         let at_start = self.cursor_at(2, prompt);
         if at_start && rest_blank && hint_like(first) {
-            return unknown(format!(
-                "{place} shows coloured text where its input starts, which can be a hint or a draft"
-            ));
+            return Reading {
+                unsure: true,
+                ..unknown(format!(
+                    "{place} shows colored text where its input starts, a hint or a draft"
+                ))
+            };
         }
         if holds_writing(&[first]) || (prompt + 1..end).any(|y| holds_writing(&[self.row(y)])) {
             let mark = |line: &Cells, pattern: &Regex| match lines.len() {
@@ -308,7 +416,7 @@ impl<'a> Screen<'a> {
         }
         if !rest_blank {
             return unknown(format!(
-                "{place} holds dim text under its prompt row, which is no placeholder"
+                "{place} holds dim text under its prompt row, which is no hint"
             ));
         }
         if !at_start {
@@ -318,7 +426,7 @@ impl<'a> Screen<'a> {
         }
         match all_space(first) {
             true => usable(format!("{place} is empty")),
-            false => usable(format!("{place} is empty but for its dim placeholder")),
+            false => usable(format!("{place} is empty but for its dim hint")),
         }
     }
 
@@ -442,6 +550,21 @@ impl<'a> Screen<'a> {
             ));
         }
         let lines: Vec<&Cells> = (upper + 1..lower).map(|y| self.row(y)).collect();
+        let rest = lines[1..].iter().any(|line| !all_space(line));
+        let line = line_of(lines[0], upper + 1, 0, rest, self.cursor);
+        self.editor_reading(rule, upper, lower, &lines, &place)
+            .with_line(line)
+    }
+
+    fn editor_reading(
+        &self,
+        rule: &Editor,
+        upper: usize,
+        lower: usize,
+        lines: &[&Cells],
+        place: &str,
+    ) -> Reading {
+        let column = self.cursor.0;
         // One row, with the cursor in its first columns and nothing drawn before it.
         let at_start = lines.len() == 1
             && column <= 3
@@ -449,16 +572,19 @@ impl<'a> Screen<'a> {
                 .iter()
                 .any(|cell| cell.column < column && draws(cell));
         if at_start && hint_like(lines[0]) {
-            return unknown(format!(
-                "{place} shows coloured text where its input starts, which can be a hint or a draft"
-            ));
+            return Reading {
+                unsure: true,
+                ..unknown(format!(
+                    "{place} shows colored text where its input starts, a hint or a draft"
+                ))
+            };
         }
-        if holds_writing(&lines) {
+        if holds_writing(lines) {
             let marks = (
                 counted(&rule.above, &self.lines[upper]),
                 counted(&rule.below, &self.lines[lower]),
             );
-            return drafted(&place, marks, &lines);
+            return drafted(place, marks, lines);
         }
         if lines.len() > 1 || column > 3 {
             return unknown(format!(

@@ -354,5 +354,18 @@
 	"1 agent": "1 個のエージェント",
 	"{0} agents": "{0} 個のエージェント",
 	"Open Settings": "設定を開く",
-	"Edit in facade.json": "facade.json で編集"
+	"Edit in facade.json": "facade.json で編集",
+	"The engine changes only after you reload the window.": "エンジンはウィンドウの再読み込み後に切り替わります。",
+	"All agents on the old engine have ended. Reload this window to switch.": "旧エンジンのエージェントはすべて終了しました。切り替えるには、このウィンドウを再読み込みしてください。",
+	"Facade's settings file has an error": "Facade の設定ファイルにエラーがあります",
+	"Facade could not find what you asked for": "指定された項目が Facade で見つかりませんでした",
+	"Facade cannot do this right now": "Facade では現在この操作を実行できません",
+	"This CLI does not support this action": "この CLI ではこの操作はサポートされていません",
+	"Could not create the worktree": "作業ツリーを作成できませんでした",
+	"The agent has ended": "エージェントは終了しています",
+	"Too much input at once": "一度に入力する量が多すぎます",
+	"Facade is updating; try again in a moment": "Facade を更新しています。しばらくしてからもう一度お試しください",
+	"Facade does not allow this": "Facade ではこの操作は許可されていません",
+	"Something went wrong in Facade": "Facade でエラーが発生しました",
+	"Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.": "Facade core を起動できませんでした: {0}。このウィンドウは旧エンジンを使用しています。Facade が Rust エンジンを試さないようにするには、{1} を `off` に設定してウィンドウを再読み込みしてください。"
 }

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'extension/**'
+      - 'core/**'
       - 'docs/extension/**'
       - '.github/workflows/extension-check.yml'
   workflow_dispatch:
@@ -19,27 +20,28 @@ permissions:
 
 jobs:
   verify:
-    name: Extension on ${{ matrix.target }}
+    name: Extension on ${{ matrix.target }}, ${{ matrix.engine }} engine
+    # Every target runs the editor journeys on the old engine (`facade.rustEngine` off); the four with core's programs run them
+    # again on the Rust engine in a job of their own, which builds and tests nothing else.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
-          - os: windows-latest
-            target: win32-x64
-          - os: windows-11-arm
-            target: win32-arm64
-          - os: macos-latest
-            target: darwin-arm64
-          - os: macos-15-intel
-            target: darwin-x64
+          - { os: ubuntu-latest, target: linux-x64, engine: old }
+          - { os: ubuntu-latest, target: linux-x64, engine: rust }
+          - { os: ubuntu-24.04-arm, target: linux-arm64, engine: old }
+          - { os: ubuntu-24.04-arm, target: linux-arm64, engine: rust }
+          - { os: windows-latest, target: win32-x64, engine: old }
+          - { os: windows-11-arm, target: win32-arm64, engine: old }
+          - { os: macos-latest, target: darwin-arm64, engine: old }
+          - { os: macos-latest, target: darwin-arm64, engine: rust }
+          - { os: macos-15-intel, target: darwin-x64, engine: old }
+          - { os: macos-15-intel, target: darwin-x64, engine: rust }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
       FACADE_PACKAGE_TARGET: ${{ matrix.target }}
+      CARGO_INCREMENTAL: '0'
     defaults:
       run:
         shell: bash
@@ -62,16 +64,38 @@ jobs:
           import { packageTarget } from './scripts/native.mjs';
           console.info(`Building and testing ${packageTarget(process.env.FACADE_PACKAGE_TARGET)}`);
           JS
+      # Core's programs go in every package but Windows': the toolchain core pins, on Linux for musl, the target scripts/core.mjs builds
+      - name: Rust toolchain for core
+        if: runner.os != 'Windows'
+        working-directory: core
+        run: rustup toolchain install
+      # rustup target add acts on the toolchain of the directory it runs in: core's pinned one, which builds, not the runner's default
+      - name: musl for core on Linux
+        if: runner.os == 'Linux'
+        working-directory: core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add "$(uname -m)-unknown-linux-musl"
+          echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run compile
       - run: npm test
+        if: matrix.engine == 'old'
       - name: Release script tests
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.engine == 'old'
         run: node --test scripts/release.test.mjs
       - run: node scripts/l10n.mjs check
+        if: matrix.engine == 'old'
       - run: python ../docs/extension/audit/check_spec.py
+        if: matrix.engine == 'old'
       - run: npm run package -- --target "$FACADE_PACKAGE_TARGET"
+        if: matrix.engine == 'old'
       - run: npm run test:package
+        if: matrix.engine == 'old'
+      # The Rust engine's journeys need the built extension and core's programs (scripts/build-it.mjs), not the packages
+      - run: npm run bundle
+        if: matrix.engine == 'rust'
       - name: Download official VS Code for isolated tests
         run: |
           node <<'JS'
@@ -82,18 +106,23 @@ jobs:
           JS
       - name: Isolated editor journeys on Linux
         if: runner.os == 'Linux'
+        env:
+          FACADE_IT_ENGINE: ${{ matrix.engine }}
         run: xvfb-run -a npm run test:integration 2>&1 | tee build/integration.log
       - name: Isolated editor journeys on Windows and macOS
         if: runner.os != 'Linux'
+        env:
+          FACADE_IT_ENGINE: ${{ matrix.engine }}
         run: npm run test:integration 2>&1 | tee build/integration.log
       - name: Keep editor test output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: editor-tests-${{ matrix.target }}
+          name: editor-tests-${{ matrix.target }}-${{ matrix.engine }}
           path: extension/build/integration.log
           if-no-files-found: ignore
       - name: Keep tested packages
+        if: matrix.engine == 'old'
         uses: actions/upload-artifact@v4
         with:
           name: extension-${{ matrix.target }}

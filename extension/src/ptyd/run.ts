@@ -283,6 +283,8 @@ export class Run {
 	/** How its screen is read as its status while its program reports nothing, where its adapter names a reader (CLIS-2.3). */
 	private readonly screenReader: ScreenReader | undefined;
 	private screenRead: ReturnType<typeof setTimeout> | undefined;
+	/** How many times the person wrote to it: a key pressed `unlessTyped` goes only while this still is that number (RULES-1.4). */
+	private typed = 0;
 	/** The number of the last output chunk: each is numbered as it is drawn, so that a reattach never shows one twice. */
 	private seq = 0;
 	/** What was written to the headless terminal and is not drawn yet, in UTF-8 bytes. */
@@ -587,11 +589,12 @@ export class Run {
 		}
 	}
 
-	/** What the person typed in the window that shows the run: straight to its process (EXPERIENCE-2.1). */
+	/** What the person typed in the window that shows the run: straight to its process (EXPERIENCE-2.1), and counted (RULES-1.4). */
 	write(data: string): void {
 		if (!this.writable) {
 			return;
 		}
+		this.typed++;
 		if (hasCtrlC(data)) {
 			this.ctrlCAt = Date.now();
 		}
@@ -639,9 +642,10 @@ export class Run {
 
 	/**
 	 * Presses `keys` in order, each in the modes the program has as it is pressed, in turn: one after another, but for the pause a
-	 * lone Escape needs before the key after it ({@link ESCAPE_GAP_MS}).
+	 * lone Escape needs before the key after it ({@link ESCAPE_GAP_MS}). With `unlessTyped`, each key goes only while the person's
+	 * writes still number that many, compared in the same step it is sent in: none lands after a write of theirs (RULES-1.4, CLIS-2.1).
 	 */
-	keys(keys: readonly string[]): Promise<InputEffect> {
+	keys(keys: readonly string[], unlessTyped?: number): Promise<InputEffect> {
 		return this.queue.add(async alive => {
 			if (!this.pty) {
 				// No program yet to take them (ARCHITECTURE-2.3)
@@ -655,6 +659,10 @@ export class Run {
 				await this.parsed();
 				if (!alive()) {
 					return { outcome: sent ? 'partial' : 'not_applied', reason: 'ended', keysSent: sent };
+				}
+				// Nothing awaited from here to the send: no write of the person's comes in between
+				if (unlessTyped !== undefined && this.typed !== unlessTyped) {
+					return { outcome: sent ? 'partial' : 'not_applied', typedFirst: true, keysSent: sent };
 				}
 				if (keys[sent] === 'Ctrl+C') {
 					this.ctrlCAt = Date.now();
@@ -720,14 +728,14 @@ export class Run {
 
 	/**
 	 * Its ordinary-message input as `adapter` reads it from the screen, once what was written is drawn (CLIS-2.1, RULES-1.4): read,
-	 * never probed with a key. An ended run's is unknown.
+	 * never probed with a key, with how many times the person wrote to it by then. An ended run's is unknown.
 	 */
 	async inspect(adapter: string): Promise<InputReading> {
 		await this.parsed();
 		if (this.exited || this.disposed) {
 			return { state: 'unknown', evidence: 'its process ended' };
 		}
-		return readInput(inputScreenOf(this.terminal), adapter);
+		return { ...readInput(inputScreenOf(this.terminal), adapter), typed: this.typed };
 	}
 
 	/** Keeps the alternate screen as it stands as the last frame its program drew there. */

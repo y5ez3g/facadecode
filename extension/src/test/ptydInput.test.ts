@@ -145,3 +145,40 @@ suite('ptyd input (COLLABORATION-1.2, RULES-1.10)', () => {
 		});
 	});
 });
+
+suite('ptyd: keys pressed unless the person wrote first (RULES-1.4, CLIS-2.1)', () => {
+	function started() {
+		let output!: (data: string) => void;
+		const written: string[] = [];
+		const pty = { pid: 1, onData(listener: typeof output) { output = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); } };
+		const { Run } = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/run')>(require.resolve('../ptyd/run'));
+		const run = new Run({ run: 'probe', owner: 'test', file: 'fixture', args: [], cwd: '/unused', env: {}, cols: 80, rows: 24, meta: {} });
+		return { run, written, output: (data: string) => output(data) };
+	}
+
+	test('a reading counts the person\'s writes, and keys pressed with that count go in', async () => {
+		const { run, written } = started();
+		try {
+			const before = await run.inspect('muse-frame');
+			run.write('a');
+			const after = await run.inspect('muse-frame');
+			assert.deepStrictEqual([before.typed, after.typed], [0, 1]);
+			written.splice(0);
+			assert.deepStrictEqual(await run.keys(['Space', 'Backspace'], after.typed), { outcome: 'applied', keysSent: 2 });
+			assert.deepStrictEqual(written, [' ', '\x7f']);
+		} finally { run.dispose(); }
+	});
+
+	test('a write of the person\'s that comes while a key waits for the screen to be parsed goes in, and the key does not', async () => {
+		const { run, written, output } = started();
+		try {
+			const { typed } = await run.inspect('muse-frame');
+			// Output still being parsed: the key waits for it before it is sent
+			output('❯ hello there\r\n'.repeat(50));
+			const backspace = run.keys(['Backspace'], typed);
+			run.write('x');
+			assert.deepStrictEqual(await backspace, { outcome: 'not_applied', typedFirst: true, keysSent: 0 });
+			assert.deepStrictEqual(written, ['x'], 'the person\'s character alone');
+		} finally { run.dispose(); }
+	});
+});

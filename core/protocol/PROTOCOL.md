@@ -50,8 +50,8 @@ Wait for a successful `hello` before using the connection. In this example, `→
 message. The redraw's base64 value is abbreviated.
 
 ```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[1,1],"build":"0.2.0","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"build":"0.2.0","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[1,1],"build":"1.4.2","kind":"terminal"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"build":"1.4.2","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"command":["claude"],"cwd":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","name":"Pixel","cli":"claude","cwd":"/Users/me/project","window_id":"terminal","location_id":"loc-5f3c2a1b9e8d7c60","pid":5001,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:22:05.123Z","root":"a1","yolo":false,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"agent":"a1"}}}
@@ -76,6 +76,11 @@ An agent ID is `a` followed by a number, unique within its Facade home. The next
 each number is assigned. Numbering continues across restarts while the home's files remain. Separate homes count separately;
 deleting a home resets its counter. `a3`, `#a3`, and `3` select the same agent. A unique name also works, with or without `@`,
 and so does a name followed by its ID, as Facade writes a message's sender, such as `@Pixel #a3`: the ID decides.
+
+An `ide` client can send `numbers_given` in `hello`, the highest agent and message numbers its editor gave before, each at
+most 2^53 - 1. The daemon keeps both counters in `core/facade.db` before responding: future numbers exceed its own and the
+editor's; lower values change nothing. A number above that limit, or `numbers_given` from another client kind, refuses
+`hello` with `invalid_argument`.
 
 A missing, empty, or blank name gets a name from the settings file's `names`, else from the built-in names: at random, one no
 agent of its window has, ignoring case and surrounding spaces; once every one is taken, or for a list of none, the agent's ID,
@@ -143,6 +148,11 @@ starts, resumes, or is recovered. `unknown` is a state of its own: clients decod
 it as unrecognized, not as `unknown`. No input state means the CLI may be typed into.
 
 ### Resume
+
+`agent.start` with `session` continues that CLI session as a new agent with its own number, using the same arguments as
+`agent.resume`; the agent's `session` still comes from what its run reports. A CLI whose rule does not resume sessions, and a
+program outside the settings file, refuse it with `unsupported` before anything starts, and an `mcp` client cannot
+supply it. Prompt, worktree, request ID and name work as for any start.
 
 `agent.resume` starts an ended agent's CLI again in its terminal, continuing the agent's `session` with the CLI's own resume
 arguments. The agent keeps its ID, name, record, `cwd`, `created_at`, and screen, and takes no agent number. The CLI gets the
@@ -423,15 +433,16 @@ what became of the message is not known to it. The next daemon goes on deliverin
 
 Every agent is in a window: the editor window it was started or last resumed in, or the terminal window, `terminal`, which
 holds the agents started or resumed from a terminal, guests among them. `AgentInfo.window_id` names the window, and
-`location_id` the agent's folder, its location. `agent.start` and `agent.resume` take `window_id`; without it, the agent runs
-in the terminal window, where any folder will do. In an editor window, the agent's folder must be one of the window's
-locations; a window that is not there now is `unavailable`. A resume keeps the agent's folder, so an editor window without
-it among its locations refuses the resume.
+`location_id` its location: the agent's folder, or the innermost location the folder is inside. `agent.start` and
+`agent.resume` take `window_id`; without it, the agent runs in the terminal window, where any folder will do. In an editor
+window, the agent's folder must be one of the window's locations or a folder inside one; a window that is not there now is
+`unavailable`. A resume keeps the agent's folder, so an editor window where it is neither a location nor inside one refuses
+the resume.
 
 An editor window connects as an `ide` client, which acts for the person. Its `hello` describes the window in `window`: its ID,
 which stays the same across its reloads, its name, its `environment`, `local` or a remote authority, the `workspace` key its
-agents are kept under, its folders, and its Git branch prefix. `window.update` sends the whole description again whenever any of
-it changes, and asks the daemon to read the window's locations again, as the client does when a repository of the window
+agents are kept under, its folders, its Git branch prefix, and optionally its terminal `colors` and `env`.
+`window.update` sends the whole description again whenever any of it changes, and asks the daemon to read the window's locations again, as the client does when a repository of the window
 changes. A window's locations are its folders and every checkout of a Git repository one of them is in: the repository's main
 checkout first, then the folder if it is another place, then the other worktrees, each place once, its path with symbolic
 links resolved. The daemon reads them with Git when the window describes itself and after a worktree is made there, never on a
@@ -439,14 +450,21 @@ timer; a read that fails keeps the window's locations as last read and says so i
 
 The `windows` topic lists every editor window that is there or still holds agents, and the terminal window while it holds
 running agents, with their locations; for a client that acts for an agent, each window also lists the CLIs a start by that
-agent can run. `worktree.create` makes a worktree from a checkout of a window, with a new branch, at
+agent can run. An `ide` client also gets `clis` and `settings_problem` for each window that gave `env`: the programs are
+looked for on that environment's `PATH`, with relative entries taken relative to the window's first folder. A window with
+no folder lists no CLI. The environment is that of the first folder's terminals; a start sends its own location's
+environment. A snapshot or change reads the settings file as it is now. The window's `env` stays in memory alone, never
+in the store, a log or a response.
+
+`worktree.create` makes a worktree from a checkout of a window, with a new branch, at
 `<main folder>.worktrees/<branch>`, and answers with the new location; it keeps whatever a failure made, and says what in the
 error's `data.kept`.
 
 A window is there while one of its connections is open. Once its last one closes, its agents wait for it: 90 seconds for a
 `local` window, five minutes for another. A connection of the same window within that time keeps them, and so does a window of
 the same `workspace`, which takes them over from a window with no connection left; the first window, back, has none of them.
-Once the time runs out, the window's running agents end as `agent.stop` ends them, and their records stay. An agent ends too
+Once the time runs out, the window's running agents end as `agent.stop` ends them, and their records stay. A later window of the
+same `workspace` takes over those ended agents too, so its client can resume or remove them. An agent ends too
 once its location is known to be gone: its window no longer has the folder that brought it, or Git no longer lists its worktree
 and its folder no longer exists. A failed read or a disconnected window proves nothing.
 
@@ -576,8 +594,14 @@ provide no response.
 ### Terminal queries and redraws
 
 The daemon's headless terminal replies to supported cursor position, device status, device attributes, and mode queries.
-It does not reply to colour, clipboard, XTGETTCAP, DECRQSS, or kitty graphics queries. Viewers never receive terminal queries,
-so they cannot send a second reply. Using an editor's theme for colour replies is planned.
+An editor window's `colors` give replies to OSC 10, 11 and 12: foreground, background and cursor, each `#rrggbb`; a
+malformed color refuses `hello` or `window.update` with `invalid_argument`. Each 8-bit channel is written twice, so
+`#1e1e1e` replies `rgb:1e1e/1e1e/1e1e`, ended as the query was, with BEL or ST. A color left out gets no reply, and neither
+does any color query from an agent of the terminal window. Agents use their current window's colors from their start or
+resume, after a takeover, and from the next query after `window.update` when the editor's theme changes.
+
+The terminal does not reply to clipboard, XTGETTCAP, DECRQSS, or kitty graphics queries. Viewers never receive terminal
+queries, so they cannot send a second reply.
 
 A redraw restores cells, attributes, wraps, cursor, saved cursor, pen, charsets, and modes from alacritty. Facade also tracks
 and restores the scrolling region, tab stops, active charset, and modifyOtherKeys state, which alacritty keeps private.
@@ -624,8 +648,8 @@ longer than the terminal's buffer leaves the CLI inside it; the next daemon type
 still be inside a paste.
 
 To its editor windows, a daemon's restart is a lost connection, never a close. The next daemon keeps each window's description
-in `facade.db`, and a window that holds running agents waits from the restart as a window whose last connection closed does: one
-that connects again keeps its agents, and one that never comes back ends them after its 90 seconds or five minutes.
+in `facade.db`, apart from its `colors` and `env`, and a window that holds running agents waits from the restart as a window whose last
+connection closed does: one that connects again keeps its agents, and one that never comes back ends them after its 90 seconds or five minutes.
 
 A daemon failure can lose queued input and, for each agent, one output chunk read but not yet logged, at most 64 KiB. Missing
 control sequences can make later output draw incorrectly until the CLI redraws. Recovery sets the terminal to its last logged
@@ -795,7 +819,7 @@ The `data.reason` values of the daemon protocol.
 | `cancelled` | The call was withdrawn by its `cancel` before it took effect: a message whose paste had not begun, which is not kept. |
 | `worktree_failed` | Git could not make a worktree it was asked for: `data.kept` says what it made, which stays. |
 | `upgrading` | A newer Facade is taking over: the call did nothing, and a client repeats it once the new daemon answers. |
-| `unsupported` | The CLI cannot do what the call asks of it: take a model or an effort it has no way to set, or resume a conversation that a CLI of another type had. |
+| `unsupported` | The CLI cannot do what the call asks of it: take a model or an effort it has no way to set, or resume a session that a CLI of another type had. |
 
 ## Types
 
@@ -818,7 +842,7 @@ An agent record. Field names match MCP `list_agents`.
 | `cli` | `string` | yes | The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a program started by its path or name. |
 | `cwd` | `string` | yes | The CLI's working folder at startup. |
 | `window_id` | `string` | yes | The window the agent is in: the editor window it was started in, or `terminal` for an agent started from a terminal. |
-| `location_id` | `string` | yes | The ID of its location, `cwd`, as its window lists it. |
+| `location_id` | `string` | yes | The ID of its location, as its window lists it: the location `cwd` is, or the innermost one `cwd` is inside. |
 | `pid` | `number` | no | The CLI's process ID. Omitted for a guest, whose process Facade does not know. |
 | `process` | `ProcessState` | yes | Whether the CLI is running or ended. |
 | `cols` | `number` | no | Terminal width in columns. Omitted for a guest, which has no terminal of Facade's. |
@@ -873,6 +897,7 @@ A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
 | `display_name` | `string` | yes | The name people know it by: a built-in's, such as `Claude Code`, or an added CLI's own. |
 | `available` | `boolean` | yes | Whether it can be started: its entry is right and its program is found. |
 | `problem` | `string` | no | Why it cannot be started: what is wrong with its entry, or that its program cannot run where it would start, each said by its setting. Omitted where it can. |
+| `not_installed` | `boolean` | no | A built-in CLI whose entry has no problem and names no program of its own, and whose program is not found where the start would run: not installed. Only with `available` false. A client may leave it out of its list instead of showing it as one that cannot start. Omitted otherwise. |
 | `overrides` | `Overrides` | yes | Whether a start can choose its model and its effort (CLIS-1.4). |
 
 ### ClientKind
@@ -962,6 +987,7 @@ Error details for clients to inspect.
 | `enter_written` | `boolean` | no | With `partial_input` for text: whether its Enter reached the agent's terminal. |
 | `keys_sent` | `number` | no | With `partial_input` for keys: how many keys reached the agent's terminal whole. |
 | `kept` | `Kept` | no | With `worktree.create`, or `agent.start` with a `worktree`, that failed after Git made part or all of the worktree: what it made, which stays. |
+| `entry` | `string` | no | With a refused start or resume that an entry of the settings file caused - its program not found, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot take - the entry's name, such as `claude`. A client offers to open the settings file. |
 
 ### HandOver
 
@@ -983,6 +1009,7 @@ Parameters for `hello`.
 | `agent` | `string` | no | The agent this client acts for, by ID: the agent of `facade-mcp`, or the agent in whose terminal a `facade` command runs. Messages the client sends come from that agent, and the `messages` topic reads its inbox. Required for `mcp`, whose agent must be listed: a hello naming one that is not is refused with `not_found`. |
 | `sessions` | `string[]` | no | The sessions the client's CLI names in its environment, such as `CLAUDE_CODE_SESSION_ID`. The client acts for the agent that has one of them, the newest where several do, ahead of `agent`: a command a guest's model runs acts for the guest. |
 | `window` | `WindowDescription` | no | The editor window this client is part of. Required for `ide`, and refused for any other kind. Every connection of a window describes it; the window is there while one of them is open. |
+| `numbers_given` | `NumbersGiven` | no | For an `ide` client: the highest agent and message numbers its editor gave before, such as 41 for `#a41`. The daemon's next numbers are above both these and its own, from then on. Refused for any other kind with `invalid_argument`. |
 
 ### HelloResult
 
@@ -1202,6 +1229,15 @@ A message without an ID or response, such as `changed`.
 | `jsonrpc` | `string` | no | Always `2.0`. |
 | `method` | `string` | yes | The notification method, such as `changed`. |
 | `params` | `unknown` | no | Parameters for the notification method. |
+
+### NumbersGiven
+
+The highest numbers an editor gave before.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `number` | yes | The highest agent number, such as 41 for `#a41`; 0 for none. At most 2^53 - 1. |
+| `message` | `number` | yes | The highest message number, such as 230 for `#m230`; 0 for none. At most 2^53 - 1. |
 
 ### Overrides
 
@@ -1428,7 +1464,7 @@ Arguments for `agent.start`, supplied by the client.
 |---|---|---|---|
 | `command` | `string[]` | yes | The CLI followed by more of its arguments. The exact name of a CLI of Facade's settings file, `facade.json` in the Facade home - a built-in's, such as `claude`, or one its `clis` adds - starts that CLI as its entry says, its entry's `args` before these (CONFIGURATION-2, 3). Any other word, including a path, runs as that program, as given. A start from an `mcp` client names one CLI of the file and nothing more; another name is refused with `not_found`, naming the CLIs there. A file that cannot be read as a whole refuses every start with `configuration_invalid`, and so does a CLI whose entry is wrong, saying each problem; a CLI its entry turns off is refused with `unavailable`, and one whose program cannot run where it starts with `not_found`, saying so by its setting. |
 | `name` | `string` | no | The display name, trimmed. A missing, empty, or blank name gets a name from the settings file's `names`, else from the built-in names: one no agent of the window has, ignoring case and surrounding spaces, or, where every one is taken or the list is empty, the agent's ID, such as `#a7` (LIFECYCLE-2.1). Given names may repeat. |
-| `cwd` | `string` | yes | The CLI's working folder, an absolute path. In an editor window it must be one of the window's locations, which `worktree.create` adds to. |
+| `cwd` | `string` | yes | The CLI's working folder, an absolute path. In an editor window it must be one of the window's locations, which `worktree.create` adds to, or a folder inside one. |
 | `window_id` | `string` | no | The window the agent goes in: an editor window that is there now, by its ID, or `terminal`, where any folder will do. Omitted, `terminal`. |
 | `env` | `{ readonly [key: string]: string }` | no | The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`, and `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor, and CLI session variables, but keeps `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`, which tell the CLI which terminal app displays it; then it sets `TERM`, `COLORTERM`, and `PWD`. Supply the user's remaining environment explicitly. `facade start` does this, omitting non-UTF-8 variables and naming them on stderr. A start from an `mcp` client takes its agent's environment instead, as that agent's CLI started with it, less what that CLI's rule added: a CLI chooses what it gives its MCP server, while a `facade` command sends its shell's. Where that environment cannot be read, as when the CLI is not running or the system hides it, the start fails with `unavailable` and starts nothing. A start that an agent asks for, from its tools or its terminal, inherits that environment as it is, including what the agent's own entry `env` set or removed, as a shell started from another inherits its variables; the started CLI's own entry applies on top (CONFIGURATION-2.1, 3.2). |
 | `cols` | `number` | yes | The initial terminal width in columns, at least 2. |
@@ -1439,6 +1475,7 @@ Arguments for `agent.start`, supplied by the client.
 | `worktree` | `Worktree` | no | A worktree to make from `cwd`, a checkout of the window, with a new branch, as `worktree.create` makes one, and to start in. It is made after the request ID is looked for, so a repeat makes none. |
 | `model` | `string` | no | The model this start chooses, over its entry's `model` (CONFIGURATION-3.3, CLIS-1.4). A CLI that takes none from Facade, as OpenCode and a program do not, refuses it with `unsupported`. Omitted, a model the command's own words choose, else the entry's, else the CLI's own. |
 | `effort` | `string` | no | The effort this start chooses, over its entry's `effort`, as `model` is. |
+| `session` | `string` | no | A session of the CLI to continue, as `agent.resume` continues one: the CLI's rule gives the arguments that continue it, the same way for every CLI. The start is a new agent, with its own number. A CLI whose rule does not resume sessions, and a program that is not a CLI of the settings file, refuse it with `unsupported` before anything starts. Refused from an `mcp` client, as more words are. |
 
 ### StartOutcome
 
@@ -1488,6 +1525,16 @@ The result of `agent.stop`: the CLI's recorded exit, and whether it had ended be
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
 | `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
 | `already_ended` | `boolean` | no | The CLI had ended before this stop, so the stop signaled nothing. Omitted when false. |
+
+### TerminalColors
+
+The colors an editor window's terminals draw with, each `#rrggbb`. An agent of the window replies to its CLI's OSC 10, 11 and 12 queries with them; a color left out gets no reply.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `foreground` | `string` | no |  |
+| `background` | `string` | no |  |
+| `cursor` | `string` | no |  |
 
 ### TextWritten
 
@@ -1577,9 +1624,11 @@ An editor window as it describes itself, in `hello` and again with `window.updat
 | `id` | `string` | yes | The window's ID, which stays the same across its reloads. `terminal` is not an editor window's. |
 | `label` | `string` | yes | The window's name. |
 | `environment` | `string` | yes | `local`, or the remote authority, such as `ssh-remote+devbox`, of a window whose user interface is on another computer. Once the window's last connection closes, its agents end after 90 seconds if it is `local`, otherwise after five minutes, unless it connects again or a window of the same workspace takes them over first. |
-| `workspace` | `string` | no | The key the window's agents are kept under across its reloads: a window that connects with the same key while this one has no connection takes its agents over. Omitted for a window with no folder. |
+| `workspace` | `string` | no | The key the window's agents are kept under across its reloads: a window that connects with the same key takes over the agents of an earlier window with that key that has no connection left, those that still run within its grace and those that ended. Omitted for a window with no folder. |
 | `folders` | `string[]` | no | The window's folders, as absolute paths, in the editor's order. Each is a location, and so is every checkout of a Git repository one of them is in. |
 | `branch_prefix` | `string` | no | The window's Git branch prefix, which a new worktree's folder name leaves out. Omitted where none is set. |
+| `colors` | `TerminalColors` | no | The colors the window's terminals draw with, which its agents reply to color queries with. `window.update` sends them again when the editor's theme changes. Omitted, no color query gets a reply. |
+| `env` | `{ readonly [key: string]: string }` | no | The environment the window's agents start with, as the editor works it out for its first folder's terminals. Facade looks for each CLI's program on its `PATH` to say in `clis` which can start. Omitted, the window lists neither `clis` nor `settings_problem` to an `ide` client. |
 
 ### WindowInfo
 
@@ -1595,8 +1644,8 @@ A window: an editor window, or the terminal window, `terminal`, which holds the 
 | `locations` | `LocationInfo[]` | yes | Where an agent of the window can start: each folder and Git checkout once, a repository's main checkout first. The terminal window's are the folders its running agents work in. |
 | `problems` | `string[]` | no | What Facade could not read of the window's locations, which are then as last read. |
 | `observed_at` | `string` | no | When Facade last read the window's locations, in UTC ISO 8601 format with milliseconds; for the terminal window, when it was listed. Omitted for a window whose locations this daemon has not read yet. |
-| `clis` | `CliInfo[]` | no | The CLIs a start by the agent the client acts for can run in this window, each found on that agent's `PATH` or not; none where Facade's settings file cannot be read as a whole. Omitted for a client that acts for no agent. |
-| `settings_problem` | `string` | no | For a client that acts for an agent, what is wrong with Facade's settings file where it cannot be read as a whole, which then lists no CLI and stops every start, as one text. Omitted where the file reads. |
+| `clis` | `CliInfo[]` | no | The CLIs a start can run in this window, each found on a `PATH` or not: for a client that acts for an agent, that agent's; for an `ide` client, the one in the window's own `env`. None for a window with no folder, and none where Facade's settings file cannot be read as a whole. Omitted for a client that acts for no agent, and for an `ide` client where the window gave no `env`. |
+| `settings_problem` | `string` | no | For a client that acts for an agent, or an `ide` client where the window gave `env`, what is wrong with Facade's settings file where it cannot be read as a whole, which then lists no CLI and stops every start, as one text. Omitted where the file reads. |
 
 ### WindowsChange
 

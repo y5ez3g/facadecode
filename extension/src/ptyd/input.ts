@@ -8,10 +8,12 @@
 
 /** What automated input into a run did: what went in, and why the rest did not. */
 export interface InputEffect {
-	/** `applied`: all of it; `partial`: a first part, the run ending before the rest; `not_applied`: nothing. */
+	/** `applied`: all of it; `partial`: a first part, the run ending or the person writing before the rest; `not_applied`: nothing. */
 	readonly outcome: 'applied' | 'partial' | 'not_applied';
 	/** Why not all of it went in: the run ended or is being stopped. */
 	readonly reason?: 'ended';
+	/** Not all of it went in because the person wrote to the run after the reading it was to follow (RULES-1.4). */
+	readonly typedFirst?: true;
 	/** For text: whether it was pasted, and whether Enter followed. */
 	readonly pasted?: boolean;
 	readonly entered?: boolean;

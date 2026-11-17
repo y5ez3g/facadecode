@@ -172,29 +172,29 @@ async function afterReload(which: number, reloadedAt: number, expected: readonly
 	const pinned = expected.filter(agent => agent.pinned);
 	const back = await until('every pinned agent\'s tab back, the others hidden', async () => {
 		const now = await seen();
-		return expected.every(agent => now.agents.some(each => each.runId === agent.runId && each.tabs === (agent.pinned ? 1 : 0))) ? now : undefined;
+		return expected.every(agent => now.agents.some(each => each.alias === agent.alias && each.tabs === (agent.pinned ? 1 : 0))) ? now : undefined;
 	}, 60_000).catch(() => undefined);
 	const settled = await agreed();
 	// Marks that come late, or go: what the window shows a while after
 	await sleep(3_000);
 	const later = await seen();
 	const last = pinned[pinned.length - 1];
-	const lastNow = last && later.agents.find(each => each.runId === last.runId);
+	const lastNow = last && later.agents.find(each => each.alias === last.alias);
 	const aliasOf = (label: string) => expected.find(agent => isAgentLabel(label, agent))?.alias ?? label;
 	write({
 		phase: `reload-${which}`, back: !!back, took: settled.took, settled: settled.seen, later,
 		// Each pinned agent's tab in the group it was in
-		moved: pinned.filter(agent => agent.group !== undefined && later.agents.find(each => each.runId === agent.runId)?.group !== agent.group).map(agent => agent.alias),
+		moved: pinned.filter(agent => agent.group !== undefined && later.agents.find(each => each.alias === agent.alias)?.group !== agent.group).map(agent => agent.alias),
 		// No other agent's tab opened, though it was open before the reload
-		shown: expected.filter(agent => !agent.pinned && later.agents.find(each => each.runId === agent.runId)?.tabs !== 0).map(agent => agent.alias),
+		shown: expected.filter(agent => !agent.pinned && later.agents.find(each => each.alias === agent.alias)?.tabs !== 0).map(agent => agent.alias),
 		// The agent tabs in the order they opened, each once, and those that opened before the one before them showed its mark
 		order: openings.map(each => aliasOf(each.label)), expectedOrder: pinned.map(agent => agent.alias),
 		unmarkedBefore: openings.filter(each => !each.earlierMarked).map(each => aliasOf(each.label)),
 		// Nothing given back: the last pinned agent's tab in front of its group, that group the active one, the panel's selection on it
 		last: last?.alias ?? null,
 		front: !last || (isAgentLabel(later.active, last) && later.activeGroup === lastNow?.group),
-		selected: !last || (await state()).cards.find(card => card.selected)?.runId === last.runId,
-		pinChanged: expected.filter(agent => later.agents.find(each => each.runId === agent.runId)?.pinned !== agent.pinned).map(agent => agent.alias),
+		selected: !last || (await state()).cards.find(card => card.selected)?.alias === last.alias,
+		pinChanged: expected.filter(agent => later.agents.find(each => each.alias === agent.alias)?.pinned !== agent.pinned).map(agent => agent.alias),
 		logged: pinLines(reloadedAt)
 	});
 }

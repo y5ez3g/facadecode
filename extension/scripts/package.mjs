@@ -5,9 +5,13 @@
 // It is made for one target, `--target <target>` or this host's - only ever this host's, whose artifacts the build loads and
 // starts a PTY with - and its VSIX names it. The VSIX is read back as it was written: one whose manifest names another target,
 // or which carries a binary not of its target, is removed and refused.
+//
+// Core's programs go in every package but Windows' (scripts/core.mjs); nothing is packaged where core's version is not the
+// extension's, or the extension's copy of the protocol is not core's.
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { BIN, buildCore, checkSources, coreTriple, programProblems, zipModes } from './core.mjs';
 import { filesOfZip, nativeProblems, packageTarget } from './native.mjs';
 
 const root = path.join(import.meta.dirname, '..');
@@ -16,8 +20,13 @@ const out = path.join(root, 'build', 'vsix');
 const asked = process.argv.includes('--target') ? process.argv[process.argv.indexOf('--target') + 1] : process.argv.find(arg => arg.startsWith('--target='))?.slice('--target='.length);
 // Before anything is built: another target than this host's cannot be verified here
 const target = packageTarget(asked);
+checkSources();
 
 execFileSync(process.execPath, [path.join(root, 'scripts', 'build.mjs'), '--production'], { stdio: 'inherit' });
+if (coreTriple()) {
+	buildCore();
+	fs.cpSync(BIN, path.join(root, 'build', 'extension', 'bin'), { recursive: true });
+}
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
 for (const [stage, native] of [['window', false], ['extension', true]]) {
@@ -31,11 +40,12 @@ for (const [stage, native] of [['window', false], ['extension', true]]) {
 	const named = identity.match(/\bTargetPlatform="([^"]*)"/)?.[1];
 	const problems = [
 		...(named === (native ? target : undefined) ? [] : [`its manifest names ${named === undefined ? 'no target' : `the target ${named}`}, not ${native ? target : 'none'}`]),
-		...nativeProblems(files, target, { none: !native })
+		...nativeProblems(files, target, { none: !native }),
+		...(native ? programProblems(files, target, zipModes(file)) : [])
 	];
 	if (problems.length) {
 		fs.rmSync(file, { force: true });
 		throw new Error(`${path.basename(file)} is refused and removed: ${problems.join('; ')}.`);
 	}
-	console.info(`${path.basename(file)}: ${native ? `for ${target} alone, its native binaries all ${target}'s` : 'for every target, no native binary'}.`);
+	console.info(`${path.basename(file)}: ${native ? `for ${target} alone, its native binaries all ${target}'s${target.startsWith('win32-') ? '' : ', core\'s programs with them'}` : 'for every target, no native binary'}.`);
 }

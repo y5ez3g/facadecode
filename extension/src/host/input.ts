@@ -10,7 +10,8 @@ import type { InputEffects, InputPort, Submission } from '../core/messagePorts';
 import type { CapabilityState, LaunchPlan, RunFacts, RunId } from '../core/ports';
 import { PtydNotSent } from './execution/ptydClient';
 import { drawnAs, isOwnDraft, isSameDraft } from '../ptyd/drafts';
-import type { InputEffect, InputReading, InputState, ScreenRead } from '../ptyd/protocol';
+import type { InputEffect, InputLine, InputReading, InputState, ScreenRead } from '../ptyd/protocol';
+import { lineKey, type ProbeVerdict, restored, sameLine, shapeOf, spaceTaken, verdictOf } from './inputProbe';
 
 /** How often the input is read again while a submission waits for it to change. */
 const POLL_MS = 100;
@@ -67,6 +68,14 @@ function holds(reading: InputReading, text: string, adapter: string, platform: N
 		isOwnDraft(draft, drawn, adapter, lead, reading.hidden) && (seen === undefined || isSameDraft(draft, seen, drawn, lead, reading.hidden)));
 }
 
+/** A reading unsure whether its input's only row is a hint or a draft, with that row and the person's writes so far: one a probe may try (CLIS-2.1). */
+type Unsure = InputReading & { readonly unsure: true; readonly line: InputLine; readonly typed: number };
+
+/** Whether `reading` is one a probe may try: a ptyd that gives no row or count of the person's writes is never probed (CLIS-2.1). */
+function isUnsure(reading: InputReading): reading is Unsure {
+	return reading.state === 'unknown' && reading.unsure === true && reading.line !== undefined && reading.typed !== undefined;
+}
+
 /** What ordinary message input needs of the window: the run's facts, ptyd's reading of its input and its serialized terminal input. */
 export interface OrdinaryInputDeps {
 	readonly get: (run: RunId) => RunFacts | undefined;
@@ -74,7 +83,8 @@ export interface OrdinaryInputDeps {
 	readonly inspectInput: (run: RunId, adapter: string) => Promise<InputReading | undefined>;
 	/** Pastes text, `lead` typed before it where given, then Enter where asked, in turn with the run's other automated input in ptyd (RULES-1.10). */
 	readonly typeText: (run: RunId, text: string, enter: boolean, lead?: string) => Promise<InputEffect>;
-	readonly pressKeys: (run: RunId, keys: readonly string[]) => Promise<InputEffect>;
+	/** Presses keys in turn with the run's other automated input; with `unlessTyped`, each only while the person's writes number that many (RULES-1.4). */
+	readonly pressKeys: (run: RunId, keys: readonly string[], unlessTyped?: number) => Promise<InputEffect>;
 	/** The bottom `lines` lines of the run's screen, where its start waits on what its CLI shows (COLLABORATION-2.2). */
 	readonly readScreen?: (run: RunId, lines: number) => Promise<ScreenRead>;
 	/** A line for Show Agents Log: what a reading rested on, never the text on the screen or of a message (ARCHITECTURE-3.3). */
@@ -99,6 +109,8 @@ export class OrdinaryInput implements InputPort {
 
 	/** Each run's submissions and direct input from this window, one after another (RULES-1.10). */
 	private readonly turns = new Map<RunId, Promise<void>>();
+	/** Each run's probed rows, by {@link lineKey}, and what each was found to be: a row is probed once a run (CLIS-2.1). */
+	private readonly probed = new Map<RunId, Map<string, ProbeVerdict>>();
 	private readonly mono: () => number;
 	private readonly wait: (ms: number, signal?: AbortSignal) => Promise<void>;
 	private readonly platform: NodeJS.Platform;
@@ -121,7 +133,7 @@ export class OrdinaryInput implements InputPort {
 		return { state: 'unverified', reason: `How the message input of ${facts?.displayName ?? 'this agent'} is read is not known before its launch is planned, so Facade does not type messages into its terminal.` };
 	}
 
-	async inspect(run: RunId, own?: string, lead?: string, seen?: string): Promise<InputState | 'own'> {
+	async inspect(run: RunId, own?: string, lead?: string, seen?: string): Promise<InputState | 'own' | 'unsure'> {
 		const adapter = this.adapterOf(run);
 		if (adapter === undefined) {
 			return 'unknown';
@@ -129,6 +141,10 @@ export class OrdinaryInput implements InputPort {
 		const reading = await this.readWhole(run, adapter);
 		if (own !== undefined && holds(reading, own, adapter, this.platform, lead, seen)) {
 			return 'own';
+		}
+		// Told apart in the submission's turn: nothing is typed here, nor a probe's verdict recalled (CLIS-2.1)
+		if (isUnsure(reading)) {
+			return 'unsure';
 		}
 		if (reading.state !== 'usable') {
 			this.log(run, `input reads ${reading.state} by ${adapter}: ${reading.evidence}`);
@@ -217,7 +233,7 @@ export class OrdinaryInput implements InputPort {
 		if (shown || await this.screenUntil(run, opened, 0)) {
 			await this.deps.pressKeys(run, [warmUp.close]);
 		}
-		const usable = await this.until(run, adapter, reading => reading.state === 'usable', TAKEN_MS, undefined);
+		const usable = await this.until(run, adapter, reading => this.recall(run, reading).state === 'usable', TAKEN_MS, undefined);
 		this.log(run, `before its first turn its tools ${shown ? 'were shown ready' : `did not show ready within ${WARM_READY_MS / 1000} seconds`}, and its input ${usable ? 'reads empty again' : 'did not read empty again'}`);
 	}
 
@@ -225,7 +241,7 @@ export class OrdinaryInput implements InputPort {
 	private async firstReading(run: RunId, adapter: string, ms: number): Promise<InputState> {
 		const end = this.mono() + ms;
 		for (; ;) {
-			const { state } = await this.read(run, adapter);
+			const { state } = await this.resolve(run, adapter, await this.read(run, adapter));
 			if (state !== 'unknown' || this.deps.get(run)?.lifecycle === 'ended') {
 				return state;
 			}
@@ -286,8 +302,12 @@ export class OrdinaryInput implements InputPort {
 		// Read again in this turn: direct input that came after the delivery looked is never pasted over (RULES-1.4), and nothing goes
 		// in once stopped meanwhile
 		// read whole: a frame its CLI is still drawing is read again within the attempt, never taken for what it shows half drawn (CLIS-2.1)
-		if ((await this.readWhole(run, adapter)).state !== 'usable' || signal?.aborted || canPaste?.() === false) {
-			return { effects: NOTHING, shown: false };
+		const reading = await this.readWhole(run, adapter);
+		const now = await this.resolve(run, adapter, reading);
+		if (now.state !== 'usable' || signal?.aborted || canPaste?.() === false) {
+			// Held by what a probe of an unsure row found: a draft, or neither for sure (CLIS-2.1)
+			const held = isUnsure(reading) && now.state !== 'usable' ? { held: now.state === 'draft' ? 'input_draft' as const : 'input_unknown' as const } : {};
+			return { effects: NOTHING, shown: false, ...held };
 		}
 		// Typed ahead of the paste only where its CLI takes a paste alone as material (COLLABORATION-2.1)
 		const typed = lead !== undefined && TAKES_LEAD.has(adapter) ? lead : undefined;
@@ -349,7 +369,8 @@ export class OrdinaryInput implements InputPort {
 		}
 		// Taken once its input is empty again: busy or idle, the CLI has the message (RULES-1.3)
 		const takenMs = TAKEN_MS + this.pasteMs(text);
-		if (await this.until(run, adapter, reading => reading.state === 'usable', takenMs, signal)) {
+		// Empty again, or showing a row this run's probe found a hint (CLIS-2.1)
+		if (await this.until(run, adapter, reading => this.recall(run, reading).state === 'usable', takenMs, signal)) {
 			return CONFIRMED;
 		}
 		this.log(run, `its input did not empty within ${takenMs / 1000} seconds of Enter, so the message's submission is not confirmed yet`);
@@ -435,6 +456,90 @@ export class OrdinaryInput implements InputPort {
 	}
 
 	/**
+	 * `reading`, where it is unsure, as this run's probe of its row found it - a hint an empty input, else a draft or unknown - probing
+	 * the row first where no probe of this run has (CLIS-2.1). Called in the run's turn only; any other reading is as it is.
+	 */
+	private async resolve(run: RunId, adapter: string, reading: InputReading): Promise<InputReading> {
+		if (!isUnsure(reading)) {
+			return reading;
+		}
+		// The rows of runs that ended go with them
+		for (const each of this.probed.keys()) {
+			if (each !== run && (this.deps.get(each)?.lifecycle ?? 'ended') === 'ended') {
+				this.probed.delete(each);
+			}
+		}
+		const rows = this.probed.get(run) ?? new Map<string, ProbeVerdict>();
+		this.probed.set(run, rows);
+		const key = lineKey(reading.line);
+		let verdict = rows.get(key);
+		if (verdict === undefined) {
+			// Kept as neither before the space: however the probe stops, the row is not probed again this run
+			rows.set(key, 'other');
+			verdict = await this.probe(run, adapter, reading);
+			rows.set(key, verdict);
+		}
+		return verdictReading(reading, verdict);
+	}
+
+	/** `reading`, where it is unsure, as this run's probe of its row found it, where one did: nothing typed to find out (CLIS-2.1). */
+	private recall(run: RunId, reading: InputReading): InputReading {
+		const verdict = isUnsure(reading) ? this.probed.get(run)?.get(lineKey(reading.line)) : undefined;
+		return verdict === undefined || !isUnsure(reading) ? reading : verdictReading(reading, verdict);
+	}
+
+	/**
+	 * A space typed where the input starts, read once drawn still, then Backspace, read once drawn still again: the row gone, a hint;
+	 * there behind the space, a draft (CLIS-2.1). Each key goes only while the person has typed nothing since `before` was read, which
+	 * ptyd compares as it sends the key (RULES-1.4). Backspace goes only where the space went in and no menu or question came; after one
+	 * that did not put the input back, nothing more is pressed.
+	 */
+	private async probe(run: RunId, adapter: string, before: Unsure): Promise<ProbeVerdict> {
+		const press = (key: string) => this.deps.pressKeys(run, [key], before.typed).catch(() => undefined);
+		const shape = shapeOf(before.line);
+		const space = await press('Space');
+		if (space?.outcome !== 'applied') {
+			this.log(run, `input probe typed nothing, ${space?.typedFirst ? 'as the person typed first' : 'its space not taken'}: ${shape}`);
+			return 'other';
+		}
+		const after = await this.drawnStill(run, adapter);
+		if (after.reading.state === 'interaction' || !spaceTaken(before.line, after.reading.line)) {
+			this.log(run, `input probe pressed nothing more, its space not shown or a menu shown: before ${shape}; after ${shapeOf(after.reading.line)}`);
+			return 'other';
+		}
+		const found = after.still ? verdictOf(before.line, after.reading) : 'other';
+		const back = await press('Backspace');
+		if (back?.outcome !== 'applied') {
+			this.log(run, `input probe's Backspace not pressed, ${back?.typedFirst ? 'as the person typed first' : 'not taken'}, so its space may be in the input: ${shape}`);
+			return 'other';
+		}
+		const again = await this.drawnStill(run, adapter);
+		if (!again.still || !restored(found, before.line, again.reading)) {
+			this.log(run, `input probe pressed nothing more, its input not as before: before ${shape}; after ${shapeOf(again.reading.line)}`);
+			return 'other';
+		}
+		this.log(run, `input probe found ${found === 'hint' ? 'a hint' : found === 'draft' ? 'a draft' : 'neither a hint nor a draft for sure'}${after.still ? '' : ', its space not drawn still'}: ${shape}`);
+		return found;
+	}
+
+	/**
+	 * The input once drawn still: read every POLL_MS until two readings in a row show the same row and cursor, for at most DRAWING_MS.
+	 * A probe's verdict rests on it, as a frame read half drawn could take a draft for a hint (CLIS-2.1).
+	 */
+	private async drawnStill(run: RunId, adapter: string): Promise<{ readonly reading: InputReading; readonly still: boolean }> {
+		let last = await this.read(run, adapter);
+		for (let waited = 0; waited < DRAWING_MS; waited += POLL_MS) {
+			await this.wait(POLL_MS);
+			const next = await this.read(run, adapter);
+			if (!last.drawing && !next.drawing && last.state === next.state && sameLine(last.line, next.line)) {
+				return { reading: next, still: true };
+			}
+			last = next;
+		}
+		return { reading: last, still: false };
+	}
+
+	/**
 	 * The input as a whole frame shows it: a screen its program is still drawing - within a synchronized update - is read again every
 	 * POLL_MS for at most DRAWING_MS, never taken for an empty input (CLIS-2.1).
 	 */
@@ -458,6 +563,12 @@ export class OrdinaryInput implements InputPort {
 	private log(run: RunId, text: string): void {
 		this.deps.log?.(`Message input of ${this.deps.get(run)?.alias ?? run}: ${text}`);
 	}
+}
+
+/** An unsure reading as its probe's verdict reads: a hint is an empty input, a draft a draft, anything else unknown (CLIS-2.1). */
+function verdictReading(reading: Unsure, verdict: ProbeVerdict): InputReading {
+	const state: InputState = verdict === 'hint' ? 'usable' : verdict === 'draft' ? 'draft' : 'unknown';
+	return { state, evidence: `${reading.evidence}: ${verdict === 'hint' ? 'a hint' : verdict === 'draft' ? 'a draft' : 'neither for sure'}, as its probe found` };
 }
 
 /**

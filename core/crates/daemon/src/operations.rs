@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
     AgentInfo, AgentState, AgentsChange, Message, ResumeArgs, StartArgs, StartResult, StopResult,
-    TERMINAL_WINDOW, ToolsState, location_id,
+    TERMINAL_WINDOW, ToolsState,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessState};
@@ -21,7 +21,7 @@ use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
 use crate::messages::OwedResult;
 use crate::records::{self, Named, Reach};
-use crate::runs::{ExitSink, FirstRead, RunExit, RunLaunch, RunRequest};
+use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::AgentRecord;
 use crate::{Daemon, HUMAN, Sender, blocking, gate_for_test, log, pause_for_test};
 
@@ -291,6 +291,9 @@ impl Daemon {
         // One reading of the settings file gives the start its YOLO, names and entry (RULES-4.3).
         let settings = command_line::read_settings()?;
         let configured = command_line::configure(&settings, &args, by_model)?;
+        if let Some(session) = args.session.as_deref() {
+            command_line::check_session(&configured, &args.command[0], session)?;
+        }
         if let Some(prompt) = args.prompt.as_deref() {
             command_line::check_start_prompt(prompt, &configured, &args.command[0])?;
             let widest = crate::delivery::pending_message(
@@ -355,7 +358,9 @@ impl Daemon {
             .window_id
             .take()
             .unwrap_or_else(|| TERMINAL_WINDOW.to_string());
-        args.cwd = self.windows.check_destination(&window, &args.cwd)?;
+        let destination = self.windows.check_destination(&window, &args.cwd)?;
+        args.cwd = destination.cwd;
+        let location = destination.location_id;
         configured.find_program(&args.cwd)?;
         let yolo = settings.yolo;
         let rule = configured.rule;
@@ -385,11 +390,13 @@ impl Daemon {
             plain_program: &args.command[0],
             inherited: configured.env.clone(),
             cwd: &args.cwd,
+            location_id: &location,
             window_id: &window,
             window_label: &label,
             creator: creator.as_deref().map(|creator| (creator, creator_name)),
             yolo,
-            resume: None,
+            session: args.session.as_deref(),
+            kind: RunKind::Start,
         };
         let mut prepared = match self.runs.prepare(request).await {
             Ok(prepared) => prepared,
@@ -401,7 +408,7 @@ impl Daemon {
         let (tx, rx) = mpsc::channel(agent::MAX_QUEUED_COMMANDS);
         let started = self
             .runs
-            .launch(
+            .start(
                 reservation,
                 &id,
                 agent::FIRST_RUN,
@@ -409,7 +416,6 @@ impl Daemon {
                 args.cols,
                 args.rows,
                 exit_sink(tx.clone()),
-                RunLaunch::Start,
             )
             .await;
         let started = match started {
@@ -424,7 +430,7 @@ impl Daemon {
             agent_id: id.clone(),
             name: name.clone(),
             cli: configured.cli.clone(),
-            location_id: location_id(&args.cwd),
+            location_id: location,
             cwd: args.cwd.clone(),
             window_id: window.clone(),
             pid: Some(started.pid),
@@ -460,6 +466,7 @@ impl Daemon {
             yolo,
             request_id: args.request_id.clone(),
             prompt: None,
+            location_id: Some(info.location_id.clone()),
         };
         // The prompt is committed with the record, so that a start answered with it never loses
         // it; its delivery time begins once the CLI's tools connected or will not.
@@ -487,6 +494,7 @@ impl Daemon {
         gate_for_test("after-start-record");
         let screen = self.screens.folder(&id);
         let actor = ActorStart {
+            colors: self.window_colors(&window),
             info: info.clone(),
             master: Some(started.master),
             screen: ScreenStart::New(screen.clone()),
@@ -608,7 +616,7 @@ impl Daemon {
         let unreadable = |why: String| {
             ErrorBody::new(
                 Reason::Unavailable,
-                format!("#{id}'s environment cannot be read: {why}; nothing was started"),
+                format!("#{id}'s environment is unavailable: {why}; nothing was started"),
             )
         };
         let agent = self.get_agent(id).ok_or_else(|| {
@@ -840,6 +848,7 @@ impl Daemon {
             plain_program: &rule.cli,
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
+            location_id: &info.location_id,
             window_id: &window,
             window_label: &label,
             creator: info
@@ -847,7 +856,8 @@ impl Daemon {
                 .as_deref()
                 .map(|creator| (creator, creator_name.as_deref())),
             yolo,
-            resume: Some(&session),
+            session: Some(&session),
+            kind: RunKind::Resume,
         };
         let mut prepared = self.runs.prepare(request).await?;
         if !self
@@ -877,7 +887,7 @@ impl Daemon {
         prepared_screen.await.map_err(|_| agent_stopped(&id))?;
         let started = self
             .runs
-            .launch(
+            .start(
                 reservation,
                 &id,
                 number,
@@ -885,7 +895,6 @@ impl Daemon {
                 args.cols,
                 args.rows,
                 exit_sink(agent.mailbox()),
-                RunLaunch::Resume,
             )
             .await?;
         gate_for_test("before-restart-commit");
@@ -898,6 +907,10 @@ impl Daemon {
             return Err(error);
         }
         agent.set_window_and_yolo(&window, yolo);
+        // Before the run is installed, so its first color query gets them as a reply.
+        agent
+            .send(AgentCommand::SetColors(self.window_colors(&window)))
+            .await;
         let (reply, installed) = oneshot::channel();
         let install = AgentCommand::InstallRun {
             run: number,

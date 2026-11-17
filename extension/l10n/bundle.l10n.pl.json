@@ -354,5 +354,18 @@
 	"The working location {0} is not available in this window.": "Lokalizacja robocza {0} nie jest dostępna w tym oknie.",
 	"Stop unconfirmed · check process": "Zatrzymanie niepotwierdzone · sprawdź proces",
 	"1 agent": "1 agent",
-	"{0} agents": "Agenci: {0}"
+	"{0} agents": "Agenci: {0}",
+	"The engine changes only after you reload the window.": "Silnik zmieni się dopiero po ponownym załadowaniu okna.",
+	"All agents on the old engine have ended. Reload this window to switch.": "Wszystkie agenty starego silnika zakończyły działanie. Załaduj ponownie to okno, aby przełączyć się na nowy silnik.",
+	"Facade's settings file has an error": "Plik ustawień Facade zawiera błąd",
+	"Facade could not find what you asked for": "Facade nie znalazł żądanego elementu",
+	"Facade cannot do this right now": "Facade nie może tego teraz zrobić",
+	"This CLI does not support this action": "To CLI nie obsługuje tej operacji",
+	"Could not create the worktree": "Nie udało się utworzyć drzewa roboczego",
+	"The agent has ended": "Agent zakończył działanie",
+	"Too much input at once": "Za dużo danych naraz",
+	"Facade is updating; try again in a moment": "Facade się aktualizuje; spróbuj ponownie za chwilę",
+	"Facade does not allow this": "Facade na to nie pozwala",
+	"Something went wrong in Facade": "W Facade wystąpił błąd",
+	"Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.": "Nie udało się uruchomić Facade core: {0}. To okno używa starego silnika. Aby Facade nie próbował już uruchamiać silnika Rust, ustaw {1} na `off` i załaduj ponownie okno."
 }

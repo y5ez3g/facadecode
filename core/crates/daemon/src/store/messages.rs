@@ -373,6 +373,21 @@ impl MessageTable {
         MessageTable(store)
     }
 
+    /// Raises the counter so the next message number is above `given`; one already above stays.
+    /// Blocks.
+    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
+        self.0.with(
+            || "raise the message counter".to_string(),
+            |connection| {
+                connection.execute(
+                    "UPDATE message_numbers SET next = MAX(next, ?1 + 1)",
+                    [given as i64],
+                )
+            },
+        )?;
+        Ok(())
+    }
+
     /// Takes the next number and writes `message` under it, in one transaction, with `request`,
     /// its send's request ID, where it had one. Where that transaction finds a message the sender
     /// kept with the same ID within its hour, it keeps nothing and answers that message.

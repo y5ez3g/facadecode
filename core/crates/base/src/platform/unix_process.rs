@@ -590,7 +590,9 @@ fn procargs_environment(buffer: &[u8]) -> Option<Vec<Vec<u8>>> {
     if strings.by_ref().take(arguments).count() < arguments {
         return None;
     }
-    let entries = strings.take_while(|entry| !entry.is_empty());
+    let entries = strings
+        .skip_while(|entry| entry.is_empty())
+        .take_while(|entry| !entry.is_empty());
     Some(entries.map(<[u8]>::to_vec).collect())
 }
 
@@ -1167,6 +1169,10 @@ mod os {
         super::signal_checked(identity, signal)
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "procargs_tests.rs"]
+mod procargs_tests;
 
 #[cfg(all(test, unix))]
 mod tests {

@@ -17,7 +17,7 @@ use facade_rules::{CommandLine, Rule};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::{PreparedRun, RunEvent, RunRequest};
+use super::{PreparedRun, RunEvent, RunKind, RunRequest};
 use crate::ToolsGiven;
 
 pub(crate) use folder::RunFiles;
@@ -51,7 +51,7 @@ impl Preparation {
     /// file work and installation version reads. Failure removes a start's folders.
     pub(crate) async fn prepare(&self, request: RunRequest<'_>) -> Result<PreparedRun, ErrorBody> {
         self.sessions.starting(request.id);
-        let start = request.resume.is_none();
+        let start = request.kind == RunKind::Start;
         let id = request.id.to_owned();
         let prepared = self.compose(request).await;
         if start && prepared.is_err() {
@@ -77,6 +77,7 @@ impl Preparation {
                 files: RunFiles::default(),
                 rule: None,
                 cwd: request.cwd.to_owned(),
+                kind: request.kind,
             });
         };
         let mut files = RunFiles::new(&self.folders, request.id);
@@ -87,14 +88,13 @@ impl Preparation {
             file: &session_file,
             cwd: Path::new(request.cwd),
         };
-        let captures =
-            request.resume.is_some() || rule.session.capture == facade_rules::Capture::SessionStart;
+        let captures = request.session.is_some()
+            || rule.session.capture == facade_rules::Capture::SessionStart;
         let report = captures.then_some(&report);
-        let location = facade_base::daemon::location_id(request.cwd);
         let place = facade_base::instructions::Place {
             window: request.window_label,
             window_id: request.window_id,
-            location_id: &location,
+            location_id: request.location_id,
             folder: request.cwd,
         };
         let run = facade_base::instructions::Run {
@@ -121,7 +121,7 @@ impl Preparation {
         };
         let compose = |server| {
             let trusted = request.yolo.then_some(Path::new(request.cwd));
-            match request.resume {
+            match request.session {
                 Some(session) => facade_rules::resume_command_line(
                     rule,
                     session,
@@ -147,7 +147,7 @@ impl Preparation {
                 format!("{} sessions cannot be resumed", rule.cli),
             )
         })?;
-        if request.resume.is_none() && !command_line.plugin.is_empty() {
+        if request.kind == RunKind::Start && !command_line.plugin.is_empty() {
             let (noted, cwd) = (files.clone(), PathBuf::from(request.cwd));
             file_work(move || noted.note_plugin(&cwd)).await?;
         }
@@ -184,13 +184,15 @@ impl Preparation {
         if let Some(program) = request.program {
             command[0] = program.to_owned();
         }
-        let session = match request.resume {
-            Some(session) => Some(Some(session)),
-            None => captures.then_some(None),
+        // Only a resume's file starts with its session saved; a start's, even one that continues a
+        // session, starts as for a new session, so the session the CLI reports is committed.
+        let session = match (request.kind, request.session) {
+            (RunKind::Resume, Some(session)) => Some(Some(session)),
+            _ => captures.then_some(None),
         };
         let create = captures || !contents.is_empty();
         files.fill(session, contents);
-        if request.resume.is_none() && create {
+        if request.kind == RunKind::Start && create {
             let created = files.clone();
             file_work(move || created.create()).await?;
         }
@@ -218,6 +220,7 @@ impl Preparation {
             files,
             rule: Some(rule),
             cwd: request.cwd.to_owned(),
+            kind: request.kind,
         })
     }
 

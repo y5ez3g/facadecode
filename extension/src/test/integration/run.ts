@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { EDITOR_FLAGS, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { EDITOR_FLAGS, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
@@ -79,6 +79,12 @@ async function main(): Promise<void> {
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
+	// The engine the windows run on: `old`, the default, writes `facade.rustEngine: off` into each profile; `rust` writes `auto`, which the
+	// package with core's programs takes to the Rust engine (the setting's own default is `auto`, so the suite always says it)
+	const engine = process.env.FACADE_IT_ENGINE ?? 'old';
+	if (engine !== 'old' && engine !== 'rust') {
+		throw new Error('FACADE_IT_ENGINE is old or rust.');
+	}
 	// Real agents, for `real` alone: the built-in FACADE_IT_REAL (Claude Code by default) at FACADE_IT_REAL_PATH - FACADE_IT_CLAUDE
 	// for Claude Code - and Claude Code's temporary configuration folder FACADE_IT_CLAUDE_CONFIG, signed in for testing. Its terminals
 	// get FACADE_IT_REAL_ENV, a JSON object - such as a configuration folder of its own - and the variables FACADE_IT_REAL_PASS names,
@@ -163,7 +169,8 @@ async function main(): Promise<void> {
 		...terminalEnv(),
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
-		'window.restoreWindows': 'none'
+		'window.restoreWindows': 'none',
+		'facade.rustEngine': engine === 'rust' ? 'auto' : 'off'
 	};
 	/**
 	 * Facade's settings file in the Facade root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
@@ -181,6 +188,13 @@ async function main(): Promise<void> {
 	const alone = (cli: string) => Object.fromEntries(BUILT_INS.filter(each => each.id !== cli).map(each => [each.id, { enabled: false }]));
 	const extension = path.resolve(__dirname, '..', '..', '..', 'extension-it');
 	const windowComponent = path.resolve(__dirname, '..', '..', '..', 'window');
+	/** Core's programs in the stage, and what a run on the Rust engine leaves of them in the Facade root `facade`: ended as core's README ends them. */
+	const corePrograms = path.join(extension, 'bin', 'facade');
+	const endRust = async (facade: string) => {
+		if (engine === 'rust') {
+			await endCore(corePrograms, facade);
+		}
+	};
 	/**
 	 * One editor of the suite on `folder`, with user data, extensions and a Facade directory of its own - and shared data: without it
 	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2) - its CLIs `clis` of Facade's
@@ -208,6 +222,7 @@ async function main(): Promise<void> {
 					FACADE_HOME: facade,
 					FACADE_IT_RECORD: record,
 					FACADE_IT_AGENTS_HOME: agentsHome,
+					FACADE_IT_ENGINE: engine,
 					CLAUDE_CONFIG_DIR: claude,
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
 					...env
@@ -216,6 +231,7 @@ async function main(): Promise<void> {
 		} finally {
 			// The window's ptyd outlives it, as it is made to: it goes with the run, and the agents it holds with it
 			endMatching(path.join(facade, 'extension', 'ptyd'));
+			await endRust(facade);
 		}
 	};
 	/**
@@ -256,9 +272,11 @@ async function main(): Promise<void> {
 			child.stderr?.on('data', append);
 			child.on('error', append);
 		};
-		const editorEnv = { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out,
+		const editorEnv = { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_ENGINE: engine,
 			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
 			...!reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
+			// The Rust engine's expiry: two more agents beside the pinned one, which the grace ends and the reopened window must not show
+			...engine === 'rust' && expiry ? { FACADE_IT_LOAD: '2' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
@@ -287,7 +305,8 @@ async function main(): Promise<void> {
 				if (!closed()) { throw new Error('The isolated window did not close.'); }
 				if (expiry) {
 					const closedAt = Date.now();
-					if (nativeLifecycle) { endMatching(path.join(facade, 'extension', 'ptyd')); }
+					if (nativeLifecycle) { endMatching(path.join(facade, 'extension', 'ptyd'));
+			await endRust(facade); }
 					// A local window's grace, 90 seconds from its extension host's disconnect, a few seconds before `closedAt` (RULES-4.1):
 					// ended about then, well after the close
 					const expiresBy = closedAt + 150_000;
@@ -309,10 +328,20 @@ async function main(): Promise<void> {
 				const reopenBy = Date.now() + (nativeLifecycle ? 150_000 : 45_000);
 				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
 				const after = lines().find(line => line.phase === 'reopened');
+				// On the Rust engine a run is known by its agent's ID once a window has claimed it, where the first window's was its start's own
+				// ID: the process and the session are the run's identity there
 				// A local window closed and reopened within its 90 seconds takes its run over, as a reload does - no claim ends it; after its
 				// grace the process ended already and the Pin restores the exact session in a new process (RULES-4.1)
-				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid)) : after.runId !== before.runId || after.pid !== before.pid)
-					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))) {
+				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid)) : (engine === 'rust' ? false : after.runId !== before.runId) || after.pid !== before.pid)
+					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))
+					// After the grace, on the Rust engine: the Pin started a new agent; the others are not shown, no card is red, and core keeps no record of them
+					|| (engine === 'rust' && expiry && (() => {
+						const others = (before.others as string[] | undefined) ?? [];
+						const cards = after.cards as { alias: string; dot: string }[] | undefined;
+						const core = after.core as string[] | undefined;
+						return !others.length || !cards || cards.length !== 1 || cards.some(card => card.dot === 'error' || others.includes(card.alias))
+							|| !core || core.some(id => others.includes(`#${id}`));
+					})())) {
 					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
 				}
 				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
@@ -320,9 +349,9 @@ async function main(): Promise<void> {
 			}
 			const said = lines();
 			const before = said.find(line => line.phase === 'folder') as { runId: string; name: string; pid: number } | undefined;
-			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string; pinned: boolean } | null; terminals: string[] } | undefined;
+			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string; name: string; pinned: boolean } | null; terminals: string[] } | undefined;
 			console.log(`  Journey: ${suffix}: Pin and Unpin survive reload; a folder window becomes a multi-root workspace and keeps its pinned agent (LIFECYCLE-3.4, ARCHITECTURE-2.2)\n    ${JSON.stringify(said)}`);
-			if (!before || !after || after.folders !== 2 || after.card?.runId !== before.runId || !after.card.pinned || !alive(before.pid)
+			if (!before || !after || after.folders !== 2 || (engine === 'rust' ? after.card?.name !== before.name : after.card?.runId !== before.runId) || !after.card?.pinned || !alive(before.pid)
 				|| after.terminals.filter(each => each === before.name).length !== 1 || !['reload-pinned', 'reload-unpinned'].every(phase => said.some(line => line.phase === phase))) {
 				throw new Error('Pin/Unpin did not survive reload, or the folder agent was not the same pinned run, live process and one terminal in the workspace it became.');
 			}
@@ -343,6 +372,7 @@ async function main(): Promise<void> {
 			} finally {
 				endMatching(user);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
+			await endRust(facade);
 			}
 		}
 	};
@@ -442,6 +472,7 @@ async function main(): Promise<void> {
 			} finally {
 				endMatching(user);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
+			await endRust(facade);
 			}
 		}
 	};
@@ -473,6 +504,7 @@ async function main(): Promise<void> {
 			editor.kill('SIGTERM');
 			endMatching(user);
 			endMatching(path.join(facade, 'extension', 'ptyd'));
+			await endRust(facade);
 		}
 	};
 	/**
@@ -620,6 +652,7 @@ async function main(): Promise<void> {
 				endMatching(user);
 				endMatching(extensions);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
+			await endRust(facade);
 			}
 		}
 	};
@@ -658,11 +691,92 @@ async function main(): Promise<void> {
 			}
 		}
 	};
+	/**
+	 * The Rust engine's acceptance on the extension's side, in one window on it (engine.it.ts): the window runs on core of its Facade
+	 * root, its terminal's `facade list` shows the editor's agent, End Agent leaves nothing of an agent in core and Recent continues
+	 * it by session as a new agent, and a program is told the theme's colours.
+	 */
+	const rustJourneys = async () => {
+		await run('engine', repo, { FACADE_IT_JOURNEY: 'engine', FACADE_IT_GREP: 'Journey: the Rust engine' }, alone('claude'));
+	};
+	/**
+	 * Switching engines (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the old engine; both ended,
+	 * a new agent is not started there; reload: the window is on the Rust engine, and Recent continues both by their sessions. The
+	 * reloads end a test run's extension host, so a driver beside Facade Code (engineDriver.ts) does the steps and this judges them.
+	 */
+	const engineSwitch = async () => {
+		const solo = path.join(root, 'switch-app');
+		const user = path.join(root, 'u-sw'), extensions = path.join(root, 'x-sw'), shared = path.join(root, 's-sw');
+		const facade = path.join(home, 'switch');
+		const out = path.join(root, 'switch.jsonl');
+		const driver = path.join(root, 'driver-switch');
+		for (const dir of [solo, path.join(user, 'User'), driver]) {
+			fs.mkdirSync(dir, { recursive: true });
+		}
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, 'facade.rustEngine': 'off' }));
+		facadeSettings(facade, alone('claude'));
+		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'switch-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
+		fs.copyFileSync(path.join(__dirname, 'engineDriver.js'), path.join(driver, 'extension.js'));
+		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
+			fs.rmSync(path.join(root, file));
+		}
+		let editorOutput = '';
+		const editors: ReturnType<typeof spawn>[] = [];
+		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
+			stdio: ['ignore', 'pipe', 'pipe'],
+			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_SWITCH: out, FACADE_IT_AGENTS_HOME: agentsHome, CLAUDE_CONFIG_DIR: claudeConfig }
+		});
+		editors.push(editor);
+		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
+		editor.stdout?.on('data', append);
+		editor.stderr?.on('data', append);
+		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
+		try {
+			const end = Date.now() + 240_000;
+			while (Date.now() < end && !lines().some(line => line.phase === 'rust' || line.phase === 'error')) {
+				await new Promise(resolve => setTimeout(resolve, 500));
+			}
+			const said = lines();
+			console.log(`  Journey: switching engines (spec 验收)\n    ${JSON.stringify(said)}`);
+			const phase = (name: string) => said.find(line => line.phase === name);
+			const two = phase('two') as { agents: { runId: string; alias: string; session: string }[]; core: boolean } | undefined;
+			const still = phase('old-still') as { cards: string[]; alive: boolean[]; core: boolean; setting: string } | undefined;
+			const refused = phase('refused') as { cards: number; newCli: string[]; core: boolean } | undefined;
+			const rust = phase('rust') as { core: boolean; resumed: { alias: string; session: string }[] } | undefined;
+			const problems = [
+				...!two || two.agents.length !== 2 || two.core ? ['two agents did not start on the old engine, with no core running'] : [],
+				...!still || still.setting !== 'auto' || still.core || still.alive.some(each => !each) || !two || !isDeepStrictEqual([...still.cards].sort(), two.agents.map(agent => agent.runId).sort())
+					? ['after `auto` and a reload the two agents did not go on, on the old engine'] : [],
+				...!refused || refused.cards !== 0 || refused.newCli.length || refused.core ? ['with both ended, a new agent was started or core was started where the window says to reload'] : [],
+				...!rust || !rust.core ? ['the window did not come up on the Rust engine after the second reload'] : [],
+				...rust && two && !isDeepStrictEqual(rust.resumed.map(each => each.session).sort(), two.agents.map(agent => agent.session).sort()) ? ['Recent did not continue both conversations by their sessions'] : [],
+				...rust && two && rust.resumed.some(each => two.agents.some(agent => agent.alias === each.alias)) ? ['a continued conversation reused an old agent\'s number: it must be a new agent'] : [],
+				...phase('error') ? [`the driver failed: ${JSON.stringify(phase('error'))}`] : []
+			];
+			if (problems.length) {
+				throw new Error(`Switching engines failed: ${problems.join('; ')}`);
+			}
+			console.log('    ✔ off → auto and a reload keeps the two agents on the old engine; with both ended a new agent is not started; the next reload runs core, and Recent continues both by session as new agents');
+		} catch (error) {
+			console.error(`Editor output for the engine switch (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
+			throw error;
+		} finally {
+			try {
+				await endEditors(editors);
+			} finally {
+				endMatching(user);
+				endMatching(path.join(facade, 'extension', 'ptyd'));
+				await endRust(facade);
+			}
+		}
+	};
 	try {
-		if (!only || only === 'journeys') {
+		// `custom` alone is the program's journey, without the built-ins' six
+		if (!only || only === 'journeys' || only === 'custom') {
 			// The journeys once for each built-in: those before it in the catalog not installed, so that it is the one preselected
 			for (const [at, cli] of BUILT_INS.entries()) {
-				if (builtIn && builtIn !== cli.id) {
+				if (only === 'custom' || (builtIn && builtIn !== cli.id)) {
 					continue;
 				}
 				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [earlier.id, { command: path.join(root, `unavailable-${earlier.id}`) }]));
@@ -693,6 +807,16 @@ async function main(): Promise<void> {
 		if (!only || only === 'expiry') {
 			// The shared supervisor's real local grace, not a shortened fixture timer.
 			await conversion(BUILT_INS[0], true, true);
+		}
+		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
+		if (only === 'engine' || only === 'switch' ? engine !== 'rust' : false) {
+			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
+		}
+		if (only === 'engine' || (!only && engine === 'rust')) {
+			await rustJourneys();
+		}
+		if (only === 'switch' || (!only && engine === 'rust')) {
+			await engineSwitch();
 		}
 		// Asked for alone, as its three reloads of a window of twelve agents or more take minutes
 		if (only === 'pins') {

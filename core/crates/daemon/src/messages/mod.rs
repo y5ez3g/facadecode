@@ -270,6 +270,12 @@ impl Messages {
         }
     }
 
+    /// Raises the counter so the next message number is above `given`; one already above stays.
+    /// Blocks.
+    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
+        self.deliveries.table.raise_above(given)
+    }
+
     /// The handle an agent's typist delivers through.
     pub(crate) fn delivery_handle(&self) -> DeliveryHandle {
         DeliveryHandle::of(self.deliveries.clone())

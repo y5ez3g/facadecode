@@ -242,6 +242,15 @@ impl ToolStart {
             self.deadline = bounded(view, now + START_TIMEOUT);
             return None;
         }
+        // A draft read while the CLI still draws may be half of a redraw: judged once the screen is
+        // still, or once the start's time is up.
+        if view.input == InputState::Draft
+            && now < still_at(now, view)
+            && view.start_bound.is_none_or(|end| now < end)
+        {
+            self.deadline = bounded(view, still_at(now, view));
+            return None;
+        }
         let failure = match view.input {
             InputState::Unknown => {
                 "its input showed nothing it could read within 60 seconds of its start".into()

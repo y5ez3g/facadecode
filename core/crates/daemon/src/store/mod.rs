@@ -57,7 +57,7 @@ const SCHEMA: &str = "
 ";
 
 /// The columns `agents` gained after its first schema, with their types.
-const AGENT_COLUMNS: [(&str, &str); 9] = [
+const AGENT_COLUMNS: [(&str, &str); 10] = [
     ("exit_reason", "TEXT"),
     ("rule", "TEXT"),
     ("session", "TEXT"),
@@ -67,6 +67,7 @@ const AGENT_COLUMNS: [(&str, &str); 9] = [
     ("yolo", "INTEGER"),
     ("request_id", "TEXT"),
     ("prompt", "INTEGER"),
+    ("location_id", "TEXT"),
 ];
 
 fn log(level: &str, message: &str) {
@@ -102,6 +103,9 @@ pub(crate) struct AgentRecord {
     /// The number of its start's prompt, which a repeated start answers again. The result the
     /// prompt owes, where it owes one, has the next number.
     pub(crate) prompt: Option<u64>,
+    /// Its location's ID: the location its folder is, or the innermost one its folder is inside.
+    /// None in a record from before it, whose location is its folder's.
+    pub(crate) location_id: Option<String>,
 }
 
 /// The store as the daemon's start reads it.
@@ -436,6 +440,21 @@ impl NumberTable {
         )?;
         Ok(number as u64)
     }
+
+    /// Raises the counter so the next agent number is above `given`; one already above stays.
+    /// Blocks.
+    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
+        self.0.with(
+            || "raise the agent counter".to_string(),
+            |connection| {
+                connection.execute(
+                    "UPDATE numbers SET next = MAX(next, ?1 + 1)",
+                    [given as i64],
+                )
+            },
+        )?;
+        Ok(())
+    }
 }
 
 /// Whether a test asked the store to fail a write, by the file `name` in `core/`.
@@ -507,8 +526,9 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
     let exit = record.exit.as_ref();
     connection.execute(
         "INSERT INTO agents (agent_id, name, cli, cwd, pid, created_at, exit_code, exit_signal, \
-         exit_at, exit_reason, rule, session, window_id, creator, root, yolo, request_id, prompt) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+         exit_at, exit_reason, rule, session, window_id, creator, root, yolo, request_id, prompt, \
+         location_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             record.agent_id,
             record.name,
@@ -528,6 +548,7 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
             record.yolo,
             record.request_id,
             record.prompt.map(|number| number as i64),
+            record.location_id,
         ],
     )?;
     Ok(())
@@ -631,6 +652,7 @@ fn read_record(row: &Row) -> rusqlite::Result<AgentRecord> {
         yolo: optional(row, "yolo").unwrap_or(false),
         request_id: optional(row, "request_id"),
         prompt: optional::<i64>(row, "prompt").map(|number| number as u64),
+        location_id: optional(row, "location_id"),
         agent_id,
     })
 }
@@ -790,6 +812,7 @@ pub(crate) mod tests {
             yolo: true,
             request_id: None,
             prompt: None,
+            location_id: None,
         }
     }
 

@@ -61,5 +61,6 @@
 	"config.home": "Facade home は Facade の設定、エージェントの履歴、メッセージを保存するフォルダーです。同じ Facade home を持つウィンドウのエージェント間でのみ通信できます。環境変数 `FACADE_HOME` は既定値 `~/.facade` を上書きし、ここで指定したパスはその両方を上書きします。\n\n[facade.json で編集](command:facade.openSettingsFile)して、独自の CLI やターミナル プログラムを追加できます。各 CLI の起動方法、[新しいエージェント] に表示する CLI、候補として提示する名前、YOLO を有効にするかも設定できます。",
 	"config.home.pattern": "パスは ~/ で始まるか、絶対パスである必要があります。",
 	"config.moved": "`facade.json` に移りました。[facade.json で編集](command:facade.openSettingsFile)",
-	"config.movedPlain": "facade.json に移りました。「Facade Code: 設定を開く」を実行してアクセスしてください。"
+	"config.movedPlain": "facade.json に移りました。「Facade Code: 設定を開く」を実行してアクセスしてください。",
+	"config.rustEngine": "エージェントを動かすエンジンを制御します。新しい Rust エンジンは、最高のパフォーマンスを追求して設計されています。\n\n- `auto`: Rust エンジンを使います。このコンピューターで旧エンジンのエージェントがすべて終了すると、ウィンドウが切り替わります。実行中のエージェントが中断されることはなく、切り替え可能になるとすぐに Facade がウィンドウの再読み込みを促します。\n- `off`: 旧エンジンを使います。Rust エンジンで問題が起きた場合は、`off` を選んでウィンドウを再読み込みし、[GitHub の issue](https://github.com/y5ez3g/facadecode/issues) でお知らせください。\n\nWindows では、当面はエージェントが旧エンジンで動きます。リモート ウィンドウでは、リモート マシン側の設定が使われます。"
 }

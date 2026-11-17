@@ -354,5 +354,18 @@
 	"1 agent": "1 agente",
 	"{0} agents": "{0} agentes",
 	"Open Settings": "Abrir Configurações",
-	"Edit in facade.json": "Editar no facade.json"
+	"Edit in facade.json": "Editar no facade.json",
+	"The engine changes only after you reload the window.": "O mecanismo só muda depois de recarregar a janela.",
+	"All agents on the old engine have ended. Reload this window to switch.": "Todos os agentes do mecanismo antigo terminaram. Recarregue esta janela para fazer a troca.",
+	"Facade's settings file has an error": "O arquivo de configurações do Facade tem um erro",
+	"Facade could not find what you asked for": "O Facade não encontrou o item solicitado",
+	"Facade cannot do this right now": "O Facade não pode fazer isso agora",
+	"This CLI does not support this action": "Esta CLI não oferece suporte a esta ação",
+	"Could not create the worktree": "Não foi possível criar a árvore de trabalho",
+	"The agent has ended": "O agente terminou",
+	"Too much input at once": "Muita entrada de uma vez",
+	"Facade is updating; try again in a moment": "O Facade está sendo atualizado; tente novamente em instantes",
+	"Facade does not allow this": "O Facade não permite isso",
+	"Something went wrong in Facade": "Algo deu errado no Facade",
+	"Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.": "O Facade core não pôde iniciar: {0}. Esta janela está usando o mecanismo antigo. Para que o Facade não tente mais usar o mecanismo em Rust, defina {1} como `off` e recarregue a janela."
 }

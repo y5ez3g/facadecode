@@ -61,5 +61,6 @@
 	"config.home": "Facade home은 Facade의 설정, 에이전트 기록 및 메시지를 보관하는 폴더입니다. 동일한 Facade home을 사용하는 창의 에이전트끼리만 서로 통신할 수 있습니다. `FACADE_HOME` 환경 변수는 기본값 `~/.facade`보다 우선하며, 여기에 지정한 경로는 둘 다보다 우선합니다.\n\n[facade.json에서 편집](command:facade.openSettingsFile)하여 고유한 CLI 또는 터미널 프로그램을 추가하세요. 각 CLI의 시작 방법, '새 에이전트'에서 제공할 항목, 제안할 이름 및 YOLO 사용 여부도 선택할 수 있습니다.",
 	"config.home.pattern": "경로는 ~/로 시작하거나 절대 경로여야 합니다.",
 	"config.moved": "`facade.json`으로 옮겨졌습니다. [facade.json에서 편집](command:facade.openSettingsFile)",
-	"config.movedPlain": "facade.json으로 옮겨졌습니다. 'Facade Code: 설정 열기'를 실행하여 이동하세요."
+	"config.movedPlain": "facade.json으로 옮겨졌습니다. 'Facade Code: 설정 열기'를 실행하여 이동하세요.",
+	"config.rustEngine": "에이전트를 실행할 엔진을 제어합니다. 새 Rust 엔진은 최대 성능을 위해 만들어졌습니다.\n\n- `auto`: Rust 엔진을 사용합니다. 이 컴퓨터에서 이전 엔진의 에이전트가 모두 끝나면 창이 전환됩니다. 실행 중인 에이전트는 중단되지 않으며, 전환할 수 있게 되면 Facade가 창을 다시 로드하도록 안내합니다.\n- `off`: 이전 엔진을 사용합니다. Rust 엔진에 문제가 있으면 `off`를 선택하고 창을 다시 로드한 다음, [GitHub에 이슈를 남겨](https://github.com/y5ez3g/facadecode/issues) 알려 주세요.\n\nWindows에서는 당분간 에이전트가 이전 엔진에서 실행됩니다. 원격 창에서는 원격 컴퓨터의 설정이 적용됩니다."
 }

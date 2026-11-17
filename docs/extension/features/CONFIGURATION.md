@@ -80,6 +80,10 @@ reason. Effort suggestions are not an enum: another nonblank string is valid.
 
 For example, with Facade: Home set to `/tmp/facade-test`, Edit in facade.json opens `/tmp/facade-test/facade.json`.
 
+Below it, **Facade: Rust Engine** (`facade.rustEngine`, machine scope) is `auto`, the default, or `off`: which engine runs
+a window's agents (ARCHITECTURE-1.4). A change takes effect when the window reloads, offered as Facade: Home's is. A
+remote window reads the remote machine's value, so turning it on locally leaves remote windows as they are.
+
 ### 1.3 Creating the file
 
 **Facade writes settings only when creating a missing file.**

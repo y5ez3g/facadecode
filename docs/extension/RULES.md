@@ -78,13 +78,15 @@ Human notification handoff is defined separately in COLLABORATION-2.3.
 | Another draft present | Leave it untouched; wait for it to go (1.5). |
 | Menu, login, permission interaction or unusable input box | Do not type a message into it; wait for it to close (1.5). |
 | Draft/input state unknown, including an input box the reader does not recognize | Treat as unavailable, without guessing an empty input. |
+| Only row may be a hint or a draft (CLIS-2.1) | Probe it once a run, a space then Backspace, and act on what it found; else treat as unknown. |
 | Run still starting, its input reader not yet known | Treat as an unknown input at each slot; once its launch shows its CLI has no reader, fail at once. |
 | CLI without an input reader | Fail at once as a permanent obstacle; nothing is typed. |
 | Run ended or explicitly closed | Fail; do not restart it. |
 
 Every CLI version is attempted; CLIS-2.1 owns the input readers and their layout evidence, and the version is only a
 diagnostic. Do not wait for keyboard silence. Human typing that starts after this check is outside the contract; do not
-add another guard for that race. The recipient's MCP connection is not required when its terminal input is usable.
+add another guard for that race, but for one: a probe's space and Backspace each go only while the person has typed nothing since
+its reading, so that a probe never removes a character of theirs (CLIS-2.1). The recipient's MCP connection is not required when its terminal input is usable.
 Native CLI prompts remain in the terminal. Direct text/keys use COLLABORATION-1.2, which deliberately has no draft
 protection.
 
@@ -249,6 +251,9 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | Run | One start or Resume of the agent's CLI, until that CLI ends |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
 
+On the Rust engine core numbers agents and messages; a window's `hello` tells core the highest numbers this computer's
+counters gave, and core numbers on past them, so an update gives none twice. While old-engine windows still run, the two
+engines number apart and may repeat a number, which the switch's short overlap accepts.
 Keep the same agent ID and `#aN` through startup, rename, reattachment and Resume. A fresh start is a new agent with a new
 ID; Resume keeps the agent and starts a new run.
 Tree membership does not disappear when an ancestor closes. IDs are routing addresses, not credentials; no token

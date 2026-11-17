@@ -14,6 +14,8 @@ All of it in memory, one set per `Screen`:
   open synchronized update holds back.
 - **The unit being written**: the bytes of a character, escape sequence or control string the CLI
   has started and not finished.
+- **Supplied terminal colors**: optional foreground, background and cursor RGB values, used for
+  replies to OSC 10, 11 and 12 queries.
 - **The modes alacritty keeps private**: scrolling region, active charset (G0 or G1),
   modifyOtherKeys, the kitty keyboard flags (a stack per screen, at most 8 entries), and the tab
   stops.
@@ -36,7 +38,8 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   update), `redraw_with_all_scrollback` fed to an empty screen of the same size and scrollback
   rebuilds the rows, cursor, pen, charsets and modes.
 - Query replies and status events come in the order the CLI wrote what caused them. The reply to
-  `OSC 7501 ; ?` is queued among alacritty's own replies.
+  `OSC 7501 ; ?` and replies to supplied terminal color queries stay among alacritty's own replies.
+  Each query of a supplied color gets one reply; an omitted color gets none.
 - `scrollback_bytes` stays within `SCROLLBACK_BUDGET` (2 MiB). Past it, whole blocks of the oldest
   rows go, and a read reports `trimmed`.
 - A status report that breaks any limit of the protocol is dropped whole. Its words are only ever
@@ -48,17 +51,22 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
   states.
 - Touch the disk, start processes or threads, or read the clock. The only time it handles is the
   deadline alacritty puts on a synchronized update.
-- Reply to color queries (a viewer's theme is unknown), the kitty keyboard query, or ENQ.
+- Reply with a color it was not given, reply to other color queries such as OSC 4, the kitty
+  keyboard query, or ENQ.
 - Show a frame that an open synchronized update is still holding back.
 
 ## Interface
 
-`Screen` is the whole surface; the other public types are what its methods return.
+`Screen` is the whole surface; the other public types supply its colors or hold its methods' results.
 
 **Daemon, agent's screen** (`daemon/src/agent/screen/`, the screen and its screen log):
 
 - `Screen::new(cols, rows, scrollback) -> Screen`; the daemon uses 10,000 rows.
 - `feed(&mut self, &[u8]) -> ParsedOutput`, `resize(&mut self, cols, rows)`.
+- `set_colors(&mut self, colors: TerminalColors)` replaces the colors used for subsequent queries.
+  `TerminalColors { foreground, background, cursor }` has three `Option<[u8; 3]>` fields; its
+  default leaves all three `None`. OSC 10, 11 and 12 replies use `rgb:rrrr/gggg/bbbb`, each 8-bit
+  channel written twice, and the query's BEL or ST ending. No supplied colors means no color replies.
 - `at_clean_point()`, then `redraw_with_all_scrollback() -> Vec<u8>` for a checkpoint;
   `on_alternate_screen()` and `has_unfinished_unit()` to say what a forced checkpoint loses.
 - `synchronized_update_deadline() -> Option<Instant>`, `end_synchronized_update() -> ParsedOutput`.
@@ -141,8 +149,10 @@ The files:
    left the alternate screen (viewers then need a redraw), and the cursor's column for a tab stop.
    For a tab stop inside an open synchronized update, the held frame is drawn first and the update
    opened again after, so the cursor is right and a redraw still waits for the whole frame.
-3. `OSC 7501 ; ?` queues its reply among alacritty's. Then the screen takes alacritty's replies
-   and title changes, and returns them with the viewer output and status events.
+3. `OSC 7501 ; ?` queues its reply among alacritty's. Then the screen takes alacritty's replies,
+   color queries and title changes in order. Supplied colors go through alacritty's formatter into
+   the same replies; other color queries get no reply. The screen returns the replies and title
+   changes with the viewer output and status events.
 
 ### resize
 

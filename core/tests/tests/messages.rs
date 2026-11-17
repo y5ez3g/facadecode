@@ -1279,3 +1279,26 @@ fn a_message_whose_recipient_is_not_listed_after_a_restart_fails_at_its_deadline
     );
     assert!(home.submitted_messages().is_empty());
 }
+
+/// Agent and message numbers continue above the highest an editor gave before, as its window's
+/// client says in `hello`.
+#[test]
+fn numbers_continue_above_those_an_editor_gave() {
+    let home = TestHome::new("numbersgiven");
+    let folder = std::fs::canonicalize(&home.project).unwrap();
+    let window = json!({
+        "id": "win-1", "label": "win-1 window", "environment": "local", "workspace": "k1",
+        "folders": [folder],
+    });
+    let _editor = ide_with(
+        &home,
+        &window,
+        json!({ "numbers_given": { "agent": 41, "message": 230 } }),
+    );
+    let ada = home.start_named_fake("ada", &[]);
+    assert_eq!(ada.id, "a42");
+    assert_eq!(
+        home.run_facade_ok(&["send", "ada", "hi ada"]).trim(),
+        "#m231 was typed into #a42"
+    );
+}

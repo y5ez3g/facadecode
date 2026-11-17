@@ -16,8 +16,8 @@ use facade_base::daemon::{
     AgentState, AgentsChange, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
 };
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_rules::{InputRule, Rule};
-use facade_screen::ParsedOutput;
+use facade_rules::{BoxReading, InputRule, Rule};
+use facade_screen::{ParsedOutput, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -27,7 +27,7 @@ use super::readiness::{Press, Readiness, StartView};
 use super::screen::LoggedScreen;
 use super::state::{Kept, StateTracker, Viewing, keep};
 use super::terminal::{Terminal, TerminalEvent, TerminalWait};
-use super::typist::{Modes, Reading, Typing, Typist};
+use super::typist::{Modes, Typing, Typist};
 use super::viewers::{ViewerRequest, Viewers};
 use super::{
     ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
@@ -94,6 +94,7 @@ pub(super) fn spawn(
         info,
         master,
         screen,
+        colors,
         rule,
         captures,
         deliveries,
@@ -135,6 +136,7 @@ pub(super) fn spawn(
         state_at: Some(Instant::now()),
         screen_status_at: None,
         typist: Typist::new(
+            &info.agent_id,
             rule.map(|rule| &rule.paste),
             rule.and_then(facade_rules::console_typing),
             deliveries,
@@ -168,13 +170,14 @@ pub(super) fn spawn(
         publish_at: None,
         typist_at: None,
         replies_dropped: false,
+        typed: 0,
     };
     // The record shows the state from the start.
     actor.record_state();
     // Read once more as the task begins.
     actor.state_at = Some(Instant::now());
     let yolo = info.yolo;
-    tokio::spawn(actor.run(commands, recovered, yolo));
+    tokio::spawn(actor.run(commands, recovered, yolo, colors));
     Ok(())
 }
 
@@ -240,6 +243,9 @@ struct Actor {
     typist_at: Option<Instant>,
     /// Dropped terminal-query replies were logged.
     replies_dropped: bool,
+    /// How many writes of the person's went on: a probe's Backspace goes only while this is what
+    /// it was when the probe read the input.
+    typed: u64,
 }
 
 async fn sleep_until(at: Option<Instant>) {
@@ -289,8 +295,9 @@ impl Actor {
         mut commands: mpsc::Receiver<AgentCommand>,
         recovered: bool,
         yolo: bool,
+        colors: TerminalColors,
     ) {
-        self.begin(recovered, yolo).await;
+        self.begin(recovered, yolo, colors).await;
         loop {
             if !self.typist.pasting()
                 && let Some(reply) = self.settling.take()
@@ -381,7 +388,7 @@ impl Actor {
     }
 
     /// Sets the screen up, starts keeping the state's facts, and takes up a run that is under way.
-    async fn begin(&mut self, recovered: bool, yolo: bool) {
+    async fn begin(&mut self, recovered: bool, yolo: bool, colors: TerminalColors) {
         let (cols, rows) = {
             let info = self.links.shared.info.lock().unwrap();
             (
@@ -391,7 +398,7 @@ impl Actor {
         };
         let folder = self.facts.parent().map(PathBuf::from).unwrap_or_default();
         let mut handed_over = false;
-        let screen = match self.screen_start.take().expect("the screen starts once") {
+        let mut screen = match self.screen_start.take().expect("the screen starts once") {
             ScreenStart::New(folder) => LoggedScreen::create(folder, &self.id, cols, rows).await,
             ScreenStart::Recovered {
                 screen,
@@ -403,6 +410,7 @@ impl Actor {
             }
             ScreenStart::Released => LoggedScreen::released(folder, &self.id),
         };
+        screen.set_colors(colors);
         self.screen = Some(screen);
         // The screen folder exists now; the facts are kept there.
         self.start_keeping();
@@ -474,6 +482,7 @@ impl Actor {
                 let _ = reply.send(self.take_input(input, run));
             }
             AgentCommand::Resize(cols, rows) => self.take_size(cols, rows),
+            AgentCommand::SetColors(colors) => self.screen_mut().set_colors(colors),
             AgentCommand::AddViewer {
                 viewer,
                 tx,
@@ -504,7 +513,7 @@ impl Actor {
             AgentCommand::Inspect { reply } => {
                 let _ = reply.send(Inspection {
                     agent: self.links.shared.info.lock().unwrap().clone(),
-                    input: self.read_draft().0,
+                    input: self.read_screen_input().info,
                     session_tracking: self.captures && !self.ended(),
                 });
             }
@@ -560,6 +569,7 @@ impl Actor {
                 self.links.settled.send_replace(false);
                 let _ = self.links.exit.send(None);
                 self.state.restarted(Instant::now(), version, tools);
+                self.typist.clear_probes();
                 let yolo = self.links.shared.info.lock().unwrap().yolo;
                 self.ready_at =
                     self.readiness
@@ -1038,9 +1048,9 @@ impl Actor {
     }
 
     /// The CLI's input as its rule reads the screen now, with a draft's text, which stays in the
-    /// daemon.
-    fn read_draft(&self) -> Reading {
-        read_draft(
+    /// daemon, and its first row.
+    fn read_screen_input(&self) -> BoxReading {
+        read_box(
             self.input_rule,
             self.ended(),
             self.undrawn,
@@ -1073,24 +1083,38 @@ impl Actor {
         } else {
             None
         };
+        let probing = self.typist.probing();
         let (rule, ended, undrawn) = (self.input_rule, self.ended(), self.undrawn);
+        let read_screen = || read_box(rule, ended, undrawn, screen.screen());
         let read = || match first {
-            Some(evidence) => (
-                InputInfo {
+            Some(evidence) => BoxReading {
+                info: InputInfo {
                     state: InputState::Draft,
                     evidence: evidence.to_string(),
                     mechanism: rule.map(InputRule::mechanism),
                     hidden: None,
                 },
-                None,
-            ),
-            None => read_draft(rule, ended, undrawn, screen.screen()),
+                draft: None,
+                line: None,
+                unsure: false,
+            },
+            None => read_screen(),
         };
-        let step = self
-            .typist
-            .step(Instant::now(), written, queued, modes, &read);
+        let step = self.typist.step(
+            Instant::now(),
+            written,
+            queued,
+            modes,
+            self.typed,
+            &read,
+            &read_screen,
+        );
         self.terminal.push(&step.write);
         self.typist_at = step.wake;
+        // The start waits on what a probe finds: it looks again once the probe is done.
+        if probing && !self.typist.probing() && self.readiness.is_under_way() {
+            self.ready_at = Some(Instant::now());
+        }
         self.take_typed();
     }
 
@@ -1109,13 +1133,21 @@ impl Actor {
 
     /// Whether the run's start holds keys and calls now. The input is read only while it might.
     fn start_holds_input(&self) -> bool {
-        self.readiness.readies_tools() && self.readiness.holds_input(self.read_draft().0.state)
+        self.readiness.readies_tools()
+            && self
+                .readiness
+                .holds_input(self.typist.recall(self.read_screen_input()).info.state)
     }
 
     /// One step of the run's start; the keys it asks for go to the typist.
     fn step_start(&mut self) {
         let now = Instant::now();
-        let input = self.read_draft().0.state;
+        let reading = self.typist.recall(self.read_screen_input());
+        // An input that may hold a hint or a draft is probed; the start waits on what it finds.
+        if reading.unsure && self.readiness.readies_tools() {
+            self.typist.want_probe();
+        }
+        let input = reading.info.state;
         let screen = self
             .screen
             .as_ref()
@@ -1174,6 +1206,7 @@ impl Actor {
     /// The person's keys. An Enter that may submit the input waits, with the keys after it, until
     /// the input can be read; a CLI without a rule has no input to read.
     fn take_keys(&mut self, keys: Vec<u8>) {
+        self.typed += 1;
         let enter = self.person.enter(&keys);
         if enter.is_some() {
             self.state.asked();
@@ -1260,10 +1293,11 @@ impl Actor {
                 }
                 // A draft ending in `\` is a line break to a CLI, not a submission.
                 let draft = (whole && drawn.is_some())
-                    .then(|| self.read_draft())
-                    .and_then(|(input, draft)| {
-                        draft.filter(|draft| {
-                            input.state == InputState::Draft && !draft.trim_end().ends_with('\\')
+                    .then(|| self.read_screen_input())
+                    .and_then(|reading| {
+                        reading.draft.filter(|draft| {
+                            reading.info.state == InputState::Draft
+                                && !draft.trim_end().ends_with('\\')
                         })
                     })
                     .map(|draft| match self.typist.paste_rule() {
@@ -1276,7 +1310,7 @@ impl Actor {
             }
             Some(Submitting::Sent { draft, until }) => {
                 let taken = matches!(
-                    self.read_draft().0.state,
+                    self.read_screen_input().info.state,
                     InputState::Usable | InputState::Interaction
                 );
                 if taken {
@@ -1317,7 +1351,7 @@ impl Actor {
             .expect("the screen exists while the actor runs");
         self.state.observe(screen.screen());
         // A menu or question of the CLI's own in place of its input waits for the person.
-        let asking = self.read_draft().0.state == InputState::Interaction;
+        let asking = self.read_screen_input().info.state == InputState::Interaction;
         self.state.asks(asking, Instant::now());
         self.state_changed = true;
     }
@@ -1361,27 +1395,29 @@ impl Actor {
     }
 }
 
-/// A CLI's input as `rule` reads `screen`, with a draft's text. Unknown without a rule, once the
-/// run `ended`, or while the screen may not show the input yet, `undrawn` saying why.
-fn read_draft(
+/// A CLI's input as `rule` reads `screen`, with a draft's text and its first row. Unknown without a
+/// rule, once the run `ended`, or while the screen may not show the input yet, `undrawn` saying why.
+fn read_box(
     rule: Option<&InputRule>,
     ended: bool,
     undrawn: Option<&str>,
     screen: &facade_screen::Screen,
-) -> Reading {
-    let unknown = |evidence: &str, rule: Option<&InputRule>| {
-        let info = InputInfo {
+) -> BoxReading {
+    let unknown = |evidence: &str, rule: Option<&InputRule>| BoxReading {
+        info: InputInfo {
             state: InputState::Unknown,
             evidence: evidence.to_string(),
             mechanism: rule.map(InputRule::mechanism),
             hidden: None,
-        };
-        (info, None)
+        },
+        draft: None,
+        line: None,
+        unsure: false,
     };
     match (rule, undrawn) {
         (None, _) => unknown("the agent has no CLI rule to read its input by", None),
         (Some(rule), _) if ended => unknown("the agent ended", Some(rule)),
         (Some(rule), Some(why)) => unknown(why, Some(rule)),
-        (Some(rule), None) => facade_rules::read_draft(rule, &screen.view()),
+        (Some(rule), None) => facade_rules::read_box(rule, &screen.view()),
     }
 }

@@ -7,8 +7,9 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Grid};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb, StdSyncHandler};
 
+use crate::TerminalColors;
 use crate::store::StoreFeed;
 
 /// A screen's size. alacritty needs at least 2 columns and 1 row.
@@ -65,6 +66,7 @@ pub(crate) struct Requests {
 /// alacritty's terminal and parser.
 pub(crate) struct Terminal {
     pub(crate) term: Term<Outbox>,
+    pub(crate) colors: TerminalColors,
     parser: Processor<StdSyncHandler>,
     outbox: Outbox,
 }
@@ -86,6 +88,7 @@ impl Terminal {
         }
         Terminal {
             term,
+            colors: TerminalColors::default(),
             parser: Processor::new(),
             outbox,
         }
@@ -131,8 +134,7 @@ impl Terminal {
         self.outbox.send_event(Event::PtyWrite(reply.to_owned()));
     }
 
-    /// Takes what alacritty asked for. Colour queries are left unanswered: a viewer's theme is
-    /// unknown.
+    /// Takes what alacritty asked for, replying to color queries only with supplied colors.
     pub(crate) fn take_requests(&self) -> Requests {
         let queued = match self.outbox.0.lock() {
             Ok(mut queued) => std::mem::take(&mut *queued),
@@ -142,6 +144,19 @@ impl Terminal {
         for event in queued {
             match event {
                 Event::PtyWrite(text) => requests.replies.extend(text.into_bytes()),
+                Event::ColorRequest(index, formatter) => {
+                    let color = match index {
+                        index if index == NamedColor::Foreground as usize => self.colors.foreground,
+                        index if index == NamedColor::Background as usize => self.colors.background,
+                        index if index == NamedColor::Cursor as usize => self.colors.cursor,
+                        _ => None,
+                    };
+                    if let Some([r, g, b]) = color {
+                        requests
+                            .replies
+                            .extend(formatter(Rgb { r, g, b }).into_bytes());
+                    }
+                }
                 Event::Title(title) => requests.title = Some(title),
                 Event::ResetTitle => requests.title = Some(String::new()),
                 _ => {}

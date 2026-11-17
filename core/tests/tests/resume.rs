@@ -866,3 +866,45 @@ fn a_codex_run_keeps_the_version_its_installation_names_and_a_resume_reads_it_ag
     assert!(resumed.status.success(), "{}", stderr(&resumed));
     assert!(kept("0.167.0"), "{:?}", std::fs::read_to_string(&facts));
 }
+
+/// A start that continues a session is a new agent, with a number of its own, whose CLI continues
+/// that session as its rule's resume says, after the agent that had it was removed.
+#[test]
+fn a_start_with_a_session_continues_it_as_a_new_agent() {
+    let home = TestHome::new("continue");
+    let first = home.start_named_fake("before", &[("FAKECLI_SESSION", FIRST)]);
+    assert!(records_session(&home, "before", Some(FIRST)));
+    home.run_facade_ok(&["stop", "before"]);
+    home.run_facade_ok(&["remove", "before"]);
+    let file = home.project.parent().unwrap().join("after.args");
+    let mut wire = connect(&home);
+    let args = json!({
+        "command": ["fake"], "session": FIRST, "name": "after", "cwd": home.project,
+        "env": {
+            "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path, "FAKECLI_ARGS": file,
+        },
+        "cols": 80, "rows": 24,
+    });
+    let started = wire.call("agent.start", args);
+    let id = started["result"]["agent"]["agent_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{started}"));
+    assert_ne!(id, first.id, "a new agent");
+    assert!(
+        wait_until(secs(10), || file.exists()),
+        "the CLI wrote no arguments"
+    );
+    let words: Vec<String> =
+        facade_scenarios::serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(words, ["--resume", FIRST]);
+    assert!(
+        wait_for_screen_text(&home, "after", &format!("session {FIRST}")),
+        "the CLI continued the session"
+    );
+    assert!(
+        records_session(&home, "after", Some(FIRST)),
+        "the run reports the session: {:?}\n{}",
+        home.agent_from_list_json("after"),
+        home.daemon_log()
+    );
+}

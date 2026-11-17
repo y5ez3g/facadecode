@@ -11,14 +11,14 @@
 
 mod locations;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::daemon::{
-    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowDescription, WindowInfo,
-    WindowsChange, WorktreeCreateArgs,
+    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, TerminalColors, WindowDescription,
+    WindowInfo, WindowsChange, WorktreeCreateArgs, location_id,
 };
 use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -51,17 +51,27 @@ pub(crate) struct LocationsRead {
 }
 
 impl LocationsRead {
-    /// Whether an agent working in `cwd` lost its location: the window no longer has the folder
-    /// that brought it, or a read with no problem no longer finds the folder.
+    /// Whether an agent working in `cwd` lost its location: no location holds the folder and the
+    /// window no longer has the folder of one that did, or a read with no problem no longer finds
+    /// the folder.
     pub(crate) fn is_gone(&self, cwd: &str) -> bool {
         if self.catalog.location(cwd).is_some() {
             return false;
         }
-        self.dropped
-            .iter()
-            .any(|path| folder_key(Path::new(path)) == folder_key(Path::new(cwd)))
+        let cwd_key = folder_key(Path::new(cwd));
+        (self.catalog.holding(cwd).is_none()
+            && self
+                .dropped
+                .iter()
+                .any(|path| Path::new(&cwd_key).starts_with(folder_key(Path::new(path)))))
             || (self.catalog.problems().is_empty() && !Path::new(cwd).exists())
     }
+}
+
+/// Where an agent starts: its folder, and the ID of the location that holds the folder.
+pub(crate) struct Destination {
+    pub(crate) cwd: String,
+    pub(crate) location_id: String,
 }
 
 /// The editor windows, by ID, and the worktree creations under way in them.
@@ -231,12 +241,13 @@ impl Windows {
         }
     }
 
-    /// Takes back `owners`, the editor windows that hold running agents, each as left once and
+    /// Takes back `running`, the editor windows that hold running agents, each as left once and
     /// with no connection: to a window, a daemon's restart is a lost connection. Each keeps the
     /// description the table kept, or, where it is lost, its ID as its name and a remote window's
-    /// grace. Deletes the rows of the other windows. Answers the windows taken back, whose graces
-    /// the caller starts. Blocks on the table.
-    pub(crate) fn restore(&self, owners: &[String]) -> Vec<String> {
+    /// grace. The rows of `agents`, the windows that hold any agent's record, stay, unlisted: a
+    /// later window of their workspace takes them over. Deletes the other rows. Answers the
+    /// windows taken back, whose graces the caller starts. Blocks on the table.
+    pub(crate) fn restore(&self, running: &[String], agents: &[String]) -> Vec<String> {
         let kept = blocking_in_place(|| self.shared.table.windows()).unwrap_or_else(|err| {
             warn(&format!("{err:#}"));
             Vec::new()
@@ -246,7 +257,7 @@ impl Windows {
             .map(|description| (description.id.clone(), description))
             .collect();
         let mut restored = Vec::new();
-        for id in owners {
+        for id in running {
             if *id == TERMINAL_WINDOW || restored.contains(id) {
                 continue;
             }
@@ -257,6 +268,8 @@ impl Windows {
                 workspace: None,
                 folders: Vec::new(),
                 branch_prefix: None,
+                colors: None,
+                env: None,
             });
             self.shared
                 .windows
@@ -265,7 +278,7 @@ impl Windows {
                 .insert(id.clone(), Window::new(description, 1));
             restored.push(id.clone());
         }
-        for id in kept.keys() {
+        for id in kept.keys().filter(|id| !agents.contains(id)) {
             if let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
                 warn(&format!("{err:#}"));
             }
@@ -295,8 +308,9 @@ impl Windows {
     }
 
     /// Takes `description` as its window's, counting one more connection where `connecting`, and
-    /// keeps it in the table. Answers the windows of the same workspace that have no connection
-    /// left: they are forgotten here, and their agents are the caller's to move before
+    /// keeps it in the table. Answers the windows of the same workspace that it takes over: those
+    /// listed with no connection left, which are removed here, and those that left and are no
+    /// longer listed, whose rows the table kept. Their agents are the caller's to move before
     /// [`Windows::taken_over`]. Blocks on the table.
     pub(crate) fn describe(
         &self,
@@ -304,10 +318,18 @@ impl Windows {
         connecting: bool,
     ) -> Vec<String> {
         let id = &description.id;
+        let rows = match &description.workspace {
+            Some(_) => blocking_in_place(|| self.shared.table.windows()).unwrap_or_else(|err| {
+                warn(&format!("{err:#}"));
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
         let taken = {
             let mut windows = self.shared.windows.lock().unwrap();
-            let taken: Vec<String> = match &description.workspace {
-                Some(workspace) => windows
+            let mut taken: Vec<String> = Vec::new();
+            if let Some(workspace) = &description.workspace {
+                taken = windows
                     .iter()
                     .filter(|(other, window)| {
                         *other != id
@@ -315,9 +337,17 @@ impl Windows {
                             && window.description.workspace.as_ref() == Some(workspace)
                     })
                     .map(|(other, _)| other.clone())
-                    .collect(),
-                None => Vec::new(),
-            };
+                    .collect();
+                taken.extend(
+                    rows.iter()
+                        .filter(|row| {
+                            row.id != *id
+                                && row.workspace.as_ref() == Some(workspace)
+                                && !windows.contains_key(&row.id)
+                        })
+                        .map(|row| row.id.clone()),
+                );
+            }
             for other in &taken {
                 windows.remove(other);
             }
@@ -413,9 +443,11 @@ impl Windows {
         });
     }
 
-    /// Forgets window `id` and deletes its row, unless it connected again since its
-    /// `departure`-th leaving. Blocks on the table.
-    pub(crate) fn forget(&self, id: &str, departure: u64) {
+    /// Removes window `id` from the list, unless it connected again since its `departure`-th
+    /// leaving, and deletes its row, except where `has_agents`: agents' records are still under
+    /// its ID, and the row keeps its `workspace`, so that a later window of it can take them over.
+    /// Blocks on the table.
+    pub(crate) fn remove(&self, id: &str, departure: u64, has_agents: bool) {
         {
             let mut windows = self.shared.windows.lock().unwrap();
             if !windows
@@ -426,7 +458,7 @@ impl Windows {
             }
             windows.remove(id);
         }
-        if let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
+        if !has_agents && let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
             warn(&format!("{err:#}"));
         }
         self.shared.publish(WindowsChange::Removed {
@@ -489,10 +521,23 @@ impl Windows {
     }
 
     /// Where an agent of window `id` starts from `cwd`: in the terminal window, `cwd` as given; in
-    /// an editor window that is connected, the location at `cwd`, whose folder must still exist.
-    pub(crate) fn check_destination(&self, id: &str, cwd: &str) -> Result<String, ErrorBody> {
+    /// an editor window that is connected, `cwd` with its links resolved, which must be a location
+    /// of the window or a folder inside one, and still exist. Its location is the innermost one.
+    pub(crate) fn check_destination(&self, id: &str, cwd: &str) -> Result<Destination, ErrorBody> {
+        self.check_place(id, cwd, false)
+    }
+
+    /// As [`Self::check_destination`], where `cwd` must be a location itself.
+    fn check_location(&self, id: &str, cwd: &str) -> Result<Destination, ErrorBody> {
+        self.check_place(id, cwd, true)
+    }
+
+    fn check_place(&self, id: &str, cwd: &str, exact: bool) -> Result<Destination, ErrorBody> {
         if id == TERMINAL_WINDOW {
-            return Ok(cwd.to_string());
+            return Ok(Destination {
+                cwd: cwd.to_string(),
+                location_id: location_id(cwd),
+            });
         }
         let path = real_path(Path::new(cwd)).map_or_else(
             |_| cwd.to_string(),
@@ -505,19 +550,28 @@ impl Windows {
             .ok_or_else(|| {
                 ErrorBody::new(Reason::Unavailable, format!("window {id} is not there now"))
             })?;
-        let location = window.catalog.location(&path).ok_or_else(|| {
+        let location = if exact {
+            window.catalog.location(&path)
+        } else {
+            window.catalog.holding(&path)
+        }
+        .ok_or_else(|| {
+            let nor_inside = if exact { "" } else { ", nor inside one" };
             ErrorBody::invalid_argument(format!(
-                "{cwd} is not a location of window {}",
+                "{cwd} is not a location of window {}{nor_inside}",
                 window.description.label
             ))
         })?;
-        if !Path::new(&location.path).is_dir() {
+        if !Path::new(&path).is_dir() {
             return Err(ErrorBody::new(
                 Reason::Unavailable,
-                format!("the folder {} no longer exists", location.path),
+                format!("the folder {path} no longer exists"),
             ));
         }
-        Ok(location.path.clone())
+        Ok(Destination {
+            location_id: location.location_id.clone(),
+            cwd: path,
+        })
     }
 
     /// Window `id`'s Git branch prefix.
@@ -529,6 +583,30 @@ impl Windows {
             .get(id)?
             .description
             .branch_prefix
+            .clone()
+    }
+
+    /// The terminal colors window `id` last described, kept only in memory.
+    pub(crate) fn colors(&self, id: &str) -> Option<TerminalColors> {
+        self.shared
+            .windows
+            .lock()
+            .unwrap()
+            .get(id)?
+            .description
+            .colors
+            .clone()
+    }
+
+    /// The environment window `id` last described, kept only in memory.
+    pub(crate) fn env(&self, id: &str) -> Option<BTreeMap<String, String>> {
+        self.shared
+            .windows
+            .lock()
+            .unwrap()
+            .get(id)?
+            .description
+            .env
             .clone()
     }
 
@@ -550,7 +628,7 @@ impl Windows {
         &self,
         args: WorktreeCreateArgs,
     ) -> Result<(LocationInfo, Option<LocationsRead>), ErrorBody> {
-        let source = self.check_destination(&args.window_id, &args.cwd)?;
+        let source = self.check_location(&args.window_id, &args.cwd)?.cwd;
         let prefix = self.branch_prefix(&args.window_id);
         let made = locations::create(
             Path::new(&source),

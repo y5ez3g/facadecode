@@ -103,7 +103,8 @@ async function main(): Promise<void> {
 	if (aliases.length !== folders.length || aliases.length + (image ? 1 : 0) > 2) {
 		throw new Error('Give one or two hosts, and the extension\'s folder on each SSH host.');
 	}
-	if (image && process.platform !== 'linux') {
+	// A Linux computer's own Docker, or a VM's that mounts this computer's home (DOCKER_HOST names it), as a Mac's colima does
+	if (image && process.platform !== 'linux' && !process.env.DOCKER_HOST) {
 		throw new Error('A container host is started with this computer\'s Docker, from Linux.');
 	}
 	const only = process.env.FACADE_IT_ONLY;
@@ -111,6 +112,12 @@ async function main(): Promise<void> {
 		throw new Error(`FACADE_IT_ONLY is one of ${SCENARIOS.join(', ')}.`);
 	}
 	const keep = !!process.env.FACADE_IT_KEEP;
+	// The engine the windows run on, as `run.ts` has it: `old` (the default) writes `facade.rustEngine: off`, `rust` writes `auto`. The
+	// setting is the machine's: a remote window reads its own host's, which this run writes where it can (a container's user settings)
+	const engine = process.env.FACADE_IT_ENGINE ?? 'old';
+	if (engine !== 'old' && engine !== 'rust') {
+		throw new Error('FACADE_IT_ENGINE is old or rust.');
+	}
 	const base = process.env.FACADE_IT_REMOTE_ROOT || '/tmp';
 	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
 	sanitizedEnvironment();
@@ -161,7 +168,10 @@ async function main(): Promise<void> {
 		const folder = path.resolve(__dirname, '..', '..', '..', '..');
 		const alias = `${name}-container`;
 		try {
-			execFileSync('docker', ['run', '--detach', '--name', alias, '--user', 'node', '--volume', `${folder}:${folder}:ro`, image, 'sleep', 'infinity'], { stdio: 'pipe' });
+			// On the Rust engine the stage's bin/ holds this computer's core, which the container cannot run: FACADE_IT_REMOTE_BIN names a folder
+			// of core's programs built for the container's platform, which the container sees in its place
+			const linuxCore = process.env.FACADE_IT_REMOTE_BIN ? ['--volume', `${path.resolve(process.env.FACADE_IT_REMOTE_BIN)}:${folder}/build/extension-it/bin:ro`] : [];
+			execFileSync('docker', ['run', '--detach', '--name', alias, '--user', 'node', '--volume', `${folder}:${folder}:ro`, ...linuxCore, image, 'sleep', 'infinity'], { stdio: 'pipe' });
 		} catch (err) {
 			throw new Error(`A container of ${image} could not be started: ${failureOf(err)}`);
 		}
@@ -193,6 +203,7 @@ async function main(): Promise<void> {
 		'window.restoreWindows': 'none',
 		'workbench.startupEditor': 'none',
 		'update.mode': 'none',
+		'facade.rustEngine': engine === 'rust' ? 'auto' : 'off',
 		'extensions.autoUpdate': false,
 		'extensions.autoCheckUpdates': false,
 		'telemetry.telemetryLevel': 'off',
@@ -220,7 +231,7 @@ async function main(): Promise<void> {
 		return user;
 	};
 	/** What the editor gives its extension hosts, local and remote, with this scenario's own. */
-	const environment = (more: { readonly [variable: string]: string } = {}) => ({ FACADE_HOME: facade, CLAUDE_CONFIG_DIR: claude, FACADE_IT_RECORD: record, ...more });
+	const environment = (more: { readonly [variable: string]: string } = {}) => ({ FACADE_IT_ENGINE: engine, FACADE_HOME: facade, CLAUDE_CONFIG_DIR: claude, FACADE_IT_RECORD: record, ...more });
 	const profile = (editor: string) => ['--user-data-dir', userData(editor), '--extensions-dir', extensions, '--shared-data-dir', path.join(root, `s-${editor}`)];
 	const opened = (folder: Folder) => 'local' in folder ? [folder.local] : ['--folder-uri', folder.host.uri(folder.remote)];
 	const workspaceExtension = (folder: Folder) => 'local' in folder ? extension : folder.host.uri(`${folder.host.build}/extension-it`);
@@ -294,6 +305,23 @@ for repo in app remote-peer; do
 	git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m first
 done
 `);
+				// A machine setting belongs to the remote server, before its first extension activation.
+				if (host.platform !== 'windows') {
+					const qaMachine = host.kind === 'container'
+						? '/home/node/.vscode-server/data/Machine/settings.json'
+						: `${server(host)}/.vscode-server/data/Machine/settings.json`;
+					const qaValue = engine === 'old' ? 'off' : 'auto';
+					const qaText = JSON.stringify({ 'facade.rustEngine': qaValue });
+					const qaNode = "const fs=require('fs'),crypto=require('crypto');const p=process.argv[1],s=fs.readFileSync(p,'utf8');console.log(JSON.stringify({path:p,sha256:crypto.createHash('sha256').update(s).digest('hex'),settings:JSON.parse(s)}))";
+					const qaReadback = host.run(`set -e
+umask 077
+mkdir -p ${quoted(path.posix.dirname(qaMachine))}
+printf '%s' ${quoted(qaText)} > ${quoted(qaMachine)}
+node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
+"$node" -e ${quoted(qaNode)} ${quoted(qaMachine)}
+`);
+					console.log('QA_MACHINE_PRESET ' + JSON.stringify({ host: host.alias, file: qaMachine, value: qaValue, readback: qaReadback.trim() }));
+				}
 			} catch (err) {
 				throw new Error(`${host.alias} cannot run the journeys: ${failureOf(err)}. It needs Node and Git, and the extension built for the suite in ${host.build}.`);
 			}
@@ -382,6 +410,11 @@ done
 				},
 				{
 					scenario: 'local-ssh', title: on, go: async () => {
+						// The Rust engine's computers do not work together: of this scenario the local window's own journeys run, the container started beside it
+						if (engine === 'rust') {
+							await suite('local-ssh', { local: fs.realpathSync(local.app) }, { FACADE_IT_CLI: 'claude' });
+							return;
+						}
 						const label = await peer('remote-peer', remotePeer(host));
 						await suite('local-ssh', { local: fs.realpathSync(local.app) }, { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: label, FACADE_IT_PEER_DIR: host.at(`${root}/remote-peer`), FACADE_IT_PEER_ELSEWHERE: '1' });
 					}
@@ -392,9 +425,12 @@ done
 						await suite('ssh-local', app(host), { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: label, FACADE_IT_PEER_DIR: fs.realpathSync(local.peer), FACADE_IT_PEER_ELSEWHERE: '1' });
 					}
 				}
-			] as const).filter(each => !inContainer || each.scenario === 'local-ssh'));
+			] as const).filter(each => !inContainer || each.scenario === 'local-ssh').filter(each => engine !== 'rust' || each.scenario === (inContainer ? 'local-ssh' : 'ssh')));
+			if (engine === 'rust') {
+				console.log(`\nOn the Rust engine ${on} runs the journeys of one remote window only${inContainer ? ' - a container window cannot be driven by a test editor (Dev Containers attaches it again and the editor refuses), so of a container the local window\'s own journeys run, with the container started beside it' : ''}: agents of different computers do not work together there, as the owner decided - each computer runs its own core - so the scenarios between windows of different computers (and the wait for a peer window to register under extension/network) are not run.`);
+			}
 		}
-		if (hosts.length === 2 && hosts[0].kind === 'ssh') {
+		if (hosts.length === 2 && hosts[0].kind === 'ssh' && engine !== 'rust') {
 			const [first, second] = hosts;
 			runs.push({
 				scenario: 'hosts', title: `${first.alias} with ${second.alias}`, go: async () => {

@@ -406,9 +406,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		return this.ask('type', { run, text, enter, ...lead !== undefined ? { lead } : {} });
 	}
 
-	/** Presses `keys`, already validated names, in `run`'s terminal, in turn with its other automated input (MCP-5.2). */
-	pressKeys(run: RunId, keys: readonly string[]): Promise<InputEffect> {
-		return this.ask('keys', { run, keys });
+	/**
+	 * Presses `keys`, already validated names, in `run`'s terminal, in turn with its other automated input (MCP-5.2); with `unlessTyped`,
+	 * each only while the person's writes to it number that many (RULES-1.4).
+	 */
+	pressKeys(run: RunId, keys: readonly string[], unlessTyped?: number): Promise<InputEffect> {
+		return this.ask('keys', { run, keys, ...unlessTyped !== undefined ? { unlessTyped } : {} });
 	}
 
 	/** `run`'s ordinary-message input as the input reader `adapter` reads it from ptyd's screen of the run (CLIS-2.1, RULES-1.4). */

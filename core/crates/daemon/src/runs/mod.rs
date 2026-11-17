@@ -82,13 +82,18 @@ pub(crate) struct RunRequest<'a> {
     /// The environment the settings give the CLI; Facade's variables go on top.
     pub(crate) inherited: BTreeMap<String, String>,
     pub(crate) cwd: &'a str,
+    /// The agent's location ID, which its instructions name.
+    pub(crate) location_id: &'a str,
     pub(crate) window_id: &'a str,
     pub(crate) window_label: &'a str,
     /// The agent that starts it, by ID and name.
     pub(crate) creator: Option<(&'a str, Option<&'a str>)>,
     pub(crate) yolo: bool,
-    /// The session a resume continues; None for a start.
-    pub(crate) resume: Option<&'a str>,
+    /// The session the command line continues: a resume's, or a start's that continues one. None
+    /// for a start of a new session.
+    pub(crate) session: Option<&'a str>,
+    /// Whether this is the agent's first run or a resume of it.
+    pub(crate) kind: RunKind,
 }
 
 /// A run ready for the keeper.
@@ -107,6 +112,8 @@ pub(crate) struct PreparedRun {
     pub(crate) files: RunFiles,
     pub(crate) rule: Option<&'static Rule>,
     pub(crate) cwd: String,
+    /// The request's kind: whether the run is the agent's first or a resume.
+    pub(crate) kind: RunKind,
 }
 
 impl PreparedRun {
@@ -117,9 +124,10 @@ impl PreparedRun {
     }
 }
 
-/// Whether a launch starts an agent's first run or resumes it.
+/// Whether a run is the agent's first run or a resume of it. A start that continues a session is
+/// still the agent's first run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RunLaunch {
+pub(crate) enum RunKind {
     Start,
     /// The run's exit waits to be saved until the daemon has committed the run
     /// ([`Runs::installed`]).
@@ -208,7 +216,7 @@ impl Runs {
     /// Has the keeper start run `number` of agent `id` and registers it before returning. An exit
     /// reported meanwhile goes to `exits`. A start that fails takes its run folder with it.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn launch(
+    pub(crate) async fn start(
         &self,
         reservation: StartReservation,
         id: &str,
@@ -217,7 +225,6 @@ impl Runs {
         cols: u16,
         rows: u16,
         exits: ExitSink,
-        kind: RunLaunch,
     ) -> Result<StartedRun, ErrorBody> {
         let args = StartArgs {
             agent: id.to_string(),
@@ -229,7 +236,7 @@ impl Runs {
         };
         let launched = self
             .link
-            .send_start(reservation, id, number, args, exits, kind)
+            .send_start(reservation, id, number, args, exits, prepared.kind)
             .await;
         match &launched {
             Ok(_) => {
@@ -237,7 +244,7 @@ impl Runs {
                 self.preparation
                     .plugin_used(id, rule, Path::new(&prepared.cwd));
             }
-            Err(_) if kind == RunLaunch::Start => self.preparation.remove_folders(id),
+            Err(_) if prepared.kind == RunKind::Start => self.preparation.remove_folders(id),
             Err(_) => {}
         }
         launched

@@ -5,9 +5,9 @@ instead of repeating them: the [daemon protocol](../../core/protocol/PROTOCOL.md
 [MCP contract](../extension/engineering/MCP.md) for Facade's tools, and the [shared rules](../extension/RULES.md) that
 both follow.
 
-Core serves the computer it runs on. The editor extension does not run on it yet. It runs on macOS, on Linux, and on
-Windows 11 or Windows Server 2022 and later, on x64. On Windows it is a native program, and each CLI runs in a pseudo
-console.
+Core serves the computer it runs on. The editor extension uses core when its Rust engine is on. It runs on macOS,
+on Linux, and on Windows 11 or Windows Server 2022 and later, on x64. On Windows it is a native program, and each CLI
+runs in a pseudo console.
 
 ## Agents
 
@@ -21,7 +21,8 @@ An agent is a CLI that Facade runs in a terminal it keeps, or a session that joi
 - **First prompt**: `--prompt` is the agent's first message. Facade sends it once the CLI's tools have connected, or
   will not, so that the first turn has them.
 - **Numbers and names**: every agent gets the next `#aN`, which its home never gives again. An agent without a name gets
-  one from the settings file's `names`, else from Facade's own. `facade rename` changes it.
+  one from the settings file's `names`, else from Facade's own. `facade rename` changes it. An editor window says at
+  `hello` the highest agent and message numbers its editor gave before, and core numbers above them from then on.
 - **States**: `facade list` shows what each agent is doing: `starting`, `working`, `waiting_for_you` (on a permission, a
   question or a sign-in), `just_done`, `idle`, `error`, `ended` or `unknown`. A state comes from what the CLI reports of
   itself, and from its screen where its rule reads it. See [States](../../core/protocol/PROTOCOL.md#states).
@@ -33,6 +34,9 @@ An agent is a CLI that Facade runs in a terminal it keeps, or a session that joi
 - **Resume**: `facade resume` starts an ended agent's CLI again, continuing the session the CLI reported. The agent
   keeps its ID, `#aN`, name and screen; the resume is a new run of its CLI. An agent can resume when it was started by a
   CLI's name and its CLI reported a session. See [Resume](../../core/protocol/PROTOCOL.md#resume).
+- **Continue a session**: a start can continue a CLI's session as a new agent, with its own `#aN`, with the arguments
+  its rule gives to continue it: an editor does this to bring back a pinned or recent session. See `StartArgs.session` in
+  [PROTOCOL](../../core/protocol/PROTOCOL.md#startargs).
 - **Inspect**: `facade inspect` shows an agent's rule, state, tools, its input box as its screen shows it now, what was
   last said to it, and its session.
 
@@ -47,6 +51,8 @@ An agent is a CLI that Facade runs in a terminal it keeps, or a session that joi
 - **Type from a script**: `facade type <agent> "<text>" [--enter]` pastes text; `facade type <agent> --key Esc --key
   Enter` presses keys.
 - **Read**: `facade screen <agent> [--lines <n>]` prints the last lines of the screen and its scrollback.
+- **Colors**: an agent in an editor window replies to its CLI's color queries (OSC 10, 11 and 12) with the colors the
+  window's terminals draw with, so a CLI that picks its colors by the background suits the editor's theme.
 
 ## Messages
 
@@ -105,6 +111,8 @@ See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-
   started from a terminal.
 - An editor window's locations are its folders and every worktree of their repositories. A start in a window must use
   one of them, and can make a new worktree to start in.
+- An editor window describes its terminals' environment, and core lists the CLIs a start there can run, each found on
+  that environment's `PATH` or not, and whether a built-in is not installed.
 - When an editor window's last connection closes, its agents wait for it: 90 seconds for a local window, five minutes
   for another. A window of the same workspace can take them over. Once the time runs out, its running agents stop, and
   their records stay.

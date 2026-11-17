@@ -1312,20 +1312,178 @@ fn the_approve_hook_approves_facade_s_own_tools_alone() {
 #[test]
 fn a_daemon_that_replaces_another_finds_the_tools_there_again() {
     let home = TestHome::new("mcpreconnect");
-    home.start_named_fake("ada", &[]);
-    let tools = |home: &TestHome| home.agent_from_list_json("ada").unwrap()["tools_state"].clone();
+    let agent = home.start_named_fake("ada", &[]);
+    let started = std::time::Instant::now();
+    let mut polls = Vec::new();
+    let tools = |home: &TestHome, polls: &mut Vec<Value>, phase: &str| {
+        let begin = reconnect_time(started);
+        let record = home.agent_from_list_json("ada").unwrap();
+        let state = record["tools_state"].clone();
+        polls.push(json!({ "phase": phase, "begin": begin,
+            "end": reconnect_time(started), "record": record }));
+        state
+    };
     assert!(
-        wait_until(secs(10), || tools(&home) == "available"),
+        wait_until(secs(10), || tools(&home, &mut polls, "initial")
+            == "available"),
         "{}",
-        tools(&home)
+        tools(&home, &mut polls, "initial failure value")
     );
+    // This read precedes the kill; it is not the kill instant or proof of what recovery reads.
+    let before_kill = reconnect_state(&home, &agent, started);
+    let kill_begin = reconnect_time(started);
     let old = home.kill_daemon();
-    home.wait_for_daemon_after(old, secs(30))
+    let kill_end = reconnect_time(started);
+    let replacement_begin = reconnect_time(started);
+    let replacement = home
+        .wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
-    assert!(
-        wait_until(secs(10), || tools(&home) == "available"),
-        "{}",
-        tools(&home)
+    let replacement_end = reconnect_time(started);
+    let available = wait_until(secs(10), || {
+        tools(&home, &mut polls, "replacement") == "available"
+    });
+    if !available {
+        // Freeze the original assertion's extra tools() read before any late diagnostic reads.
+        let failure = format!("{}", tools(&home, &mut polls, "original failure value"));
+        let diagnostic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reconnect_diagnostics(
+                &home,
+                &agent,
+                started,
+                json!({
+                    "agent_id": agent.id, "agent_pid": agent.pid, "polls": polls,
+                    "before_kill": before_kill,
+                    "kill": { "begin": kill_begin, "end": kill_end, "returned_old_pid": old },
+                    "replacement": { "begin": replacement_begin, "end": replacement_end,
+                        "hello_returned_new_pid": replacement },
+                    "original_failure": failure,
+                    "limits": "pre-kill sampling window, not kill instant or recovery input; sampling affects scheduling; late inspect is current public state",
+                }),
+            );
+        }));
+        if diagnostic.is_err() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "MCP reconnect diagnostics unavailable: diagnostic panicked"
+            );
+        }
+        assert!(available, "{failure}");
+    }
+}
+
+/// UTC epoch and monotonic times share the case's origin, without a clock/hash dependency.
+fn reconnect_time(started: std::time::Instant) -> Value {
+    let utc = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(time) => json!(time.as_nanos().to_string()),
+        Err(error) => json!({ "unavailable": error.to_string() }),
+    };
+    json!({ "utc_unix_ns": utc, "monotonic_elapsed_ns": started.elapsed().as_nanos().to_string() })
+}
+
+/// One open and one read of this agent's state, with metadata from that same handle. No default facts.
+fn reconnect_state(home: &TestHome, agent: &TestAgent, started: std::time::Instant) -> Value {
+    let begin = reconnect_time(started);
+    let file = home.path.join("core/screens").join(&agent.id).join("state");
+    let mut raw = Vec::new();
+    let mut metadata = json!({ "unavailable": "state was not opened" });
+    let error = match std::fs::File::open(&file) {
+        Ok(mut handle) => {
+            metadata = match handle.metadata() {
+                Ok(metadata) => {
+                    json!({ "len": metadata.len(), "handle_metadata": format!("{metadata:?}") })
+                }
+                Err(error) => json!({ "unavailable": error.to_string() }),
+            };
+            std::io::Read::read_to_end(&mut handle, &mut raw)
+                .err()
+                .map(|error| error.to_string())
+        }
+        Err(error) => Some(error.to_string()),
+    };
+    json!({ "file": file, "begin": begin, "end": reconnect_time(started),
+        "metadata": metadata, "len": raw.len(), "raw_bytes": raw, "unavailable": error })
+}
+
+/// Only the reconnect case's second failed wait calls this; its original assertion still decides failure.
+fn reconnect_diagnostics(
+    home: &TestHome,
+    agent: &TestAgent,
+    started: std::time::Instant,
+    mut evidence: Value,
+) {
+    evidence["diagnostic_begin"] = reconnect_time(started);
+    let deadline = std::time::Instant::now() + secs(2);
+    evidence["public"] = json!({ "hello": { "unavailable": "not connected" },
+        "inspect": { "unavailable": "no successful diagnostic hello" } });
+    if let Some(mut wire) = DaemonTestClient::try_open(home) {
+        for (label, method, params) in [
+            (
+                "hello",
+                "hello",
+                json!({ "protocol": [1, 1], "build": "test", "kind": "terminal" }),
+            ),
+            (
+                "inspect",
+                "call",
+                json!({ "op": "agent.inspect", "args": { "agent": agent.id } }),
+            ),
+        ] {
+            let begin = reconnect_time(started);
+            let response = if std::time::Instant::now() < deadline {
+                wire.try_send(method, params).and_then(|id| {
+                    wire.wait_for_response(
+                        id,
+                        deadline.saturating_duration_since(std::time::Instant::now()),
+                    )
+                })
+            } else {
+                None
+            };
+            let answered = response
+                .as_ref()
+                .is_some_and(|response| response.get("result").is_some());
+            evidence["public"][label] = json!({ "begin": begin, "end": reconnect_time(started),
+                "response": response.unwrap_or_else(|| json!({ "unavailable": "send failed or shared 2s response deadline expired" })) });
+            if label == "hello" && !answered {
+                break;
+            }
+        }
+    }
+    evidence["after_failure"] = reconnect_state(home, agent, started);
+    for (label, file) in [
+        ("daemon.log", home.path.join("core/logs/daemon.log")),
+        ("keeper.log", home.path.join("core/logs/keeper.log")),
+        ("fake.log", home.fake_log.clone()),
+    ] {
+        let begin = reconnect_time(started);
+        evidence["logs"][label] = match std::fs::read_to_string(&file) {
+            Ok(text) => {
+                json!({ "file": file, "begin": begin, "end": reconnect_time(started), "text": text })
+            }
+            Err(error) => {
+                json!({ "file": file, "begin": begin, "end": reconnect_time(started), "unavailable": error.to_string() })
+            }
+        };
+    }
+    evidence["diagnostic_end"] = reconnect_time(started);
+    // TestHome::drop removes folder(), so its unique sibling survives without KEEP or other cases' data.
+    let package = home.folder().with_file_name(format!(
+        "{}-reconnect-diagnostics",
+        home.folder().file_name().unwrap().to_string_lossy()
+    ));
+    evidence["package"] = json!(package);
+    let output = format!("{evidence:#}");
+    let write = std::fs::create_dir(&package)
+        .and_then(|()| std::fs::write(package.join("diagnostics.json"), &output));
+    if let Err(error) = write {
+        let _ = writeln!(
+            std::io::stderr(),
+            "MCP reconnect diagnostic package unavailable: {error}"
+        );
+    }
+    let _ = writeln!(
+        std::io::stderr(),
+        "MCP reconnect failure diagnostics:\n{output}"
     );
 }
 
@@ -1359,10 +1517,9 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     home.run_facade_ok(&["stop", "boss"]);
     let ended = boss.call("start_agent", start("late"));
     assert!(
-        ended["message"]
-            .as_str()
-            .unwrap()
-            .contains("#a1's environment cannot be read: its CLI is not running"),
+        ended["message"].as_str().unwrap().contains(
+            "#a1's environment is unavailable: its CLI is not running; nothing was started"
+        ),
         "{ended}"
     );
     #[cfg(target_os = "macos")]
@@ -1375,7 +1532,7 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
             McpTestClient::open_stripped(&home, &shell).call("start_agent", start("hidden"));
         let message = hidden["message"].as_str().unwrap();
         assert!(
-            message.contains("the system keeps it hidden")
+            message.contains("the environment read from its CLI has no FACADE_AGENT")
                 || message.contains("was not found on the PATH of a terminal"),
             "{hidden}"
         );

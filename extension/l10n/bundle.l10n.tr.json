@@ -354,5 +354,18 @@
 	"The working location {0} is not available in this window.": "{0} çalışma konumu bu pencerede kullanılamıyor.",
 	"Stop unconfirmed · check process": "Durdurma doğrulanamadı · işlemi kontrol edin",
 	"1 agent": "1 aracı",
-	"{0} agents": "{0} aracı"
+	"{0} agents": "{0} aracı",
+	"The engine changes only after you reload the window.": "Motor yalnızca pencereyi yeniden yükledikten sonra değişir.",
+	"All agents on the old engine have ended. Reload this window to switch.": "Eski motorun tüm aracıları sona erdi. Geçmek için bu pencereyi yeniden yükleyin.",
+	"Facade's settings file has an error": "Facade ayar dosyasında bir hata var",
+	"Facade could not find what you asked for": "Facade istediğinizi bulamadı",
+	"Facade cannot do this right now": "Facade bunu şu anda yapamıyor",
+	"This CLI does not support this action": "Bu CLI bu işlemi desteklemiyor",
+	"Could not create the worktree": "Çalışma ağacı oluşturulamadı",
+	"The agent has ended": "Aracı sona erdi",
+	"Too much input at once": "Tek seferde çok fazla girdi",
+	"Facade is updating; try again in a moment": "Facade güncelleniyor; birazdan yeniden deneyin",
+	"Facade does not allow this": "Facade buna izin vermiyor",
+	"Something went wrong in Facade": "Facade'de bir sorun oluştu",
+	"Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.": "Facade core başlatılamadı: {0}. Bu pencere eski motoru kullanıyor. Facade'in Rust motorunu denemeyi bırakması için {1} ayarını `off` olarak belirleyin ve pencereyi yeniden yükleyin."
 }

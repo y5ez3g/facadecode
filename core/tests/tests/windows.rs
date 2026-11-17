@@ -421,9 +421,14 @@ fn a_daemon_restart_gives_each_window_its_grace_from_the_restart() {
         home.daemon_log()
     );
     assert!(
-        wait_until(secs(5), || stored() == ["win-back"]),
-        "a window goes with its agents: {:?}",
-        stored()
+        wait_until(secs(5), || listed(&home, "win-gone").is_none()),
+        "the window that never came back goes from the list"
+    );
+    assert_eq!(
+        stored(),
+        ["win-back", "win-gone"],
+        "a window that went keeps its row while its ended agents' records stay, for a later window \
+         of its workspace"
     );
     assert!(
         restarted.elapsed() >= std::time::Duration::from_millis(3500),
@@ -934,4 +939,111 @@ fn a_message_between_windows_names_its_sender_s_window() {
         ]
     );
     drop((first, second));
+}
+
+/// An editor window's agents reply to their CLI's color queries with the window's colors, each
+/// reply ended as its query was; after `window.update`, with the new colors.
+#[test]
+fn an_editor_window_s_agents_answer_color_queries_with_its_colors() {
+    let home = TestHome::new("windowcolors");
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
+    let folder = real(&home.project);
+    let mut described = window("win-1", Some("k1"), std::slice::from_ref(&folder));
+    described["colors"] =
+        json!({ "foreground": "#333333", "background": "#ffffff", "cursor": "#000000" });
+    let mut wire = ide(&home, &described);
+    let id = start_fake(&mut wire, &home, "win-1", &folder, "painter");
+    type_raw(&mut wire, &id, "/fake colors\r");
+    for reply in [
+        "color 10;rgb:3333/3333/3333 bel",
+        "color 11;rgb:ffff/ffff/ffff st",
+        "color 12;rgb:0000/0000/0000 bel",
+    ] {
+        assert!(
+            wait_for_screen_text(&home, "painter", reply),
+            "{reply}: {}",
+            home.screen("painter")
+        );
+    }
+    described["colors"]["background"] = json!("#1e1e1e");
+    let updated = wire.call("window.update", described);
+    assert_eq!(updated["result"], json!({}), "{updated}");
+    type_raw(&mut wire, &id, "/fake colors\r");
+    assert!(
+        wait_for_screen_text(&home, "painter", "color 11;rgb:1e1e/1e1e/1e1e st"),
+        "the new background: {}",
+        home.screen("painter")
+    );
+}
+
+/// In an editor window, a start that continues a session may work in a folder inside one of the
+/// window's locations, as "Recent" continues a conversation in the folder it was in: it starts,
+/// and its location is the one that holds the folder.
+#[test]
+fn a_start_in_a_folder_inside_a_location_continues_its_session_there() {
+    let home = TestHome::new("windowinside");
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
+    let folder = real(&home.project);
+    let nested = home.project.join("app").join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let nested = real(&nested);
+    let mut wire = ide(
+        &home,
+        &window("win-1", Some("k1"), std::slice::from_ref(&folder)),
+    );
+    let location = listed(&home, "win-1").unwrap()["locations"][0]["location_id"].clone();
+    let session = "11111111-2222-4333-8444-555555555555";
+    let env = json!({
+        "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path,
+        "FAKECLI_LOG": home.fake_log,
+    });
+    let args = json!({
+        "command": ["fake"], "session": session, "name": "inside", "cwd": nested,
+        "window_id": "win-1", "env": env, "cols": 80, "rows": 24,
+    });
+    let started = wire.call("agent.start", args);
+    let id = started["result"]["agent"]["agent_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{started}"))
+        .to_string();
+    assert!(
+        wait_for_screen_text(&home, "inside", &format!("session {session}")),
+        "the CLI continued the session: {}",
+        home.screen("inside")
+    );
+    let record = agent(&home, &id);
+    assert_eq!(record["cwd"], json!(nested), "{record}");
+    assert_eq!(record["location_id"], location, "{record}");
+}
+
+/// A window of the same workspace that connects after an earlier window's grace ran out takes over
+/// that window's ended agents: its first snapshot lists them, in the new window.
+#[test]
+fn a_later_window_of_the_workspace_takes_over_the_ended_agents() {
+    let home = TestHome::new("windowexpired");
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
+    let folders = vec![real(&home.project)];
+    let mut first = ide(&home, &window("win-old", Some("k1"), &folders));
+    let id = start_shell(&mut first, &home, "win-old", &real(&home.project), "kept");
+    drop(first);
+    assert!(
+        wait_until(secs(15), || !running(&home, &id)),
+        "the grace ends it: {}",
+        home.daemon_log()
+    );
+    assert!(
+        wait_until(secs(5), || listed(&home, "win-old").is_none()),
+        "the window went"
+    );
+    let mut later = ide(&home, &window("win-new", Some("k1"), &folders));
+    let watching = later.request("watch", json!({ "topic": "agents" }));
+    let taken = watching["result"]["snapshot"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{watching}"))
+        .iter()
+        .find(|agent| agent["agent_id"] == id.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("no {id} in the first snapshot: {watching}"));
+    assert_eq!(taken["window_id"], "win-new", "{taken}");
+    assert_ne!(taken["process"], "running", "{taken}");
 }

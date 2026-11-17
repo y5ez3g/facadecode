@@ -983,3 +983,68 @@ fn an_agent_starts_agents_with_its_own_environment() {
         "{env:?}"
     );
 }
+
+/// An editor window that gives the environment its agents start with lists, to its own client,
+/// the CLIs a start can run there, each found on that environment's `PATH` or not. A window that
+/// gives none lists no CLIs.
+#[test]
+fn an_editor_window_s_environment_lists_the_clis_it_can_start() {
+    let home = TestHome::new("configide");
+    let gone = json!({ "type": "fake", "command": "/nowhere/facade-fakecli" });
+    settings(&home, &json!({ "clis": { "gone": gone } }));
+    let folder = std::fs::canonicalize(&home.project).unwrap();
+    let window = |id: &str| {
+        json!({
+            "id": id, "label": format!("{id} window"), "environment": "local", "workspace": id,
+            "folders": [folder],
+        })
+    };
+    let mut described = window("win-env");
+    described["env"] = json!({ "PATH": home.path_with_test_programs() });
+    let mut editor = ide(&home, &described);
+    let _bare = ide(&home, &window("win-bare"));
+    let watching = editor.request("watch", json!({ "topic": "windows" }));
+    let listed = |id: &str| {
+        watching["result"]["snapshot"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{watching}"))
+            .iter()
+            .find(|listed| listed["window_id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no window {id}: {watching}"))
+    };
+    let clis = listed("win-env")["clis"].clone();
+    let cli = |name: &str| {
+        clis.as_array()
+            .unwrap_or_else(|| panic!("{clis}"))
+            .iter()
+            .find(|cli| cli["cli"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {name}: {clis}"))
+    };
+    assert_eq!(cli("fake")["available"], true, "{clis}");
+    assert_eq!(cli("gone")["available"], false, "{clis}");
+    assert!(
+        listed("win-bare").get("clis").is_none(),
+        "{}",
+        listed("win-bare")
+    );
+}
+
+/// A start that an entry of the settings file refuses names the entry in the error's data, so that
+/// an editor can offer to open the file.
+#[test]
+fn a_start_an_entry_refuses_names_the_entry() {
+    let home = TestHome::new("configentry");
+    let gone = json!({ "type": "fake", "command": "/nowhere/facade-fakecli" });
+    settings(&home, &json!({ "clis": { "gone": gone } }));
+    let mut wire = connect(&home);
+    let args = json!({
+        "command": ["gone"], "name": "nope", "cwd": home.project,
+        "env": { "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path },
+        "cols": 80, "rows": 24,
+    });
+    let refused = wire.call("agent.start", args);
+    assert_eq!(refused["error"]["data"]["entry"], "gone", "{refused}");
+    assert!(home.agents().is_empty(), "nothing started");
+}

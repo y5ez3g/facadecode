@@ -100,6 +100,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.closeAgent', when: card, group: '4_close@1' }
 			],
 			commandPalette: [
+				{ command: 'facade.showAgentLaunch', when: 'facade.engine != rust' },
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.showAgentDetails', when: 'facade.agentSelected && facade.agentSelectedVisible' },
@@ -121,7 +122,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		// These commands are in the Command Palette alone (PANEL-1.1); Open Settings is in it too.
 		const palette = ['facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
-		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.openSettings'].includes(each.command)));
+		// Show Agent Launch is hidden from the palette only on the Rust engine, which has no launch view
+		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette.filter(command => command !== 'facade.showAgentLaunch'), 'facade.openSettings'].includes(each.command)));
 	});
 
 	test('settings: one Facade Code section, its first item Facade: Home, the folder Facade keeps its data in, whose description links to facade.json; every setting an earlier build read stays as it was, marked moved; the file has its schema (CONFIGURATION-1.2, 6.3, UX-4.1, ARCHITECTURE-3.1)', () => {
@@ -139,7 +141,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		assert.strictEqual(english('%config.home.pattern%'), 'The path must start with ~/ or be absolute.');
 		// The earlier settings keep their types and defaults, so the editor still checks a value set and a migration reads it; the
 		// editor shows a deprecated setting only where it is set, with where it went
-		const earlier = Object.keys(settings).filter(key => key !== 'facade.home');
+		assert.deepStrictEqual(settings['facade.rustEngine'], { type: 'string', enum: ['auto', 'off'], default: 'auto', scope: 'machine', order: 1, markdownDescription: '%config.rustEngine%' });
+		const earlier = Object.keys(settings).filter(key => key !== 'facade.home' && key !== 'facade.rustEngine');
 		assert.deepStrictEqual(earlier, [...LEGACY_SETTINGS]);
 		assert.deepStrictEqual(earlier.map(key => [key, settings[key].type, settings[key].default, settings[key].scope]), [
 			['facade.yolo', 'boolean', true, 'machine'],

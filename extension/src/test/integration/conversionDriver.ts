@@ -7,6 +7,7 @@
 // across real reloads, then adds a folder. The editor restarts the extensions, this one with them, which then says what Facade
 // shows. Each step is a line of FACADE_IT_CONVERSION for the runner to judge; setup runs only on the first activation.
 
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -22,6 +23,32 @@ const OUT = process.env.FACADE_IT_CONVERSION!;
 const RECORD = process.env.FACADE_IT_RECORD!;
 const REOPEN = process.env.FACADE_IT_REOPEN === '1';
 const NATIVE = process.env.FACADE_IT_NATIVE;
+const RUST = process.env.FACADE_IT_ENGINE === 'rust';
+
+/** The agents core keeps for this root, by ID: what `facade list --json` prints in the window's terminal. */
+function coreAgents(): string[] {
+	const { FACADE_AGENT: _agent, ...env } = process.env;
+	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
+	try { return (JSON.parse(run.stdout) as { agent_id: string }[]).map(agent => agent.agent_id); } catch { return [`unreadable: ${run.stdout}${run.stderr}`]; }
+}
+
+/**
+ * The conversation an agent runs: the old engine's file of the run, or - on the Rust engine - the `session` core keeps on the agent's
+ * record, which `facade list` prints (the agent is `a1` where the card says `#a1`).
+ */
+function sessionOf(runId: string, alias: string): string | undefined {
+	if (!RUST) {
+		try {
+			const id: unknown = JSON.parse(fs.readFileSync(path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${runId}.session.json`), 'utf8')).session_id;
+			return typeof id === 'string' && id ? id : undefined;
+		} catch { return undefined; }
+	}
+	const { FACADE_AGENT: _agent, ...env } = process.env;
+	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
+	try {
+		return (JSON.parse(run.stdout) as { agent_id: string; session?: string }[]).find(agent => `#${agent.agent_id}` === alias)?.session || undefined;
+	} catch { return undefined; }
+}
 /** Agents started beside the journey's own before it reloads, so that each reload's claim is timed in a busy window (VERIFICATION G2). */
 const LOAD = Number(process.env.FACADE_IT_LOAD ?? 0);
 
@@ -66,6 +93,8 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
  * the window hears it (LIFECYCLE-3.4), and a window closed before that restores a new conversation instead.
  */
 function pinHolds(session: string): boolean {
+	// The Rust engine keeps its Pins in the editor's own workspace state, not in the extension's file: only the pinned card and tab are seen
+	if (RUST) { return true; }
 	const root = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
 	const saved = (dir: string): unknown => {
 		try { return (JSON.parse(fs.readFileSync(path.join(root, dir, 'workspace-state.json'), 'utf8')) as Record<string, unknown>)['facade.pins']; } catch { return undefined; }
@@ -141,12 +170,7 @@ export async function activate(): Promise<void> {
 			await until('Pin offered', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined, NATIVE ? 60_000 : 20_000);
 			await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 			await pinState(card.runId, true);
-			const session = await until('the persisted native session ID', async () => {
-				try {
-					const id: unknown = JSON.parse(fs.readFileSync(path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`), 'utf8')).session_id;
-					return typeof id === 'string' && id ? id : undefined;
-				} catch { return undefined; }
-			}, NATIVE ? 60_000 : 20_000);
+			const session = await until('the persisted native session ID', async () => sessionOf(card.runId, alias), NATIVE ? 60_000 : 20_000);
 			// Pin is offered before the CLI names its conversation (LIFECYCLE-3.4): its record takes the session once the window hears it
 			await until('the Pin to take the session', async () => pinHolds(session) || undefined, NATIVE ? 60_000 : 20_000);
 			// A busy window: more agents beside it, each running, for the reload to claim (VERIFICATION G2, J14)
@@ -160,7 +184,7 @@ export async function activate(): Promise<void> {
 					return undefined;
 				});
 			}
-			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session, at: Date.now() });
+			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session, others: (await state()).cards.filter(each => each.runId !== card.runId).map(each => each.alias), at: Date.now() });
 			// Reload tears down this host, which may cancel its command promise after the window accepted the request.
 			void vscode.commands.executeCommand(REOPEN ? 'workbench.action.closeWindow' : 'workbench.action.reloadWindow').then(undefined, () => undefined);
 			return;
@@ -171,14 +195,15 @@ export async function activate(): Promise<void> {
 			if (NATIVE) { await nativeTurn(card.runId, card.name); }
 			const alias = card.alias;
 			const pid = await until('the restored CLI process', async () => pidOf(alias));
-			const sessionFile = path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`);
-			const session = await until('the restored native session identity', async () => {
-				try { return JSON.parse(fs.readFileSync(sessionFile, 'utf8')).session_id as string | undefined; } catch { return undefined; }
-			});
-			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length });
+			const session = await until('the restored native session identity', async () => sessionOf(card.runId, alias));
+			// What a window opened after the grace shows and what core keeps: the other agents are gone from both (spec 验收, RULES-4.1)
+			const { cards } = await state();
+			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length, cards: cards.map(each => ({ alias: each.alias, dot: each.dot })), ...RUST ? { core: coreAgents() } : {} });
 			return;
 		}
-		const runId = steps[0].runId!;
+		// On the Rust engine the claimed run is known by its agent's ID, where the first window's was its start's own ID: found by its name
+		const first = steps[0] as unknown as { runId: string; name: string };
+		const runId = RUST ? (await until('the claimed card', async () => (await state()).cards.find(each => each.name === first.name)?.runId)) : first.runId;
 		if (!vscode.workspace.workspaceFile) {
 			if (!steps.some(step => step.phase === 'unpin')) {
 				await pinState(runId, true);
@@ -203,8 +228,8 @@ export async function activate(): Promise<void> {
 		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => unspun(each.name) === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: vscode.window.terminals.map(each => unspun(each.name)) });
 	} catch (err) {
-		const screens = await state().then(current => Promise.all(current.cards.map(async card => ({ name: card.name,
-			text: await vscode.commands.executeCommand('facade.screen', card.runId, 500) }))), () => []);
+		const screens = await Promise.race([state().then(current => Promise.all(current.cards.map(async card => ({ name: card.name,
+			text: await Promise.resolve(vscode.commands.executeCommand('facade.screen', card.runId, 500)).catch(() => undefined) }))), () => []), new Promise<never[]>(resolve => setTimeout(() => resolve([]), 5_000))]);
 		write({ phase: 'error', error: String(err), screens });
 	}
 }

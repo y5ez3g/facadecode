@@ -1,16 +1,19 @@
 //! Serializes program input and confirms message submission from the CLI's input box.
 //! The actor owns terminal I/O; byte receipts anchor every delay to actual writes.
 
-use std::collections::VecDeque;
+mod probe;
+
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use facade_base::daemon::{DeliveryFailure, InputInfo, InputState, TextWritten};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::terminal::{PASTE_BYTES_PER_MS, key_down_records};
-use facade_rules::{ConsoleTyping, PasteRule, Rule};
+use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict, Rule};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use self::probe::{Next, PROBE_READ, Probe};
 use super::{ESCAPE_DELAY, PASTE_END, PASTE_START, Submission};
 use crate::Sender;
 use crate::messages::{DeliveryHandle, Outcome};
@@ -28,9 +31,6 @@ pub(crate) struct Modes {
     pub(crate) bracketed_paste: bool,
     pub(crate) application_cursor_keys: bool,
 }
-
-/// An input observation and its draft, supplied synchronously by the actor.
-pub(crate) type Reading = (InputInfo, Option<String>);
 
 /// Bytes to queue now and the next timer to arrange; neither operation waits.
 #[derive(Debug, Default)]
@@ -327,11 +327,20 @@ pub(crate) struct Typist {
     submitted: Option<Submission>,
     entered: bool,
     paste_held: bool,
+    /// The agent named in what a probe logs.
+    agent: String,
+    /// A probe under way: nothing else is typed until it is done.
+    probing: Option<Probe>,
+    /// What each row this run's probes tried was found to be: a row is tried once a run.
+    probed: HashMap<Vec<LineCell>, ProbeVerdict>,
+    /// The run's start waits on an input a probe may tell.
+    probe_wanted: bool,
 }
 
 impl Typist {
     /// Uses the supplied delivery handle; later message operations may synchronously persist data.
     pub(crate) fn new(
+        agent: &str,
         paste: Option<&'static PasteRule>,
         console: Option<ConsoleTyping>,
         deliveries: DeliveryHandle,
@@ -348,17 +357,116 @@ impl Typist {
             submitted: None,
             entered: false,
             paste_held: false,
+            agent: agent.to_string(),
+            probing: None,
+            probed: HashMap::new(),
+            probe_wanted: false,
         }
     }
 
-    /// Advances receipt accounting, then one call or delivery; persistence may block, no typist lock.
+    /// A new run of the CLI starts: what the last run's probes found no longer holds, and a probe
+    /// under way stops.
+    pub(crate) fn clear_probes(&mut self) {
+        self.probed.clear();
+        self.probing = None;
+        self.probe_wanted = false;
+    }
+
+    /// The run's start waits on an input that may hold a hint or a draft: it is probed once no call
+    /// is typed and no paste is under way.
+    pub(crate) fn want_probe(&mut self) {
+        self.probe_wanted = true;
+    }
+
+    /// `reading` as this run's probes found its row, where one tried it: a hint reads as an empty
+    /// input, a draft as a draft. Nothing is typed to find out.
+    pub(crate) fn recall(&self, reading: BoxReading) -> BoxReading {
+        let verdict = reading
+            .line
+            .as_ref()
+            .filter(|_| reading.unsure)
+            .and_then(|line| self.probed.get(&line.cells));
+        let (state, what) = match verdict {
+            Some(ProbeVerdict::Hint) => (InputState::Usable, "a hint"),
+            Some(ProbeVerdict::Draft) => (InputState::Draft, "a draft"),
+            _ => return reading,
+        };
+        BoxReading {
+            info: InputInfo {
+                state,
+                evidence: format!("{}; a probe found it {what}", reading.info.evidence),
+                ..reading.info
+            },
+            unsure: false,
+            ..reading
+        }
+    }
+
+    /// Whether `reading` is unsure of a row no probe of this run tried.
+    fn unprobed(&self, reading: &BoxReading) -> bool {
+        reading.unsure
+            && reading
+                .line
+                .as_ref()
+                .is_some_and(|line| !self.probed.contains_key(&line.cells))
+    }
+
+    /// Begins a probe of `reading`'s row with its space; the row counts as tried at once.
+    fn begin_probe(&mut self, reading: &BoxReading, now: Instant, offset: u64, typed: u64) -> Step {
+        let line = reading.line.clone().expect("an unprobed reading has a row");
+        self.probed.insert(line.cells.clone(), ProbeVerdict::Other);
+        self.probing = Some(Probe::new(line, now, typed));
+        self.record_write(offset, 1, Duration::ZERO);
+        Step {
+            write: b" ".to_vec(),
+            wake: Some(now + PROBE_READ),
+        }
+    }
+
+    /// One step of the probe under way; none once it is done, what it found kept for the run.
+    fn continue_probe(
+        &mut self,
+        mut probe: Probe,
+        now: Instant,
+        offset: u64,
+        typed: u64,
+        read_screen: &dyn Fn() -> BoxReading,
+    ) -> Option<Step> {
+        match probe.next(&self.agent, now, typed, read_screen) {
+            Next::Wait(at) => {
+                self.probing = Some(probe);
+                Some(Step::wait(Some(at)))
+            }
+            Next::Backspace => {
+                self.probing = Some(probe);
+                self.record_write(offset, 1, Duration::ZERO);
+                let mut write = Vec::new();
+                Key::Backspace.write(false, &mut write);
+                Some(Step {
+                    write,
+                    wake: Some(now + PROBE_READ),
+                })
+            }
+            Next::Done(verdict) => {
+                self.probed.insert(probe.row().to_vec(), verdict);
+                None
+            }
+        }
+    }
+
+    /// Advances receipt accounting, then a probe, one call or delivery; persistence may block, no
+    /// typist lock. `typed` counts the person's writes so far. `read_screen` reads the input box as
+    /// the screen shows it, where `read` may say the run's start holds it.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn step(
         &mut self,
         now: Instant,
         written: u64,
         queued: u64,
         modes: Modes,
-        read: &dyn Fn() -> Reading,
+        typed: u64,
+        read: &dyn Fn() -> BoxReading,
+        read_screen: &dyn Fn() -> BoxReading,
     ) -> Step {
         if let Some(receipt) = &mut self.receipt
             && receipt.arrived.is_none()
@@ -386,6 +494,23 @@ impl Typist {
             .receipt
             .as_ref()
             .and_then(|receipt| receipt.paused(now));
+        if let Some(probe) = self.probing.take()
+            && let Some(step) = self.continue_probe(probe, now, queued, typed, read_screen)
+        {
+            return step;
+        }
+        if self.probe_wanted
+            && pause.is_none()
+            && self.current.is_none()
+            && self.calls.is_empty()
+            && !self.pasting()
+        {
+            self.probe_wanted = false;
+            let reading = read_screen();
+            if self.unprobed(&reading) {
+                return self.begin_probe(&reading, now, queued, typed);
+            }
+        }
         if self.current.is_none() && !self.pasting() {
             self.current = self.calls.pop_front();
         }
@@ -395,12 +520,13 @@ impl Typist {
                 None => self.emit_call(queued, modes),
             }
         } else {
-            self.advance_delivery(now, queued, modes, read, pause)
+            self.advance_delivery(now, queued, modes, typed, read, pause)
         }
     }
 
     /// Stops every call and delivery with its actual write progress; delivery persistence may block.
     pub(crate) fn fail_all(&mut self, written: u64, why: &str) {
+        (self.probing, self.probe_wanted) = (None, false);
         if let Some(mut call) = self.current.take() {
             let mut remaining = call.strokes.len();
             let mut partial = false;
@@ -511,7 +637,11 @@ impl Typist {
     }
     /// Reads whether any input work remains; no I/O or locks.
     pub(crate) fn busy(&self) -> bool {
-        self.types_calls() || self.reads_input()
+        self.types_calls() || self.reads_input() || self.probing.is_some() || self.probe_wanted
+    }
+    /// Reads whether a probe is under way; no I/O or locks.
+    pub(crate) fn probing(&self) -> bool {
+        self.probing.is_some()
     }
     /// Reads whether delivery has passed persistence and awaits settlement; no I/O or locks.
     pub(crate) fn pasting(&self) -> bool {
@@ -664,7 +794,8 @@ impl Typist {
         now: Instant,
         offset: u64,
         modes: Modes,
-        read: &dyn Fn() -> Reading,
+        typed: u64,
+        read: &dyn Fn() -> BoxReading,
         paused: Option<Instant>,
     ) -> Step {
         let Some(rule) = self.paste else {
@@ -697,7 +828,8 @@ impl Typist {
                 DeliveryPhase::Waiting => {}
             }
             self.gather(&mut batch);
-            let (info, _) = read();
+            let reading = read();
+            let info = self.recall(reading.clone()).info;
             let reason = match info.state {
                 InputState::Usable => DeliveryFailure::Timeout,
                 InputState::Draft => DeliveryFailure::InputDraft,
@@ -714,6 +846,11 @@ impl Typist {
                 }
             });
             self.deliveries.settle(&expired, Outcome::untyped(reason));
+            // A row that may be a hint or a draft is probed once a run, the messages waiting.
+            if paused.is_none() && !batch.messages.is_empty() && self.unprobed(&reading) {
+                self.batch = Some(batch);
+                return self.begin_probe(&reading, now, offset, typed);
+            }
             if info.state == InputState::Usable && paused.is_none() {
                 self.fit_deadlines(&mut batch, rule, now);
                 batch.messages.sort_by_key(|message| message.number);
@@ -762,7 +899,7 @@ impl Typist {
         rule: &PasteRule,
         now: Instant,
         offset: u64,
-        read: &dyn Fn() -> Reading,
+        read: &dyn Fn() -> BoxReading,
         paused: Option<Instant>,
     ) -> Step {
         if batch.deadline().is_some_and(|due| now >= due) {
@@ -779,7 +916,11 @@ impl Typist {
             batch.phase = DeliveryPhase::Draft(draft);
             return self.settle_batch(batch, outcome);
         }
-        let (info, observed) = read();
+        let BoxReading {
+            info,
+            draft: observed,
+            ..
+        } = read();
         let own = observed.filter(|text| {
             info.state == InputState::Draft
                 && facade_rules::is_own_draft(rule, text, &draft.text, draft.prefix(), info.hidden)
@@ -826,10 +967,15 @@ impl Typist {
         mut at: Instant,
         now: Instant,
         offset: u64,
-        read: &dyn Fn() -> Reading,
+        read: &dyn Fn() -> BoxReading,
         paused: Option<Instant>,
     ) -> Step {
-        let (info, observed) = read();
+        // Empty again, or showing a hint this run's probe found.
+        let BoxReading {
+            info,
+            draft: observed,
+            ..
+        } = self.recall(read());
         if info.state == InputState::Usable {
             return self.settle_batch(batch, Outcome::Typed);
         }
@@ -1112,7 +1258,7 @@ mod tests {
     struct Terminal {
         queued: Vec<u8>,
         written: usize,
-        reading: Reading,
+        reading: BoxReading,
     }
 
     impl Default for Terminal {
@@ -1126,16 +1272,18 @@ mod tests {
     }
 
     /// An input reading: its state and a draft's text.
-    fn input(state: InputState, draft: Option<&str>) -> Reading {
-        (
-            InputInfo {
+    fn input(state: InputState, draft: Option<&str>) -> BoxReading {
+        BoxReading {
+            info: InputInfo {
                 state,
                 evidence: String::new(),
                 mechanism: None,
                 hidden: None,
             },
-            draft.map(str::to_string),
-        )
+            draft: draft.map(str::to_string),
+            line: None,
+            unsure: false,
+        }
     }
 
     impl Terminal {
@@ -1146,6 +1294,8 @@ mod tests {
                 self.written as u64,
                 self.queued.len() as u64,
                 modes,
+                0,
+                &|| reading.clone(),
                 &|| reading.clone(),
             );
             self.queued.extend(step.write);
@@ -1290,7 +1440,7 @@ mod tests {
     /// reached the terminal.
     #[test]
     fn enter_goes_in_a_write_of_its_own_after_the_text_reached_the_terminal() {
-        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
+        let mut typist = Typist::new("a1", None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         let (typing, mut answer) =
             Typing::text("hello\nworld".into(), true, Sender::person()).unwrap();
@@ -1346,7 +1496,7 @@ mod tests {
     /// alone, and a call cut off before its Enter reached the terminal submit nothing.
     #[test]
     fn only_text_whose_enter_reached_the_terminal_is_submitted() {
-        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
+        let mut typist = Typist::new("a1", None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         for typing in [
             Typing::text("sent".into(), true, Sender::person()),
@@ -1390,7 +1540,7 @@ mod tests {
     /// write.
     #[test]
     fn the_key_after_an_escape_waits() {
-        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
+        let mut typist = Typist::new("a1", None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         let (typing, mut answer) = Typing::keys(&names(&[
             "Down", "Down", "Escape", "x", "Esc", "Esc", "Enter",
@@ -1440,7 +1590,7 @@ mod tests {
                 PASTE_DELAY,
             ),
         ] {
-            let mut typist = Typist::new(None, None, test_messages().delivery_handle());
+            let mut typist = Typist::new("a1", None, None, test_messages().delivery_handle());
             let mut terminal = Terminal::default();
             let (first, mut answered) = first;
             typist.push(first);
@@ -1471,7 +1621,7 @@ mod tests {
     /// Calls are typed one at a time: the next starts once the one before was answered.
     #[test]
     fn calls_are_typed_whole_in_the_order_they_came() {
-        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
+        let mut typist = Typist::new("a1", None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         let (first, mut first_answer) =
             Typing::text("first".into(), true, Sender::person()).unwrap();
@@ -1505,7 +1655,7 @@ mod tests {
 
     #[test]
     fn the_bytes_of_waiting_calls_count_until_they_are_written() {
-        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
+        let mut typist = Typist::new("a1", None, None, test_messages().delivery_handle());
         let (text, _) = Typing::text("12345".into(), true, Sender::person()).unwrap();
         let (keys, _) = Typing::keys(&names(&["Up", "Delete", "界"])).unwrap();
         typist.push(text);
@@ -1529,7 +1679,7 @@ mod tests {
         // pass, then stops typing with the last `short` bytes queued still short of the terminal.
         let stopped =
             |(typing, mut answer): (Typing, TypingAnswer), pauses: usize, short: usize| {
-                let mut typist = Typist::new(None, None, test_messages().delivery_handle());
+                let mut typist = Typist::new("a1", None, None, test_messages().delivery_handle());
                 let (waiting, mut waiting_answer) = Typing::keys(&names(&["z"])).unwrap();
                 typist.push(typing);
                 typist.push(waiting);
@@ -1644,6 +1794,7 @@ mod tests {
     /// A typist for the CLI of rule `cli`, which settles its messages in `post`.
     fn typist_for(cli: &str, post: &Arc<Messages>) -> Typist {
         Typist::new(
+            "a1",
             Some(&facade_rules::find(cli).unwrap().unwrap().paste),
             None,
             post.delivery_handle(),
@@ -1972,7 +2123,7 @@ mod tests {
         };
         assert!(
             typist
-                .step(start, 0, 0, ANY, &read_by_the_agent)
+                .step(start, 0, 0, ANY, 0, &read_by_the_agent, &read_by_the_agent)
                 .write
                 .is_empty()
         );
@@ -2524,7 +2675,7 @@ mod tests {
     #[test]
     fn a_message_to_a_cli_without_a_rule_fails_at_once() {
         let post = test_messages();
-        let mut typist = Typist::new(None, None, post.delivery_handle());
+        let mut typist = Typist::new("a1", None, None, post.delivery_handle());
         let mut terminal = Terminal {
             reading: input(InputState::Usable, None),
             ..Terminal::default()
@@ -2831,7 +2982,7 @@ mod tests {
     #[test]
     fn a_paste_begun_before_a_restart_that_no_rule_can_finish_fails_at_once() {
         let post = test_messages();
-        let mut typist = Typist::new(None, None, post.delivery_handle());
+        let mut typist = Typist::new("a1", None, None, post.delivery_handle());
         let (typing, number) = message(&post, "hello", Instant::now() + Duration::from_secs(20));
         post.delivery_handle().begin_paste(&[number]);
         typist.finish_paste(vec![typing]);

@@ -31,7 +31,9 @@ pub use command_line::{Choices, TrustQuestion, YoloRule, entries};
 pub use compose::{CommandLine, resume_command_line, start_command_line};
 pub use formats::shell_word;
 pub use input::{
-    is_own_draft, is_same_draft, read_draft, read_input, settle_time, with_paste_text,
+    BoxReading, InputLine, LineCell, ProbeVerdict, is_own_draft, is_same_draft, read_box,
+    read_draft, read_input, restored, settle_time, shape_of, space_taken, verdict_of,
+    with_paste_text,
 };
 pub use sessions::{
     Reported, SESSION_FILE, SESSION_VARIABLES, SessionFile, WriteFailure, is_session_variable,

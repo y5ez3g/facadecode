@@ -61,5 +61,6 @@
 	"config.home": "Facade home 是存放 Facade 設定、Agent 歷程記錄與訊息的資料夾。只有在具有相同 Facade home 的視窗中的 Agent 才能互相通訊。環境變數 `FACADE_HOME` 會覆寫預設的 `~/.facade`；在此處設定的路徑則會覆寫這兩者。\n\n[在 facade.json 中編輯](command:facade.openSettingsFile)以新增您自己的 CLI 或終端機程式。您也可以選擇每個 CLI 如何啟動、「新增 Agent」提供哪些 CLI、建議的名稱，以及是否開啟 YOLO。",
 	"config.home.pattern": "路徑必須以 ~/ 開頭或是絕對路徑。",
 	"config.moved": "已移至 `facade.json`。[在 facade.json 中編輯](command:facade.openSettingsFile)",
-	"config.movedPlain": "已移至 facade.json。執行「Facade Code: 開啟設定」即可找到它。"
+	"config.movedPlain": "已移至 facade.json。執行「Facade Code: 開啟設定」即可找到它。",
+	"config.rustEngine": "控制執行 Agent 的引擎。全新的 Rust 引擎專為極致效能打造。\n\n- `auto`：使用 Rust 引擎。這台電腦上舊引擎的 Agent 全部結束後，視窗才會切換過去。執行中的 Agent 不會被中斷；一旦可以切換，Facade 會提示您重新載入視窗。\n- `off`：使用舊引擎。如果 Rust 引擎出了問題，請選擇 `off` 並重新載入視窗，然後[到 GitHub 回報問題](https://github.com/y5ez3g/facadecode/issues)。\n\n在 Windows 上，Agent 暫時仍使用舊引擎。在遠端視窗中，以遠端電腦上的設定為準。"
 }

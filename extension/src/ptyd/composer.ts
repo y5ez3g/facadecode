@@ -4,7 +4,7 @@
 
 // Whether a run's CLI can take an ordinary message now (RULES-1.4, CLIS-2.1, 2.3), read from the cells its headless terminal
 // draws: its input found where its cursor is, and empty or holding a draft. Never from activity, tracked keystrokes or a key sent
-// to see what happens. Each reader recognizes the one layout its CLI was observed drawing, whatever the CLI's version: a version
+// to see what happens: where only a key could tell a hint from a draft, the reading says so (`unsure`). Each reader recognizes the one layout its CLI was observed drawing, whatever the CLI's version: a version
 // that draws it differently is no layout the reader knows, and any screen it does not recognize is `unknown`, which delivery
 // treats as unavailable input - nothing is typed into it.
 
@@ -27,6 +27,31 @@ export interface InputReading {
 	readonly hidden?: Hidden;
 	/** Read mid-redraw, within a synchronized update: worth reading again in a moment, as a whole frame follows (CLIS-2.1). */
 	readonly drawing?: true;
+	/** Unknown only because its input's first row may be a hint or a draft, which a space typed and taken back tells apart (CLIS-2.1). */
+	readonly unsure?: true;
+	/** Its input's first row and the cursor, where the reader found its input: compared around such a space, never logged (CLIS-2.1). */
+	readonly line?: InputLine;
+	/** How many times the person wrote to the run up to this reading, as ptyd counts them (RULES-1.4). */
+	readonly typed?: number;
+}
+
+/** An input's first row, from the column its input starts at to its last cell that shows something, and the cursor. */
+export interface InputLine {
+	/** The row on the screen. */
+	readonly y: number;
+	/** The column its input starts at. */
+	readonly start: number;
+	readonly cells: readonly LineCell[];
+	/** Whether a row of the input under its first shows something. */
+	readonly rest: boolean;
+	readonly cursor: { readonly x: number; readonly y: number };
+}
+
+/** One cell of an input's first row: its characters, and whether they are dim or drawn in a color of their own. */
+export interface LineCell {
+	readonly chars: string;
+	readonly dim: boolean;
+	readonly colored: boolean;
 }
 
 export interface Hidden {
@@ -83,13 +108,19 @@ const shows = (cell: InputCell) => cell.chars.trim() !== '';
 const isBlank = (row: Row) => !row.some(shows);
 /** Text of the person's or Facade's: shown and not dim, inverse or not. Dim is a CLI's placeholder or hint. */
 const isText = (cell: InputCell) => shows(cell) && !cell.dim;
-/**
- * Drawn in a color of its own and not dim: a placeholder only where a CLI's captures show its typed text in another color, which no
- * built-in's do yet, else neither a placeholder nor a draft (CLIS-2.1).
- */
+/** Drawn in a color of its own and not dim: a hint or a draft, which only a space typed and taken back tells apart (CLIS-2.1). */
 const isColored = (cell: InputCell) => shows(cell) && !cell.dim && !!cell.colored;
 /** Text where an empty input's placeholder shows, the cursor at the input's start, all of it dim or colored and some colored (CLIS-2.1). */
 const coloredHint = (row: readonly InputCell[]) => row.some(isColored) && row.filter(shows).every(cell => cell.dim || isColored(cell));
+
+/** The input line whose first row is `first`, its input starting at column `start` of row `y`; `rest` its other rows. */
+function inputLine(first: Row, y: number, start: number, rest: readonly Row[], cursor: InputScreen['cursor']): InputLine {
+	const end = first.findLastIndex(shows) + 1;
+	return {
+		y, start, rest: rest.some(row => !isBlank(row)), cursor: { x: cursor.x, y: cursor.y },
+		cells: first.slice(0, end).map(cell => ({ chars: cell.chars, dim: cell.dim, colored: !!cell.colored }))
+	};
+}
 /** A row of a field indented under its first: two spaces first, or nothing on it. */
 const isContinuation = (row: Row) => charAt(row, 0) === ' ' && charAt(row, 1) === ' ';
 /** A rule across the terminal: `─` alone, from its first column to its last. */
@@ -133,12 +164,12 @@ function noInput(rows: readonly Row[], menus: Menu | readonly Menu[], why: strin
  */
 function contentOf(rows: readonly Row[], prompt: number, end: number, cursor: InputScreen['cursor'], what: string): InputReading {
 	const input = [rows[prompt].slice(2), ...rows.slice(prompt + 1, end)];
+	const line = inputLine(input[0], prompt, 2, input.slice(1), cursor);
 	const where = `${what} at ${input.length > 1 ? `rows ${prompt + 1}-${end}` : `row ${end}`}`;
-	// Text in a color of its own on the prompt row the cursor sits before, nothing typed ahead of it - as Muse Code draws some of its
-	// hints - is no placeholder that a capture of its CLI tells from a draft drawn so: unknown, neither typed over nor taken for a
-	// draft (CLIS-2.1)
+	// Text in a color of its own on the prompt row the cursor sits before, nothing typed ahead of it - as Muse Code draws its hints
+	// and its drafts alike - is unknown, unsure until a space typed and taken back tells a hint from a draft (CLIS-2.1)
 	if (cursor.y === prompt && cursor.x === 2 && input.slice(1).every(isBlank) && coloredHint(input[0])) {
-		return { state: 'unknown', evidence: `${where} shows text in a color of its own where its input starts, which no capture tells from a draft` };
+		return { state: 'unknown', evidence: `${where} shows text in a color of its own where its input starts, a hint or a draft`, unsure: true, line };
 	}
 	if (input.some(row => row.some(isText))) {
 		// The rows under the prompt row are indented two columns; marks of rows scrolled out of the box are no part of the draft
@@ -148,16 +179,16 @@ function contentOf(rows: readonly Row[], prompt: number, end: number, cursor: In
 		const shown = drawn.slice(above !== undefined ? 1 : 0, below !== undefined ? -1 : undefined);
 		return {
 			state: 'draft', evidence: `${where} holds text${above !== undefined || below !== undefined ? ', scrolled' : ''}`, draft: draftOf(shown),
-			...above !== undefined || below !== undefined ? { hidden: { above: Number(above ?? 0), below: Number(below ?? 0) } } : {}
+			...above !== undefined || below !== undefined ? { hidden: { above: Number(above ?? 0), below: Number(below ?? 0) } } : {}, line
 		};
 	}
 	if (input.slice(1).some(row => !isBlank(row))) {
-		return { state: 'unknown', evidence: `${where} holds dim text under its prompt row, which is no placeholder` };
+		return { state: 'unknown', evidence: `${where} holds dim text under its prompt row, which is no placeholder`, line };
 	}
 	if (cursor.y !== prompt || cursor.x !== 2) {
-		return { state: 'unknown', evidence: `${where} is empty, its cursor away from where the input starts` };
+		return { state: 'unknown', evidence: `${where} is empty, its cursor away from where the input starts`, line };
 	}
-	return { state: 'usable', evidence: `${where} is empty${isBlank(input[0]) ? '' : ' but for its dim placeholder'}` };
+	return { state: 'usable', evidence: `${where} is empty${isBlank(input[0]) ? '' : ' but for its dim placeholder'}`, line };
 }
 
 /** An input drawn between two rules, as Claude Code, Muse Code and Antigravity draw theirs. */
@@ -351,23 +382,25 @@ function readPiEditor(screen: InputScreen): InputReading {
 		return { state: 'unknown', evidence: `${where} does not have its own cursor where the cursor is, at row ${cursor.y + 1}` };
 	}
 	const input = rows.slice(top, lower);
-	// Text in a color of its own where the editor's input starts, nothing typed ahead of it: unknown, as in the other CLIs' inputs (CLIS-2.1)
+	const line = inputLine(input[0], top, 0, input.slice(1), cursor);
+	// Text in a color of its own where the editor's input starts, nothing typed ahead of it: unknown and unsure, as in the other CLIs'
+	// inputs (CLIS-2.1)
 	if (height === 1 && cursor.y === top && cursor.x <= 3 && input[0].every(cell => cell.x >= cursor.x || !shows(cell)) && coloredHint(input[0])) {
-		return { state: 'unknown', evidence: `${where} shows text in a color of its own where its input starts, which no capture tells from a draft` };
+		return { state: 'unknown', evidence: `${where} shows text in a color of its own where its input starts, a hint or a draft`, unsure: true, line };
 	}
 	if (input.some(row => row.some(isText))) {
 		const above = PI_ABOVE.exec(textOf(rows[upper]))?.[1];
 		const below = PI_BELOW.exec(textOf(rows[lower]))?.[1];
 		return {
 			state: 'draft', evidence: `${where} holds text${above !== undefined || below !== undefined ? ', scrolled' : ''}`, draft: draftOf(input),
-			...above !== undefined || below !== undefined ? { hidden: { above: Number(above ?? 0), below: Number(below ?? 0) } } : {}
+			...above !== undefined || below !== undefined ? { hidden: { above: Number(above ?? 0), below: Number(below ?? 0) } } : {}, line
 		};
 	}
 	// Its padding, a setting, puts the start of an empty editor at most three columns in
 	if (height > 1 || cursor.x > 3) {
-		return { state: 'unknown', evidence: `${where} is empty, its cursor away from where the input starts` };
+		return { state: 'unknown', evidence: `${where} is empty, its cursor away from where the input starts`, line };
 	}
-	return { state: 'usable', evidence: `${where} is empty` };
+	return { state: 'usable', evidence: `${where} is empty`, line };
 }
 
 /**
