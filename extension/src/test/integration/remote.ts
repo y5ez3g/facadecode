@@ -317,7 +317,8 @@ done
 umask 077
 mkdir -p ${quoted(path.posix.dirname(qaMachine))}
 printf '%s' ${quoted(qaText)} > ${quoted(qaMachine)}
-node -e ${quoted(qaNode)} ${quoted(qaMachine)}
+node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
+"$node" -e ${quoted(qaNode)} ${quoted(qaMachine)}
 `);
 					console.log('QA_MACHINE_PRESET ' + JSON.stringify({ host: host.alias, file: qaMachine, value: qaValue, readback: qaReadback.trim() }));
 				}
