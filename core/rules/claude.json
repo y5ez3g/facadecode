@@ -6,6 +6,7 @@
 	"choices": {"model": ["--model", "${value}"], "effort": ["--effort", "${value}"], "spelling": {"model": ["--model"], "effort": ["--effort"]}},
 	"input": {
 		"mechanism": "frame",
+		"probe_unstyled_hint": true,
 		"prompt": "❯",
 		"gap": "\u00a0",
 		"upper": "^(?:─+|─{3} [^─]+ ─+)$",

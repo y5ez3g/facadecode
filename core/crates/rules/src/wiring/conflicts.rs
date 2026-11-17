@@ -21,7 +21,9 @@ const LEFT_AS_IT_IS: &str = "Facade leaves it as it is, and the run has no Facad
 
 /// Why a run of `cli` in `cwd`, with the CLI's own `environment`, is not given Facade's tools: a
 /// `facade` server of the person's own that `cli` reads. None where there is none. Muse Code's
-/// refusals are [`muse_refusal`].
+/// refusals are [`muse_refusal`]. Antigravity has no such check: Antigravity names a plugin's
+/// server after the plugin, so Facade's is `facade_facade`, and neither it nor a `facade` server
+/// of the person's own takes the other's place.
 pub(super) fn persons_server(
     cli: &str,
     cwd: &Path,
@@ -31,7 +33,6 @@ pub(super) fn persons_server(
         "claude" => claude_servers(cwd, environment),
         "codex" => codex_servers(environment),
         "opencode" => opencode_servers(cwd, environment),
-        "agy" => agy_servers(environment),
         "pi" => return pi_registration(cwd, environment),
         _ => Vec::new(),
     };
@@ -116,14 +117,6 @@ fn opencode_servers(cwd: &Path, environment: &BTreeMap<String, String>) -> Vec<(
         found.push((format!("its {OPENCODE_CONFIG}"), entry.clone()));
     }
     found
-}
-
-/// Antigravity's: `mcpServers.facade` in its own MCP configuration, which `agy mcp add` writes.
-fn agy_servers(environment: &BTreeMap<String, String>) -> Vec<(String, Value)> {
-    let file =
-        home(environment).map(|home| home.join(".gemini").join("config").join("mcp_config.json"));
-    let found = || facade_in(file.as_ref()?, &read_config(file.as_ref()?)?["mcpServers"]);
-    found().into_iter().collect()
 }
 
 /// An extension Pi loads that registers a `facade` server: Pi does not start at all beside a second
