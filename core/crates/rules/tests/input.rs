@@ -1,12 +1,13 @@
 //! The input readers against screens recorded from each CLI, in `tests/input/<cli>.json`. A label
 //! names the recording: the CLI's version and the screen, such as `claude-2.1.312/typed`. Each
 //! screen keeps its rows' text, the cells drawn dim, inverse, or coloured, and the cursor; a wide
-//! character takes two columns.
+//! character takes two columns. A screen whose only input row may be a hint or a draft, as Muse
+//! draws both in colour, says `"unsure": true`: it reads unknown, with that row.
 
 mod recorded;
 
 use facade_base::daemon::{HiddenRows, InputState};
-use facade_rules::{find, is_own_draft, read_draft, read_input};
+use facade_rules::{find, is_own_draft, read_box, read_draft, read_input};
 use facade_screen::{ScreenView, VisibleCell};
 use recorded::view_of;
 
@@ -33,6 +34,16 @@ fn reads_as_recorded(cli: &str) {
             ));
         }
         assert_eq!(read.mechanism, Some(rule.input.mechanism()));
+        let unsure = screen["unsure"] == true;
+        let boxed = read_box(&rule.input, &view_of(screen));
+        if boxed.unsure != unsure || unsure && boxed.line.is_none() {
+            wrong.push(format!(
+                "{}: unsure {}, with a row {}, expected unsure {unsure}",
+                screen["label"],
+                boxed.unsure,
+                boxed.line.is_some()
+            ));
+        }
         states.push(expected);
     }
     assert!(
@@ -44,8 +55,9 @@ fn reads_as_recorded(cli: &str) {
     );
     states.sort();
     states.dedup();
-    // Codex's recordings also show its search and selection screens, which read unknown.
-    let shown: &[&str] = if cli == "codex" {
+    // Codex's recordings also show its search and selection screens, which read unknown, and
+    // Muse's its drafts with the cursor where the input starts, which read unknown as unsure.
+    let shown: &[&str] = if cli == "codex" || cli == "muse" {
         &["draft", "interaction", "unknown", "usable"]
     } else {
         &["draft", "interaction", "usable"]

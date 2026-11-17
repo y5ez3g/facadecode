@@ -35,6 +35,18 @@
 //! from its screen, as a CLI's permission question does: the question and a menu in place of its
 //! input, the cursor hidden, until Enter or Escape.
 //!
+//! `FAKECLI_LOOK=muse` shows a long paste as Muse 1.4.20 does, `[Pasted Content <n> chars]`.
+//!
+//! Hints: `FAKECLI_HINT=<text>` draws `<text>` in color where an empty input starts, the cursor
+//! before it, as Muse 1.4.20 draws a hint once a turn has ended: not until `FAKECLI_TURN_MS`
+//! after a message it takes; `FAKECLI_DRAFT_AT_START=<text>` starts with `<text>` as
+//! a draft in color with the cursor before it, as a draft the person moved the cursor back over;
+//! what is typed goes in before it. `FAKECLI_KEYS=<file>` appends every byte it reads to `<file>`.
+//! `FAKECLI_IGNORE_KEYS` lists keys it ignores, `space` and `backspace`, comma-separated;
+//! `FAKECLI_NO_LEADING_SPACE=1` draws no space where its input starts; `FAKECLI_SPACE_SUGGESTS=<text>`
+//! draws `<text>` on the row under the input while the input starts with a space, as a CLI that
+//! suggests something.
+//!
 //! Colors: `/fake colors` asks its terminal for its foreground, background and cursor colors, as a
 //! CLI that picks its colors by the background does: OSC 10 and 12 ended by BEL, OSC 11 by ST. Its
 //! screen shows each answer as `color <number>;<color> <bel|st>`, ended as the answer was.
@@ -188,6 +200,8 @@ struct FakeCli {
     session: Option<String>,
     /// It draws Antigravity's screen and takes its plugin.
     agy: bool,
+    /// It shows a long paste as Muse does.
+    muse: bool,
     /// Antigravity's MCP panel shows.
     panel: bool,
     /// The question `/fake menu` asks in place of the input, until Enter or Escape.
@@ -206,6 +220,16 @@ struct FakeCli {
     drawn: bool,
     /// Terminal queries the next frame sends, before it draws.
     queries: Vec<String>,
+    /// `FAKECLI_HINT`: drawn in color where an empty input starts.
+    hint: Option<String>,
+    /// `FAKECLI_DRAFT_AT_START`: the draft after the cursor, drawn in color.
+    after_cursor: String,
+    /// `FAKECLI_NO_LEADING_SPACE`: spaces where the input starts are not drawn.
+    no_leading_space: bool,
+    /// `FAKECLI_SPACE_SUGGESTS`: drawn under the input while it starts with a space.
+    space_suggests: Option<String>,
+    /// When the hint shows again after a message it took: once the message's turn has ended.
+    hint_after: Option<Instant>,
 }
 
 impl FakeCli {
@@ -252,6 +276,9 @@ impl FakeCli {
             .iter()
             .map(|piece| match piece {
                 InputSegment::Text(text) => text.clone(),
+                InputSegment::Paste { text, .. } if self.muse => {
+                    format!("[Pasted Content {} chars]", text.chars().count())
+                }
                 InputSegment::Paste { number, text } => {
                     // Antigravity counts a paste's lines; this CLI's own look, those after the
                     // first.
@@ -301,8 +328,15 @@ impl FakeCli {
     }
 
     fn submit(&mut self) {
-        let text = self.draft_text();
+        let text = self.draft_text() + &std::mem::take(&mut self.after_cursor);
         self.draft.clear();
+        if self.hint.is_some() {
+            let turn = std::env::var("FAKECLI_TURN_MS")
+                .ok()
+                .and_then(|ms| ms.parse().ok())
+                .unwrap_or(400);
+            self.hint_after = Some(Instant::now() + Duration::from_millis(turn));
+        }
         if text.trim().is_empty() {
             return;
         }
@@ -489,6 +523,10 @@ impl FakeCli {
 
     /// Reports idle once it is ready and once each turn ends. Returns whether it reported.
     fn tick(&mut self) -> bool {
+        if self.hint_after.is_some_and(|at| at <= Instant::now()) {
+            self.hint_after = None;
+            return true;
+        }
         let Some(status) = self.status.as_mut() else {
             return false;
         };
@@ -601,17 +639,42 @@ impl FakeCli {
         } else {
             ("❯", "  Enter to send")
         };
+        let shown = if self.no_leading_space {
+            shown.trim_start_matches(' ').to_string()
+        } else {
+            shown
+        };
+        // Muse 1.4.20 draws its input in this color, a hint and a draft alike.
+        let colored = |text: &str| format!("\x1b[38;2;204;211;219m{text}\x1b[0m");
+        let mut after = colored(&self.after_cursor);
+        if shown.is_empty() && self.after_cursor.is_empty() && self.hint_after.is_none() {
+            after = self.hint.as_deref().map(colored).unwrap_or_default();
+        }
+        let suggestion = self
+            .space_suggests
+            .as_deref()
+            .filter(|_| self.draft_text().starts_with(' '));
         frame.push_str(&format!(
-            "\x1b[{};1H{prompt} {}",
+            "\x1b[{};1H{prompt} {}{after}",
             input_row + 1,
             truncate_chars(&shown, cols.saturating_sub(2))
         ));
+        // A suggestion takes a row under the input, pushing the lower rule onto the footer's.
+        let lower = match suggestion {
+            Some(suggestion) => {
+                frame.push_str(&format!("\x1b[{};1H  {suggestion}", input_row + 2));
+                input_row + 3
+            }
+            None => input_row + 2,
+        };
         frame.push_str(&format!(
             "\x1b[{};1H\x1b[2m{}\x1b[0m",
-            input_row + 2,
+            lower,
             "─".repeat(cols)
         ));
-        frame.push_str(&format!("\x1b[{};1H\x1b[2m{footer}\x1b[0m", input_row + 3));
+        if suggestion.is_none() {
+            frame.push_str(&format!("\x1b[{};1H\x1b[2m{footer}\x1b[0m", input_row + 3));
+        }
         let cursor_col = 3 + shown.chars().count().min(cols.saturating_sub(3));
         frame.push_str(&format!("\x1b[{};{}H", input_row + 1, cursor_col));
         if self.sync {
@@ -926,6 +989,7 @@ fn run() -> anyhow::Result<()> {
         server,
         session: None,
         agy,
+        muse: std::env::var("FAKECLI_LOOK").is_ok_and(|look| look == "muse"),
         panel: false,
         menu: None,
         cursor_hidden: false,
@@ -935,6 +999,11 @@ fn run() -> anyhow::Result<()> {
         panel_drawn_ready: false,
         drawn: false,
         queries: Vec::new(),
+        hint: std::env::var("FAKECLI_HINT").ok(),
+        after_cursor: std::env::var("FAKECLI_DRAFT_AT_START").unwrap_or_default(),
+        no_leading_space: std::env::var("FAKECLI_NO_LEADING_SPACE").is_ok_and(|v| v == "1"),
+        space_suggests: std::env::var("FAKECLI_SPACE_SUGGESTS").ok(),
+        hint_after: None,
     };
     let resumed = arguments
         .iter()
@@ -969,6 +1038,16 @@ fn run() -> anyhow::Result<()> {
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     let reads_input = std::env::var("FAKECLI_IGNORE_INPUT").is_err();
+    let mut keys = std::env::var_os("FAKECLI_KEYS").and_then(|path| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()
+    });
+    let ignored = std::env::var("FAKECLI_IGNORE_KEYS").unwrap_or_default();
+    let ignores = |key: &str| ignored.split(',').any(|each| each.trim() == key);
+    let (ignore_space, ignore_backspace) = (ignores("space"), ignores("backspace"));
     let takes_enter = std::env::var("FAKECLI_IGNORE_ENTER").is_err();
     std::thread::spawn(move || {
         if !reads_input {
@@ -1004,6 +1083,9 @@ fn run() -> anyhow::Result<()> {
         let mut typed = false;
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(bytes) => {
+                if let Some(keys) = keys.as_mut() {
+                    let _ = keys.write_all(&bytes);
+                }
                 pending.extend(bytes);
                 dirty = true;
                 typed = true;
@@ -1048,6 +1130,7 @@ fn run() -> anyhow::Result<()> {
                     dirty = true;
                 }
                 b'\r' | b'\n' if takes_enter => app.submit(),
+                0x7f | 0x08 if ignore_backspace => {}
                 0x7f | 0x08 => app.backspace(),
                 0x03 => app.draft.clear(),
                 0x04 if app.draft.is_empty() => {
@@ -1102,7 +1185,15 @@ fn run() -> anyhow::Result<()> {
                     while end < pending.len() && pending[end] >= 0x20 && pending[end] != 0x7f {
                         end += 1;
                     }
-                    app.push_text(&String::from_utf8_lossy(&pending[start..end]));
+                    let text = String::from_utf8_lossy(&pending[start..end]);
+                    let text = if ignore_space {
+                        text.replace(' ', "")
+                    } else {
+                        text.into_owned()
+                    };
+                    if !text.is_empty() {
+                        app.push_text(&text);
+                    }
                     i = end;
                     continue;
                 }

@@ -1041,9 +1041,9 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
     );
 }
 
-/// A running Facade whose version is a pre-release, such as 0.2.0-rc1, is taken over by no build: a
-/// command of 0.2.0 asks nothing, says nothing, and works with it. The command and the daemon
-/// decide by one rule.
+/// A running Facade whose version is a pre-release of this version, such as this version with
+/// `-rc1`, is taken over by no build: a command of this version asks nothing, says nothing, and
+/// works with it. The command and the daemon decide by one rule.
 #[test]
 fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     let home = TestHome::new("prerelease");
