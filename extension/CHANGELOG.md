@@ -2,11 +2,11 @@
 
 ## 0.1.6
 
-- **A new engine, written in Rust, built for maximum performance.** On macOS and Linux, Facade now runs your agents on Facade core. With 100 agents idle, it uses under 1% CPU and about 70 MB of memory. Keystrokes in an agent's terminal echo in about 1 ms, even while 100 other agents flood their terminals. A message sent to 100 agents at once reaches 95% of them within 0.2 seconds, and 400 agents use about 250 MB. (Measured on a Mac with Apple M5.)
+- **A new engine, written in Rust, built for maximum performance.** On macOS, Windows and Linux, Facade now runs your agents on Facade core. With 100 agents idle, it uses under 1% CPU and about 70 MB of memory. Keystrokes in an agent's terminal echo in about 1 ms, even while 100 other agents flood their terminals. A message sent to 100 agents at once reaches 95% of them within 0.2 seconds, and 400 agents use about 250 MB. (Measured on a Mac with Apple M5.)
 - **Lighter.** An agent no longer needs its own Node.js process for Facade's tools.
 - **`facade` in VS Code's terminal.** In a window running the new engine, `facade list` shows the same agents as the panel, and `facade start` starts one there.
 - **Nothing to do.** Agents that are already running keep running. Once no agent of the old engine is still running on that computer, Facade offers to reload the window, and the window switches. The panel, cards, tabs, Pins and New Agent look and work as before.
-- **If something goes wrong,** set **Facade: Rust Engine** to `off` and reload the window to go back to the old engine, then let us know in a [GitHub issue](https://github.com/y5ez3g/facadecode/issues). Windows keeps the old engine for now.
+- **If something goes wrong,** set **Facade: Rust Engine** to `off` and reload the window to go back to the old engine, then let us know in a [GitHub issue](https://github.com/y5ez3g/facadecode/issues).
 
 ## 0.1.5
 

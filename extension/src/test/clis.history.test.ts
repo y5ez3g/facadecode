@@ -407,6 +407,17 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		assert.ok(entries.every(entry => entry.key.environment === 'local' && entry.unavailable === undefined));
 	});
 
+	test('Claude lists and reads a Windows conversation recorded with a lowercase drive when core lists its folder with an uppercase drive (CLIS-2.4)', async function () {
+		if (process.platform !== 'win32') { this.skip(); }
+		const upper = repo[0].toUpperCase() + repo.slice(1);
+		const lower = repo[0].toLowerCase() + repo.slice(1);
+		const cwd = path.join(lower, 'pkg');
+		claude(cwd, id(1), Date.UTC(2026, 10, 17, 17));
+		const entries = await all([upper]);
+		assert.deepStrictEqual(entries.map(entry => [entry.key.sessionId, entry.cwd, entry.title, entry.unavailable]), [[id(1), cwd, 'Work 01', undefined]]);
+		assert.strictEqual(await history.title({ cli: 'claude', sessionId: id(1) }, path.join(upper, 'pkg')), 'Work 01');
+	});
+
 	test('a title is the first prompt even after a preamble longer than the head: Codex writes its instructions and skills first', async () => {
 		const base = Date.UTC(2026, 9, 29, 10);
 		// As Codex 0.165.0 writes a rollout: about 100 KB of developer instructions before the environment and the first prompt

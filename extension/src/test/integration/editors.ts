@@ -185,10 +185,25 @@ export function fakeClis(root: string): FakeClis {
 	return { fake, launchers: { pi } };
 }
 
-/** The daemon socket of Facade core for `home`, by the rule core and the extension share (`host/rust/connection.ts`'s `daemonSocketPath`). */
+/**
+ * The daemon socket of Facade core for `home`, by the rule core and the extension share (`host/rust/connection.ts`'s `daemonSocketPath`):
+ * on Windows a named pipe.
+ */
 export function coreSocket(home: string): string {
 	const key = createHash('sha256').update(Buffer.from(home, 'utf8')).digest('hex').slice(0, 10);
-	return path.join('/tmp', `facade-core-${process.getuid?.() ?? 0}`, `daemon-${key}.sock`);
+	return process.platform === 'win32' ? `\\\\.\\pipe\\facade-core-daemon-${key}`
+		: path.join('/tmp', `facade-core-${process.getuid?.() ?? 0}`, `daemon-${key}.sock`);
+}
+
+/** Whether a daemon of `home` listens: its socket is there, or on Windows its pipe is among the pipes, which listing does not connect to. */
+export function coreListens(home: string): boolean {
+	const socket = coreSocket(home);
+	return process.platform === 'win32' ? fs.readdirSync('\\\\.\\pipe\\').includes(path.win32.basename(socket)) : fs.existsSync(socket);
+}
+
+/** Core's `facade` program in the folder `bin`, as the package carries it. */
+export function coreProgram(bin: string): string {
+	return path.join(bin, process.platform === 'win32' ? 'facade.exe' : 'facade');
 }
 
 /**
@@ -197,8 +212,7 @@ export function coreSocket(home: string): string {
  * its socket away. Only processes of this `home` are touched - never one by name - and nothing where no daemon of it runs.
  */
 export async function endCore(program: string, home: string, ms = 30_000): Promise<void> {
-	const socket = coreSocket(home);
-	if (!fs.existsSync(program) || !fs.existsSync(socket)) {
+	if (!fs.existsSync(program) || !coreListens(home)) {
 		return;
 	}
 	// Not as an agent: `facade` acts for the agent whose terminal it runs in
@@ -212,10 +226,10 @@ export async function endCore(program: string, home: string, ms = 30_000): Promi
 		}
 	}
 	const end = Date.now() + ms;
-	while (fs.existsSync(socket) && Date.now() < end) {
+	while (coreListens(home) && Date.now() < end) {
 		await new Promise(resolve => setTimeout(resolve, 200));
 	}
-	if (fs.existsSync(socket)) {
+	if (coreListens(home)) {
 		console.warn(`Facade core of ${home} still runs after ${ms} ms.`);
 	}
 }

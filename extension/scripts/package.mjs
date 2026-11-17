@@ -6,7 +6,7 @@
 // starts a PTY with - and its VSIX names it. The VSIX is read back as it was written: one whose manifest names another target,
 // or which carries a binary not of its target, is removed and refused.
 //
-// Core's programs go in every package but Windows' (scripts/core.mjs); nothing is packaged where core's version is not the
+// Core's programs go in every package (scripts/core.mjs); nothing is packaged where core's version is not the
 // extension's, or the extension's copy of the protocol is not core's.
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -47,5 +47,5 @@ for (const [stage, native] of [['window', false], ['extension', true]]) {
 		fs.rmSync(file, { force: true });
 		throw new Error(`${path.basename(file)} is refused and removed: ${problems.join('; ')}.`);
 	}
-	console.info(`${path.basename(file)}: ${native ? `for ${target} alone, its native binaries all ${target}'s${target.startsWith('win32-') ? '' : ', core\'s programs with them'}` : 'for every target, no native binary'}.`);
+	console.info(`${path.basename(file)}: ${native ? `for ${target} alone, its native binaries all ${target}'s, core's programs with them` : 'for every target, no native binary'}.`);
 }

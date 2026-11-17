@@ -284,6 +284,7 @@ impl Daemon {
             info,
             master,
             screen,
+            untouched_input: false,
             rule: record.rule,
             captures: follows_session,
             deliveries: self.messages.delivery_handle(),

@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
-import { checkSources, namesDynamicLinker, programProblems, protocolProblems, versionProblems, withWorkspaceVersion, workspaceVersion, zipModes } from './core.mjs';
+import { checkSources, coreTriple, namesDynamicLinker, programProblems, protocolProblems, versionProblems, withWorkspaceVersion, workspaceVersion, zipModes } from './core.mjs';
 import { binaryTarget, filesOfZip, hostTarget, nativeProblems, packageTarget } from './native.mjs';
 import { packageReadme } from './readme.mjs';
 
@@ -62,6 +62,7 @@ test('the staged product has usable README links and preserves both product and 
 	assert.match(notices, /2026 - present Facade Code contributors/);
 	// node-pty's Windows build ships ConPTY's conpty.dll and OpenConsole.exe, whose notice is not in node-pty's own
 	assert.match(notices, /^ConPTY \(conpty\.dll and OpenConsole\.exe/m);
+	assert.match(notices, /Facade core's copy in bin\/conpty\/: Microsoft\.Windows\.Console\.ConPTY 1\.25\.260303002/);
 	assert.doesNotMatch(notices, /^None$/m);
 });
 
@@ -381,7 +382,7 @@ test('core\'s version is the extension\'s and the window component\'s, and the p
 	checkSources();
 });
 
-test('a package carries core\'s two programs, executable, static on Linux, and a Windows package carries none', () => {
+test('a package carries core\'s programs, executable on Unix, static on Linux, and with ConPTY on Windows (ARCHITECTURE-4.3)', () => {
 	const modes = names => new Map(names.map(name => [name, 0o755]));
 	const pty = { name: 'extension/node_modules/node-pty/prebuilds/x/pty.node', bytes: Buffer.alloc(0) };
 	const mac = ['facade', 'facade-mcp'].map(program => ({ name: `extension/bin/${program}`, bytes: machO(ARM64) }));
@@ -395,8 +396,19 @@ test('a package carries core\'s two programs, executable, static on Linux, and a
 	assert.equal(namesDynamicLinker(elfStatic(0x3e, true)), true);
 	assert.deepEqual(programProblems(linux(false), 'linux-x64', modes(names)), []);
 	assert.match(programProblems(linux(true), 'linux-x64', modes(names)).join(), /bin\/facade is not a static musl build/);
-	assert.deepEqual(programProblems([pty], 'win32-x64', new Map()), []);
-	assert.match(programProblems([pty, ...mac], 'win32-x64', modes(names)).join(), /extension\/bin\/facade is core's, in a package for Windows/);
+	for (const [arch, machine, triple] of [['x64', 0x8664, 'x86_64'], ['arm64', 0xaa64, 'aarch64']]) {
+		const target = `win32-${arch}`;
+		assert.equal(coreTriple('win32', arch), `${triple}-pc-windows-msvc`);
+		const windows = ['facade.exe', 'facade-mcp.exe', 'conpty/conpty.dll', 'conpty/OpenConsole.exe']
+			.map(program => ({ name: `extension/bin/${program}`, bytes: pe(machine) }));
+		assert.deepEqual(programProblems([pty, ...windows], target, new Map()), []);
+		assert.deepEqual(nativeProblems(windows, target), []);
+		for (const file of windows) {
+			assert.deepEqual(programProblems(windows.filter(each => each !== file), target, new Map()), [`${file.name.slice('extension/'.length)} is not in the package`]);
+			assert.match(programProblems(windows.map(each => each === file ? { ...each, bytes: Buffer.from('no binary') } : each), target, new Map()).join(), /is no program/);
+			assert.match(nativeProblems(windows.map(each => each === file ? { ...each, bytes: pe(arch === 'x64' ? 0xaa64 : 0x8664) } : each), target).join(), /not win32-/);
+		}
+	}
 });
 
 test('the packaged workspace extension carries core\'s programs of this host\'s target at the extension\'s version, and the window component none', () => {
@@ -406,7 +418,9 @@ test('the packaged workspace extension carries core\'s programs of this host\'s 
 	const files = filesOfZip(file);
 	assert.deepEqual(programProblems(files, target, zipModes(file)), []);
 	const programs = files.filter(each => each.name.startsWith('extension/bin/'));
-	assert.deepEqual(programs.map(each => each.name).sort(), target.startsWith('win32-') ? [] : ['extension/bin/facade', 'extension/bin/facade-mcp']);
+	assert.deepEqual(programs.map(each => each.name).sort(), target.startsWith('win32-')
+		? ['extension/bin/conpty/OpenConsole.exe', 'extension/bin/conpty/conpty.dll', 'extension/bin/facade-mcp.exe', 'extension/bin/facade.exe']
+		: ['extension/bin/facade', 'extension/bin/facade-mcp']);
 	assert.deepEqual(nativeProblems(files, target), []);
 	assert.equal(workspaceVersion(fs.readFileSync(path.join(root, '..', 'core', 'Cargo.toml'), 'utf8')), version);
 	assert.ok(!filesOfZip(path.join(root, 'build', 'vsix', `facadecode-window-${version}.vsix`)).some(each => each.name.startsWith('extension/bin/')));

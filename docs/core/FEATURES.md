@@ -5,9 +5,9 @@ instead of repeating them: the [daemon protocol](../../core/protocol/PROTOCOL.md
 [MCP contract](../extension/engineering/MCP.md) for Facade's tools, and the [shared rules](../extension/RULES.md) that
 both follow.
 
-Core serves the computer it runs on. The editor extension uses core when its Rust engine is on. It runs on macOS,
-on Linux, and on Windows 11 or Windows Server 2022 and later, on x64. On Windows it is a native program, and each CLI
-runs in a pseudo console.
+Core serves the computer it runs on. The editor extension uses core when its Rust engine is on. It runs on macOS and
+on Linux, each on x64 and arm64, and on Windows 11 or Windows Server 2022 and later on x64 and Windows 11 on arm64. On
+Windows it is a native program, and each CLI runs in a pseudo console.
 
 ## Agents
 

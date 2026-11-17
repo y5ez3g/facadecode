@@ -11,8 +11,9 @@ unset. On macOS and Linux the daemon socket is `/tmp/facade-core-<uid>/daemon-<k
 user ID. Only that user can access the socket folder. On Windows the daemon listens on the named pipe
 `\\.\pipe\facade-core-daemon-<key>`, and the keeper on `\\.\pipe\facade-core-keeper-<key>`. The pipes let in their owner
 alone (DACL `D:P(A;;GA;;;OW)`). Before its `hello`, a Windows client checks that the server process runs as its own user
-(`GetNamedPipeServerProcessId`, then that process's token's user SID), and closes the connection otherwise. Lines, framing
-and every operation are the same on every system.
+(`GetNamedPipeServerProcessId`, then that process's token's user SID), and closes the connection otherwise. An `ide`
+client is the exception: Node.js, which runs the editor's extension, has no API for that check, so it relies on the
+daemon pipe's DACL alone. Lines, framing and every operation are the same on every system.
 
 To compute `key`, encode the home's path string as UTF-8. Replace invalid path bytes with U+FFFD, as Rust's
 `Path::to_string_lossy` does. Take the first five bytes of its SHA-256 digest and write them as ten lowercase hexadecimal
@@ -229,10 +230,13 @@ there uses it, if it is still exactly what this version writes; a daemon that st
 no daemon ran, or whose start was cut before its agent was listed, as the run's folder names the project before the plugin
 goes there. A `facade` server of the person's own, one that does not run `facade-mcp`, in any configuration the CLI reads,
 means the run starts without the tools, and Facade changes nothing; for Pi, whose extensions would clash, that is an extension
-that registers `facade`, and Pi starts without Facade's. Muse Code is the one exception: any `facade` server in its
-configuration, `facade-mcp` included, means its run starts without the tools, as Muse Code refuses to run beside one. So does
-a project MCP file Muse Code cannot load, and a plugin folder there that is not Facade core's, such as the person's own or the
-Facade Code extension's, or that holds a file a Facade core plugin never holds; Facade changes none of it.
+that registers `facade`, and Pi starts without Facade's. Antigravity's runs get the tools beside such a server: Antigravity
+names a plugin's server after the plugin too, so Facade's is `facade_facade` and neither takes the other's place. They start
+without the tools where `.agents/plugins/facade/` is not Facade core's plugin, such as the person's own or the Facade Code
+extension's, or holds a file a Facade core plugin never holds. Muse Code is stricter, as it refuses to run beside a second
+`facade` server: any `facade` server in its configuration, even one that runs `facade-mcp`, means its run starts without the
+tools, and so does a project MCP file Muse Code cannot load. Only the one Facade's integration writes in its settings does
+not: it serves the run itself. Facade changes none of it.
 
 `tools_state` in an agent record says whether its CLI can use them: `not_injected` where it was not given them, `connecting`
 until its server has answered the CLI's `tools/list`, `available` while the server holds a connection, and `unavailable`

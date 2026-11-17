@@ -932,13 +932,14 @@ fn muse_code_is_not_given_the_tools_beside_a_facade_server_of_its_own_or_a_proje
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// One rule for every CLI: a `facade` server of the person's own, in any configuration the CLI
-/// reads, leaves the run without Facade's tools, says why, and stays as it is. A `facade`
-/// server that runs `facade-mcp`, and Pi's guest extension, are Facade's own and change
-/// nothing. Pi then starts without Facade's extension, as it would not start beside a second
-/// one.
+/// A conflicting `facade` server of the person's own, in any configuration the CLI reads, leaves
+/// the run without Facade's tools, says why, and stays as it is. Antigravity names a plugin's
+/// server after the plugin, so Facade's is `facade_facade`, and its run is given the tools beside a
+/// `facade` server. A `facade` server that runs `facade-mcp`, and Pi's guest extension, are
+/// Facade's own and change nothing. Pi then starts without Facade's extension, as it would not
+/// start beside a second one.
 #[test]
-fn a_facade_server_of_the_person_s_own_leaves_any_cli_without_the_tools() {
+fn a_facade_server_of_the_person_s_own_withholds_tools_only_where_it_conflicts() {
     let root = scratch("ownserver");
     let (home, repository) = (root.join("home"), root.join("repository"));
     let cwd = repository.join("app");
@@ -1063,12 +1064,13 @@ fn a_facade_server_of_the_person_s_own_leaves_any_cli_without_the_tools() {
     );
     given("opencode", &environment);
 
-    // Antigravity: its own MCP configuration.
+    // Antigravity names the plugin's server facade_facade, so its run is given the tools beside
+    // a facade server in its own MCP configuration.
     write(
         home.join(".gemini/config/mcp_config.json"),
         &servers("mcpServers", mine),
     );
-    refused("agy", &environment, "mcp_config.json");
+    given("agy", &environment);
     std::fs::remove_file(home.join(".gemini/config/mcp_config.json")).unwrap();
 
     // Pi: an extension it loads, in its agent folder or the project's, that registers `facade`.

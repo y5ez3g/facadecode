@@ -94,6 +94,7 @@ pub(super) fn spawn(
         info,
         master,
         screen,
+        untouched_input,
         colors,
         rule,
         captures,
@@ -171,6 +172,8 @@ pub(super) fn spawn(
         typist_at: None,
         replies_dropped: false,
         typed: 0,
+        untouched_input,
+        holds_input_for_probe: false,
     };
     // The record shows the state from the start.
     actor.record_state();
@@ -246,6 +249,10 @@ struct Actor {
     /// How many writes of the person's went on: a probe's Backspace goes only while this is what
     /// it was when the probe read the input.
     typed: u64,
+    /// Automatic delivery can probe an unstyled hint before it accepts any external input.
+    untouched_input: bool,
+    /// The probe of a fresh unstyled hint finishes before external keys reach the terminal.
+    holds_input_for_probe: bool,
 }
 
 async fn sleep_until(at: Option<Instant>) {
@@ -300,6 +307,7 @@ impl Actor {
         self.begin(recovered, yolo, colors).await;
         loop {
             if !self.typist.pasting()
+                && !self.holds_input_for_probe
                 && let Some(reply) = self.settling.take()
             {
                 let _ = reply.send(());
@@ -570,6 +578,8 @@ impl Actor {
                 let _ = self.links.exit.send(None);
                 self.state.restarted(Instant::now(), version, tools);
                 self.typist.clear_probes();
+                self.untouched_input = false;
+                self.holds_input_for_probe = false;
                 let yolo = self.links.shared.info.lock().unwrap().yolo;
                 self.ready_at =
                     self.readiness
@@ -606,6 +616,9 @@ impl Actor {
             AgentCommand::Quiesce { reply } => {
                 gate_for_test("agent-quiesce");
                 (self.quiet, self.typist_at) = (true, None);
+                if std::mem::take(&mut self.holds_input_for_probe) {
+                    self.release_held();
+                }
                 // It reads no more, so the person's keys go as they come.
                 self.let_enter_go();
                 // No read is under way once it replies, and what the last reads brought went
@@ -665,9 +678,12 @@ impl Actor {
             facade_base::service::mark_for_test("input-without-room");
             return Err(InputRejection::Backpressured(input));
         }
-        let holds = matches!(input, Input::Raw(_) | Input::Typed(_)) && self.start_holds_input();
-        if holds {
-            // The start readies the tools: other keys and calls wait, the person's too.
+        let external = matches!(input, Input::Raw(_) | Input::Typed(_));
+        if external {
+            self.untouched_input = false;
+        }
+        if external && (self.holds_input_for_probe || self.start_holds_input()) {
+            // Let the start or the unstyled hint probe finish before forwarding external input.
             self.held.push_back(input);
             return Ok(());
         }
@@ -1055,6 +1071,7 @@ impl Actor {
             self.ended(),
             self.undrawn,
             self.screen().screen(),
+            false,
         )
     }
 
@@ -1080,12 +1097,16 @@ impl Actor {
             Some("the run's start readies its tools first")
         } else if self.awaits_prompt {
             Some("the run's start prompt goes first")
+        } else if self.holds_input_for_probe && !self.held.is_empty() {
+            Some("input is waiting for the hint probe to finish")
         } else {
             None
         };
         let probing = self.typist.probing();
+        let pasting = self.typist.pasting();
         let (rule, ended, undrawn) = (self.input_rule, self.ended(), self.undrawn);
-        let read_screen = || read_box(rule, ended, undrawn, screen.screen());
+        let untouched_input = self.untouched_input;
+        let read_screen = || read_box(rule, ended, undrawn, screen.screen(), untouched_input);
         let read = || match first {
             Some(evidence) => BoxReading {
                 info: InputInfo {
@@ -1109,19 +1130,36 @@ impl Actor {
             &read,
             &read_screen,
         );
+        let still_probing = self.typist.probing();
+        if !probing && still_probing && untouched_input {
+            self.holds_input_for_probe =
+                !read_box(rule, ended, undrawn, screen.screen(), false).unsure;
+        }
         self.terminal.push(&step.write);
         self.typist_at = step.wake;
-        // The start waits on what a probe finds: it looks again once the probe is done.
-        if probing && !self.typist.probing() && self.readiness.is_under_way() {
-            self.ready_at = Some(Instant::now());
+        let submitted = self.take_typed();
+        if pasting && !self.typist.pasting() && !submitted {
+            self.untouched_input = false;
         }
-        self.take_typed();
+        if probing && !still_probing {
+            if std::mem::take(&mut self.holds_input_for_probe) && !self.start_holds_input() {
+                self.release_held();
+                if self.typist.types_calls() {
+                    self.typist_at = Some(Instant::now());
+                }
+            }
+            if self.readiness.is_under_way() {
+                self.ready_at = Some(Instant::now());
+            }
+        }
     }
 
     /// What the typist submitted is said to the agent, and an Enter it typed asks the CLI to do
     /// something, unless the start holds the other input and types its own keys alone.
-    fn take_typed(&mut self) {
-        if let Some(submission) = self.typist.take_submitted() {
+    fn take_typed(&mut self) -> bool {
+        let submission = self.typist.take_submitted();
+        let submitted = submission.is_some();
+        if let Some(submission) = submission {
             self.state.said(submission);
             self.state_changed = true;
         }
@@ -1129,6 +1167,7 @@ impl Actor {
             self.state.asked();
             self.state_changed = true;
         }
+        submitted
     }
 
     /// Whether the run's start holds keys and calls now. The input is read only while it might.
@@ -1180,8 +1219,11 @@ impl Actor {
         }
     }
 
-    /// The keys and calls held while the start readied the tools go on, in the order they came.
+    /// The held keys and calls go on in their original order after the probe has finished.
     fn release_held(&mut self) {
+        if self.holds_input_for_probe {
+            return;
+        }
         for input in std::mem::take(&mut self.held) {
             match input {
                 Input::Raw(keys) => self.take_keys(keys),
@@ -1193,6 +1235,7 @@ impl Actor {
     /// Drops queued input and fails the typist's calls: `why` typing stopped.
     fn stop_input(&mut self, why: &str) {
         self.terminal.clear();
+        self.holds_input_for_probe = false;
         (self.person, self.submitting) = (PersonKeys::default(), None);
         // Held calls fail with the others; held keys go with the queued ones.
         for input in std::mem::take(&mut self.held) {
@@ -1402,6 +1445,7 @@ fn read_box(
     ended: bool,
     undrawn: Option<&str>,
     screen: &facade_screen::Screen,
+    untouched_input: bool,
 ) -> BoxReading {
     let unknown = |evidence: &str, rule: Option<&InputRule>| BoxReading {
         info: InputInfo {
@@ -1418,6 +1462,8 @@ fn read_box(
         (None, _) => unknown("the agent has no CLI rule to read its input by", None),
         (Some(rule), _) if ended => unknown("the agent ended", Some(rule)),
         (Some(rule), Some(why)) => unknown(why, Some(rule)),
-        (Some(rule), None) => facade_rules::read_box(rule, &screen.view()),
+        (Some(rule), None) => {
+            facade_rules::read_box_for_typing(rule, &screen.view(), untouched_input)
+        }
     }
 }

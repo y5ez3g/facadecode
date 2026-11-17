@@ -21,8 +21,8 @@ permissions:
 jobs:
   verify:
     name: Extension on ${{ matrix.target }}, ${{ matrix.engine }} engine
-    # Every target runs the editor journeys on the old engine (`facade.rustEngine` off); the four with core's programs run them
-    # again on the Rust engine in a job of their own, which builds and tests nothing else.
+    # Every target runs the editor journeys on the old engine (`facade.rustEngine` off) and runs them
+    # again on the Rust engine in a job of its own, which builds and tests nothing else.
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +32,9 @@ jobs:
           - { os: ubuntu-24.04-arm, target: linux-arm64, engine: old }
           - { os: ubuntu-24.04-arm, target: linux-arm64, engine: rust }
           - { os: windows-latest, target: win32-x64, engine: old }
+          - { os: windows-latest, target: win32-x64, engine: rust }
           - { os: windows-11-arm, target: win32-arm64, engine: old }
+          - { os: windows-11-arm, target: win32-arm64, engine: rust }
           - { os: macos-latest, target: darwin-arm64, engine: old }
           - { os: macos-latest, target: darwin-arm64, engine: rust }
           - { os: macos-15-intel, target: darwin-x64, engine: old }
@@ -64,9 +66,8 @@ jobs:
           import { packageTarget } from './scripts/native.mjs';
           console.info(`Building and testing ${packageTarget(process.env.FACADE_PACKAGE_TARGET)}`);
           JS
-      # Core's programs go in every package but Windows': the toolchain core pins, on Linux for musl, the target scripts/core.mjs builds
+      # Core's programs go in every package: the toolchain core pins, on Linux for musl, the target scripts/core.mjs builds
       - name: Rust toolchain for core
-        if: runner.os != 'Windows'
         working-directory: core
         run: rustup toolchain install
       # rustup target add acts on the toolchain of the directory it runs in: core's pinned one, which builds, not the runner's default

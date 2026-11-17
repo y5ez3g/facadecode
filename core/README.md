@@ -35,11 +35,12 @@ The stress test is a program of its own, not part of `cargo test`:
 CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo run --release -p facade-scenarios --bin facade-stress
 ```
 
-Core builds for macOS, for Linux, and for Windows 11 or Windows Server 2022 and later on x64. Linux needs kernel 5.3 or
-newer, with process descriptors (`pidfd_open`) allowed. An agent keeps running when the SSH login that started it ends,
-except where systemd ends a user's processes at logout (`KillUserProcesses=yes`): there, run `loginctl enable-linger`
-first. Windows builds with the MSVC toolchain, and every Windows build carries the ConPTY package in
-[vendor/conpty](vendor/conpty/), which the build copies beside the programs.
+Core builds for macOS and for Linux, each on x64 and arm64, and for Windows 11 or Windows Server 2022 and later on x64
+and Windows 11 on arm64. Linux needs kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed. An agent
+keeps running when the SSH login that started it ends, except where systemd ends a user's processes at logout
+(`KillUserProcesses=yes`): there, run `loginctl enable-linger` first. Windows builds with the MSVC toolchain, and every
+Windows build carries the ConPTY package's files for its architecture, from [vendor/conpty](vendor/conpty/), which the
+build copies beside the programs.
 
 ## Try it in a temporary Facade home
 

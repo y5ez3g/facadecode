@@ -44,10 +44,14 @@ async function until<T>(what: string, probe: () => Promise<T | undefined> | T | 
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/** Core's daemon socket for this root, by the rule core and the extension share: there only while a daemon of it runs. */
+/**
+ * Core's daemon socket for this root, by the rule core and the extension share: there only while a daemon of it runs. On Windows its
+ * named pipe, among the pipes, which listing does not connect to.
+ */
 function coreRuns(): boolean {
 	const key = crypto.createHash('sha256').update(Buffer.from(HOME, 'utf8')).digest('hex').slice(0, 10);
-	return fs.existsSync(path.join('/tmp', `facade-core-${process.getuid?.() ?? 0}`, `daemon-${key}.sock`));
+	return process.platform === 'win32' ? fs.readdirSync('\\\\.\\pipe\\').includes(`facade-core-daemon-${key}`)
+		: fs.existsSync(path.join('/tmp', `facade-core-${process.getuid?.() ?? 0}`, `daemon-${key}.sock`));
 }
 
 const aliasOf = (card: PanelState['cards'][number]) => card.alias;

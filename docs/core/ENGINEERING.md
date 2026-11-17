@@ -190,7 +190,8 @@ where every commit must build.
 | `scripts/check-each-commit.sh <base> [<head>]` | Checks every commit after `<base>`: the whole workspace builds, all targets, and cargo leaves `Cargo.lock` as it is. Works in a temporary worktree it removes at the end |
 | `scripts/ssh-check.sh [<destination>]` | On Linux, over real ssh to this machine and with the test CLI: a login starts an agent and detaches, another login drops while attached, a new login finds both agents running with their screens and types into one, and once they stop, both services exit. Needs a key login without a prompt. Exits 1 when a step fails |
 
-A pull request that changes `core/` runs the workflow `Core checks`: clippy and `test-all.sh` on macOS and Linux, each
-on arm64 and x64; `cargo fmt --check`, `ssh-check.sh` and `check-each-commit.sh` on Linux x64.
+A pull request that changes `core/` runs the workflow `Core checks`: clippy and the tests on macOS, Linux and Windows,
+each on arm64 and x64, with `test-all.sh`, or `test-all.ps1` on Windows; `cargo fmt --check`, `ssh-check.sh` and
+`check-each-commit.sh` on Linux x64.
 
 The stress test is `facade-stress`; [core/README](../../core/README.md) says how to run it.

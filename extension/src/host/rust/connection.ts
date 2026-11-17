@@ -52,6 +52,9 @@ export interface ConnectOptions {
 /** The daemon's socket for `home` (PROTOCOL "Connect to the daemon"): the home's path exactly as the program was started with it. */
 export function daemonSocketPath(home: string): string {
 	const key = crypto.createHash('sha256').update(Buffer.from(home, 'utf8')).digest('hex').slice(0, 10);
+	if (process.platform === 'win32') {
+		return `\\\\.\\pipe\\facade-core-daemon-${key}`;
+	}
 	return path.join('/tmp', `facade-core-${process.getuid?.() ?? os.userInfo().uid}`, `daemon-${key}.sock`);
 }
 
@@ -366,7 +369,9 @@ class Link implements DaemonLink {
 	/** One try: a decoded refusal other than `upgrading` is thrown; anything else that fails is for the next try. */
 	private async attempt(): Promise<Attempt> {
 		const socket = daemonSocketPath(this.options.home);
-		if (!socketFolderIsOurs(path.dirname(socket))) {
+		// On Windows this `ide` client relies on the daemon pipe's DACL alone (ARCHITECTURE-1.4,
+		// PROTOCOL "Connect to the daemon"); the folder check is Unix's.
+		if (process.platform !== 'win32' && !socketFolderIsOurs(path.dirname(socket))) {
 			return { absent: true, reason: 'the socket folder does not exist yet' };
 		}
 		const reached = await connectWithin(socket, CONNECT_WAIT_MS);

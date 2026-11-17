@@ -151,23 +151,26 @@ Worktree input and planning are shared under WORKTREES-4.3 rather than copied in
 **A window runs its agents on one engine, chosen as it opens or reloads: Facade core, the Rust engine, or the extension's
 own, the old engine.**
 
-`facade.rustEngine` (CONFIGURATION-1.2) is `auto` by default. Under `auto` a window takes the Rust engine where its package
-carries core's `bin/facade`, no run of the old engine is still running in its execution environment - ptyd lists none
-without `exited`, whatever window started it; a ptyd that does not answer has none, and none is started to ask - and core
-responds. Otherwise, and always under `off`, it takes the old engine, all of 1.1-1.3 unchanged. A core that cannot start
-there, as on WSL 1 or in a container that forbids process descriptors, leaves the window on the old engine with one
-notification of why and how to stop trying. An old-engine window under `auto` whose reload would switch asks again
-whether old runs remain after each change of its own agents, every 10 seconds and before restoring Pins; once none does,
-it says once that a reload switches it, and the person's New Agent, Resume and Pin restoration then say so instead of
-starting on the old engine. Agents never run on both engines in one window.
+`facade.rustEngine` (CONFIGURATION-1.2) is `auto` by default. Under `auto` a window takes the Rust engine where its
+package carries core's `facade` program (`bin/facade.exe` on Windows, `bin/facade` elsewhere), no run of the old engine
+is still running in its execution environment - ptyd lists none without `exited`, whatever window started it; a ptyd
+that does not answer has none, and none is started to ask - and core responds. Otherwise, and always under `off`, it
+takes the old engine, all of 1.1-1.3 unchanged. A core that cannot start there, as on WSL 1 or in a container that
+forbids process descriptors, leaves the window on the old engine with one notification of why and how to stop trying. An
+old-engine window under `auto` whose reload would switch asks again whether old runs remain after each change of its own
+agents, every 10 seconds and before restoring Pins; once none does, it says once that a reload switches it, and the
+person's New Agent, Resume and Pin restoration then say so instead of starting on the old engine. Agents never run on
+both engines in one window.
 
 A Rust window is an `ide` client of core over the daemon protocol (`core/protocol/PROTOCOL.md`), under `host/rust`: the
 connection (`connection.ts`), which starts `facade daemon --detach` with the window's `FACADE_HOME` where no daemon
-responds and lets its own build take over an older one; the agents (`agents.ts`), an `Agents` of core's records; the
-locations, CLIs and worktrees core lists for the window (`ports.ts`); the agents' tabs, today's terminals drawing core's
-screens, each watched only while its tab is open (`terminals.ts`); and the environment (`environment.ts`). Its
-`hello` describes the window - its routing ID (2.2), name, environment, workspace, folders, Git branch prefix, terminal
-colors and the environment its first folder's terminals have - and the numbers this computer's counters gave (RULES-2.2);
+responds, lets its own build take over an older one, and on Windows connects to the daemon's named pipe with Node's
+`net`, relying on the pipe's DACL alone, as PROTOCOL's "Connect to the daemon" allows an `ide` client, since Node has no
+API to check the pipe server's user; the agents (`agents.ts`), an `Agents` of core's records; the locations, CLIs and
+worktrees core lists for the window (`ports.ts`); the agents' tabs, today's terminals drawing core's screens, each
+watched only while its tab is open (`terminals.ts`); and the environment (`environment.ts`). Its `hello` describes the
+window - its routing ID (2.2), name, environment, workspace, folders, Git branch prefix, terminal colors and the
+environment its first folder's terminals have - and the numbers this computer's counters gave (RULES-2.2);
 `window.update` sends it again as any of it changes, as the window regains focus, and as a picker refreshes its
 locations. The panel, cards, tabs, Pins and pickers are the same code on both engines; core's errors show in the
 person's language by their reason, core's own words after. The window starts no ptyd, shim or Facade tools of its own,
@@ -660,16 +663,21 @@ Open VSX only when the owner asks. Both components and core carry one release ve
 heading names; the build refuses a window component of another version, packaging refuses a core of another version or a
 protocol copy (`src/base/coreProtocol.ts`) that differs from core's, and `scripts/release.mjs version` raises all three.
 The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry core's release programs, `bin/facade` and
-`bin/facade-mcp`, Linux's built with musl and static; the Windows packages carry none and run the old engine (1.4). Release candidates target darwin-x64, darwin-arm64,
-linux-x64, linux-arm64, win32-x64 and win32-arm64, together with the window component. Publication requires each
-platform's build and verification evidence from the release run. The version advances when preparing a
-release; already published versions retain their original artifacts. [Official manifest
-reference](https://code.visualstudio.com/api/references/extension-manifest).
+`bin/facade-mcp`, Linux's built with musl and static. The win32-x64 and win32-arm64 packages carry core's release
+programs, `bin/facade.exe` and `bin/facade-mcp.exe`, built for `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`
+respectively, and ConPTY for the same architecture, `bin/conpty/conpty.dll` and `bin/conpty/OpenConsole.exe`. Packaging
+refuses a package where any of these four is missing or a binary is of another target; executable-mode and static-musl
+checks apply only to Unix. Third-party notices name core's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
+they name node-pty's. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
+win32-arm64, together with the window component. Publication requires each platform's build and verification evidence
+from the release run. The version advances when preparing a release; already published versions retain their original
+artifacts. [Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
 
 The extension checks workflow builds candidate packages for darwin-x64, darwin-arm64, linux-x64, linux-arm64,
 win32-x64 and win32-arm64. It uses `macos-15-intel` for Intel Macs, `ubuntu-24.04-arm` for Linux ARM64 and
 `windows-11-arm` for Windows ARM64. Each job verifies its requested target against its native host before
-installation, passes that target to packaging, and runs the same unit, package-content and isolated editor suites.
+installation, passes that target to packaging, and runs the same unit, package-content and isolated editor suites,
+with core built by its pinned toolchain on every target and the editor journeys run on both engines (1.4).
 Artifacts and editor logs name the target. A configured CI target does not establish verified or published support;
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 

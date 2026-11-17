@@ -24,8 +24,10 @@ export function claudeProjectFolderName(folder: string): string {
 /** The project folders in the config folder `configDir` that may keep conversations of `scope` or folders below it: theirs and those named below. */
 function projectFolders(configDir: string, scope: Scope): string[] {
 	const projects = path.join(configDir, 'projects');
-	const prefixes = [...new Set(scope.forms.map(claudeProjectFolderName))];
-	return namesIn(projects).filter(name => prefixes.some(prefix => name === prefix || name.startsWith(`${prefix}-`))).map(name => path.join(projects, name));
+	// Windows keeps the project's spelling even when the window uses another drive-letter case (CLIS-2.4).
+	const compared = (name: string) => process.platform === 'win32' ? name.toLowerCase() : name;
+	const prefixes = [...new Set(scope.forms.map(folder => compared(claudeProjectFolderName(folder))))];
+	return namesIn(projects).filter(name => prefixes.some(prefix => compared(name) === prefix || compared(name).startsWith(`${prefix}-`))).map(name => path.join(projects, name));
 }
 
 /** The conversation files that may be of `scope` or folders below it: their project folders and those named below. */

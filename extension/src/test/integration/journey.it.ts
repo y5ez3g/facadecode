@@ -313,7 +313,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const shellFolder = typeof cwd === 'string' ? cwd : cwd?.fsPath ?? '';
 			assert.deepStrictEqual([(await state()).cards.map(card => card.runId), vscode.window.tabGroups.all[0].tabs.some(tab => unspun(tab.label) === first.name)],
 				[[first.runId], true], `the agent stays, alone, in its group: ${seen()}`);
-			assert.strictEqual(fs.realpathSync(shellFolder), fs.realpathSync(agentFolder), `the terminal starts in the agent's folder: ${seen()}`);
+			assert.ok(sameFolder(fs.realpathSync(shellFolder), fs.realpathSync(agentFolder)), `the terminal starts in the agent's folder: ${shellFolder}, ${agentFolder}: ${seen()}`);
 			shell.dispose();
 		} finally {
 			for (const run of cards) {

@@ -3,22 +3,26 @@
 ## ConPTY 1.25.260303002
 
 Microsoft's [Microsoft.Windows.Console.ConPTY 1.25.260303002-preview NuGet package](https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY/1.25.260303002-preview),
-from [Windows Terminal](https://github.com/microsoft/terminal), under the MIT license. The x64 runtime files are
-unchanged in `conpty/1.25.260303002/win10-x64/`:
+from [Windows Terminal](https://github.com/microsoft/terminal), under the MIT license. The x64 and arm64 runtime files
+are unchanged in `conpty/1.25.260303002/win-x64/` and `conpty/1.25.260303002/win-arm64/`, respectively:
 
-- `conpty.dll`, from the package's `runtimes/win-x64/native/conpty.dll`;
-- `OpenConsole.exe`, from `build/native/runtimes/x64/OpenConsole.exe`.
+- `conpty.dll`, from the package's `runtimes/win-x64/native/conpty.dll` or `runtimes/win-arm64/native/conpty.dll`;
+- `OpenConsole.exe`, from `build/native/runtimes/x64/OpenConsole.exe` or `build/native/runtimes/arm64/OpenConsole.exe`.
 
 The package declares MIT through its license expression and link; it contains no separate license file.
-`conpty/1.25.260303002/LICENSE` contains the upstream project's MIT license and Microsoft copyright notice.
+`conpty/1.25.260303002/LICENSE` contains the upstream project's MIT license and Microsoft copyright notice; it covers
+both folders.
 
-The keeper's `build.rs` copies both files into `<target>/<profile>/conpty/` for Windows x64 targets, including when
-the build uses `--target` or a custom target directory. Installation copies that folder into the running build's
-folder. The keeper loads only that build's DLL and keeps the console's signal pipe so either service can hold the
-terminal alive. The packaged console host also supplies `ReleasePseudoConsole` on every supported Windows version.
+The keeper's `build.rs` selects `win-x64` for Windows `x86_64` targets and `win-arm64` for Windows `aarch64`
+targets, and rejects other Windows architectures. It copies both files into `<target dir>[/<triple>]/<profile>/conpty/`,
+including when the build uses `--target` or a custom target directory. Installation copies that folder into the
+running build's folder. The keeper loads only that build's DLL and keeps the console's signal pipe so either service
+can hold the terminal alive. The packaged console host also supplies `ReleasePseudoConsole` on every supported
+Windows version.
 
-To update: take both x64 files from the new NuGet release, keep its MIT license, update the vendor folder and keeper
-build path together, then run the scenario tests, including the tests where the keeper ends while agents run.
+To update: take the four files, two for each architecture, from the new NuGet release, keep its MIT license, update
+the vendor folder and keeper build path together, then run the scenario tests, including the tests where the keeper
+ends while agents run.
 
 ## alacritty_terminal 0.26.0
 

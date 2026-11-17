@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { EDITOR_FLAGS, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { coreProgram, EDITOR_FLAGS, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
@@ -136,7 +136,7 @@ async function main(): Promise<void> {
 	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
-	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
+	const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
 	const repo = path.join(root, 'app');
 	newRepository(repo);
 
@@ -189,7 +189,7 @@ async function main(): Promise<void> {
 	const extension = path.resolve(__dirname, '..', '..', '..', 'extension-it');
 	const windowComponent = path.resolve(__dirname, '..', '..', '..', 'window');
 	/** Core's programs in the stage, and what a run on the Rust engine leaves of them in the Facade root `facade`: ended as core's README ends them. */
-	const corePrograms = path.join(extension, 'bin', 'facade');
+	const corePrograms = coreProgram(path.join(extension, 'bin'));
 	const endRust = async (facade: string) => {
 		if (engine === 'rust') {
 			await endCore(corePrograms, facade);

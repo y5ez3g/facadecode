@@ -219,6 +219,8 @@ pub(crate) struct ActorStart {
     /// The terminal; None for an agent whose terminal closed.
     pub(crate) master: Option<PtyMaster>,
     pub(crate) screen: ScreenStart,
+    /// A new session whose input cannot contain a draft from an earlier session.
+    pub(crate) untouched_input: bool,
     /// The colors its screen replies to color queries with, from the first output on.
     pub(crate) colors: facade_screen::TerminalColors,
     /// The name of the CLI rule the agent was started by.

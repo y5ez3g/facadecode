@@ -7,7 +7,10 @@
 mod recorded;
 
 use facade_base::daemon::{HiddenRows, InputState};
-use facade_rules::{find, is_own_draft, read_box, read_draft, read_input};
+use facade_rules::{
+    ProbeVerdict, find, is_own_draft, read_box, read_box_for_typing, read_draft, read_input,
+    restored, space_taken, verdict_of,
+};
 use facade_screen::{ScreenView, VisibleCell};
 use recorded::view_of;
 
@@ -272,6 +275,41 @@ fn screen_after(output: &[u8]) -> ScreenView {
     let mut screen = facade_screen::Screen::new(40, 8, 0);
     screen.feed(output);
     screen.view()
+}
+
+#[test]
+fn claude_plain_hint_and_same_text_draft_need_the_probe() {
+    let claude = &find("claude").unwrap().unwrap().input;
+    let text = r#"Try "refactor <filepath>""#;
+    let border = "─".repeat(40);
+    let frame = |text: &str, column: usize| {
+        let output = format!("{border}\r\n❯\u{a0}{text}\r\n{border}\x1b[2;{column}H");
+        screen_after(output.as_bytes())
+    };
+    let read = |text: &str, column: usize| read_box_for_typing(claude, &frame(text, column), true);
+
+    // Claude Code 2.1.326 under NO_COLOR draws the hint as plain text.
+    let initial = read(text, 3);
+    let before = initial.line.as_ref().expect("the first row of the frame");
+
+    let hint_after_space = read(" ", 4);
+    assert!(space_taken(before, &hint_after_space));
+    assert_eq!(verdict_of(before, &hint_after_space), ProbeVerdict::Hint);
+
+    let draft_after_space = read(&format!(" {text}"), 4);
+    assert!(space_taken(before, &draft_after_space));
+    let verdict = verdict_of(before, &draft_after_space);
+    assert_eq!(verdict, ProbeVerdict::Draft);
+    assert!(!restored(verdict, before, &read("", 3)));
+    assert!(restored(verdict, before, &read(text, 3)));
+
+    assert!(initial.unsure, "{}", initial.info.evidence);
+    assert_eq!(initial.info.state, InputState::Unknown);
+
+    let ordinary = read_box(claude, &frame(text, 3));
+    assert_eq!(ordinary.info.state, InputState::Draft);
+    assert_eq!(ordinary.draft.as_deref(), Some(text));
+    assert!(!ordinary.unsure);
 }
 
 #[test]

@@ -108,8 +108,10 @@ types in `facade_base::keeper`):
   `unix_process::WaitPacket`, `programs::{quoted_command, bin_dir, CONPTY_FOLDER}`.
 - **Third party:** `serde`, `serde_json`, `anyhow`; on Unix `nix`, `libc`, `signal-hook`; on Windows
   `windows-sys`.
-- **The ConPTY package** (`core/vendor/conpty/`), which `build.rs` copies into `<target>/<profile>/conpty/`
-  for Windows targets, and the install into `core/bin/<build>/conpty/`.
+- **The ConPTY package** (`core/vendor/conpty/`): `build.rs` selects `win-x64` for Windows
+  `x86_64` targets and `win-arm64` for Windows `aarch64` targets, and rejects other Windows architectures.
+  It copies `conpty.dll` and `OpenConsole.exe` into `<target dir>[/<triple>]/<profile>/conpty/`, and installation
+  copies them into `core/bin/<build>/conpty/`. Both architectures use the package folder's `LICENSE`.
 
 ## Inside
 

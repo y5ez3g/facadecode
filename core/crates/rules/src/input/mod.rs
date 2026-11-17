@@ -41,8 +41,8 @@ pub struct BoxReading {
     pub draft: Option<String>,
     /// The input's first row and the cursor, where the reader found the input.
     pub line: Option<InputLine>,
-    /// Unknown only because its first row, alone in the input with the cursor where it starts, is
-    /// colored text that may be a hint or a draft: a space typed and taken back tells them apart.
+    /// Unknown because the only input row may be a hint or a draft. A space typed and taken back
+    /// tells them apart.
     pub unsure: bool,
 }
 
@@ -69,6 +69,16 @@ pub struct LineCell {
 
 /// Reads the input box as [`read_draft`] does, with its first row and whether it is unsure of it.
 pub fn read_box(rule: &InputRule, view: &ScreenView) -> BoxReading {
+    read_box_for_typing(rule, view, false)
+}
+
+/// Reads the input for automatic delivery. A fresh input that has received no external edits
+/// can try a probe where its rule allows an unstyled hint.
+pub fn read_box_for_typing(
+    rule: &InputRule,
+    view: &ScreenView,
+    untouched_input: bool,
+) -> BoxReading {
     let screen = Screen::new(view, rule.menus());
     let Reading {
         state,
@@ -77,7 +87,7 @@ pub fn read_box(rule: &InputRule, view: &ScreenView) -> BoxReading {
         draft,
         line,
         unsure,
-    } = screen.read(rule, view);
+    } = screen.read(rule, view, untouched_input);
     let info = InputInfo {
         state,
         evidence,
@@ -255,7 +265,7 @@ impl<'a> Screen<'a> {
         }
     }
 
-    fn read(&self, rule: &InputRule, view: &ScreenView) -> Reading {
+    fn read(&self, rule: &InputRule, view: &ScreenView, untouched_input: bool) -> Reading {
         let (column, row) = self.cursor;
         if view.synchronized_update {
             return unknown("the CLI is in the middle of a synchronized update");
@@ -270,7 +280,7 @@ impl<'a> Screen<'a> {
             ));
         }
         match rule {
-            InputRule::Frame(frame) => self.in_frame(frame),
+            InputRule::Frame(frame) => self.in_frame(frame, untouched_input),
             InputRule::Prompt(prompt) => self.over_model_line(prompt),
             InputRule::Editor(editor) => self.in_editor(editor),
             InputRule::Box(input) => self.in_box(input),
@@ -372,13 +382,18 @@ impl<'a> Screen<'a> {
         unknown(why)
     }
 
-    /// The input box that starts on row `prompt`, after the prompt and its gap, and ends before
-    /// row `end`. Written text anywhere is a draft; at most a dim hint on the prompt row, with the
-    /// cursor where the input starts, is empty. The reading comes with the prompt row.
-    fn after_prompt(&self, prompt: usize, end: usize, what: &str, scrolled: &Scrolled) -> Reading {
+    /// Reads the box after the prompt and its gap up to row `end`, with the first row for a probe.
+    fn after_prompt(
+        &self,
+        prompt: usize,
+        end: usize,
+        what: &str,
+        scrolled: &Scrolled,
+        probe_unstyled_hint: bool,
+    ) -> Reading {
         let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
         let line = line_of(self.row(prompt), prompt, 2, !rest_blank, self.cursor);
-        self.prompt_reading(prompt, end, what, scrolled)
+        self.prompt_reading(prompt, end, what, scrolled, probe_unstyled_hint)
             .with_line(line)
     }
 
@@ -388,6 +403,7 @@ impl<'a> Screen<'a> {
         end: usize,
         what: &str,
         scrolled: &Scrolled,
+        probe_unstyled_hint: bool,
     ) -> Reading {
         let place = format!("{what} at {}", row_span(prompt + 1, end));
         // Wrapped rows start under the prompt's two columns.
@@ -395,15 +411,19 @@ impl<'a> Screen<'a> {
         let first = self.from(prompt, 2);
         let rest_blank = (prompt + 1..end).all(|y| self.blank(y));
         let at_start = self.cursor_at(2, prompt);
-        if at_start && rest_blank && hint_like(first) {
+        let first_holds_writing = first.iter().any(written);
+        if at_start
+            && rest_blank
+            && (hint_like(first) || probe_unstyled_hint && first_holds_writing)
+        {
             return Reading {
                 unsure: true,
                 ..unknown(format!(
-                    "{place} shows colored text where its input starts, a hint or a draft"
+                    "{place} shows text where its input starts, a hint or a draft"
                 ))
             };
         }
-        if holds_writing(&[first]) || (prompt + 1..end).any(|y| holds_writing(&[self.row(y)])) {
+        if first_holds_writing || (prompt + 1..end).any(|y| holds_writing(&[self.row(y)])) {
             let mark = |line: &Cells, pattern: &Regex| match lines.len() {
                 1 => None,
                 _ => counted(pattern, joined(line).trim()),
@@ -431,7 +451,7 @@ impl<'a> Screen<'a> {
     }
 
     /// `frame`: a prompt row between two rules.
-    fn in_frame(&self, frame: &Frame) -> Reading {
+    fn in_frame(&self, frame: &Frame, untouched_input: bool) -> Reading {
         let cursor_row = self.cursor.1;
         let missing = || {
             self.elsewhere(format!(
@@ -480,7 +500,13 @@ impl<'a> Screen<'a> {
                 };
             }
         }
-        self.after_prompt(prompt, lower, "the input frame", &frame.scrolled)
+        self.after_prompt(
+            prompt,
+            lower,
+            "the input frame",
+            &frame.scrolled,
+            untouched_input && frame.probe_unstyled_hint,
+        )
     }
 
     /// `prompt`: a prompt row above a model line at the bottom.
@@ -521,7 +547,7 @@ impl<'a> Screen<'a> {
                 y + 1
             ));
         }
-        self.after_prompt(prompt, end, "the input", &rule.scrolled)
+        self.after_prompt(prompt, end, "the input", &rule.scrolled, false)
     }
 
     /// `editor`: rows between two rules, with a cursor the CLI draws itself.
