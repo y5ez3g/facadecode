@@ -1171,6 +1171,10 @@ mod os {
 }
 
 #[cfg(all(test, unix))]
+#[path = "procargs_tests.rs"]
+mod procargs_tests;
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::test_folder::TestFolder;

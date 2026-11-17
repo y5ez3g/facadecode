@@ -1359,10 +1359,9 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     home.run_facade_ok(&["stop", "boss"]);
     let ended = boss.call("start_agent", start("late"));
     assert!(
-        ended["message"]
-            .as_str()
-            .unwrap()
-            .contains("#a1's environment cannot be read: its CLI is not running"),
+        ended["message"].as_str().unwrap().contains(
+            "#a1's environment is unavailable: its CLI is not running; nothing was started"
+        ),
         "{ended}"
     );
     #[cfg(target_os = "macos")]
@@ -1375,7 +1374,7 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
             McpTestClient::open_stripped(&home, &shell).call("start_agent", start("hidden"));
         let message = hidden["message"].as_str().unwrap();
         assert!(
-            message.contains("the system keeps it hidden")
+            message.contains("the environment read from its CLI has no FACADE_AGENT")
                 || message.contains("was not found on the PATH of a terminal"),
             "{hidden}"
         );

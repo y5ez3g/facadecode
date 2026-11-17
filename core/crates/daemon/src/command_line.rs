@@ -525,7 +525,7 @@ mod tests {
     use super::*;
 
     /// The environment a creator's CLI started with comes without what the CLI's rule added. A
-    /// read without the `FACADE_AGENT` Facade set is hidden, and no read means the CLI is not
+    /// read without the `FACADE_AGENT` Facade set is refused, and no read means the CLI is not
     /// running.
     #[test]
     fn a_creator_s_environment_comes_without_what_its_rule_added() {
@@ -556,7 +556,7 @@ mod tests {
             .collect();
         assert_eq!(
             creator_environment(Some(hidden), Some(fake)),
-            Err("the system keeps it hidden")
+            Err("the environment read from its CLI has no FACADE_AGENT")
         );
         assert_eq!(
             creator_environment(None, Some(fake)),

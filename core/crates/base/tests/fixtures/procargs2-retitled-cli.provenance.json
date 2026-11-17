@@ -1,0 +1,44 @@
+{
+  "synthetic": true,
+  "not_a_process_dump": true,
+  "observation": {
+    "cli": "Pi 1.5.1",
+    "runtime": "Node 26.0.0",
+    "platform": "macOS 27.2 arm64",
+    "behavior": "Setting process.title to pi leaves the original argc and NUL padding before the environment."
+  },
+  "layout": {
+    "bytes": 3628,
+    "argc": 7,
+    "path_end_offset": 26,
+    "first_argument_offset": 28,
+    "argument_lengths_consumed_by_previous_parser": [
+      2,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "previous_environment_offset": 37,
+    "nul_padding_before_first_environment_entry": 307,
+    "first_environment_entry_offset": 344,
+    "facade_agent_entry_offset": 3085
+  },
+  "replacement": {
+    "executable_path": "/redacted/bin/nodexxxx",
+    "arguments": "pi followed by six empty slots",
+    "environment": {
+      "HOME": "/qa/home",
+      "PATH": "/usr/bin:/bin",
+      "TERM": "xterm-256color",
+      "COLORTERM": "truecolor",
+      "SAFE_PADDING": "Only synthetic x bytes, sized to preserve the observed marker offset.",
+      "FACADE_AGENT": "a999"
+    },
+    "remaining_bytes": "NUL"
+  },
+  "privacy": "Generated from numeric layout observations only. No original environment bytes, login tokens, user paths or process identities are included.",
+  "sha256": "c8403bc4ca6b01295fd1e03423b3a12581ba1eac6e54d92db855352d229687f8"
+}
