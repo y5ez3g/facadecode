@@ -46,7 +46,9 @@ const FOLDERS: { readonly [folder: string]: { readonly adapter: string; readonly
 	'pi-1.4.0-24rows': { adapter: 'pi-frame', garble: chars => chars.replace(/─/g, '-') },
 	'opencode-2.1.4-24rows': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') },
 	'codex-0.166.0-windows-pastes': { adapter: 'codex-prompt', garble: chars => chars.replace('›', '>') },
-	'muse-1.4.14-windows-pastes': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') }
+	'muse-1.4.14-windows-pastes': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') },
+	'muse-1.4.20': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') },
+	'muse-1.4.20-24rows': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') }
 };
 
 /** A screen as a fixture keeps it: each row's cells - a string of one character each, trailing spaces cut - and its dim and inverse runs. */
@@ -160,7 +162,8 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		// Each kind of screen is among them, for each CLI
 		for (const adapter of INPUT_ADAPTERS) {
 			const kinds = new Set(PROBED.filter(each => each.adapter === adapter).map(each => each.fixture.expect));
-			assert.deepStrictEqual([...kinds].sort(), ['draft', 'interaction', 'usable'], adapter);
+			// Muse Code 1.4.20's colored drafts with the cursor where the input starts read unknown, as a hint or a draft
+			assert.deepStrictEqual([...kinds].filter(kind => adapter !== 'muse-frame' || kind !== 'unknown').sort(), ['draft', 'interaction', 'usable'], adapter);
 		}
 	});
 
@@ -181,7 +184,7 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 			assert.ok(!isOwnDraft(reading.draft, `${pasted[each.fixture.name]}\nmore`, each.adapter), label(each));
 			checked++;
 		}
-		assert.strictEqual(checked, 3 * Object.keys(FOLDERS).filter(folder => !folder.endsWith('-pastes') && !folder.endsWith('-24rows') && !folder.endsWith('-modes') && !['claude-2.1.316', 'codex-0.166.0'].includes(folder)).length);
+		assert.strictEqual(checked, 3 * Object.keys(FOLDERS).filter(folder => !folder.endsWith('-pastes') && !folder.endsWith('-24rows') && !folder.endsWith('-modes') && !['claude-2.1.316', 'codex-0.166.0', 'muse-1.4.20'].includes(folder)).length);
 		// Each captured paste, its text kept with its screen: its own draft, after its lead where one was typed
 		const captured = PROBED.filter(probed => probed.fixture.paste !== undefined);
 		assert.ok(captured.length >= 60, `${captured.length} captured pastes`);
@@ -215,6 +218,23 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 			rows: empty.rows.map((row, y) => y === prompt ? { cells: `❯ ${text}`, ...colored ? { colored: [[2, 2 + text.length]] as [number, number][] } : {} } : row)
 		}), 'muse-frame').state;
 		assert.deepStrictEqual([shown(hint, true, 2), shown(hint, false, 2), shown(hint, true, 2 + hint.length), shown('fix the login bug', false, 2)], ['unknown', 'draft', 'draft', 'draft']);
+	});
+
+	test('Muse Code 1.4.20 draws a draft in color like a hint: with the cursor where the input starts it reads unknown and unsure, with its row; with the cursor after it, a draft (CLIS-2.1)', () => {
+		const recorded = PROBED.filter(each => each.folder.startsWith('muse-1.4.20'));
+		const starts = recorded.filter(each => each.fixture.name.endsWith('-start'));
+		assert.strictEqual(starts.length, 6);
+		for (const each of starts) {
+			const reading = readInput(each.screen, each.adapter);
+			const row = each.screen.rows[each.screen.cursor.y].filter(cell => cell.x >= 2).map(cell => cell.chars).join('').trimEnd();
+			assert.deepStrictEqual(
+				[reading.state, reading.unsure, reading.line?.y, reading.line?.start, reading.line?.cursor, reading.line?.rest, reading.line?.cells.map(cell => cell.chars).join('')],
+				['unknown', true, each.screen.cursor.y, 2, each.screen.cursor, false, row], label(each));
+			assert.ok(reading.line!.cells.every(cell => cell.colored && !cell.dim), label(each));
+		}
+		for (const each of recorded.filter(each => !starts.includes(each))) {
+			assert.strictEqual(readInput(each.screen, each.adapter).unsure, undefined, label(each));
+		}
 	});
 
 	test('a reading says what it rests on, without the text on the screen', () => {
