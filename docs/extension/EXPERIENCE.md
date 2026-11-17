@@ -116,13 +116,12 @@ wait.
 
 ### 2.4 Reloading, closing and reconnecting
 
-**Reload reconnects existing runs; closing a window ends that window's agents.**
+**Reload reconnects existing runs. A window's engine determines what happens when it closes.**
 
-Temporary remote loss retains observations and reconciles the original processes. A closed window's agents end after
-RULES-4.1's grace - 90 seconds for a local window, five minutes for a remote one, and five minutes for agents a released
-build's execution supervisor still holds - unless the workspace is opened again first, which shows them again, as a
-reload does within that time (RULES-4.1), and Pins restore once their agents ended. A reload - an update's included -
-brings every agent's process and card back but opens only the pinned agents' tabs again: every other agent's tab stays
+Temporary remote loss retains observations and reconciles the original processes. On the Rust engine, agents keep
+running after the window closes. Reopening the workspace reconnects their original processes and screens. On the old
+engine, agents end after RULES-4.1's grace unless the workspace reconnects first. Reloading reconnects running agents
+and opens only the pinned agents' tabs again. Every other agent's tab stays
 hidden until the person opens it from its card, and the last pinned tab opened is in front with its card selected
 (LIFECYCLE-3.5). An agent that cannot be pinned - a custom program (CONFIGURATION-2.3), or a run whose
 session integration failed - always comes back with its tab hidden. Other windows continue their work.
@@ -138,10 +137,10 @@ Resume lists relevant vendor histories with the original CLI and location. Pin a
 same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
 Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
 card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a
-hidden one hidden. End Agent, a person's close of the agent's tab showing its pin
-mark and normal exit Unpin; abnormal exit and whole-window close preserve the intent, and a Pin restored opens its tab
-again, the pinned agents' tabs one after another in the Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own restoration
-and capability limits.
+hidden one hidden. Closing a tab showing its pin mark unpins it. End Agent and normal exit preserve the Pin on the
+Rust engine. On the old engine, both unpin the agent. Whole-window close and abnormal exit preserve the intent on either
+engine. The pinned agents' tabs reopen one after another in the Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own
+restoration and capability limits.
 
 ## 3 Working with other agents
 
@@ -245,7 +244,7 @@ Creation trees do not group the list or imply a team workflow.
 | --- | --- |
 | 1.1–1.7 | Walk first use, last location, location change, no Git, no CLI, cancel, immediate surfaces and both startup failures |
 | 2.1–2.3 | Observe actual activity, errors, native CLI prompts, normal exit, unknown abnormal exit and explicit closure |
-| 2.4 | Reload, disconnect, close and immediate reopen under RULES-4.1's grace policy for the supervisor that holds each run, pending messages to ended runs |
+| 2.4 | Reload, disconnect, close and reopen under RULES-4.1 for each engine, pending messages to ended runs |
 | 2.5 | Resume an exact conversation; Pin from the card and the native tab, restored on reopening; Unpin keeps the agent running |
 | 3.1–3.6 | Two-way cross-window and local/remote operations; explicit launch choices; all initial/final message outcomes |
 | 4.1–4.3 | Walk both complete journeys including review, redirected work, cleanup, multi-folder and plain-folder use |

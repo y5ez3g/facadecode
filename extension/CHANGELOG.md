@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Closing a window on the Rust engine leaves its agents running.** Reopen the workspace to return to the same
+  processes and screens. On the old engine, agents still stop after 90 seconds for a local window or five minutes for
+  a remote one if the workspace stays closed. The old engine remains available until 0.2.0.
+- **End Agent on the Rust engine keeps the record and Pin.** Resume Agent can restore the same agent number after
+  stopping. Reopening the workspace restores eligible Pins by agent number. If a Pin predates this change, pin the
+  agent again to enable automatic restoration.
+
 ## 0.1.6
 
 - **A new engine, written in Rust, built for maximum performance.** On macOS, Windows and Linux, Facade now runs your agents on Facade core. With 100 agents idle, it uses under 1% CPU and about 70 MB of memory. Keystrokes in an agent's terminal echo in about 1 ms, even while 100 other agents flood their terminals. A message sent to 100 agents at once reaches 95% of them within 0.2 seconds, and 400 agents use about 250 MB. (Measured on a Mac with Apple M5.)
