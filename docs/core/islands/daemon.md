@@ -8,8 +8,9 @@ child islands each own one kind of data. This layer joins them.
 ## Owns
 
 - The agent list: every agent listed, by its ID, with its handle.
-- `core/facade.db`, its schema and its one connection. The parts get handles of their own tables
-  only; every write across tables is a transaction here.
+- `core/facade.db`, its schema and its one connection. It keeps this machine's ID, logical
+  windows, agent memberships, and each run's recorded location source. The parts get handles
+  of their own tables. Each write across tables is one transaction.
 - The `agents` topic's changes, which every listed agent's record goes out on.
 - The starts under way with a request ID, so that a repeated start waits for the first one's response.
 - What each open watch lets go of when it ends: a screen viewer, or a window's watch that lets Facade
@@ -22,18 +23,18 @@ child islands each own one kind of data. This layer joins them.
 - Lock order: the agent list's lock first, then at most one part's lock, taken inside that part's
   method. The parts' locks never nest; the keeper link's lock and each actor's record are leaf
   locks.
-- A write across tables is one transaction: a record with its start's prompt; an agent or a guest
-  with its inbox; a window's agents moving to the window that took it over; and a settlement that
-  writes a start's result only to a caller still there (its record has no exit, or it is a kept
-  guest).
-- The cross-island orders (start, paste, session, output, removal and window takeover, guest join
+- A start writes its record, initial members, location source and any prompt together. Removal
+  deletes an agent's record, members and inbox together. A start result is written only while its
+  caller's record has no exit or its guest record is still kept.
+- The cross-island orders (start, paste, session, output, removal and window binding, guest join
   and end) are kept as [ARCHITECTURE](../ARCHITECTURE.md) states them.
 - Clients are accepted only once recovery has listed every readable agent.
 - A stop lets go of the actor's copy of the terminal's signal pipe, then keeper_link's, before the keeper
   is asked to stop: on Windows the pseudo console hangs up only once every copy is closed.
-- An agent replies to color queries with the colors of the window it is in now: given at its start or
-  resume there, after its window's `hello` or `window.update`, and after a takeover moved it. After the
-  daemon starts again, they come with the window's next `hello`.
+- The most recent member editor to resize an agent supplies its terminal colors. A run can start
+  with colors from its creating window, the parent's member source, or the first member with
+  known colors. The source's theme changes apply while it is the source. In-memory colors survive
+  disconnect and resume, and a restarted daemon restores them from a member description or resize.
 - A window's `env` stays in windows' memory: never in the store, a log or a response. From it and the
   window's first folder, an `ide` client's `windows` watch lists the CLIs each window can start, worked
   out for each snapshot and change, as an agent client's are.
@@ -87,7 +88,7 @@ The layer's files:
 | `store/` | `facade.db`: the schema, the cross-table transactions, the table handles. |
 | `operations.rs` | Start, resume, stop, remove, rename, a run's exit, the environment of an agent's CLI. Resume distinguishes a session the CLI has not saved yet from one never reported. |
 | `delivery.rs` | `agent.send`, start prompts, results, and input handed to an agent. |
-| `presence.rs` | Joins and ends guests, handles window presence and takeover, and stops agents whose locations are gone. |
+| `presence.rs` | Joins and ends guests, handles window binding, and stops runs whose location source reports their folder gone. |
 | `topics.rs` | The four watch topics: snapshots, changes, resyncs, and what a watch's end lets go of. |
 | `relays.rs` | Relay hellos, the in-process connection the MCP tools use, MCP members. |
 | `service.rs` | The server's `Service` trait for the daemon: hello, calls, watches, relays. |
@@ -147,15 +148,20 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - Input and exits reach only the run they name. Each run has a number, starting at `FIRST_RUN`; `WriteInput`, `ProcessExited` and `StartPrompt` for any other run are refused as ended or dropped. An exit of a run whose terminal is not installed yet waits until it is.
   - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt; while the start readies the tools, keys and calls wait and then go in the order they came; the person's Enter waits, with the keys after it, until the input can be read.
   - Every screen change goes into the screen log before the screen takes it.
-  - The record shows a run's end before anything waiting on the run learns it.
+  - The record shows a run's end before anything waiting on the run learns it. The installed run
+    number changes when its terminal is installed. Input is fenced from the previous run as soon
+    as restart preparation begins.
+  - The actor applies a committed member set, publishes its current record and then answers the
+    daemon through `UpdateWindows`.
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
   - At most `MAX_INPUT_BYTES` (1 MiB) of input waits; more is refused with the input given back.
   - Quiet replies only once no read is under way and what the last reads brought went through the screen log; `LetGoBeforeStop` lets go of the signal pipe and nothing else.
 - **Never does:** touch the database; know other agents; decide when a run starts or ends; type into a terminal that is not Facade's.
 - **Interface:**
-  - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the record, the terminal's `PtyMaster`, a `ScreenStart` (`New(folder)`, `Recovered { screen, log, handed_over_cleanly }`, `Released`), the rule name, the messages' `DeliveryHandle`, a `StateStart`, and the window's `TerminalColors`, which its screen replies to color queries with from the first output on.
-  - `AgentHandle`: `guest(info)`, `id()`, `info()`, `is_guest()`, `rule()`, `run()`, `exit()`, `settled()`, `output_seen()` (marked at each output of the terminal), `input_room_changed()`, `send(AgentCommand) -> bool`, `is_closed()`, `mailbox()`, `lock_run_change()`, `try_lock_run_change()`, `tools_connected() -> ToolsConnection` (dropping it closes the connection), and for guests and windows `set_guest_state`, `mark_ended`, `move_window`, `set_window_and_yolo`.
-  - `AgentCommand`: input (`WriteInput`, `Resize`), viewing (`AddViewer`, `RemoveViewer`, `ReadScreen`, `Inspect`), run events (`ProcessExited`, `RecordSession`, `PrepareRestart`, `InstallRun`, `AwaitPrompt`, `StartPrompt`) and control (`Rename`, `Remove`, `Quiesce`, `LetGoBeforeStop`, `SettlePaste`, `SetColors`, the colors its screen replies to color queries with from the next output on). `Input` is `Raw` keys, `Typed` text or keys, a `Message`, or a `BegunPaste` to finish.
+  - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>` and
+    `spawn_with_color_source(ActorStart, rx, tx, changes, Option<WindowRef>)`. `ActorStart` carries the record, the terminal's `PtyMaster`, a `ScreenStart` (`New(folder)`, `Recovered { screen, log, handed_over_cleanly }`, `Released`), the rule name, the messages' `DeliveryHandle`, a `StateStart`, and the window's `TerminalColors`, which its screen replies to color queries with from the first output on.
+  - `AgentHandle`: `guest(info)`, `id()`, `info()`, `is_guest()`, `rule()`, `run()`, `exit()`, `settled()`, `output_seen()` (marked at each output of the terminal), `input_room_changed()`, `send(AgentCommand) -> bool`, `is_closed()`, `mailbox()`, `lock_run_change()`, `installed_record()`, `color_source()`, `tools_connected() -> ToolsConnection` (dropping it closes the connection), and for guests and windows `set_guest_state`, `mark_ended`, `set_yolo`.
+  - `AgentCommand`: input (`WriteInput`, `Resize`, `ResizeFromWindow`), viewing (`AddViewer`, `RemoveViewer`, `ReadScreen`, `Inspect`), run events (`ProcessExited`, `RecordSession`, `PrepareRestart`, `InstallRun`, `AwaitPrompt`, `StartPrompt`) and control (`Rename`, `Remove`, `Quiesce`, `LetGoBeforeStop`, `SettlePaste`, `WindowColorsChanged`, `UpdateWindows`). `Input` is `Raw` keys, `Typed` text or keys, a `Message`, or a `BegunPaste` to finish.
   - `Screens`: `new(folder)`, `folder(id)`, `remove(id)`, `delete_without_records(kept)`.
   - For recovery: `recover`, `recover_after_clean_end`, `saved_size`, `screen_writes`, `state_file`, `read_kept`, `instant_of`.
 
@@ -231,7 +237,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Interface:** `new(rule, id)`, `begin(started, tools, yolo) -> Option<Instant>`, `end()`, `step(now, &StartView, press) -> StartStep { wake, release_held, tools_not_started }`, `holds_input(InputState)`, `readies_tools()`, `is_under_way()`.
 
 ### messages
-Numbers every Facade message (#mN), keeps the deliveries still open, and settles each one once: through the recipient's typist, a read, or its deadline.
+Numbers every Facade message (#mN), keeps the deliveries still open, and settles each one once: through the recipient's typist, a read, its deadline or the person's window subscriptions.
 
 - **Owns:** the open deliveries, in memory behind one lock, each with its message, whether its paste began, and the result it owes; the `messages` and `message_numbers` tables, through `MessageTable`; the changes for the `messages` topic; the results start prompts write, until the daemon takes them.
 - **Keeps:**
@@ -240,16 +246,21 @@ Numbers every Facade message (#mN), keeps the deliveries still open, and settles
   - A message is settled once. A typist and a read never both take it: a read before the paste means it is never typed; a read during the paste delivers it with what reached the terminal unknown.
   - A message is withdrawn only while none of it can have been typed: on `cancel`, or when it fails with nothing typed. A start's prompt is never withdrawn: a first task that times out stays in the inbox.
   - Settling a start's prompt writes the result it owes in the same transaction, and only if the caller is still there.
-  - A request ID finds the message it kept for an hour; the repeat keeps nothing new.
+  - A request ID finds the message it kept for an hour. A person message has one stored number
+    and one settlement for all windows, or is withdrawn when no subscription accepts it. A repeat
+    can wait for the in-flight settlement, reuse its saved receipt or report an interrupted
+    settlement as pending. Window snapshots include the messages delivered to that window.
   - Messages are kept 30 days (`KEPT_FOR`).
 - **Never does:** reads the agents or guests tables; types into a terminal; finds an agent; deletes an inbox (the daemon does, in the transaction that removes its owner).
 - **Interface:**
   - Daemon layer:
     - `Messages::new(MessageTable)`, `raise_above(given)` (every `#mN` above `given` from then on; blocks), `delivery_handle()`, `take_results() -> Option<Receiver<PostedResult>>`, `subscribe() -> Receiver<Change>`
-    - `post(Message, request_id) -> Posted`, `notify(Message, request_id) -> (Message, bool)`, `find_request(from, request_id) -> Option<Earlier>`, `withdraw(number) -> bool`
+    - `post(Message, request_id) -> Posted`, `begin_human(Message, request_id) -> PostedHuman`,
+      `finish_human(&Message, WindowDelivery) -> SendResult`, `find_request(from, request_id) -> Option<Earlier>`, `withdraw(number) -> bool`
     - `deliver_prompt(Message, Option<OwedResult>)`, `begin_prompt(number, deadline, from_name) -> Option<Message>`
     - `settle(numbers, Outcome)`, `settle_by_deadline(number, &mut settled, deadline)`
-    - `read(owner, &MessagesWatchArgs) -> MessagesSnapshot`, `take(owner) -> Vec<Message>`, `inbox(owner)`, `message(id)`, `in_inbox(owner, id)`
+    - `read(owner, &MessagesWatchArgs) -> MessagesSnapshot`,
+      `read_human(&WindowRef, &MessagesWatchArgs) -> MessagesSnapshot`, `take(owner) -> Vec<Message>`, `inbox(owner)`, `message(id)`, `in_inbox(owner, id)`
     - `drop_inbox(owner, gone)`, `expire(now) -> usize`, `keeps(number) -> bool`
     - At a restart: `pending()`, `paste_messages(paste)`, `take_up(Message, pasted, Option<OwedResult>)`, `decide(&Message, paste, Recipient, now) -> TakeUp`
     - Types: `Settled` (`Kept`, `Withdrawn`, `Cancelled`), `Posted`, `Earlier`, `Change`, `PostedResult`, `Due`, `delivery_limit()`, `number(&Message)`, `KEPT_FOR`. `OwedResult { number, agent }`, where `agent` is a closure the daemon gives that returns the started agent's record as it is when the prompt settles.
@@ -374,43 +385,51 @@ A run's command line, environment, folder, plugin and session following.
 
 Agent IDs, default names, and what a reference names within a client's reach (`records.rs`).
 
-- **Owns:** the default names held for starts not yet listed; the IDs of agents whose records this version cannot read; the 140 default names, the same list as `extension/src/base/names.ts`. It reaches the database only through `NumberTable`.
-- **Keeps:** every `#aN` comes from the number counter, committed before it is used, so no ID is given twice, even after a failed start. A default name is free in the agent's window, ignoring case and surrounding spaces, and no other start holds it; when none is free, the name is the ID, such as `#a7`. A reference names one agent or the person, or fails: an ID outside reach is refused, a name only names agents in reach, and a name several agents have is ambiguous. `#human` always names the person; `human` and `@human` name the person unless an agent in reach has that name.
+- **Owns:** the default names held for starts not yet listed; the IDs of agents whose records this version cannot read; the 140 default names, the same list as `extension/src/base/names.ts`. It reaches the database through `NumberTable` and `MembershipTable`.
+- **Keeps:** every `#aN` comes from the number counter, committed before it is used, so no ID is given twice, even after a failed start. A default name is free across the agent's member windows, ignoring case and surrounding spaces, and no other start holds it; when none is free, the name is the ID, such as `#a7`. A reference names one agent or the person, or fails: an ID outside reach is refused, a name only names agents in reach, and a name several agents have is ambiguous. `#human` always names the person; `human` and `@human` name the person unless an agent in reach has that name.
 - **Never does:** hold agent handles (it reads only `AgentInfo`); touch any other table; take the agents lock (the daemon passes in what it needs).
 - **Interface:**
-  - `Records::new(NumberTable)`; `next_id() -> Result<String, ErrorBody>` (async, `a<N>`); `raise_above(given)`, after which every `#aN` is above `given` (blocks); `reserve_name(taken, id, names) -> String` and `release_name(name)`, where `taken` is the names in the agent's window and the caller holds the agents lock; `keep_unreadable(ids)` once at startup; `is_unreadable(id)` during recovery.
+  - `Records::new(NumberTable, MembershipTable)`; `next_id() -> Result<String, ErrorBody>` (async, `a<N>`); `raise_above(given)`, after which every `#aN` is above `given` (blocks); `reserve_name(windows, listed, id, names) -> String` and `release_name(name)`, where the caller holds the agents lock; `add_window(agent_id, &WindowRef)` returns the committed sorted membership of an existing agent; `keep_unreadable(ids)` once at startup; `is_unreadable(id)` during recovery.
   - `reach_of(caller, info) -> Reach`: the person, or an agent whose run has YOLO on, reaches all agents; an agent whose run has YOLO off reaches its creation tree. `Reach::reaches(&AgentInfo)`.
   - `resolve(agents, reference, reach, running_only) -> Result<Named, ErrorBody>`, with `Named::Agent(id)` or `Named::Person`. With `running_only`, agents that have ended are left out when matching by name.
   - `agent_number(id) -> u64` to sort by; `normalize_agent_reference(reference)`: `a3`, `#a3` and `3` all become `a3`.
 
 ### windows
-The editor windows that `ide` clients describe, their open connections, and their locations. `src/windows/`.
+Logical editor windows and their connections, subscriptions and locations. `src/windows/`.
 
-- **Owns:**
-  - Each editor window's description, open connections, open `messages` watches, locations as last read with the time of that read, and how many times it has left. One leaf lock covers them all. Disconnect publishes the `windows` topic's `Updated` under the lock and sends `WindowEvent::Left` after releasing it. Table writes also run outside the lock.
-  - The `windows` topic's changes (`WindowsChange`).
-  - The `windows` table, through `WindowTable`: a row is written on every description and deleted when the window is removed, unless agents' records are still under it.
-  - The worktree creations under way (`Creations`).
+- **Owns:** each logical window's allocation order and latest instance, its current generation,
+  connections, person-message subscriptions and location readings. The window table keeps the
+  logical ID, instance and description, including the workspace. Environment variables and
+  colors stay in memory. The terminal is listed by the daemon.
 - **Keeps:**
-  - A window leaves when its last connection closes. It publishes `connected: false`, and its running agents keep running. Each leaving has its own number, `departure`. Removal requires that the window is still disconnected and has that departure number.
-  - When a window of a workspace describes itself, every other window of that workspace with no connection left, listed or not, is taken over: its ID is returned so that its agents can move.
-  - Window changes are sent only from here.
-  - Locations are read when a window describes itself and after a worktree is made there, never on a timer.
-- **Never does:** stop or move agents; read the agent list; run Git (locations does that); list the terminal window or the CLIs (the daemon adds them).
-- **Interface** (called by the daemon in `presence.rs`, `topics.rs`, `operations.rs`, `delivery.rs`, `service.rs`):
-  - `Windows::new(table: WindowTable, events: UnboundedSender<WindowEvent>) -> Windows`.
-  - `WindowEvent::Left { window_id, departure }` reports that the last connection closed. The daemon checks the agent list and removes the window only if it has no running agents.
-  - `Windows::check(&WindowDescription) -> Result<(), ErrorBody>`: refuses an empty ID, the terminal window's ID, or a folder that is not an absolute path.
-  - `describe(&WindowDescription, connecting: bool) -> Vec<String>`: takes the description, counts a connection when connecting, writes the row, and returns the windows of the same workspace that have no connection: listed ones, and windows that left and were removed while agents' records were under them. The daemon moves their agents in one transaction and then calls `taken_over(from)`, which sends `Removed`.
-  - `connection(id) -> WindowConnection`: a guard whose drop closes one connection and may send `Left`.
-  - `folders(id) -> Vec<String>` and `async read_locations(id, folders_before: Option<Vec<String>>) -> Option<LocationsRead>`: reads the locations again and sends `Updated`. `LocationsRead::is_gone(cwd)` is true when no location holds `cwd` and the window dropped the folder of one that did, or a read with no problem no longer finds it. The daemon stops the running agents whose folder is gone.
-  - `restore(running: &[String], agents: &[String])` restores editor windows with running agents as disconnected. It uses the saved description where available and the window ID as the label otherwise. It keeps the rows of windows with only ended agents outside the list so that another window of the same workspace can take those agents over. It deletes rows for windows with no agent records.
-  - `remove(id, departure, has_agents)` sends `Removed` and deletes the row if no agent records belong to the window.
-  - `watch_person(id) -> PersonWatch` and `tells_person(id) -> bool`: whether the window's `ide` client watches its messages, so that the window can tell the person.
-  - `label(id) -> String`, `subscribe() -> broadcast::Receiver<WindowsChange>`, `infos() -> Vec<WindowInfo>` (editor windows by ID, with no CLIs).
-  - `colors(id) -> Option<TerminalColors>` and `env(id) -> Option<BTreeMap<String, String>>`: what the window last described; its `env` stays in memory only, never in the table.
-  - `check_destination(id, cwd) -> Result<Destination, ErrorBody>`, with `Destination { cwd, location_id }`: in the terminal window, `cwd` as given; in an editor window, it must be connected, and `cwd`, with its links resolved, must be one of its locations or a folder inside one, and still exist; its location is the innermost one that holds it, by whole path components. A worktree's source must be a location itself.
-  - `async create_worktree(WorktreeCreateArgs) -> Result<(LocationInfo, Option<LocationsRead>), ErrorBody>`: makes the worktree from one of the window's locations, reads an editor window's locations again, and returns the new location as listed, with that read.
+  - A hello binds to the same known instance, otherwise to the first disconnected logical
+    window of the same workspace by allocation order, otherwise to a new logical window. It
+    saves the binding before returning its connection guard.
+  - A binding gate orders description writes and removals. Inside the gate, the leaf lock
+    protects the current generation and connections, and is released for a table write. A new
+    instance advances the generation. Late updates, disconnects, subscriptions and Git reads
+    are checked against their binding.
+  - Closing the last connection publishes the disconnected window and its departure number.
+    Reclaiming an empty workspace-less window checks that departure and asks the daemon to
+    delete its row only if the membership table is empty for that window.
+  - A person message counts a window after a current subscription accepts the queued change.
+    Delivery uses the generation and viewers observed before the message took a number.
+- **Never does:** stop or move agents; read the agent list; run Git (locations does that).
+- **Interface:**
+  - `Windows::new(machine_id, WindowTable, events)`, `restore()`,
+    `bind(WindowDescription) -> (WindowConnection, Vec<String>)`, and
+    `update(&WindowBinding, WindowDescription) -> Vec<String>`. The folder list is the previous
+    description's. The guard's `binding()` identifies the logical window and generation.
+  - `WindowEvent::Left { binding, departure }`, `is_current(&WindowBinding)` and
+    `discard_empty(&WindowBinding, departure, delete)`.
+  - `watch_person(&WindowBinding, viewer, sink) -> PersonWatch`,
+    `person_target(&WindowRef) -> PersonTarget`, and `deliver_to_person(&PersonTarget, change)`.
+  - `check_member(&WindowRef)`, `label(&WindowRef)`, `colors(&WindowRef)`, `folders(id)`,
+    `env(id)`, `infos()` and `subscribe()`.
+  - `check_destination(Option<&WindowRef>, cwd)` returns a directory and location ID for a
+    start. `create_worktree(WorktreeCreateArgs)` uses the requested logical window or terminal.
+    An editor worktree starts at an exact location. `read_locations(&WindowBinding, folders)`
+    and the optional read from worktree creation carry their generation to the daemon.
 
 #### locations
 A window's locations, read from its folders through Git, and the worktrees made there. `src/windows/locations.rs`.

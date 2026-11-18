@@ -19,6 +19,35 @@ pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+pub(super) fn insert(
+    connection: &Connection,
+    agent_id: &str,
+    windows: &[WindowRef],
+) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare_cached(
+        "INSERT INTO agent_windows (agent_id, machine_id, window_id) VALUES (?1, ?2, ?3)
+         ON CONFLICT (agent_id, machine_id, window_id) DO NOTHING",
+    )?;
+    for window in windows {
+        statement.execute(params![agent_id, window.machine_id, window.window_id])?;
+    }
+    Ok(())
+}
+
+pub(super) fn read(connection: &Connection, agent_id: &str) -> rusqlite::Result<Vec<WindowRef>> {
+    let mut statement = connection.prepare_cached(
+        "SELECT machine_id, window_id FROM agent_windows WHERE agent_id = ?1
+         ORDER BY machine_id, window_id",
+    )?;
+    let rows = statement.query_map([agent_id], |row| {
+        Ok(WindowRef {
+            machine_id: row.get(0)?,
+            window_id: row.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
 /// The handle records uses to join an existing agent to another window.
 #[derive(Clone)]
 pub(crate) struct MembershipTable(Arc<Store>);
@@ -45,22 +74,8 @@ impl MembershipTable {
                 if !exists {
                     return Ok(None);
                 }
-                transaction.execute(
-                    "INSERT INTO agent_windows (agent_id, machine_id, window_id) VALUES (?1, ?2, ?3)
-                     ON CONFLICT (agent_id, machine_id, window_id) DO NOTHING",
-                    params![agent_id, window.machine_id, window.window_id],
-                )?;
-                let mut statement = transaction.prepare(
-                    "SELECT machine_id, window_id FROM agent_windows WHERE agent_id = ?1
-                     ORDER BY machine_id, window_id",
-                )?;
-                let rows = statement.query_map([agent_id], |row| {
-                    Ok(WindowRef {
-                        machine_id: row.get(0)?,
-                        window_id: row.get(1)?,
-                    })
-                })?;
-                rows.collect::<rusqlite::Result<Vec<_>>>().map(Some)
+                insert(transaction, agent_id, std::slice::from_ref(window))?;
+                read(transaction, agent_id).map(Some)
             },
         )
     }

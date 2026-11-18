@@ -271,10 +271,13 @@ impl Daemon {
             name: record.name,
             cli: record.cli,
             cwd: record.cwd,
-            machine_id: String::new(),
-            windows: Vec::new(),
-            location_source_window: None,
-            window_id: record.window_id,
+            machine_id: self.machine_id.clone(),
+            window_id: record.windows.first().map_or_else(
+                || facade_base::daemon::TERMINAL_WINDOW.to_owned(),
+                |window| window.window_id.clone(),
+            ),
+            windows: record.windows,
+            location_source_window: record.location_source_window,
             created_at: record.created_at,
             creator: record.creator,
             creator_machine_id: None,
@@ -305,17 +308,14 @@ impl Daemon {
     }
 
     /// A resume the daemon before started and never committed: the keeper's run is the agent's
-    /// now. Commits its process; the record's window and YOLO stand, as the resume's were not kept.
+    /// now. Commits its process with the last committed YOLO setting.
     fn commit_uncommitted_resume(
         &self,
         record: &mut AgentRecord,
         run: &HeldAgent,
     ) -> anyhow::Result<()> {
         let id = &record.agent_id;
-        blocking_in_place(|| {
-            self.store
-                .record_restart(id, run.pid, &record.window_id, record.yolo)
-        })?;
+        blocking_in_place(|| self.store.record_restart(id, run.pid, record.yolo))?;
         log(
             "info",
             &format!("committed the resumed run of {id}, process {}", run.pid),

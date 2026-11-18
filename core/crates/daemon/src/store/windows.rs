@@ -1,7 +1,5 @@
-//! The `windows` table keeps each editor window's last description for daemon recovery and
-//! workspace takeover. A window writes its row whenever it describes itself. The row is deleted
-//! when the window is removed and holds no agent records, or in `Store::take_over` when another
-//! window takes its agents. The daemon lists the terminal window separately.
+//! The `windows` table keeps each logical editor window's last instance and description for
+//! recovery and workspace rebinding. The daemon lists the terminal window separately.
 
 use std::sync::Arc;
 
@@ -169,6 +167,7 @@ mod tests {
     use super::*;
     use crate::store::AgentRecord;
     use crate::store::tests::record;
+    use facade_base::daemon::WindowRef;
 
     fn window(id: &str, workspace: &str) -> WindowDescription {
         WindowDescription {
@@ -210,51 +209,37 @@ mod tests {
         assert_eq!(store.window_table().windows().unwrap(), [renamed]);
     }
 
-    /// A takeover moves the agents of one window to another, and deletes the first window,
-    /// together. Other agents stay.
     #[test]
-    fn a_takeover_moves_a_window_s_agents_and_deletes_the_window_together() {
+    fn an_empty_disconnected_window_can_be_deleted_after_its_last_agent_is_removed() {
         let store = Store::in_memory();
+        let member = WindowRef {
+            machine_id: "test-machine".into(),
+            window_id: "win-1".into(),
+        };
+        let row = WindowRow {
+            window_id: member.window_id.clone(),
+            sequence: 1,
+            description: window("instance-1", "workspace"),
+        };
+        let windows = store.window_table();
+        windows.save_logical_window(&row).unwrap();
         store
-            .window_table()
-            .save_window(&window("win-old", "k"))
+            .insert(&AgentRecord {
+                windows: vec![member.clone()],
+                ..record("a1")
+            })
             .unwrap();
-        store
-            .window_table()
-            .save_window(&window("win-new", "k"))
-            .unwrap();
-        for (id, window) in [("a1", "win-old"), ("a2", "win-old"), ("a3", "terminal")] {
-            store
-                .insert(&AgentRecord {
-                    window_id: window.into(),
-                    ..record(id)
-                })
-                .unwrap();
-        }
-        store.take_over("win-old", "win-new").unwrap();
-        let windows: Vec<String> = store
-            .windows()
-            .unwrap()
-            .into_iter()
-            .map(|window| window.id)
-            .collect();
-        assert_eq!(windows, ["win-new"]);
-        let connection = store.connection.lock().unwrap();
-        let mut placed: Vec<(String, String)> = connection
-            .prepare("SELECT agent_id, window_id FROM agents ORDER BY agent_id")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        placed.sort();
+        let members = store.membership_table();
         assert_eq!(
-            placed,
-            [
-                ("a1".into(), "win-new".into()),
-                ("a2".into(), "win-new".into()),
-                ("a3".into(), "terminal".into())
-            ]
+            members.add("a1", &member).unwrap(),
+            Some(vec![member.clone()])
         );
+        assert!(!store.delete_empty_window(&member).unwrap());
+        assert_eq!(windows.logical_windows().unwrap().len(), 1);
+
+        store.delete("a1").unwrap();
+        assert!(store.delete_empty_window(&member).unwrap());
+        assert!(windows.logical_windows().unwrap().is_empty());
+        assert_eq!(members.add("a1", &member).unwrap(), None);
     }
 }

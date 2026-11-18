@@ -92,7 +92,7 @@ impl Preparation {
             || rule.session.capture == facade_rules::Capture::SessionStart;
         let report = captures.then_some(&report);
         let place = facade_base::instructions::Place {
-            window: Some((request.window_label, request.window_id)),
+            window: request.window,
             location_id: request.location_id,
             folder: request.cwd,
         };

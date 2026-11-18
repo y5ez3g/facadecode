@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    self, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume, AgentScreen,
-    AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsChange, ClientKind,
+    self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
+    AgentScreen, AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsChange, ClientKind,
     DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog, DaemonLogArgs, DaemonLogResult,
     DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle, HookPrompt, HookSession,
     HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState, InspectResult,
@@ -23,7 +23,9 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{oneshot, watch};
 
-use crate::agent::{AgentCommand, AgentHandle, Input, MAX_INPUT_BYTES, ToolsConnection};
+use crate::agent::{
+    AgentCommand, AgentHandle, Input, MAX_INPUT_BYTES, ToolsConnection, WindowColors,
+};
 use crate::agent::{Typing, TypingAnswer};
 use crate::delivery::InputWait;
 use crate::lifecycle::{Work, WorkGuard};
@@ -118,8 +120,8 @@ impl server::Service for Daemon {
         let result = HelloResult {
             protocol: hello.protocol[1].min(DAEMON_PROTOCOL_VERSION),
             build: facade_base::build_id(),
-            machine_id: String::new(),
-            window: None,
+            machine_id: self.machine_id.clone(),
+            window: window.as_ref().map(|binding| binding.window.clone()),
             pid: std::process::id(),
             agent: agent.clone(),
             agents: self.agents().len(),
@@ -212,9 +214,47 @@ impl Daemon {
             AgentStart::NAME => {
                 let args: StartArgs = decode_arguments(args)?;
                 let by_model = client.identity.kind == ClientKind::Mcp;
-                let args = self.checked_start(args, acting, by_model).await?;
-                let started = self.start(args, self.sender_of(acting), by_model).await?;
+                let mut args = self.checked_start(args, acting, by_model).await?;
+                if DAEMON_PROTOCOL_VERSION == 1
+                    && let Some(id) = args.window_id.take()
+                {
+                    let window = self.local_window(id);
+                    if window.window_id != daemon::TERMINAL_WINDOW {
+                        args.location_source_window
+                            .get_or_insert_with(|| window.clone());
+                    }
+                    args.window.get_or_insert(window);
+                }
+                let window = client
+                    .window
+                    .as_ref()
+                    .map(|binding| {
+                        if self.windows.is_current(binding) {
+                            Ok(binding.window.clone())
+                        } else {
+                            Err(ErrorBody::new(
+                                Reason::Refused,
+                                "this editor window is no longer bound",
+                            ))
+                        }
+                    })
+                    .transpose()?;
+                let started = self
+                    .start(args, self.sender_of(acting), by_model, window)
+                    .await?;
                 Ok(value_of(started))
+            }
+            AgentAdopt::NAME => {
+                let AgentArgs { agent } = decode_arguments(args)?;
+                let binding = client
+                    .window
+                    .as_ref()
+                    .filter(|_| client.identity.kind == ClientKind::Ide && acting.is_none())
+                    .ok_or_else(|| {
+                        ErrorBody::refused("only a bound editor window can adopt an agent")
+                    })?;
+                let agent = self.reached_agent(&agent, acting)?;
+                Ok(value_of(self.adopt(&agent, binding).await?))
             }
             AgentResume::NAME => {
                 let args: ResumeArgs = decode_arguments(args)?;
@@ -251,7 +291,21 @@ impl Daemon {
                 let args: ResizeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let agent = self.terminal_agent(&args.agent, acting)?;
-                if !agent.send(AgentCommand::Resize(args.cols, args.rows)).await {
+                let info = agent.info();
+                let command = match client.window.as_ref().filter(|binding| {
+                    info.windows.contains(&binding.window) && self.windows.is_current(binding)
+                }) {
+                    Some(binding) => AgentCommand::ResizeFromWindow {
+                        cols: args.cols,
+                        rows: args.rows,
+                        colors: WindowColors {
+                            window: binding.window.clone(),
+                            colors: self.window_colors(&binding.window).unwrap_or_default(),
+                        },
+                    },
+                    None => AgentCommand::Resize(args.cols, args.rows),
+                };
+                if !agent.send(command).await {
                     return Err(actor_stopped(&agent));
                 }
                 Ok(value_of(EmptyResult {}))
@@ -329,21 +383,11 @@ impl Daemon {
             }
             WindowUpdate::NAME => {
                 let description: WindowDescription = decode_arguments(args)?;
-                let Some(window) = client
-                    .window
-                    .as_ref()
-                    .map(|binding| binding.window.window_id.as_str())
-                else {
+                let Some(binding) = client.window.as_ref() else {
                     let message = "only an ide client describes a window";
                     return Err(ErrorBody::invalid_argument(message));
                 };
-                if description.id != window {
-                    return Err(ErrorBody::invalid_argument(format!(
-                        "this client is window {window}'s; it cannot describe window {}",
-                        description.id
-                    )));
-                }
-                self.window_updated(description).await?;
+                self.window_updated(binding, description).await?;
                 Ok(value_of(EmptyResult {}))
             }
             WorktreeCreate::NAME => {

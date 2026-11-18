@@ -84,8 +84,8 @@ pub(crate) struct RunRequest<'a> {
     pub(crate) cwd: &'a str,
     /// The agent's location ID, which its instructions name.
     pub(crate) location_id: &'a str,
-    pub(crate) window_id: &'a str,
-    pub(crate) window_label: &'a str,
+    /// The label and logical ID when the agent belongs to exactly one window.
+    pub(crate) window: Option<(&'a str, &'a str)>,
     /// The agent that starts it, by ID and name.
     pub(crate) creator: Option<(&'a str, Option<&'a str>)>,
     pub(crate) yolo: bool,

@@ -186,6 +186,7 @@ pub(crate) struct Daemon {
     /// parts' locks never nest, and the keeper link's and each actor's record are leaf locks.
     agents: Mutex<HashMap<String, AgentHandle>>,
     store: Arc<Store>,
+    machine_id: String,
     /// Changes for clients following the `agents` topic.
     changes: broadcast::Sender<AgentsChange>,
     lifecycle: Arc<Lifecycle>,
@@ -202,6 +203,15 @@ pub(crate) struct Daemon {
     results: PathBuf,
     /// What each open watch lets go of when it ends, by its viewer number.
     watch_ends: Mutex<HashMap<u64, topics::WatchEnd>>,
+}
+
+impl Daemon {
+    fn local_window(&self, window_id: impl Into<String>) -> WindowRef {
+        WindowRef {
+            machine_id: self.machine_id.clone(),
+            window_id: window_id.into(),
+        }
+    }
 }
 
 impl LifecycleActivity for Daemon {
@@ -360,7 +370,11 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         lifecycle: Lifecycle::new(),
         starting: Mutex::default(),
         screens: Screens::new(core.join("screens")),
-        windows: Windows::new(String::new(), store.window_table(), window_events),
+        windows: Windows::new(
+            opened.machine_id.clone(),
+            store.window_table(),
+            window_events,
+        ),
         guests: Guests::new(
             store.guest_table(),
             store.integration_table(),
@@ -372,6 +386,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         messages,
         runs,
         records,
+        machine_id: opened.machine_id,
         store,
     });
     daemon.sweep(SystemTime::now());
@@ -382,7 +397,9 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     daemon.restore_guests()?;
     daemon.take_up_messages()?;
     // Restore disconnected windows from the recovered agent records before accepting clients.
-    daemon.restore_windows();
+    daemon
+        .restore_windows()
+        .map_err(|error| anyhow::anyhow!("could not restore windows: {}", error.message))?;
     // A plugin whose runs ended while no daemon ran goes now.
     let users = daemon
         .agents()

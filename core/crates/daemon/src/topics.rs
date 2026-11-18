@@ -9,7 +9,7 @@ use std::time::Duration;
 use facade_base::daemon::{
     self, AgentInfo, AgentsChange, AgentsTopic, LocationInfo, LocationKind, Message,
     MessagesChange, MessagesTopic, MessagesWatchArgs, ScreenChange, ScreenSnapshot, ScreenTopic,
-    ScreenWatchArgs, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowInfo, WindowsChange,
+    ScreenWatchArgs, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowInfo, WindowRef, WindowsChange,
     WindowsTopic,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
@@ -18,13 +18,13 @@ use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::Daemon;
 use crate::agent::{AgentCommand, AgentHandle, ViewerChange, viewer_channel};
 use crate::command_line::CliViewer;
 use crate::messages::Change;
 use crate::records::{self, Reach};
 use crate::server::{Client, Watch, WatchChange};
 use crate::service::{actor_stopped, decode_or_default, value_of};
-use crate::{Daemon, HUMAN};
 
 /// How long an agent has to draw a new viewer's first screen.
 const SCREEN_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -204,31 +204,36 @@ impl Daemon {
         }
     }
 
-    /// An inbox's messages. An editor window reads the person's inbox, and follows the messages
-    /// its own agents send the person; any other client reads the inbox of the agent it acts for.
+    /// An agent reads its own inbox. An editor sees the messages handed to its window.
     fn watch_messages(
         self: &Arc<Self>,
         client: &Client,
         args: MessagesWatchArgs,
         viewer: u64,
     ) -> Result<Watch, ErrorBody> {
-        let window = client
-            .window
-            .as_ref()
-            .map(|binding| binding.window.window_id.clone());
-        let owner = match &window {
-            Some(_) => HUMAN.to_string(),
-            None => self.listed_actor(client.agent.as_deref())?,
-        };
-        // Subscribed before the window counts as one that can tell the person.
-        let mut following = self.messages.subscribe();
-        if let Some(window) = window.as_deref() {
-            let person = self.windows.watch_person_v1(window, viewer);
+        if let Some(binding) = client.window.as_ref() {
+            let (changes, sent) = mpsc::channel(CHANGES_WAITING);
+            let person = self.windows.watch_person(
+                binding,
+                viewer,
+                Arc::new(move |change| {
+                    changes
+                        .try_send(WatchChange::Change(change.clone()))
+                        .is_ok()
+                }),
+            )?;
+            let snapshot = self.messages.read_human(&binding.window, &args)?;
             self.watch_ends
                 .lock()
                 .unwrap()
                 .insert(viewer, WatchEnd::Person(person));
+            return Ok(Watch {
+                snapshot: value_of(&snapshot),
+                changes: sent,
+            });
         }
+        let owner = self.listed_actor(client.agent.as_deref())?;
+        let mut following = self.messages.subscribe();
         let snapshot = self.messages.read(&owner, &args)?;
         // What this watch gave, so that a resync after a lag removes those no longer kept.
         let mut known: HashSet<String> = snapshot
@@ -239,22 +244,12 @@ impl Daemon {
         let (changes, sent) = mpsc::channel(CHANGES_WAITING);
         let daemon = self.clone();
         tokio::spawn(async move {
-            let followed = |to: &str, from: &str| {
-                to == owner
-                    && window
-                        .as_deref()
-                        .is_none_or(|window| daemon.sent_from(from, window))
-            };
             loop {
                 let received = match following.recv().await {
-                    Ok(change) if followed(change.to(), change.from()) => vec![change],
+                    Ok(change) if change.to() == owner => vec![change],
                     Ok(_) => continue,
                     Err(RecvError::Lagged(_)) => {
                         let inbox = daemon.messages.inbox(&owner);
-                        let inbox = inbox
-                            .into_iter()
-                            .filter(|message| followed(&message.to, &message.from))
-                            .collect();
                         resync_messages(&known, inbox, &owner)
                     }
                     Err(RecvError::Closed) => return,
@@ -293,10 +288,7 @@ impl Daemon {
         let mut agents = self.changes.subscribe();
         let mut snapshot = self.window_infos();
         self.show_clis(&viewer, &mut snapshot).await;
-        let mut known: HashSet<String> = snapshot
-            .iter()
-            .map(|window| window.window_id.clone())
-            .collect();
+        let mut known: HashSet<WindowRef> = snapshot.iter().map(window_reference).collect();
         let mut terminal = self.terminal_window();
         let (changes, sent) = mpsc::channel(CHANGES_WAITING);
         let daemon = self.clone();
@@ -322,7 +314,7 @@ impl Daemon {
                             vec![match now {
                                 Some(window) => WindowsChange::Updated { window: Box::new(window) },
                                 None => WindowsChange::Removed {
-                                    machine_id: String::new(),
+                                    machine_id: daemon.machine_id.clone(),
                                     window_id: TERMINAL_WINDOW.into(),
                                 },
                             }]
@@ -336,10 +328,16 @@ impl Daemon {
                             daemon
                                 .show_clis(&viewer, std::slice::from_mut(window.as_mut()))
                                 .await;
-                            known.insert(window.window_id.clone());
+                            known.insert(window_reference(window));
                         }
-                        WindowsChange::Removed { window_id, .. } => {
-                            known.remove(window_id);
+                        WindowsChange::Removed {
+                            machine_id,
+                            window_id,
+                        } => {
+                            known.remove(&WindowRef {
+                                machine_id: machine_id.clone(),
+                                window_id: window_id.clone(),
+                            });
                         }
                         WindowsChange::Unknown => {}
                     }
@@ -379,12 +377,6 @@ impl Daemon {
         Ok(agent.to_string())
     }
 
-    /// Whether `from`, a message's sender, is an agent of window `id`.
-    fn sent_from(&self, from: &str, id: &str) -> bool {
-        self.get_agent(from)
-            .is_some_and(|agent| agent.info().window_id == id)
-    }
-
     /// The windows: the editor windows, then the terminal window while it holds running agents.
     fn window_infos(&self) -> Vec<WindowInfo> {
         let mut infos = self.windows.infos();
@@ -396,8 +388,9 @@ impl Daemon {
     /// work in.
     fn terminal_window(&self) -> Option<WindowInfo> {
         let mut locations: Vec<LocationInfo> = Vec::new();
+        let terminal = self.local_window(TERMINAL_WINDOW);
         let running = self.agent_infos().into_iter().filter(|info| {
-            info.window_id == TERMINAL_WINDOW
+            info.windows.contains(&terminal)
                 && info.process == facade_base::process::ProcessState::Running
         });
         for info in running {
@@ -416,8 +409,8 @@ impl Daemon {
             });
         }
         (!locations.is_empty()).then(|| WindowInfo {
-            machine_id: String::new(),
-            window_id: TERMINAL_WINDOW.into(),
+            machine_id: terminal.machine_id,
+            window_id: terminal.window_id,
             label: TERMINAL_WINDOW_LABEL.into(),
             environment: "local".into(),
             connected: true,
@@ -469,14 +462,21 @@ fn resync_agents(known: &HashSet<String>, now: Vec<AgentInfo>) -> Vec<AgentsChan
     changes
 }
 
+fn window_reference(info: &WindowInfo) -> WindowRef {
+    WindowRef {
+        machine_id: info.machine_id.clone(),
+        window_id: info.window_id.clone(),
+    }
+}
+
 /// What brings a client that knew the windows `known` to the windows `now`.
-fn resync_windows(known: &HashSet<String>, now: Vec<WindowInfo>) -> Vec<WindowsChange> {
+fn resync_windows(known: &HashSet<WindowRef>, now: Vec<WindowInfo>) -> Vec<WindowsChange> {
+    let present: HashSet<WindowRef> = now.iter().map(window_reference).collect();
     let gone = known
-        .iter()
-        .filter(|id| !now.iter().any(|info| &info.window_id == *id))
-        .map(|id| WindowsChange::Removed {
-            machine_id: String::new(),
-            window_id: id.clone(),
+        .difference(&present)
+        .map(|window| WindowsChange::Removed {
+            machine_id: window.machine_id.clone(),
+            window_id: window.window_id.clone(),
         });
     let mut changes: Vec<WindowsChange> = gone.collect();
     changes.extend(now.into_iter().map(|window| WindowsChange::Updated {

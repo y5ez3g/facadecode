@@ -608,7 +608,11 @@ fn record(id: &str) -> AgentRecord {
         exit: None,
         rule: None,
         session: None,
-        window_id: "terminal".into(),
+        windows: vec![facade_base::daemon::WindowRef {
+            machine_id: "test-machine".into(),
+            window_id: "terminal".into(),
+        }],
+        location_source_window: None,
         creator: None,
         root: id.into(),
         yolo: false,

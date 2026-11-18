@@ -133,21 +133,12 @@ impl Daemon {
         let id = self.records.next_id().await?;
         // A member is in the terminal window, at its relay's folder.
         let names = crate::command_line::settings_names();
-        let name = {
-            let agents = self.agents.lock().unwrap();
-            let taken = agents
-                .values()
-                .map(AgentHandle::info)
-                .filter(|info| info.window_id == TERMINAL_WINDOW)
-                .map(|info| info.name)
-                .collect();
-            self.records
-                .reserve_name_taken(taken, &id, names.as_deref())
-        };
+        let name = self.reserve_name(&[self.local_window(TERMINAL_WINDOW)], &id, names.as_deref());
         let cli = client
             .filter(|name| is_session_id(name))
             .unwrap_or(MEMBER_CLI);
         let (info, record) = Guests::member_info(&id, &name, cli, process, cwd);
+        let info = self.project_guest(info);
         if let Err(err) = self.guests.keep(&record).await {
             self.records.release_name(&name);
             return Err(err);

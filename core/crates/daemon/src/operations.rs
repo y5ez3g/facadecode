@@ -10,20 +10,22 @@ use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
     AgentInfo, AgentState, AgentsChange, Message, ResumeArgs, StartArgs, StartResult, StopResult,
-    TERMINAL_WINDOW, ToolsState,
+    TERMINAL_WINDOW, ToolsState, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessState};
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::agent::{self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStart, StateStart};
+use crate::agent::{
+    self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStart, StateStart, WindowColors,
+};
 use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
 use crate::messages::OwedResult;
 use crate::records::{self, Named, Reach};
 use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::AgentRecord;
-use crate::{Daemon, HUMAN, Sender, blocking, gate_for_test, log, pause_for_test};
+use crate::{Daemon, HUMAN, Sender, WindowBinding, blocking, gate_for_test, log, pause_for_test};
 
 /// The exit wait once the keeper took `agent.stop`, its 3 seconds before SIGKILL included.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,6 +38,11 @@ const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
 pub(crate) type StartKey = (Option<String>, String);
 /// A start's answer, once it has one.
 pub(crate) type StartAnswer = Option<Result<StartResult, ErrorBody>>;
+
+struct StartWindows {
+    members: Vec<WindowRef>,
+    colors: Option<WindowColors>,
+}
 
 /// A start under way with a request ID: the calls that repeat it meanwhile get its answer. It
 /// lets go of its key once it answers, or ends without one; the record keeps the ID from then on.
@@ -168,17 +175,68 @@ impl Daemon {
         })
     }
 
-    /// Reserves a default name for agent `id` in window `window` until it is listed: the names of
-    /// the window's agents are taken under the list's lock, before records' own.
-    pub(crate) fn reserve_name(&self, window: &str, id: &str, names: Option<&[String]>) -> String {
+    /// Reserves a default name across the initial members, under the list's lock before records'.
+    pub(crate) fn reserve_name(
+        &self,
+        windows: &[WindowRef],
+        id: &str,
+        names: Option<&[String]>,
+    ) -> String {
         let agents = self.agents.lock().unwrap();
-        let taken: Vec<String> = agents
-            .values()
-            .map(AgentHandle::info)
-            .filter(|info| info.window_id == window)
-            .map(|info| info.name)
-            .collect();
-        self.records.reserve_name_taken(taken, id, names)
+        let listed: Vec<AgentInfo> = agents.values().map(AgentHandle::info).collect();
+        self.records.reserve_name(windows, &listed, id, names)
+    }
+
+    fn start_windows(
+        &self,
+        explicit: Option<WindowRef>,
+        editor: Option<WindowRef>,
+        sender: &Sender,
+    ) -> Result<StartWindows, ErrorBody> {
+        // A CLI can start a child before its own record is listed.
+        let parent = if sender.from == HUMAN {
+            None
+        } else {
+            self.get_agent(&sender.from)
+        };
+        let mut members = match explicit {
+            Some(window) => {
+                self.windows.check_member(&window)?;
+                vec![window]
+            }
+            None => match &parent {
+                Some(parent) => parent.info().windows,
+                None => vec![
+                    editor
+                        .clone()
+                        .unwrap_or_else(|| self.local_window(TERMINAL_WINDOW)),
+                ],
+            },
+        };
+        members.sort();
+        members.dedup();
+        if members.is_empty() {
+            return Err(ErrorBody::internal(
+                "the starting agent has no member window",
+            ));
+        }
+        let preferred = editor
+            .or_else(|| parent.and_then(|parent| parent.color_source()))
+            .filter(|window| members.contains(window));
+        let colors = preferred
+            .and_then(|window| {
+                self.window_colors(&window)
+                    .map(|colors| WindowColors { window, colors })
+            })
+            .or_else(|| self.first_member_colors(&members));
+        Ok(StartWindows { members, colors })
+    }
+
+    fn instructions_window<'a>(&self, windows: &'a [WindowRef]) -> Option<(String, &'a str)> {
+        let [window] = windows else {
+            return None;
+        };
+        Some((self.windows.label(window), window.window_id.as_str()))
     }
 
     /// Starts a CLI as [`facade_base::daemon::AgentStart`] says. A start with its creator's own
@@ -190,9 +248,10 @@ impl Daemon {
         args: StartArgs,
         sender: Sender,
         by_model: bool,
+        editor: Option<WindowRef>,
     ) -> Result<StartResult, ErrorBody> {
         let Some(request_id) = args.request_id.clone() else {
-            return self.start_once(args, sender, by_model).await;
+            return self.start_once(args, sender, by_model, editor).await;
         };
         check_request_id(&request_id)?;
         let creator = (sender.from != HUMAN).then(|| sender.from.clone());
@@ -222,7 +281,7 @@ impl Daemon {
         };
         let mut answered = match under_way {
             Ok(held) => {
-                let answer = self.start_once(args, sender, by_model).await;
+                let answer = self.start_once(args, sender, by_model, editor).await;
                 held.answer(answer.clone());
                 return answer;
             }
@@ -286,6 +345,7 @@ impl Daemon {
         mut args: StartArgs,
         sender: Sender,
         by_model: bool,
+        editor: Option<WindowRef>,
     ) -> Result<StartResult, ErrorBody> {
         gate_for_test("before-start-run");
         // One reading of the settings file gives the start its YOLO, names and entry (RULES-4.3).
@@ -310,22 +370,27 @@ impl Daemon {
                 "start it with a shorter prompt and send the rest as messages",
             )?;
         }
+        let windows = self.start_windows(args.window.take(), editor, &sender)?;
         let Some(worktree) = args.worktree.take() else {
-            return self.start_in(args, sender, &settings, configured).await;
+            return self
+                .start_in(args, sender, &settings, configured, windows)
+                .await;
         };
+        self.windows
+            .check_destination(args.location_source_window.as_ref(), &args.cwd)?;
         let branch = worktree.branch.clone();
         let made = self
             .create_worktree(facade_base::daemon::WorktreeCreateArgs {
-                window_id: args
-                    .window_id
-                    .clone()
-                    .unwrap_or_else(|| TERMINAL_WINDOW.to_string()),
+                window_id: args.location_source_window.as_ref().map_or_else(
+                    || TERMINAL_WINDOW.to_owned(),
+                    |window| window.window_id.clone(),
+                ),
                 cwd: args.cwd.clone(),
                 worktree,
             })
             .await?;
         args.cwd = made.path.clone();
-        self.start_in(args, sender, &settings, configured)
+        self.start_in(args, sender, &settings, configured, windows)
             .await
             .map_err(|mut error| {
                 error.message.push_str(&format!(
@@ -347,6 +412,7 @@ impl Daemon {
         sender: Sender,
         settings: &facade_base::settings::Settings,
         mut configured: Configured,
+        windows: StartWindows,
     ) -> Result<StartResult, ErrorBody> {
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(ErrorBody::new(
@@ -354,11 +420,9 @@ impl Daemon {
                 "Facade is exiting; start the agent again",
             ));
         };
-        let window = args
-            .window_id
-            .take()
-            .unwrap_or_else(|| TERMINAL_WINDOW.to_string());
-        let destination = self.windows.check_destination_v1(&window, &args.cwd)?;
+        let destination = self
+            .windows
+            .check_destination(args.location_source_window.as_ref(), &args.cwd)?;
         args.cwd = destination.cwd;
         let location = destination.location_id;
         configured.find_program(&args.cwd)?;
@@ -374,14 +438,14 @@ impl Daemon {
             .filter(|name| !name.is_empty());
         let name = match given {
             Some(name) => name.to_string(),
-            None => self.reserve_name(&window, &id, settings.names.as_deref()),
+            None => self.reserve_name(&windows.members, &id, settings.names.as_deref()),
         };
         if let Err(error) = reservation.wait_for_keeper().await {
             self.records.release_name(&name);
             return Err(error);
         }
         let creator_name = sender.from_name.as_deref();
-        let label = self.windows.label_v1(&window);
+        let place = self.instructions_window(&windows.members);
         let request = RunRequest {
             id: &id,
             rule,
@@ -391,8 +455,7 @@ impl Daemon {
             inherited: configured.env.clone(),
             cwd: &args.cwd,
             location_id: &location,
-            window_id: &window,
-            window_label: &label,
+            window: place.as_ref().map(|(label, id)| (label.as_str(), *id)),
             creator: creator.as_deref().map(|creator| (creator, creator_name)),
             yolo,
             session: args.session.as_deref(),
@@ -432,10 +495,10 @@ impl Daemon {
             cli: configured.cli.clone(),
             location_id: location,
             cwd: args.cwd.clone(),
-            machine_id: String::new(),
-            windows: Vec::new(),
-            location_source_window: None,
-            window_id: window.clone(),
+            machine_id: self.machine_id.clone(),
+            window_id: windows.members[0].window_id.clone(),
+            windows: windows.members,
+            location_source_window: args.location_source_window,
             pid: Some(started.pid),
             process: ProcessState::Running,
             cols: Some(args.cols),
@@ -465,7 +528,8 @@ impl Daemon {
             exit: None,
             rule: rule.map(|rule| rule.cli.clone()),
             session: None,
-            window_id: window.clone(),
+            windows: info.windows.clone(),
+            location_source_window: info.location_source_window.clone(),
             creator,
             root,
             yolo,
@@ -499,7 +563,10 @@ impl Daemon {
         gate_for_test("after-start-record");
         let screen = self.screens.folder(&id);
         let actor = ActorStart {
-            colors: self.window_colors(&window),
+            colors: windows
+                .colors
+                .as_ref()
+                .map_or_else(Default::default, |colors| colors.colors),
             info: info.clone(),
             master: Some(started.master),
             screen: ScreenStart::New(screen.clone()),
@@ -513,19 +580,22 @@ impl Daemon {
                 started: tokio::time::Instant::now(),
             },
         };
-        let handle = match agent::spawn(actor, rx, tx, self.changes.clone()) {
-            Ok(handle) => handle,
-            Err(err) => {
-                self.records.release_name(&name);
-                self.runs.remove_folders(&id);
-                let (store, removed) = (self.store.clone(), id.clone());
-                let _ = blocking(move || store.delete(&removed)).await;
-                self.runs.abandon(&id);
-                return Err(ErrorBody::internal(format!(
-                    "could not read agent {id}'s terminal: {err}"
-                )));
-            }
-        };
+        let color_source = windows.colors.map(|colors| colors.window);
+        let handle =
+            match agent::spawn_with_color_source(actor, rx, tx, self.changes.clone(), color_source)
+            {
+                Ok(handle) => handle,
+                Err(err) => {
+                    self.records.release_name(&name);
+                    self.runs.remove_folders(&id);
+                    let (store, removed) = (self.store.clone(), id.clone());
+                    let _ = blocking(move || store.delete(&removed)).await;
+                    self.runs.abandon(&id);
+                    return Err(ErrorBody::internal(format!(
+                        "could not read agent {id}'s terminal: {err}"
+                    )));
+                }
+            };
         // A prompt holds the run's messages from before the agent is listed, so that none goes
         // ahead of it.
         let prompt = match kept {
@@ -659,7 +729,7 @@ impl Daemon {
 
     /// Stops `agent`'s run while the caller holds its run change: only the keeper signals a CLI.
     /// Waits up to 10 seconds for its exit. A run that ended before is left as it was.
-    async fn stop_run(&self, agent: &AgentHandle) -> Result<StopResult, ErrorBody> {
+    pub(crate) async fn stop_run(&self, agent: &AgentHandle) -> Result<StopResult, ErrorBody> {
         let id = agent.id().to_string();
         let mut exit = agent.exit();
         if let Some(exit) = exit.borrow().clone() {
@@ -752,6 +822,43 @@ impl Daemon {
         self.runs.keep_exit_task(&writer, task);
     }
 
+    /// Adds the calling editor to an agent. The actor publishes the committed member set.
+    pub(crate) async fn adopt(
+        &self,
+        agent: &AgentHandle,
+        binding: &WindowBinding,
+    ) -> Result<AgentInfo, ErrorBody> {
+        if agent.is_guest() {
+            return Err(ErrorBody::refused("a guest stays in its original window"));
+        }
+        let id = agent.id();
+        let missing =
+            || ErrorBody::new(Reason::NotFound, format!("agent #{id} is no longer listed"));
+        let _changing = agent.lock_run_change().await;
+        if self.get_agent(id).is_none() {
+            return Err(missing());
+        }
+        if !self.windows.is_current(binding) {
+            return Err(ErrorBody::refused("this editor window is no longer bound"));
+        }
+        let current = agent.info();
+        if current.windows.contains(&binding.window) {
+            return Ok(current);
+        }
+        let windows = self
+            .records
+            .add_window(id, &binding.window)?
+            .ok_or_else(missing)?;
+        let (reply, updated) = oneshot::channel();
+        if !agent
+            .send(AgentCommand::UpdateWindows { windows, reply })
+            .await
+        {
+            return Err(agent_stopped(id));
+        }
+        updated.await.map_err(|_| agent_stopped(id))
+    }
+
     /// Removes an agent: stops it first, then deletes its record with its inbox in one transaction,
     /// then its actor, run, screen and run folders.
     pub(crate) async fn remove(self: &Arc<Self>, agent: &AgentHandle) -> Result<(), ErrorBody> {
@@ -786,10 +893,8 @@ impl Daemon {
         Ok(())
     }
 
-    /// Starts an ended agent's CLI again in its terminal, in its recorded session and folder, in
-    /// window `args.window_id`, and returns the running record (`agent.resume`). The agent keeps
-    /// its ID, name, record and screen. The new process ID and cleared exit are committed before
-    /// the actor installs the terminal; where the commit fails, the new run is stopped.
+    /// Resumes an ended agent in its recorded folder and session. An overlapping request returns
+    /// the current record if a new run was installed while it waited.
     pub(crate) async fn resume(
         self: &Arc<Self>,
         agent: &AgentHandle,
@@ -798,11 +903,20 @@ impl Daemon {
         let id = agent.id().to_string();
         let unavailable = |message: String| ErrorBody::new(Reason::Unavailable, message);
         let busy = || unavailable(format!("agent #{id} is running or already resuming"));
-        let Some(_changing) = agent.try_lock_run_change() else {
+        let (when_called, then) = agent.installed_record();
+        if then.process == ProcessState::Running {
             return Err(busy());
-        };
-        if agent.exit().borrow().is_none() {
-            return Err(busy());
+        }
+        let _changing = agent.lock_run_change().await;
+        if self.get_agent(&id).is_none() {
+            return Err(ErrorBody::new(
+                Reason::NotFound,
+                format!("agent #{id} is no longer listed"),
+            ));
+        }
+        let (installed, info) = agent.installed_record();
+        if installed != when_called {
+            return Ok(info);
         }
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(unavailable(
@@ -819,7 +933,6 @@ impl Daemon {
             .ok_or_else(|| {
                 unavailable(format!("#{id}'s CLI rule {rule_name} is not in this build"))
             })?;
-        let info = agent.info();
         let Some(session) = info.session.clone() else {
             let message = if self.runs.has_unsaved_session(&id).await {
                 format!(
@@ -830,11 +943,12 @@ impl Daemon {
             };
             return Err(unavailable(message));
         };
-        let window = args
-            .window_id
-            .clone()
-            .unwrap_or_else(|| TERMINAL_WINDOW.to_string());
-        self.windows.check_destination_v1(&window, &info.cwd)?;
+        if !std::path::Path::new(&info.cwd).is_dir() {
+            return Err(unavailable(format!(
+                "the folder {} no longer exists",
+                info.cwd
+            )));
+        }
         // A resume is a new launch: YOLO and the entry come from the settings file as it is now,
         // the entry of the same kind as the agent ran (RULES-4.2, CONFIGURATION-3.4).
         let settings = command_line::read_settings()?;
@@ -845,7 +959,7 @@ impl Daemon {
             .as_deref()
             .and_then(|creator| self.get_agent(creator))
             .map(|creator| creator.info().name);
-        let label = self.windows.label_v1(&window);
+        let place = self.instructions_window(&info.windows);
         let request = RunRequest {
             id: &id,
             rule: Some(rule),
@@ -855,8 +969,7 @@ impl Daemon {
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
             location_id: &info.location_id,
-            window_id: &window,
-            window_label: &label,
+            window: place.as_ref().map(|(label, id)| (label.as_str(), *id)),
             creator: info
                 .creator
                 .as_deref()
@@ -904,19 +1017,12 @@ impl Daemon {
             )
             .await?;
         gate_for_test("before-restart-commit");
-        let (store, committed, pid, window_id) =
-            (self.store.clone(), id.clone(), started.pid, window.clone());
-        if let Err(error) =
-            blocking(move || store.record_restart(&committed, pid, &window_id, yolo)).await
-        {
+        let (store, committed, pid) = (self.store.clone(), id.clone(), started.pid);
+        if let Err(error) = blocking(move || store.record_restart(&committed, pid, yolo)).await {
             self.runs.abandon(&id);
             return Err(error);
         }
-        agent.set_window_and_yolo(&window, yolo);
-        // Before the run is installed, so its first color query gets them as a reply.
-        agent
-            .send(AgentCommand::SetColors(self.window_colors(&window)))
-            .await;
+        agent.set_yolo(yolo);
         let (reply, installed) = oneshot::channel();
         let install = AgentCommand::InstallRun {
             run: number,
@@ -963,7 +1069,7 @@ impl Daemon {
         let id = agent.id().to_string();
         let name = match name.trim_matches(facade_base::settings::is_space) {
             "" => self.reserve_name(
-                &agent.info().window_id,
+                &agent.info().windows,
                 &id,
                 command_line::settings_names().as_deref(),
             ),

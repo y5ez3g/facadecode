@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use facade_base::daemon::{Message, TERMINAL_WINDOW, WindowDescription};
+use facade_base::daemon::{Message, WindowDescription, WindowRef};
 use facade_base::files;
 use facade_base::process::{EndReason, ProcessExit};
 use rusqlite::{Connection, Row, params};
@@ -53,17 +53,22 @@ const SCHEMA: &str = "
 		exit_code INTEGER,
 		exit_signal TEXT,
 		exit_at TEXT,
-		exit_reason TEXT
+		exit_reason TEXT,
+		location_machine_id TEXT,
+		location_window_id TEXT
 	);
 	CREATE TABLE IF NOT EXISTS initialized (at TEXT NOT NULL);
+	CREATE TABLE machine (
+		singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+		machine_id TEXT NOT NULL
+	);
 ";
 
 /// The columns `agents` gained after its first schema, with their types.
-const AGENT_COLUMNS: [(&str, &str); 10] = [
+const AGENT_COLUMNS: [(&str, &str); 9] = [
     ("exit_reason", "TEXT"),
     ("rule", "TEXT"),
     ("session", "TEXT"),
-    ("window_id", "TEXT"),
     ("creator", "TEXT"),
     ("root", "TEXT"),
     ("yolo", "INTEGER"),
@@ -98,8 +103,10 @@ pub(crate) struct AgentRecord {
     pub(crate) rule: Option<String>,
     /// The session its CLI last reported.
     pub(crate) session: Option<String>,
-    /// Its window: an editor window's ID, or `terminal`, as for a record from before windows.
-    pub(crate) window_id: String,
+    /// Its member windows, sorted by machine and logical ID.
+    pub(crate) windows: Vec<WindowRef>,
+    /// The window that supplied the run's location, when it started from an editor location.
+    pub(crate) location_source_window: Option<WindowRef>,
     /// The agent that started it, none where the person did.
     pub(crate) creator: Option<String>,
     /// The first agent of its creation tree; a record from before creation trees is its own.
@@ -120,6 +127,7 @@ pub(crate) struct AgentRecord {
 /// The store as the daemon's start reads it.
 pub(crate) struct OpenedStore {
     pub(crate) store: Arc<Store>,
+    pub(crate) machine_id: String,
     /// Every record this build can read.
     pub(crate) records: Vec<AgentRecord>,
     /// Every agent ID in the table, also of the rows this build cannot read.
@@ -168,11 +176,19 @@ impl Store {
         }
         grow(&mut connection)
             .map_err(|err| anyhow::anyhow!("could not update {}: {err}", path.display()))?;
+        let machine_id = connection
+            .query_row(
+                "SELECT machine_id FROM machine WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(unreadable)?;
         let (records, agent_ids) = read_records(&connection).map_err(unreadable)?;
         Ok(OpenedStore {
             store: Arc::new(Store {
                 connection: Mutex::new(connection),
             }),
+            machine_id,
             records,
             agent_ids,
         })
@@ -217,9 +233,9 @@ impl Store {
         Ok(())
     }
 
-    /// Commits a new agent record. Blocks.
+    /// Commits a new agent record and its initial members together. Blocks.
     pub(crate) fn insert(&self, record: &AgentRecord) -> anyhow::Result<()> {
-        self.with(
+        self.transaction(
             || format!("save the record of {}", record.agent_id),
             |connection| insert_record(connection, record),
         )
@@ -298,12 +314,11 @@ impl Store {
         Ok(())
     }
 
-    /// Commits a resumed run in one statement: its process ID, window and YOLO, and no exit. Blocks.
+    /// Commits a resumed run in one statement: its process ID and YOLO, and no exit. Blocks.
     pub(crate) fn record_restart(
         &self,
         agent_id: &str,
         pid: u32,
-        window_id: &str,
         yolo: bool,
     ) -> anyhow::Result<()> {
         #[cfg(debug_assertions)]
@@ -314,9 +329,9 @@ impl Store {
             || format!("save the resumed run of {agent_id}"),
             |connection| {
                 connection.execute(
-                    "UPDATE agents SET pid = ?2, window_id = ?3, yolo = ?4, exit_code = NULL, \
+                    "UPDATE agents SET pid = ?2, yolo = ?3, exit_code = NULL, \
                      exit_signal = NULL, exit_at = NULL, exit_reason = NULL WHERE agent_id = ?1",
-                    params![agent_id, pid, window_id, yolo],
+                    params![agent_id, pid, yolo],
                 )
             },
         )?;
@@ -352,6 +367,7 @@ impl Store {
             || format!("delete the record of {agent_id}"),
             |transaction| {
                 transaction.execute("DELETE FROM agents WHERE agent_id = ?1", [agent_id])?;
+                transaction.execute("DELETE FROM agent_windows WHERE agent_id = ?1", [agent_id])?;
                 messages::delete_inbox(transaction, agent_id)
             },
         )
@@ -365,22 +381,6 @@ impl Store {
             |transaction| {
                 transaction.execute("DELETE FROM guests WHERE agent_id = ?1", [agent_id])?;
                 messages::delete_inbox(transaction, agent_id)
-            },
-        )
-    }
-
-    /// Moves every agent of window `from` to window `to` and deletes `from`'s row, in one
-    /// transaction. Blocks.
-    pub(crate) fn take_over(&self, from: &str, to: &str) -> anyhow::Result<()> {
-        self.transaction(
-            || format!("move the agents of window {from} to window {to}"),
-            |transaction| {
-                transaction.execute(
-                    "UPDATE agents SET window_id = ?2 WHERE window_id = ?1",
-                    [from, to],
-                )?;
-                transaction.execute("DELETE FROM windows WHERE window_id = ?1", [from])?;
-                Ok(())
             },
         )
     }
@@ -523,10 +523,7 @@ fn grow(connection: &mut Connection) -> rusqlite::Result<()> {
     integrations::add_table(connection)?;
     messages::add_table(connection)?;
     windows::add_table(connection)?;
-    guests::add_table(connection)?;
-    let transaction = connection.transaction()?;
-    membership::add_table(&transaction)?;
-    transaction.commit()
+    guests::add_table(connection)
 }
 
 /// The names of `table`'s columns.
@@ -540,11 +537,12 @@ fn column_names(connection: &Connection, table: &str) -> rusqlite::Result<Vec<St
 /// Writes `record` as a new row of `agents`.
 fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Result<()> {
     let exit = record.exit.as_ref();
+    let source = record.location_source_window.as_ref();
     connection.execute(
         "INSERT INTO agents (agent_id, name, cli, cwd, pid, created_at, exit_code, exit_signal, \
-         exit_at, exit_reason, rule, session, window_id, creator, root, yolo, request_id, prompt, \
-         location_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+         exit_at, exit_reason, rule, session, creator, root, yolo, request_id, prompt, location_id, \
+         location_machine_id, location_window_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             record.agent_id,
             record.name,
@@ -558,16 +556,17 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
             exit.and_then(reason_name),
             record.rule,
             record.session,
-            record.window_id,
             record.creator,
             record.root,
             record.yolo,
             record.request_id,
             record.prompt.map(|number| number as i64),
             record.location_id,
+            source.map(|window| &window.machine_id),
+            source.map(|window| &window.window_id),
         ],
     )?;
-    Ok(())
+    membership::insert(connection, &record.agent_id, &record.windows)
 }
 
 /// Whether the `initialized` row was committed.
@@ -604,7 +603,25 @@ fn initialize(
         "INSERT INTO initialized (at) VALUES (?1)",
         [facade_base::time::iso_now()],
     )?;
+    membership::add_table(&transaction)?;
+    transaction.execute(
+        "INSERT INTO machine (singleton, machine_id) VALUES (1, ?1)",
+        [machine_uuid()],
+    )?;
     transaction.commit()
+}
+
+fn machine_uuid() -> String {
+    let first = facade_base::random_u64();
+    let second = facade_base::random_u64();
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        first >> 32,
+        (first >> 16) & 0xffff,
+        (first & 0x0fff) | 0x4000,
+        ((second >> 48) & 0x3fff) | 0x8000,
+        second & 0xffff_ffff_ffff,
+    )
 }
 
 /// Every record this build can read, and every agent ID in the table.
@@ -617,7 +634,7 @@ fn read_records(connection: &Connection) -> rusqlite::Result<(Vec<AgentRecord>, 
     let mut rows = statement.query([])?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
-        match read_record(row) {
+        match read_record(connection, row) {
             Ok(record) => records.push(record),
             Err(err) => {
                 let id: Option<String> = row.get(0).ok();
@@ -635,7 +652,7 @@ fn read_records(connection: &Connection) -> rusqlite::Result<(Vec<AgentRecord>, 
     Ok((records, agent_ids))
 }
 
-fn read_record(row: &Row) -> rusqlite::Result<AgentRecord> {
+fn read_record(connection: &Connection, row: &Row) -> rusqlite::Result<AgentRecord> {
     // A value this build cannot read leaves the agent without it; the row keeps it.
     fn optional<T: rusqlite::types::FromSql>(row: &Row, column: &str) -> Option<T> {
         row.get::<_, Option<T>>(column).ok().flatten()
@@ -644,6 +661,7 @@ fn read_record(row: &Row) -> rusqlite::Result<AgentRecord> {
     let exit_at: Option<String> = row.get("exit_at")?;
     let (code, signal) = (row.get("exit_code")?, row.get("exit_signal")?);
     let reason: Option<String> = row.get("exit_reason")?;
+    let source = optional(row, "location_machine_id").zip(optional(row, "location_window_id"));
     Ok(AgentRecord {
         name: row.get("name")?,
         cli: row.get("cli")?,
@@ -660,9 +678,11 @@ fn read_record(row: &Row) -> rusqlite::Result<AgentRecord> {
         session: optional::<String>(row, "session").filter(|session| {
             facade_rules::parse_session_id(session).is_some_and(|id| id == *session)
         }),
-        window_id: row
-            .get::<_, Option<String>>("window_id")?
-            .unwrap_or_else(|| TERMINAL_WINDOW.to_string()),
+        windows: membership::read(connection, &agent_id)?,
+        location_source_window: source.map(|(machine_id, window_id)| WindowRef {
+            machine_id,
+            window_id,
+        }),
         creator: optional(row, "creator"),
         root: optional(row, "root").unwrap_or_else(|| agent_id.clone()),
         yolo: optional(row, "yolo").unwrap_or(false),
@@ -822,7 +842,11 @@ pub(crate) mod tests {
             exit: None,
             rule: Some("claude".into()),
             session: None,
-            window_id: "terminal".into(),
+            windows: vec![WindowRef {
+                machine_id: "test-machine".into(),
+                window_id: "terminal".into(),
+            }],
+            location_source_window: None,
             creator: None,
             root: id.into(),
             yolo: true,
@@ -1186,24 +1210,20 @@ pub(crate) mod tests {
         store
             .record_session("a1", Some("86da4482-2bae-4a45-b193-a5664c19826a"))
             .unwrap();
-        store.record_restart("a1", 77, "win-2", false).unwrap();
+        store.record_restart("a1", 77, false).unwrap();
         drop(store);
         let opened = Store::open(&core, &[]).unwrap();
         let session = Some("86da4482-2bae-4a45-b193-a5664c19826a".into());
         let resumed = AgentRecord {
             pid: 77,
             session,
-            window_id: "win-2".into(),
             yolo: false,
             ..record("a1")
         };
         assert_eq!(opened.records, [resumed]);
         opened.store.delete("a1").unwrap();
         opened.store.record_session("a1", None).unwrap();
-        opened
-            .store
-            .record_restart("a1", 78, "terminal", true)
-            .unwrap();
+        opened.store.record_restart("a1", 78, true).unwrap();
         assert!(
             Store::open(&core, &[]).unwrap().records.is_empty(),
             "a late write must not bring the record back"
