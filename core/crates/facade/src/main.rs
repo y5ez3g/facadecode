@@ -28,7 +28,7 @@ use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
 use facade_base::process::{EndReason, ProcessExit};
 
 use commands::{Format, IntegrationAction};
-use daemon_client::{attempt, connect_or_start};
+use daemon_client::{connect_or_start, reconnect};
 use hooks::HookEvent;
 
 #[derive(Parser)]
@@ -168,10 +168,11 @@ enum Command {
     /// Once the agent's input is empty, its typist pastes the message under a header naming its
     /// sender, such as `📨 Message from #human · #m5`, and presses Enter; it never types over a
     /// draft. In an agent's terminal, the message comes from that agent; elsewhere, from the
-    /// person. A message to '#human' from an agent of an editor window goes to that window, which
-    /// shows it to the person. A message to a guest, a CLI the person started, waits for its next
-    /// turn: return at once. Otherwise return once the message is delivered, or fail within 30
-    /// seconds saying why.
+    /// person. A message to '#human' goes to the active messages subscriptions of the sender's
+    /// windows. The command reports the outcome for each window and succeeds if at least one
+    /// subscription took the message. A message to a guest, a CLI the person started, waits for
+    /// its next turn and returns at once. Otherwise return once the message is delivered, or fail
+    /// within 30 seconds saying why.
     Send {
         /// The recipient: an agent ID (a3, '#a3', or 3), a unique name of a running agent with or
         /// without @, a name and its ID, or '#human' for the person.
@@ -344,7 +345,7 @@ fn show(
     agent: Option<String>,
 ) -> anyhow::Result<i32> {
     match agent {
-        Some(agent) => attach::attach(client, &agent, &attempt),
+        Some(agent) => attach::attach(client, &agent, &reconnect),
         None => Ok(0),
     }
 }
@@ -376,7 +377,9 @@ fn run(command: Command) -> anyhow::Result<i32> {
             let shown = commands::resume(&mut client, agent, terminal)?;
             show(client, shown)
         }
-        Command::Attach(Target { agent }) => attach::attach(connect_or_start()?, &agent, &attempt),
+        Command::Attach(Target { agent }) => {
+            attach::attach(connect_or_start()?, &agent, &reconnect)
+        }
         Command::Messages => {
             let Some(agent) = daemon_client::agent_of_terminal()? else {
                 anyhow::bail!(

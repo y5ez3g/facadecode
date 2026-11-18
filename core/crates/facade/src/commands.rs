@@ -10,9 +10,10 @@ use facade_base::daemon::{
     DeliveredVia, DeliveryStatus, InspectResult, IntegrationAdd, IntegrationArgs, IntegrationInfo,
     IntegrationList, IntegrationRemove, IntegrationsArgs, MessagesTopic, MessagesWatchArgs,
     PartState, RenameArgs, ResumeArgs, Said, ScreenArgs, SendArgs, StartArgs, StateReason,
-    TypeArgs, display_name,
+    TypeArgs, WindowDeliveryFailure, WindowRef, display_name,
 };
 use facade_base::daemon_client::{DaemonClient, made_request_id};
+use facade_base::jsonrpc::ErrorBody;
 use facade_base::operations::NoArgs;
 use facade_base::process::EndReason;
 use unicode_width::UnicodeWidthStr;
@@ -259,19 +260,41 @@ pub(crate) fn send(
         request_id: Some(made_request_id()),
         time_left_ms: None,
     };
-    let message = client
-        .call_with_request_id::<AgentSend>(args, false)?
-        .0
-        .message;
+    let (sent, _) = client
+        .call_with_request_id::<AgentSend>(args, false)
+        .inspect_err(|error| {
+            if let Some(windows) = error
+                .downcast_ref::<ErrorBody>()
+                .and_then(|body| body.data.windows.as_deref())
+            {
+                for failure in windows {
+                    eprintln!("facade: {}", window_failure(failure));
+                }
+            }
+        })?;
+    let message = sent.message;
     let (id, to) = (&message.message_id, &message.to);
+    if let Some(windows) = sent.windows {
+        println_or_end!("#{id} was handed to these window subscriptions");
+        for window in windows.delivered {
+            println_or_end!("  {}", window_text(&window));
+        }
+        for failure in windows.not_delivered {
+            println_or_end!("{}", window_failure(&failure));
+        }
+        return Ok(());
+    }
+    if to == "human" {
+        if message.delivery.status == DeliveryStatus::Pending && sent.repeated {
+            anyhow::bail!("delivery outcome is unknown for #{id} to #human")
+        }
+        anyhow::bail!("missing window delivery receipt for #{id} to #human");
+    }
     match (message.delivery.status, message.delivery.delivered_via) {
         // A guest takes its messages at its next turn.
         (DeliveryStatus::Pending, _) => println_or_end!("#{id} waits for #{to}'s next turn"),
         (DeliveryStatus::Success, Some(DeliveredVia::Read)) => {
             println_or_end!("#{id} was read by #{to}")
-        }
-        (DeliveryStatus::Success, Some(DeliveredVia::Notified)) => {
-            println_or_end!("#{id} was handed to the person's editor window")
         }
         (DeliveryStatus::Success, _) => println_or_end!("#{id} was typed into #{to}"),
         _ => anyhow::bail!(
@@ -280,6 +303,29 @@ pub(crate) fn send(
         ),
     }
     Ok(())
+}
+
+/// Identifies a window by its logical ID and machine.
+fn window_text(window: &WindowRef) -> String {
+    format!(
+        "window {} on machine {}",
+        display_name(&window.window_id),
+        display_name(&window.machine_id)
+    )
+}
+
+/// Why the message could not be handed to this window.
+fn window_failure(failure: &WindowDeliveryFailure) -> String {
+    let reason = match failure.reason.as_str() {
+        "window_disconnected" => "window is disconnected",
+        "not_watching" => "window has no active messages subscription",
+        reason => reason,
+    };
+    format!(
+        "Could not hand the message to {} ({})",
+        window_text(&failure.window),
+        display_name(reason)
+    )
 }
 
 /// Prints the messages waiting for the agent the connection speaks for, as its terminal would show

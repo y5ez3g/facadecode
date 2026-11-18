@@ -12,9 +12,9 @@ The `facade` program: the terminal commands that people and agents run, the hook
 ## Keeps
 
 - Help, argument errors and `--version` need no daemon. `facade start` refuses words it cannot use before it reaches the daemon.
-- Every other command that needs the daemon connects first. Where nothing responds, it starts a keeper, and the keeper starts the daemon. One attempt takes at most 10 seconds.
+- Every other command that needs the daemon connects first. Where nothing responds, it starts a keeper, and the keeper starts the daemon. The initial connection can wait up to 10 seconds.
 - A command acts for the agent of its terminal: the agent that holds a CLI session its environment names, else `FACADE_AGENT`.
-- A build that reaches an older running Facade asks it to let this build take over, waits for a daemon of its own build, and says on one line how it went. A Facade that refuses, or serves on, is used as it is.
+- A build that reaches an older running Facade asks it to let this build take over, waits for a daemon of its own build, and says on one line how it went. A command can continue on an older daemon that speaks the command's protocol.
 - `facade hook …` only talks to a daemon that already runs, never starts Facade, and exits 0 whatever happens. That includes a hook line this build cannot parse.
 - A command whose output closes early, as `facade list | head` does, ends quietly: by SIGPIPE on macOS and Linux (`service::default_broken_pipe`), and on Windows through `print_or_end!`. The keeper and the daemon keep treating a closed peer as an error.
 
@@ -67,8 +67,8 @@ flowchart LR
 
 What `run` does for each kind of command:
 
-- **start, resume:** `commands::start_words` checks the words first (start only). If standard input and output are both terminals, `attach::terminal_size` gives the first frame's size. Then `run` connects and calls `commands::start` or `commands::resume`. If one returns an agent, `run` passes the same connection to `attach::attach`.
-- **attach:** connect, then `attach::attach(client, agent, &attempt)`.
+- **start, resume:** `commands::start_words` checks the words first (start only). If standard input and output are both terminals, `attach::terminal_size` gives the first frame's size. Then `run` connects and calls `commands::start` or `commands::resume`. If one returns an agent, `run` passes the same connection and `reconnect` to `attach::attach`.
+- **attach:** connect, then `attach::attach(client, agent, &reconnect)`.
 - **messages:** `agent_of_terminal` finds the terminal's agent, or the command fails saying this is no agent's terminal. Then `run` connects as that agent and calls `commands::messages`.
 - **other commands:** connect, then the matching function in commands.
 - **hook:** `hooks::run(event, FACADE_AGENT, connect)`, where `connect` reaches a running daemon only, acting for `FACADE_AGENT`, and gives `None` after 2 seconds.
@@ -78,16 +78,16 @@ What `run` does for each kind of command:
 Shared with the children:
 
 - `ConnectFailure`: why one attempt failed. `Timeout` means another attempt may succeed, `Permanent` means it will not, and `Cancelled` means the caller gave up.
-- `Reconnect`: the type of the function attach reconnects with, `daemon_client::attempt`.
+- `Reconnect`: the type of the function attach reconnects with, `daemon_client::reconnect`.
 - `print_or_end!` and `println_or_end!`: every print to standard output. A reader that went away, as `head` once it has its lines, ends the command quietly with code 0; on macOS and Linux SIGPIPE ends it first, and Windows, without SIGPIPE, fails the write instead.
 - `ExitText`: an agent's exit as a person reads it: `code 3`, the signal's name, or why neither is known. A code outside 0–255, as a Windows status, shows its 32 bits in hex: `code 0xC000013A`.
 
 `daemon_client.rs` reaches the daemon:
 
-- `reach` tries to connect every 25 ms until its 10-second deadline. While nothing responds, it reads what a keeper it started has reported so far. A keeper that lost the lock to another is let go, and the attempt waits for the other keeper's daemon. A keeper that exits before it reports fails the attempt, with the last line of `keeper.log`, which says why. Facade starts a keeper only when nothing holds the daemon lock and no keeper runs, because a daemon holding the lock may be recovering. Starting one installs the running build, and points the launcher at it where the launcher names no build, one this build takes over from, or one without a version. Then it starts `facade keeper`.
+- `reach` tries to connect every 25 ms until its deadline, which is 10 seconds for an initial connection. While nothing responds, it reads what a keeper it started has reported so far. A keeper that lost the lock to another is let go, and the attempt waits for the other keeper's daemon. A keeper that exits before it reports fails the attempt, with the last line of `keeper.log`, which says why. Facade starts a keeper only when nothing holds the daemon lock and no keeper runs, because a daemon holding the lock may be recovering. Starting one installs the running build, and points the launcher at it where the launcher names no build, one this build takes over from, or one without a version. Then it starts `facade keeper`.
 - `StartedKeeper` waits for the keeper's process on a thread however the attempt ends, so it never stays a zombie.
-- `attempt_as` follows `reach` with a takeover check. If `takes_over(ours, theirs)`, it sends `daemon.upgrade` with this program, its build and its protocol ranges. Then it reaches the daemon again until one of this build responds, within base's `takeover_timeout`. If the old build responds instead, the takeover failed, and the command goes on with the old build.
-- The identity: `attempt` and `agent_of_terminal` send `FACADE_AGENT` and the CLI sessions. `connect_or_start_for` and `connect_running` send only the agent.
+- `attempt_as` checks the build after an ordinary hello. If `takes_over(ours, theirs)`, it sends `daemon.upgrade` with this program, its build and its protocol ranges. Then it waits up to base's `takeover_timeout` for its own build. If the old build answers an ordinary hello again, the command reports the failed takeover and goes on with that build.
+- `connect_or_start`, `agent_of_terminal` and `reconnect` send `FACADE_AGENT` and the CLI sessions. `connect_or_start_for` and `connect_running` send only the agent.
 
 A command runs on one thread. attach adds its own threads (see [attach](#attach)). A hook reads its input on a thread so that it can stop waiting after one second.
 
@@ -102,11 +102,11 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
   - `agent.start` and `agent.send` carry a request ID. If a newer Facade cuts the call off when it takes over, the call is repeated, and the result says what was done.
   - Without the person's terminal, `start` and `resume` print `#aN pid N` and return no agent. With it, they print on standard error how to detach and reconnect, and return the agent to show. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
   - `resume` first warns when the earlier CLI may still be running, because its terminal closed while no Facade service held it.
-  - `send` fails, with exit code 1, when the message did not reach the recipient. A message that waits for a guest's next turn is not a failure.
+  - `send` to `#human` uses the window receipt to report success, listing which subscriptions took the message and why the other windows could not take it. If no window took the message or the receipt is missing, it reports an error on standard error and exits 1. A repeated send that is still pending reports an unknown outcome. A message that waits for a guest's next turn succeeds.
 - **Never does:** connect to or start the daemon; show an agent or change terminal modes; read hook input; work out which agent a terminal belongs to.
 - **Interface:** only `run` calls it. Every call blocks until the daemon responds.
   - `start_words(Vec<String>) -> Result<StartWords>`, then `start(&mut DaemonClient, StartWords, Option<(u16, u16)>) -> Result<Option<String>>`. `resume(&mut DaemonClient, agent, Option<(u16, u16)>)` returns the same.
-  - `list` and `inspect` take a `Format` (`Text` or `Json`). `screen`, `type_input`, `send`, `messages`, `rename`, `stop` and `remove` take the command's words.
+  - `list` and `inspect` take a `Format` (`Text` or `Json`). Their JSON carries the protocol's `AgentInfo` with its running machine, window memberships and optional location source. `screen`, `type_input`, `send`, `messages`, `rename`, `stop` and `remove` take the command's words.
   - `integration(&mut DaemonClient, IntegrationAction)`, where `IntegrationAction` is `Add { cli }`, `Remove { cli }` or `List`.
   - `status(&DaemonClient)` prints the `hello` result: the build, the daemon's pid, the agent count and the keeper.
   - Operations it calls: `agent.start`, `agent.resume`, `agent.inspect`, `agent.screen`, `agent.type`, `agent.send`, `agent.rename`, `agent.stop`, `agent.remove`, `integration.add`, `integration.remove` and `integration.list`. Topics it reads one snapshot of: `agents` and `messages`.
@@ -156,7 +156,7 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 ## Reading the code
 
 1. `main.rs`, `run`: every command and the island it goes to.
-2. `daemon_client.rs`, `attempt_as` and `reach`: connecting, starting Facade, taking over.
+2. `daemon_client.rs`, `attempt_as`, `reach` and `follow_takeover`: connecting, starting Facade, taking over.
 3. `commands.rs`, `start`: one command from words to output.
 4. `attach.rs`, `attach`, then `follow_agent`: showing an agent and reconnecting.
 5. `hooks.rs`, `run`, then `report_guest`: the run hooks and the guest hooks.
