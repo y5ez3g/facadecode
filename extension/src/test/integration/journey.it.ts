@@ -13,6 +13,7 @@ import { BUILT_IN_NAMES } from '../../base/names';
 import type { PanelState } from '../../webview/protocol';
 import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
+import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 const CLI = process.env.FACADE_IT_CLI ?? 'claude';
@@ -38,8 +39,8 @@ const RUST = process.env.FACADE_IT_ENGINE === 'rust';
 const CUSTOM = CLI === 'my-cli';
 
 /** Native store fixtures: actual vendor interoperability is verified separately with isolated native CLIs. */
-function resumeFixture(cwd: string): { sessionId: string; args: string[] } {
-	const id = '86da4482-2bae-4a45-b193-a5664c19826a', title = 'Resume integration fixture';
+function resumeFixture(cwd: string): { title: string; args: string[] } {
+	const id = '86da4482-2bae-4a45-b193-a5664c19826a', title = `Resume integration fixture for ${CLI}`;
 	const write = (file: string, content: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); };
 	const sqlite = (file: string, sql: string, insert: string, values: (string | number)[]) => {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -50,8 +51,6 @@ function resumeFixture(cwd: string): { sessionId: string; args: string[] } {
 		write(path.join(dir, `${id}.jsonl`), [
 			{ type: 'user', sessionId: id, cwd, parentUuid: null, message: { role: 'user', content: 'Initial prompt before native naming' } },
 			{ type: 'attachment', padding: 'x'.repeat(80_000) },
-			// This journey accepts the most recent entry. In a complete serial run the other vendors' earlier fixtures remain,
-			// so this newly written conversation must also have new native activity, not an artificially old timestamp.
 			{ type: 'assistant', sessionId: id, timestamp: new Date().toISOString(), message: { role: 'assistant', content: [] } },
 			{ type: 'ai-title', sessionId: id, aiTitle: title }
 		].map(value => JSON.stringify(value)).join('\n') + '\n');
@@ -74,14 +73,14 @@ function resumeFixture(cwd: string): { sessionId: string; args: string[] } {
 		const session = 'ses_integration';
 		sqlite(path.join(AGENTS_HOME!, '.local', 'share', 'opencode', 'opencode.db'), 'CREATE TABLE IF NOT EXISTS session_v2 (id TEXT, directory TEXT, title TEXT, time_updated INTEGER, parent_id TEXT)',
 			'INSERT INTO session_v2 VALUES (?, ?, ?, ?, NULL)', [session, cwd, title, Date.now()]);
-		return { sessionId: session, args: ['--session', session] };
+		return { title, args: ['--session', session] };
 	} else if (CLI === 'muse') {
 		const dir = path.join(AGENTS_HOME!, '.local', 'share', 'muse'), log = path.join(dir, `${id}.jsonl`);
 		write(log, '{}\n');
 		sqlite(path.join(dir, 'session-index.db'), 'CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, workspace_root TEXT, status TEXT, prompt_count INTEGER, session_log_path TEXT, first_user_prompt TEXT, updated_at_us INTEGER)',
 			"INSERT OR REPLACE INTO sessions VALUES (?, ?, 'valid', 1, ?, ?, ?)", [id, cwd, log, title, Date.now() * 1000]);
 	}
-	return { sessionId: id, args: [({ codex: 'resume', muse: 'resume', agy: '--conversation', pi: '--session' } as Record<string, string>)[CLI] ?? '--resume', id] };
+	return { title, args: [({ codex: 'resume', muse: 'resume', agy: '--conversation', pi: '--session' } as Record<string, string>)[CLI] ?? '--resume', id] };
 }
 
 /** Whether two paths name one folder as this system names them: Windows ignores case, and VS Code writes its drive in lower case. */
@@ -357,54 +356,66 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		fs.mkdirSync(cwd, { recursive: true });
 		const fixture = resumeFixture(cwd);
 		const before = new Set((await state()).cards.map(each => each.runId));
-		void vscode.commands.executeCommand('facade.history');
-		const card = await until('the resumed card', async () => {
-			const current = await state();
-			const added = current.cards.find(each => !before.has(each.runId));
-			// On the Rust engine its short ID and name come with core's answer to the start
-			if (added && /#a\d+/.test(linesOf(added).join(' '))) { return added; }
-			if (!added) { await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem'); }
-			return undefined;
-		});
-		assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
-		const alias = linesOf(card).join(' ').match(/#a\d+/)![0];
-		const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
-		assert.ok(sameFolder(launch.cwd, cwd));
-		const resumeAt = launch.args.indexOf(fixture.args[0]);
-		assert.ok(resumeAt >= 0, 'the native resume option accompanies the MCP configuration');
-		assert.deepStrictEqual(launch.args.slice(resumeAt, resumeAt + 2), fixture.args);
-		await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
-		await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
-		await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
-		await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && tab.isPinned) ? true : undefined).catch(error => {
-			console.error('Native Pin state', JSON.stringify({ terminal: vscode.window.activeTerminal?.name, tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
-			throw error;
-		});
-		await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
-		// LIFECYCLE-3.4: the tab-change event can precede completion of Facade's own mark command. Observe the unpinned state across
-		// two polls before issuing a separate native action; one early observation can still be inside that command's event guard.
-		let unpinned = 0;
-		await until('the unpinned card and tab to settle', async () => {
-			const agreed = !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && !tab.isPinned);
-			unpinned = agreed ? unpinned + 1 : 0;
-			return unpinned >= 2 ? true : undefined;
-		});
-		// A native action acts on the active group's front tab alone and saves the same restoration intent.
-		await vscode.commands.executeCommand('facade.revealAgent', { run_id: card.runId });
-		await until('the resumed terminal in front for native Pin', async () => {
-			const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
-			return tab?.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && !tab.isPinned ? true : undefined;
-		});
-		await vscode.commands.executeCommand('workbench.action.pinEditor');
+		const started = async () => (await state()).cards.filter(each => !before.has(each.runId));
+		const history = vscode.commands.executeCommand('facade.history');
+		void history.then(undefined, () => undefined);
 		try {
-			await until('the card and tab following a native Pin', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && tab.isPinned) ? true : undefined);
-		} catch (error) {
-			console.error('Native Pin synchronization', JSON.stringify({ cards: (await state()).cards.map(each => ({ runId: each.runId, name: each.name, pinned: each.pinned })),
-				tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
-			throw error;
+			await until('the Resume fixture ' + fixture.title + ' to be selected', async () => {
+				const picker = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
+				if (!picker || picker.busy || picker.active < 0) { return undefined; }
+				const target = picker.labels.indexOf(fixture.title);
+				if (target < 0) { return undefined; }
+				assert.strictEqual(picker.labels.lastIndexOf(fixture.title), target, 'the Resume fixture title identifies one row');
+				if (target === picker.active) { return true; }
+				await vscode.commands.executeCommand(target < picker.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
+				return undefined;
+			});
+			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+			await history;
+			// On the Rust engine its short ID and name come with core's answer to the start.
+			const card = await until('the resumed card', async () => (await started()).find(each => /#a\d+/.test(linesOf(each).join(' '))));
+			assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
+			const alias = linesOf(card).join(' ').match(/#a\d+/)![0];
+			const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
+			assert.ok(sameFolder(launch.cwd, cwd));
+			const resumeAt = launch.args.indexOf(fixture.args[0]);
+			assert.ok(resumeAt >= 0, 'the native resume option accompanies the MCP configuration');
+			assert.deepStrictEqual(launch.args.slice(resumeAt, resumeAt + 2), fixture.args);
+			await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
+			await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
+			await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
+			await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && tab.isPinned) ? true : undefined).catch(error => {
+				console.error('Native Pin state', JSON.stringify({ terminal: vscode.window.activeTerminal?.name, tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
+				throw error;
+			});
+			await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
+			// LIFECYCLE-3.4: the tab-change event can precede completion of Facade's own mark command. Observe the unpinned state across
+			// two polls before issuing a separate native action; one early observation can still be inside that command's event guard.
+			let unpinned = 0;
+			await until('the unpinned card and tab to settle', async () => {
+				const agreed = !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && !tab.isPinned);
+				unpinned = agreed ? unpinned + 1 : 0;
+				return unpinned >= 2 ? true : undefined;
+			});
+			// A native action acts on the active group's front tab alone and saves the same restoration intent.
+			await vscode.commands.executeCommand('facade.revealAgent', { run_id: card.runId });
+			await until('the resumed terminal in front for native Pin', async () => {
+				const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+				return tab?.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && !tab.isPinned ? true : undefined;
+			});
+			await vscode.commands.executeCommand('workbench.action.pinEditor');
+			try {
+				await until('the card and tab following a native Pin', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && tab.isPinned) ? true : undefined);
+			} catch (error) {
+				console.error('Native Pin synchronization', JSON.stringify({ cards: (await state()).cards.map(each => ({ runId: each.runId, name: each.name, pinned: each.pinned })),
+					tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
+				throw error;
+			}
 		} finally {
-			// A failed Pin check must not leave this resumed card in the following filter scenario.
-			await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+			await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+			await history.then(undefined, () => undefined);
+			await Promise.all((await started()).map(card => vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId })));
+			await until('the resumed cards to close', async () => (await started()).length === 0 || undefined);
 		}
 	});
 

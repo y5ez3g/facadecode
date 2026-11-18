@@ -22,8 +22,16 @@ if (coreTriple()) {
 // jsonc-parser's ES modules, as the shipped bundle has them (scripts/build.mjs)
 const common = { outdir: path.join(stage, 'dist'), bundle: true, sourcemap: true, platform: 'node', format: 'cjs', target: 'node20', logLevel: 'info', define: { FACADE_TEST_MODE: 'true' },
 	alias: { 'jsonc-parser': 'jsonc-parser/lib/esm/main.js' } };
+const observeResumePicker = {
+	name: 'resume-picker-fixture',
+	setup(build) {
+		const picker = path.join(root, 'src', 'ui', 'pickers', 'resume.ts');
+		const fixture = path.join(root, 'src', 'test', 'integration', 'resumePickerFixture.ts');
+		build.onResolve({ filter: /^vscode$/ }, args => path.normalize(args.importer) === picker ? { path: fixture } : undefined);
+	}
+};
 await Promise.all([
-	esbuild.build({ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, external: ['vscode'] }),
+	esbuild.build({ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, external: ['vscode'], plugins: [observeResumePicker] }),
 	esbuild.build({ ...common, entryPoints: { ptyd: path.join(root, 'src', 'test', 'integration', 'ptydFixture.ts') }, external: ['node-pty'] }),
 	esbuild.build({ ...common, entryPoints: { shim: path.join(root, 'src', 'transport', 'shim.ts') } }),
 	// The page with its test probe, which the shipped page compiles out (UX-3.2)
