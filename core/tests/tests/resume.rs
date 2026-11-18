@@ -926,7 +926,7 @@ fn a_start_with_a_session_continues_it_as_a_new_agent() {
     home.run_facade_ok(&["remove", "before"]);
     let file = home.project.parent().unwrap().join("after.args");
     let mut wire = connect(&home);
-    let mut args = json!({
+    let args = json!({
         "command": ["fake"], "session": FIRST, "name": "after", "cwd": home.project,
         "env": {
             "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path, "FAKECLI_ARGS": file,
@@ -935,9 +935,11 @@ fn a_start_with_a_session_continues_it_as_a_new_agent() {
     });
     // Windows PowerShell, which runs the session hook on Windows, does not start without it.
     #[cfg(windows)]
-    {
+    let args = {
+        let mut args = args;
         args["env"]["SystemRoot"] = json!(std::env::var("SystemRoot").unwrap());
-    }
+        args
+    };
     let started = wire.call("agent.start", args);
     let id = started["result"]["agent"]["agent_id"]
         .as_str()

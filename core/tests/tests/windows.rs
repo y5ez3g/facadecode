@@ -832,15 +832,17 @@ fn an_agent_resumes_in_the_window_of_the_client_that_resumes_it() {
         &home,
         &window("win-1", Some("k1"), std::slice::from_ref(&folder)),
     );
-    let mut env = json!({
+    let env = json!({
         "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path,
         "FAKECLI_LOG": home.fake_log, "FAKECLI_SESSION": "11111111-2222-4333-8444-555555555555",
     });
     // Windows PowerShell, which runs the session hook on Windows, does not start without it.
     #[cfg(windows)]
-    {
+    let env = {
+        let mut env = env;
         env["SystemRoot"] = json!(std::env::var("SystemRoot").unwrap());
-    }
+        env
+    };
     let args = json!({
         "command": ["fake"], "name": "kept", "cwd": folder, "window_id": "win-1", "env": env,
         "cols": 80, "rows": 24,
