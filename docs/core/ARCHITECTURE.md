@@ -88,6 +88,19 @@ The protocols' types, framing and client live in [base](islands/base.md); `core/
 relay depends on no other Facade crate, so it reckons the daemon's socket path itself, by the same rule as base;
 scenario tests that go through the relay keep the two the same.
 
+From `core/` in an isolated checkout, build the programs and run the [relay scenario](../../core/tests/tests/mcp.rs)
+with a fresh `TMPDIR`. The scenario creates its Facade home there and starts the fake CLI.
+
+```sh
+cargo build &&
+  relay_test_tmp=$(mktemp -d) &&
+  TMPDIR="$relay_test_tmp" cargo test -p facade-scenarios --test mcp \
+    a_line_of_a_mebibyte_goes_through_the_relay_each_way -- --exact
+```
+
+The scenario sends a request with a method name 1 MiB long through the relay. The daemon replies with JSON-RPC error
+`-32601` and an error message longer than 1 MiB. The next `ping` on the same connection returns an empty object.
+
 The daemon alone opens the store, `core/facade.db`. The home's files each have one owner island: see
 [daemon](islands/daemon.md).
 
