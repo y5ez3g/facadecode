@@ -87,9 +87,9 @@ impl server::Service for Daemon {
                 return Err(ErrorBody::invalid_argument(message));
             }
             (ClientKind::Ide, Some(description)) => {
-                let id = description.id.clone();
-                presence._window = Some(self.window_connected(description).await?);
-                window = Some(id);
+                let connection = self.window_connected(description).await?;
+                window = Some(connection.binding().clone());
+                presence._window = Some(connection);
             }
             (ClientKind::Ide, None) => {
                 return Err(ErrorBody::invalid_argument(
@@ -329,7 +329,11 @@ impl Daemon {
             }
             WindowUpdate::NAME => {
                 let description: WindowDescription = decode_arguments(args)?;
-                let Some(window) = client.window.as_deref() else {
+                let Some(window) = client
+                    .window
+                    .as_ref()
+                    .map(|binding| binding.window.window_id.as_str())
+                else {
                     let message = "only an ide client describes a window";
                     return Err(ErrorBody::invalid_argument(message));
                 };

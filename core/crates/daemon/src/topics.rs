@@ -212,7 +212,10 @@ impl Daemon {
         args: MessagesWatchArgs,
         viewer: u64,
     ) -> Result<Watch, ErrorBody> {
-        let window = client.window.clone();
+        let window = client
+            .window
+            .as_ref()
+            .map(|binding| binding.window.window_id.clone());
         let owner = match &window {
             Some(_) => HUMAN.to_string(),
             None => self.listed_actor(client.agent.as_deref())?,
