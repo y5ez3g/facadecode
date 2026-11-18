@@ -177,8 +177,9 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
 - The first connection to a machine says what it trusts: agents with YOLO on, on any machine with a route to this one,
   can operate this machine's agents.
 - `facade machine list` shows a table of the machines this one connects to and those it saved but cannot connect to
-  now: name, ID, version, route and the SSH connection saved here; `--json` adds every connection and its state;
-  `facade machine remove <machine>` removes a saved connection only.
+  now. Copy a machine's `id:` selector from the ID column. It gives the shortest unique prefix of at least eight
+  hexadecimal digits. The table also shows the name, version, route and SSH connection saved here. `--json` gives
+  every connection and its state. `facade machine remove <machine>` removes a saved connection only.
 - Calls go through other machines when no direct connection exists, by the route that passes the fewest machines.
   When a connection ends, only the routes through it go, and a machine is unreachable only when no route is left.
 - An agent's address names its machine: `#a17@gpu`, or `#a17@id:3f9a2c1d` when names repeat; a message's is `#m42@gpu`.

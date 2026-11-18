@@ -171,11 +171,17 @@ pub fn display_machine_selector(machine: &MachineIdentity, machines: &[MachineId
     {
         return machine.name.clone();
     }
-    let id = compact_id(&machine.machine_id);
+    machine_id_selector(&machine.machine_id, machines)
+}
+
+/// The shortest unique `id:` selector of at least eight hex digits for this machine.
+/// Supply every machine that can be selected by the display's reader.
+pub fn machine_id_selector(machine_id: &str, machines: &[MachineIdentity]) -> String {
+    let id = compact_id(machine_id);
     let mut length = 8;
     for other in machines
         .iter()
-        .filter(|other| other.machine_id != machine.machine_id)
+        .filter(|other| other.machine_id != machine_id)
     {
         let other_id = compact_id(&other.machine_id);
         let shared = id
@@ -215,6 +221,41 @@ pub fn default_machine_name(hostname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id_selectors_are_the_shortest_that_select_one_machine() {
+        let machines = [
+            ("3f9a2c1d-a120-4abc-8def-123456789abc", "gpu"),
+            ("3f9a2c1d-a220-4abc-8def-123456789abc", "gpu"),
+            ("734b9912-1234-4abc-8def-123456789abc", "lab"),
+        ]
+        .map(|(machine_id, name)| MachineIdentity {
+            machine_id: machine_id.into(),
+            name: name.into(),
+        });
+        for (machine, expected) in
+            machines
+                .iter()
+                .zip(["id:3f9a2c1da1", "id:3f9a2c1da2", "id:734b9912"])
+        {
+            let printed = machine_id_selector(&machine.machine_id, &machines);
+            assert_eq!(printed, expected);
+            let selector = parse_machine_selector(&printed).unwrap();
+            assert!(selector.matches(machine));
+            assert_eq!(
+                machines
+                    .iter()
+                    .filter(|other| selector.matches(other))
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(
+            display_machine_selector(&machines[0], &machines),
+            "id:3f9a2c1da1"
+        );
+        assert_eq!(display_machine_selector(&machines[2], &machines), "lab");
+    }
 
     /// The command line prints a17@gpu and m42@gpu; with or without `#`, they are addresses.
     #[test]

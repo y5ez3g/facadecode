@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 
 use anyhow::Context as _;
-use facade_base::address::{display_machine_selector, short_machine_id};
+use facade_base::address::{display_machine_selector, machine_id_selector, short_machine_id};
 use facade_base::daemon::{ClientKind, HelloParams, HelloResult, display_name, methods};
 use facade_base::daemon_client::{DaemonClient, transient_transport};
 use facade_base::jsonrpc::{
@@ -504,7 +504,7 @@ fn print_table(machines: &[MachineInfo], local_machine_id: &str) {
                 .join(", ");
             vec![
                 machine.name.clone(),
-                format!("id:{}", short_machine_id(&machine.machine_id)),
+                machine_id_selector(&machine.machine_id, &identities),
                 machine.build.clone().unwrap_or_default(),
                 route,
                 saved,

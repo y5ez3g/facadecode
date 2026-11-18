@@ -209,7 +209,7 @@ service switch a takeover.
 |---|---|---|
 | machine | One Facade home and the core that manages it. Two Facade homes on the same computer are two machines. Use `facade machine`, `machine.*` and the `machines` topic | node, peer, host (for this) |
 | machine ID | The persistent ID of a machine, stored in its home's database as a lowercase UUID v4 with hyphens and given as `machine_id` | host name, OS machine ID, node ID, peer ID |
-| short ID | The first eight hexadecimal digits of a machine ID after removing hyphens, used for display. An `id:` selector uses a unique prefix of 8 to 32 hexadecimal digits | machine ID, machine name (for this) |
+| short ID | The first eight hexadecimal digits of a machine ID after removing hyphens, used for display. An `id:` selector uses a unique prefix of 8 to 32 hexadecimal digits. The ID column in `facade machine list` prints the shortest such selector | machine ID, machine name (for this) |
 | machine name | The name a machine stores for itself, initially derived from its host name. A person can rename it, and machines can share a name | machine ID, host name (for this) |
 | daemon start ID | A random UUID v4 generated each time the daemon starts and kept in memory. Machine introductions and tables carry it as `boot_id` to recognize the same running daemon on several connections | machine ID, OS boot ID |
 | connection | A direct, bidirectional channel between two machines. A live connection carries one machine session over SSH or a bridge | link, route (for this) |

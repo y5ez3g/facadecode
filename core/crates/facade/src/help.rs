@@ -350,7 +350,8 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "machine list",
-        description: "See the machines this one connects to and how, and the connections saved here.",
+        description: "See the machines this one connects to and how, and the connections saved here. \
+             Copy an ID from the table to select a machine.",
         alias: None,
         examples: &[
             direct(

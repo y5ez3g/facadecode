@@ -2,7 +2,8 @@ List machines
 
 Usage: facade machine list [OPTIONS]
 
-See the machines this one connects to and how, and the connections saved here.
+See the machines this one connects to and how, and the connections saved here. Copy an ID from the
+table to select a machine.
 
 Options:
       --json  Print machines as JSON

@@ -20,7 +20,8 @@ Options:
   -d, --detach
           Start in the background and print the agent's ID
       --machine <MACHINE>
-          Start on another machine
+          Machine name or 'id:' followed by 8 to 32 hex
+          digits from 'facade machine list'
       --cwd <PATH>
           Folder on that machine. Needs '--machine'
           [default: that user's home folder]

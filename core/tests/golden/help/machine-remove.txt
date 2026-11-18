@@ -6,7 +6,7 @@ Remove a saved connection to a machine. Its agents keep running, and other machi
 route to it.
 
 Arguments:
-  <MACHINE>  Machine ID or name
+  <MACHINE>  Machine name or 'id:' followed by 8 to 32 hex digits from 'facade machine list'
 
 Options:
   -h, --help  Print help

@@ -11,6 +11,9 @@ use crate::hooks::HookEvent;
 /// The shells `facade completion` writes a script for.
 const SHELLS: [&str; 4] = ["bash", "zsh", "fish", "powershell"];
 
+const MACHINE_SELECTOR_HELP: &str =
+    "Machine name or 'id:' followed by 8 to 32 hex digits from 'facade machine list'";
+
 #[derive(Parser)]
 #[command(name = "facade", bin_name = "facade", version)]
 pub(crate) struct Arguments {
@@ -65,7 +68,7 @@ pub(crate) enum Command {
             help = "Start in the background and print the agent's ID"
         )]
         detach: bool,
-        #[arg(long, value_name = "MACHINE", help = "Start on another machine")]
+        #[arg(long, value_name = "MACHINE", help = MACHINE_SELECTOR_HELP)]
         machine: Option<String>,
         #[arg(
             long,
@@ -272,12 +275,12 @@ pub(crate) enum MachineAction {
     },
     #[command(about = "Remove a saved connection")]
     Remove {
-        #[arg(value_name = "MACHINE", help = "Machine ID or name")]
+        #[arg(value_name = "MACHINE", help = MACHINE_SELECTOR_HELP)]
         machine: String,
     },
     #[command(about = "Rename a machine")]
     Rename {
-        #[arg(value_name = "MACHINE", help = "Machine ID or name")]
+        #[arg(value_name = "MACHINE", help = MACHINE_SELECTOR_HELP)]
         machine: String,
         #[arg(value_name = "NAME", help = "New name")]
         name: String,

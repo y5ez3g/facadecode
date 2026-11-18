@@ -287,13 +287,20 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     wait_for_route(&first, &second_id, &[&second_id]);
     wait_for_route(&second, &first_id, &[&first_id]);
 
+    let listed = first.run_facade_ok(&["machine", "list"]);
+    let remote_row = listed
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some("second"))
+        .expect("the remote machine has a row");
+    let selector = remote_row.split_whitespace().nth(1).expect("the ID column");
+    assert!(selector.starts_with("id:"), "{listed}");
     let sender = first.start_named_fake("caller", &[]);
     let project = facade_base::files::real_path(&second.project).unwrap();
     let project = project.to_str().unwrap();
     let started = first.run_facade_ok(&[
         "start",
         "--machine",
-        "second",
+        selector,
         "--cwd",
         project,
         "--name",
