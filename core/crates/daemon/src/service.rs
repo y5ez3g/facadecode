@@ -9,10 +9,10 @@ use std::time::Duration;
 use facade_base::daemon::{
     self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
     AgentScreen, AgentSend, AgentStart, AgentStartArgs, AgentState, AgentStop, AgentType,
-    AgentsUpdate, ClientKind, DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog,
-    DaemonLogArgs, DaemonLogResult, DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle,
-    HookPrompt, HookSession, HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState,
-    InspectResult, IntegrationAdd, IntegrationList, IntegrationRemove, MAX_SCREEN_LINES,
+    AgentsUpdate, ClientKind, DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLogArgs,
+    DaemonLogResult, DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle, HookPrompt,
+    HookSession, HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState,
+    InspectResult, IntegrationAdd, IntegrationList, IntegrationRemove, LogRead, MAX_SCREEN_LINES,
     RenameArgs, ResizeArgs, ResumeArgs, ScreenArgs, ScreenBuffer, ScreenText, SendArgs, SendResult,
     SessionStartResult, StartArgs, TypeArgs, WindowDelivery, WindowDescription, WindowUpdate,
     WorktreeCreate, WorktreeCreateArgs,
@@ -20,7 +20,7 @@ use facade_base::daemon::{
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
-    AgentDeliverStartResult, AgentStartPreflight, Caller, ForwardCall, WindowDeliver,
+    AgentCheckStart, AgentDeliverStartResult, Caller, ForwardCall, WindowDeliver,
 };
 use facade_base::operations::{EmptyResult, Operation};
 use facade_base::process::ProcessState;
@@ -262,9 +262,9 @@ impl Daemon {
     ) -> Result<Value, ErrorBody> {
         let acting = client.agent.as_deref();
         match operation {
-            AgentStart::NAME | AgentStartPreflight::NAME => {
+            AgentStart::NAME | AgentCheckStart::NAME => {
                 let args: StartArgs = decode_arguments(args)?;
-                self.start_from_client(client, args, operation == AgentStartPreflight::NAME, cancel)
+                self.start_from_client(client, args, operation == AgentCheckStart::NAME, cancel)
                     .await
             }
             AgentAdopt::NAME => {
@@ -426,7 +426,7 @@ impl Daemon {
                     .take_over(decode_arguments(args)?, self.clone())
                     .await?,
             )),
-            DaemonLog::NAME => {
+            LogRead::NAME => {
                 if client.agent.is_some() {
                     return Err(ErrorBody::refused("daemon.log is for the person's clients"));
                 }
@@ -509,7 +509,7 @@ impl Daemon {
             args.result_message_machine_id = Some(reserved.machine_id);
         }
         let operation = if preflight {
-            AgentStartPreflight::NAME
+            AgentCheckStart::NAME
         } else {
             AgentStart::NAME
         };
@@ -653,12 +653,12 @@ impl Daemon {
             Ok::<_, ErrorBody>(agent)
         };
         match operation.as_str() {
-            AgentStart::NAME | AgentStartPreflight::NAME => {
+            AgentStart::NAME | AgentCheckStart::NAME => {
                 self.accept_forwarded_start(
                     &caller,
                     call,
                     request_id,
-                    operation == AgentStartPreflight::NAME,
+                    operation == AgentCheckStart::NAME,
                 )
                 .await
             }

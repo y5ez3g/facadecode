@@ -2776,8 +2776,8 @@ impl Operation for DaemonUpgrade {
     type Result = UpgradeResult;
 }
 
-pub struct DaemonLog;
-impl Operation for DaemonLog {
+pub struct LogRead;
+impl Operation for LogRead {
     const NAME: &'static str = "daemon.log";
     const DOC: &'static str = "Reads the daemon's log, `core/logs/daemon.log`, which Facade keeps \
                                for 30 days: its last `lines` lines, oldest first. For the person's \
@@ -2832,7 +2832,7 @@ pub fn visit_operations(visitor: &mut impl OperationVisitor) {
     visitor.operation::<WindowUpdate>();
     visitor.operation::<WorktreeCreate>();
     visitor.operation::<DaemonUpgrade>();
-    visitor.operation::<DaemonLog>();
+    visitor.operation::<LogRead>();
 }
 
 pub struct AgentsTopic;
@@ -2955,7 +2955,7 @@ mod tests {
 
     #[test]
     fn starts_and_preflights_keep_the_v2_folder_marker_and_command_vector() {
-        use crate::machine::AgentStartPreflight;
+        use crate::machine::AgentCheckStart;
 
         assert_eq!(
             [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
@@ -2980,7 +2980,7 @@ mod tests {
         let mut remote_default = local;
         remote_default["cwd"] = json!("");
         assert_eq!(serde_json::to_value(forwarded).unwrap(), remote_default);
-        let preflight: <AgentStartPreflight as Operation>::Args =
+        let preflight: <AgentCheckStart as Operation>::Args =
             serde_json::from_value(remote_default.clone()).unwrap();
         assert_eq!(preflight.clone().into_start(true).launch.folder, None);
         assert_eq!(preflight.into_start(false).launch.folder, None);

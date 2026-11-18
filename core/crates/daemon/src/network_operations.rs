@@ -252,7 +252,7 @@ impl Daemon {
             operation,
             AgentResize::NAME
                 | facade_base::daemon::AgentStart::NAME
-                | facade_base::machine::AgentStartPreflight::NAME
+                | facade_base::machine::AgentCheckStart::NAME
         ) {
             client
                 .window

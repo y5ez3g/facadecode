@@ -591,8 +591,8 @@ impl Operation for LocationList {
     type Result = LocationListResult;
 }
 
-pub struct AgentStartPreflight;
-impl Operation for AgentStartPreflight {
+pub struct AgentCheckStart;
+impl Operation for AgentCheckStart {
     const NAME: &'static str = "agent.start_preflight";
     const DOC: &'static str =
         "Checks a start's program and location without starting an agent or making a worktree.";
@@ -647,7 +647,7 @@ pub fn visit_operations(visitor: &mut impl OperationVisitor) {
     visitor.operation::<AgentList>();
     visitor.operation::<CliList>();
     visitor.operation::<LocationList>();
-    visitor.operation::<AgentStartPreflight>();
+    visitor.operation::<AgentCheckStart>();
 }
 
 pub fn visit_internal_operations(visitor: &mut impl OperationVisitor) {
