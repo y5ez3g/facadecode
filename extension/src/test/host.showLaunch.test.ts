@@ -18,7 +18,7 @@ const api = {
 	QuickPickItemKind: { Separator: -1 }
 };
 
-suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () => {
+suite('Show Agent Command Line: its argument and its document (CLIS-4.1, UX-3.1)', () => {
 	const { launchDocument, locationArgument } = withModules({ vscode: api })<typeof import('../host/showLaunch')>(require.resolve('../host/showLaunch'));
 	const now = new Date('2026-10-31T01:02:03Z');
 	const file = TEST_SETTINGS_FILE;
@@ -31,7 +31,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 		...more
 	});
 	const header = [
-		'Agent launch in main',
+		'Agent command line in main',
 		'Working location: /repo',
 		'Computed at 2026-10-31 01:02:03 UTC without starting any CLI. This shows the configuration a new agent would use now, not an observation of a running process. Secret values are <redacted>.'
 	];
@@ -54,9 +54,9 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			'YOLO: off, from yolo in ~/.facade/facade.json; applies to newly started agents',
 			'',
 			'Codex (codex, clis.codex)',
-			'  Status: available',
+			'  State: available',
 			'  Executable: /bin/codex (found on PATH)',
-			'  Working directory: /repo',
+			'  Folder: /repo',
 			'  Environment layers, lowest precedence first: the extension host\'s environment → clis.codex.env → all agents',
 			'    CODEX_HOME set (clis.codex.env)',
 			'    ELECTRON_RUN_AS_NODE removed (all agents)',
@@ -68,7 +68,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			'  YOLO: off',
 			'  Sandbox: on, by --sandbox workspace-write',
 			'  Approvals: the CLI\'s own',
-			'  Trust: for this launch alone, by -c "a b"',
+			'  Trust: for this start alone, by -c "a b"',
 			''
 		]);
 	});
@@ -133,19 +133,19 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 		const missing = sections(codex({ program: { missing: 'codex was not found', said: { kind: 'not_on_path', values: ['codex', '/repo', 'clis.codex.program'] } }, args: undefined, trust: undefined }));
 		const unsafe = sections(codex({ planProblem: { text: 'refused', said: { kind: 'cmd_unsafe_setting', values: ['codex.cmd', 'clis.codex.args', '1', '"!"', 'clis.codex.program'] } }, args: undefined, trust: undefined }));
 		assert.deepStrictEqual([off[1], off.find(line => line.startsWith('  Arguments')), wrong.slice(1, 5), missing.slice(1, 3), unsafe[1]], [
-			'  Status: off; clis.codex.enabled is false, so New Agent does not offer it',
+			'  State: off; clis.codex.enabled is false, so New Agent does not offer it',
 			'  Arguments: none; CLI cannot start with current configuration',
 			[
-				'  Status: cannot start until configuration errors are fixed',
+				'  State: cannot start until configuration errors are fixed',
 				'  Configuration errors:',
 				'    - clis.codex.args[0] is --yolo, which Facade sets or decides itself; remove it',
 				'  Executable: unresolved until configuration errors are fixed'
 			],
 			[
-				'  Status: cannot start: codex was not found on PATH in /repo, and clis.codex.program does not name its location',
+				'  State: cannot start: codex was not found on PATH in /repo, and clis.codex.program does not name its location',
 				'  Executable: not found: codex was not found on PATH in /repo, and clis.codex.program does not name its location'
 			],
-			'  Status: cannot start: codex.cmd runs via cmd.exe, which cannot safely accept clis.codex.args[1] containing "!"; set clis.codex.program to the CLI executable or Node entry point'
+			'  State: cannot start: codex.cmd runs via cmd.exe, which cannot safely accept clis.codex.args[1] containing "!"; set clis.codex.program to the CLI executable or Node entry point'
 		]);
 		assert.strictEqual(launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: true, launches: [], entries: [], problems: [], file, now }).split('\n')[1], 'Working location: /repo (SSH: build)');
 	});
@@ -159,7 +159,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 		const text = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: true, launches: [program], entries: [], problems: [], file, now }).split('\n');
 		assert.deepStrictEqual(text.slice(5, 8).concat(text.slice(-6)), [
 			'my cli (my cli, clis["my cli"])',
-			'  Status: available',
+			'  State: available',
 			'  Executable: /bin/my-cli (from clis["my cli"].command "my-cli")',
 			'    --fast',
 			'  YOLO: not applied; a custom CLI starts exactly as configured',
@@ -197,13 +197,13 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			launchDocument({ gone: 'shop · login-fix', yolo: true, launches: [], entries: [], problems: [], file, now })
 		], [
 			[
-				'No folder is open. Open a folder to view agent launch details.',
+				'No folder is open. Open a folder to view agent command lines.',
 				'Computed at 2026-10-31 01:02:03 UTC without starting any CLI. This shows the configuration a new agent would use now, not an observation of a running process. Secret values are <redacted>.',
 				'YOLO: on, from yolo in ~/.facade/facade.json; applies to newly started agents',
-				'', 'Codex (codex, clis.codex)', '  Status: off; clis.codex.enabled is false, so New Agent does not offer it', '  Configuration errors: none',
+				'', 'Codex (codex, clis.codex)', '  State: off; clis.codex.enabled is false, so New Agent does not offer it', '  Configuration errors: none',
 				'', 'Pi (pi, clis.pi)', '  Configuration errors:', '    - clis.pi.enabled must be true or false; received string', ''
 			],
-			'Working location shop · login-fix is no longer available. Run Show Agent Launch again to choose another.\n'
+			'Working location shop · login-fix is no longer available. Run Show Agent Command Line again to choose another.\n'
 		]);
 	});
 });

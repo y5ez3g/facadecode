@@ -351,4 +351,19 @@ suite('Localization: the words each language has for Facade\'s things (UX-2.4)',
 		}
 		assert.deepStrictEqual(wrong, []);
 	});
+
+	test('the command line preview names the commands as they appear in the palette', () => {
+		const missing = 'Working location {0} is no longer available. Run Show Agent Command Line again to choose another.';
+		const off = 'State: off; {0}.enabled is false, so New Agent does not offer it';
+		for (const locale of ['', ...LOCALES]) {
+			const suffix = locale ? `.${locale}` : '';
+			const nls = readJson(path.join(ROOT, 'l10n', `package.nls${suffix}.json`));
+			const bundle = readJson(path.join(ROOT, 'l10n', `bundle.l10n${suffix}.json`));
+			for (const [command, text] of [['showAgentLaunch', missing], ['newAgent', off]]) {
+				const title = textOf(nls[`command.${command}`]);
+				assert.ok(title.endsWith('...'), title);
+				assert.ok(textOf(bundle[text]).includes(title.slice(0, -3)), `package.nls${suffix}.json: ${title}`);
+			}
+		}
+	});
 });

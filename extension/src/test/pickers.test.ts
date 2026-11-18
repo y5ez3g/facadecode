@@ -1113,7 +1113,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			], [MAIN.id, [MAIN.id, LOGIN.id], MAIN.id, MAIN.id]);
 		});
 
-		test('Show Agent Launch offers no Resume cwd within a location: with one location besides it, that one is shown without asking', async () => {
+		test('Show Agent Command Line offers no Resume cwd within a location: with one location besides it, that one is shown without asking', async () => {
 			const { chosen } = withModules({ vscode: { window: { createQuickPick: () => { throw new Error('asked'); } }, ThemeIcon: class { }, Uri: { from: (parts: object) => parts }, QuickPickItemKind: { Separator: -1 }, l10n: { t: (text: string) => text } } })<typeof import('../host/showLaunch')>(require.resolve('../host/showLaunch'));
 			const locations = { snapshot: () => ({ locations: [NESTED, MAIN], folders: [SHOP], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: () => ({ dispose() { } }) } as never;
 			assert.strictEqual((await chosen(locations, undefined, { event: () => undefined } as never))?.id, MAIN.id);
@@ -1598,7 +1598,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		});
 	});
 
-	suite('Show Agent Launch: its location', () => {
+	suite('Show Agent Command Line: its location', () => {
 		const log = { event: () => undefined };
 		const locationsOf = (catalog: () => Catalog, changed = new TestEmitter<void>()) => ({ snapshot: catalog, refresh: async () => undefined, onDidChange: changed.event });
 		// Its folder with two locations second, so that Back's highlight is not merely the first row's
@@ -1630,8 +1630,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await settle();
 			ui.current!.hide();
 			assert.deepStrictEqual([first, inFolder, back, login?.id, guide?.id, await choosing], [
-				['Show Agent Launch', 'Select a folder', ['docs', 'shop'], ['/', '/'], ['folder', 'repo'], 0],
-				['Show Agent Launch · shop', 'Select a working location', ['main', 'login-fix'], 1],
+				['Show Agent Command Line', 'Select a folder', ['docs', 'shop'], ['/', '/'], ['folder', 'repo'], 0],
+				['Show Agent Command Line · shop', 'Select a working location', ['main', 'login-fix'], 1],
 				[['docs', 'shop'], ['shop']],
 				LOGIN.id,
 				GUIDE.id,
@@ -1650,10 +1650,10 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			choosing = chooseLaunchLocation(locationsOf(() => one), log);
 			await settle();
 			ui.current!.hide();
-			assert.deepStrictEqual([shown, login?.id, await choosing], [['Show Agent Launch', 'Select a working location', ['main', 'login-fix'], ['/main', '/login-fix'], true], LOGIN.id, null]);
+			assert.deepStrictEqual([shown, login?.id, await choosing], [['Show Agent Command Line', 'Select a working location', ['main', 'login-fix'], ['/main', '/login-fix'], true], LOGIN.id, null]);
 		});
 
-		test('Show Agent Launch preserves literal location labels and paths while returning the original location', async () => {
+		test('Show Agent Command Line preserves literal location labels and paths while returning the original location', async () => {
 			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
 			const literal = { ...MAIN, label: '$(git-branch) main', path: '/$(folder)/main' };
 			const choosing = chooseLaunchLocation(locationsOf(() => ({ folders: [SHOP], locations: [literal], pending: false })), log);

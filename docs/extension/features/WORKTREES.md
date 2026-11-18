@@ -33,9 +33,9 @@ order does not choose the launch default: LIFECYCLE-1.2 retains the remembered l
 The catalog keeps the opened location first within each folder for that fallback; the picker orders a copy for display.
 A workspace folder opened explicitly - a repository's subfolder among them - is a launch location of its own. A
 successful Resume whose conversation's exact cwd lies below an existing location, its anchor, runs in that exact cwd:
-the window keeps the cwd internally, as a record within its anchor, and makes it no other location - no picker, Show
-Agent Launch or MCP launch location offers it - its agents showing and counting as the anchor's (PANEL-1.5, 2.3). An
-agent there reports and filters by its anchor's `location_id`, its `cwd` exact (MCP-3.1), counts and targeted discovery
+the window keeps the cwd internally, as a record within its anchor, and makes it no other location - no picker,
+Show Agent Command Line or MCP launch location offers it - its agents showing and counting as the anchor's
+(PANEL-1.5, 2.3). An agent there reports and filters by its anchor's `location_id`, its `cwd` exact (MCP-3.1), counts and targeted discovery
 using the anchor too; a `location_id` formerly issued for the cwd itself normalizes to its anchor for a new start, while
 Resume and removal keep the exact cwd and its internal record. New Agent's remembered default for such a cwd likewise
 normalizes to its anchor (LIFECYCLE-1.2). An unavailable cwd is never registered. Confirmed deletion of that cwd's

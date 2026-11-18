@@ -176,7 +176,7 @@ description as it changes, as the window regains focus and as a picker refreshes
 connection's bound window. The extension shares UI surfaces between engines and wires the Rust member search
 and restoration into them when on Rust. Core's errors show in the person's language by their reason, core's own
 words after. The window starts no ptyd, shim or Facade tools of its own,
-keeps no record of its agents, and offers no Show Agent Launch. The window component is the same for both engines: an
+keeps no record of its agents, and offers no Show Agent Command Line. The window component is the same for both engines: an
 old-engine agent's request to a Rust window finds it unavailable.
 
 Stop Agent calls `agent.stop` for a running agent. Stops and exits record the conversation in `conversations/`

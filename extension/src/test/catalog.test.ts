@@ -32,7 +32,7 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.showAgentDetails', 'Show Agent Details'],
 	['facade.filter', 'Filter by Working Location...', '$(filter)'],
 	['facade.openSettings', 'Open Settings'],
-	['facade.showAgentLaunch', 'Show Agent Launch...'],
+	['facade.showAgentLaunch', 'Show Agent Command Line...'],
 	['facade.showAgentsLog', 'Show Agents Log']
 ];
 /** The moved notice where VS Code cannot show a link (CONFIGURATION-6.3). */
@@ -48,7 +48,7 @@ const HIDDEN: readonly [string, string, string?][] = [
 	['facade.openSettingsFile', 'Open facade.json']
 ];
 /**
- * Registered by the host itself rather than the panel: New Worktree, Show Agent Launch and Show Agents Log beside the CLIs and the log,
+ * Registered by the host itself rather than the panel: New Worktree, Show Agent Command Line and Show Agents Log beside the CLIs and the log,
  * and Open Settings File beside the settings file.
  */
 const HOST_COMMANDS = ['facade.newWorktree', 'facade.showAgentLaunch', 'facade.showAgentsLog', 'facade.openSettingsFile'];
@@ -128,7 +128,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		// These commands are in the Command Palette alone (PANEL-1.1); Open Settings is in it too.
 		const palette = ['facade.goToAgent', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
-		// Show Agent Launch is hidden from the palette only on the Rust engine, which has no launch view
+		// Show Agent Command Line is hidden from the palette only on the Rust engine, which has no launch view
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette.filter(command => command !== 'facade.showAgentLaunch'), 'facade.openSettings'].includes(each.command)));
 	});
 
@@ -218,7 +218,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Show Agent Launch, Show Agents Log and Open Settings File (UX-3.2, E03)', () => {
+		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Show Agent Command Line, Show Agents Log and Open Settings File (UX-3.2, E03)', () => {
 			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id) && id !== 'facade.resumeAgent');
 			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
 		});

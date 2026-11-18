@@ -191,7 +191,7 @@ are validated against current state, without falling back to the selection.
 | `showAgentDetails` | Show Agent Details | A selected record whose card the filter shows; the card's ⓘ | PANEL-1.5 |
 | `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
 | `openSettings` | Open Settings | Always; panel `…` menu, New Agent's gear and configuration entries; opens the Settings section or remote facade.json under CONFIGURATION-1.2 | CONFIGURATION-1.2 |
-| `showAgentLaunch` | Show Agent Launch... | Always; Command Palette | CLIS-4.1 |
+| `showAgentLaunch` | Show Agent Command Line... | Old engine; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 

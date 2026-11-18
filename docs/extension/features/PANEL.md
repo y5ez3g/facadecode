@@ -28,7 +28,7 @@ supported minimum. The view's native `Views and More Actions...` (`…`) menu ho
 editor's command), then New Worktree... when a workspace folder is open, followed by Open Settings in a separate
 group. Open Settings follows CONFIGURATION-1.2: Facade Code's Settings section and its Edit in facade.json link, or
 facade.json directly for a remote window whose Settings open as JSON, including file creation and migration conflicts.
-Go to Agent..., Show Agent Launch... and Show Agents Log are Command Palette entries, not view-menu items.
+Go to Agent..., Show Agent Command Line... and Show Agents Log are Command Palette entries, not view-menu items.
 Facade commands use the titles and flows in UX-3.1. The badge counts this window's cards, including starting,
 retained-error and temporarily disconnected records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does
 not change the underlying card count.

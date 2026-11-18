@@ -420,7 +420,7 @@ folder and environment; new worktree paths follow CLIS-4.2's staged checks.
 **Facade shows the names and sources of the person's environment variables, never their values; the fixed values Facade itself sets are shown.**
 
 The person's values come from the execution host environment, `terminal.integrated.env`, the terminal profile's
-`env`, or the entry's `env`. Errors, logs, diagnostics, API listings and Show Agent Launch show only their names and
+`env`, or the entry's `env`. Errors, logs, diagnostics, API listings and Show Agent Command Line show only their names and
 sources. This includes their values embedded in generated arguments or files: redact the structured values before
 serialization. Facade's own constant values are shown, such as `TERM_PROGRAM=vscode`, `COLORTERM=truecolor` and
 `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`. Values Facade generates for each run, such as its run ID, launch context and
@@ -434,7 +434,7 @@ A secret option also hides its next argument when that value starts with one das
 `--api-key=abc`, `-c service_token=abc` and `--token -abc` all hide their values.
 This is not a promise to recognize every secret format an arbitrary custom program accepts.
 
-When a launch passes a per-run settings file, Show Agent Launch also shows its JSON. This applies to Claude and
+When a launch passes a per-run settings file, Show Agent Command Line also shows its JSON. This applies to Claude and
 Antigravity. Hide the person's environment values and other secret values inside it, and use placeholders for
 per-run values, just as in the arguments. The preview does not write the file (CLIS-4.1).
 

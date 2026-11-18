@@ -648,12 +648,14 @@ report its state stays unknown, not an integration error (CONFIGURATION-2.3).
 
 ## 4 Inspection and design
 
-### 4.1 Show Agent Launch...
+### 4.1 Show Agent Command Line...
 
-**Show Agent Launch... displays a start's effective launch and actual known choices without running a CLI.**
+**Show Agent Command Line... displays the command line an agent would use, with its source and settings.**
 
-Show executable/environment source, cwd, literal argument order, resulting YOLO, native sandbox/approval facts, how the
-folder is trusted and configuration errors. It includes the arguments and variables the Facade tools (2.2) and session
+The old engine opens a read-only document titled `Agent Command Line` headed `Agent command line in {0}`.
+The picker uses `Show Agent Command Line`, with ` · {folder}` appended at the second step.
+Show executable and environment sources, the folder, literal argument order, resulting YOLO, native sandbox and
+approval facts, folder trust and configuration errors. It includes the arguments and variables the Facade tools (2.2) and session
 tracking (2.4) add at a start, in their literal order, without writing any launch file to show them: a value that exists
 only once a start makes it - a generated path or session ID - appears as a named placeholder, and what cannot be planned
 without writing files is said in words. Use one launch configuration and RULES-4.3's YOLO source. A chosen inspection
@@ -719,7 +721,7 @@ installed CLI is the runtime evidence.
 | 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, terminal and report titles rejected for each built-in (2.3), Muse Code's screen reader on its fixtures and its reports' precedence |
 | 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks; native-title refresh at 2.4's read times, its cache and its retention across reattachment, as VERIFICATION U14 checks |
 | 3.1–3.4 | Literal arguments, reserved-option tables and aliases, short clusters and attached values, Go single-dash options, end marker versus a required value, parent/child config conflicts, per-CLI dash-prefixed values read consistently by validation/migration/settings extraction/list merging/hook merging, additive integrations and settings/hooks merges, run settings with POSIX 0600 and inherited Windows permissions, Antigravity's file with and without tools or identity tracking, Claude null conflicts, custom-program limits, native prompt mapping, folder trust and user configuration preserved |
-| 4.1–4.2 | Show Agent Launch describes and redacts the configured launch and run-settings JSON, writes no preview files, and says where no trust entry is written; staged cwd validation |
+| 4.1–4.2 | Show Agent Command Line describes and redacts the configured launch and run-settings JSON, writes no preview files, and says where no trust entry is written; staged cwd validation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes; no claim inferred from a dated observation |
 
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.

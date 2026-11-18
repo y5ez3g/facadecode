@@ -454,13 +454,13 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		]);
 	});
 
-	test('CLIS-4.1, ARCHITECTURE-3.3: Show Agent Launch shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log', async function () {
+	test('CLIS-4.1, ARCHITECTURE-3.3: Show Agent Command Line shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log', async function () {
 		// Once, with the first built-in: the documents are the window's, whatever the CLI
 		if (CLI !== 'claude') {
 			this.skip();
 		}
 		const before = (await state()).cardCount;
-		// The Rust engine has no Show Agent Launch (the specification takes it away); its log is core's own
+		// The Rust engine has no Show Agent Command Line (the specification takes it away); its log is core's own
 		if (RUST) {
 			await vscode.commands.executeCommand('facade.showAgentsLog');
 			const log = await until('the log document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-agents-log'));
@@ -477,11 +477,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			return undefined;
 		});
 		await showing;
+		assert.strictEqual(launch.uri.path, '/Agent Command Line');
 		const text = launch.getText();
-		assert.match(text, /^Agent launch in /);
+		assert.match(text, /^Agent command line in /);
 		assert.match(text, /^YOLO: on, from yolo in .*facade\.json; applies to newly started agents$/m);
 		for (const name of ['Claude Code (claude, clis.claude)', 'Codex (codex, clis.codex)', 'Pi (pi, clis.pi)']) {
-			assert.ok(text.includes(`\n${name}\n  Status: available\n`), `${name} available in:\n${text}`);
+			assert.ok(text.includes(`\n${name}\n  State: available\n`), `${name} available in:\n${text}`);
 		}
 		assert.ok(text.includes('\n    --dangerously-skip-permissions\n'), text);
 		assert.strictEqual((await state()).cardCount, before, 'no agent was started');
