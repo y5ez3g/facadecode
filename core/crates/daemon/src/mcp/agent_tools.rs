@@ -6,7 +6,7 @@ use std::path::Path;
 use facade_base::address::{exact_machine_selector, parse_machine_selector};
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, DEFAULT_TERMINAL_SIZE,
-    StartArgs, TERMINAL_WINDOW, WaitKind, WindowInfo, WindowRef, WindowsTopic, Worktree,
+    LocationInfo, LocationKind, StartArgs, WaitKind, WindowInfo, WindowRef, WindowsTopic, Worktree,
     check_message_text,
 };
 use facade_base::daemon_client::DaemonClient;
@@ -39,27 +39,6 @@ pub(super) fn check_start(arguments: &Map<String, Value>, problems: &mut Problem
     if let Some(Err(problem)) = prompt.map(check_message_text) {
         problems.add(problem);
     }
-}
-
-/// The folders a window's agents can work in: its locations' paths, worktrees included, each once.
-fn folders_of(window: &WindowInfo) -> Vec<&str> {
-    let mut folders = Vec::new();
-    for location in &window.locations {
-        if !folders.contains(&location.path.as_str()) {
-            folders.push(location.path.as_str());
-        }
-    }
-    folders
-}
-
-/// The CLIs that can start in a window now.
-fn available_clis(window: &WindowInfo) -> Vec<&str> {
-    window
-        .clis
-        .iter()
-        .filter(|known| known.available)
-        .map(|known| known.cli.as_str())
-        .collect()
 }
 
 /// Resolve both selectors against the same machine list. Either selector defaults to the
@@ -321,19 +300,36 @@ fn agent_row(agent: &AgentInfo, local_machine: &str) -> Value {
     row
 }
 
-/// A window as `list_agents` shows it, including folders and available CLIs while connected.
+/// A v2 location in the MCP result, using its public kind and folder field.
+fn location_row(location: &LocationInfo) -> Option<Value> {
+    let kind = match location.kind {
+        LocationKind::Folder => "folder",
+        LocationKind::Main => "main_checkout",
+        LocationKind::Worktree => "worktree",
+        LocationKind::Unknown => return None,
+    };
+    Some(json!({
+        "location_id": location.location_id, "label": location.label,
+        "folder": location.path, "kind": kind,
+    }))
+}
+
+/// A window as `list_agents` shows it, including launch locations and CLI facts while connected.
 fn window_row(window: &WindowInfo) -> Value {
     let mut row = json!({
         "id": window.window_id, "machine_id": window.machine_id,
         "name": window.label, "connected": window.connected,
     });
-    if !window.connected {
-        return row;
+    if window.connected {
+        row["locations"] = json!(
+            window
+                .locations
+                .iter()
+                .filter_map(location_row)
+                .collect::<Vec<_>>()
+        );
+        row["clis"] = json!(window.clis);
     }
-    if window.window_id != TERMINAL_WINDOW {
-        row["folders"] = json!(folders_of(window));
-    }
-    row["clis"] = json!(available_clis(window));
     row
 }
 

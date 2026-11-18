@@ -108,7 +108,7 @@
               "readOnlyHint": true,
               "openWorldHint": false
             },
-            "description": "List reachable agents and windows. Agent rows give address, machine_id and windows. data.machines gives machine_id, short_id, name, build, status and answered_at. Long lists return data.file.",
+            "description": "List reachable agents. Connected windows give locations and clis. Agents give address, machine_id and windows. Machines give machine_id, short_id, name, build, status and answered_at. Long lists use data.file.",
             "inputSchema": {
               "type": "object",
               "properties": {},
@@ -348,8 +348,90 @@
             "machine_id": "<machine ID>",
             "name": "Terminal",
             "connected": true,
+            "locations": [
+              {
+                "location_id": "<project location>",
+                "label": "project",
+                "folder": "<test>/project",
+                "kind": "folder"
+              }
+            ],
             "clis": [
-              "fake"
+              {
+                "cli": "claude",
+                "display_name": "Claude Code",
+                "available": false,
+                "problem": "claude was not found on the PATH of a terminal in <test>/project, and clis.claude.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "codex",
+                "display_name": "Codex",
+                "available": false,
+                "problem": "codex was not found on the PATH of a terminal in <test>/project, and clis.codex.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "agy",
+                "display_name": "Antigravity",
+                "available": false,
+                "problem": "agy was not found on the PATH of a terminal in <test>/project, and clis.agy.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "muse",
+                "display_name": "Muse Code",
+                "available": false,
+                "problem": "muse was not found on the PATH of a terminal in <test>/project, and clis.muse.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "opencode",
+                "display_name": "OpenCode",
+                "available": false,
+                "problem": "opencode was not found on the PATH of a terminal in <test>/project, and clis.opencode.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": false,
+                  "effort": false
+                }
+              },
+              {
+                "cli": "pi",
+                "display_name": "Pi",
+                "available": false,
+                "problem": "pi was not found on the PATH of a terminal in <test>/project, and clis.pi.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "fake",
+                "display_name": "Fake CLI",
+                "available": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              }
             ]
           }
         ],

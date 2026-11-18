@@ -73,7 +73,7 @@
       "readOnlyHint": true,
       "openWorldHint": false
     },
-    "description": "List reachable agents and windows. Agent rows give address, machine_id and windows. data.machines gives machine_id, short_id, name, build, status and answered_at. Long lists return data.file.",
+    "description": "List reachable agents. Connected windows give locations and clis. Agents give address, machine_id and windows. Machines give machine_id, short_id, name, build, status and answered_at. Long lists use data.file.",
     "inputSchema": {
       "type": "object",
       "properties": {},

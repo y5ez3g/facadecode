@@ -642,10 +642,13 @@ fn starts_keep_members_and_location_sources_separate() {
     let repo = base(&home).join("app");
     repository(&repo);
     std::fs::create_dir_all(base(&home).join("app.worktrees/review")).unwrap();
+    let notes = base(&home).join("notes");
+    std::fs::create_dir(&notes).unwrap();
+    let notes = real(&notes);
     let folder = real(&repo);
     let (mut wire, source) = ide_binding(
         &home,
-        &window("win-1", Some("one"), std::slice::from_ref(&folder)),
+        &window("win-1", Some("one"), &[folder.clone(), notes.clone()]),
     );
     let boss = start_fake(&mut wire, &home, &source, &folder, "boss");
     let parent = agent(&home, &boss);
@@ -709,10 +712,6 @@ fn starts_keep_members_and_location_sources_separate() {
     let reviewer = home.agent_from_list_json("reviewer").unwrap();
     assert_eq!(reviewer["location_source_window"], json!(source));
     assert_eq!(reviewer["windows"], memberships(&[&away]));
-    assert!(
-        places(&listed(&home, &source.window_id).unwrap())
-            .contains(&(path.clone(), "worktree".into()))
-    );
 
     let again = mcp.call("start_agent", worktree);
     assert!(
@@ -723,28 +722,72 @@ fn starts_keep_members_and_location_sources_separate() {
         "{again}"
     );
     let list = mcp.call("list_agents", json!({}));
-    let windows = list["data"]["windows"].as_array().unwrap();
+    let windows = list["data"]["windows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{list}"));
     let connected = windows
         .iter()
         .find(|window| window["id"] == source.window_id)
         .unwrap();
     assert_eq!(connected["connected"], true, "{connected}");
-    assert!(
-        connected["folders"]
-            .as_array()
-            .unwrap()
-            .contains(&json!(path))
-    );
+    assert!(connected.get("folders").is_none(), "{connected}");
+    let locations = connected["locations"].as_array().unwrap();
+    let snapshot = listed(&home, &source.window_id).unwrap();
+    let wire_locations = snapshot["locations"].as_array().unwrap();
+    assert_eq!(locations.len(), 3, "{connected}");
+    for (folder, wire_kind, mcp_kind) in [
+        (&notes, "folder", "folder"),
+        (&folder, "main", "main_checkout"),
+        (&path, "worktree", "worktree"),
+    ] {
+        let wire_location = wire_locations
+            .iter()
+            .find(|location| location["path"] == folder.as_str())
+            .unwrap();
+        assert_eq!(wire_location["kind"], wire_kind, "{wire_location}");
+        assert!(
+            locations.contains(&json!({
+                "location_id": wire_location["location_id"], "label": wire_location["label"],
+                "folder": folder, "kind": mcp_kind,
+            })),
+            "{connected}"
+        );
+    }
     let offline = windows
         .iter()
         .find(|window| window["id"] == away.window_id)
         .unwrap();
-    assert_eq!(offline["connected"], false, "{offline}");
-    assert_eq!(offline["machine_id"], source.machine_id, "{offline}");
-    assert!(
-        offline.get("folders").is_none() && offline.get("clis").is_none(),
-        "{offline}"
+    assert_eq!(
+        offline,
+        &json!({
+            "id": away.window_id, "machine_id": away.machine_id,
+            "name": "win-away window", "connected": false,
+        })
     );
+
+    // One long label makes the same rows travel in a file.
+    let mut description = window("win-empty", None, &[]);
+    description["label"] = json!("x".repeat(8_000));
+    let (_empty, empty) = ide_binding(&home, &description);
+    let long = mcp.call("list_agents", json!({}));
+    assert_eq!(long["status"], "success", "{long}");
+    let file = long["data"]["file"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{long}"));
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    let saved = data["windows"].as_array().unwrap();
+    for row in windows {
+        assert!(
+            saved.contains(row),
+            "window missing from the long list: {row}"
+        );
+    }
+    let empty = saved
+        .iter()
+        .find(|row| row["id"] == empty.window_id)
+        .unwrap();
+    assert_eq!(empty["locations"], json!([]), "{empty}");
+    assert!(empty["clis"].is_array(), "{empty}");
 }
 
 /// Two creations of one branch sent together take turns: one makes the worktree, and the other is

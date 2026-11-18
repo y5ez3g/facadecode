@@ -219,14 +219,32 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
     let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     let rows = ada.call("list_agents", json!({}))["data"]["windows"][0]["clis"].clone();
+    let rows = rows.as_array().unwrap();
     let named: Vec<&str> = rows
-        .as_array()
-        .unwrap()
         .iter()
-        .filter_map(Value::as_str)
+        .map(|row| row["cli"].as_str().unwrap())
         .filter(|cli| ["fake", "fake work", "oc", "off", "bad"].contains(cli))
         .collect();
-    assert_eq!(named, ["fake", "fake work", "oc"], "{rows}");
+    assert_eq!(named, ["fake", "fake work", "oc", "bad"], "{rows:?}");
+    let info = |cli: &str| rows.iter().find(|row| row["cli"] == cli).unwrap();
+    assert_eq!(
+        info("fake work"),
+        &json!({
+            "cli": "fake work", "display_name": "fake work", "available": true,
+            "overrides": { "model": true, "effort": true },
+        })
+    );
+    assert_eq!(info("oc")["available"], true);
+    assert_eq!(info("oc")["overrides"]["effort"], false);
+    let bad_row = info("bad");
+    assert_eq!(bad_row["available"], false, "{bad_row}");
+    assert!(
+        bad_row["problem"]
+            .as_str()
+            .unwrap()
+            .starts_with("clis.bad.icon must be one of"),
+        "{bad_row}"
+    );
     let start = |cli: &str, more: Value| {
         let mut call = json!({ "name": "worker", "cli": cli, "window": "terminal", "path": cwd });
         call.as_object_mut()
@@ -698,7 +716,10 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
     let rows = w.call("list_agents", json!({}))["data"]["windows"][0]["clis"].clone();
     for cli in ["fake", "homed", "here"] {
         assert!(
-            rows.as_array().unwrap().iter().any(|row| row == cli),
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["cli"] == cli && row["available"] == true),
             "{cli} listed available: {rows}"
         );
     }

@@ -214,8 +214,13 @@ or automatic creator progress report.
 
 **One query returns window discovery and agents within the caller's reach.**
 
-On Rust, window rows include `machine_id` and `connected`. Disconnected windows remain listed with no folders or
-CLIs. An agent row has its `machine_id` and a `windows` array of references containing `machine_id` and `window_id`.
+On Rust, a disconnected window gives `id`, `machine_id`, `name` and `connected`. A connected window, including the
+terminal window, also gives `locations` and `clis` arrays, including when empty. A location gives `location_id`, `label`,
+its absolute path as `folder`, and `kind` as `folder`, `main_checkout` or `worktree`. Each CLI gives `cli`,
+`display_name`, `available` and `overrides` with `model` and `effort` booleans. It can also give `problem` and
+`not_installed: true`. A long result writes the complete list object to the file named by `data.file`, with the same rows.
+
+An agent row has its `machine_id` and a `windows` array of references containing `machine_id` and `window_id`.
 Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
 Equal timestamps are ordered by machine ID, then by numeric agent ID.
 The rest of this rule describes the old-engine result and its connected-window scope.

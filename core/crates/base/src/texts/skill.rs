@@ -34,9 +34,10 @@ type_text and press_keys. Each answers with `status`: success, with `data` where
 `start_agent({cli: \"codex\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`
 starts Codex in that folder with your window membership. Its `data.id`, such as \"#a7\", addresses it from then on.
 Its run takes YOLO from `facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person
-set it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows, with folders
-and CLIs for connected windows. It lists the agents you reach, including ended agents. With YOLO off you can reach agents
-in your creation tree. Use an ID when a name matches more than one agent.
+set it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows. Connected
+windows list launch `locations`, each with a `folder`, and CLI availability in `clis`. The tool lists the agents you reach,
+including ended agents. With YOLO off you can reach agents in your creation tree. Use an ID when a name matches more
+than one agent.
 
 ## Messages
 
