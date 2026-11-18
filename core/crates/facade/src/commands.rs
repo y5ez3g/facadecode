@@ -78,7 +78,6 @@ pub(crate) fn start(
         command: words.command,
         name: words.name,
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
-        window_id: None,
         window: None,
         location_source_window: None,
         env: environment(),
@@ -119,7 +118,6 @@ pub(crate) fn resume(
         env: environment(),
         cols,
         rows,
-        window_id: None,
     })?;
     Ok(announce(&resumed, "resumed", terminal))
 }

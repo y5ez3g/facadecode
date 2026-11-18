@@ -272,10 +272,6 @@ impl Daemon {
             cli: record.cli,
             cwd: record.cwd,
             machine_id: self.machine_id.clone(),
-            window_id: record.windows.first().map_or_else(
-                || facade_base::daemon::TERMINAL_WINDOW.to_owned(),
-                |window| window.window_id.clone(),
-            ),
             windows: record.windows,
             location_source_window: record.location_source_window,
             created_at: record.created_at,

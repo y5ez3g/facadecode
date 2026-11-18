@@ -69,10 +69,6 @@ pub struct Place<'a> {
 /// The place of `agent`, with the name that `windows` give its sole member window.
 pub fn place_of<'a>(agent: &'a AgentInfo, windows: &'a [WindowInfo]) -> Place<'a> {
     let window = match agent.windows.as_slice() {
-        [] => Some((
-            window_name(&agent.machine_id, &agent.window_id, windows),
-            agent.window_id.as_str(),
-        )),
         [window] => Some((
             window_name(&window.machine_id, &window.window_id, windows),
             window.window_id.as_str(),

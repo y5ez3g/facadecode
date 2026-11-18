@@ -20,8 +20,8 @@ Connect to the socket and retry `hello` for up to 10 seconds. A successful `hell
 alone does not.
 
 The daemon accepts connections after recovering its agents and screens. Recovery can take longer than one connection
-attempt. Temporary transport failures can be retried. A decoded refusal, an invalid response, or a permission or configuration
-error ends the attempt; report that error instead of treating the service as absent. `facade` commands follow these rules.
+attempt. A client can retry temporary transport failures. Report a decoded refusal, invalid response, permission error,
+or configuration error.
 
 Nothing runs at login. A command starts the keeper, and the keeper starts the daemon; `hello.keeper` is absent while no keeper
 runs. The daemon exits after 5 seconds with no running agent, connected client, or unfinished work, and the keeper, holding no
@@ -45,10 +45,10 @@ Wait for a successful `hello` before using the connection. In this example, `→
 message. The redraw's base64 value is abbreviated.
 
 ```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[1,1],"build":"1.4.2","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"build":"1.4.2","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[2,2],"build":"1.4.2","kind":"terminal"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"command":["claude"],"cwd":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
-← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","name":"Pixel","cli":"claude","cwd":"/Users/me/project","window_id":"terminal","location_id":"loc-5f3c2a1b9e8d7c60","pid":5001,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:22:05.123Z","root":"a1","yolo":false,"state":"starting","tools_state":"connecting"}}}
+← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","name":"Pixel","cli":"claude","cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","windows":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","window_id":"terminal"}],"location_id":"loc-5f3c2a1b9e8d7c60","pid":5001,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:22:05.123Z","root":"a1","yolo":false,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"agent":"a1"}}}
 ← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","cols":120,"rows":30,"redraw":"G1s/MjAyNmw…","process":"running"}}}
 ← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"output","data":"aGVsbG8="}}}
@@ -77,9 +77,9 @@ most 2^53 - 1. The daemon keeps both counters in `core/facade.db` before respond
 editor's; lower values change nothing. A number above that limit, or `numbers_given` from another client kind, refuses
 `hello` with `invalid_argument`.
 
-A missing, empty, or blank name gets a name from the settings file's `names`, else from the built-in names: at random, one no
-agent of its window has, ignoring case and surrounding spaces; once every one is taken, or for a list of none, the agent's ID,
-such as `#a7`. Given names are trimmed and may repeat. Use an ID when names repeat.
+A missing, empty, or blank name gets a random name from the settings file's `names`, or from the built-in names. The name
+must be unused in all the initial member windows, ignoring case and surrounding spaces. If every name is taken or the list
+is empty, Facade uses the agent's ID, such as `#a7`. Given names are trimmed and may repeat. Use an ID when names repeat.
 `agent.rename` gives an agent a new name the same way and returns its record; the `agents` topic sends it as `updated`.
 
 ### Responses and ordering
@@ -101,8 +101,8 @@ such as `#a7`. Given names are trimmed and may repeat. Use an ID when names repe
   A CLI that starts and immediately exits still creates an agent. The start response reports `running`; follow the `agents`
   topic or read a later snapshot for the recorded exit. A start's `prompt` is answered pending and delivered later, and a
   result may follow; see [Agent messages](#agent-messages).
-- `agent.resume` responds once the agent's CLI runs again, with its running record. The `agents` topic then has an `updated`
-  change with the new `pid`, `running`, and no `exit`.
+- A call to `agent.resume` that starts a new run returns its running record. The `agents` topic reports the new `pid`,
+  `running`, and no `exit`. See [Resume](#resume) for the response to an overlapping call.
 - The `messages` topic sends `updated` to insert or replace a message by `message_id`: when it arrives in the inbox and when
   its delivery changes. A change delivers nothing; a client that hands messages to a model takes them through a snapshot.
 
@@ -149,12 +149,15 @@ it as unrecognized, not as `unknown`. No input state means the CLI may be typed 
 program outside the settings file, refuse it with `unsupported` before anything starts, and an `mcp` client cannot
 supply it. Prompt, worktree, request ID and name work as for any start.
 
-`agent.resume` starts an ended agent's CLI again in its terminal, continuing the agent's `session` with the CLI's own resume
-arguments. The agent keeps its ID, name, record, `cwd`, `created_at`, and screen, and takes no agent number. The CLI gets the
-caller's `env`, filtered as for `agent.start`, and the terminal size in `cols` and `rows`. It is `unavailable` for a running
-agent or one already resuming, an agent without a CLI rule that resumes sessions, one without a recorded session, and a CLI or
-folder that cannot be used. A resume waits up to 10 seconds for the ended run's exit to be saved and its terminal released,
-then for the keeper as a start does.
+`agent.resume` starts an ended agent's CLI again in its terminal, continuing its `session` in the record's `cwd`. The agent
+keeps its ID, name, member windows, location source, `created_at`, and screen. The CLI uses the caller's `env`, filtered
+as for `agent.start`, and its `cols` and `rows`.
+
+If two resumes overlap, the later call waits for the first. If the run number changes while it waits, the later call
+returns the agent's current record, even if the new run has already ended. If the run number stays the same, the
+waiting call tries to resume. A removed record returns `not_found`. An agent already running when the call starts,
+a session that cannot be continued, or a CLI or folder that cannot be used returns `unavailable`. A resume waits up to
+10 seconds for the ended run's exit to be saved and its terminal released, then for the keeper as a start does.
 
 Before the new CLI starts, the screen gets a fresh terminal's modes and the new size, through the same output and log as the
 CLI's own output: an open synchronized update ends, the alternate screen is left, and modes, charsets, the scrolling region,
@@ -217,6 +220,10 @@ states before it serves clients.
 
 A CLI that runs by a built-in's rule is given Facade's tools for its run, the MCP server `facade-mcp`, where its rule gives them;
 `facade-mcp` is the relay to the daemon's own MCP server, below.
+The daemon lists Facade's version 3 tool definitions in `tools/list`. `list_agents` and `start_agent` results
+identify the running machine and member windows. `start_agent` inputs select local windows by ID.
+`send_message` reports which windows' subscriptions took a notification.
+
 Antigravity's runs get them from a plugin in the folder they start in, `.agents/plugins/facade/`, which the runs there share:
 the only file Facade writes into a project. Its manifest names Facade core and the version that wrote it: a start brings one
 an earlier version wrote, or one changed since, up to date, and leaves one a later version wrote as it is. It goes once no run
@@ -294,10 +301,11 @@ exit with `already_ended`, without sending another signal.
 `agent.remove` stops a running agent first, then removes its record. If the CLI ended by itself, processes it left behind
 that ignore terminal hangup keep running, as after closing a terminal. Removing that ended agent sends them no signal.
 
-`agent.start` with `worktree`, a `branch` and its `base_ref`, makes that worktree from `cwd` as `worktree.create` does, then
-starts in it, as one call. Git's failure answers `worktree_failed`, with what it made in `data.kept`. A start that fails after
-making the worktree keeps it, and its error's `kept` names it. `worktree.create` makes a worktree alone, for the editor's New
-Worktree.
+`agent.start` with `worktree`, a `branch` and its `base_ref`, makes the worktree and starts in it in one call. With
+`location_source_window`, the worktree branches from the supplied window location. Without it, the worktree branches from
+the repository of `cwd`. A Git failure returns `worktree_failed` with what Git made in `data.kept`. A start that fails
+after making the worktree keeps it and gives its location in `data.kept`. `worktree.create` makes a worktree for the
+editor's New Worktree command.
 
 A start's `request_id`, 1 to 200 characters, is its creator's own ID of it, kept on the agent's record. The daemon looks for
 it before anything else. A start with the same ID under way gives its answer once it comes. An agent the same creator started
@@ -375,15 +383,24 @@ message whose paste began goes on, and its answer says what reached the terminal
 `notifications/cancelled` of a `send_message`, and answers nothing to a call it withdrew, or cancelled before it wrote its
 `agent.send`.
 
-`#human`, the person, takes messages from the agents of editor windows. Such a message goes to the `ide` clients of the
-sender's window that watch `messages`, which tell the person, and it is delivered as it reaches them: `delivered_via` is
-`notified`, and nothing is typed. Where the sender's window has no such client now, where the sender is in the terminal window,
-and where the sender is the person, the send is refused with nothing kept. A message to the person is never kept for later or
-sent to another window.
+`#human` is the person. The daemon takes the sending agent's member windows at send time. It offers the message to the
+current `messages` subscriptions of each connected member window. A subscription channel accepting the notification
+counts as delivery to that window. A send succeeds once at least one window accepts it. Its result has
+`delivered_via: notified` and `windows: { delivered, not_delivered }`. `delivered` contains window references and
+`not_delivered` contains `{ window, reason }` entries. If every window misses the message, the daemon keeps no message
+and returns `unavailable` with those entries in `data.windows`. The reasons are `window_disconnected` and
+`not_watching`, which also covers a subscription that closes before it can take the message. A send from the person to
+the person is refused.
 
-The recipient's typist delivers the message. It waits until the input is empty, as the CLI's rule reads it, and never types
-over a draft. It pastes the message under a header naming its sender, number, the sender's window where that is not the
-recipient's, kept in the message as `from_window`, and the message it replies to, then presses
+The daemon saves the window outcomes before it responds. A repeat with the same request ID waits for an in-progress send
+or returns the saved message and outcomes. If the daemon ended between saving the message and saving the outcomes, a
+repeat returns that message as `pending` with `repeated: true` and no `windows`. The outcome is unknown and the daemon
+sends nothing again.
+
+The recipient's typist delivers a message to an agent. It waits until the input is empty, as the CLI's rule reads it, and
+never types over a draft. The header names the sender, the message number and any message it replies to. If the sender has
+one member window and the recipient has no membership there, the header also names that window from `from_window`. The
+typist pastes the header and message, then presses
 Enter once the input shows the paste as the message's own draft for the CLI's settle time, and again after 2 seconds while that
 draft stays. The message is delivered once the input is empty again. A paste goes only where its delivery fits in the time
 left: 2 seconds for its own draft to show, the settle time, and 3 seconds for the input to empty, each with the paste's own
@@ -412,8 +429,12 @@ and read as one: a guest's waits in its inbox for a take, as its other messages 
 not delivered becomes delivered with no second result. Where the agent that is owed the result was removed or has ended by
 then, or the guest is no longer listed, none is written, and its number goes unused. A prompt from the person owes none.
 
-The `messages` topic reads the inbox of the agent the client acts for, which must be listed, or, for an `ide` client, the
-person's inbox, `human`, whose changes are the messages the agents of its own window send the person. Its arguments select messages:
+The `messages` topic reads the inbox of the agent the client acts for, which must be listed. For an `ide` client it reads
+the person's inbox, `human`, as delivered to the client's bound logical window. Its snapshot only includes messages
+delivered to that window. A client uses the snapshot to recognize duplicates and shows notifications for new changes.
+Adopting an agent brings its future notifications into the window.
+
+The arguments select messages:
 by default those not yet delivered, including failed ones; `ids`, 1 to 100 message IDs, rereads those; `all` pages every
 kept message; `cursor` continues from a page's `next_cursor`, and `limit` sets a page's size, 1 to 200, 100 by default. A snapshot
 delivers every message it returns that was not yet delivered, through `read`: its typist never types a message it has not
@@ -422,49 +443,61 @@ begun, and its sender's `agent.send` responds. A message whose paste the typist 
 changes are `updated`, a message arriving or its delivery changing, and `removed`, a message no longer kept: withdrawn by its
 send's `cancel`, past its 30 days, or gone with its inbox.
 
-Messages and what became of them are kept 30 days, across daemon restarts; a message ID is never given again, even after its
-message is deleted. A daemon that ends before answering an `agent.send` answers nothing: the client's connection closes, and
-what became of the message is not known to it. The next daemon goes on delivering the message within the 30 seconds it had
-(see [Daemon replacement](#daemon-replacement)).
+Messages and what became of them are kept 30 days across daemon restarts. A message ID is never given again, even after
+its message is deleted. If the daemon ends during `agent.send`, the client loses its connection. The next daemon takes
+up deliveries to agents within their original 30 seconds (see [Daemon replacement](#daemon-replacement)). A repeat of a
+send to the person reads the saved window outcomes or reports an unknown outcome as described above.
 
 ### Editor windows
 
-Every agent is in a window: the editor window it was started or last resumed in, or the terminal window, `terminal`, which
-holds the agents started or resumed from a terminal, guests among them. `AgentInfo.window_id` names the window, and
-`location_id` its location: the agent's folder, or the innermost location the folder is inside. `agent.start` and
-`agent.resume` take `window_id`; without it, the agent runs in the terminal window, where any folder will do. In an editor
-window, the agent's folder must be one of the window's locations or a folder inside one; a window that is not there now is
-`unavailable`. A resume keeps the agent's folder, so an editor window where it is neither a location nor inside one refuses
-the resume.
+A Facade machine is a Facade home and its core. Its persistent `machine_id` is a lowercase UUID version 4, returned
+by `hello`. A logical window reference has `machine_id` and `window_id`. The terminal window has the local machine ID
+and `window_id: "terminal"`. `AgentInfo.machine_id` is the running machine. `AgentInfo.windows` lists the agent's
+one or more member windows, unique and sorted by machine ID and window ID. An omitted `creator_machine_id` or
+`root_machine_id` refers to the record's machine.
 
-An editor window connects as an `ide` client, which acts for the person. Its `hello` describes the window in `window`: its ID,
-which stays the same across its reloads, its name, its `environment`, `local` or a remote authority, the `workspace` key its
-agents are kept under, its folders, its Git branch prefix, and optionally its terminal `colors` and `env`.
-`window.update` sends the whole description again whenever any of it changes, and asks the daemon to read the window's locations again, as the client does when a repository of the window
-changes. A window's locations are its folders and every checkout of a Git repository one of them is in: the repository's main
-checkout first, then the folder if it is another place, then the other worktrees, each place once, its path with symbolic
-links resolved. The daemon reads them with Git when the window describes itself and after a worktree is made there, never on a
-timer; a read that fails keeps the window's locations as last read and says so in `problems`.
+`agent.start` can supply `window` to choose one initial member, including a disconnected window. By default a listed
+agent's call inherits all of its windows, and a person's `ide` call joins its bound window. A person's terminal call
+joins `terminal`, as does an agent's call before its record is listed. A connected local `location_source_window`
+can supply the location for `cwd`, which must be that location or
+a folder inside it. Without that field, a start uses `cwd` under the terminal window's folder rules. The agent records
+the location's `location_id` and the optional `location_source_window`.
 
-The `windows` topic lists every editor window that is there or still holds agents, and the terminal window while it holds
-running agents, with their locations; for a client that acts for an agent, each window also lists the CLIs a start by that
-agent can run. An `ide` client also gets `clis` and `settings_problem` for each window that gave `env`: the programs are
-looked for on that environment's `PATH`, with relative entries taken relative to the window's first folder. A window with
-no folder lists no CLI. The environment is that of the first folder's terminals; a start sends its own location's
-environment. A snapshot or change reads the settings file as it is now. The window's `env` stays in memory alone, never
-in the store, a log or a response.
+An editor window connects as an `ide` client acting for the person. `hello.params.window` carries its description.
+Its `WindowDescription.id` stays the same across reloads of an editor instance and changes when the window reopens.
+The description also carries the window's name, `environment`, `workspace` where available, folders, Git branch prefix,
+and optional terminal `colors` and `env`. `hello.result.window` gives the logical window bound to that connection
+and is present for `ide` clients.
 
-`worktree.create` makes a worktree from a checkout of a window, with a new branch, at
-`<main folder>.worktrees/<branch>`, and answers with the new location; it keeps whatever a failure made, and says what in the
-error's `data.kept`.
+The daemon binds an editor connection to the logical window last bound to that instance, if one remains. Otherwise, a
+workspace can reuse its earliest allocated logical window with no current connections. If neither applies, the daemon
+allocates a new logical window. A binding that was replaced cannot publish updates for that window. Closing a connection
+keeps the agents running. The last current connection closing sets `connected` to false and keeps the logical window.
+On startup recovery the daemon removes a logical window if it has no workspace and no saved agent record refers to it
+as a member window or location source. A window with a workspace stays available for reopening.
 
-A window is there while one of its connections is open. Once its last one closes, its agents go on running: a window that
-holds running agents stays listed, with `connected` false, and one that holds none leaves the list. A connection of the same
-window has its agents again, and so does a window of the same `workspace`, which takes over every agent, running or ended, of a
-window with no connection left; the first window, back, has none of them. A window's agent ends only as any agent does: by its
-CLI's own exit, by `agent.stop` or `agent.remove`, or once its location is known to be gone: its window no longer has the
-folder that brought it, or Git no longer lists its worktree and its folder no longer exists. A failed read or a disconnected
-window proves nothing.
+`agent.adopt` adds the bound editor window to a running or ended agent's members and returns the updated record.
+An existing member gets the same record, guests are refused, and a missing record returns `not_found`. The
+`agents` topic publishes an updated record when membership changes. Resuming retains the member windows. Removing
+an agent removes all of its memberships.
+
+`window.update` sends the whole description with the same instance ID and asks the daemon to read the logical
+window's locations again. Locations are the window's folders and every checkout of a Git repository one of
+them is in: the main checkout first, then the folder if it is another place, then other worktrees. Each path
+appears once, with symbolic links resolved. The daemon reads them when the window describes itself and after a
+worktree is made. A failed read keeps the last successful locations and reports `problems`. If the location
+source window loses a location, the daemon stops the agents that used that source and location. A disconnected
+window retains its prior locations.
+
+The `windows` topic lists logical editor windows and the terminal window while it holds running agents.
+`machine_id` and `window_id` identify a window, and a `removed` change carries both fields. For a client acting for an agent,
+the window lists the CLIs that agent can start. An `ide` client also gets `clis` and `settings_problem` for a window
+that gave `env`. Relative `PATH` entries resolve from the first folder, and a window with no folder lists no CLI.
+The daemon keeps the window's `env` in memory.
+
+`worktree.create` takes a local logical `window_id` or `terminal`. It makes a worktree and branch from the chosen
+checkout at `<main folder>.worktrees/<branch>` and responds with the new location. `data.kept` describes any branch or
+folder that remains after a failure.
 
 ### YOLO and creation trees
 
@@ -592,11 +625,16 @@ provide no response.
 ### Terminal queries and redraws
 
 The daemon's headless terminal replies to supported cursor position, device status, device attributes, and mode queries.
-An editor window's `colors` give replies to OSC 10, 11 and 12: foreground, background and cursor, each `#rrggbb`; a
-malformed color refuses `hello` or `window.update` with `invalid_argument`. Each 8-bit channel is written twice, so
-`#1e1e1e` replies `rgb:1e1e/1e1e/1e1e`, ended as the query was, with BEL or ST. A color left out gets no reply, and neither
-does any color query from an agent of the terminal window. Agents use their current window's colors from their start or
-resume, after a takeover, and from the next query after `window.update` when the editor's theme changes.
+An editor window's `colors` give replies to OSC 10, 11 and 12: foreground, background and cursor, each `#rrggbb`.
+A malformed color refuses `hello` or `window.update` with `invalid_argument`. Each 8-bit channel is written twice, so
+`#1e1e1e` replies `rgb:1e1e/1e1e/1e1e`, ended with the query's BEL or ST. A reply needs a window that provides the
+requested color.
+
+An editor resize sets the color source to that member window, including a resize with the same dimensions. A terminal
+attach resize updates the size. An agent starts with its creating editor's colors or, for an agent start, with the
+creator's color source if it is a member window. Other starts use the first member editor with colors in reference order.
+The agent keeps the last colors when their window disconnects and across a resume. After a daemon restart or takeover,
+the next resize or window description can supply colors again.
 
 The terminal does not reply to clipboard, XTGETTCAP, DECRQSS, or kitty graphics queries. Viewers never receive terminal
 queries, so they cannot send a second reply.
@@ -635,8 +673,8 @@ agents recover at once. The daemon accepts connections after recovering the read
 recorded exits, and after taking up the messages still being delivered. An exit already saved by the daemon takes precedence
 over the keeper's inventory.
 
-Each message still being delivered keeps the deadline it had from its send, at most 29.5 seconds from the restart, and a send
-repeated with its request ID joins it there. One whose
+Each message to an agent still being delivered keeps its original deadline, at most 29.5 seconds after the restart.
+A send repeated with its request ID joins it there. A message whose
 paste had not begun goes to its recipient's typist. One whose paste had begun is never pasted again: the typist presses Enter
 only once the input shows it whole as its own draft, an empty input confirms nothing, and at its deadline it fails as
 `submission_unconfirmed`, with `text_written` `unknown` and no `enter_written`. That paste goes before the agent's other
@@ -645,9 +683,9 @@ listed, whose record this build cannot read, waits for a snapshot until its dead
 longer than the terminal's buffer leaves the CLI inside it; the next daemon types nothing into it and logs that the CLI may
 still be inside a paste.
 
-To its editor windows, a daemon's restart is a lost connection, never a close. The next daemon keeps each window's description
-in `facade.db`, apart from its `colors` and `env`, and lists a window that holds running agents as one whose last connection
-closed: not connected, its agents running, until it connects again or a window of its `workspace` takes them over.
+The next daemon reads each saved logical window, its recent instance binding and its agent memberships from
+`facade.db`. It starts with the windows disconnected. When an instance reconnects, the daemon uses the normal
+window binding rules. Window colors and environments are supplied by the editor after it reconnects.
 
 A daemon failure can lose queued input and, for each agent, one output chunk read but not yet logged, at most 64 KiB. Missing
 control sequences can make later output draw incorrectly until the CLI redraws. Recovery sets the terminal to its last logged
@@ -706,7 +744,7 @@ unavailable.
 
 #### A newer build taking over
 
-A `facade` command of a newer build that finds an older daemon asks it to hand over with `daemon.upgrade`. Every agent runs on,
+A `facade` command or editor of a newer build uses `daemon.upgrade` to take over from the older daemon. Every agent runs on,
 with the same process and terminal. The daemon refuses a build of its own version or an older one, and one whose daemon
 protocol range does not include its own version (`protocol_incompatible`, saying what each side speaks). While agents run, the
 new build must also speak the running keeper's protocol, as the keeper never changes build while it holds CLIs; one that does
@@ -720,7 +758,8 @@ and one still waiting for its recipient is delivered by the new daemon. A messag
 agent reading on until its CLI took it, and no other paste begins. Each agent stops typing and reading its terminal once the
 input queued for it is written. The daemon then sends `closing` with the new build on every connection past `hello`, waits up
 to 0.2 seconds for each client's `closing` back, and exits. Before its `hello` is answered, a connection is sent nothing else.
-The keeper starts the launcher's daemon, the new build, after its restart delay.
+A keeper holding CLIs starts the launcher's daemon, the new build, after its restart delay. When the old keeper exits
+with no CLIs, the client starts the new build through the ordinary startup path.
 
 A client reconnects and says `hello` until a daemon answers, and repeats a call refused as `upgrading`. A call cut off after
 `closing` that carried a `request_id` is repeated with that ID; one without has an unknown outcome, as after any
@@ -738,9 +777,10 @@ again after the keeper's restart delay until a fixed build is installed; nothing
 
 ### Compatibility
 
-`hello` carries the oldest and newest protocol versions the client supports. The peers use the highest version they share,
-or return `protocol_incompatible` if there is none. A newer build takes over only where it speaks the running build's
-versions, so a version is raised with a range that still includes the one before it. Ignore fields you do not recognize. Treat an unrecognized enumeration
-value as unknown locally, and skip a change whose `kind` you do not recognize. The Rust types provide `Unknown` variants for
-this purpose, or `Unrecognized` where `unknown` is a value of its own. The daemon rejects an unsupported client kind during
-`hello`.
+Daemon clients send `hello` with `protocol: [2,2]` and expect the daemon to select 2. A version range that excludes
+2 receives `protocol_incompatible` before the daemon reads the rest of the hello parameters. The relay contract and
+keeper protocol are at version 1. MCP's date versions are independent of Facade's tool interface version.
+
+Ignore fields you do not recognize and skip a change whose `kind` you do not recognize. Treat unrecognized enum
+values as unknown locally. Rust uses `Unknown`, or `Unrecognized` where `unknown` is a protocol value.
+The daemon refuses an unsupported client kind in `hello`.

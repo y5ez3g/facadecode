@@ -5,9 +5,9 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use facade_base::daemon::{
-    AgentSend, DAEMON_PROTOCOL_VERSION, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE,
-    Message, MessagesTopic, MessagesWatchArgs, SendArgs, SendResult, WindowDelivery, WindowRef,
-    WindowsTopic, check_message_text, display_name,
+    AgentSend, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE, Message, MessagesTopic,
+    MessagesWatchArgs, SendArgs, SendResult, WindowDelivery, WindowRef, WindowsTopic,
+    check_message_text, display_name,
 };
 use facade_base::daemon_client::{Cut, DaemonClient, cancel_line, upgrading};
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -140,7 +140,7 @@ fn delivered(client: &mut DaemonClient, sent: &SendResult, arrived: Instant) -> 
     let message = &sent.message;
     let delivery = &message.delivery;
     let id = format!("#{}", message.message_id);
-    if DAEMON_PROTOCOL_VERSION > 1 && message.to == HUMAN {
+    if message.to == HUMAN {
         if let Some(windows) = &sent.windows {
             return delivered_to_windows(client, id, windows, arrived);
         }
@@ -148,7 +148,6 @@ fn delivered(client: &mut DaemonClient, sent: &SendResult, arrived: Instant) -> 
     }
     let how = match (delivery.status, delivery.delivered_via) {
         (DeliveryStatus::Success, Some(DeliveredVia::Read)) => "read_by_recipient",
-        (DeliveryStatus::Success, Some(DeliveredVia::Notified)) => "shown_to_person",
         (DeliveryStatus::Success, _) => "typed_into_input",
         // A guest takes its messages at its next turn: the send ends here.
         (DeliveryStatus::Pending, _) => "waiting_in_inbox",

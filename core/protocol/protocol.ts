@@ -1,10 +1,10 @@
 // Generated from core/crates/base/src by core/crates/base/tests/protocol_files.rs: do not edit.
 
-export const PROTOCOL = 1;
-export const OLDEST_PROTOCOL = 1;
+export const PROTOCOL = 2;
+export const OLDEST_PROTOCOL = 2;
 export const METHODS = ["hello","call","watch","unwatch","cancel","changed","closing"] as const;
 export const TOPICS = ["agents","screen","messages","windows"] as const;
-export const OPS = ["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"] as const;
+export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"] as const;
 export type Topic = typeof TOPICS[number];
 export type Operation = keyof Operations;
 
@@ -19,9 +19,8 @@ export interface AgentInfo {
 	readonly name: string;
 	readonly cli: string;
 	readonly cwd: string;
-	readonly machine_id?: string;
-	readonly windows?: WindowRef[];
-	readonly window_id: string;
+	readonly machine_id: string;
+	readonly windows: WindowRef[];
 	readonly location_id: string;
 	readonly location_source_window?: WindowRef;
 	readonly pid?: number;
@@ -149,7 +148,7 @@ export interface HelloParams {
 export interface HelloResult {
 	readonly protocol: number;
 	readonly build: string;
-	readonly machine_id?: string;
+	readonly machine_id: string;
 	readonly window?: WindowRef;
 	readonly pid: number;
 	readonly agent?: string;
@@ -371,7 +370,6 @@ export interface ResumeArgs {
 	readonly env?: { readonly [key: string]: string };
 	readonly cols: number;
 	readonly rows: number;
-	readonly window_id?: string;
 }
 
 /** What last went into an agent's message input with Enter: what the person submitted in its
@@ -478,7 +476,6 @@ export interface StartArgs {
 	readonly command: string[];
 	readonly name?: string;
 	readonly cwd: string;
-	readonly window_id?: string;
 	readonly window?: WindowRef;
 	readonly location_source_window?: WindowRef;
 	readonly env?: { readonly [key: string]: string };
@@ -614,7 +611,7 @@ export interface WindowDescription {
 /** A window: an editor window, or the terminal window, `terminal`, which holds the agents started
  * from a terminal. */
 export interface WindowInfo {
-	readonly machine_id?: string;
+	readonly machine_id: string;
 	readonly window_id: string;
 	readonly label: string;
 	readonly environment: string;
@@ -634,7 +631,7 @@ export interface WindowRef {
 }
 
 /** A change to the windows. */
-export type WindowsChange = { readonly kind: 'updated'; readonly window: WindowInfo } | { readonly kind: 'removed'; readonly machine_id?: string; readonly window_id: string };
+export type WindowsChange = { readonly kind: 'updated'; readonly window: WindowInfo } | { readonly kind: 'removed'; readonly machine_id: string; readonly window_id: string };
 
 /** A new worktree: its branch and where the branch starts. */
 export interface Worktree {

@@ -5,8 +5,8 @@ use std::path::Path;
 
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, AgentsTopic,
-    DAEMON_PROTOCOL_VERSION, DEFAULT_TERMINAL_SIZE, StartArgs, TERMINAL_WINDOW, WaitKind,
-    WindowInfo, WindowRef, WindowsTopic, Worktree, check_message_text,
+    DEFAULT_TERMINAL_SIZE, StartArgs, TERMINAL_WINDOW, WaitKind, WindowInfo, WindowRef,
+    WindowsTopic, Worktree, check_message_text,
 };
 use facade_base::daemon_client::DaemonClient;
 use facade_base::files::{folder_key, real_path};
@@ -60,76 +60,6 @@ fn available_clis(window: &WindowInfo) -> Vec<&str> {
         .filter(|known| known.available)
         .map(|known| known.cli.as_str())
         .collect()
-}
-
-/// Why `cli` cannot start in `window`, where it cannot; `nothing` says nothing was started.
-fn start_problem(window: &WindowInfo, cli: &str, path: &str, nothing: &str) -> Option<Value> {
-    let id = &window.window_id;
-    if !window.connected {
-        let message = format!(
-            "window {id} is not there now: its editor is closed or has lost its connection; \
-             {nothing}"
-        );
-        return Some(envelope::failure("unavailable", message));
-    }
-    if let Some(problem) = &window.settings_problem {
-        let message = format!("{problem}; {nothing}; correct the settings file, then start again");
-        return Some(envelope::failure("configuration_invalid", message));
-    }
-    let known = window.clis.iter().find(|known| known.cli == cli);
-    if let Some(problem) = known
-        .filter(|known| !known.available)
-        .and_then(|known| known.problem.as_deref())
-    {
-        let problem = problem.trim_end_matches(&format!("; {nothing}"));
-        let message = format!("{cli} cannot start in window {id}: {problem}; {nothing}");
-        return Some(envelope::failure("unavailable", message));
-    }
-    if !known.is_some_and(|known| known.available) {
-        let message = format!(
-            "window {id} starts no CLI {cli}; {nothing}; it starts {}",
-            available_clis(window).join(", ")
-        );
-        return Some(envelope::failure("invalid_argument", message));
-    }
-    // The terminal window starts an agent in any folder.
-    let folders = folders_of(window);
-    if *id != TERMINAL_WINDOW && !folders.contains(&path) {
-        let message = format!(
-            "window {id} has no folder {path}; {nothing}; its folders are {}",
-            folders.join(", ")
-        );
-        return Some(envelope::failure("invalid_argument", message));
-    }
-    None
-}
-
-/// Checks the window and CLI for protocol 1, where the window supplies both membership and location.
-fn check_start_v1(
-    client: &mut DaemonClient,
-    window_id: &str,
-    cli: &str,
-    path: &str,
-    nothing: &str,
-) -> Result<(), Value> {
-    let windows = client
-        .snapshot::<WindowsTopic>(NoArgs {})
-        .map_err(|err| failed(&err, nothing))?;
-    let Some(window) = windows.iter().find(|window| window.window_id == window_id) else {
-        let ids: Vec<&str> = windows
-            .iter()
-            .map(|window| window.window_id.as_str())
-            .collect();
-        let message = format!(
-            "no window {window_id}; {nothing}; the windows are {}",
-            ids.join(", ")
-        );
-        return Err(envelope::failure("invalid_argument", message));
-    };
-    match start_problem(window, cli, path, nothing) {
-        Some(problem) => Err(problem),
-        None => Ok(()),
-    }
 }
 
 /// Checks the actual folder and, where supplied, the connected editor window that supplies its
@@ -207,22 +137,28 @@ pub(super) fn start(
         Ok(inspected) => inspected.agent,
         Err(err) => return failed(&err, nothing),
     };
-    let cli = text(arguments, "cli");
     let path = Path::new(&me.cwd).join(text(arguments, "path"));
-    let cwd = path.to_string_lossy().into_owned();
+    let local_window = |window_id| WindowRef {
+        machine_id: client.hello_result.machine_id.clone(),
+        window_id,
+    };
+    let window = optional(arguments, "window").map(local_window);
+    let location_source_window = optional(arguments, "location_source_window").map(local_window);
+    if let Err(failure) = check_start_destination(client, &path, location_source_window.as_ref()) {
+        return failure;
+    }
     let worktree = optional(arguments, "worktree").map(|branch| Worktree {
         branch,
         base_ref: "HEAD".to_string(),
     });
     // A guest has no terminal of Facade's to size the new one by.
     let (cols, rows) = DEFAULT_TERMINAL_SIZE;
-    let mut start = StartArgs {
-        command: vec![cli],
+    let start = StartArgs {
+        command: vec![text(arguments, "cli")],
         name: optional(arguments, "name"),
-        cwd,
-        window_id: None,
-        window: None,
-        location_source_window: None,
+        cwd: path.to_string_lossy().into_owned(),
+        window,
+        location_source_window,
         env: Default::default(),
         cols: me.cols.unwrap_or(cols),
         rows: me.rows.unwrap_or(rows),
@@ -234,28 +170,6 @@ pub(super) fn start(
         effort: optional(arguments, "effort"),
         session: None,
     };
-    if DAEMON_PROTOCOL_VERSION == 1 {
-        let window_id = text(arguments, "window");
-        if let Err(failure) =
-            check_start_v1(client, &window_id, &start.command[0], &start.cwd, nothing)
-        {
-            return failure;
-        }
-        start.window_id = Some(window_id);
-    } else {
-        let local_window = |window_id| WindowRef {
-            machine_id: client.hello_result.machine_id.clone(),
-            window_id,
-        };
-        start.window = optional(arguments, "window").map(local_window);
-        start.location_source_window =
-            optional(arguments, "location_source_window").map(local_window);
-        if let Err(failure) =
-            check_start_destination(client, &path, start.location_source_window.as_ref())
-        {
-            return failure;
-        }
-    }
     let err = match client.call_with_request_id::<AgentStart>(start, true) {
         Ok((started, _)) => {
             let agent = started.agent;
@@ -317,12 +231,8 @@ fn state_word(agent: &AgentInfo) -> &'static str {
 
 /// Adds the window membership to an agent's list row or start result.
 fn show_members(row: &mut Value, agent: &AgentInfo) {
-    if DAEMON_PROTOCOL_VERSION == 1 {
-        row["window"] = json!(agent.window_id);
-    } else {
-        row["machine_id"] = json!(agent.machine_id);
-        row["windows"] = json!(agent.windows);
-    }
+    row["machine_id"] = json!(agent.machine_id);
+    row["windows"] = json!(agent.windows);
 }
 
 /// An agent as `list_agents` shows it: who and where it is, what it is doing, what it waits for
@@ -357,14 +267,10 @@ fn agent_row(agent: &AgentInfo) -> Value {
 
 /// A window as `list_agents` shows it, including folders and available CLIs while connected.
 fn window_row(window: &WindowInfo) -> Value {
-    let mut row = if DAEMON_PROTOCOL_VERSION == 1 {
-        json!({ "id": window.window_id, "name": window.label })
-    } else {
-        json!({
-            "id": window.window_id, "machine_id": window.machine_id,
-            "name": window.label, "connected": window.connected,
-        })
-    };
+    let mut row = json!({
+        "id": window.window_id, "machine_id": window.machine_id,
+        "name": window.label, "connected": window.connected,
+    });
     if !window.connected {
         return row;
     }
@@ -393,11 +299,7 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
             .strip_prefix('a')
             .and_then(|number| number.parse::<u64>().ok())
     });
-    let windows: Vec<Value> = windows
-        .iter()
-        .filter(|window| DAEMON_PROTOCOL_VERSION > 1 || window.connected)
-        .map(window_row)
-        .collect();
+    let windows: Vec<Value> = windows.iter().map(window_row).collect();
     let agents: Vec<Value> = agents.iter().map(agent_row).collect();
     let data = json!({ "windows": windows, "agents": agents });
     let written = data.to_string();

@@ -439,13 +439,16 @@ fn hello_answer(message: Option<ServerMessage>) -> anyhow::Result<HelloResult> {
         return Err(error.into());
     }
     let result = response.result.unwrap_or_default();
-    // Whatever version the daemon claims, an answer this build cannot read is another protocol's.
-    HelloResult::deserialize(&result).map_err(|err| another_protocol(&result, err).into())
+    let hello = HelloResult::deserialize(&result).map_err(|err| another_protocol(&result, err))?;
+    if !(MIN_DAEMON_PROTOCOL_VERSION..=DAEMON_PROTOCOL_VERSION).contains(&hello.protocol) {
+        return Err(another_protocol(&result, "selected version outside the offered range").into());
+    }
+    Ok(hello)
 }
 
 /// The error for a hello answer of another protocol: this build, and the build and protocol the
 /// daemon names, where it names them.
-fn another_protocol(result: &Value, err: serde_json::Error) -> ErrorBody {
+fn another_protocol(result: &Value, problem: impl std::fmt::Display) -> ErrorBody {
     let said = |key: &str| match result.get(key) {
         Some(Value::String(text)) => text.clone(),
         Some(other) => other.to_string(),
@@ -458,7 +461,7 @@ fn another_protocol(result: &Value, err: serde_json::Error) -> ErrorBody {
         Reason::ProtocolIncompatible,
         format!(
             "the Facade daemon's answer to hello does not read as daemon protocol {versions} of \
-             this client, {ours}: {err}; the daemon says build {build} and protocol {protocol}; \
+             this client, {ours}: {problem}; the daemon says build {build} and protocol {protocol}; \
              update Facade"
         ),
     )

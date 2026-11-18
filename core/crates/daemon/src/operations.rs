@@ -496,7 +496,6 @@ impl Daemon {
             location_id: location,
             cwd: args.cwd.clone(),
             machine_id: self.machine_id.clone(),
-            window_id: windows.members[0].window_id.clone(),
             windows: windows.members,
             location_source_window: args.location_source_window,
             pid: Some(started.pid),

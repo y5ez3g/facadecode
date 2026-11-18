@@ -121,7 +121,6 @@ fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16
         machine_id: String::new(),
         windows: Vec::new(),
         location_source_window: None,
-        window_id: "terminal".into(),
         location_id: facade_base::daemon::location_id("/"),
         pid: Some(1),
         process,

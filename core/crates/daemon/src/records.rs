@@ -350,7 +350,6 @@ mod tests {
             machine_id: String::new(),
             windows: Vec::new(),
             location_source_window: None,
-            window_id: "terminal".into(),
             location_id: "loc-1".into(),
             pid: Some(1),
             process: ProcessState::Running,

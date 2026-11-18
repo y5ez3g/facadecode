@@ -214,17 +214,7 @@ impl Daemon {
             AgentStart::NAME => {
                 let args: StartArgs = decode_arguments(args)?;
                 let by_model = client.identity.kind == ClientKind::Mcp;
-                let mut args = self.checked_start(args, acting, by_model).await?;
-                if DAEMON_PROTOCOL_VERSION == 1
-                    && let Some(id) = args.window_id.take()
-                {
-                    let window = self.local_window(id);
-                    if window.window_id != daemon::TERMINAL_WINDOW {
-                        args.location_source_window
-                            .get_or_insert_with(|| window.clone());
-                    }
-                    args.window.get_or_insert(window);
-                }
+                let args = self.checked_start(args, acting, by_model).await?;
                 let window = client
                     .window
                     .as_ref()

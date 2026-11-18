@@ -21,8 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{
     AgentInfo, AgentState, HookSession, IntegrationArgs, IntegrationInfo, IntegrationsArgs,
-    IntegrationsList, StateDetail, StateReason, TERMINAL_WINDOW, ToolsState, is_session_id,
-    location_id,
+    IntegrationsList, StateDetail, StateReason, ToolsState, is_session_id, location_id,
 };
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::process::ProcessState;
@@ -392,7 +391,6 @@ fn joined(id: &str, name: &str, cli: &str, session: &str, cwd: String) -> (Agent
         machine_id: String::new(),
         windows: Vec::new(),
         location_source_window: None,
-        window_id: TERMINAL_WINDOW.into(),
         location_id: location_id(&cwd),
         cwd,
         pid: None,

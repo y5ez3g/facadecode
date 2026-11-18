@@ -1165,7 +1165,11 @@ mod tests {
     /// The result #a2's prompt `prompt` owes #a1, under `number`, its prompt settled as `delivery`.
     fn result(number: u64, prompt: &Message, delivery: &Delivery) -> Message {
         let agent = serde_json::from_value(serde_json::json!({
-            "agent_id": "a2", "name": "Nova", "cli": "claude", "cwd": "/w", "window_id": "terminal",
+            "agent_id": "a2", "name": "Nova", "cli": "claude", "cwd": "/w",
+            "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+            "windows": [{
+                "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "window_id": "terminal"
+            }],
             "location_id": "loc-1", "pid": 7, "process": "running", "cols": 80, "rows": 24,
             "created_at": "2026-11-11T00:00:00.000Z", "root": "a1", "yolo": true, "state": "idle",
             "tools_state": "available",
