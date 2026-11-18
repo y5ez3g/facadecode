@@ -81,6 +81,17 @@ function socketFolderIsOurs(dir: string): boolean {
 	return true;
 }
 
+/** Opens one socket to this user's core, before either ordinary hello or the bridge's terminal hello. */
+export async function connectDaemonSocket(home: string, waitMs: number): Promise<Reached> {
+	const socket = daemonSocketPath(home);
+	// On Windows the extension relies on the daemon pipe's DACL (ARCHITECTURE-1.4,
+	// PROTOCOL "Connect to the daemon"). The folder check is Unix's.
+	if (process.platform !== 'win32' && !socketFolderIsOurs(path.dirname(socket))) {
+		return { absent: true, reason: 'the socket folder does not exist yet' };
+	}
+	return connectWithin(socket, waitMs);
+}
+
 /** Whether the daemon of build `running` hands over to build `newer`: only a higher release version does, as core decides it. */
 export function takesOver(newer: string, running: string): boolean {
 	const a = versionOf(newer);
@@ -141,7 +152,7 @@ function verifyHello(result: unknown): BoundHello {
 }
 
 /** Runs `facade daemon --detach` for `home`: where Facade starts, or already runs, it answers with code 0. */
-function startDaemon(options: ConnectOptions): Promise<void> {
+export function startDaemon(options: Pick<ConnectOptions, 'home' | 'program' | 'log'>): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(options.program, ['daemon', '--detach'], { env: { ...process.env, FACADE_HOME: options.home }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 		let output = '';
@@ -452,16 +463,6 @@ class Link implements DaemonLink {
 		}
 	}
 
-	private async connect(deadline: number): Promise<Reached> {
-		const socket = daemonSocketPath(this.options.home);
-		// On Windows this `ide` client relies on the daemon pipe's DACL alone (ARCHITECTURE-1.4,
-		// PROTOCOL "Connect to the daemon"); the folder check is Unix's.
-		if (process.platform !== 'win32' && !socketFolderIsOurs(path.dirname(socket))) {
-			return { absent: true, reason: 'the socket folder does not exist yet' };
-		}
-		return connectWithin(socket, Math.min(CONNECT_WAIT_MS, Math.max(0, deadline - Date.now())));
-	}
-
 	private async helloV2(connection: Connection, waitMs: number): Promise<unknown> {
 		const hello: HelloParams = {
 			protocol: [DAEMON_PROTOCOL, DAEMON_PROTOCOL],
@@ -481,7 +482,7 @@ class Link implements DaemonLink {
 
 	/** Tries one v2 hello. */
 	private async attempt(deadline: number): Promise<Attempt> {
-		const reached = await this.connect(deadline);
+		const reached = await connectDaemonSocket(this.options.home, Math.min(CONNECT_WAIT_MS, Math.max(0, deadline - Date.now())));
 		if (!reached.socket) {
 			return reached;
 		}
