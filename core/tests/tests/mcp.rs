@@ -222,8 +222,8 @@ fn a_long_read_whose_file_cannot_be_written_returns_the_messages_whole() {
     assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
 }
 
-/// A screen longer than 8,000 characters as JSON comes whole in a file only this user can read, and
-/// the result names it.
+/// A long screen comes whole in a text file only this user can read. A file error tells the caller
+/// to ask for fewer lines.
 #[test]
 fn a_long_screen_comes_as_a_file() {
     let home = TestHome::new("mcpscreenfile");
@@ -237,7 +237,20 @@ fn a_long_screen_comes_as_a_file() {
     );
     assert!(wait_for_screen_text(&home, &agent, "READY"));
     let mut reader = McpTestClient::open(&home, &agent);
-    let read = reader.call("read_screen", json!({ "agent": agent, "last": 200 }));
+    let arguments = json!({ "agent": agent, "lines": 200 });
+    let results = home.path.join("core/results");
+    std::fs::write(&results, "").unwrap();
+    let failed = reader.call("read_screen", arguments.clone());
+    assert_eq!(failed["status"], "failure", "{failed}");
+    assert_eq!(failed["reason"], "unavailable", "{failed}");
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|message| message.ends_with("; set 'lines' to a smaller number")),
+        "{failed}"
+    );
+    std::fs::remove_file(results).unwrap();
+    let read = reader.call("read_screen", arguments);
     assert!(
         read["data"].get("text").is_none() && read["data"]["ended"] == false,
         "{read}"
@@ -2059,8 +2072,29 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "read_screen of lines that are not a number",
         "read_screen",
-        json!({ "agent": "@helper", "last": "12" }),
+        json!({ "agent": "@helper", "lines": "12" }),
     );
+    golden.call(
+        &mut ada,
+        "read_screen with the old last argument",
+        "read_screen",
+        json!({ "agent": "@helper", "last": 4 }),
+    );
+    golden.call(
+        &mut ada,
+        "read_screen with both last and lines",
+        "read_screen",
+        json!({ "agent": "@helper", "last": 4, "lines": 4 }),
+    );
+    let retried = golden.call(
+        &mut ada,
+        "read_screen retried with lines",
+        "read_screen",
+        json!({ "agent": "@helper", "lines": 4 }),
+    );
+    assert_eq!(retried["status"], "success", "{retried}");
+    assert_eq!(retried["data"]["ended"], false);
+    assert_eq!(retried["data"]["text"].as_str().unwrap().lines().count(), 4);
     golden.call(
         &mut ada,
         "read_screen of an agent that does not exist",

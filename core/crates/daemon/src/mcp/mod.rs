@@ -301,6 +301,15 @@ impl Problems {
         self.others.push(problem.into());
     }
 
+    /// Names an extra argument and gives the replacement for a renamed one.
+    fn add_unknown_argument(&mut self, tool: &str, key: &str) {
+        if tool == "read_screen" && key == "last" {
+            self.add("unknown argument 'last' for read_screen. Use 'lines'");
+        } else {
+            self.add(format!("{key} is not an argument of {tool}"));
+        }
+    }
+
     fn total(&self) -> usize {
         self.missing.len() + self.others.len()
     }
@@ -481,5 +490,36 @@ mod tests {
                 "press_keys"
             ]
         );
+    }
+
+    #[test]
+    fn read_screen_requires_an_agent_and_defaults_lines_to_fifty() {
+        let (_, arguments) = validate_tool("read_screen", &json!({ "agent": "#a7" })).unwrap();
+        assert_eq!(arguments["lines"], 50);
+        for lines in [1, 2000] {
+            let (_, arguments) =
+                validate_tool("read_screen", &json!({ "agent": "#a7", "lines": lines })).unwrap();
+            assert_eq!(arguments["lines"], lines);
+        }
+        for (given, message) in [
+            (
+                json!({ "lines": 50 }),
+                "read_screen requires agent; nothing was done",
+            ),
+            (
+                json!({ "agent": "#a7", "lines": 0 }),
+                "lines must be from 1 to 2000, not 0; nothing was done",
+            ),
+            (
+                json!({ "agent": "#a7", "lines": 2001 }),
+                "lines must be from 1 to 2000, not 2001; nothing was done",
+            ),
+        ] {
+            let Err(failure) = validate_tool("read_screen", &given) else {
+                panic!("accepted invalid read_screen arguments: {given}");
+            };
+            assert_eq!(failure["reason"], "invalid_argument");
+            assert_eq!(failure["message"], message);
+        }
     }
 }

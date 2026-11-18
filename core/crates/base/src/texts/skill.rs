@@ -55,7 +55,7 @@ a CLI session the person started, waits for its next turn.
 /// The skill's section after the repeated-message paragraph: the terminals.
 const AFTER_REPEATS: &str = "## Terminals
 
-`read_screen({agent: \"#a7\"})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go
+`read_screen({agent: \"#a7\", lines: 20})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go
 where its cursor is, as `press_keys({agent: \"#a7\", keys: [\"Down\", \"Enter\"]})` picks a menu's second item.
 ";
 

@@ -468,6 +468,37 @@ mod tests {
     }
 
     #[test]
+    fn read_screen_refuses_last_before_connecting_to_the_daemon() {
+        let mut relay = Relay::for_test(&[], &[]);
+        relay.connect = Box::new(|_| panic!("a rejected tool call must not connect"));
+        for arguments in [
+            json!({ "agent": "#a7", "last": 4 }),
+            json!({ "agent": "#a7", "last": 4, "lines": 4 }),
+        ] {
+            let call = json!({
+                "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                "params": { "name": "read_screen", "arguments": arguments },
+            });
+            let answer = relay
+                .respond(
+                    &Serves::Agent("a7".into()),
+                    call.to_string().as_bytes(),
+                    Instant::now(),
+                )
+                .expect("an answer");
+            assert_eq!(answer["result"]["isError"], true);
+            assert_eq!(
+                answer["result"]["structuredContent"],
+                json!({
+                    "status": "failure",
+                    "reason": "invalid_argument",
+                    "message": "unknown argument 'last' for read_screen. Use 'lines'; nothing was done",
+                })
+            );
+        }
+    }
+
+    #[test]
     fn malformed_messages_get_json_rpc_errors_and_notifications_nothing() {
         assert_eq!(answered("{nope")["error"]["code"], -32700);
         assert_eq!(answered("[]")["error"]["code"], -32600);

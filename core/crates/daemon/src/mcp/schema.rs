@@ -41,10 +41,10 @@ impl Owner<'_> {
         }
     }
 
-    fn unknown(&self, key: &str) -> String {
+    fn note_unknown(&self, key: &str, problems: &mut Problems) {
         match self {
-            Owner::Arguments(tool) => format!("{key} is not an argument of {tool}"),
-            Owner::Field(field) => format!("{key} is not a field of {field}"),
+            Owner::Arguments(tool) => problems.add_unknown_argument(tool, key),
+            Owner::Field(field) => problems.add(format!("{key} is not a field of {field}")),
         }
     }
 }
@@ -65,7 +65,7 @@ fn read_fields(
             .is_some_and(|names| names.iter().any(|name| name.as_str() == Some(key)))
     };
     for key in given.keys().filter(|key| !properties.contains_key(*key)) {
-        problems.add(owner.unknown(key));
+        owner.note_unknown(key, problems);
     }
     let mut read = Map::new();
     for (key, property) in properties {

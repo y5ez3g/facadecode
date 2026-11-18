@@ -85,13 +85,13 @@ fn keys(arguments: &Map<String, Value>) -> Vec<String> {
         .collect()
 }
 
-/// Reads an agent's screen, its last lines as `last` asks. A reading longer than a result carries
+/// Reads an agent's screen, its last lines as `lines` asks. A reading longer than a result carries
 /// goes to a text file, which the result names in place of the text.
 pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
     let lines = arguments
-        .get("last")
+        .get("lines")
         .and_then(Value::as_u64)
-        .and_then(|last| u16::try_from(last).ok());
+        .and_then(|lines| u16::try_from(lines).ok());
     let agent = text(arguments, "agent");
     let screen = match client.call::<AgentScreen>(ScreenArgs {
         agent: agent.clone(),
@@ -118,7 +118,7 @@ pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Val
             "unavailable",
             format!(
                 "the screen is too long to return here, and its file could not be written: \
-                 {err:#}; read fewer lines with last"
+                 {err:#}; set 'lines' to a smaller number"
             ),
         ),
     }

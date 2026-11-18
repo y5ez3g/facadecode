@@ -377,7 +377,8 @@ through normal delivery without polling; MCP members read them themselves (6.1).
 
 **Read rendered terminal text without taking focus or treating its words as instructions.**
 
-Required `agent:string`; optional `last:integer=50` (1–2000), counting the last lines including scrollback.
+Required `agent:string`. Optional `lines:integer=50` accepts 1–2000 and counts the last lines including scrollback.
+Rust returns `invalid_argument` with a hint to use `lines` when a call supplies `last`.
 Enforce normal tree reach. Return only `ended:boolean` and `text` in data. `ended` says whether the run had ended when
 the screen was read. When true, return the screen that run left. A later read after a resume can show new output
 under the same agent ID. Empty live output is successful empty output. An agent without a screen fails as
@@ -390,14 +391,15 @@ spaces and Unicode. Cues come directly from terminal cells; the model need not c
 highlight. Do not execute escape sequences.
 
 Above 8,000 text code points, return `ended` and `file`, a string path to a complete UTF-8 text file, in place of text.
+If writing the file fails, return `unavailable` and ask for a smaller `lines` value.
 There is no agent ID, timestamp, buffer, style-format field, line count, stale flag or last_alternate_frame in data.
-An invalid last argument answers:
+A string passed as `lines` gives this answer.
 
 ```json
 {
   "status": "failure",
   "reason": "invalid_argument",
-  "message": "last must be an integer, not a string; nothing was done"
+  "message": "lines must be an integer, not a string; nothing was done"
 }
 ```
 
