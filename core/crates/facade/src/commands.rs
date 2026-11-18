@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::SystemTime;
 
-use facade_base::address::{display_machine_selector, exact_machine_selector};
+use facade_base::address::{
+    display_machine_selector, exact_machine_selector, parse_machine_selector,
+};
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResume, AgentScreen,
     AgentSend, AgentStart, AgentState, AgentStop, AgentType, DEFAULT_TERMINAL_SIZE, DeliveredVia,
@@ -27,9 +29,7 @@ use facade_rules::integration::command_program;
 use serde_json::json;
 use unicode_width::UnicodeWidthStr;
 
-use crate::errors::{
-    Change, Problem, about_agent, about_change, about_machine, about_send, bare_id,
-};
+use crate::errors::{Change, Problem, about_agent, about_change, about_send, about_start, bare_id};
 use crate::{ExitText, Opening, Shown, single_line, table};
 
 /// How a command prints: for the reader, or as JSON.
@@ -57,17 +57,43 @@ pub(crate) fn start(
     client: &mut DaemonClient,
     name: Option<String>,
     prompt: Option<String>,
-    (machine, cwd): (Option<String>, Option<String>),
+    (machine, folder): (Option<String>, Option<String>),
     command: Vec<String>,
     terminal: Option<(u16, u16)>,
 ) -> anyhow::Result<Option<Shown>> {
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
     let on = machine.clone();
-    // On another machine without --cwd, the daemon starts the agent in that user's home folder.
-    let cwd_is_default = cwd.is_none();
-    let cwd = match cwd {
-        Some(cwd) => cwd,
-        None => std::env::current_dir()?.to_string_lossy().into_owned(),
+    let selected = if let Some(selector) = machine
+        .as_deref()
+        .and_then(|machine| parse_machine_selector(machine).ok())
+    {
+        let mut matches = machines(client)?
+            .into_iter()
+            .filter(|machine| selector.matches(machine));
+        matches.next().filter(|_| matches.next().is_none())
+    } else {
+        None
+    };
+    let local = machine.is_none()
+        || selected
+            .as_ref()
+            .is_some_and(|machine| machine.machine_id == client.hello_result.machine_id);
+    // Pin a unique match so the folder and the start refer to the same machine even after a
+    // rename. Let the daemon report an unresolved selector.
+    let machine = selected
+        .map(|machine| exact_machine_selector(&machine.machine_id))
+        .or(machine);
+    // v2 forwards an omitted remote folder as an empty cwd with cwd_is_default set.
+    let cwd_is_default = !local && folder.is_none();
+    let cwd = if local {
+        match folder {
+            Some(folder) => std::path::absolute(folder)?,
+            None => std::env::current_dir()?,
+        }
+        .to_string_lossy()
+        .into_owned()
+    } else {
+        folder.unwrap_or_default()
     };
     let args = StartArgs {
         command,
@@ -94,7 +120,7 @@ pub(crate) fn start(
     let (started, _) = client
         .call_with_request_id::<AgentStart>(args, false)
         .map_err(|error| match &on {
-            Some(machine) => about_machine(machine, None, error),
+            Some(machine) => about_start(machine, error),
             None => error,
         })?;
     let here = client.hello_result.machine_id.clone();
@@ -413,22 +439,18 @@ fn window_failure(failure: &WindowDeliveryFailure, here: &str) -> String {
     format!("{} {why}", window_name(&failure.window, here))
 }
 
-/// The machines this one knows, to name them; none where the lookup fails, as the inbox read has
-/// already delivered its messages.
-fn machines(client: &mut DaemonClient) -> Vec<MachineIdentity> {
-    client
-        .call::<MachineList>(NoArgs {})
-        .map(|listed| {
-            listed
-                .machines
-                .into_iter()
-                .map(|machine| MachineIdentity {
-                    machine_id: machine.machine_id,
-                    name: machine.name,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// The identities in the daemon's machine table, including saved machines without a route.
+fn machines(client: &mut DaemonClient) -> anyhow::Result<Vec<MachineIdentity>> {
+    client.call::<MachineList>(NoArgs {}).map(|listed| {
+        listed
+            .machines
+            .into_iter()
+            .map(|machine| MachineIdentity {
+                machine_id: machine.machine_id,
+                name: machine.name,
+            })
+            .collect()
+    })
 }
 
 /// How a reader names the machine `id` among `machines`: its name where unique, else `id:` and
@@ -443,7 +465,7 @@ fn selector_among(machines: &[MachineIdentity], id: &str) -> String {
 
 /// How a reader names the machine `id`.
 fn machine_selector(client: &mut DaemonClient, id: &str) -> String {
-    selector_among(&machines(client), id)
+    selector_among(&machines(client).unwrap_or_default(), id)
 }
 
 /// Prints and delivers up to 100 inbox messages as the recipient's terminal would show them.
@@ -458,7 +480,7 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
             remote(message.from_machine_id.as_deref())
                 || remote(message.reply_to_machine_id.as_deref())
         }) {
-            true => machines(client),
+            true => machines(client).unwrap_or_default(),
             false => Vec::new(),
         };
         let selector = |id: Option<&str>| {

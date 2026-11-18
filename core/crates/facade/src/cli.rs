@@ -74,11 +74,12 @@ pub(crate) enum Command {
         machine: Option<String>,
         #[arg(
             long,
-            value_name = "PATH",
-            requires = "machine",
-            help = "Folder on that machine. Needs '--machine' [default: that user's home folder]"
+            value_name = "FOLDER",
+            value_parser = clap::builder::NonEmptyStringValueParser::new(),
+            help = "Folder for the agent. Relative paths use the shell's current folder here. On another machine, \
+                    give an absolute path [default: current folder here, login home on another machine]"
         )]
-        cwd: Option<String>,
+        folder: Option<String>,
         // PROGRAM and its arguments: one trailing list, so that every word after PROGRAM is the
         // program's own, its `--help` included.
         #[arg(

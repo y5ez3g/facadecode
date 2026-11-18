@@ -112,8 +112,10 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 - **Owns:** no lasting state. It owns the arguments each command sends and how it prints the result: a table for `facade list` and `facade integration list`, IDs alone for `facade list -q`, aligned labels for `facade inspect` and `facade status`, or the protocol's JSON, pretty-printed, with `--json`. It also collects the environment that `agent.start`, `agent.resume` and the `integration.*` operations carry. Variables that are not UTF-8 are left out, and standard error names them.
 - **Keeps:**
   - It reaches the daemon only through the `DaemonClient` it is given.
-  - `facade start` takes `--machine <MACHINE>` to select a machine and `--cwd <PATH>` to select a folder there.
-    Without `--cwd` the agent starts in this shell's folder here, or in the login user's home on another machine.
+  - `facade start` takes `--machine <MACHINE>` to select a machine and `--folder <FOLDER>` to select a folder.
+    A local start uses this shell's current folder by default and resolves relative paths from it. The same rule
+    applies if `--machine` selects the local machine. Another machine checks a supplied path there and uses its
+    login user's home when the option is omitted. The command encodes this through v2's `cwd` and `cwd_is_default`.
   - `agent.start` and `agent.send` carry a request ID. If a newer Facade cuts the call off when it takes over, the call is repeated, and the result says what was done.
   - In the background (`-d`, or without the person's terminal), `start` and `resume` print the agent's bare ID, as `a3` or `a17@gpu`, and return no agent. Otherwise they return the agent to show, by its exact address where it runs on another machine, and how it began, for attach's first line. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
   - `resume` of an agent on another machine sends no environment: the run takes that machine's login environment.

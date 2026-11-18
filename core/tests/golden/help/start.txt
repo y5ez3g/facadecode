@@ -16,8 +16,9 @@ Options:
   -d, --detach             Start in the background and print the agent's ID
       --machine <MACHINE>  Machine name or 'id:' followed by 8 to 32 hex digits from 'facade machine
                            list'
-      --cwd <PATH>         Folder on that machine. Needs '--machine' [default: that user's home
-                           folder]
+      --folder <FOLDER>    Folder for the agent. Relative paths use the shell's current folder here.
+                           On another machine, give an absolute path [default: current folder here,
+                           login home on another machine]
   -h, --help               Print help
 
 Examples:
@@ -30,5 +31,8 @@ Examples:
   # Start in the background with a first prompt
   facade start -d --prompt "Fix the failing test in parser.rs" claude
 
+  # Start Codex in a folder relative to this shell
+  facade start --folder ./app codex
+
   # Start Codex on gpu in /work/app
-  facade start --machine gpu --cwd /work/app codex
+  facade start --machine gpu --folder /work/app codex

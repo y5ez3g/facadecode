@@ -190,11 +190,12 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
   `Pixel@gpu`, that meaning counts too, and finding both is an error that lists them.
 - `facade list` and `list_agents` ask every machine at once and answer when all have, or after 3 seconds, saying of
   each machine whether it answered, is unreachable, timed out or failed.
-- `facade start --machine <MACHINE> [--cwd <PATH>]` and New Agent's machine step start an agent on another machine, in
-  that machine's login environment, in the folder given or else that machine's user's home folder; with
-  `start_agent`, `machine` names the machine and `path` must be an absolute path on it. Send,
-  screen, type, keys, stop, resume and `attach` work on agents of other machines. A remote `attach` pauses input when
-  the connection drops, and shows the screen again before it takes keys when it returns.
+- `facade start --folder <FOLDER>` takes an absolute path or a path relative to the current folder on this machine.
+  Omit it to use the current folder, including when `--machine` selects this machine explicitly. With another machine,
+  give an absolute path there or omit `--folder` to use that user's login home. Remote starts from the command line
+  and New Agent use the other machine's login environment. In `start_agent`, `machine` names the machine and `path`
+  must be an absolute path on it. Send, screen, type, keys, stop, resume and `attach` work on agents of other machines.
+  A remote `attach` pauses input when the connection drops, and shows the screen again before it takes keys when it returns.
 - A message to an agent is kept, and numbered, on its recipient's machine; a sender on another machine is named with
   `on <machine>`. A message to the person is kept on the sending agent's machine under one number and handed to the
   windows the agent is in, on every machine; one window that took it is enough. A call that never

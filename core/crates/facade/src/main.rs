@@ -260,7 +260,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             prompt,
             detach,
             machine,
-            cwd,
+            folder,
             command_line,
         } => {
             // An option Facade does not know fails before Facade is reached.
@@ -271,7 +271,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
                 &mut client,
                 name,
                 prompt,
-                (machine, cwd),
+                (machine, folder),
                 command_line,
                 terminal,
             )?;

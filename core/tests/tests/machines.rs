@@ -301,7 +301,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "start",
         "--machine",
         selector,
-        "--cwd",
+        "--folder",
         project,
         "--name",
         "worker",
@@ -437,6 +437,59 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert_eq!(
         second.agent_from_list_json("worker").unwrap()["process"],
         "ended"
+    );
+}
+
+/// A remote start defaults to the peer's login folder. Only the execution machine interprets an
+/// explicit folder, and an ambiguous selector still fails through the daemon.
+#[test]
+fn start_folder_uses_the_remote_login_folder_and_requires_absolute_paths() {
+    let first = TestHome::new("folder-first");
+    let second = TestHome::new("folder-peer");
+    let programs = test_binaries();
+    install_machine_ssh(&[("second", &second), ("first", &first)], &programs.facade);
+    let first_id = name_machine(&first, "first");
+    let second_id = name_machine(&second, "second");
+    let _link = MachineLink::open(&first, "second", &second);
+    wait_for_route(&first, &second_id, &[&second_id]);
+
+    let fake = programs.fakecli.to_str().unwrap();
+    first.run_facade_ok(&["start", "--machine", "second", "--name", "login", fake]);
+    let agent = second.agent_from_list_json("login").unwrap();
+    let login_folder = facade_base::files::real_path(&second.user_home()).unwrap();
+    assert_eq!(agent["cwd"], login_folder.to_str().unwrap(), "{agent}");
+    assert_eq!(agent["machine_id"], second_id, "{agent}");
+
+    let refused = first.run_facade(&[
+        "start",
+        "--machine",
+        "second",
+        "--folder",
+        ".",
+        "--name",
+        "relative",
+        fake,
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("'--folder' needs an absolute path on 'second', got \".\""),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(second.agent_from_list_json("relative").is_none());
+
+    first.run_facade_ok(&[
+        "machine",
+        "rename",
+        &exact_machine_selector(&first_id),
+        "second",
+    ]);
+    let ambiguous = first.run_facade(&["start", "--machine", "second", "--folder", ".", fake]);
+    assert_eq!(ambiguous.status.code(), Some(1), "{}", stderr(&ambiguous));
+    assert!(
+        stderr(&ambiguous).contains("several machines match that address"),
+        "{}",
+        stderr(&ambiguous)
     );
 }
 

@@ -2,8 +2,12 @@
 //! IDs that scripts take back, `start`'s options, `status` that starts nothing, and the commands
 //! that reach no Facade.
 
+use std::path::Path;
 use std::process::{Output, Stdio};
 
+use facade_base::address::exact_machine_selector;
+use facade_base::files::real_path;
+use facade_base::machine::MachineListResult;
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
@@ -133,7 +137,7 @@ fn a_prompt_that_starts_with_a_dash_is_one_value() {
     }
 }
 
-/// Every word after PROGRAM is the program's, `--help`, `--name`, `--machine` and `--` among them.
+/// Options after PROGRAM belong to that program, including current and former Facade options.
 #[test]
 fn every_word_after_the_program_is_the_program_s() {
     let home = TestHome::new("programwords");
@@ -154,6 +158,10 @@ fn every_word_after_the_program_is_the_program_s() {
             "x",
             "--machine",
             "gpu",
+            "--folder",
+            "app",
+            "--cwd",
+            "old",
             "--",
             "-d",
             "y",
@@ -161,9 +169,9 @@ fn every_word_after_the_program_is_the_program_s() {
     );
     assert_eq!(said(&started), ("a1\n".to_string(), String::new(), Some(0)));
     assert!(
-        wait_until(secs(10), || home
-            .screen("echoer")
-            .contains("given:--help --name x --machine gpu -- -d y")),
+        wait_until(secs(10), || home.screen("echoer").contains(
+            "given:--help --name x --machine gpu --folder app --cwd old -- -d y"
+        )),
         "{}",
         home.screen("echoer")
     );
@@ -186,16 +194,63 @@ fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
     assert!(!reached(&home), "the usage error reached Facade");
 }
 
-/// `--cwd` requires `--machine`. Both that check and the old option fail before reaching Facade.
+/// Use the invoking shell's directory for default and relative folders, even with a local selector.
 #[test]
-fn start_cwd_without_machine_exits_2_without_reaching_facade() {
-    let home = TestHome::new("startcwd");
-    let (out, err, code) = said(&facade(&home, &["start", "--cwd", "/work", "fake"]));
+fn start_folder_uses_the_invoking_shell_for_local_paths() {
+    let home = TestHome::new("startfolder");
+    let listed: MachineListResult =
+        serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"])).unwrap();
+    let local = &listed.machines[0];
+    let selector = exact_machine_selector(&local.machine_id);
+    let shell_folder = home.project.join("shell");
+    let app_folder = shell_folder.join("my app");
+    std::fs::create_dir_all(&app_folder).unwrap();
+    let cases: &[(&[&str], &Path)] = &[
+        (&[], &shell_folder),
+        (&["--folder", "my app"], &app_folder),
+        (&["--folder", app_folder.to_str().unwrap()], &app_folder),
+        (&["--machine", &local.name], &shell_folder),
+        (&["--machine", &selector, "--folder", "my app"], &app_folder),
+    ];
+    for (options, folder) in cases {
+        let started = home
+            .command(&test_binaries().facade)
+            .env("PATH", home.path_with_test_programs())
+            .current_dir(&shell_folder)
+            .args(["start", "-d"])
+            .args(*options)
+            .arg("fake")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            started.status.success(),
+            "{options:?}: {}",
+            stderr(&started)
+        );
+        let id = stdout(&started);
+        let record = home.agent_record(id.trim()).unwrap();
+        assert_eq!(record["machine_id"], local.machine_id, "{record}");
+        assert_eq!(record["cwd"], real_path(folder).unwrap().to_str().unwrap());
+    }
+}
+
+/// Former options and an explicitly empty folder fail before a daemon is reached.
+#[test]
+fn start_refuses_old_options_and_an_empty_folder() {
+    let home = TestHome::new("startopts");
+    for arguments in [
+        &["start", "--cwd", "/work", "fake"][..],
+        &["start", "--machine", "gpu", "--cwd=/work", "fake"][..],
+    ] {
+        let (out, err, code) = said(&facade(&home, arguments));
+        assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
+        assert!(err.contains("unexpected option '--cwd"), "{err}");
+        assert!(err.contains("tip: use '--folder'"), "{err}");
+    }
+    let (out, err, code) = said(&facade(&home, &["start", "--folder", "", "fake"]));
     assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
-    assert!(
-        err.starts_with("error: ") && err.contains("--machine"),
-        "{err}"
-    );
+    assert!(err.contains("--folder <FOLDER>"), "{err}");
     let (out, err, code) = said(&facade(&home, &["start", "--on", "gpu", "fake"]));
     assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
     assert!(err.starts_with("error: ") && err.contains("--on"), "{err}");

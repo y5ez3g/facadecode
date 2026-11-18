@@ -110,9 +110,21 @@ pub(crate) const PAGES: &[Page] = &[
                 ],
             ),
             direct(
+                "Start Codex in a folder relative to this shell",
+                "facade start --folder ./app codex",
+                &["start", "--folder", "./app", "codex"],
+            ),
+            direct(
                 "Start Codex on gpu in /work/app",
-                "facade start --machine gpu --cwd /work/app codex",
-                &["start", "--machine", "gpu", "--cwd", "/work/app", "codex"],
+                "facade start --machine gpu --folder /work/app codex",
+                &[
+                    "start",
+                    "--machine",
+                    "gpu",
+                    "--folder",
+                    "/work/app",
+                    "codex",
+                ],
             ),
         ],
     },

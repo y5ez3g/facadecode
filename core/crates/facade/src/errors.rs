@@ -51,6 +51,8 @@ pub(crate) enum Problem {
     NotAgentTerminal,
     /// An option before `start`'s PROGRAM that Facade does not know.
     UnknownStartOption { option: String },
+    /// The execution machine requires an absolute folder.
+    StartFolder { machine: String, folder: String },
     /// The key batch or a key in it did not match the public syntax.
     Keys(KeyProblem),
     /// Text contains a control character that needs a named key.
@@ -193,10 +195,16 @@ impl Problem {
             ),
             Problem::UnknownStartOption { option } => (
                 format!("unexpected option '{option}' before the program"),
-                Some(
+                Some(if option == "--cwd" || option.starts_with("--cwd=") {
+                    "use '--folder' to choose the agent's folder".into()
+                } else {
                     "put the program's options after its name: 'facade start claude --model opus'"
-                        .into(),
-                ),
+                        .into()
+                }),
+            ),
+            Problem::StartFolder { machine, folder } => (
+                format!("'--folder' needs an absolute path on '{machine}', got {folder:?}"),
+                None,
             ),
             Problem::Keys(problem) => (
                 problem.to_string(),
@@ -432,6 +440,23 @@ pub(crate) fn about_change(given: &str, change: Change, error: anyhow::Error) ->
         return about_machine(machine_of(given), Some((change, given.to_string())), error);
     }
     about_agent(given, error)
+}
+
+/// A start's v2 folder refusal or machine error, using the names from the command line.
+pub(crate) fn about_start(machine: &str, error: anyhow::Error) -> anyhow::Error {
+    if let Some(body) = service_error(&error)
+        && body.data.reason == Reason::InvalidArgument
+        && let Some(folder) = body
+            .message
+            .strip_prefix("cwd must be an absolute path, not ")
+    {
+        return Problem::StartFolder {
+            machine: machine.to_string(),
+            folder: folder.to_string(),
+        }
+        .into();
+    }
+    about_machine(machine, None, error)
 }
 
 /// The failure of a call that names `machine`, or reaches another machine for it, as a catalog row
