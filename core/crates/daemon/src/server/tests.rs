@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ struct Hellos {
 impl Service for Hellos {
     type Hold = ();
     type Work = ();
+    type Machine = Infallible;
 
     async fn hello(
         self: &Arc<Self>,
@@ -49,6 +51,31 @@ impl Service for Hellos {
             agent: None,
         };
         Ok((result, client, ()))
+    }
+
+    async fn machine_hello(
+        self: &Arc<Self>,
+        _: HelloParams,
+        _: Option<u32>,
+    ) -> Result<(HelloResult, Self::Machine), ErrorBody> {
+        Err(ErrorBody::invalid_argument("no machine sessions"))
+    }
+
+    async fn machine_connect(
+        self: &Arc<Self>,
+        _: &Client,
+        _: Value,
+    ) -> Result<(Value, Self::Machine), ErrorBody> {
+        Err(ErrorBody::invalid_argument("no machine sessions"))
+    }
+
+    async fn serve_machine(
+        self: &Arc<Self>,
+        machine: Self::Machine,
+        _: tokio::io::BufReader<ServerReader>,
+        _: ServerWriter,
+    ) -> anyhow::Result<()> {
+        match machine {}
     }
 
     async fn call(

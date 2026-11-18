@@ -414,6 +414,40 @@ impl Clis {
 }
 
 impl Daemon {
+    /// The CLI choices in this machine's login environment.
+    pub(crate) async fn login_clis(
+        &self,
+    ) -> Result<facade_base::machine::CliListResult, ErrorBody> {
+        let (environment, home) = self.login_environment().await?;
+        let clis = clis_from(&Ok(environment), &home);
+        Ok(facade_base::machine::CliListResult {
+            clis: clis.rows,
+            settings_problem: clis.settings_problem,
+        })
+    }
+
+    pub(crate) async fn login_environment(
+        &self,
+    ) -> Result<(BTreeMap<String, String>, String), ErrorBody> {
+        let env = facade_base::system::login_environment(std::time::Duration::from_secs(3))
+            .await
+            .map_err(|error| {
+                ErrorBody::new(
+                    Reason::Unavailable,
+                    format!("could not read this machine's login environment: {error:#}"),
+                )
+            })?;
+        let home = facade_base::system::home_folder_in(&env)
+            .and_then(|path| path.into_os_string().into_string().ok())
+            .ok_or_else(|| {
+                ErrorBody::new(
+                    Reason::Unavailable,
+                    "this machine's login environment has no user home folder",
+                )
+            })?;
+        Ok((env, home))
+    }
+
     /// Shows in each of `windows` the CLIs a start by `viewer` can run there, as the settings file
     /// and the programs are now: an agent's from its environment and folder, the same in every
     /// window; an editor's from each window's own `env` and first folder, and none in a window that

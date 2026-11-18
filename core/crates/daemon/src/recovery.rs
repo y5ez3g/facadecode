@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use facade_base::daemon::{
-    AgentInfo, AgentState, DeliveryFailure, Message, TextWritten, ToolsState, typed_text,
+    AgentInfo, AgentState, DeliveryFailure, Message, TextWritten, ToolsState,
 };
 use facade_base::keeper::HeldAgent;
 use facade_base::process::{EndReason, ProcessExit, ProcessState};
@@ -276,9 +276,9 @@ impl Daemon {
             location_source_window: record.location_source_window,
             created_at: record.created_at,
             creator: record.creator,
-            creator_machine_id: None,
+            creator_machine_id: record.creator_machine_id,
             root: record.root,
-            root_machine_id: None,
+            root_machine_id: Some(record.root_machine_id),
             yolo: record.yolo,
             session: record.session,
         };
@@ -449,7 +449,7 @@ impl Daemon {
         let owes = result_owed
             .zip(recipient)
             .map(|(number, agent)| OwedResult {
-                number,
+                reference: number,
                 agent: Arc::new(move || agent.info()),
             });
         let number = messages::number(&message);
@@ -529,7 +529,7 @@ impl Daemon {
                     },
                 };
                 MessageTyping::new(
-                    typed_text(message),
+                    self.message_text(message),
                     messages::number(message),
                     deadline,
                     said,

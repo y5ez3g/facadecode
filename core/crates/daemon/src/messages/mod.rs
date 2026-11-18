@@ -32,6 +32,7 @@ use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{AgentInfo, Message, SendResult};
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine::{AgentRef, DeliverStartResultArgs, MessageRef};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
 
@@ -39,6 +40,7 @@ use crate::store::{Kept, KeptMessage, MessageTable, RequestId};
 use crate::{HUMAN, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
+pub(crate) use human::human_result;
 pub(crate) use outcome::{Due, Outcome, delivery_limit};
 pub(crate) use restart::{Recipient, TakeUp, decide};
 
@@ -109,18 +111,23 @@ pub(crate) enum Earlier {
 
 /// The result a start's prompt owes the agent or guest that sent it.
 pub(crate) struct OwedResult {
-    /// The number the prompt keeps for the result.
-    pub(crate) number: u64,
+    /// The number reserved on the creator's machine.
+    pub(crate) reference: MessageRef,
     /// The started agent as it stands; the result describes it as it is when the prompt ends.
     pub(crate) agent: Arc<dyn Fn() -> AgentInfo + Send + Sync>,
 }
 
-/// A result written for the daemon to hand to its recipient's typist by `deadline`, with the
-/// receiver its settlement reaches.
-pub(crate) struct PostedResult {
-    pub(crate) message: Message,
-    pub(crate) deadline: Instant,
-    pub(crate) settled: watch::Receiver<Option<Settled>>,
+/// A result ready for the daemon to deliver before its deadline.
+pub(crate) enum PostedResult {
+    Local {
+        message: Message,
+        deadline: Instant,
+        settled: watch::Receiver<Option<Settled>>,
+    },
+    Remote {
+        args: DeliverStartResultArgs,
+        deadline: Instant,
+    },
 }
 
 /// The number of message `message`, which the table numbered.
@@ -164,6 +171,7 @@ impl Open {
 
 /// The open deliveries and the table under them, shared by [`Messages`] and its typists' handles.
 struct Deliveries {
+    machine_id: String,
     table: MessageTable,
     /// By number. Taken before any write to the table, so that a read, the beginning of a paste and
     /// a settlement never interleave.
@@ -183,6 +191,25 @@ struct OpenDeliveries {
 impl Deliveries {
     fn lock(&self) -> MutexGuard<'_, OpenDeliveries> {
         self.open.lock().unwrap()
+    }
+
+    fn reference(&self, message_id: String) -> MessageRef {
+        MessageRef {
+            machine_id: self.machine_id.clone(),
+            message_id,
+        }
+    }
+
+    /// Supplies the full reference for a window notification or a cross-machine send response.
+    fn identify(&self, message: &mut Message) {
+        if message.to == HUMAN
+            || message
+                .from_machine_id
+                .as_ref()
+                .is_some_and(|from| from != &self.machine_id)
+        {
+            message.message_ref = Some(self.reference(message.message_id.clone()));
+        }
     }
 
     fn updated(&self, message: &Message) {
@@ -217,11 +244,59 @@ impl Deliveries {
 
     /// Writes `message` under the next number, unless its sender kept one with `request_id` within
     /// the hour.
-    fn keep(&self, message: &Message, request_id: Option<&str>) -> Result<Kept, ErrorBody> {
+    fn keep(
+        &self,
+        message: &Message,
+        request_id: Option<&str>,
+        caller_window_id: Option<&str>,
+    ) -> Result<Kept, ErrorBody> {
         let since = hour_ago();
-        let request = request_id.map(|id| RequestId { id, since: &since });
+        let request = request_id.map(|id| RequestId {
+            id,
+            since: &since,
+            caller_window_id,
+        });
         blocking_in_place(|| self.table.insert_message(message, request))
             .map_err(ErrorBody::internal)
+    }
+
+    fn posted(&self, open: &mut OpenDeliveries, kept: Kept) -> Posted {
+        match kept {
+            Kept::New(mut message) => {
+                self.identify(&mut message);
+                let settled = Self::open(&mut open.agents, message.clone(), false, false, None);
+                self.updated(&message);
+                Posted::New(message, settled)
+            }
+            Kept::Earlier(kept) => Posted::Earlier(self.earlier(open, kept)),
+        }
+    }
+
+    /// A request ID's kept message, with a way to wait while its delivery is open.
+    fn earlier(&self, open: &OpenDeliveries, kept: KeptMessage) -> Earlier {
+        let KeptMessage {
+            mut message,
+            human_windows,
+            ..
+        } = kept;
+        self.identify(&mut message);
+        if message.to == HUMAN {
+            return match open.human.get(&number(&message)) {
+                Some(settled) => Earlier::HumanInFlight(settled.subscribe()),
+                None => Earlier::HumanReady(SendResult {
+                    message,
+                    repeated: true,
+                    withdrawn: false,
+                    windows: human_windows,
+                }),
+            };
+        }
+        match open.agents.get(&number(&message)) {
+            Some(delivery) => {
+                Earlier::Delivering(delivery.message.clone(), delivery.settled.subscribe())
+            }
+            None => Earlier::Settled(message),
+        }
     }
 
     /// Deletes message `number` from the table. Returns whether it did.
@@ -241,33 +316,6 @@ fn hour_ago() -> String {
     )
 }
 
-/// A message found by its request ID, with a way to wait if its delivery is still open.
-fn earlier(open: &OpenDeliveries, kept: KeptMessage) -> Earlier {
-    let KeptMessage {
-        message,
-        human_windows,
-        ..
-    } = kept;
-    if message.to == HUMAN {
-        return match open.human.get(&number(&message)) {
-            Some(settled) => Earlier::HumanInFlight(settled.subscribe()),
-            // A pending row left by another daemon answers with its original number and status.
-            None => Earlier::HumanReady(SendResult {
-                message,
-                repeated: true,
-                withdrawn: false,
-                windows: human_windows,
-            }),
-        };
-    }
-    match open.agents.get(&number(&message)) {
-        Some(delivery) => {
-            Earlier::Delivering(delivery.message.clone(), delivery.settled.subscribe())
-        }
-        None => Earlier::Settled(message),
-    }
-}
-
 /// The daemon's messages.
 pub(crate) struct Messages {
     deliveries: Arc<Deliveries>,
@@ -276,10 +324,11 @@ pub(crate) struct Messages {
 }
 
 impl Messages {
-    pub(crate) fn new(table: MessageTable) -> Messages {
+    pub(crate) fn new(table: MessageTable, machine_id: String) -> Messages {
         let (results, receiver) = mpsc::unbounded_channel();
         Messages {
             deliveries: Arc::new(Deliveries {
+                machine_id,
                 table,
                 open: Mutex::default(),
                 changes: broadcast::channel(CHANGES_QUEUED).0,
@@ -317,34 +366,67 @@ impl Messages {
         &self,
         message: Message,
         request_id: Option<&str>,
+        caller_window_id: Option<&str>,
     ) -> Result<Posted, ErrorBody> {
         let mut open = self.deliveries.lock();
-        Ok(match self.deliveries.keep(&message, request_id)? {
-            Kept::New(message) => {
-                let settled =
-                    Deliveries::open(&mut open.agents, message.clone(), false, false, None);
-                self.deliveries.updated(&message);
-                Posted::New(message, settled)
-            }
-            Kept::Earlier(kept) => Posted::Earlier(earlier(&open, kept)),
-        })
+        let kept = self
+            .deliveries
+            .keep(&message, request_id, caller_window_id)?;
+        Ok(self.deliveries.posted(&mut open, kept))
     }
 
-    /// The message `from` kept with `request_id` within the hour, if any.
+    /// The message this caller kept for `to` with `request_id` within the hour, if any.
     pub(crate) fn find_request(
         &self,
+        from_machine_id: &str,
         from: &str,
+        to: &str,
         request_id: &str,
+        caller_window_id: Option<&str>,
     ) -> Result<Option<Earlier>, ErrorBody> {
         let open = self.deliveries.lock();
         let since = hour_ago();
         let request = RequestId {
             id: request_id,
             since: &since,
+            caller_window_id,
         };
-        let found = blocking_in_place(|| self.deliveries.table.find_request(from, request))
+        let found = blocking_in_place(|| {
+            self.deliveries
+                .table
+                .find_request(from_machine_id, from, to, request)
+        })
+        .map_err(ErrorBody::internal)?;
+        Ok(found.map(|kept| self.deliveries.earlier(&open, kept)))
+    }
+
+    /// Commits the local number a start result will use when it reaches its creator.
+    pub(crate) fn reserve_result(&self) -> Result<MessageRef, ErrorBody> {
+        let _open = self.deliveries.lock();
+        let number = blocking_in_place(|| self.deliveries.table.reserve_result_number())
             .map_err(ErrorBody::internal)?;
-        Ok(found.map(|kept| earlier(&open, kept)))
+        Ok(self.deliveries.reference(format!("m{number}")))
+    }
+
+    /// Keeps a result under its reserved number and opens its delivery on this machine.
+    pub(crate) fn accept_reserved_result(
+        &self,
+        recipient: &AgentRef,
+        message: &Message,
+    ) -> Result<Option<Posted>, ErrorBody> {
+        if message.to != recipient.agent_id {
+            return Err(ErrorBody::invalid_argument(
+                "the start result names a different recipient",
+            ));
+        }
+        let mut open = self.deliveries.lock();
+        let kept = blocking_in_place(|| {
+            self.deliveries
+                .table
+                .insert_reserved_result(recipient, message)
+        })
+        .map_err(ErrorBody::internal)?;
+        Ok(kept.map(|kept| self.deliveries.posted(&mut open, kept)))
     }
 
     /// Withdraws message `number` for its send's `cancel`, where its paste has not begun: it is
@@ -410,15 +492,13 @@ impl Messages {
     /// Message `id` as it stands, where it is kept.
     pub(crate) fn message(&self, id: &str) -> Option<Message> {
         let number = parse_number(id)?;
-        blocking_in_place(|| self.deliveries.table.message(number)).unwrap_or_else(|err| {
-            warn(&format!("{err:#}"));
-            None
-        })
-    }
-
-    /// Whether message `id` is in `owner`'s inbox.
-    pub(crate) fn in_inbox(&self, owner: &str, id: &str) -> bool {
-        self.message(id).is_some_and(|message| message.to == owner)
+        let mut message = blocking_in_place(|| self.deliveries.table.message(number))
+            .unwrap_or_else(|err| {
+                warn(&format!("{err:#}"));
+                None
+            })?;
+        self.deliveries.identify(&mut message);
+        Some(message)
     }
 
     /// Whether message `number` is kept. A table that cannot say counts as yes, so nothing is

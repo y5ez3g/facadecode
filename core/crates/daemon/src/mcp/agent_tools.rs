@@ -136,13 +136,6 @@ pub(super) fn start(
     call: &ToolCall,
 ) -> Value {
     let nothing = "nothing was started";
-    let machine = optional(arguments, "machine");
-    if let Err(error) = crate::service::check_local_start_machine(
-        machine.as_deref(),
-        &client.hello_result.machine_id,
-    ) {
-        return start_refused(&error);
-    }
     let me = match client.call::<AgentInspect>(AgentArgs {
         agent: me.to_string(),
     }) {

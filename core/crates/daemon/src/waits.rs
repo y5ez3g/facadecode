@@ -147,7 +147,7 @@ impl Daemon {
         let guest = creator.is_guest();
         let deadline = (!guest).then(|| due.at.clone());
         let message = pending_message(from, creator.id(), text, None, deadline);
-        let (message, mut settled) = match self.messages.post(message, None) {
+        let (message, mut settled) = match self.messages.post(message, None, None) {
             Ok(Posted::New(message, settled)) => (message, settled),
             Ok(Posted::Earlier(_)) => return,
             Err(error) => {

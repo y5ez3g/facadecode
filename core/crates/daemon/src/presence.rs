@@ -4,19 +4,26 @@
 //! docs/core/ARCHITECTURE.md gives for a window's binding and a guest's join and end.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use facade_base::daemon::{
     AgentInfo, AgentState, AgentsChange, HookSession, LocationInfo, TERMINAL_WINDOW,
     TerminalColors, WindowDescription, WindowRef, WorktreeCreateArgs,
 };
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine::{Caller, ForwardCall};
+use facade_base::operations::CallParams;
 use facade_base::process::ProcessState;
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::agent::{AgentCommand, AgentHandle, WindowColors};
 use crate::guests::{GuestEvent, Guests, SessionMatch};
+use crate::service::value_of;
 use crate::windows::{LocationsRead, WindowConnection};
 use crate::{Daemon, WindowBinding, blocking_in_place, command_line, gate_for_test, log};
+
+pub(crate) const MACHINE_WINDOW_COLORS: &str = "machine.window_colors";
 
 /// What a hook reports on: a guest; a part of a guest's session, such as a subagent's, which acts
 /// for the guest but whose turns are not the guest's; or a session of the run Facade started that
@@ -243,6 +250,7 @@ impl Daemon {
             self.stop_gone(&read);
         }
         self.push_colors(binding).await;
+        self.push_remote_colors(binding);
     }
 
     pub(crate) fn window_colors(
@@ -294,6 +302,79 @@ impl Daemon {
                 agent.send(command).await;
             }
         }
+    }
+
+    /// Offers a connected window's palette to each running machine with that member.
+    fn push_remote_colors(self: &Arc<Self>, binding: &WindowBinding) {
+        for state in self.remote_agent_states() {
+            if !state.agents.is_some_and(|agents| {
+                agents
+                    .iter()
+                    .any(|agent| agent.windows.contains(&binding.window))
+            }) {
+                continue;
+            }
+            let daemon = self.clone();
+            let binding = binding.clone();
+            tokio::spawn(async move {
+                let Ok(window_colors) = daemon.windows.colors_for_binding(&binding) else {
+                    return;
+                };
+                let caller = Caller::Ide {
+                    window: binding.window,
+                };
+                let update = ForwardCall {
+                    call: CallParams {
+                        op: MACHINE_WINDOW_COLORS.to_string(),
+                        args: Value::Null,
+                    },
+                    by_model: false,
+                    from_name: None,
+                    from_window: None,
+                    window_colors,
+                };
+                let _ = daemon
+                    .network
+                    .call(
+                        &state.machine_id,
+                        caller,
+                        "call".to_string(),
+                        value_of(update),
+                        Some(Duration::from_secs(3)),
+                        None,
+                    )
+                    .await;
+            });
+        }
+    }
+
+    pub(crate) async fn accept_window_colors(
+        &self,
+        caller: &Caller,
+        colors: Option<TerminalColors>,
+    ) -> Result<(), ErrorBody> {
+        let Caller::Ide { window } = caller else {
+            return Err(ErrorBody::refused(
+                "only an editor window can supply its colors",
+            ));
+        };
+        let colors = colors.as_ref().map(terminal_colors).transpose()?;
+        for agent in self.agents() {
+            if agent.is_guest() || !agent.info().windows.contains(window) {
+                continue;
+            }
+            // The actor applies a change only to its current source, or chooses its first source.
+            agent
+                .send(AgentCommand::WindowColorsChanged {
+                    colors: WindowColors {
+                        window: window.clone(),
+                        colors: colors.unwrap_or_default(),
+                    },
+                    allow_initial: colors.is_some(),
+                })
+                .await;
+        }
+        Ok(())
     }
 
     /// Stops only the same run whose source binding reported that its location went away.
@@ -372,7 +453,9 @@ pub(crate) async fn follow_guests(
 
 /// `colors` as the screen replies with them; a color that is not `#` and six hexadecimal digits
 /// is refused.
-fn terminal_colors(colors: &TerminalColors) -> Result<facade_screen::TerminalColors, ErrorBody> {
+pub(crate) fn terminal_colors(
+    colors: &TerminalColors,
+) -> Result<facade_screen::TerminalColors, ErrorBody> {
     let color = |name: &str, text: &Option<String>| -> Result<Option<[u8; 3]>, ErrorBody> {
         let Some(text) = text else {
             return Ok(None);

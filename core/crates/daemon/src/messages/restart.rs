@@ -27,11 +27,12 @@ impl Messages {
     /// where `pasted`, owing `owes` where it is a start's prompt.
     pub(crate) fn take_up(
         &self,
-        message: Message,
+        mut message: Message,
         pasted: bool,
         owes: Option<OwedResult>,
     ) -> watch::Receiver<Option<Settled>> {
         let mut open = self.deliveries.lock();
+        self.deliveries.identify(&mut message);
         Deliveries::open(&mut open.agents, message, pasted, false, owes)
     }
 }

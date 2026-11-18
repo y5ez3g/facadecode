@@ -7,6 +7,7 @@ use facade_base::daemon::{
     MessagesSnapshot, MessagesWatchArgs, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::machine::MessageRef;
 
 use super::outcome::read_delivery;
 use super::settle::owed_results;
@@ -45,6 +46,33 @@ impl Messages {
         self.snapshot(Inbox::Window(window), args)
     }
 
+    /// Looks up the original message in its recipient's inbox. A window replying to a message
+    /// for the person must appear on that message's delivery receipt.
+    pub(crate) fn reply_in_inbox(
+        &self,
+        owner: &str,
+        reference: &MessageRef,
+        window: Option<&WindowRef>,
+    ) -> Result<Option<Message>, ErrorBody> {
+        if reference.machine_id != self.deliveries.machine_id {
+            return Ok(None);
+        }
+        let Some(number) = parse_number(&reference.message_id) else {
+            return Ok(None);
+        };
+        let kept = blocking_in_place(|| self.deliveries.table.inbox_message(owner, number))
+            .map_err(ErrorBody::internal)?;
+        Ok(kept
+            .filter(|kept| {
+                window.is_none_or(|window| {
+                    kept.human_windows
+                        .as_ref()
+                        .is_some_and(|receipt| receipt.delivered.contains(window))
+                })
+            })
+            .map(|kept| kept.message))
+    }
+
     fn snapshot(
         &self,
         inbox: Inbox<'_>,
@@ -60,10 +88,14 @@ impl Messages {
                 })
             })
             .transpose()?;
-        match &args.ids {
+        let mut snapshot = match &args.ids {
             Some(ids) => self.by_ids(inbox, ids, args),
             None => self.page(inbox, after.unwrap_or(0), args.all, limit),
+        }?;
+        for message in &mut snapshot.messages {
+            self.deliveries.identify(message);
         }
+        Ok(snapshot)
     }
 
     /// The messages among `ids` in `inbox`, and the IDs not found there.

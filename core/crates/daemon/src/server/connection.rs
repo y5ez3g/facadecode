@@ -13,13 +13,15 @@ use facade_base::daemon::{
     WatchResult, methods,
 };
 use facade_base::jsonrpc::{
-    ErrorBody, MAX_LINE_BYTES, Notification, Reason, decode_arguments, encode_line, parse_request,
+    ErrorBody, MAX_LINE_BYTES, Notification, Reason, Response, decode_arguments, encode_line,
+    parse_request,
 };
+use facade_base::machine::{MachineConnect, ProtocolMismatch};
 use facade_base::operations::{CallParams, EmptyResult, Operation};
 use facade_base::sockets::{ServerPeer, ServerReader, ServerSocket};
 use serde::Serialize;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Notify, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -111,11 +113,19 @@ pub(super) struct Connection<S: Service> {
 }
 
 /// What a request leaves the connection to do.
-enum Next {
+enum Next<M> {
     Read,
     End,
     /// Carry MCP from now on: the hello of a relay.
     Relay(Option<u64>, Value),
+    /// Send the final ordinary RPC response and hand over the stream.
+    Machine(MachineHandoff<M>),
+}
+
+struct MachineHandoff<M> {
+    id: u64,
+    response: Value,
+    machine: M,
 }
 
 /// Serves `socket` until the client closes, and cleans up after it.
@@ -129,7 +139,7 @@ pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> 
     });
     let (outbox, writer) = Outbox::open(write);
     let mut connection = Connection {
-        service,
+        service: service.clone(),
         peer,
         outbox,
         peer_pid,
@@ -146,12 +156,28 @@ pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> 
     let mut reader = BufReader::new(read);
     let served = connection.read_requests(&mut reader).await;
     connection.clean_up().await;
-    let _ = writer.await;
-    served
+    let writer = writer.await;
+    if let Some(MachineHandoff {
+        id,
+        response,
+        machine,
+    }) = served?
+    {
+        let mut write = writer??;
+        write
+            .write_all(&encode_line(&Response::ok(id, response)))
+            .await?;
+        write.flush().await?;
+        return service.serve_machine(machine, reader, write).await;
+    }
+    Ok(())
 }
 
 impl<S: Service> Connection<S> {
-    async fn read_requests(&mut self, reader: &mut Reader) -> anyhow::Result<()> {
+    async fn read_requests(
+        &mut self,
+        reader: &mut Reader,
+    ) -> anyhow::Result<Option<MachineHandoff<S::Machine>>> {
         let hello_by = tokio::time::Instant::now() + HELLO_TIMEOUT;
         let mut line = Vec::new();
         loop {
@@ -163,32 +189,34 @@ impl<S: Service> Connection<S> {
                 Some(_) => reading.await?,
                 None => match tokio::time::timeout_at(hello_by, reading).await {
                     Ok(read) => read?,
-                    Err(_) => return Ok(()),
+                    Err(_) => return Ok(None),
                 },
             };
             if read == 0 {
                 self.peer.closed.send_replace(true);
-                return Ok(());
+                return Ok(None);
             }
             if self.peer.hung_up() {
-                return Ok(());
+                return Ok(None);
             }
             if line.len() > MAX_LINE_BYTES {
                 // The rest of the line is no request of its own: answer and close.
                 self.outbox.fail(ErrorBody::line_too_long()).await;
-                return Ok(());
+                return Ok(None);
             }
             match self.request(&line).await {
                 Next::Read => {}
-                Next::End => return Ok(()),
+                Next::End => return Ok(None),
+                Next::Machine(handoff) => return Ok(Some(handoff)),
                 Next::Relay(id, params) => {
-                    return super::relay::serve(self, reader, id, params).await;
+                    super::relay::serve(self, reader, id, params).await?;
+                    return Ok(None);
                 }
             }
         }
     }
 
-    async fn request(&mut self, line: &[u8]) -> Next {
+    async fn request(&mut self, line: &[u8]) -> Next<S::Machine> {
         let request = match parse_request(line) {
             Ok(request) => request,
             Err(error) => {
@@ -204,7 +232,7 @@ impl<S: Service> Connection<S> {
             } else if super::is_relay_hello(&params) {
                 return Next::Relay(id, params);
             } else {
-                self.hello(id, params).await;
+                return self.hello(id, params).await;
             }
             return Next::Read;
         }
@@ -214,7 +242,7 @@ impl<S: Service> Connection<S> {
             return Next::Read;
         };
         match method {
-            methods::CALL => self.call(client, id, params, line.len()).await,
+            methods::CALL => return self.call(client, id, params, line.len()).await,
             methods::CANCEL => {
                 let result = self.cancel(params);
                 self.outbox.answer(id, result).await;
@@ -246,36 +274,65 @@ impl<S: Service> Connection<S> {
         Next::Read
     }
 
-    async fn hello(&mut self, id: Option<u64>, params: Value) {
-        let result = match self.client {
-            Some(_) => Err(ErrorBody::invalid_argument(
-                "hello was already received on this connection",
-            )),
-            None => self.say_hello(params).await,
+    async fn hello(&mut self, id: Option<u64>, params: Value) -> Next<S::Machine> {
+        let machine_hello = self.client.is_none() && params["kind"] == "machine";
+        let hello = match self.hello_params(params) {
+            Ok(hello) => hello,
+            Err(error) => {
+                self.outbox.answer(id, Err(error)).await;
+                return if machine_hello { Next::End } else { Next::Read };
+            }
         };
+        if hello.kind == ClientKind::Machine {
+            let Some(id) = id else { return Next::End };
+            let accepted = self
+                .service
+                .machine_hello(hello, self.peer_pid)
+                .await
+                .map(|(result, machine)| (value_of(result), machine));
+            return self.switch_to_machine(id, accepted, Next::End).await;
+        }
+        let result = self.say_hello(hello).await;
         let said = result.is_ok();
         self.outbox.answer(id, result).await;
         if said {
             self.teller = Some(self.tell_closing());
         }
+        Next::Read
     }
 
-    async fn say_hello(&mut self, params: Value) -> Result<Value, ErrorBody> {
+    fn hello_params(&self, params: Value) -> Result<HelloParams, ErrorBody> {
+        if self.client.is_some() {
+            return Err(ErrorBody::invalid_argument(
+                "hello was already received on this connection",
+            ));
+        }
         let hello: HelloParams = decode_arguments(params)?;
         let [oldest, newest] = hello.protocol;
         if newest.min(DAEMON_PROTOCOL_VERSION) < oldest.max(MIN_DAEMON_PROTOCOL_VERSION) {
+            let local_build = facade_base::build_id();
             let message = format!(
-                "daemon {} supports daemon protocol versions \
+                "daemon {local_build} supports daemon protocol versions \
                  {MIN_DAEMON_PROTOCOL_VERSION}-{DAEMON_PROTOCOL_VERSION}; client supports \
-                 {oldest}-{newest}; update Facade",
-                facade_base::build_id()
+                 {oldest}-{newest}; update Facade"
             );
-            return Err(ErrorBody::new(Reason::ProtocolIncompatible, message));
+            let mut error = ErrorBody::new(Reason::ProtocolIncompatible, message);
+            error.data.protocol = Some(ProtocolMismatch {
+                local_build,
+                local_protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+                remote_build: hello.build,
+                remote_protocol: hello.protocol,
+            });
+            return Err(error);
         }
-        if matches!(hello.kind, ClientKind::Unknown | ClientKind::Machine) {
+        if hello.kind == ClientKind::Unknown {
             let message = "unsupported client kind; update Facade";
             return Err(ErrorBody::new(Reason::ProtocolIncompatible, message));
         }
+        Ok(hello)
+    }
+
+    async fn say_hello(&mut self, hello: HelloParams) -> Result<Value, ErrorBody> {
         let (result, client, hold) = self.service.hello(hello, self.peer_pid).await?;
         self.client = Some(Arc::new(client));
         self.hold = Some(hold);
@@ -283,10 +340,19 @@ impl<S: Service> Connection<S> {
     }
 
     /// Runs a call in a task of its own, or in its agent's lane for typing and resizing.
-    async fn call(&mut self, client: Arc<Client>, id: Option<u64>, params: Value, size: usize) {
+    async fn call(
+        &mut self,
+        client: Arc<Client>,
+        id: Option<u64>,
+        params: Value,
+        size: usize,
+    ) -> Next<S::Machine> {
         let call: CallParams = match decode_arguments(params) {
             Ok(call) => call,
-            Err(error) => return self.outbox.answer(id, Err(error)).await,
+            Err(error) => {
+                self.outbox.answer(id, Err(error)).await;
+                return Next::Read;
+            }
         };
         let typing = matches!(call.op.as_str(), AgentType::NAME | AgentResize::NAME);
         // While a newer Facade takes over, a new call does nothing. An attached terminal's keys and
@@ -297,7 +363,13 @@ impl<S: Service> Connection<S> {
             && !attached
             && let Some(refused) = self.service.draining()
         {
-            return self.outbox.answer(id, Err(refused)).await;
+            self.outbox.answer(id, Err(refused)).await;
+            return Next::Read;
+        }
+        if call.op == MachineConnect::NAME {
+            let Some(id) = id else { return Next::Read };
+            let accepted = self.service.machine_connect(&client, call.args).await;
+            return self.switch_to_machine(id, accepted, Next::Read).await;
         }
         if typing {
             let context = LaneContext {
@@ -306,13 +378,13 @@ impl<S: Service> Connection<S> {
                 outbox: self.outbox.clone(),
                 peer: self.peer.clone(),
             };
-            return self
-                .lanes
+            self.lanes
                 .queue(&context, id, call.op, call.args, size)
                 .await;
+            return Next::Read;
         }
         let Ok(slot) = self.call_slots.clone().acquire_owned().await else {
-            return;
+            return Next::Read;
         };
         let (when_full, cancel) = match id {
             Some(id) => {
@@ -337,6 +409,26 @@ impl<S: Service> Connection<S> {
             outbox.answer(id, result).await;
             drop(slot);
         });
+        Next::Read
+    }
+
+    async fn switch_to_machine(
+        &mut self,
+        id: u64,
+        accepted: Result<(Value, S::Machine), ErrorBody>,
+        refused: Next<S::Machine>,
+    ) -> Next<S::Machine> {
+        match accepted {
+            Ok((response, machine)) => Next::Machine(MachineHandoff {
+                id,
+                response,
+                machine,
+            }),
+            Err(error) => {
+                self.outbox.answer(Some(id), Err(error)).await;
+                refused
+            }
+        }
     }
 
     /// Tells the call that `cancel` names that its client cancelled it, and answers `{}`: the
@@ -433,6 +525,7 @@ impl<S: Service> Connection<S> {
     async fn clean_up(mut self) {
         if let Some(teller) = self.teller.take() {
             teller.abort();
+            let _ = teller.await;
         }
         let watches: Vec<Watching> = self.watches.drain().map(|(_, watching)| watching).collect();
         if let Some(client) = self.client.clone() {

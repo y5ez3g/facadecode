@@ -24,18 +24,21 @@ use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{Message, WindowDescription, WindowRef};
 use facade_base::files;
+use facade_base::machine::MessageRef;
 use facade_base::process::{EndReason, ProcessExit};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, Row, params};
 
 mod guests;
 mod integrations;
+mod machines;
 mod membership;
 mod messages;
 mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use integrations::{IntegrationFile, IntegrationTable};
+pub(crate) use machines::SavedConnection;
 pub(crate) use membership::MembershipTable;
 pub(crate) use messages::{Gone, Kept, KeptMessage, MessageTable, RequestId, Settlement};
 pub(crate) use windows::WindowTable;
@@ -57,17 +60,24 @@ const SCHEMA: &str = "
 		rule TEXT,
 		session TEXT,
 		creator TEXT,
+		creator_machine_id TEXT,
+		start_machine_id TEXT NOT NULL,
+		start_window_id TEXT,
 		root TEXT NOT NULL,
+		root_machine_id TEXT NOT NULL,
 		yolo INTEGER NOT NULL,
 		request_id TEXT,
 		prompt INTEGER,
+		result_message_id TEXT,
+		result_message_machine_id TEXT,
 		location_id TEXT NOT NULL,
 		location_machine_id TEXT,
 		location_window_id TEXT
 	);
 	CREATE TABLE machine (
 		singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-		machine_id TEXT NOT NULL
+		machine_id TEXT NOT NULL,
+		name TEXT NOT NULL
 	);
 ";
 
@@ -103,8 +113,12 @@ pub(crate) struct AgentRecord {
     pub(crate) location_source_window: Option<WindowRef>,
     /// The agent that started it, none where the person did.
     pub(crate) creator: Option<String>,
+    pub(crate) creator_machine_id: Option<String>,
+    pub(crate) start_machine_id: String,
+    pub(crate) start_window_id: Option<String>,
     /// The first agent of its creation tree.
     pub(crate) root: String,
+    pub(crate) root_machine_id: String,
     /// Its run's YOLO.
     pub(crate) yolo: bool,
     /// The creator's own ID of its start, where it gave one: the same ID within the hour answers
@@ -117,10 +131,18 @@ pub(crate) struct AgentRecord {
     pub(crate) location_id: String,
 }
 
+/// The record and the receipts kept for a repeated start.
+pub(crate) struct KeptStart {
+    pub(crate) agent_id: String,
+    pub(crate) prompt: Option<u64>,
+    pub(crate) result: Option<MessageRef>,
+}
+
 /// The store as the daemon's start reads it.
 pub(crate) struct OpenedStore {
     pub(crate) store: Arc<Store>,
     pub(crate) machine_id: String,
+    pub(crate) machine_name: String,
     /// Every record this build can read.
     pub(crate) records: Vec<AgentRecord>,
     /// Every agent ID in the table, also of the rows this build cannot read.
@@ -147,16 +169,17 @@ impl Store {
         connection
             .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
             .map_err(unreadable)?;
-        let (has_tables, has_machine): (bool, bool) = connection
+        let (has_tables, has_saved_connections): (bool, bool) = connection
             .query_row(
                 "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table'),
-                        EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'machine')",
+                        EXISTS (SELECT 1 FROM sqlite_schema
+                                WHERE type = 'table' AND name = 'saved_connections')",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(unreadable)?;
         anyhow::ensure!(
-            !has_tables || has_machine,
+            !has_tables || has_saved_connections,
             "{} belongs to an older development build. Remove {} before restarting Facade.",
             path.display(),
             core.display()
@@ -179,11 +202,11 @@ impl Store {
             initialize(&mut connection, held)
                 .map_err(|err| anyhow::anyhow!("could not initialize {}: {err}", path.display()))?;
         }
-        let machine_id = connection
+        let (machine_id, machine_name) = connection
             .query_row(
-                "SELECT machine_id FROM machine WHERE singleton = 1",
+                "SELECT machine_id, name FROM machine WHERE singleton = 1",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(unreadable)?;
         let (records, agent_ids) = read_records(&connection).map_err(unreadable)?;
@@ -192,6 +215,7 @@ impl Store {
                 connection: Mutex::new(connection),
             }),
             machine_id,
+            machine_name,
             records,
             agent_ids,
         })
@@ -252,7 +276,14 @@ impl Store {
         record: &AgentRecord,
         prompt: &Message,
         owes_result: bool,
-    ) -> anyhow::Result<(Message, Option<u64>)> {
+        reserved: Option<&MessageRef>,
+    ) -> anyhow::Result<(Message, Option<MessageRef>)> {
+        let reserved = reserved
+            .map(|reference| {
+                messages::result_number(reference)
+                    .map(|number| (reference.machine_id.as_str(), number))
+            })
+            .transpose()?;
         self.transaction(
             || format!("save the record of {} with its prompt", record.agent_id),
             |transaction| {
@@ -264,34 +295,44 @@ impl Store {
                     params![number as i64, record.agent_id],
                 )?;
                 let owed = owes_result
-                    .then(|| messages::owe_result(transaction, number))
+                    .then(|| messages::owe_result(transaction, number, reserved))
                     .transpose()?;
+                if let Some(reference) = &owed {
+                    transaction.execute(
+                        "UPDATE agents SET result_message_id = ?1, result_message_machine_id = ?2 WHERE agent_id = ?3",
+                        params![reference.message_id, reference.machine_id, record.agent_id],
+                    )?;
+                }
                 Ok((prompt, owed))
             },
         )
     }
 
-    /// The agent `creator` (none for the person) started with request ID `request_id` at `since`
-    /// or later: its ID, and its start's prompt's number where it had one. Blocks.
+    /// The record and first receipt a caller got for this start in the last hour.
     pub(crate) fn find_start(
         &self,
-        creator: Option<&str>,
-        request_id: &str,
+        key: &crate::operations::StartKey,
         since: &str,
-    ) -> anyhow::Result<Option<(String, Option<u64>)>> {
+    ) -> anyhow::Result<Option<KeptStart>> {
         self.with(
-            || "read the agent records".to_string(),
+            || "read a repeated start".to_string(),
             |connection| {
                 let mut statement = connection.prepare(
-                    "SELECT agent_id, prompt FROM agents WHERE request_id = ?1 AND creator IS ?2 \
-                     AND created_at >= ?3 ORDER BY created_at LIMIT 1",
+                    "SELECT agent_id, prompt, result_message_id, result_message_machine_id FROM agents
+                     WHERE request_id = ?1 AND creator IS ?2 AND start_machine_id = ?3
+                     AND start_window_id IS ?4 AND created_at >= ?5 ORDER BY created_at LIMIT 1",
                 )?;
-                let mut rows = statement.query(params![request_id, creator, since])?;
-                let Some(row) = rows.next()? else {
-                    return Ok(None);
-                };
+                let mut rows = statement.query(params![key.request_id, key.agent_id, key.machine_id, key.window_id, since])?;
+                let Some(row) = rows.next()? else { return Ok(None); };
                 let prompt: Option<i64> = row.get(1)?;
-                Ok(Some((row.get(0)?, prompt.map(|number| number as u64))))
+                let result: Option<String> = row.get(2)?;
+                let machine: Option<String> = row.get(3)?;
+                let reference = result.zip(machine).map(|(message_id, machine_id)| MessageRef { machine_id, message_id });
+                Ok(Some(KeptStart {
+                    agent_id: row.get(0)?,
+                    prompt: prompt.map(|number| number as u64),
+                    result: reference,
+                }))
             },
         )
     }
@@ -511,9 +552,9 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
     let source = record.location_source_window.as_ref();
     connection.execute(
         "INSERT INTO agents (agent_id, name, cli, cwd, pid, created_at, exit_code, exit_signal, \
-         exit_at, exit_reason, rule, session, creator, root, yolo, request_id, prompt, location_id, \
-         location_machine_id, location_window_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+         exit_at, exit_reason, rule, session, creator, creator_machine_id, start_machine_id, start_window_id, root, root_machine_id, \
+         yolo, request_id, prompt, location_id, location_machine_id, location_window_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
         params![
             record.agent_id,
             record.name,
@@ -528,7 +569,11 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
             record.rule,
             record.session,
             record.creator,
+            record.creator_machine_id,
+            record.start_machine_id,
+            record.start_window_id,
             record.root,
+            record.root_machine_id,
             record.yolo,
             record.request_id,
             record.prompt.map(|number| number as i64),
@@ -550,20 +595,23 @@ fn initialize(connection: &mut Connection, held: &[String]) -> rusqlite::Result<
     let transaction = connection.transaction()?;
     transaction.execute_batch(SCHEMA)?;
     integrations::add_table(&transaction)?;
+    machines::add_tables(&transaction)?;
     messages::add_table(&transaction)?;
     windows::add_table(&transaction)?;
     guests::add_table(&transaction)?;
     membership::add_table(&transaction)?;
     transaction.execute("INSERT INTO numbers (next) VALUES (?1)", [next as i64])?;
     transaction.execute("INSERT INTO message_numbers (next) VALUES (1)", [])?;
+    let hostname = facade_base::system::hostname().unwrap_or_default();
+    let machine_name = facade_base::address::default_machine_name(&hostname);
     transaction.execute(
-        "INSERT INTO machine (singleton, machine_id) VALUES (1, ?1)",
-        [machine_uuid()],
+        "INSERT INTO machine (singleton, machine_id, name) VALUES (1, ?1, ?2)",
+        params![machine_uuid(), machine_name],
     )?;
     transaction.commit()
 }
 
-fn machine_uuid() -> String {
+pub(super) fn machine_uuid() -> String {
     let first = facade_base::random_u64();
     let second = facade_base::random_u64();
     format!(
@@ -636,7 +684,11 @@ fn read_record(connection: &Connection, row: &Row) -> rusqlite::Result<AgentReco
             window_id,
         }),
         creator: optional(row, "creator"),
+        creator_machine_id: optional(row, "creator_machine_id"),
+        start_machine_id: row.get("start_machine_id")?,
+        start_window_id: optional(row, "start_window_id"),
         root: row.get("root")?,
+        root_machine_id: row.get("root_machine_id")?,
         yolo: row.get("yolo")?,
         request_id: optional(row, "request_id"),
         prompt: optional::<i64>(row, "prompt").map(|number| number as u64),
@@ -655,12 +707,22 @@ impl Store {
     ) -> anyhow::Result<Kept> {
         self.message_table().insert_message(message, request)
     }
+    pub(crate) fn test_machine_id(&self) -> String {
+        self.connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT machine_id FROM machine", [], |row| row.get(0))
+            .unwrap()
+    }
+
     pub(crate) fn find_request(
         self: &Arc<Self>,
         from: &str,
+        to: &str,
         request: RequestId,
     ) -> anyhow::Result<Option<KeptMessage>> {
-        self.message_table().find_request(from, request)
+        self.message_table()
+            .find_request(&self.test_machine_id(), from, to, request)
     }
     pub(crate) fn settle_messages(
         self: &Arc<Self>,
@@ -754,7 +816,11 @@ pub(crate) mod tests {
             }],
             location_source_window: None,
             creator: None,
+            creator_machine_id: None,
+            start_machine_id: "test-machine".into(),
+            start_window_id: None,
             root: id.into(),
+            root_machine_id: "test-machine".into(),
             yolo: true,
             request_id: None,
             prompt: None,
@@ -1025,7 +1091,9 @@ pub(crate) mod tests {
         let store = Store::open(&core, &[]).unwrap().store;
         let child = AgentRecord {
             creator: Some("a1".into()),
+            creator_machine_id: Some("creator-machine".into()),
             root: "a1".into(),
+            root_machine_id: "root-machine".into(),
             yolo: false,
             ..record("a2")
         };

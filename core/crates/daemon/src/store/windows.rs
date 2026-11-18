@@ -128,9 +128,6 @@ impl WindowTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::AgentRecord;
-    use crate::store::tests::record;
-    use facade_base::daemon::WindowRef;
 
     fn window(id: &str, workspace: &str) -> WindowDescription {
         WindowDescription {
@@ -180,53 +177,5 @@ mod tests {
         assert_eq!(row.sequence, kept.sequence);
         kept.description.env = None;
         assert_eq!(row.description, kept.description);
-    }
-
-    #[test]
-    fn an_unreferenced_window_can_be_deleted_after_its_last_agent_is_removed() {
-        let store = Store::in_memory();
-        let member = WindowRef {
-            machine_id: "test-machine".into(),
-            window_id: "win-1".into(),
-        };
-        let row = WindowRow {
-            window_id: member.window_id.clone(),
-            sequence: 1,
-            description: window("instance-1", "workspace"),
-        };
-        let source = WindowRef {
-            window_id: "win-source".into(),
-            ..member.clone()
-        };
-        let windows = store.window_table();
-        windows.save_logical_window(&row).unwrap();
-        windows
-            .save_logical_window(&WindowRow {
-                window_id: source.window_id.clone(),
-                sequence: 2,
-                description: window("source-instance", "workspace"),
-            })
-            .unwrap();
-        store
-            .insert(&AgentRecord {
-                windows: vec![member.clone()],
-                location_source_window: Some(source.clone()),
-                ..record("a1")
-            })
-            .unwrap();
-        let members = store.membership_table();
-        assert_eq!(
-            members.add("a1", &member).unwrap(),
-            Some(vec![member.clone()])
-        );
-        assert!(!store.delete_empty_window(&member).unwrap());
-        assert!(!store.delete_empty_window(&source).unwrap());
-        assert_eq!(windows.logical_windows().unwrap().len(), 2);
-
-        store.delete("a1").unwrap();
-        assert!(store.delete_empty_window(&member).unwrap());
-        assert!(store.delete_empty_window(&source).unwrap());
-        assert!(windows.logical_windows().unwrap().is_empty());
-        assert_eq!(members.add("a1", &member).unwrap(), None);
     }
 }

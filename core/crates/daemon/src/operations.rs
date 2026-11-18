@@ -13,6 +13,7 @@ use facade_base::daemon::{
     TERMINAL_WINDOW, ToolsState, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::machine::{AgentRef, Caller, MessageRef};
 use facade_base::process::{ProcessExit, ProcessState};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -34,8 +35,43 @@ const PREVIOUS_RUN_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a request ID answers again.
 const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
 
-/// A start's creator, none for the person, and its request ID.
-pub(crate) type StartKey = (Option<String>, String);
+/// A request is scoped to its caller and the machine holding the start.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct StartKey {
+    pub(crate) machine_id: String,
+    pub(crate) agent_id: Option<String>,
+    pub(crate) window_id: Option<String>,
+    pub(crate) request_id: String,
+}
+
+pub(crate) struct StartOrigin {
+    pub(crate) caller: Caller,
+    pub(crate) sender: Sender,
+    pub(crate) by_model: bool,
+    pub(crate) from_window: Option<String>,
+    pub(crate) colors: Option<facade_base::daemon::TerminalColors>,
+}
+
+impl StartOrigin {
+    fn editor(&self) -> Option<WindowRef> {
+        match &self.caller {
+            Caller::Ide { window } => Some(window.clone()),
+            _ => None,
+        }
+    }
+
+    fn key(&self, request_id: String) -> StartKey {
+        StartKey {
+            machine_id: self.caller.machine_id().to_string(),
+            agent_id: match &self.caller {
+                Caller::Agent { agent, .. } => Some(agent.agent_id.clone()),
+                _ => None,
+            },
+            window_id: self.editor().map(|window| window.window_id),
+            request_id,
+        }
+    }
+}
 /// A start's answer, once it has one.
 pub(crate) type StartAnswer = Option<Result<StartResult, ErrorBody>>;
 
@@ -201,7 +237,9 @@ impl Daemon {
         };
         let mut members = match explicit {
             Some(window) => {
-                self.windows.check_member(&window)?;
+                if window.machine_id == self.machine_id {
+                    self.windows.check_member(&window)?;
+                }
                 vec![window]
             }
             None => match &parent {
@@ -246,26 +284,24 @@ impl Daemon {
     pub(crate) async fn start(
         self: &Arc<Self>,
         args: StartArgs,
-        sender: Sender,
-        by_model: bool,
-        editor: Option<WindowRef>,
+        origin: StartOrigin,
     ) -> Result<StartResult, ErrorBody> {
         let Some(request_id) = args.request_id.clone() else {
-            return self.start_once(args, sender, by_model, editor).await;
+            return self.start_once(args, origin).await;
         };
         check_request_id(&request_id)?;
-        let creator = (sender.from != HUMAN).then(|| sender.from.clone());
-        let key: StartKey = (creator, request_id.clone());
+        let key = origin.key(request_id.clone());
+        let from = origin.sender.from.clone();
         let under_way = {
             let mut starting = self.starting.lock().unwrap();
             if let Some(answer) = starting.get(&key) {
                 Err(answer.clone())
-            } else if let Some(answer) = self.started_before(key.0.as_deref(), &key.1)? {
+            } else if let Some(answer) = self.started_before(&key)? {
                 log(
                     "info",
                     &format!(
                         "#{}'s start request {request_id} answers #{} again, as it stands",
-                        sender.from, answer.agent.agent_id
+                        from, answer.agent.agent_id
                     ),
                 );
                 return Ok(answer);
@@ -281,7 +317,7 @@ impl Daemon {
         };
         let mut answered = match under_way {
             Ok(held) => {
-                let answer = self.start_once(args, sender, by_model, editor).await;
+                let answer = self.start_once(args, origin).await;
                 held.answer(answer.clone());
                 return answer;
             }
@@ -299,7 +335,7 @@ impl Daemon {
                 "info",
                 &format!(
                     "#{}'s start request {request_id} answers #{} again, as it started",
-                    sender.from, answer.agent.agent_id
+                    from, answer.agent.agent_id
                 ),
             );
         }
@@ -312,28 +348,26 @@ impl Daemon {
     /// The agent `creator` (none for the person) started with `request_id` within the hour, as a
     /// repeat answers it: as it stands now, with its prompt as it stands, and the result an
     /// agent's start is owed.
-    fn started_before(
-        &self,
-        creator: Option<&str>,
-        request_id: &str,
-    ) -> Result<Option<StartResult>, ErrorBody> {
+    fn started_before(&self, key: &StartKey) -> Result<Option<StartResult>, ErrorBody> {
         let since = an_hour_ago();
-        let found = crate::blocking_in_place(|| self.store.find_start(creator, request_id, &since))
+        let found = crate::blocking_in_place(|| self.store.find_start(key, &since))
             .map_err(ErrorBody::internal)?;
-        let Some((agent, prompt)) =
-            found.and_then(|(id, prompt)| Some((self.get_agent(&id)?, prompt)))
-        else {
+        let Some(kept) = found else {
             return Ok(None);
         };
-        // The result an agent's start is owed took the number right after its prompt's.
-        let result_message_id = prompt
-            .filter(|_| creator.is_some())
-            .map(|number| format!("m{}", number + 1));
+        let Some(agent) = self.get_agent(&kept.agent_id) else {
+            return Ok(None);
+        };
         Ok(Some(StartResult {
             agent: agent.info(),
-            prompt: prompt.and_then(|number| self.messages.message(&format!("m{number}"))),
-            result_message_machine_id: result_message_id.as_ref().map(|_| self.machine_id.clone()),
-            result_message_id,
+            prompt: kept
+                .prompt
+                .and_then(|number| self.messages.message(&format!("m{number}"))),
+            result_message_machine_id: kept
+                .result
+                .as_ref()
+                .map(|reference| reference.machine_id.clone()),
+            result_message_id: kept.result.map(|reference| reference.message_id),
             repeated: true,
         }))
     }
@@ -344,37 +378,19 @@ impl Daemon {
     async fn start_once(
         self: &Arc<Self>,
         mut args: StartArgs,
-        sender: Sender,
-        by_model: bool,
-        editor: Option<WindowRef>,
+        origin: StartOrigin,
     ) -> Result<StartResult, ErrorBody> {
+        if args.initial_windows.is_some() {
+            args = self.prepare_forwarded_start(args, origin.by_model).await?;
+        }
         gate_for_test("before-start-run");
         // One reading of the settings file gives the start its YOLO, names and entry (RULES-4.3).
         let settings = command_line::read_settings()?;
-        let configured = command_line::configure(&settings, &args, by_model)?;
-        if let Some(session) = args.session.as_deref() {
-            command_line::check_session(&configured, &args.command[0], session)?;
-        }
-        if let Some(prompt) = args.prompt.as_deref() {
-            command_line::check_start_prompt(prompt, &configured, &args.command[0])?;
-            let widest = crate::delivery::pending_message(
-                sender.clone(),
-                "a999999999",
-                prompt.to_owned(),
-                None,
-                None,
-            );
-            crate::delivery::check_fits(
-                configured.rule,
-                "the new agent",
-                &widest,
-                "start it with a shorter prompt and send the rest as messages",
-            )?;
-        }
-        let windows = self.start_windows(args.window.take(), editor, &sender)?;
+        let configured = self.configure_start(&settings, &args, &origin)?;
+        let windows = self.windows_for_start(&mut args, &origin)?;
         let Some(worktree) = args.worktree.take() else {
             return self
-                .start_in(args, sender, &settings, configured, windows)
+                .start_in(args, origin, &settings, configured, windows)
                 .await;
         };
         self.windows
@@ -391,7 +407,7 @@ impl Daemon {
             })
             .await?;
         args.cwd = made.path.clone();
-        self.start_in(args, sender, &settings, configured, windows)
+        self.start_in(args, origin, &settings, configured, windows)
             .await
             .map_err(|mut error| {
                 error.message.push_str(&format!(
@@ -406,11 +422,90 @@ impl Daemon {
             })
     }
 
+    fn configure_start(
+        &self,
+        settings: &facade_base::settings::Settings,
+        args: &StartArgs,
+        origin: &StartOrigin,
+    ) -> Result<Configured, ErrorBody> {
+        let configured = command_line::configure(settings, args, origin.by_model)?;
+        if let Some(session) = args.session.as_deref() {
+            command_line::check_session(&configured, &args.command[0], session)?;
+        }
+        if let Some(prompt) = args.prompt.as_deref() {
+            command_line::check_start_prompt(prompt, &configured, &args.command[0])?;
+            let widest = Message {
+                from_machine_id: (origin.caller.machine_id() != self.machine_id)
+                    .then(|| origin.caller.machine_id().to_string()),
+                from_window: origin.from_window.clone(),
+                ..crate::delivery::pending_message(
+                    origin.sender.clone(),
+                    "a999999999",
+                    prompt.to_owned(),
+                    None,
+                    None,
+                )
+            };
+            crate::delivery::check_fits(
+                configured.rule,
+                "the new agent",
+                &widest,
+                "start it with a shorter prompt and send the rest as messages",
+                |message| self.message_text(message),
+            )?;
+        }
+        Ok(configured)
+    }
+
+    fn windows_for_start(
+        &self,
+        args: &mut StartArgs,
+        origin: &StartOrigin,
+    ) -> Result<StartWindows, ErrorBody> {
+        let Some(mut members) = args.initial_windows.take() else {
+            return self.start_windows(args.window.take(), origin.editor(), &origin.sender);
+        };
+        members.sort();
+        members.dedup();
+        if members.is_empty() {
+            return Err(ErrorBody::invalid_argument(
+                "the forwarded start has no member window",
+            ));
+        }
+        let colors = origin
+            .editor()
+            .filter(|window| members.contains(window))
+            .zip(
+                origin
+                    .colors
+                    .as_ref()
+                    .and_then(|colors| crate::presence::terminal_colors(colors).ok()),
+            )
+            .map(|(window, colors)| WindowColors { window, colors })
+            .or_else(|| self.first_member_colors(&members));
+        Ok(StartWindows { members, colors })
+    }
+
+    pub(crate) fn preflight_start(
+        &self,
+        mut args: StartArgs,
+        origin: &StartOrigin,
+    ) -> Result<(), ErrorBody> {
+        let settings = command_line::read_settings()?;
+        let mut configured = self.configure_start(&settings, &args, origin)?;
+        self.windows_for_start(&mut args, origin)?;
+        let location = self
+            .windows
+            .check_destination(args.location_source_window.as_ref(), &args.cwd)?;
+        configured.find_program(&location.cwd)?;
+        Ok(())
+    }
+
     /// Starts the CLI `configured` in `args.cwd`, in the order a start keeps (docs/core/ARCHITECTURE.md).
     async fn start_in(
         self: &Arc<Self>,
         mut args: StartArgs,
-        sender: Sender,
+        origin: StartOrigin,
         settings: &facade_base::settings::Settings,
         mut configured: Configured,
         windows: StartWindows,
@@ -431,7 +526,17 @@ impl Daemon {
         let rule = configured.rule;
         let reservation = self.runs.reserve_start();
         let id = self.records.next_id().await?;
-        let (creator, root) = self.tree_of(&sender, &id);
+        let (creator, root) = match &origin.caller {
+            Caller::Agent { agent, root, .. } => (Some(agent.clone()), root.clone()),
+            _ => (
+                None,
+                AgentRef {
+                    machine_id: self.machine_id.clone(),
+                    agent_id: id.clone(),
+                },
+            ),
+        };
+        let sender = &origin.sender;
         let given = args
             .name
             .as_deref()
@@ -457,7 +562,9 @@ impl Daemon {
             cwd: &args.cwd,
             location_id: &location,
             window: place.as_ref().map(|(label, id)| (label.as_str(), *id)),
-            creator: creator.as_deref().map(|creator| (creator, creator_name)),
+            creator: creator
+                .as_ref()
+                .map(|creator| (creator.agent_id.as_str(), creator_name)),
             yolo,
             session: args.session.as_deref(),
             kind: RunKind::Start,
@@ -507,10 +614,10 @@ impl Daemon {
             cols: Some(args.cols),
             rows: Some(args.rows),
             created_at: facade_base::time::iso_now(),
-            creator: creator.clone(),
-            creator_machine_id: None,
-            root: root.clone(),
-            root_machine_id: None,
+            creator: creator.as_ref().map(|agent| agent.agent_id.clone()),
+            creator_machine_id: creator.as_ref().map(|agent| agent.machine_id.clone()),
+            root: root.agent_id.clone(),
+            root_machine_id: Some(root.machine_id.clone()),
             yolo,
             exit: None,
             session: None,
@@ -533,8 +640,12 @@ impl Daemon {
             session: None,
             windows: info.windows.clone(),
             location_source_window: info.location_source_window.clone(),
-            creator,
-            root,
+            creator: info.creator.clone(),
+            creator_machine_id: info.creator_machine_id.clone(),
+            start_machine_id: origin.caller.machine_id().to_string(),
+            start_window_id: origin.editor().map(|window| window.window_id),
+            root: root.agent_id,
+            root_machine_id: root.machine_id,
             yolo,
             request_id: args.request_id.clone(),
             prompt: None,
@@ -548,10 +659,26 @@ impl Daemon {
             Some(text) => {
                 let message = Message {
                     call_id: args.call_id.clone(),
+                    from_machine_id: (origin.caller.machine_id() != self.machine_id)
+                        .then(|| origin.caller.machine_id().to_string()),
+                    from_window: origin.from_window.clone(),
                     ..crate::delivery::pending_message(sender.clone(), &id, text, None, None)
                 };
                 let owes = sender.from != HUMAN;
-                blocking(move || store.insert_with_prompt(&record, &message, owes).map(Some)).await
+                let reserved = args
+                    .result_message_machine_id
+                    .clone()
+                    .zip(args.result_message_id.clone())
+                    .map(|(machine_id, message_id)| MessageRef {
+                        machine_id,
+                        message_id,
+                    });
+                blocking(move || {
+                    store
+                        .insert_with_prompt(&record, &message, owes, reserved.as_ref())
+                        .map(Some)
+                })
+                .await
             }
         };
         let kept = match kept {
@@ -603,10 +730,10 @@ impl Daemon {
         // ahead of it.
         let prompt = match kept {
             Some((prompt, owed)) => {
-                let owes = owed.map(|number| {
+                let owes = owed.clone().map(|reference| {
                     let agent = handle.clone();
                     OwedResult {
-                        number,
+                        reference,
                         agent: Arc::new(move || agent.info()),
                     }
                 });
@@ -635,7 +762,7 @@ impl Daemon {
                 FirstRead::Now,
             );
         }
-        let (prompt, result_message_id) = match prompt {
+        let (prompt, result) = match prompt {
             Some((prompt, owed, settled, started)) => {
                 tokio::spawn(self.clone().send_start_prompt(
                     handle.clone(),
@@ -643,7 +770,7 @@ impl Daemon {
                     settled,
                     started,
                 ));
-                (Some(prompt), owed.map(|number| format!("m{number}")))
+                (Some(prompt), owed)
             }
             None => (None, None),
         };
@@ -668,23 +795,12 @@ impl Daemon {
         Ok(StartResult {
             agent: info,
             prompt,
-            result_message_machine_id: result_message_id.as_ref().map(|_| self.machine_id.clone()),
-            result_message_id,
+            result_message_machine_id: result
+                .as_ref()
+                .map(|reference| reference.machine_id.clone()),
+            result_message_id: result.map(|reference| reference.message_id),
             repeated: false,
         })
-    }
-
-    /// Where new agent `id` that `sender` starts goes in the creation trees (RULES-2.2): an
-    /// agent's start joins its creator's tree, and the person's starts a tree of its own. A creator
-    /// no longer listed counts as its own tree's first.
-    fn tree_of(&self, sender: &Sender, id: &str) -> (Option<String>, String) {
-        if sender.from == HUMAN {
-            return (None, id.to_string());
-        }
-        let root = self
-            .get_agent(&sender.from)
-            .map_or_else(|| sender.from.clone(), |creator| creator.info().root);
-        (Some(sender.from.clone()), root)
     }
 
     /// The environment agent `id`'s CLI started with, less what its rule added, for a start its
@@ -830,7 +946,8 @@ impl Daemon {
     pub(crate) async fn adopt(
         &self,
         agent: &AgentHandle,
-        binding: &WindowBinding,
+        window: &WindowRef,
+        binding: Option<&WindowBinding>,
     ) -> Result<AgentInfo, ErrorBody> {
         if agent.is_guest() {
             return Err(ErrorBody::refused("a guest stays in its original window"));
@@ -842,17 +959,14 @@ impl Daemon {
         if self.get_agent(id).is_none() {
             return Err(missing());
         }
-        if !self.windows.is_current(binding) {
+        if binding.is_some_and(|binding| !self.windows.is_current(binding)) {
             return Err(ErrorBody::refused("this editor window is no longer bound"));
         }
         let current = agent.info();
-        if current.windows.contains(&binding.window) {
+        if current.windows.contains(window) {
             return Ok(current);
         }
-        let windows = self
-            .records
-            .add_window(id, &binding.window)?
-            .ok_or_else(missing)?;
+        let windows = self.records.add_window(id, window)?.ok_or_else(missing)?;
         let (reply, updated) = oneshot::channel();
         if !agent
             .send(AgentCommand::UpdateWindows { windows, reply })

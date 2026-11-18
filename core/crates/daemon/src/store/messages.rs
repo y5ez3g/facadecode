@@ -19,7 +19,8 @@
 use std::sync::Arc;
 
 use facade_base::daemon::{Delivery, Message, WindowDelivery, WindowRef};
-use rusqlite::{Connection, Row, params};
+use facade_base::machine::{AgentRef, MessageRef};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -33,7 +34,8 @@ const UNDELIVERED: &str = "status != 'success'";
 /// The columns a message is read from and written to, in order.
 const COLUMNS: &str = "number, \"from\", from_name, \"to\", text, reply_to, at, status, reason, \
                        text_written, enter_written, deadline, delivered_via, delivered_at, paste, \
-                       from_window, call_id, result_owed, result, human_windows";
+                       from_window, call_id, result_owed, result, human_windows, \
+                       from_machine_id, reply_to_machine_id, result_owed_machine_id";
 
 /// Creates the table and its indexes. `messages_undelivered` lets reads scan only messages that
 /// are still waiting.
@@ -58,13 +60,18 @@ pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
 			from_window TEXT,
 			call_id TEXT,
 			result_owed INTEGER,
+			result_owed_machine_id TEXT,
 			result TEXT,
 			request_id TEXT,
-			human_windows TEXT
+			request_window_id TEXT,
+			human_windows TEXT,
+			from_machine_id TEXT,
+			reply_to_machine_id TEXT
 		);
 		CREATE INDEX messages_inbox ON messages (\"to\", number);
 		CREATE INDEX messages_undelivered ON messages (\"to\", number) WHERE {UNDELIVERED};
-		CREATE INDEX messages_request ON messages (\"from\", request_id) WHERE request_id IS NOT NULL;"
+		CREATE INDEX messages_request ON messages
+		    (\"from\", from_machine_id, \"to\", request_window_id, request_id) WHERE request_id IS NOT NULL;"
     ))
 }
 
@@ -74,6 +81,7 @@ pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
 pub(crate) struct RequestId<'a> {
     pub(crate) id: &'a str,
     pub(crate) since: &'a str,
+    pub(crate) caller_window_id: Option<&'a str>,
 }
 
 /// What keeping a message with a request ID found: the message kept now, or the one its sender
@@ -101,7 +109,7 @@ impl Kept {
 pub(crate) struct KeptMessage {
     pub(crate) message: Message,
     pub(crate) paste: Option<u64>,
-    pub(crate) result_owed: Option<u64>,
+    pub(crate) result_owed: Option<MessageRef>,
     /// The window subscriptions that took or refused a message to the person.
     pub(crate) human_windows: Option<WindowDelivery>,
 }
@@ -148,6 +156,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
     let via: Option<String> = row.get("delivered_via")?;
     let paste: Option<i64> = row.get("paste")?;
     let result_owed: Option<i64> = row.get("result_owed")?;
+    let result_machine: Option<String> = row.get("result_owed_machine_id")?;
     // Facts this build cannot read leave a result its words.
     let result: Option<String> = row.get("result")?;
     let human_column = row.as_ref().column_index("human_windows")?;
@@ -174,15 +183,15 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
     };
     Ok(KeptMessage {
         message: Message {
-            message_ref: None,
-            from_machine_id: None,
-            reply_to_machine_id: None,
             message_id: format!("m{number}"),
+            message_ref: None,
             from: row.get("from")?,
             from_name: row.get("from_name")?,
+            from_machine_id: row.get("from_machine_id")?,
             to: row.get("to")?,
             text: row.get("text")?,
             reply_to: reply_to.map(|reply| format!("m{reply}")),
+            reply_to_machine_id: row.get("reply_to_machine_id")?,
             from_window: row.get("from_window")?,
             call_id: row.get("call_id")?,
             result: result.and_then(|facts| serde_json::from_str(&facts).ok()),
@@ -190,7 +199,12 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
             delivery,
         },
         paste: paste.map(|paste| paste as u64),
-        result_owed: result_owed.map(|number| number as u64),
+        result_owed: result_owed
+            .zip(result_machine)
+            .map(|(number, machine_id)| MessageRef {
+                machine_id,
+                message_id: format!("m{number}"),
+            }),
         human_windows,
     })
 }
@@ -209,7 +223,7 @@ fn write(
     connection: &Connection,
     number: i64,
     message: &Message,
-    request_id: Option<&str>,
+    request: Option<RequestId<'_>>,
 ) -> rusqlite::Result<()> {
     let delivery = &message.delivery;
     let reply_to = message
@@ -222,8 +236,9 @@ fn write(
         .map(|facts| serde_json::to_string(facts).expect("a result's facts are written as JSON"));
     connection.execute(
         &format!(
-            "INSERT INTO messages ({COLUMNS}, request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, \
-             ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16, NULL, ?17, NULL, ?18)"
+            "INSERT INTO messages ({COLUMNS}, request_id, request_window_id) VALUES
+             (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16,
+              NULL, ?17, NULL, NULLIF(?18, (SELECT machine_id FROM machine)), ?19, NULL, ?20, ?21)"
         ),
         params![
             number,
@@ -243,23 +258,36 @@ fn write(
             message.from_window,
             message.call_id,
             result,
-            request_id,
+            message.from_machine_id,
+            message.reply_to_machine_id,
+            request.map(|request| request.id),
+            request.and_then(|request| request.caller_window_id),
         ],
     )?;
     Ok(())
 }
 
-/// The message `from` kept with request ID `request` within its hour.
+/// The message this caller kept for `to` with the same request ID within its hour.
 fn find_request(
     connection: &Connection,
+    from_machine_id: Option<&str>,
     from: &str,
+    to: &str,
     request: RequestId,
 ) -> rusqlite::Result<Option<KeptMessage>> {
     let mut statement = connection.prepare(&format!(
-        "SELECT {COLUMNS} FROM messages WHERE \"from\" = ?1 AND request_id = ?2 AND at >= ?3 \
-         ORDER BY number LIMIT 1"
+        "SELECT {COLUMNS} FROM messages WHERE \"from\" = ?1
+         AND from_machine_id IS NULLIF(?2, (SELECT machine_id FROM machine)) AND \"to\" = ?3
+         AND request_window_id IS ?4 AND request_id = ?5 AND at >= ?6 ORDER BY number LIMIT 1"
     ))?;
-    let mut rows = statement.query(params![from, request.id, request.since])?;
+    let mut rows = statement.query(params![
+        from,
+        from_machine_id,
+        to,
+        request.caller_window_id,
+        request.id,
+        request.since
+    ])?;
     rows.next()?.map(read_message).transpose()
 }
 
@@ -275,13 +303,36 @@ pub(super) fn insert(connection: &Connection, message: &Message) -> rusqlite::Re
 
 /// Takes the next number for the result prompt `prompt` owes and keeps it on the prompt, in
 /// `connection`'s transaction.
-pub(super) fn owe_result(connection: &Connection, prompt: u64) -> rusqlite::Result<u64> {
-    let number = take_number(connection)?;
+pub(super) fn owe_result(
+    connection: &Connection,
+    prompt: u64,
+    reserved: Option<(&str, i64)>,
+) -> rusqlite::Result<MessageRef> {
+    let (machine_id, number) = match reserved {
+        Some((machine_id, number)) => (machine_id.to_string(), number),
+        None => (local_machine(connection)?, take_number(connection)?),
+    };
     connection.execute(
-        "UPDATE messages SET result_owed = ?1 WHERE number = ?2",
-        params![number, prompt as i64],
+        "UPDATE messages SET result_owed = ?1, result_owed_machine_id = ?2 WHERE number = ?3",
+        params![number, machine_id, prompt as i64],
     )?;
-    Ok(number as u64)
+    Ok(MessageRef {
+        machine_id,
+        message_id: format!("m{number}"),
+    })
+}
+
+fn local_machine(connection: &Connection) -> rusqlite::Result<String> {
+    connection.query_row("SELECT machine_id FROM machine", [], |row| row.get(0))
+}
+
+pub(super) fn result_number(reference: &MessageRef) -> anyhow::Result<i64> {
+    reference
+        .message_id
+        .strip_prefix('m')
+        .and_then(|digits| digits.parse::<i64>().ok())
+        .filter(|number| *number > 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid result message number {}", reference.message_id))
 }
 
 /// Deletes `owner`'s inbox, in `connection`'s transaction. The messages it sent stay. Returns what
@@ -313,32 +364,44 @@ fn delete_returning(
 /// whose record has no exit, or a guest whose record is kept. Returns whether it was written. A
 /// result not written leaves its number unused.
 fn write_result(connection: &Connection, prompt: u64, result: &Message) -> rusqlite::Result<bool> {
-    let owed: Option<i64> = connection.query_row(
-        "SELECT result_owed FROM messages WHERE number = ?1",
+    let (owed, machine): (Option<i64>, Option<String>) = connection.query_row(
+        "SELECT result_owed, result_owed_machine_id FROM messages WHERE number = ?1",
         [prompt as i64],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let numbered = result
         .message_id
         .strip_prefix('m')
         .and_then(|n| n.parse().ok());
-    let Some(number) = owed.filter(|owed| Some(*owed) == numbered) else {
+    let Some((number, machine_id)) = owed.zip(machine).filter(|(number, machine_id)| {
+        Some(*number) == numbered
+            && result.message_ref.as_ref().is_some_and(|reference| {
+                &reference.machine_id == machine_id && reference.message_id == result.message_id
+            })
+    }) else {
         return Ok(false);
     };
     connection.execute(
-        "UPDATE messages SET result_owed = NULL WHERE number = ?1",
+        "UPDATE messages SET result_owed = NULL, result_owed_machine_id = NULL WHERE number = ?1",
         [prompt as i64],
     )?;
-    let caller_there: bool = connection.query_row(
-        "SELECT EXISTS (SELECT 1 FROM agents WHERE agent_id = ?1 AND exit_at IS NULL) \
-         OR EXISTS (SELECT 1 FROM guests WHERE agent_id = ?1)",
-        [&result.to],
-        |row| row.get(0),
-    )?;
+    if machine_id != local_machine(connection)? {
+        return Ok(true);
+    }
+    let caller_there = recipient_there(connection, &result.to)?;
     if caller_there {
         write(connection, number, result, None)?;
     }
     Ok(caller_there)
+}
+
+fn recipient_there(connection: &Connection, recipient: &str) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS (SELECT 1 FROM agents WHERE agent_id = ?1 AND exit_at IS NULL) \
+         OR EXISTS (SELECT 1 FROM guests WHERE agent_id = ?1)",
+        [recipient],
+        |row| row.get(0),
+    )
 }
 
 /// Writes message `number`'s delivery where its row satisfies `condition`. Returns whether a row
@@ -378,6 +441,64 @@ impl MessageTable {
         MessageTable(store)
     }
 
+    /// Commits a message number for a result that another machine will send back.
+    pub(crate) fn reserve_result_number(&self) -> anyhow::Result<u64> {
+        self.0.with(
+            || "reserve a result message number".to_string(),
+            |connection| take_number(connection).map(|number| number as u64),
+        )
+    }
+
+    /// Admits a forwarded result under the number this home reserved for its caller.
+    pub(crate) fn insert_reserved_result(
+        &self,
+        recipient: &AgentRef,
+        message: &Message,
+    ) -> anyhow::Result<Option<Kept>> {
+        let reference = message
+            .message_ref
+            .as_ref()
+            .filter(|reference| {
+                reference.machine_id == recipient.machine_id
+                    && reference.message_id == message.message_id
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("the result's message reference does not name its reserved number")
+            })?;
+        let number = result_number(reference)?;
+        self.0.transaction(
+            || format!("save the start result #m{number}"),
+            |connection| {
+                let next: i64 =
+                    connection
+                        .query_row("SELECT next FROM message_numbers", [], |row| row.get(0))?;
+                if number >= next
+                    || recipient.machine_id != local_machine(connection)?
+                    || !recipient_there(connection, &recipient.agent_id)?
+                {
+                    return Ok(None);
+                }
+                let existing = connection
+                    .query_row(
+                        &format!("SELECT {COLUMNS} FROM messages WHERE number = ?1"),
+                        [number],
+                        read_message,
+                    )
+                    .optional()?;
+                if let Some(kept) = existing {
+                    return Ok((kept.message.to == recipient.agent_id
+                        && kept.message.from == message.from
+                        && kept.message.from_machine_id == message.from_machine_id
+                        && kept.message.call_id == message.call_id
+                        && kept.message.result == message.result)
+                        .then_some(Kept::Earlier(kept)));
+                }
+                write(connection, number, message, None)?;
+                Ok(Some(Kept::New(message.clone())))
+            },
+        )
+    }
+
     /// Raises the counter so the next message number is above `given`; one already above stays.
     /// Blocks.
     pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
@@ -405,17 +526,18 @@ impl MessageTable {
             || "save a message".to_string(),
             |transaction| {
                 if let Some(request) = request
-                    && let Some(earlier) = find_request(transaction, &message.from, request)?
+                    && let Some(earlier) = find_request(
+                        transaction,
+                        message.from_machine_id.as_deref(),
+                        &message.from,
+                        &message.to,
+                        request,
+                    )?
                 {
                     return Ok(Kept::Earlier(earlier));
                 }
                 let number = take_number(transaction)?;
-                write(
-                    transaction,
-                    number,
-                    message,
-                    request.map(|request| request.id),
-                )?;
+                write(transaction, number, message, request)?;
                 Ok(Kept::New(Message {
                     message_id: format!("m{number}"),
                     ..message.clone()
@@ -424,15 +546,17 @@ impl MessageTable {
         )
     }
 
-    /// The message `from` kept with request ID `request` within its hour, if one is kept.
+    /// The message this caller kept for `to` with the same request ID within its hour.
     pub(crate) fn find_request(
         &self,
+        from_machine_id: &str,
         from: &str,
+        to: &str,
         request: RequestId,
     ) -> anyhow::Result<Option<KeptMessage>> {
         self.0.with(
             || "read messages".to_string(),
-            |connection| find_request(connection, from, request),
+            |connection| find_request(connection, Some(from_machine_id), from, to, request),
         )
     }
 
@@ -447,28 +571,52 @@ impl MessageTable {
         Ok(deleted == 1)
     }
 
-    /// Commits that the pending message to the person reached at least one window subscription.
+    /// Keeps the first window receipt. Without a confirmed delivery the message stays pending.
     pub(crate) fn settle_human(
         &self,
         number: u64,
         windows: &WindowDelivery,
     ) -> anyhow::Result<Message> {
+        let delivered_at = (!windows.delivered.is_empty()).then(facade_base::time::iso_now);
         let windows = serde_json::to_string(windows)?;
-        let now = facade_base::time::iso_now();
         self.0.transaction(
             || format!("save the window delivery of #m{number}"),
             |transaction| {
                 transaction.query_row(
                     &format!(
-                        "UPDATE messages SET status = 'success', reason = NULL, text_written = 'none',
-                         enter_written = 0, deadline = NULL, delivered_via = 'notified',
+                        "UPDATE messages SET
+                         status = CASE WHEN ?2 IS NOT NULL THEN 'success' ELSE status END,
+                         delivered_via = CASE WHEN ?2 IS NOT NULL THEN 'notified' ELSE NULL END,
                          delivered_at = ?2, human_windows = ?3
                          WHERE number = ?1 AND \"to\" = ?4 AND status = 'pending'
+                         AND human_windows IS NULL
                          RETURNING {COLUMNS}"
                     ),
-                    params![number as i64, now, windows, HUMAN],
+                    params![number as i64, delivered_at, windows, HUMAN],
                     |row| Ok(read_message(row)?.message),
                 )
+            },
+        )
+    }
+
+    /// Looks up a message in its owner's inbox without changing delivery state.
+    pub(crate) fn inbox_message(
+        &self,
+        owner: &str,
+        number: u64,
+    ) -> anyhow::Result<Option<KeptMessage>> {
+        self.0.with(
+            || format!("read #m{number} in {owner}'s inbox"),
+            |connection| {
+                connection
+                    .query_row(
+                        &format!(
+                            "SELECT {COLUMNS} FROM messages WHERE number = ?1 AND \"to\" = ?2"
+                        ),
+                        params![number as i64, owner],
+                        read_message,
+                    )
+                    .optional()
             },
         )
     }
@@ -573,7 +721,7 @@ impl MessageTable {
                     if let Some((_, result)) = result
                         && write_result(transaction, *number, result)?
                     {
-                        written.results.push(number_of(result));
+                        written.results.push(*number);
                     }
                 }
                 Ok(written)
@@ -809,6 +957,7 @@ mod tests {
         let request = RequestId {
             id: "to-person",
             since: "2026-11-09T00:00:00.000Z",
+            caller_window_id: None,
         };
         let pending = message(0, HUMAN);
         let store = core.open();
@@ -819,7 +968,7 @@ mod tests {
         drop(store);
 
         let store = core.open();
-        let kept = store.find_request("a1", request).unwrap().unwrap();
+        let kept = store.find_request("a1", HUMAN, request).unwrap().unwrap();
         assert_eq!(kept.message, settled);
         assert_eq!(kept.human_windows, Some(receipt));
         assert_eq!(
@@ -840,20 +989,27 @@ mod tests {
     /// same ID, the same ID once the first is deleted, and the same ID after the hour keep new
     /// messages.
     #[test]
-    fn a_request_id_keeps_one_message_per_sender_within_the_hour() {
+    fn a_request_id_keeps_one_message_per_sender_and_recipient_within_the_hour() {
         let store = Store::in_memory();
         // The messages are sent at 2026-11-10T00:00:00.000Z, within the hour since this.
         let within = "2026-11-09T23:00:00.000Z";
         let keep = |message: &Message, id, since| {
             store
-                .insert_message(message, Some(RequestId { id, since }))
+                .insert_message(
+                    message,
+                    Some(RequestId {
+                        id,
+                        since,
+                        caller_window_id: None,
+                    }),
+                )
                 .unwrap()
         };
         assert!(matches!(
             keep(&message(0, "a2"), "r1", within),
             Kept::New(first) if first.message_id == "m1"
         ));
-        let again = keep(&message(0, "a3"), "r1", within);
+        let again = keep(&message(0, "a2"), "r1", within);
         assert!(
             matches!(
                 &again,
@@ -878,9 +1034,11 @@ mod tests {
         let found = store
             .find_request(
                 "a1",
+                "a2",
                 RequestId {
                     id: "r1",
                     since: within,
+                    caller_window_id: None,
                 },
             )
             .unwrap();
@@ -894,9 +1052,11 @@ mod tests {
             store
                 .find_request(
                     "a1",
+                    "a2",
                     RequestId {
                         id: "r1",
-                        since: within
+                        since: within,
+                        caller_window_id: None,
                     }
                 )
                 .unwrap()
@@ -911,6 +1071,9 @@ mod tests {
         );
         let after_the_hour = keep(&message(0, "a2"), "r1", "2026-11-10T00:00:00.001Z");
         assert!(matches!(after_the_hour, Kept::New(new) if new.message_id == "m4"));
+        assert!(
+            matches!(keep(&message(0, "a3"), "r1", within), Kept::New(new) if new.message_id == "m5")
+        );
     }
 
     /// A message takes its number in the transaction that writes it: one that cannot be written
@@ -1108,7 +1271,7 @@ mod tests {
     }
 
     /// The result #a2's prompt `prompt` owes #a1, under `number`, its prompt settled as `delivery`.
-    fn result(number: u64, prompt: &Message, delivery: &Delivery) -> Message {
+    fn result(reference: &MessageRef, prompt: &Message, delivery: &Delivery) -> Message {
         let agent = serde_json::from_value(serde_json::json!({
             "agent_id": "a2", "name": "Nova", "cli": "claude", "cwd": "/w",
             "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
@@ -1126,7 +1289,8 @@ mod tests {
         };
         let outcome = facade_base::daemon::StartOutcome { agent, prompt };
         Message {
-            message_id: format!("m{number}"),
+            message_id: reference.message_id.clone(),
+            message_ref: Some(reference.clone()),
             from: facade_base::daemon::FACADE.into(),
             from_name: None,
             to: "a1".into(),
@@ -1159,15 +1323,19 @@ mod tests {
         let store = core.open();
         store.insert(&crate::store::tests::record("a1")).unwrap();
         let (kept, owed_number) = store
-            .insert_with_prompt(&crate::store::tests::record("a2"), &prompt(), true)
+            .insert_with_prompt(&crate::store::tests::record("a2"), &prompt(), true, None)
             .unwrap();
-        assert_eq!((kept.message_id.as_str(), owed_number), ("m1", Some(2)));
+        let reference = owed_number.unwrap();
+        assert_eq!(
+            (kept.message_id.as_str(), reference.message_id.as_str()),
+            ("m1", "m2")
+        );
         assert_eq!(
             store.message_table().pending_messages().unwrap(),
             [KeptMessage {
                 message: kept.clone(),
                 paste: None,
-                result_owed: Some(2),
+                result_owed: Some(reference.clone()),
                 human_windows: None,
             }]
         );
@@ -1191,7 +1359,7 @@ mod tests {
             (Some("2026-11-11T00:00:29.500Z"), Some("Ada"))
         );
         let timeout = failure(DeliveryFailure::Timeout);
-        let owed_result = result(2, &kept, &timeout);
+        let owed_result = result(&reference, &kept, &timeout);
         let settled = store
             .settle_messages(&[(1, &timeout)], &[(1, owed_result.clone())])
             .unwrap();
@@ -1199,14 +1367,14 @@ mod tests {
             settled,
             Settlement {
                 settled: vec![1],
-                results: vec![2]
+                results: vec![1]
             }
         );
         assert_eq!(owed(&store, 1), None, "the prompt owes nothing more");
         let read = store
             .record_reads(
                 &[(1, &read_at("t"))],
-                &[(1, result(2, &kept, &read_at("t")))],
+                &[(1, result(&reference, &kept, &read_at("t")))],
             )
             .unwrap();
         assert_eq!(
@@ -1221,7 +1389,10 @@ mod tests {
         let store = core.open();
         assert_eq!(
             store.message_table().message(2).unwrap().unwrap(),
-            owed_result,
+            Message {
+                message_ref: None,
+                ..owed_result
+            },
             "the result, its call and its facts survive a reopen"
         );
         assert_eq!(
@@ -1241,8 +1412,8 @@ mod tests {
     fn a_prompt_whose_result_cannot_be_written_is_not_settled() {
         let store = Store::in_memory();
         store.insert(&crate::store::tests::record("a1")).unwrap();
-        let (kept, _) = store
-            .insert_with_prompt(&crate::store::tests::record("a2"), &prompt(), true)
+        let (kept, reference) = store
+            .insert_with_prompt(&crate::store::tests::record("a2"), &prompt(), true, None)
             .unwrap();
         let refuse = "CREATE TRIGGER refuse BEFORE INSERT ON messages WHEN NEW.\"from\" = 'facade' \
                       BEGIN SELECT RAISE(ABORT, 'refused'); END;";
@@ -1255,7 +1426,10 @@ mod tests {
         let timeout = failure(DeliveryFailure::Timeout);
         assert!(
             store
-                .settle_messages(&[(1, &timeout)], &[(1, result(2, &kept, &timeout))])
+                .settle_messages(
+                    &[(1, &timeout)],
+                    &[(1, result(&reference.unwrap(), &kept, &timeout))]
+                )
                 .is_err()
         );
         assert_eq!(
@@ -1288,14 +1462,15 @@ mod tests {
         for (caller, went) in [("removed", true), ("ended", false)] {
             store.insert(&crate::store::tests::record("a1")).unwrap();
             let (kept, owed_number) = store
-                .insert_with_prompt(&crate::store::tests::record("a2"), &prompt(), true)
+                .insert_with_prompt(&crate::store::tests::record("a2"), &prompt(), true, None)
                 .unwrap();
             let number = super::number_of(&kept);
             match went {
                 true => drop(store.delete("a1").unwrap()),
                 false => store.record_exit("a1", &exit).unwrap(),
             }
-            let owed_result = result(owed_number.unwrap(), &kept, &timeout);
+            let reference = owed_number.unwrap();
+            let owed_result = result(&reference, &kept, &timeout);
             let settled = store
                 .settle_messages(&[(number, &timeout)], &[(number, owed_result)])
                 .unwrap();
@@ -1308,7 +1483,10 @@ mod tests {
                 "{caller}"
             );
             assert_eq!(
-                store.message_table().message(owed_number.unwrap()).unwrap(),
+                store
+                    .message_table()
+                    .message(result_number(&reference).unwrap() as u64)
+                    .unwrap(),
                 None,
                 "{caller}"
             );
@@ -1317,7 +1495,7 @@ mod tests {
             store.delete("a2").unwrap();
         }
         let (kept, owed_number) = store
-            .insert_with_prompt(&crate::store::tests::record("a3"), &prompt(), false)
+            .insert_with_prompt(&crate::store::tests::record("a3"), &prompt(), false, None)
             .unwrap();
         assert_eq!(
             (owed_number, owed(&store, super::number_of(&kept))),
@@ -1326,7 +1504,7 @@ mod tests {
         );
         assert!(
             store
-                .insert_with_prompt(&crate::store::tests::record("a3"), &prompt(), true)
+                .insert_with_prompt(&crate::store::tests::record("a3"), &prompt(), true, None)
                 .is_err(),
             "a record already kept"
         );

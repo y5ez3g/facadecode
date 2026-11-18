@@ -1,5 +1,6 @@
 //! What a connection sends: its lines in order, at most [`MAX_OUTBOX_BYTES`] of them waiting.
 
+use std::io;
 use std::sync::Arc;
 
 use facade_base::daemon::{ChangedParams, methods};
@@ -27,20 +28,22 @@ pub(super) struct Outbox {
 }
 
 impl Outbox {
-    /// Starts writing to `write`. The task ends once every outbox is dropped or the client stops
-    /// reading; senders waiting for room then learn that the connection closed.
-    pub(super) fn open(mut write: ServerWriter) -> (Outbox, JoinHandle<()>) {
+    /// Starts writing to `write`. After all queued lines are sent, the task gives back the
+    /// writer. If the client stops reading, senders waiting for room learn the outbox closed.
+    pub(super) fn open(mut write: ServerWriter) -> (Outbox, JoinHandle<io::Result<ServerWriter>>) {
         let (lines, mut waiting) = mpsc::unbounded_channel::<Vec<u8>>();
         let room = Arc::new(Semaphore::new(MAX_OUTBOX_BYTES));
         let freed = room.clone();
         let writer = tokio::spawn(async move {
             while let Some(line) = waiting.recv().await {
-                if write.write_all(&line).await.is_err() {
-                    break;
+                if let Err(error) = write.write_all(&line).await {
+                    freed.close();
+                    return Err(error);
                 }
                 freed.add_permits(weight(&line) as usize);
             }
             freed.close();
+            Ok(write)
         });
         (Outbox { lines, room }, writer)
     }

@@ -4,12 +4,13 @@ use facade_base::daemon::{
     Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, PromptOutcome, StartOutcome,
     TextWritten, start_result_text,
 };
+use facade_base::machine::{AgentRef, DeliverStartResultArgs};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::{
     Deliveries, Due, Messages, OpenMap, Outcome, OwedResult, PostedResult, RESPONSE_GRACE, Settled,
-    number, warn,
+    warn,
 };
 use crate::blocking_in_place;
 use crate::store::Settlement;
@@ -124,8 +125,8 @@ impl Deliveries {
         self.hand_on(open, results, &written.results, &due);
     }
 
-    /// Opens the delivery of each result in `results` the table wrote, `written`, and hands it to
-    /// the daemon to deliver by `due`.
+    /// Hands results for the prompts the table settled to the daemon. Local results are already
+    /// kept and open for delivery, and a remote result carries the creator's reserved number.
     pub(super) fn hand_on(
         &self,
         open: &mut OpenMap,
@@ -133,13 +134,32 @@ impl Deliveries {
         written: &[u64],
         due: &Due,
     ) {
-        for (_, result) in results {
-            if !written.contains(&number(&result)) {
+        for (prompt, mut result) in results {
+            if !written.contains(&prompt) {
                 continue;
             }
+            let reference = result
+                .message_ref
+                .as_ref()
+                .expect("a result's reserved reference");
+            if reference.machine_id != self.machine_id {
+                let recipient = AgentRef {
+                    machine_id: reference.machine_id.clone(),
+                    agent_id: result.to.clone(),
+                };
+                let _ = self.results.send(PostedResult::Remote {
+                    args: DeliverStartResultArgs {
+                        recipient,
+                        message: result,
+                    },
+                    deadline: due.instant,
+                });
+                continue;
+            }
+            result.message_ref = None;
             let settled = Deliveries::open(open, result.clone(), false, false, None);
             self.updated(&result);
-            let _ = self.results.send(PostedResult {
+            let _ = self.results.send(PostedResult::Local {
                 message: result,
                 deadline: due.instant,
                 settled,
@@ -186,10 +206,11 @@ fn result_message(
         },
     };
     Message {
-        message_ref: None,
-        from_machine_id: None,
+        message_ref: Some(owed.reference.clone()),
+        from_machine_id: (outcome.agent.machine_id != owed.reference.machine_id)
+            .then(|| outcome.agent.machine_id.clone()),
         reply_to_machine_id: None,
-        message_id: format!("m{}", owed.number),
+        message_id: owed.reference.message_id.clone(),
         from: FACADE.to_string(),
         from_name: None,
         to: prompt.from.clone(),

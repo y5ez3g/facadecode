@@ -11,6 +11,7 @@ use tokio::time::Instant;
 
 use super::*;
 use crate::store::{AgentRecord, Store};
+use crate::testing::test_folder::TestFolder;
 
 /// Posts `message` with no request ID, as a new message: its numbered self and the receiver its
 /// settlement reaches.
@@ -18,7 +19,7 @@ pub(crate) fn post_new(
     messages: &Messages,
     message: Message,
 ) -> (Message, watch::Receiver<Option<Settled>>) {
-    match messages.post(message, None).unwrap() {
+    match messages.post(message, None, None).unwrap() {
         Posted::New(message, settled) => (message, settled),
         Posted::Earlier(_) => unreachable!("a message with no request ID is new"),
     }
@@ -27,7 +28,15 @@ pub(crate) fn post_new(
 /// Messages over a store in memory, and that store.
 pub(crate) fn messages() -> (Arc<Messages>, Arc<Store>) {
     let store = Store::in_memory();
-    (Arc::new(Messages::new(store.message_table())), store)
+    let messages = Messages::new(store.message_table(), store.test_machine_id());
+    (Arc::new(messages), store)
+}
+
+/// A store with its actual machine identity for tests of message references and request keys.
+fn messages_on_disk(folder: &TestFolder) -> (Messages, Arc<Store>) {
+    let opened = Store::open(folder, &[]).unwrap();
+    let messages = Messages::new(opened.store.message_table(), opened.machine_id);
+    (messages, opened.store)
 }
 
 /// A pending message from #a1 Ada to `to`, which the store numbers as it keeps it.
@@ -93,43 +102,56 @@ fn ids(snapshot: &MessagesSnapshot) -> Vec<&str> {
         .collect()
 }
 
-/// A message with a request ID is posted once: the same sender's same ID within the hour finds
-/// it, while it is delivered and once it is settled, and keeps nothing more.
+/// A message with a request ID is posted once for the caller and recipient. It can be found
+/// while its delivery is open and once it settles.
 #[test]
 fn a_request_id_posts_one_message_found_while_delivered_and_once_settled() {
-    let (post, _store) = messages();
+    let folder = TestFolder::new("messages-request");
+    let (post, _store) = messages_on_disk(&folder);
+    let machine_id = &post.deliveries.machine_id;
     let now = facade_base::time::iso_now();
     let fresh = |to: &str| Message {
         at: now.clone(),
+        from: HUMAN.into(),
         ..message(0, to)
     };
-    let Posted::New(first, _) = post.post(fresh("a2"), Some("r1")).unwrap() else {
+    let Posted::New(first, _) = post.post(fresh("a2"), Some("r1"), Some("win-1")).unwrap() else {
         panic!("a new message")
     };
-    let again = post.post(fresh("a3"), Some("r1")).unwrap();
+    let again = post.post(fresh("a2"), Some("r1"), Some("win-1")).unwrap();
     assert!(
         matches!(&again, Posted::Earlier(Earlier::Delivering(message, _)) if *message == first),
         "it joins the first"
     );
     assert!(matches!(
-        post.find_request("a1", "r1").unwrap(),
+        post.find_request(machine_id, HUMAN, "a2", "r1", Some("win-1"))
+            .unwrap(),
         Some(Earlier::Delivering(..))
     ));
     post.settle(&[1], Outcome::Typed);
-    let settled = post.find_request("a1", "r1").unwrap();
+    let settled = post
+        .find_request(machine_id, HUMAN, "a2", "r1", Some("win-1"))
+        .unwrap();
     assert!(matches!(
         settled,
         Some(Earlier::Settled(message)) if message.delivery.status == DeliveryStatus::Success
     ));
-    assert!(
-        post.find_request("a1", "r2").unwrap().is_none()
-            && post.find_request("a4", "r1").unwrap().is_none()
-    );
-    assert_eq!(
-        post_new(&post, fresh("a2")).0.message_id,
-        "m2",
-        "the repeat took no number"
-    );
+    for (machine, from, to, request, window) in [
+        (machine_id.as_str(), HUMAN, "a2", "r2", Some("win-1")),
+        (machine_id.as_str(), "a4", "a2", "r1", None),
+        (machine_id.as_str(), HUMAN, "a2", "r1", Some("win-2")),
+        (machine_id.as_str(), HUMAN, "a2", "r1", None),
+        ("another-machine", HUMAN, "a2", "r1", Some("win-1")),
+        (machine_id.as_str(), HUMAN, "a3", "r1", Some("win-1")),
+    ] {
+        assert!(
+            post.find_request(machine, from, to, request, window)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let different = post.post(fresh("a3"), Some("r1"), Some("win-1")).unwrap();
+    assert!(matches!(different, Posted::New(message, _) if message.message_id == "m2"));
 }
 
 /// A withdrawal takes a message whose paste has not begun out of the deliveries and the store:
@@ -621,7 +643,11 @@ fn record(id: &str) -> AgentRecord {
         }],
         location_source_window: None,
         creator: None,
+        creator_machine_id: None,
+        start_machine_id: "test-machine".into(),
+        start_window_id: None,
         root: id.into(),
+        root_machine_id: "test-machine".into(),
         yolo: false,
         request_id: None,
         prompt: None,
@@ -642,18 +668,20 @@ fn prompt(post: &Messages, store: &Store, caller: &str, to: &str) -> (u64, u64) 
         ..message(0, to)
     };
     let (kept, owed) = store
-        .insert_with_prompt(&record(to), &prompt, true)
+        .insert_with_prompt(&record(to), &prompt, true, None)
         .unwrap();
     let owed = owed.expect("a prompt from an agent owes it a result");
-    let info = agent(to);
+    let number_owed = parse_number(&owed.message_id).unwrap();
+    let mut info = agent(to);
+    info.machine_id.clone_from(&owed.machine_id);
     drop(post.deliver_prompt(
         kept.clone(),
         Some(OwedResult {
-            number: owed,
+            reference: owed,
             agent: Arc::new(move || info.clone()),
         }),
     ));
-    (number(&kept), owed)
+    (number(&kept), number_owed)
 }
 
 /// The settlement of a start's prompt, by its typist or a read, writes the result it owes in
@@ -663,7 +691,8 @@ fn prompt(post: &Messages, store: &Store, caller: &str, to: &str) -> (u64, u64) 
 /// not written, and nothing is handed on.
 #[test]
 fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
-    let (post, store) = messages();
+    let folder = TestFolder::new("messages-prompt-result");
+    let (post, store) = messages_on_disk(&folder);
     let mut results = post.take_results().unwrap();
     assert!(post.take_results().is_none(), "the results go to one taker");
     for caller in ["a1", "a3", "a5"] {
@@ -678,13 +707,17 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
         Some("2026-11-11T00:00:29.500Z")
     );
     post.settle(&[typed], Outcome::Typed);
-    let posted = results.try_recv().expect("the result is handed on");
+    let PostedResult::Local {
+        message: result, ..
+    } = results.try_recv().expect("the result is handed on")
+    else {
+        panic!("the result is for a local caller")
+    };
     assert_eq!(
-        posted.message,
+        result,
         post.message(&format!("m{owed}")).unwrap(),
         "as it is kept"
     );
-    let result = posted.message;
     assert_eq!(
         (
             result.from.as_str(),
@@ -712,10 +745,12 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
         ids(&post.read("a4", &MessagesWatchArgs::default()).unwrap()),
         [format!("m{read}")]
     );
-    let result = results
-        .try_recv()
-        .expect("a read settles the prompt too")
-        .message;
+    let PostedResult::Local {
+        message: result, ..
+    } = results.try_recv().expect("a read settles the prompt too")
+    else {
+        panic!("the result is for a local caller")
+    };
     assert_eq!(
         (result.message_id, result.text.lines().nth(1)),
         (
@@ -747,7 +782,8 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
 /// to type.
 #[test]
 fn a_prompt_read_before_its_delivery_begins_is_not_typed() {
-    let (post, store) = messages();
+    let folder = TestFolder::new("messages-prompt-read");
+    let (post, store) = messages_on_disk(&folder);
     store.insert(&record("a1")).unwrap();
     let (number, _) = prompt(&post, &store, "a1", "a2");
     post.read("a2", &MessagesWatchArgs::default()).unwrap();

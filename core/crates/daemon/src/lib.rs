@@ -13,6 +13,7 @@
 //! - `windows`: editor windows and their locations;
 //! - `guests`: sessions people start that join, MCP members, and integrations;
 //! - `lifecycle`: work under way, idle exit, takeover and the daemon log;
+//! - `network`: SSH sessions, machine routes and forwarding;
 //! - `server`: client connections; `mcp`: Facade's MCP tools behind each relay.
 //!
 //! This level keeps the list of agents, the store and every write across its tables, and the
@@ -24,6 +25,7 @@ mod guests;
 mod lifecycle;
 mod mcp;
 mod messages;
+mod network;
 mod records;
 mod runs;
 mod server;
@@ -31,10 +33,13 @@ mod windows;
 
 mod command_line;
 mod delivery;
+mod machine_service;
+mod network_operations;
 mod operations;
 mod presence;
 mod recovery;
 mod relays;
+mod remote_agents;
 mod service;
 mod store;
 #[cfg(test)]
@@ -47,8 +52,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentsChange, WindowRef};
+use facade_base::daemon::{
+    AgentsChange, DAEMON_PROTOCOL_VERSION, MIN_DAEMON_PROTOCOL_VERSION, WindowRef,
+};
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine::{MachineHello, MachineInfo, new_boot_id};
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
 use serde::{Deserialize, Serialize};
@@ -58,6 +66,7 @@ use agent::{AgentCommand, AgentHandle, Screens};
 use guests::Guests;
 use lifecycle::{Lifecycle, LifecycleActivity};
 use messages::Messages;
+use network::Network;
 use operations::{StartAnswer, StartKey};
 use records::Records;
 use runs::{FoundKeeper, RunEvent, Runs};
@@ -121,6 +130,10 @@ impl Cancel {
     /// The cancellation `cancel` asks for once it turns true.
     pub(crate) fn of(cancel: watch::Receiver<bool>) -> Cancel {
         Cancel(Some(cancel))
+    }
+
+    pub(crate) fn is_requested(&self) -> bool {
+        self.0.as_ref().is_some_and(|cancel| *cancel.borrow())
     }
 
     /// Waits until the call is cancelled: never where it cannot be.
@@ -187,6 +200,10 @@ pub(crate) struct Daemon {
     agents: Mutex<HashMap<String, AgentHandle>>,
     store: Arc<Store>,
     machine_id: String,
+    network: Network,
+    machine_changes: tokio::sync::Mutex<()>,
+    machine_views: broadcast::Sender<Vec<MachineInfo>>,
+    remote_agents: Mutex<remote_agents::RemoteAgents>,
     /// Changes for clients following the `agents` topic.
     changes: broadcast::Sender<AgentsChange>,
     lifecycle: Arc<Lifecycle>,
@@ -216,6 +233,9 @@ impl Daemon {
 
 impl LifecycleActivity for Daemon {
     fn holds_agents(&self) -> bool {
+        if self.network.has_connections() {
+            return true;
+        }
         self.agents
             .lock()
             .unwrap()
@@ -361,8 +381,27 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         .map(|record| record.agent_id.clone())
         .collect();
     records.keep_unreadable(opened.agent_ids.difference(&readable).cloned().collect());
-    let messages = Arc::new(Messages::new(store.message_table()));
+    let messages = Arc::new(Messages::new(
+        store.message_table(),
+        opened.machine_id.clone(),
+    ));
     let (guest_events, guest_events_rx) = mpsc::unbounded_channel();
+    let (network_events, network_events_rx) = mpsc::unbounded_channel();
+    let home = core.parent().expect("core is inside the Facade home");
+    let control_dir = facade_base::ssh::ssh_control_dir(home)?;
+    let network = Network::new(
+        MachineHello {
+            machine_id: opened.machine_id.clone(),
+            boot_id: new_boot_id(),
+            name: opened.machine_name,
+            build: facade_base::build_id(),
+            protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            ssh_cleans_processes: facade_base::system::ssh_cleans_processes(Duration::from_secs(1))
+                .await,
+        },
+        control_dir,
+        network_events,
+    );
     let daemon = Arc::new(Daemon {
         agents: Mutex::default(),
         changes: broadcast::channel(MAX_QUEUED_AGENT_CHANGES).0,
@@ -382,6 +421,10 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         runs,
         records,
         machine_id: opened.machine_id,
+        network,
+        machine_changes: tokio::sync::Mutex::new(()),
+        machine_views: broadcast::channel(MAX_QUEUED_AGENT_CHANGES).0,
+        remote_agents: Mutex::default(),
         store,
     });
     daemon.sweep(SystemTime::now());
@@ -391,7 +434,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         .await?;
     daemon.restore_guests()?;
     daemon.take_up_messages()?;
-    // Restore logical windows and reclaim unreferenced ones before accepting clients.
+    // Restore logical windows before accepting clients.
     daemon
         .restore_windows()
         .map_err(|error| anyhow::anyhow!("could not restore windows: {}", error.message))?;
@@ -417,6 +460,11 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     tokio::spawn(waits::follow_waits(daemon.clone()));
     // Clients are accepted only after recovery, so that they see every readable agent.
     let listener = server::bind()?;
+    daemon.restore_machine_connections()?;
+    tokio::spawn(machine_service::follow_network(
+        daemon.clone(),
+        network_events_rx,
+    ));
     if let Some(channel) = channel.take() {
         channel.started();
     }
