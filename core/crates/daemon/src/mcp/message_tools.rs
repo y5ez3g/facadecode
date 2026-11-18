@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use facade_base::address::{MachineSelector, parse_message_address};
 use facade_base::daemon::{
     AgentSend, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE, Message, MessagesTopic,
-    MessagesWatchArgs, SendArgs, SendResult, WindowDelivery, check_message_text,
+    MessagesWatchArgs, SendArgs, SendOutcome, SendResult, WindowDeliveryOutcome,
+    check_message_text,
 };
 use facade_base::daemon_client::{Cut, DaemonClient, cancel_line, upgrading};
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -113,7 +114,7 @@ pub(super) fn send(
         }
     };
     match outcome {
-        Ok(sent) => Some(delivered(&sent, &client.hello_result.machine_id)),
+        Ok(sent) => Some(delivered(&sent.into(), &client.hello_result.machine_id)),
         Err(err) if relay.sends.cancelled(&call.key) && was_cancelled(&err) => None,
         Err(err) => Some(agent_failed(
             &mut client,
@@ -148,7 +149,7 @@ fn reference_to(message: &Message, local_machine_id: &str) -> MessageRef {
 }
 
 /// The result of a send, with the message ID and the delivery information the daemon kept.
-fn delivered(sent: &SendResult, local_machine: &str) -> Value {
+fn delivered(sent: &SendOutcome, local_machine: &str) -> Value {
     let message = &sent.message;
     let delivery = &message.delivery;
     let reference = reference_to(message, local_machine);
@@ -163,18 +164,18 @@ fn delivered(sent: &SendResult, local_machine: &str) -> Value {
             &reference,
             delivery.status,
             sent.repeated,
-            sent.windows.as_ref(),
+            sent.window_delivery.as_deref(),
             &addresses,
         ) {
             Ok(windows) => envelope::success(json!({
                 "id": id, "address": address, "delivery": "delivered_to_windows",
-                "windows": envelope::window_delivery(windows, &addresses),
+                "window_delivery": envelope::window_delivery(windows, &addresses),
             })),
             Err(failure) => failure,
         };
     }
     let how = match (delivery.status, delivery.delivered_via) {
-        (DeliveryStatus::Success, Some(DeliveredVia::Read)) => "read_by_recipient",
+        (DeliveryStatus::Success, Some(DeliveredVia::ReadByRecipient)) => "read_by_recipient",
         (DeliveryStatus::Success, _) => "typed_into_input",
         // A guest takes its messages at its next turn: the send ends here.
         (DeliveryStatus::Pending, _) => "waiting_in_inbox",
@@ -203,9 +204,9 @@ fn window_receipt<'a>(
     reference: &MessageRef,
     status: DeliveryStatus,
     repeated: bool,
-    windows: Option<&'a WindowDelivery>,
+    windows: Option<&'a [WindowDeliveryOutcome]>,
     addresses: &Addresses<'_>,
-) -> Result<&'a WindowDelivery, Value> {
+) -> Result<&'a [WindowDeliveryOutcome], Value> {
     let (reason, detail) = match (status, repeated, windows) {
         (DeliveryStatus::Pending, true, _) => {
             ("outcome_unknown", "Its window delivery outcome is unknown.")
@@ -447,15 +448,13 @@ mod tests {
             here: &reference.machine_id,
             machines: &[],
         };
-        let receipt = WindowDelivery {
-            delivered: Vec::new(),
-            not_delivered: Vec::new(),
-            outcome_unknown: vec![WindowRef {
+        let receipt = [WindowDeliveryOutcome::OutcomeUnknown {
+            window: WindowRef {
                 machine_id: reference.machine_id.clone(),
                 window_id: "win-2".into(),
-            }],
-        };
-        for windows in [None, Some(&receipt)] {
+            },
+        }];
+        for windows in [None, Some(receipt.as_slice())] {
             let unknown = window_receipt(
                 &reference,
                 DeliveryStatus::Pending,
@@ -466,9 +465,8 @@ mod tests {
             .unwrap_err();
             let mut expected = data.clone();
             if windows.is_some() {
-                expected["window_delivery"] = json!({
-                    "delivered": [], "not_delivered": [], "outcome_unknown": ["win-2"],
-                });
+                expected["window_delivery"] =
+                    json!([{"window": "win-2", "state": "outcome_unknown"}]);
             }
             assert_eq!(
                 unknown,

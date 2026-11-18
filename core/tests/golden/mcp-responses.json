@@ -169,7 +169,7 @@
               "idempotentHint": false,
               "openWorldHint": false
             },
-            "description": "Send to an agent or #human within 30 seconds. Agent delivery may be typed, read or waiting for a guest. Human results list each window's delivery, failure or unknown outcome. Receipts use id, address and window references. A request can fail before executing or return an unknown outcome.",
+            "description": "Send to an agent or #human within 30 seconds. Delivery is typed_into_input, read_by_recipient, waiting_in_inbox or delivered_to_windows. Person receipts give data.window_delivery rows with window, state and a reason for not_delivered. Copy receipt addresses. An unknown outcome may have been delivered.",
             "inputSchema": {
               "type": "object",
               "properties": {
@@ -617,9 +617,10 @@
       "reason": "unavailable",
       "message": "no member window could tell the person",
       "data": {
-        "windows": [
+        "window_delivery": [
           {
             "window": "terminal",
+            "state": "not_delivered",
             "reason": "not_watching"
           }
         ]

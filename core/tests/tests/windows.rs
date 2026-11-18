@@ -583,6 +583,29 @@ fn messages_to_the_person_report_each_member_windows_delivery() {
         json!([{ "window": right, "reason": "window_disconnected" }]),
         "{partial}"
     );
+    let mut mcp = McpTestClient::open(&home, &id);
+    let partial = mcp.call(
+        "send_message",
+        json!({ "to": "#human", "text": "one window took the MCP message" }),
+    );
+    let message_id = partial["data"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{partial}"));
+    let machine = facade_base::address::exact_machine_selector(&left.machine_id);
+    assert_eq!(
+        partial,
+        json!({
+            "status": "success",
+            "data": {
+                "id": message_id, "address": format!("{message_id}@{machine}"),
+                "delivery": "delivered_to_windows",
+                "window_delivery": [
+                    {"window": left.window_id, "state": "delivered"},
+                    {"window": right.window_id, "state": "not_delivered", "reason": "window_disconnected"},
+                ],
+            },
+        })
+    );
     let command = home
         .command(&test_binaries().facade)
         .env("FACADE_AGENT", &id)
@@ -623,11 +646,30 @@ fn messages_to_the_person_report_each_member_windows_delivery() {
             "{refused}"
         );
     }
+    let refused = mcp.call(
+        "send_message",
+        json!({ "to": "#human", "text": "no window can take the MCP message" }),
+    );
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unavailable", "{refused}");
+    let rows = refused["data"]["window_delivery"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{refused}");
+    for window in [&left, &right] {
+        assert!(
+            rows.contains(&json!({
+                "window": window.window_id,
+                "state": "not_delivered",
+                "reason": "window_disconnected"
+            })),
+            "{refused}"
+        );
+    }
+    assert_eq!(refused["data"], json!({ "window_delivery": rows }));
     let kept: i64 = rusqlite::Connection::open(home.path.join("core/facade.db"))
         .unwrap()
         .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(kept, 3, "only the delivered messages were saved");
+    assert_eq!(kept, 4, "only the delivered messages were saved");
 
     let (mut late, _) = ide_binding(&home, &window("win-3", Some("three"), folders));
     adopt(&mut late, &id);

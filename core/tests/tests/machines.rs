@@ -613,6 +613,14 @@ fn a_window_adopts_a_remote_agent_and_receives_its_message() {
         json!([window]),
         "{sent}"
     );
+    assert_eq!(
+        sent["result"]["windows"]["not_delivered"],
+        json!([{
+            "window": {"window_id": "terminal", "machine_id": remote_id},
+            "reason": "not_watching",
+        }]),
+        "{sent}"
+    );
     let number = &sent["result"]["message_ref"];
     assert_eq!(number["machine_id"], remote_id, "{sent}");
     assert!(
@@ -622,6 +630,23 @@ fn a_window_adopts_a_remote_agent_and_receives_its_message() {
         })),
         "{:?}",
         editor.changes(messages)
+    );
+
+    let mut mcp = McpTestClient::open(&remote, &orphan.id);
+    let sent = mcp.call(
+        "send_message",
+        json!({ "to": "#human", "text": "MCP reports the remote window receipt" }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["delivery"], "delivered_to_windows", "{sent}");
+    let selector = exact_machine_selector(&window.machine_id);
+    assert_eq!(
+        sent["data"]["window_delivery"],
+        json!([
+            {"window": format!("{}@{selector}", window.window_id), "state": "delivered"},
+            {"window": "terminal", "state": "not_delivered", "reason": "not_watching"},
+        ]),
+        "{sent}"
     );
 
     let caller = local.start_named_fake("caller", &[]);

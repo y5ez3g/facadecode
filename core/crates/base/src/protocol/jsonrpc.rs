@@ -167,10 +167,26 @@ pub struct SendFailure {
 }
 
 impl From<ErrorBody> for SendFailure {
-    fn from(error: ErrorBody) -> Self {
+    fn from(mut error: ErrorBody) -> Self {
+        let failures = error.data.windows.take();
+        let window_delivery = error
+            .data
+            .window_delivery
+            .take()
+            .map(WindowDelivery::into_outcomes)
+            .or_else(|| {
+                failures.map(|failures| {
+                    failures
+                        .into_iter()
+                        .map(|WindowDeliveryFailure { window, reason }| {
+                            WindowDeliveryOutcome::NotDelivered { window, reason }
+                        })
+                        .collect()
+                })
+            });
         Self {
             error,
-            window_delivery: None,
+            window_delivery,
         }
     }
 }

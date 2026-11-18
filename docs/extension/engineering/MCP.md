@@ -301,18 +301,19 @@ Text beginning with `[Earlier output truncated]` lost its beginning on its way: 
 and type_text refuse it as invalid_argument before any effect, asking for shorter parts.
 
 Within thirty seconds (1.3), return the message's `id` and `delivery` in data for agent delivery and old-engine human
-contact, as below. Rust also gives the message's `address`. Rust `#human` success uses `delivered_to_windows` and groups
-its receipts under `data.windows` as `delivered`, `not_delivered` and `outcome_unknown`. A confirmed zero-delivery
-failure gives its failure rows in `data.windows`. An unconfirmed send can give the retained message's `id` and `address`
-and its known groups under `data.window_delivery`. Window references in those groups and failure rows are address
-strings. Delivery counts handoff to the window's
-subscription under COLLABORATION-2.3.
+contact, as below. Rust also gives the message's `address`. A Rust send to `#human` succeeds with `delivered_to_windows`
+when at least one window's subscription took it under COLLABORATION-2.3. Both success and failure use
+`data.window_delivery` for the observed outcomes. Each row gives a `window` address and a `state` of `delivered`,
+`not_delivered` or `outcome_unknown`. Only `not_delivered` has a `reason`. When there are no member windows, the
+failure gives an empty array. An unconfirmed send can give the retained message's `id` and `address` with its known
+outcomes. Argument errors before a send use the ordinary failure envelope.
 
 | Delivery | Meaning |
 | --- | --- |
 | `typed_into_input` | Typed into the recipient's input and submitted |
 | `read_by_recipient` | The recipient read it with read_messages before it was typed |
 | `shown_to_person` | Handed to the person through the caller's editor window |
+| `delivered_to_windows` | Rust handed it to at least one member window's subscription |
 | `waiting_in_inbox` | A guest or MCP member takes it from its inbox later |
 
 Ordinary delivery follows RULES-1.4–1.6's input checks. A message's text is typed at most once.

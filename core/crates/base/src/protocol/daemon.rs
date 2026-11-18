@@ -1389,6 +1389,17 @@ impl From<SendOutcome> for SendResult {
     }
 }
 
+impl From<SendResult> for SendOutcome {
+    fn from(result: SendResult) -> Self {
+        Self {
+            message: result.message,
+            repeated: result.repeated,
+            withdrawn: result.withdrawn,
+            window_delivery: result.windows.map(WindowDelivery::into_outcomes),
+        }
+    }
+}
+
 /// One member window's outcome for a message to the person.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]

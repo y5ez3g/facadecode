@@ -112,9 +112,9 @@ Tool results give `status` and any result `data`. A failure gives `reason` and `
 in `data`. In Rust MCP, agents, messages and windows have an `id` and an `address` that can be copied into a tool call.
 References to their roles, such as `from`, `reply_to` and member windows, are address strings.
 
-A Rust MCP send to the person returns `delivered_to_windows` when a window has taken it. Its `data.windows` groups
-delivered windows, failures with their reasons, and unknown outcomes. An unconfirmed send can report its known
-receipts under `data.window_delivery`. These window references use the same address strings.
+A Rust MCP send to the person returns `delivered_to_windows` when a window has taken it. The `data.window_delivery`
+array in a success or failure gives a window address and state for each observed outcome. A `not_delivered` row also
+gives its reason. An unconfirmed send can report the retained message's address with the known receipts.
 
 Golden files in the scenario tests hold the tools' responses. An agent's record says whether its CLI can use the tools
 (`tools_state`). The [MCP contract](../extension/engineering/MCP.md) describes the arguments and responses.

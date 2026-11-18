@@ -3,8 +3,8 @@
 //! whose message says what is wrong, whether anything was done and what to do next. The model reads
 //! it as JSON text and gets the same object as the call's structured content.
 
-use facade_base::daemon::{WindowDelivery, WindowDeliveryFailure};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::daemon::WindowDeliveryOutcome;
+use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure};
 use serde_json::{Value, json};
 
 use super::addresses::Addresses;
@@ -35,6 +35,10 @@ pub(super) fn refusal(error: &ErrorBody) -> Value {
 }
 
 pub(super) fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
+    let SendFailure {
+        error,
+        window_delivery: outcomes,
+    } = error.clone().into();
     let reason = match error.data.reason {
         Reason::Refused => "out_of_reach",
         Reason::Upgrading => "unavailable",
@@ -52,13 +56,10 @@ pub(super) fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_
             );
             details.insert("id".into(), json!(id));
         }
-        if let Some(windows) = &error.data.windows {
-            details.insert("windows".into(), json!(window_failures(windows, addresses)));
-        }
-        if let Some(windows) = &error.data.window_delivery {
+        if let Some(outcomes) = outcomes {
             details.insert(
                 "window_delivery".into(),
-                window_delivery(windows, addresses),
+                window_delivery(&outcomes, addresses),
             );
         }
         if let Some(unavailable) = details.get_mut("unavailable")
@@ -77,41 +78,41 @@ pub(super) fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_
     refused
 }
 
-/// The receipt's existing groups, with each window represented by its address.
-pub(super) fn window_delivery(windows: &WindowDelivery, addresses: &Addresses<'_>) -> Value {
-    let delivered: Vec<_> = windows
-        .delivered
-        .iter()
-        .map(|window| addresses.window(window))
-        .collect();
-    let outcome_unknown: Vec<_> = windows
-        .outcome_unknown
-        .iter()
-        .map(|window| addresses.window(window))
-        .collect();
-    json!({
-        "delivered": delivered,
-        "not_delivered": window_failures(&windows.not_delivered, addresses),
-        "outcome_unknown": outcome_unknown,
-    })
-}
-
-fn window_failures(failures: &[WindowDeliveryFailure], addresses: &Addresses<'_>) -> Vec<Value> {
-    failures
-        .iter()
-        .map(|failure| json!({ "window": addresses.window(&failure.window), "reason": failure.reason }))
-        .collect()
+/// Each attempted window's receipt uses a copyable address.
+pub(super) fn window_delivery(
+    outcomes: &[WindowDeliveryOutcome],
+    addresses: &Addresses<'_>,
+) -> Value {
+    Value::Array(
+        outcomes
+            .iter()
+            .map(|outcome| {
+                let window = addresses.window(outcome.window());
+                match outcome {
+                    WindowDeliveryOutcome::Delivered { .. } => {
+                        json!({ "window": window, "state": "delivered" })
+                    }
+                    WindowDeliveryOutcome::NotDelivered { reason, .. } => {
+                        json!({ "window": window, "state": "not_delivered", "reason": reason })
+                    }
+                    WindowDeliveryOutcome::OutcomeUnknown { .. } => {
+                        json!({ "window": window, "state": "outcome_unknown" })
+                    }
+                }
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::WindowRef;
+    use facade_base::daemon::{WindowDelivery, WindowDeliveryFailure, WindowRef};
     use facade_base::machine::{ExecutionOutcome, MessageRef, Unavailable};
 
     use super::*;
 
     #[test]
-    fn refusals_keep_receipt_groups_with_window_addresses() {
+    fn refusals_project_each_window_delivery_state() {
         let here = "00000000-0000-4000-8000-000000000001";
         let remote = "00000000-0000-4000-8000-000000000002";
         let addresses = Addresses {
@@ -146,6 +147,7 @@ mod tests {
             }],
             outcome_unknown: vec![unknown],
         });
+        assert_eq!(ErrorBody::from(SendFailure::from(error.clone())), error);
         let refusal = refusal_with_addresses(&error, &addresses);
         assert_eq!(refusal["reason"], "unavailable");
         assert_eq!(
@@ -155,10 +157,10 @@ mod tests {
                 "unavailable": {
                     "execution": "outcome_unknown", "window": "win-3@id:00000000000040008000000000000002",
                 },
-                "window_delivery": {
-                    "delivered": [], "not_delivered": [{"window": "win-2", "reason": "not_watching"}],
-                    "outcome_unknown": ["win-3@id:00000000000040008000000000000002"],
-                },
+                "window_delivery": [
+                    {"window": "win-2", "state": "not_delivered", "reason": "not_watching"},
+                    {"window": "win-3@id:00000000000040008000000000000002", "state": "outcome_unknown"},
+                ],
             })
         );
 
@@ -167,11 +169,19 @@ mod tests {
             window,
             reason: "window_disconnected".into(),
         }]);
+        assert_eq!(ErrorBody::from(SendFailure::from(error.clone())), error);
         assert_eq!(
             refusal_with_addresses(&error, &addresses)["data"],
             json!({
-                "windows": [{"window": "win-2", "reason": "window_disconnected"}],
+                "window_delivery": [
+                    {"window": "win-2", "state": "not_delivered", "reason": "window_disconnected"},
+                ],
             })
+        );
+        error.data.windows = Some(Vec::new());
+        assert_eq!(
+            refusal_with_addresses(&error, &addresses)["data"],
+            json!({ "window_delivery": [] }),
         );
     }
 
