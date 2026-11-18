@@ -4,7 +4,9 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use facade_base::address::{display_machine_selector, exact_machine_selector};
+use facade_base::address::{
+    MachineSelector, display_machine_selector, exact_machine_selector, parse_message_address,
+};
 use facade_base::daemon::{
     AgentSend, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE, Message, MessagesTopic,
     MessagesWatchArgs, SendArgs, SendResult, WindowDelivery, WindowRef, WindowsTopic,
@@ -324,11 +326,41 @@ fn view_of(message: &Message, local_machine_id: &str, machines: &[MachineIdentit
     view
 }
 
+/// The message number in `after`, which may carry this machine as its result gives it: #m4@id:….
+fn inbox_position(client: &mut DaemonClient, after: &str) -> Result<String, ErrorBody> {
+    let address = parse_message_address(after)
+        .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+    if let Some(selector) = address.machine {
+        let here = client.hello_result.machine_id.clone();
+        let local = match selector {
+            MachineSelector::Name(_) => machine_identities(client, Some(CONNECT_TIMEOUT))
+                .into_iter()
+                .find(|machine| machine.machine_id == here),
+            MachineSelector::IdPrefix(_) => Some(MachineIdentity {
+                machine_id: here,
+                name: String::new(),
+            }),
+        };
+        if !local.is_some_and(|machine| selector.matches(&machine)) {
+            return Err(ErrorBody::invalid_argument(format!(
+                "{after} is on another machine; after takes a message of your inbox"
+            )));
+        }
+    }
+    Ok(address.message_id.to_string())
+}
+
 /// Reads the inbox of the agent the server acts for: the messages not yet delivered, which reading
 /// delivers; every message after `after`; or the `last` newest. Messages longer together than a
 /// result carries go to a JSON file.
 pub(super) fn read(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let after = optional(arguments, "after");
+    let after = match optional(arguments, "after")
+        .map(|after| inbox_position(client, &after))
+        .transpose()
+    {
+        Ok(after) => after,
+        Err(error) => return envelope::refusal(&error),
+    };
     let last = arguments
         .get("last")
         .and_then(Value::as_u64)

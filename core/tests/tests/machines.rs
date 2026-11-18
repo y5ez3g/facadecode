@@ -257,9 +257,11 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert!(wait_for_screen_text(&second, id, "request across machines"));
     let original: MessageRef =
         serde_json::from_value(sent["result"]["message_ref"].clone()).unwrap();
+    // The reply names the message as the command line on first prints it: m1@second.
+    let printed = format!("{}@second", original.message_id);
     let reply = acting_for(&second, id).call(
         "agent.send",
-        json!({ "to": from, "text": "reply across machines", "reply_to": original.exact_address() }),
+        json!({ "to": from, "text": "reply across machines", "reply_to": printed }),
     );
     assert_eq!(
         reply["result"]["message_ref"]["machine_id"], first_id,
@@ -284,11 +286,15 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         received["reply_to_machine_id"], original.machine_id,
         "{received}"
     );
-    assert!(
-        first
-            .run_facade_ok(&["screen", &target])
-            .contains("request across machines")
-    );
+    // What the command line printed, and a name with its machine, name the same agent.
+    for agent in [target.as_str(), started.trim(), "worker@second"] {
+        assert!(
+            first
+                .run_facade_ok(&["screen", agent])
+                .contains("request across machines"),
+            "{agent}"
+        );
+    }
     first.run_facade_ok(&["type", &target, "typed from first", "--enter"]);
     assert!(wait_for_screen_text(&second, id, "typed from first"));
 

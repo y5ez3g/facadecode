@@ -92,15 +92,16 @@ pub fn parse_agent_address(input: &str) -> Result<AgentAddress<'_>, AddressError
         if agent.eq_ignore_ascii_case("#human") {
             return Err(AddressError::QualifiedHuman);
         }
-        if let Some(agent) = agent.strip_prefix('#').filter(|id| is_number(id, 'a')) {
+        let id = agent.strip_prefix('#').unwrap_or(agent);
+        if is_number(id, 'a') {
             return Ok(AgentAddress::Qualified {
-                agent,
+                agent: id,
                 machine: parse_machine_selector(machine)?,
                 literal_name: None,
             });
         }
-        if agent.starts_with('@')
-            && !agent[1..].trim().is_empty()
+        if !agent.starts_with('#')
+            && !agent.strip_prefix('@').unwrap_or(agent).trim().is_empty()
             && let Ok(machine) = parse_machine_selector(machine)
         {
             return Ok(AgentAddress::Qualified {
@@ -116,7 +117,10 @@ pub fn parse_agent_address(input: &str) -> Result<AgentAddress<'_>, AddressError
 pub fn parse_message_address(input: &str) -> Result<MessageAddress<'_>, AddressError> {
     let input = input.trim();
     let (id, machine) = if let Some((id, machine)) = input.rsplit_once('@') {
-        let id = id.strip_prefix('#').ok_or(AddressError::InvalidMessage)?;
+        let id = id.strip_prefix('#').unwrap_or(id);
+        if !is_number(id, 'm') {
+            return Err(AddressError::InvalidMessage);
+        }
         (id, Some(parse_machine_selector(machine)?))
     } else {
         (input.strip_prefix('#').unwrap_or(input), None)
@@ -205,5 +209,49 @@ pub fn default_machine_name(hostname: &str) -> String {
         "machine".into()
     } else {
         name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The command line prints a17@gpu and m42@gpu; with or without `#`, they are addresses.
+    #[test]
+    fn printed_addresses_are_read_back() {
+        let a17 = AgentAddress::Qualified {
+            agent: "a17",
+            machine: MachineSelector::Name("gpu"),
+            literal_name: None,
+        };
+        assert_eq!(parse_agent_address("a17@gpu"), Ok(a17));
+        assert_eq!(parse_agent_address("#a17@gpu"), Ok(a17));
+        assert_eq!(
+            parse_agent_address("a17@id:3f9a2c1d"),
+            Ok(AgentAddress::Qualified {
+                agent: "a17",
+                machine: MachineSelector::IdPrefix("3f9a2c1d"),
+                literal_name: None,
+            })
+        );
+        assert_eq!(
+            parse_agent_address("Pixel@gpu"),
+            Ok(AgentAddress::Qualified {
+                agent: "Pixel",
+                machine: MachineSelector::Name("gpu"),
+                literal_name: Some("Pixel@gpu"),
+            })
+        );
+        assert_eq!(parse_agent_address("a17"), Ok(AgentAddress::Local("a17")));
+        let m42 = MessageAddress {
+            message_id: "m42",
+            machine: Some(MachineSelector::Name("gpu")),
+        };
+        assert_eq!(parse_message_address("m42@gpu"), Ok(m42));
+        assert_eq!(parse_message_address("#m42@gpu"), Ok(m42));
+        assert_eq!(
+            parse_message_address("x@gpu"),
+            Err(AddressError::InvalidMessage)
+        );
     }
 }
