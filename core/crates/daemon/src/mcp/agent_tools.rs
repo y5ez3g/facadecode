@@ -261,9 +261,6 @@ fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
 /// What an agent is doing, as `list_agents` says it: an ended process is `ended`, and a state the
 /// tools do not know `unknown`.
 fn state_word(agent: &AgentInfo) -> &'static str {
-    if agent.unreachable {
-        return "unreachable";
-    }
     if agent.process == ProcessState::Ended {
         return "ended";
     }
@@ -303,6 +300,9 @@ fn agent_row(agent: &AgentInfo, addresses: &Addresses<'_>) -> Value {
     show_members(&mut row, agent, addresses);
     row["folder"] = json!(agent.cwd);
     row["state"] = json!(state);
+    if agent.unreachable {
+        row["unreachable"] = json!(true);
+    }
     if state == "waiting_for_you" {
         let kind = agent
             .state_detail
@@ -463,6 +463,28 @@ mod tests {
     use facade_base::daemon::Kept;
 
     use super::*;
+
+    #[test]
+    fn agent_activity_and_reachability_are_independent() {
+        let mut agent: AgentInfo = serde_json::from_value(json!({
+            "agent_id": "a7", "name": "Ada", "cli": "fake",
+            "cwd": "/work/app", "machine_id": "00000000-0000-4000-8000-000000000001",
+            "windows": [], "location_id": "app", "process": "running",
+            "created_at": "2026-11-17T00:00:00.000Z", "root": "a7", "yolo": false,
+            "state": "waiting_for_you", "state_detail": {"kind": "question"},
+            "tools_state": "available",
+        }))
+        .unwrap();
+        let addresses = Addresses::default();
+        let mut expected = agent_row(&agent, &addresses);
+        assert_eq!(expected["state"], "waiting_for_you");
+        assert_eq!(expected["waiting_for"], "question");
+        assert!(expected.get("unreachable").is_none());
+
+        agent.unreachable = true;
+        expected["unreachable"] = json!(true);
+        assert_eq!(agent_row(&agent, &addresses), expected);
+    }
 
     #[test]
     fn a_start_failure_names_the_folder_of_its_kept_worktree() {

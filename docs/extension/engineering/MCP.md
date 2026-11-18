@@ -237,8 +237,9 @@ the terminal window, also gives `locations` and `clis` arrays, including when em
 `not_installed: true`. A long result writes the complete list object to the file named by `data.file`, with the same rows.
 
 An agent row has its `id`, `address`, launch `folder` and `machine_id`. Its `windows` are window address strings, and
-`creator` is the creator's address or `#human`. Bare role references name the caller's machine. Copy an object's
-machine-qualified `address` into a tool argument. A machine name is used when unique among the selectable machines.
+`creator` is the creator's address or `#human`. Its `state` describes the CLI's last observed activity. If its running
+machine is unreachable, the row also gives `unreachable: true`. Bare role references name the caller's machine.
+Copy an object's machine-qualified `address` into a tool argument. A machine name is used when unique among the selectable machines.
 Otherwise, the selector uses an unambiguous `id:` prefix, with the full ID available when the machine set is unavailable.
 
 Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
