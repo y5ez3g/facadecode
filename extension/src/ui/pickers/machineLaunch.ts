@@ -12,7 +12,7 @@ import { BACK, Flow } from './stepping';
 export interface LaunchMachine {
 	readonly id: string;
 	readonly name: string;
-	readonly unavailable?: string;
+	readonly unavailable?: 'unavailable' | 'ssh_interaction_required';
 }
 
 export interface RemoteLocation {
@@ -41,7 +41,8 @@ export async function chooseMachine(flow: Flow, title: string, machines: NonNull
 		machine,
 		label: machine === machines.local ? vscode.l10n.t("This machine") : plainText(machine.name),
 		description: machine === machines.local ? plainText(machine.name) : undefined,
-		detail: machine.unavailable && plainText(machine.unavailable),
+		detail: machine.unavailable === 'ssh_interaction_required' ? vscode.l10n.t("SSH interaction required")
+			: machine.unavailable ? vscode.l10n.t("Unavailable") : undefined,
 		iconPath: new vscode.ThemeIcon(machine === machines.local ? 'device-desktop' : 'remote')
 	}));
 	const picked = await flow.pick({
