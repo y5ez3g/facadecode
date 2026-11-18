@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import type * as vscode from 'vscode';
 import { replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
+import { withFileLock } from '../base/lock';
 import type { OwnedWrite } from '../base/ownership';
 import { FacadeError, OWNERSHIP_LOST } from '../core/errors';
 
@@ -16,8 +17,12 @@ import { FacadeError, OWNERSHIP_LOST } from '../core/errors';
 const COALESCE_MS = 100;
 
 /** A change through `update`, written with the others waiting, and who waits for it. */
-interface Waiting {
+interface Change {
 	readonly key: string;
+	apply(current: unknown): unknown;
+}
+
+interface Waiting extends Change {
 	resolve(): void;
 	reject(err: unknown): void;
 }
@@ -31,10 +36,8 @@ export class NotOwnedError extends FacadeError {
 }
 
 /**
- * The window's workspace state - known locations, last launch, panel order, the workspace key - kept beside its runs as well
- * (ARCHITECTURE-2.2). A folder window that becomes a multi-root workspace gets an empty workspace state from the editor, which
- * does not carry an extension's over: a window that `carried` its runs over that way takes what it kept in `file` where its
- * workspace state belongs to an older visit to the destination. The state of the continuing window wins.
+ * The shared workspace sidecar (ARCHITECTURE-3.1). A Rust activation reads it directly. The old engine also keeps its editor
+ * Memento mirror. Each write takes its claim first, then the sidecar lock, and applies only this activation's changes.
  */
 export class KeptWorkspaceState implements vscode.Memento {
 
@@ -45,21 +48,24 @@ export class KeptWorkspaceState implements vscode.Memento {
 	private waiting: Waiting[] = [];
 	private timer: ReturnType<typeof setTimeout> | undefined;
 
-	constructor(private readonly state: vscode.Memento, private readonly file: string, carried: boolean, private readonly log: (text: string) => void, private readonly writeIfOwned: OwnedWrite = write => write()) {
+	constructor(private readonly state: vscode.Memento | undefined, private readonly file: string, carried: boolean, private readonly log: (text: string) => void, private readonly writeIfOwned: OwnedWrite = write => write()) {
 		this.writeIfOwned(() => {
-			for (const key of state.keys()) {
-				this.values.set(key, state.get(key));
-			}
-			const kept = carried ? this.read() : undefined;
-			if (kept) {
-				for (const key of new Set([...this.values.keys(), ...Object.keys(kept)])) {
-					const value = kept[key];
-					if (value === undefined) { this.values.delete(key); } else { this.values.set(key, value); }
-					void Promise.resolve(state.update(key, value)).catch(err => this.log(`Could not keep ${key} in the workspace: ${String(err)}`));
+			withFileLock(this.file, () => {
+				const kept = this.read(state !== undefined);
+				if (kept) {
+					this.values = new Map(Object.entries(kept));
+					if (state && carried) {
+						for (const key of new Set([...state.keys(), ...this.values.keys()])) {
+							void Promise.resolve(state.update(key, this.values.get(key))).catch(err => this.log(`Could not keep ${key} in the workspace: ${String(err)}`));
+						}
+					}
+				} else {
+					for (const key of state?.keys() ?? []) {
+						this.values.set(key, state?.get(key));
+					}
+					this.write(this.values);
 				}
-			} else {
-				this.write(this.values);
-			}
+			}, { keepLive: true });
 		});
 		this.written = new Map(this.values);
 	}
@@ -81,7 +87,7 @@ export class KeptWorkspaceState implements vscode.Memento {
 	update(key: string, value: unknown): Thenable<void> {
 		return new Promise<void>((resolve, reject) => {
 			this.set(this.values, key, value);
-			this.waiting.push({ key, resolve, reject });
+			this.waiting.push({ key, apply: () => value, resolve, reject });
 			if (!this.timer) {
 				this.timer = setTimeout(() => this.flush(), COALESCE_MS);
 				this.timer.unref?.();
@@ -94,74 +100,98 @@ export class KeptWorkspaceState implements vscode.Memento {
 	 * disk failures, and a successor activation's ownership, throw (LIFECYCLE-3.4).
 	 */
 	keep(key: string, value: unknown): Thenable<void> {
-		const next = new Map(this.values);
-		this.set(next, key, value);
-		return this.commit(next, [{ key, resolve: () => undefined, reject: () => undefined }], true);
+		return this.commit({ key, apply: () => value });
+	}
+
+	/** Applies an edit to the latest committed value. A disk or ownership failure is reported synchronously. */
+	mutate<T>(key: string, change: (current: T | undefined) => T | undefined): void {
+		void this.commit({ key, apply: current => change(current as T | undefined) })
+			.catch(err => this.log(`Could not keep ${key} in the workspace: ${String(err)}`));
 	}
 
 	/** Writes the changes waiting now: as the window goes, none waits for a write that would come too late. */
 	flush(): void {
-		const next = new Map(this.values);
-		void this.commit(next, [], false);
+		try {
+			void this.commit();
+		} catch {
+			// Rejected the waiting updates below; each caller reports its own failure.
+		}
 	}
 
 	/**
-	 * Writes `next` with the changes waiting and `changes`: the file first, so that a handover never reads an older file than the
-	 * editor's state, then the editor's. Not written, the changes waiting are taken back and rejected, and `rethrow` throws.
+	 * Applies queued and immediate edits while holding both locks. Only a committed sidecar write reaches the editor mirror.
 	 */
-	private commit(next: Map<string, unknown>, changes: readonly Waiting[], rethrow: boolean): Thenable<void> {
+	private commit(change?: Change): Promise<void> {
 		clearTimeout(this.timer);
 		this.timer = undefined;
-		const all = [...this.waiting.splice(0), ...changes];
+		const waiting = this.waiting.splice(0);
+		const all = change ? [...waiting, change] : waiting;
 		if (!all.length) {
 			return Promise.resolve();
 		}
+		const keys = new Set(all.map(edit => edit.key));
 		try {
-			let wrote = false;
-			// Persist the handover source before confirming it in memory or the editor. A failed sidecar write must not
-			// acknowledge a newer Memento value that a subsequent handover would overwrite with the old sidecar.
+			let committed: Map<string, unknown> | undefined;
 			this.writeIfOwned(() => {
-				this.write(next);
-				wrote = true;
+				committed = withFileLock(this.file, () => {
+					const latest = this.read() ?? {};
+					const next = new Map(Object.entries(latest));
+					for (const { key, apply } of all) {
+						this.set(next, key, apply(next.get(key)));
+					}
+					if ([...keys].some(key => next.get(key) !== latest[key])) {
+						this.write(next);
+					}
+					return next;
+				}, { keepLive: true });
 			});
-			if (!wrote) {
+			if (!committed) {
 				throw new NotOwnedError();
 			}
+			this.written = committed;
+			this.values = new Map(committed);
 		} catch (err) {
 			this.values = new Map(this.written);
-			for (const change of all) {
-				change.reject(err);
+			for (const edit of waiting) {
+				edit.reject(err);
 			}
-			if (rethrow) {
-				throw err;
-			}
-			return Promise.resolve();
+			throw err;
 		}
-		this.written = new Map(next);
-		this.values = new Map(next);
-		const updates = new Map<string, Thenable<void>>();
-		for (const { key } of all) {
-			if (!updates.has(key)) {
-				updates.set(key, Promise.resolve(this.state.update(key, next.get(key))));
+		const updates = new Map<string, Promise<void>>();
+		const editor = this.state;
+		if (editor) {
+			for (const key of keys) {
+				const value = this.values.get(key);
+				updates.set(key, Promise.resolve().then(() => editor.update(key, value)));
 			}
 		}
-		for (const change of all) {
-			updates.get(change.key)!.then(() => change.resolve(), err => change.reject(err));
+		for (const edit of waiting) {
+			const update = updates.get(edit.key);
+			if (update) {
+				void update.then(edit.resolve, edit.reject);
+			} else {
+				edit.resolve();
+			}
 		}
-		return updates.get(changes.at(-1)?.key ?? '') ?? Promise.resolve();
+		return updates.get(change?.key ?? '') ?? Promise.resolve();
 	}
 
 	private set(values: Map<string, unknown>, key: string, value: unknown): void {
 		if (value === undefined) { values.delete(key); } else { values.set(key, value); }
 	}
 
-	/** What was kept, where it can be read. */
-	private read(): { readonly [key: string]: unknown } | undefined {
+	/** Old-engine initialization can recover a damaged sidecar from the existing editor state. */
+	private read(recoverDamaged = false): Readonly<Record<string, unknown>> | undefined {
 		try {
 			const value: unknown = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-			return isJsonObject(value) ? value : undefined;
-		} catch {
-			return undefined;
+			if (isJsonObject(value)) { return value; }
+			if (recoverDamaged) { return undefined; }
+			throw new Error('Invalid workspace state record.');
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === 'ENOENT' || (recoverDamaged && err instanceof SyntaxError)) {
+				return undefined;
+			}
+			throw err;
 		}
 	}
 

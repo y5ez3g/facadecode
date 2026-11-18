@@ -110,15 +110,27 @@ function tryAcquire(lock: string, mark: string, options: FileLockOptions): boole
 
 /** Takes `lock` where nobody holds it: false where another does. */
 function tryTake(lock: string, mark: string): boolean {
+	let fd: number;
 	try {
-		fs.writeFileSync(lock, mark, { flag: 'wx' });
-		return true;
+		fd = fs.openSync(lock, 'wx');
 	} catch (err) {
 		// Windows fails with EPERM while another process is deleting the lock.
 		if (!['EEXIST', 'EPERM'].includes(codeOf(err) ?? '')) {
 			throw err;
 		}
 		return false;
+	}
+	try {
+		try {
+			fs.writeFileSync(fd, mark);
+		} finally {
+			fs.closeSync(fd);
+		}
+		return true;
+	} catch (err) {
+		// The exclusive open succeeded, so an interrupted marker write belongs to this attempt.
+		removeRetried(lock);
+		throw err;
 	}
 }
 

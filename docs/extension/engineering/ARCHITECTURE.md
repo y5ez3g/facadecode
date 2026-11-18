@@ -151,38 +151,39 @@ Worktree input and planning are shared under WORKTREES-4.3 rather than copied in
 **A window runs its agents on one engine, chosen as it opens or reloads: Facade core, the Rust engine, or the extension's
 own, the old engine.**
 
-`facade.rustEngine` (CONFIGURATION-1.2) is `auto` by default. Under `auto` a window takes the Rust engine where its
-package carries core's `facade` program (`bin/facade.exe` on Windows, `bin/facade` elsewhere), no run of the old engine
-is still running in its execution environment - ptyd lists none without `exited`, whatever window started it; a ptyd
-that does not answer has none, and none is started to ask - and core responds. Otherwise, and always under `off`, it
-takes the old engine, all of 1.1-1.3 unchanged. A core that cannot start there, as on WSL 1 or in a container that
-forbids process descriptors, leaves the window on the old engine with one notification of why and how to stop trying. On
-any old-engine window under `auto`, Pins with Rust identities remain in storage for a Rust activation (RULES-4.2). An
-old-engine window under `auto` whose reload would switch asks again whether old runs remain after each change of its own
-agents, every 10 seconds and before restoring Pins; once none does, it says once that a reload switches it, and the
-person's New Agent, Resume and Pin restoration then say so instead of starting on the old engine. Agents never run on
-both engines in one window.
+`facade.rustEngine` (CONFIGURATION-1.2) is `auto` by default. Under `auto` a window takes the Rust engine where its package
+carries core's `facade` program (`bin/facade.exe` on Windows, `bin/facade` elsewhere), no run of the old engine is still running in its execution environment - ptyd lists none
+without `exited`, whatever window started it; a ptyd that does not answer has none, and none is started to ask - and core
+responds. Otherwise, and always under `off`, it takes the old engine. Failure to start or connect to core leaves the
+window on the old engine with one notification giving the reason and how to stop trying. Core can fail to start on
+WSL 1 or in a container that forbids process descriptors. On any old-engine window under `auto`, Pins with Rust identities remain in
+storage for a Rust activation (RULES-4.2). An old-engine window under `auto` whose reload would switch asks again
+whether old runs remain after each change of its own agents, every 10 seconds and before restoring Pins; once none does,
+it says once that a reload switches it, and the person's New Agent, Resume and Pin restoration then say so instead of
+starting on the old engine. Agents never run on both engines in one window.
 
 A Rust window is an `ide` client of core over the daemon protocol (`core/protocol/PROTOCOL.md`), under `host/rust`: the
 connection (`connection.ts`), which starts `facade daemon --detach` with the window's `FACADE_HOME` where no daemon
 responds, lets its own build take over an older one, and on Windows connects to the daemon's named pipe with Node's
 `net`, relying on the pipe's DACL alone, as PROTOCOL's "Connect to the daemon" allows an `ide` client, since Node has no
-API to check the pipe server's user; the agents (`agents.ts`), an `Agents` of core's records; the locations, CLIs and
-worktrees core lists for the window (`ports.ts`); the agents' tabs, today's terminals drawing core's screens, each
-watched only while its tab is open (`terminals.ts`); and the environment (`environment.ts`). Its `hello` describes the
-window - its routing ID (2.2), name, environment, workspace, folders, Git branch prefix, terminal colors and the
-environment its first folder's terminals have - and the numbers this computer's counters gave (RULES-2.2);
-`window.update` sends it again as any of it changes, as the window regains focus, and as a picker refreshes its
-locations. The panel, cards, tabs, Pins and pickers are the same code on both engines; core's errors show in the
-person's language by their reason, core's own words after. The window starts no ptyd, shim or Facade tools of its own,
+API to check the pipe server's user; the agents (`agents.ts`), an `Agents` of core's records; the
+locations, CLIs and worktrees core lists for the window (`ports.ts`); the agents' tabs, today's terminals drawing core's
+screens, each watched only while its tab is open (`terminals.ts`); and the environment (`environment.ts`). Its
+`hello` sends the editor instance ID (2.2), name, environment, workspace key when it has folders, folders, Git branch
+prefix, terminal colors, first folder's terminal environment and the numbers this computer's counters gave
+(RULES-2.2). Core answers with its machine ID and the bound logical window reference. `window.update` sends the
+description as it changes, as the window regains focus and as a picker refreshes locations. Core applies it to that
+connection's bound window. The extension shares UI surfaces between engines and wires the Rust member search
+and restoration into them when on Rust. Core's errors show in the person's language by their reason, core's own
+words after. The window starts no ptyd, shim or Facade tools of its own,
 keeps no record of its agents, and offers no Show Agent Launch. The window component is the same for both engines: an
 old-engine agent's request to a Rust window finds it unavailable.
 
 End Agent calls `agent.stop` for a running agent. End Agent and normal exit record the conversation in `conversations/`
-for Resume and leave the agent's record in core (RULES-4.1). The `agents` snapshot verifies Pins by home and number.
-Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN` (RULES-4.2).
-Pins, dismissed abnormal exits, the panel's order and filters, the last launch and where each agent's tab is are kept
-with the workspace's record (2.2), so they follow a folder window that becomes a workspace. A Rust window's terminals
+for Resume and leave the agent's record in core (RULES-4.1). Go to Agent uses `agent.adopt` to add the editor's
+logical window to an existing agent. The `agents` snapshot identifies members and verifies Pins by machine ID and
+number. Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN`
+(RULES-4.2). The shared workspace file and logical-window presentation keys follow 3.1. A Rust window's terminals
 get `<home>/core/bin` before `PATH` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`
 (CLIS-1.2), so `facade` there reaches the window's agents; an old-engine window's get neither.
 
@@ -211,8 +212,14 @@ not a product workflow.
 
 **Demonstrate reattachment of a window's runs under RULES-4.1 across reload, extension-host restart and temporary disconnect.**
 
-On the Rust engine, core owns the processes across window closure and daemon replacement. The window reconnects and
-uses its `agents` snapshot to show the original runs (RULES-4.1, LIFECYCLE-3.5).
+On Rust, core binds an editor instance to a logical window in `hello`. It first looks up that same instance,
+including after a daemon restart, then takes the first window allocated to the workspace with no effective connections,
+then allocates a window if necessary. Only windows with workspace folders supply a workspace key. Active instances of
+the same workspace use separate references. The same instance can have multiple connections. A reference remains
+connected while its current binding has a connection. A binding from an older instance cannot change a reassigned
+window. An instance reconnecting after reassignment obtains another reference through the same hello procedure.
+An empty workspace's disconnected reference can be discarded when it has no member records. Reconnect using the
+core-assigned reference and reconcile the window's members from the `agents` snapshot (RULES-4.1, LIFECYCLE-3.5).
 
 On the old engine, ptyd applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
 seconds where the claim says its window is local, five minutes otherwise; a successor activation's claim cancels it, and
@@ -224,7 +231,7 @@ workspace key is not enough to identify a particular live window; two windows ca
 detect loss, not prove closure. A window ID is the routing address the window component derives from the window's
 handover identity when it registers the window: the same across the window's reloads while that identity's record lasts,
 and another where it is gone and replaced (below). The runtime reattaches the original runs, with the same run IDs, to
-the reloaded window. RULES-2.2's Window row is the conceptual identity, not this address. Record enough current
+the reloaded window. RULES-2.2's window instance is the conceptual identity. Record enough current
 window/run association to reconnect the actual process. No durable message handover is required solely for a closing
 sender; RULES-1.9 permits natural termination of work still owned by that side. The workspace key that runs are claimed
 under is derived from the workspace's URI once and then kept in the editor's workspace storage for reloads.
@@ -262,9 +269,10 @@ merging all historical workspace URIs.
 
 When the local component survives, native terminal replacement uses its live run-to-Terminal object registrations,
 never a title, PID, private ID or an activation snapshot guess. Current session and monotonically increasing owner
-claims fence operations: a late request from an older workspace host cannot replace or dispose a newer binding, and an
-activation whose workspace a newer activation claimed detaches its cards and terminals without ending a process
-(RULES-4.1). Normal close drops the exact object's binding. The workspace runtime serializes terminal creation: begin a
+claims fence operations so that a late request from an older host cannot replace or dispose a newer binding of the
+same window. On the old engine, an activation whose workspace a newer activation claimed detaches its cards and
+terminals without ending a process (RULES-4.1). Rust presentation claims are scoped to the logical window under 3.1.
+Normal close drops the exact object's binding. The workspace runtime serializes terminal creation: begin a
 capture bounded to ten seconds, create its terminal, wait for that object's public open event, then finish. The local
 component accepts only one still-live object opened during that capture; every extra open makes it ambiguous even if
 that extra object closes before finish. Older objects' late close events do not contaminate the capture. Same-host
@@ -320,6 +328,17 @@ every supported editor supplies a complete mechanism.
 ### 2.3 Execution ownership and input deadlines
 
 **The execution owner keeps process/screen facts and serializes input independently of the visible card.**
+
+On Rust, core serializes input and answers queries for the shared terminal. The editor reports its size and colors over
+the bound connection. An editor resize, including a repeated size, makes that member the color source. Terminal attach
+resizes the shared dimensions without changing that source. Until the first editor resize, prefer the creating
+editor's colors for a human start. For a child, prefer the parent's source window when it is also a member. Otherwise
+use the first member editor with known colors in reference order. Unknown colors leave the query unanswered.
+Theme updates from the source window change
+the colors. Its disconnect keeps the last value in core memory, and Resume uses it. A daemon restart or replacement
+clears it until the next eligible update or resize. Focus alone does not choose the color source.
+
+For ptyd, the following terminal and query handling applies.
 
 Keep process/run identity, screen snapshot/output sequence and actual input effects across extension-host reload. Attach
 without duplicating output; retain a dated final screen after exit where available. A snapshot or a read waits until
@@ -429,6 +448,9 @@ human-notification claim protocol or authenticated cleanup authority. Atomic upd
 are ordinary implementation tools, not new API promises. Closing a run does not replay its mail on a later run.
 Changing protocol does not convert old pending messages into new deliveries.
 
+Rust extension connections speak daemon protocol v2 with range `[2,2]`. A compatible daemon can hand over to a newer
+packaged build. A protocol refusal reaches the old-engine fallback under 1.4.
+
 Bound output buffers at 8 MiB per run and 32 MiB per window; headless scrollback is 10,000 logical lines / 8 MiB.
 The headless terminal reflows the cursor's line with the text during resize. Narrowing and restoring a window must
 keep the cursor attached to its logical input position; an input reader must not compensate by guessing past a frame.
@@ -480,10 +502,19 @@ Windows node-pty's console worker - starts no program and says that its installa
 | Client Facade directory, `<Facade home>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
 | Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group, which LIFECYCLE-3.5's restoration needs - for as long as ptyd runs (2.3) |
 | Execution Facade directory, `<Facade home>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
-| Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs, its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged |
+| Editor workspace storage | Workspace key (2.2) and the old engine's workspace state mirror; old-engine pending updates coalesce within 100 ms and flush on deactivation, with synchronous Pin saves |
+| `workspaces/<key>/workspace-state.json` in the execution Facade directory | Rust's persistent source for workspaces' Pins, dismissed abnormal exits and launch history, and logical-window keys for tab positions, selection, filter and ordinary card order. The old engine also writes its workspace state here. |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing original cwd, Facade name and the associated CLI entry name/type; no transcript or environment-value copy (CONFIGURATION-3.4) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
+
+Two active Rust windows of the same workspace can each update workspace state. They read committed preferences on
+activation. Each write holds its claim lock and then the workspace sidecar lock through an atomic replacement, using
+the latest file and applying only its changes. This includes initial state, a flush, and an old-engine window using
+the same file. Pin mutations use the latest entries. An explicit Rust Pin reuses an entry for the same machine and
+agent, keeping its saved ID and position, or adds it if missing. A refresh or migration updates a still-present
+matching entry. An Unpin stays removed. The claim owner for the old engine is still the workspace; each active Rust
+logical window has a separate owner. A superseded claim cannot commit.
 
 The Facade home is chosen as the window starts: an explicitly set **Facade: Home** (`facade.home`, machine scope)
 wins, then `FACADE_HOME`, then `~/.facade`. Blank strings and `null` count as unset. The setting's box shows

@@ -15,6 +15,9 @@ interaction and tokens. This document owns the card, list, filter and webview co
 
 **Facade Code has one webview view in its own activity-bar container and shows only this window's agents.**
 
+On the Rust engine, the current logical window's membership supplies its records (RULES-4.1). Another member window
+can show its own card and terminal for the same running agent. Go to Agent can search beyond this panel under LIFECYCLE-2.3.
+
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
@@ -271,7 +274,8 @@ disappears when that record is removed. A failed launch remains selected; backgr
 While a reload, an extension-host restart or Pin restoration opens its pinned agents' tabs one after another the
 selection does not move; once they are open it is on the last one opened, in front of the active group, or where none
 opened as it was: LIFECYCLE-3.5's tab procedure owns that order, this list only its final selection.
-Keyboard focus and selection are independent.
+Keyboard focus and selection are independent. Each logical Rust window keeps its own selection and ordinary
+card order. Pin order is shared within the workspace under ARCHITECTURE-3.1.
 
 ### 2.2 Card menu
 
@@ -313,7 +317,8 @@ has; choosing any other folder filters by it directly. A window of one folder sh
 item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog does not list now
 stays choosable, last in the first step. The current filter, or in the first step its folder, is initially highlighted.
 Back returns to the first step; Escape leaves the filter unchanged. The view description names the filter; the icon
-fills. Persist environment-qualified location/folder association in workspace state. Clear on the filtered empty state's
+fills. Persist environment-qualified location/folder association for the logical Rust window or in old-engine
+workspace state (ARCHITECTURE-3.1). Clear on the filtered empty state's
 Clear Filter, the first step's first item or confirmed location removal, never on a failed Git read. A launch does not
 change the filter; every new agent enters the normal list data and is displayed only when it matches. Ordinary folders
 use “location,” not an implication that Git/worktrees are required.

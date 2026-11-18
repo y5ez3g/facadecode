@@ -3,7 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { Agents, ConversationDiscoveryPort, ConversationKey, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, WorktreePort } from '../../core/ports';
+import type { WindowRef } from '../../base/coreProtocol';
+import type { Agents, ConversationDiscoveryPort, ConversationKey, CliCatalogPort, Event, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, OtherAgent, RetainedConversation, RunId, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
@@ -20,6 +21,22 @@ import { AgentActions, registerAgentCommands, targetOf } from './agent';
 
 /** Defined by the build: true only in the integration suite's build, whose test commands the shipped one has none of (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
+
+/** The composition root supplies these capabilities only for a Rust window. */
+interface RustUi {
+	readonly window: () => WindowRef;
+	readonly ready: () => Promise<unknown>;
+	readonly onDidChangeWindow: vscode.Event<Promise<unknown>>;
+	otherAgents(): readonly OtherAgent[];
+	readonly onDidChangeOtherAgents: Event<void>;
+	adoptAgent(agent: string): Promise<RunId>;
+	closeOtherAgent(agent: string): ReturnType<Agents['close']>;
+	retainedConversations(): readonly RetainedConversation[];
+	resumeRetained(agent: string, options: { readonly reveal: boolean }): Promise<RunId>;
+	worktreeAgents(path: string): number;
+	closeWorktreeAgents(path: string): Promise<boolean>;
+	describeError(err: unknown): string;
+}
 
 /** What the panel, its commands and its pickers are given by the composition root. */
 export interface UiDeps {
@@ -42,7 +59,8 @@ export interface UiDeps {
 	/** New worktrees through the editor's native Git (WORKTREES-2.1). */
 	readonly worktrees: WorktreePort;
 	readonly execution: Pick<ExecutionPort, 'reveal' | 'tabOpen' | 'onDidActivate'>;
-	readonly workspaceState: vscode.Memento;
+	readonly workspaceState: Pick<vscode.Memento, 'get' | 'update'>;
+	readonly rust?: RustUi;
 	readonly extensionUri: vscode.Uri;
 	readonly log: LogPort;
 	/** A human-operation error, one neutralized line with only Show or Edit in facade.json (UX-1.2, RULES-1.8). */
@@ -124,10 +142,11 @@ function cardWords(): CardWords {
 export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	const words = cardWords();
 	const media = vscode.Uri.joinPath(deps.extensionUri, 'media');
+	const rust = deps.rust;
 	const model = new PanelModel({
 		agents: deps.agents,
 		locations: deps.locations,
-		prefs: new PanelPrefs(deps.workspaceState, deps.log),
+		prefs: new PanelPrefs(deps.workspaceState, deps.log, rust !== undefined),
 		words,
 		remote: vscode.env.remoteName !== undefined,
 		ready: deps.ready,
@@ -136,26 +155,68 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		...deps.icons ? { icons: deps.icons } : {}
 	});
 	const agent = new AgentActions({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError });
+	const checkWindow = (window: WindowRef | undefined) => {
+		if (rust && rust.window() !== window) {
+			throw new Error(vscode.l10n.t('Facade cannot do this right now'));
+		}
+	};
 	const flows = {
 		resume: async () => {
 			if (!deps.conversations) { return; }
+			const window = rust?.window();
 			// The picker shows at once, busy while this window's agents, its locations and the conversations other windows hold are read (UX-1.1)
 			const prepared = (async () => {
-				await deps.ready;
+				await (rust ? rust.ready() : deps.ready);
 				await deps.locations.refresh().catch(err => deps.log.event(`Resume uses the known working locations: ${messageOf(err)}`));
 				await deps.agents.refreshConversations();
+				checkWindow(window);
 			})();
 			// Said by the picker, which takes it: never a rejection no one hears where the picker could not be made
 			prepared.catch(() => undefined);
 			try {
 				await resumeAgent({ conversations: deps.conversations, savedName: deps.savedName, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
-					resume: entry => deps.agents.resume(entry, { reveal: true }), reveal: run => agent.reveal(run), select: run => model.select(run),
+					resume: entry => { checkWindow(window); return deps.agents.resume(entry, { reveal: true }); },
+					reveal: run => agent.reveal(run), select: run => model.select(run),
 					notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
+					...rust ? { retained: {
+						list: () => { checkWindow(window); return rust.retainedConversations(); },
+						resume: id => { checkWindow(window); return rust.resumeRetained(id, { reveal: true }); }
+					} } : {},
 					...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
 			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
 		},
-		newAgent: (startAt?: LocationId) => newAgent({ agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history, select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media, ...(deps.names ? { names: deps.names } : {}), ...(deps.remote ? { remote: deps.remote } : {}) }, startAt),
-		goToAgent: () => goToAgent({ model, agents: deps.agents, media, reveal: run => agent.reveal(run), copyReference: run => agent.copyReference(run), close: run => agent.close(run), ...deps.icons ? { icons: deps.icons } : {} })
+		newAgent: (startAt?: LocationId) => {
+			const window = rust?.window();
+			return newAgent({
+				agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history,
+				select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media,
+				...deps.names ? { names: deps.names } : {}, ...deps.remote ? { remote: deps.remote } : {},
+				...rust ? { worktreeAgents: {
+					count: path => rust.worktreeAgents(path),
+					close: async path => rust.window() === window && rust.closeWorktreeAgents(path)
+				} } : {}
+			}, startAt);
+		},
+		goToAgent: () => {
+			const window = rust?.window();
+			return goToAgent({
+				model, agents: deps.agents, media, reveal: run => agent.reveal(run),
+				copyReference: run => agent.copyReference(run), close: run => agent.close(run), ...deps.icons ? { icons: deps.icons } : {},
+				...rust ? { others: {
+					list: () => rust.window() === window ? rust.otherAgents() : [],
+					onDidChange: rust.onDidChangeOtherAgents,
+					open: async id => {
+						try { checkWindow(window); await agent.reveal(await rust.adoptAgent(id)); }
+						catch (err) { deps.notifyError(rust.describeError(err), {}); }
+					},
+					copyReference: facts => rust.window() === window ? agent.copyReference(facts.id, facts) : Promise.resolve(),
+					close: facts => agent.close(facts.id, { facts, stop: () => {
+						checkWindow(window);
+						return rust.closeOtherAgent(facts.id);
+					} })
+				} } : {}
+			});
+		}
 	};
 	/** What the page's actions do, their targets revalidated by run ID (PANEL-3.1). */
 	const act = async (what: Act, target: string | undefined): Promise<Outcome['reason'] | undefined> => {
@@ -196,6 +257,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	const view = new PanelView(deps.extensionUri, model, act, deps.log, deps.motion);
 	return [
 		model,
+		...rust ? [rust.onDidChangeWindow(ready => model.rebind(ready))] : [],
 		...deps.settingsChanged ? [deps.settingsChanged(() => model.refresh())] : [],
 		view,
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),

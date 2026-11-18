@@ -37,6 +37,7 @@ import { pruneResults, writeResult } from '../record/results';
 import { instructionsFor, launchContextText } from '../schema/instructions';
 import { RetainedFile } from '../record/retained';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
+import type { OwnerClaim } from '../base/ownership';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
 import { allocateNumbers, environmentFloor } from '../record/windowRegistry';
 import type { NetworkPort } from '../contract/network';
@@ -171,7 +172,16 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		try {
 			return await activateRust(context, {
 				root: facadeRoot(), home, identity,
-				keep: log => { const opened = openWorkspaceRecord(context, home, identity); return { state: keepWorkspaceState(context, home, identity, opened, log).workspaceState, key: opened.record.key, claim: opened.claim, handedOver: opened.record.key === opened.handedOver }; },
+				keep: log => {
+					const opened = openWorkspaceRecord(context, home, identity);
+					return {
+						key: opened.record.key,
+						claim: nextOwnerClaim(`rust-terminal:${identity.token}`, home),
+						handedOver: opened.record.key === opened.handedOver,
+						bind: window => keepWorkspaceState(context, home, identity, opened, log,
+							nextOwnerClaim(`rust-window:${window.machine_id}/${window.window_id}`, home), true).workspaceState
+					};
+				},
 				openSettings: async () => { await openSettingsOf(context.extension.id); },
 				openSettingsFile: settings => registerOpenSettingsFile(settings)
 			});
@@ -183,7 +193,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		}
 	}
 	facadeInTerminals(context.environmentVariableCollection, undefined);
-	const { folders, uri, record, handedOver, claim } = openWorkspaceRecord(context, home, identity);
+	const opened = openWorkspaceRecord(context, home, identity);
+	const { uri, record, handedOver } = opened;
+	const claim = nextOwnerClaim(record.key, home);
 	const terminalOwner = { session, claim };
 	if (await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...terminalOwner, kind: 'activate', handedOver: record.key === handedOver }) !== true) {
 		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
@@ -191,7 +203,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const agentLog = new AgentLog(record.dir);
 	let eventContext: Readonly<Record<string, unknown>> = {};
 	const log: LogPort = { event: text => agentLog.event(text), fact: (event, fields) => agentLog.fact(event, { ...eventContext, ...fields }) };
-	const { workspaceState, writeIfOwned } = keepWorkspaceState(context, home, identity, { folders, uri, record, handedOver, claim }, log);
+	const { workspaceState, writeIfOwned } = keepWorkspaceState(context, home, identity, opened, log, claim);
 	const locations = createLocationService(workspaceState, log);
 	const execution = new AgentExecution({
 		owner: record.key,
@@ -513,33 +525,35 @@ function openWorkspaceRecord(context: vscode.ExtensionContext, home: string, ide
 	const kept = context.workspaceState.get<unknown>(WORKSPACE_KEY);
 	const record = workspaceRecord(uri, home, kept, { token: identity.token, folders });
 	const handedOver = record.handedOver;
-	const claim = nextOwnerClaim(record.key, home);
-	return { folders, uri, record, handedOver, claim };
+	return { folders, uri, record, handedOver };
 }
 
 /**
  * The window's workspace state, kept beside its record too, so that Pins, order and choices follow the workspace when a folder
  * window becomes a workspace or another window takes it over (ARCHITECTURE-2.2, 3.1).
  */
-function keepWorkspaceState(context: vscode.ExtensionContext, home: string, identity: WindowIdentity, opened: ReturnType<typeof openWorkspaceRecord>, log: LogPort) {
-	const { folders, uri, record, handedOver, claim } = opened;
+function keepWorkspaceState(context: vscode.ExtensionContext, home: string, identity: WindowIdentity,
+	opened: ReturnType<typeof openWorkspaceRecord>, log: LogPort, claim: OwnerClaim, rust = false) {
+	const { folders, uri, record, handedOver } = opened;
 	// A proven handover or an exact-URI takeover uses the shared owner's state, including in a fresh profile. A stale
 	// Memento at a previously visited destination cannot overwrite the current order and choices beside those runs.
 	const carried = record.key === handedOver || record.binding.key === record.key;
 	if (carried) {
-		log.event(`This window claims its agents and saved workspace state again for ${uri}.`);
+		log.event(`This window reopens its saved workspace state for ${uri}.`);
 	}
 	const writeIfOwned = (write: () => void) => writeAsOwner(claim, home, write);
 	// The exact saved URI follows a proven handover; stale local state cannot overwrite a concurrent canonical move.
 	writeIfOwned(() => keepWorkspaceUri(uri, record, home));
-	const workspaceState = new KeptWorkspaceState(context.workspaceState, path.join(record.dir, 'workspace-state.json'), carried, text => log.event(text), writeIfOwned);
+	const workspaceState = new KeptWorkspaceState(rust ? undefined : context.workspaceState,
+		path.join(record.dir, 'workspace-state.json'), carried, text => log.event(text), writeIfOwned);
 	try {
 		writeIfOwned(() => keepWindowKey(identity.token, record.key, folders, home, Date.now(), uri));
 	} catch (err) {
 		log.event(`Could not note which agents this window claims: ${messageOf(err)}`);
 	}
-	if (workspaceState.get(WORKSPACE_KEY) !== record.key) {
-		void Promise.resolve(workspaceState.update(WORKSPACE_KEY, record.key)).catch(err => log.event(`Could not keep the workspace's key: ${messageOf(err)}`));
+	const keyStorage = rust ? context.workspaceState : workspaceState;
+	if (keyStorage.get(WORKSPACE_KEY) !== record.key) {
+		void Promise.resolve(keyStorage.update(WORKSPACE_KEY, record.key)).catch(err => log.event(`Could not keep the workspace's key: ${messageOf(err)}`));
 	}
 	return { workspaceState, writeIfOwned };
 }

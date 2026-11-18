@@ -45,7 +45,7 @@ These are ways of using the product, not modes selected in the interface. A sess
 
 **Every agent has an interactive terminal that the person can open, inspect, use and close, whoever started it.**
 
-Agents started by agents are ordinary agents in their destination window: their cards show at once, and their terminals
+Agents started by agents are ordinary agents in their member or destination windows. Their cards show at once, and their terminals
 open as the person opens them. A creator is not an access gate.
 
 ## 3 Responsibility
@@ -140,13 +140,12 @@ Every agent has a clear launch location. Additional folders add choices without 
 
 ### 5.6 Connected windows, separate management
 
-**Agents in all Facade windows on the same client computer can discover, communicate with and operate one another.**
+**Agents discover and operate within the engine's connected scope under RULES-2.1 and RULES-4.3.**
 
-This includes windows connected to different execution environments. Each window displays and manages its own agents.
-An agent created for another window runs and appears there. The network belongs to the signed-in operating-system
-user's client; it does not discover other people's computers or users. CLI permissions remain distinct from reach.
-Human UI manages the current window only. Agent reach and launch-time YOLO follow RULES-4.3; connectivity does not
-imply unrestricted access for every caller.
+Each window presents its own agent list. On the Rust engine the person can open an existing agent from another
+window on the same Facade machine. Both windows show the same agent, and its original execution location stays with
+it. On the old engine each window manages its own agents, even where the connected client windows use different
+execution environments. Agent reach and launch-time YOLO follow RULES-4.3. CLI permissions remain distinct from reach.
 These are normal MCP operating rules, not authentication or protection against deliberate impersonation.
 
 ### 5.7 Quality that can be demonstrated

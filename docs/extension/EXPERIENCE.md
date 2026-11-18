@@ -94,8 +94,8 @@ activity show no dot, the card's accessible label saying which in words and its 
 anything, whether its run began or resumed a conversation - unless Facade says, while it lasts, how it starts, why its
 dot is red or what the CLI waits for (PANEL-1.4); absence of reliable status is never claimed as idle. A turn ending
 removes the dot without a notification or a claim that the task is complete. A busy agent's tab turns a spinner before
-its name (LIFECYCLE-2.2). Clicking a card opens that same terminal. Human search and management stay within the current
-window.
+its name (LIFECYCLE-2.2). Clicking a card opens that same terminal. On Rust, Go to Agent can open another running
+agent from the same machine in this window. The agent remains in its existing windows (LIFECYCLE-2.3).
 
 ### 2.2 Only errors and explicit calls to the person notify
 
@@ -103,43 +103,46 @@ window.
 
 Agent-operation errors return to the calling agent. Agent-to-agent delivery, replies and system-result handoff never
 automatically fall back to a person; if no agent can receive an error, the report ends. Native runtime failures follow
-RULES-1.8. No startup, idle, turn-end, permission or login news is announced. Each window shows only its own notifications.
+RULES-1.8. No startup, idle, turn-end, permission or login news is announced. Explicit calls to the person can show
+independently in multiple connected Rust member windows under COLLABORATION-2.3.
 
 ### 2.3 A turn ends, a process exits, or the person ends an agent
 
 **A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until End Agent.**
 
 Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. End Agent
-removes card and terminal immediately and cleans up the owned process in the background; closing an agent's tab only
-hides it (LIFECYCLE-2.2). It does not delete a worktree or end the agents it started. There is no visible Stopping
-wait.
+removes its card and terminal immediately and cleans up the process in the background. A successful Rust stop
+closes the other connected members' cards and tabs too (RULES-4.1). Closing one tab only hides that window's view
+(LIFECYCLE-2.2). Worktrees and the agents it started stay.
 
 ### 2.4 Reloading, closing and reconnecting
 
 **Reload reconnects existing runs. A window's engine determines what happens when it closes.**
 
 Temporary remote loss retains observations and reconciles the original processes. On the Rust engine, agents keep
-running after the window closes. Reopening the workspace reconnects their original processes and screens. On the old
+running after the window closes. Reopening a workspace can reconnect its logical window and restore access to the
+same processes and screens. Two open windows of a workspace each have their own reference (RULES-4.1). On the old
 engine, agents end after RULES-4.1's grace unless the workspace reconnects first. Reloading reconnects running agents
 and opens only the pinned agents' tabs again. Every other agent's tab stays
 hidden until the person opens it from its card, and the last pinned tab opened is in front with its card selected
 (LIFECYCLE-3.5). An agent that cannot be pinned - a custom program (CONFIGURATION-2.3), or a run whose
 session integration failed - always comes back with its tab hidden. Other windows continue their work.
-Pending messages to ended runs fail to their agent senders where reachable and are never replayed on reopening. If only
-the sender closes, delivery already executing elsewhere may finish; work left at the closing side may end. No extra
-handover machinery guarantees that edge case. System results that cannot return simply end.
+Pending messages to ended runs fail to their agent senders where reachable. RULES-1.9 governs an original delivery
+across closure and reconnect. System results that cannot return simply end.
 
 ### 2.5 Resume and Pin
 
 **Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
 
-Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are the
+Resume lists relevant vendor histories with the original CLI and location. On Rust, any member can use Resume to
+continue a saved agent with its original number (LIFECYCLE-3.2). Pin and the native terminal tab's Pin are the
 same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
 Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
 card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a
 hidden one hidden. Closing a tab showing its pin mark unpins it. End Agent and normal exit preserve the Pin on the
-Rust engine. On the old engine, both unpin the agent. Whole-window close and abnormal exit preserve the intent on either
-engine. The pinned agents' tabs reopen one after another in the Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own
+Rust engine, and each workspace decides what it pins. On the old engine, both unpin the agent. Whole-window close
+and abnormal exit preserve the intent on either engine. The pinned agents' tabs reopen one after another in the
+Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own
 restoration and capability limits.
 
 ## 3 Working with other agents
@@ -153,11 +156,12 @@ manager, judge, team hierarchy or “all work done” state is imposed.
 
 ### 3.2 An agent starts another agent
 
-**An agent supplies a name, destination window, working location and CLI; model and effort can use CLI defaults.**
+**An agent chooses a working location and CLI. Window selection follows its engine's start contract.**
 
 A child joins its creator's creation tree and uses RULES-4.3's launch-time YOLO rule. The API cannot choose YOLO. It may
-request a new worktree as part of startup. A new child can be placed in another valid window on this computer, local or
-remote, even when that window has no agents; a window without a folder has no working location. An optional prompt
+request a new worktree as part of startup. On Rust, a child can inherit its creator's windows or appear in one selected
+window under RULES-4.1. Its working location is separate. On the old engine a child uses its selected destination,
+which can be another local or remote window with usable folders. An optional prompt
 follows COLLABORATION-2.2's native/post-start path. Process startup and prompt submission have separate results: the
 start answers once the process runs, never waiting on the prompt, and a pending prompt later reports its final outcome
 under MCP-2.3. Facade has no task concept and reports no child's work; its one automatic notice to a creator is
@@ -178,7 +182,8 @@ YOLO/creation-tree scope.
 
 **Sending succeeds when the other agent has the complete message under RULES-1.3, without waiting for its answer.**
 
-The call returns within thirty seconds: success, or failure with the reason. Nothing about the send comes after it. The recipient's reply is a separate message.
+The ordinary send returns its result within thirty seconds. The recipient's reply is a separate message. For Rust
+contact to `#human`, the send reports which member window subscriptions accepted it (COLLABORATION-2.3).
 [RULES-1](RULES.md#1-agent-messages) owns the complete flow; [MCP](engineering/MCP.md) owns the schema.
 
 ### 3.5 When an ordinary message reaches the CLI
@@ -200,8 +205,7 @@ requests without a policy parameter or text-format/length restriction.
 
 A system receipt is not B's own reply and does not generate another failure message for B. If B independently replies
 to a closed A, that send reports the error to B. If B also cannot receive it, drop the report. The original delivery
-outcome remains unchanged. Only an agent's explicit decision to contact the person uses `#human`, which shows a
-notification in that agent's window.
+outcome remains unchanged. An agent explicitly contacts the person through `#human` under COLLABORATION-2.3.
 
 ## 4 Completing the work
 

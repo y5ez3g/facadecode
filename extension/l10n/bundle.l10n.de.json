@@ -199,6 +199,7 @@
 	"End Agent": "Agent beenden",
 	"Go to Agent": "Zu Agent wechseln",
 	"Search by name, CLI, title, location, or ID": "Nach Name, CLI, Titel, Arbeitsort oder ID suchen",
+	"Window disconnected": "Keine Verbindung zum Fenster",
 	"Select a folder": "Ordner auswählen",
 	"Select a working location": "Arbeitsort auswählen",
 	"Show Agent Launch": "Agent-Startkonfiguration anzeigen",

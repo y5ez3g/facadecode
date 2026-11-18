@@ -74,10 +74,12 @@ export class PanelModel implements Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	private readonly listeners = new Set<(state: PanelState) => void>();
 	private order: string[];
+	private readonly layoutKeys = new Map<RunId, string>();
 	private readonly pinByRun = new Map<RunId, string | undefined>();
 	private filter: PanelFilter | undefined;
 	private selectedRun: RunId | undefined;
 	private loading = true;
+	private reconciling: Promise<unknown> | undefined;
 	/** Every location seen, kept while it is only unavailable, gone on confirmed removal alone (PANEL-1.3, RULES-2.4). */
 	private readonly known = new Map<LocationId, Location>();
 	/** Runs removed by a normal exit since the last state: their cards may fade out (UX-2.2). */
@@ -100,12 +102,15 @@ export class PanelModel implements Disposable {
 		this.timers = deps.timers ?? REAL_TIMERS;
 		this.order = deps.prefs.order();
 		this.filter = deps.prefs.filter();
+		this.selectedRun = deps.prefs.selection();
 		// A removal confirmed as the host restarted, before this panel listened, clears the filter it kept (PANEL-2.3, RULES-2.4)
 		if (this.filter && this.removedFor(this.filter)) {
 			this.setFilter(undefined);
 		}
 		for (const run of [...deps.agents.list()].sort((a, b) => a.createdAt - b.createdAt)) {
-			this.order = withNew(this.order, run.id);
+			const key = deps.prefs.keyOf(run);
+			this.layoutKeys.set(run.id, key);
+			this.order = withNew(this.order, key);
 			this.pinByRun.set(run.id, run.pin);
 		}
 		const { state, selection } = this.compute(1);
@@ -117,14 +122,34 @@ export class PanelModel implements Disposable {
 			deps.locations.onDidChange(() => this.locationsChanged()),
 			deps.locations.onDidRemove(({ ids }) => this.removed(ids))
 		);
+		this.reconcile(deps.ready);
+	}
+
+	/** Loads the presentation of a newly bound logical window while core reconciles its members. */
+	rebind(ready: Promise<unknown>): void {
+		this.order = this.deps.prefs.order();
+		this.filter = this.deps.prefs.filter();
+		this.selectedRun = this.deps.prefs.selection();
+		this.known.clear();
+		this.exited.clear();
+		this.pinByRun.clear();
+		this.layoutKeys.clear();
+		this.reconcile(ready);
+		this.schedule();
+	}
+
+	private reconcile(ready: Promise<unknown>): void {
+		this.reconciling = ready;
+		this.loading = true;
 		const settled = () => {
+			if (this.disposed || this.reconciling !== ready) { return; }
 			this.loading = false;
-			// Runs that ended while the window was closed leave the stack; those found again keep their places
-			const present = new Set(deps.agents.list().map(run => run.id));
+			// Runs that ended while the window was closed leave the stack; those found again keep their places.
+			const present = new Set(this.deps.agents.list().map(run => this.deps.prefs.keyOf(run)));
 			this.setOrder(this.order.filter(run => present.has(run)));
 			this.schedule();
 		};
-		void deps.ready.then(settled, settled);
+		void ready.then(settled, settled);
 	}
 
 	dispose(): void {
@@ -152,7 +177,7 @@ export class PanelModel implements Disposable {
 	/** Selects a card: a click, Go to Agent, a person's own launch (PANEL-2.1). */
 	select(run: RunId): void {
 		if (this.deps.agents.get(run)) {
-			this.selectedRun = run;
+			this.choose(run);
 			this.schedule();
 		}
 	}
@@ -163,9 +188,15 @@ export class PanelModel implements Disposable {
 	 */
 	activated(run: RunId | undefined): void {
 		if (run !== undefined) {
-			this.selectedRun = run;
+			this.choose(run);
 		}
 		this.schedule();
+	}
+
+	private choose(run: RunId | undefined): void {
+		if (run === this.selectedRun) { return; }
+		this.selectedRun = run;
+		this.deps.prefs.setSelection(run === undefined ? undefined : this.layoutKeys.get(run) ?? run);
 	}
 
 	/** This window's runs, every one whatever the filter shows, in the panel's order. */
@@ -201,7 +232,7 @@ export class PanelModel implements Disposable {
 			return false;
 		}
 		this.deps.agents.reorderPins?.(next.flatMap(id => byId.get(id)?.pin ? [byId.get(id)!.pin!] : []));
-		this.setOrder(next);
+		this.setOrder(next.map(id => this.layoutKeys.get(id) ?? id));
 		this.schedule();
 		return true;
 	}
@@ -233,21 +264,33 @@ export class PanelModel implements Disposable {
 	}
 
 	private changed(change: RunChange): void {
-		const pin = this.deps.agents.get(change.run)?.pin;
+		const facts = this.deps.agents.get(change.run);
+		const pin = facts?.pin;
+		const previous = this.layoutKeys.get(change.run) ?? change.run;
+		const key = facts ? this.deps.prefs.keyOf(facts) : previous;
+		if (change.kind === 'removed') {
+			this.layoutKeys.delete(change.run);
+		} else {
+			this.layoutKeys.set(change.run, key);
+			if (previous !== key) {
+				this.setOrder(this.order.map(id => id === previous ? key : id));
+				if (this.selectedRun === change.run) { this.deps.prefs.setSelection(key); }
+			}
+		}
 		if (change.kind !== 'removed' && this.pinByRun.get(change.run) !== pin) {
 			// Pinned, it goes last among the Pins; unpinned, first among the other cards, just below the Pins it left (PANEL-2.1)
-			this.setOrder(pin ? atEnd(this.order, change.run) : atStart(this.order, change.run));
+			this.setOrder(pin ? atEnd(this.order, key) : atStart(this.order, key));
 		}
 		if (change.kind === 'removed') { this.pinByRun.delete(change.run); } else { this.pinByRun.set(change.run, pin); }
 		if (change.kind === 'added') {
-			this.setOrder(withNew(this.order, change.run));
+			this.setOrder(withNew(this.order, key));
 		} else if (change.kind === 'removed') {
 			if (change.cause === 'exit') {
 				this.exited.add(change.run);
 			}
-			this.setOrder(this.order.filter(run => run !== change.run));
+			this.setOrder(this.order.filter(run => run !== key));
 			if (this.selectedRun === change.run) {
-				this.selectedRun = undefined;
+				this.choose(undefined);
 			}
 		}
 		if (change.kind === 'reported') {
@@ -398,7 +441,9 @@ export class PanelModel implements Disposable {
 
 	/** The run IDs of `runs` as the panel lists them: by the stack, any it does not know yet last, oldest first (PANEL-2.1). */
 	private arrangedIds(runs: readonly RunFacts[]): string[] {
-		const order = arranged(this.order, [...runs].sort((a, b) => a.createdAt - b.createdAt).map(run => run.id));
+		const orderedByAge = [...runs].sort((a, b) => a.createdAt - b.createdAt);
+		const byKey = new Map(orderedByAge.map(run => [this.deps.prefs.keyOf(run), run.id]));
+		const order = arranged(this.order, [...byKey.keys()]).map(key => byKey.get(key)!);
 		const byId = new Map(runs.map(run => [run.id, run]));
 		const pins = this.deps.agents.pins?.().map(pin => pin.id) ?? [];
 		const pinned = order.filter(id => byId.get(id)?.pin);

@@ -246,6 +246,11 @@ export interface LocationDeps extends FolderStepDeps {
 	readonly worktrees: WorktreePort;
 	/** A deleted worktree's agents are closed first (WORKTREES-3.2, 3.3). */
 	readonly agents: Pick<Agents, 'list' | 'close'>;
+	/** Rust finds affected agents by location source, including those without a card in this window. */
+	readonly worktreeAgents?: {
+		count(path: string): number;
+		close(path: string): Promise<boolean>;
+	};
 	readonly notifyError: HumanPort['error'];
 }
 
@@ -525,7 +530,8 @@ function foldersSettled(locations: FolderStepDeps['locations'], settled: (folder
 /** Asks before Delete Worktree (LIFECYCLE-1.3): its folder, the branch kept - or that it has none - and the agents that will close. */
 function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolean> {
 	// Those launched in a location inside it too, as a resumed conversation's subdirectory (WORKTREES-3.2)
-	const closing = runsLaunchedIn(deps.agents.list(), worktree.path, deps.locations.snapshot().locations, folderKeyOf).length;
+	const closing = deps.worktreeAgents?.count(worktree.path)
+		?? runsLaunchedIn(deps.agents.list(), worktree.path, deps.locations.snapshot().locations, folderKeyOf).length;
 	const message = vscode.l10n.t("Delete worktree \"{0}\"?", worktree.label);
 	// Keep the exact full path in the detail, separate from the short decision question.
 	const target = worktree.branch !== undefined
@@ -545,6 +551,9 @@ async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<v
 	const locations = deps.locations.snapshot().locations;
 	// True only once every agent's process is known to have ended: Git removes nothing a process may still be writing in
 	const closeAgents = async () => {
+		if (deps.worktreeAgents) {
+			return deps.worktreeAgents.close(worktree.path);
+		}
 		const results = await Promise.all(runsLaunchedIn(deps.agents.list(), worktree.path, locations, folderKeyOf).map(run => deps.agents.close(run.id, { forWorktreeDeletion: true }).then(
 			result => {
 				deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`);

@@ -6,8 +6,13 @@
   processes and screens. On the old engine, agents still stop after 90 seconds for a local window or five minutes for
   a remote one if the workspace stays closed. The old engine remains available until 0.2.0.
 - **End Agent on the Rust engine keeps the record and Pin.** Resume Agent can restore the same agent number after
-  stopping. Reopening the workspace restores eligible Pins by agent number. If a Pin predates this change, pin the
-  agent again to enable automatic restoration.
+  stopping. Reopening the workspace restores eligible Pins by machine and agent number. For session-only Pins from
+  the old engine, pin the agent again to enable automatic restoration.
+- **Open the same Rust agent in more than one window.** Go to Agent can open a running agent from another window on the
+  same Facade machine. Both windows show the same process. End Agent closes its card and tab in every connected member
+  window. Resume Agent can bring back its original number from any member window.
+- **Rust agents can contact you in every connected member window.** A send to `#human` reports which window subscriptions
+  received it. Each window shows and dismisses its notification independently.
 
 ## 0.1.6
 

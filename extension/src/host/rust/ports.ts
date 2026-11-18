@@ -285,7 +285,7 @@ export class RustWorktrees implements WorktreePort {
 		const source = this.sourceOf(plan.source);
 		let made;
 		try {
-			made = await this.link.call<LocationInfo>('worktree.create', { window_id: this.link.windowId, cwd: source.path, branch: plan.branch, base_ref: plan.baseRef });
+			made = await this.link.call<LocationInfo>('worktree.create', { window_id: this.link.window.window_id, cwd: source.path, branch: plan.branch, base_ref: plan.baseRef });
 		} catch (err) {
 			if (!(err instanceof DaemonError)) {
 				throw err;

@@ -515,6 +515,13 @@ export interface ConversationEntry {
 	readonly unavailable?: string;
 }
 
+/** A retained core agent offered by the Rust Resume picker under its original number (LIFECYCLE-3.2). */
+export interface RetainedConversation {
+	readonly agent: string;
+	readonly name: string;
+	readonly entry: ConversationEntry;
+}
+
 /** A Resume picker session: batches of 100, recent first, with metadata read once and reused (LIFECYCLE-3.2). */
 export interface ConversationPager extends Disposable {
 	/** The next batch, or `done` once every relevant store is exhausted; never silently stops at a scan limit. */
@@ -565,9 +572,11 @@ export interface Pin {
 	readonly location: LocationId;
 	readonly cwd: string;
 	readonly name: string;
-	readonly home?: string;
 	readonly agent?: string;
+	readonly machine_id?: string;
 }
+
+export type RustPin = Pin & { readonly machine_id: string; readonly agent: string };
 
 /** Pins in workspace storage, in their saved order (ARCHITECTURE-3.1). */
 export interface PinStore {
@@ -576,6 +585,16 @@ export interface PinStore {
 	remove(id: string): void;
 	/** Saves the Pin area's order, top first. */
 	reorder(ids: readonly string[]): void;
+}
+
+/** A Rust Pin's identity is unique within a workspace, independently of which member window writes it. */
+export interface RustPinStore extends PinStore {
+	/** Saves the person's Pin, reusing an entry for its identity or a matching session-only Pin. */
+	pinAgent(pin: RustPin): Pin;
+	/** Applies fields changed by `after` to the same still-present entry (ARCHITECTURE-3.1). */
+	updatePin(before: RustPin, after: RustPin): void;
+	/** Unpins an agent in this workspace for worktree deletion (WORKTREES-3.3). */
+	removeAgentPins(machineId: string, agent: string): void;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -862,10 +881,19 @@ export interface StartOutcome {
 	readonly prompt?: LaunchPlan['prompt'];
 }
 
+/** A new or retained run, or a conversation already running (LIFECYCLE-3.2). */
+export type ResumeResult = RunId | { readonly running: RunId | 'elsewhere' };
+
+/** An agent a Rust window can adopt via Go to Agent (LIFECYCLE-2.3). */
+export interface OtherAgent {
+	readonly facts: RunFacts;
+	readonly windows: readonly { readonly label: string; readonly connected: boolean }[];
+}
+
 export interface Agents {
 	/** Whether this window still owns its workspace's agents: once another window took them over, none is this window's (RULES-4.1). */
 	owned?(): boolean;
-	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' };
+	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): ResumeResult | Promise<ResumeResult>;
 	holding(key: ConversationKey): RunId | 'elsewhere' | undefined;
 	refreshConversations(): Promise<void>;
 	pin(run: RunId): void;
