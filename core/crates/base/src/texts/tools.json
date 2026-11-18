@@ -19,12 +19,12 @@
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "The run's folder. Use an absolute path on another machine. With location_source_window, use a location it lists or a folder inside it."
+          "description": "The run's folder. For a local start, relative paths resolve from your run's working directory. For a remote start, use an absolute path on the running machine. With location_source_window, use one of that window's locations or a folder inside it."
         },
         "window": {
           "type": "string",
           "minLength": 1,
-          "description": "Optional member window ID on your machine. Omit to inherit your windows."
+          "description": "A member window ID such as win-2 on your machine, or win-2@gpu or win-2@id:3f9a2c1d on another machine. The window may be disconnected. Omit to inherit your windows."
         },
         "location_source_window": {
           "type": "string",

@@ -6,6 +6,7 @@ use std::time::Duration;
 use facade_base::daemon::{AgentArgs, AgentInspect, WindowsTopic};
 use facade_base::instructions::{Run, for_agent, for_mcp_client, place_of};
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine::AgentRef;
 use facade_base::operations::NoArgs;
 
 use super::{Relay, Serves, daemon_calls, guest_sessions};
@@ -51,24 +52,30 @@ fn read_for_agent(relay: &Relay, agent: &str) -> String {
                 .map(|inspected| inspected.agent)
         };
         let me = inspect(agent.to_string()).ok()?;
-        // A creator no longer listed is named by its ID alone.
-        let creator_name = me
-            .creator
-            .clone()
-            .and_then(|creator| inspect(creator).ok())
-            .map(|creator| creator.name);
+        let creator = me.creator.as_ref().map(|id| {
+            let machine_id = me.creator_machine_id.as_deref().unwrap_or(&me.machine_id);
+            if machine_id == me.machine_id {
+                let name = inspect(id.clone()).ok().map(|creator| creator.name);
+                return (id.clone(), name);
+            }
+            let address = AgentRef {
+                machine_id: machine_id.to_string(),
+                agent_id: id.clone(),
+            }
+            .exact_address();
+            (address.trim_start_matches('#').to_string(), None)
+        });
         let windows = client.snapshot::<WindowsTopic>(NoArgs {}).ok()?;
-        Some((me, creator_name, windows))
+        Some((me, creator, windows))
     };
-    let Some((me, creator_name, windows)) = read() else {
+    let Some((me, creator, windows)) = read() else {
         return for_agent(agent, None);
     };
     let run = Run {
         place: place_of(&me, &windows),
-        creator: me
-            .creator
-            .as_deref()
-            .map(|creator| (creator, creator_name.as_deref())),
+        creator: creator
+            .as_ref()
+            .map(|(id, name)| (id.as_str(), name.as_deref())),
         yolo: me.yolo,
     };
     for_agent(agent, Some(&run))

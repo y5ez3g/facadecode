@@ -25,7 +25,7 @@ pub(super) fn failure(reason: &str, message: impl Into<String>) -> Value {
     json!({ "status": "failure", "reason": reason, "message": message.into() })
 }
 
-/// A call the daemon refused, so it changed nothing. The tools name an agent out of the caller's
+/// The daemon's error and structured details. The tools name an agent out of the caller's
 /// reach `out_of_reach`, and a daemon handing over to a newer build `unavailable`.
 pub(super) fn refusal(error: &ErrorBody) -> Value {
     let reason = match error.data.reason {
@@ -34,8 +34,11 @@ pub(super) fn refusal(error: &ErrorBody) -> Value {
         other => other.as_str(),
     };
     let mut refused = failure(reason, error.message.clone());
-    if let Some(windows) = &error.data.windows {
-        refused["data"] = json!({ "windows": windows });
+    if let Value::Object(mut details) = json!(error.data) {
+        details.remove("reason");
+        if !details.is_empty() {
+            refused["data"] = Value::Object(details);
+        }
     }
     refused
 }

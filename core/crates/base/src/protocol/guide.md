@@ -223,7 +223,11 @@ states before it serves clients.
 A CLI that runs by a built-in's rule is given Facade's tools for its run, the MCP server `facade-mcp`, where its rule gives them;
 `facade-mcp` is the relay to the daemon's own MCP server, below.
 The daemon lists Facade's version 3 tool definitions in `tools/list`. `list_agents` and `start_agent` results
-identify the running machine and member windows. `start_agent` inputs select local windows by ID.
+identify the running machine and member windows. In `start_agent`, `window` can be a member window ID on the
+originating machine (`win-2`) or a qualified ID (`win-2@gpu` or `win-2@id:3f9a2c1d`). A member window can be
+disconnected. `location_source_window` is a bare ID of a connected window on the running machine. On a local
+start, a relative `path` resolves from the calling agent's working directory. A remote start takes an absolute
+`path` on the running machine.
 `send_message` reports which windows' subscriptions took a notification.
 
 Antigravity's runs get them from a plugin in the folder they start in, `.agents/plugins/facade/`, which the runs there share:

@@ -3,19 +3,20 @@
 
 use std::path::Path;
 
+use facade_base::address::{exact_machine_selector, parse_machine_selector};
 use facade_base::daemon::{
-    AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, AgentsTopic,
-    AgentsWatchArgs, DEFAULT_TERMINAL_SIZE, StartArgs, TERMINAL_WINDOW, WaitKind, WindowInfo,
-    WindowRef, WindowsTopic, Worktree, check_message_text,
+    AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, DEFAULT_TERMINAL_SIZE,
+    StartArgs, TERMINAL_WINDOW, WaitKind, WindowInfo, WindowRef, WindowsTopic, Worktree,
+    check_message_text,
 };
 use facade_base::daemon_client::DaemonClient;
-use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::machine::{AgentList, AgentRef, MachineIdentity, MachineList, MachineQueryArgs};
 use facade_base::operations::NoArgs;
 use facade_base::process::ProcessState;
 use serde_json::{Map, Value, json};
 
-use super::daemon_calls::failed;
+use super::daemon_calls::{CONNECT_TIMEOUT, agent_failed, failed};
 use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
 use super::schema::Problems;
@@ -62,68 +63,72 @@ fn available_clis(window: &WindowInfo) -> Vec<&str> {
         .collect()
 }
 
-/// Checks the actual folder and, where supplied, the connected editor window that supplies its
-/// location. The daemon checks the CLI in its actual working folder and inherited environment.
-fn check_start_destination(
+/// Resolve both selectors against the same machine list. Either selector defaults to the
+/// caller's machine.
+fn start_machines(
     client: &mut DaemonClient,
-    path: &Path,
-    source: Option<&WindowRef>,
-) -> Result<(), Value> {
-    if !path.is_absolute() {
-        let message = format!(
-            "{} must be an absolute folder path. Nothing was started.",
-            path.display()
-        );
-        return Err(envelope::failure("invalid_argument", message));
+    running: Option<&str>,
+    member: Option<&str>,
+) -> Result<(String, String), Value> {
+    let local = client.hello_result.machine_id.clone();
+    if running.is_none() && member.is_none() {
+        return Ok((local.clone(), local));
     }
-    if !path.is_dir() {
-        let message = format!(
-            "The folder {} is unavailable. Nothing was started.",
-            path.display()
-        );
-        return Err(envelope::failure("unavailable", message));
-    }
-    let Some(source) = source else {
-        return Ok(());
+    let machines: Vec<_> = client
+        .call::<MachineList>(NoArgs {})
+        .map_err(|error| failed(&error, "nothing was started"))?
+        .machines
+        .into_iter()
+        .map(|machine| MachineIdentity {
+            machine_id: machine.machine_id,
+            name: machine.name,
+        })
+        .collect();
+    let resolve = |selected| match selected {
+        Some(selected) => select_machine(&machines, selected),
+        None => Ok(local.clone()),
     };
-    let windows = client
-        .snapshot::<WindowsTopic>(NoArgs {})
-        .map_err(|err| failed(&err, "nothing was started"))?;
-    let window = windows.iter().find(|window| {
-        window.machine_id == source.machine_id
-            && window.window_id == source.window_id
-            && window.window_id != TERMINAL_WINDOW
-            && window.connected
-    });
-    let Some(window) = window else {
-        let message = format!(
-            "Location source window {} is unavailable. Use a connected editor window or omit \
-             location_source_window. Nothing was started.",
-            source.window_id
-        );
-        return Err(envelope::failure("unavailable", message));
-    };
-    let resolved = real_path(path).unwrap_or_else(|_| path.to_path_buf());
-    let key = folder_key(&resolved);
-    if !window
-        .locations
-        .iter()
-        .any(|location| Path::new(&key).starts_with(folder_key(Path::new(&location.path))))
-    {
-        let message = format!(
-            "{} is outside the locations of window {}. Use one of its folders from list_agents \
-             or omit location_source_window. Nothing was started.",
-            path.display(),
-            source.window_id
-        );
-        return Err(envelope::failure("invalid_argument", message));
-    }
-    Ok(())
+    Ok((resolve(running)?, resolve(member)?))
 }
 
-/// Starts a CLI for `me` at its terminal size, resolving relative paths from its working folder.
-/// The daemon supplies the caller's environment and default members. A prompt owes `me` a result
-/// that names this call. If the start is repeated at another daemon, its request ID joins the first.
+fn select_machine(machines: &[MachineIdentity], selected: &str) -> Result<String, Value> {
+    let selector = parse_machine_selector(selected)
+        .map_err(|error| envelope::failure("invalid_argument", error.to_string()))?;
+    let matches: Vec<_> = machines
+        .iter()
+        .filter(|machine| selector.matches(machine))
+        .map(|machine| machine.machine_id.as_str())
+        .collect();
+    match matches.as_slice() {
+        [machine_id] => Ok(machine_id.to_string()),
+        [] => Err(envelope::failure(
+            "invalid_argument",
+            format!("No machine matches {selected:?}. Nothing was started."),
+        )),
+        _ => {
+            let mut error = ErrorBody::new(
+                Reason::AmbiguousReference,
+                format!("Several machines match {selected:?}. Choose a machine by its ID."),
+            );
+            error.data.candidates = matches
+                .iter()
+                .map(|id| exact_machine_selector(id))
+                .collect();
+            Err(envelope::refusal(&error))
+        }
+    }
+}
+
+fn exact_address(agent: &AgentInfo) -> String {
+    AgentRef {
+        machine_id: agent.machine_id.clone(),
+        agent_id: agent.agent_id.clone(),
+    }
+    .exact_address()
+}
+
+/// Starts a CLI for `me` at its terminal size, resolving local relative paths from its working
+/// folder. The running daemon checks the folder. A prompt owes `me` a result that names this call.
 pub(super) fn start(
     client: &mut DaemonClient,
     me: &str,
@@ -144,16 +149,35 @@ pub(super) fn start(
         Ok(inspected) => inspected.agent,
         Err(err) => return failed(&err, nothing),
     };
-    let path = Path::new(&me.cwd).join(text(arguments, "path"));
-    let local_window = |window_id| WindowRef {
-        machine_id: client.hello_result.machine_id.clone(),
-        window_id,
+    let machine = optional(arguments, "machine");
+    let window = optional(arguments, "window");
+    let (window_id, member_selector) = match window.as_deref().and_then(|id| id.split_once('@')) {
+        Some(("", _)) => {
+            return envelope::failure("invalid_argument", "window requires a window ID");
+        }
+        Some((id, selector)) => (Some(id), Some(selector)),
+        None => (window.as_deref(), None),
     };
-    let window = optional(arguments, "window").map(local_window);
-    let location_source_window = optional(arguments, "location_source_window").map(local_window);
-    if let Err(failure) = check_start_destination(client, &path, location_source_window.as_ref()) {
-        return failure;
-    }
+    let (running_machine, member_machine) =
+        match start_machines(client, machine.as_deref(), member_selector) {
+            Ok(machines) => machines,
+            Err(failure) => return failure,
+        };
+    let window = window_id.map(|window_id| WindowRef {
+        machine_id: member_machine,
+        window_id: window_id.to_string(),
+    });
+    let location_source_window =
+        optional(arguments, "location_source_window").map(|window_id| WindowRef {
+            machine_id: running_machine.clone(),
+            window_id,
+        });
+    let cwd = text(arguments, "path");
+    let cwd = if running_machine == client.hello_result.machine_id {
+        Path::new(&me.cwd).join(cwd).to_string_lossy().into_owned()
+    } else {
+        cwd
+    };
     let worktree = optional(arguments, "worktree").map(|branch| Worktree {
         branch,
         base_ref: "HEAD".to_string(),
@@ -161,15 +185,13 @@ pub(super) fn start(
     // A guest has no terminal of Facade's to size the new one by.
     let (cols, rows) = DEFAULT_TERMINAL_SIZE;
     let start = StartArgs {
-        machine,
-        cwd_is_default: false,
-        initial_windows: None,
-        result_message_id: None,
-        result_message_machine_id: None,
         command: vec![text(arguments, "cli")],
         name: optional(arguments, "name"),
-        cwd: path.to_string_lossy().into_owned(),
+        cwd,
+        cwd_is_default: false,
+        machine: machine.map(|_| exact_machine_selector(&running_machine)),
         window,
+        initial_windows: None,
         location_source_window,
         env: Default::default(),
         cols: me.cols.unwrap_or(cols),
@@ -177,6 +199,8 @@ pub(super) fn start(
         prompt: optional(arguments, "prompt"),
         call_id: Some(call.id.clone()),
         request_id: Some(call.request_id.clone()),
+        result_message_id: None,
+        result_message_machine_id: None,
         worktree,
         model: optional(arguments, "model"),
         effort: optional(arguments, "effort"),
@@ -189,6 +213,12 @@ pub(super) fn start(
                 "id": format!("#{}", agent.agent_id), "name": agent.name, "path": agent.cwd,
             });
             show_members(&mut data, &agent);
+            if let (Some(id), Some(machine_id)) =
+                (started.result_message_id, started.result_message_machine_id)
+            {
+                data["result_message_id"] = json!(id);
+                data["result_message_machine_id"] = json!(machine_id);
+            }
             return envelope::success(data);
         }
         Err(err) => err,
@@ -229,6 +259,9 @@ fn start_refused(error: &ErrorBody) -> Value {
 /// What an agent is doing, as `list_agents` says it: an ended process is `ended`, and a state the
 /// tools do not know `unknown`.
 fn state_word(agent: &AgentInfo) -> &'static str {
+    if agent.unreachable {
+        return "unreachable";
+    }
     if agent.process == ProcessState::Ended {
         return "ended";
     }
@@ -246,13 +279,19 @@ fn state_word(agent: &AgentInfo) -> &'static str {
 
 /// Adds the window membership to an agent's list row or start result.
 fn show_members(row: &mut Value, agent: &AgentInfo) {
+    row["address"] = json!(
+        agent
+            .address
+            .clone()
+            .unwrap_or_else(|| exact_address(agent))
+    );
     row["machine_id"] = json!(agent.machine_id);
     row["windows"] = json!(agent.windows);
 }
 
 /// An agent as `list_agents` shows it: who and where it is, what it is doing, what it waits for
 /// while it waits for the person, and who started it.
-fn agent_row(agent: &AgentInfo) -> Value {
+fn agent_row(agent: &AgentInfo, local_machine: &str) -> Value {
     let state = state_word(agent);
     let mut row = json!({
         "id": format!("#{}", agent.agent_id), "name": agent.name, "cli": agent.cli,
@@ -273,7 +312,17 @@ fn agent_row(agent: &AgentInfo) -> Value {
         row["waiting_for"] = json!(waiting_for);
     }
     let creator = match &agent.creator {
-        Some(creator) => format!("#{creator}"),
+        Some(creator) => {
+            let machine_id = agent
+                .creator_machine_id
+                .as_deref()
+                .unwrap_or(&agent.machine_id);
+            AgentRef {
+                machine_id: machine_id.to_string(),
+                agent_id: creator.clone(),
+            }
+            .label(local_machine, &exact_machine_selector(machine_id))
+        }
         None => "#human".to_string(),
     };
     row["creator"] = json!(creator);
@@ -296,27 +345,26 @@ fn window_row(window: &WindowInfo) -> Value {
     row
 }
 
-/// The windows on this computer and the agents in the caller's reach, ended ones included, oldest
-/// first. A list longer than a result carries goes to a JSON file.
+/// The local window details and the parent query's agents and per-machine results.
+/// A list longer than a result carries goes to a JSON file.
 pub(super) fn list(client: &mut DaemonClient) -> Value {
     let nothing = "nothing was changed";
     let windows = match client.snapshot::<WindowsTopic>(NoArgs {}) {
         Ok(windows) => windows,
         Err(err) => return failed(&err, nothing),
     };
-    let mut agents = match client.snapshot::<AgentsTopic>(AgentsWatchArgs::default()) {
-        Ok(snapshot) => snapshot.agents,
+    let listed = match client.call::<AgentList>(MachineQueryArgs::default()) {
+        Ok(listed) => listed,
         Err(err) => return failed(&err, nothing),
     };
-    agents.sort_by_key(|agent| {
-        agent
-            .agent_id
-            .strip_prefix('a')
-            .and_then(|number| number.parse::<u64>().ok())
-    });
+    let local_machine = &client.hello_result.machine_id;
     let windows: Vec<Value> = windows.iter().map(window_row).collect();
-    let agents: Vec<Value> = agents.iter().map(agent_row).collect();
-    let data = json!({ "windows": windows, "agents": agents });
+    let agents: Vec<Value> = listed
+        .agents
+        .iter()
+        .map(|agent| agent_row(agent, local_machine))
+        .collect();
+    let data = json!({ "windows": windows, "agents": agents, "machines": listed.machines });
     let written = data.to_string();
     if written.chars().count() <= MAX_INLINE_CHARS {
         return envelope::success(data);
@@ -336,33 +384,44 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
 /// ended already is left as it is. A stop that ran out of time went out and goes on, as the process
 /// group still gets SIGKILL at its deadline, but its end is not confirmed.
 pub(super) fn stop(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
+    let requested = text(arguments, "agent");
     let agent = match client.call::<AgentInspect>(AgentArgs {
-        agent: text(arguments, "agent"),
+        agent: requested.clone(),
     }) {
         Ok(inspected) => inspected.agent,
-        Err(err) => return failed(&err, "nothing was stopped"),
+        Err(err) => {
+            return agent_failed(
+                client,
+                &err,
+                &requested,
+                "nothing was stopped",
+                Some(CONNECT_TIMEOUT),
+            );
+        }
     };
     if agent.process == ProcessState::Ended {
         return envelope::success(json!({}));
     }
-    let id = format!("#{}", agent.agent_id);
-    let err = match client.call::<AgentStop>(AgentArgs {
-        agent: agent.agent_id,
-    }) {
+    let id = exact_address(&agent);
+    let err = match client.call::<AgentStop>(AgentArgs { agent: id.clone() }) {
         Ok(_) => return envelope::success(json!({})),
         Err(err) => err,
     };
-    let unconfirmed = err
-        .downcast_ref::<ErrorBody>()
-        .is_some_and(|error| error.data.reason == Reason::Unavailable);
+    let unconfirmed = !agent.guest
+        && err.downcast_ref::<ErrorBody>().is_some_and(|error| {
+            error.data.reason == Reason::Unavailable && error.data.unavailable.is_none()
+        });
     if unconfirmed {
         let message = format!(
             "{id} was told to stop, but its end is not confirmed; check it with list_agents"
         );
         return envelope::failure("stop_unconfirmed", message);
     }
-    failed(
+    agent_failed(
+        client,
         &err,
+        &id,
         "whether the agent ended is not known; check it with list_agents",
+        Some(CONNECT_TIMEOUT),
     )
 }

@@ -7,7 +7,7 @@ use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::process::ProcessState;
 use serde_json::{Map, Value, json};
 
-use super::daemon_calls::failed;
+use super::daemon_calls::{CONNECT_TIMEOUT, agent_failed};
 use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
 use super::schema::Problems;
@@ -94,9 +94,20 @@ pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Val
         .and_then(Value::as_u64)
         .and_then(|last| u16::try_from(last).ok());
     let agent = text(arguments, "agent");
-    let screen = match client.call::<AgentScreen>(ScreenArgs { agent, lines }) {
+    let screen = match client.call::<AgentScreen>(ScreenArgs {
+        agent: agent.clone(),
+        lines,
+    }) {
         Ok(screen) => screen,
-        Err(err) => return failed(&err, "nothing was changed"),
+        Err(err) => {
+            return agent_failed(
+                client,
+                &err,
+                &agent,
+                "nothing was changed",
+                Some(CONNECT_TIMEOUT),
+            );
+        }
     };
     let ended = screen.process == ProcessState::Ended;
     if screen.text.chars().count() <= MAX_INLINE_CHARS {
@@ -154,11 +165,14 @@ fn type_into(client: &mut DaemonClient, input: TypeArgs) -> Value {
                 error.message
             ),
         ),
-        _ => failed(
+        _ => agent_failed(
+            client,
             &err,
+            &agent,
             &format!(
                 "whether the input reached {agent} is not known; read its screen before typing again"
             ),
+            Some(CONNECT_TIMEOUT),
         ),
     }
 }
