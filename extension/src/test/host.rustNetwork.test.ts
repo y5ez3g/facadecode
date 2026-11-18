@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentInfo, AgentListResult, AgentsChange, AgentsSnapshot, Message, MessagesChange, MessagesSnapshot, Operation, ScreenChange, ScreenSnapshot, Topic, WindowRef } from '../base/coreProtocol';
+import type { AgentInfo, AgentListResult, AgentsChange, AgentsSnapshot, ErrorBody, Message, MessagesChange, MessagesSnapshot, Operation, ScreenChange, ScreenSnapshot, Topic, WindowRef } from '../base/coreProtocol';
 import type { MessageRecord } from '../core/messagePorts';
 import type { Location, RunChange } from '../core/ports';
 import type { RunBinding } from '../host/execution/agentPty';
@@ -276,6 +276,38 @@ suite('Rust machine network windows (RULES-2.2, PANEL-1.3, LIFECYCLE-2.3)', () =
 		} finally {
 			temp.remove();
 		}
+	});
+
+	test('adapts v2 settings refusals for Resume Agent without altering their original data or other errors', async () => {
+		const view = harness();
+		const cli = 'team "conversation"';
+		const setting = `clis[${JSON.stringify(cli)}]`;
+		const file = '~/work/this conversation/facade.json';
+		const ended = record(local, { cli, process: 'ended', state: 'ended', exit: { code: 2, at } });
+		view.listing.snapshot({ agents: [ended], machines: [] });
+		const [retained] = view.agents.retainedConversations();
+		const resume = () => view.agents.resumeRetained(retained.agent, { reveal: true });
+		const changed: ErrorBody = {
+			code: -32000, data: { reason: 'unsupported', entry: cli },
+			message: `${setting} runs Codex now, but this conversation is Claude Code's; it cannot be resumed with it`
+		};
+		const removed: ErrorBody = {
+			code: -32000, data: { reason: 'unavailable' },
+			message: `${JSON.stringify(cli)} is no longer in clis of ${file}, so this conversation cannot be resumed with it.`
+		};
+		for (const [body, said] of [
+			[changed, { kind: 'resume_type_changed', values: [setting, 'Claude Code'] }],
+			[removed, { kind: 'resume_entry_gone', values: [JSON.stringify(cli), file] }],
+		] as const) {
+			const refusal = new view.LinkError(body.message, body.data.reason, body.data);
+			view.answer(() => { throw refusal; });
+			await assert.rejects(resume(), { message: body.message, said });
+			assert.strictEqual(refusal.data, body.data);
+		}
+		const unknown = new view.LinkError('A tool reported this conversation is unavailable.', 'unavailable', { reason: 'unavailable' });
+		view.answer(() => { throw unknown; });
+		await assert.rejects(resume(), error => error === unknown);
+		assert.deepStrictEqual(view.calls.map(call => call.op), ['agent.resume', 'agent.resume', 'agent.resume']);
 	});
 
 	test('retries remote screens after a refusal or late watch end and ignores the old generation', async () => {

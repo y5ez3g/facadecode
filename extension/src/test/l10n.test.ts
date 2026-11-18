@@ -116,6 +116,7 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 			"No saved sessions in this window's folders",
 			'Could not read the saved sessions: {0}',
 			"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it",
+			'{0} is no longer in clis of {1}, so this session cannot be resumed with it.',
 			'Its CLI cannot resume this exact session, so it cannot be pinned.',
 			'config.custom.launch',
 			'config.custom.launch.start',

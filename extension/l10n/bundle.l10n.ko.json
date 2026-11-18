@@ -361,6 +361,7 @@
 	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "이 창의 에이전트를 실행하는 Facade Code 설치가 업데이트 또는 제거로 삭제되었습니다({0}이(가) 없음). 따라서 에이전트를 시작할 수 없습니다. 설치된 버전으로 에이전트를 시작하려면 창을 다시 로드하세요.",
 	"No CLI {0} is configured; add it to clis in {1}.": "{0} CLI가 구성되어 있지 않습니다. {1}의 clis에 추가하세요.",
 	"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it": "{0}은(는) 이제 다른 CLI를 실행하지만 이 세션은 {1}의 세션이라 해당 CLI로 재개할 수 없습니다",
+	"{0} is no longer in clis of {1}, so this session cannot be resumed with it.": "{0}이(가) {1}의 clis에 더 이상 없으므로 이 세션을 해당 항목으로 재개할 수 없습니다.",
 	"{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it": "{0}은(는) 이제 다른 CLI를 실행하지만 이 에이전트는 {1}을(를) 실행했으므로 그것으로 복원할 수 없습니다",
 	"Its CLI cannot resume this exact session, so it cannot be pinned.": "해당 CLI가 이 세션을 그대로 재개할 수 없어 고정할 수 없습니다.",
 	"The working location {0} is not available in this window.": "작업 위치 {0}은(는) 이 창에서 사용할 수 없습니다.",

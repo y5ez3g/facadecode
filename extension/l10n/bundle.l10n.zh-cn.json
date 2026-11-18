@@ -361,6 +361,7 @@
 	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "运行此窗口 Agent 的 Facade Code 安装已被更新或卸载删除（{0} 已不存在），因此无法启动 Agent。请重新加载窗口，以使用已安装的版本启动 Agent。",
 	"No CLI {0} is configured; add it to clis in {1}.": "没有配置名为 {0} 的 CLI；请把它加到 {1} 的 clis 里。",
 	"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it": "{0} 现在运行的是另一个 CLI，但这个会话属于 {1}，无法用它恢复",
+	"{0} is no longer in clis of {1}, so this session cannot be resumed with it.": "{0} 已不在 {1} 的 clis 中，因此无法用它恢复此会话。",
 	"{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it": "{0} 现在运行的是另一个 CLI，但这个 Agent 之前运行的是 {1}，无法用它恢复",
 	"Its CLI cannot resume this exact session, so it cannot be pinned.": "它的 CLI 无法恢复这一确切的会话，因此无法固定。",
 	"The working location {0} is not available in this window.": "工作位置 {0} 在此窗口中不可用。",

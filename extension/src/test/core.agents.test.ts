@@ -1595,6 +1595,15 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.strictEqual(world.log.filter(line => /Could not list the conversations running/.test(line)).length, 1, 'the same failure said once');
 	});
 
+	test('Continue Session asks for the exact session ID and working location before starting a process', () => {
+		const world = setUp();
+		assert.throws(() => world.agents.resume({ ...ENTRY, key: { ...ENTRY.key, sessionId: '' } }, { reveal: true }),
+			{ message: 'An exact session ID is required.' });
+		assert.throws(() => world.agents.resume({ ...ENTRY, cwdChoices: [ENTRY.cwd, '/other'] }, { reveal: true }),
+			{ message: 'Choose a working location before continuing this session.' });
+		assert.deepStrictEqual(world.plans, []);
+	});
+
 	test('WORKTREES-1.2: a Resume in a cwd within a location keeps that anchor from its acceptance - before its process starts, and kept red and across a reload after a failed start - remembering the cwd only once its process started', async () => {
 		const world = setUp();
 		const locations = (world.agents as unknown as { deps: { locations: { conversationLocation?: (cwd: string) => Location | undefined } } }).deps.locations;
@@ -1804,7 +1813,7 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		let refused: unknown;
 		try { world.agents.resume({ ...ENTRY, cwd: '/elsewhere/app' }, { reveal: false }); } catch (err) { refused = err; }
 		assert.ok(refused instanceof FacadeError);
-		assert.deepStrictEqual([refused.said, refused.message], [{ kind: 'location_not_here', values: ['/elsewhere/app'] }, 'The conversation\'s working location /elsewhere/app is not available in this window.']);
+		assert.deepStrictEqual([refused.said, refused.message], [{ kind: 'location_not_here', values: ['/elsewhere/app'] }, 'The session\'s working location /elsewhere/app is not available in this window.']);
 		(world.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save({ id: 'pin-gone', conversation: { environment: 'local', cli: 'claude', sessionId: 'gone' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: 'Gone' });
 		await world.agents.restorePins();
 		assert.deepStrictEqual([world.agents.list().map(run => run.error?.reason), world.errors.map(error => error.text)], [

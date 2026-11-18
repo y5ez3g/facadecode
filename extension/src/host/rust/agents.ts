@@ -12,6 +12,7 @@ import { displayLine } from '../../base/text';
 import type {
 	AgentInfo, AgentListResult, AgentMachineState, AgentRef, AgentsChange, AgentsSnapshot, CliInfo, Message, MessagesChange, MessagesSnapshot, ResumeArgs, StartArgs, StartResult, StopResult, WindowInfo, WindowRef
 } from '../../base/coreProtocol';
+import { entrySetting } from '../../clis/entries';
 import { FacadeError, invalid } from '../../core/errors';
 import { isWithin } from '../../core/locations/catalog';
 import type { MessageRecord } from '../../core/messagePorts';
@@ -738,7 +739,7 @@ export class RustAgents implements Agents, Disposable {
 			attempt = this.requestResume(info);
 		}
 		if (attempt) {
-			const resumed = await attempt.result;
+			const resumed = await attempt.result.catch((err: unknown) => { throw resumeSettingsError(err, info.cli); });
 			if (!this.owns(window)) { throw bindingChanged(); }
 			if (this.local(resumed)) { this.deps.history.remember(resumed.location_id, resumed.cli); }
 		}
@@ -1636,6 +1637,28 @@ function launchRefused(err: unknown): boolean {
 function resumeRefused(agent: string, err: unknown): boolean {
 	return launchRefused(err) && !(err instanceof DaemonError && err.reason === 'unavailable'
 		&& (err.message === `agent #${agent} is running or already resuming` || err.message === `agent #${agent} is running`));
+}
+
+/** Translate the two v2 settings refusals for Resume Agent, preserving service diagnostics and their values. */
+function resumeSettingsError(err: unknown, cli: string): unknown {
+	if (!(err instanceof DaemonError)) { return err; }
+	const setting = entrySetting(cli);
+	if (err.reason === 'unsupported' && err.data.entry === cli && err.message.startsWith(setting)) {
+		const changed = /^ runs .+ now, but this conversation is (.+)'s; it cannot be resumed with it$/.exec(err.message.slice(setting.length));
+		if (changed) {
+			return new FacadeError('INVALID', err.reason, err.message, { kind: 'resume_type_changed', values: [setting, changed[1]] });
+		}
+	}
+	if (err.reason === 'unavailable') {
+		const quoted = JSON.stringify(cli);
+		const start = `${quoted} is no longer in clis of `;
+		const end = ', so this conversation cannot be resumed with it.';
+		if (err.message.startsWith(start) && err.message.endsWith(end)) {
+			const file = err.message.slice(start.length, -end.length);
+			return new FacadeError('UNAVAILABLE', err.reason, err.message, { kind: 'resume_entry_gone', values: [quoted, file] });
+		}
+	}
+	return err;
 }
 
 /** Core uses `unavailable` for both refusals and unconfirmed stops. Only explicit refusals establish failure. */

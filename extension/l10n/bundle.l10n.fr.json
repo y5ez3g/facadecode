@@ -361,6 +361,7 @@
 	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "L'installation de Facade Code qui exécute les agents de cette fenêtre a été supprimée par une mise à jour ou une désinstallation ({0} n'existe plus) : aucun agent ne peut donc démarrer. Rechargez la fenêtre pour démarrer des agents avec la version installée.",
 	"No CLI {0} is configured; add it to clis in {1}.": "Aucune CLI {0} n'est configurée ; ajoutez-la à clis dans {1}.",
 	"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it": "{0} exécute maintenant une autre CLI, mais cette session appartient à {1} ; elle ne peut pas être reprise avec cette CLI",
+	"{0} is no longer in clis of {1}, so this session cannot be resumed with it.": "{0} ne figure plus dans clis de {1} ; cette session ne peut donc plus être reprise avec cette entrée.",
 	"{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it": "{0} exécute maintenant une autre CLI, mais cet agent exécutait {1} ; il ne peut pas être restauré avec",
 	"Its CLI cannot resume this exact session, so it cannot be pinned.": "Sa CLI ne peut pas reprendre exactement cette session ; il ne peut donc pas être épinglé.",
 	"The working location {0} is not available in this window.": "L’emplacement de travail {0} n’est pas disponible dans cette fenêtre.",

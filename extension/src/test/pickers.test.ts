@@ -1351,6 +1351,40 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 	});
 
 	suite('Resume Agent', () => {
+		test('shows the session refusal after accepting the retained number and preserves the settings key and file spelling', async () => {
+			const { pickSession } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
+			const { FacadeError } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
+			const cli = 'team "conversation"';
+			const quoted = JSON.stringify(cli);
+			const setting = `clis[${quoted}]`;
+			const file = '~/work/this conversation/facade.json';
+			const entry = { key: { environment: 'local', cli, sessionId: 'saved' }, cwd: MAIN.path, title: 'Saved title' };
+			const picked: string[] = [];
+			const errors: string[] = [];
+			for (const refusal of [
+				new FacadeError('INVALID', 'unsupported', `${setting} runs Codex now, but this conversation is Claude Code's; it cannot be resumed with it`,
+					{ kind: 'resume_type_changed', values: [setting, 'Claude Code'] }),
+				new FacadeError('UNAVAILABLE', 'unavailable', `${quoted} is no longer in clis of ${file}, so this conversation cannot be resumed with it.`,
+					{ kind: 'resume_entry_gone', values: [quoted, file] }),
+			]) {
+				const done = pickSession({
+					kind: 'resume', retained: () => [{ agent: 'a7@id:machine', alias: '#a7', name: 'Ada', entry }],
+					resume: async agent => { picked.push(agent); throw refusal; },
+					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }) },
+					running: () => false, reveal: async () => assert.fail(), select: () => assert.fail(),
+					notifyError: message => errors.push(message), media: { path: '/extension/media' } as never, language: 'en'
+				});
+				await settle();
+				ui.current!.accept('Saved title');
+				await done;
+			}
+			assert.deepStrictEqual(picked, ['a7@id:machine', 'a7@id:machine']);
+			assert.deepStrictEqual(errors, [
+				`Could not resume Saved title: ${setting} runs another CLI now, but this session is Claude Code's; it cannot be resumed with it`,
+				`Could not resume Saved title: ${quoted} is no longer in clis of ${file}, so this session cannot be resumed with it.`
+			]);
+		});
+
 		test('LIFECYCLE-3.2: identities stay distinct when two ended agents share a session', async () => {
 			const { pickSession } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
 			const entry = { key: { environment: 'local', cli: 'claude', sessionId: 'shared' }, cwd: MAIN.path, title: 'Saved title' };

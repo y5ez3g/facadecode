@@ -200,6 +200,8 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'cli_not_configured': return vscode.l10n.t("No CLI {0} is configured; add it to clis in {1}.", a, b);
 		// {0} is the entry, such as clis["Codex · work"]; {1} the CLI the conversation is of, such as Codex
 		case 'resume_type_changed': return vscode.l10n.t("{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it", a, b);
+		// {0} is the quoted entry name; {1} is the settings file on the agent's machine
+		case 'resume_entry_gone': return vscode.l10n.t("{0} is no longer in clis of {1}, so this session cannot be resumed with it.", a, b);
 		// {0} is the entry, such as clis["Codex · work"]; {1} the CLI the pinned agent ran, such as Codex
 		case 'pin_type_changed': return vscode.l10n.t("{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it", a, b);
 		case 'pin_unsupported': return vscode.l10n.t("Its CLI cannot resume this exact session, so it cannot be pinned.");

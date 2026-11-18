@@ -1132,13 +1132,13 @@ export class AgentService implements Agents, Disposable {
 			throw new FacadeError('INVALID', 'unsupported', entry.unavailable);
 		}
 		if (this.ownershipLost) { throw invalid('ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST); }
-		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact conversation ID is required.'); }
+		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact session ID is required.'); }
 		const meta = this.deps.conversations?.get(entry.key);
-		if (entry.cwdChoices?.length && !meta?.cwd) { throw invalid('invalid_argument', 'Choose a working location before resuming this conversation.'); }
+		if (entry.cwdChoices?.length && !meta?.cwd) { throw invalid('invalid_argument', 'Choose a working location before continuing this session.'); }
 		const location = this.locationFor(meta?.location, meta?.cwd ?? entry.cwd);
 		if (!location || location.environment !== entry.key.environment) {
 			const cwd = meta?.cwd ?? entry.cwd;
-			throw new FacadeError('INVALID', 'not_found', `The conversation's working location ${cwd} is not available in this window.`, locationNotHere(cwd));
+			throw new FacadeError('INVALID', 'not_found', `The session's working location ${cwd} is not available in this window.`, locationNotHere(cwd));
 		}
 		// Manual Resume names an unnamed conversation only now, as a blank name is filled in, without turning its title into an agent
 		// name (LIFECYCLE-2.1, 2.3)

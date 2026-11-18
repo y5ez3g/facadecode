@@ -376,6 +376,7 @@
 	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.",
 	"No CLI {0} is configured; add it to clis in {1}.": "No CLI {0} is configured; add it to clis in {1}.",
 	"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it": "{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it",
+	"{0} is no longer in clis of {1}, so this session cannot be resumed with it.": "{0} is no longer in clis of {1}, so this session cannot be resumed with it.",
 	"{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it": "{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it",
 	"Its CLI cannot resume this exact session, so it cannot be pinned.": "Its CLI cannot resume this exact session, so it cannot be pinned.",
 	"1 agent": "1 agent",
