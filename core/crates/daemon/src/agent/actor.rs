@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    AgentInfo, AgentState, AgentsChange, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
+    AgentInfo, AgentState, AgentsUpdate, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
     WindowRef,
 };
 use facade_base::process::{ProcessExit, ProcessState};
@@ -79,7 +79,7 @@ pub(super) struct Links {
     pub(super) settled: watch::Sender<bool>,
     /// Marked at each output, for whoever follows the CLI's work, such as its session.
     pub(super) output: watch::Sender<()>,
-    pub(super) changes: broadcast::Sender<AgentsChange>,
+    pub(super) changes: broadcast::Sender<AgentsUpdate>,
     /// Keeps the tools channel open while the actor runs.
     pub(super) _tools: Arc<watch::Sender<usize>>,
     pub(super) tools_connections: watch::Receiver<usize>,
@@ -287,7 +287,7 @@ impl Actor {
     }
 
     fn publish_record(&self, agent: AgentInfo) {
-        let _ = self.links.changes.send(AgentsChange::Updated {
+        let _ = self.links.changes.send(AgentsUpdate::Updated {
             agent: Box::new(agent),
         });
     }

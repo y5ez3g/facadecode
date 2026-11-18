@@ -1,11 +1,10 @@
 //! Entry and destination operations for the machine network.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use facade_base::address::{
     AgentAddress, exact_machine_selector, parse_agent_address, parse_machine_selector,
-    short_machine_id,
 };
 use facade_base::daemon::{
     AgentAdopt, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
@@ -15,8 +14,9 @@ use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
     AgentList, AgentListResult, AgentRef, Caller, CliList, ExecutionOutcome, ForwardCall,
     LocationList, LocationListResult, MachineAdd, MachineIdentity, MachineInfo, MachineList,
-    MachineListResult, MachineQueryArgs, MachineQueryResult, MachineQueryStatus, MachineRemove,
-    MachineRemoveArgs, MachineRename, MachineRenameArgs, Unavailable, WindowLocation,
+    MachineListResult, MachineQueryArgs, MachineQueryStatus, MachineRemove, MachineRemoveArgs,
+    MachineRename, MachineRenameArgs, MachineResponseState, MachineStateRow, Unavailable,
+    WindowLocation,
 };
 use facade_base::operations::{CallParams, Operation};
 use facade_base::process::ProcessState;
@@ -34,6 +34,21 @@ use crate::service::value_of;
 use crate::{Cancel, Daemon};
 
 const LIST_DEADLINE: Duration = Duration::from_secs(3);
+
+#[derive(Default)]
+struct AgentListing {
+    agents: Vec<AgentInfo>,
+    machines: Vec<MachineStateRow>,
+}
+
+impl From<AgentListing> for AgentListResult {
+    fn from(list: AgentListing) -> Self {
+        Self {
+            agents: list.agents,
+            machines: list.machines.into_iter().map(Into::into).collect(),
+        }
+    }
+}
 
 impl Daemon {
     /// Selects a target at the origin, then uses an ID for local and forwarded calls alike.
@@ -351,7 +366,7 @@ impl Daemon {
         let unanswered: Vec<_> = result
             .machines
             .into_iter()
-            .filter(|row| row.status != MachineQueryStatus::Answered)
+            .filter(|row| row.state != MachineResponseState::Responded)
             .map(|row| MachineIdentity {
                 machine_id: row.machine_id,
                 name: row.name,
@@ -416,22 +431,12 @@ impl Daemon {
         time_left: Option<Duration>,
         request_id: Option<String>,
     ) -> Result<Value, ErrorBody> {
-        let params = value_of(ForwardCall {
-            call: CallParams {
-                op: operation.to_string(),
-                args,
-            },
-            by_model: false,
-            from_name: None,
-            from_window: None,
-            window_colors: None,
-        });
         self.network
             .call(
                 target,
                 caller,
                 "call".to_string(),
-                params,
+                machine_call(operation, args),
                 time_left,
                 request_id,
             )
@@ -577,11 +582,13 @@ impl Daemon {
                     }
                     Ok(value_of(self.rename_local_machine(request.name).await?))
                 }
-                AgentList::NAME if forwarded => Ok(value_of(self.local_agent_list(caller)?)),
-                AgentList::NAME => Ok(value_of(
+                AgentList::NAME if forwarded => Ok(value_of(AgentListResult::from(
+                    self.local_agent_list(caller)?,
+                ))),
+                AgentList::NAME => Ok(value_of(AgentListResult::from(
                     self.list_network_agents(caller, decode_arguments(args)?)
                         .await?,
-                )),
+                ))),
                 CliList::NAME | LocationList::NAME => {
                     let request: MachineQueryArgs = decode_arguments(args)?;
                     if !forwarded && let Some(machine) = request.machine.as_deref() {
@@ -631,7 +638,7 @@ impl Daemon {
         Some(result)
     }
 
-    fn local_agent_list(&self, caller: &Caller) -> Result<AgentListResult, ErrorBody> {
+    fn local_agent_list(&self, caller: &Caller) -> Result<AgentListing, ErrorBody> {
         let reach = Reach::from(caller);
         let mut agents = self.agent_infos();
         agents.retain(|agent| reach.reaches(agent));
@@ -639,17 +646,15 @@ impl Daemon {
         for info in &mut agents {
             self.project_agent(info, &machines);
         }
-        let own = self.network.local_hello();
-        Ok(AgentListResult {
+        let own = machines
+            .iter()
+            .find(|machine| machine.machine_id == self.machine_id)
+            .expect("the machine table includes this machine");
+        let mut row = MachineStateRow::from(own);
+        row.observe(MachineResponseState::Responded, Some(SystemTime::now()));
+        Ok(AgentListing {
             agents,
-            machines: vec![MachineQueryResult {
-                short_id: short_machine_id(&own.machine_id),
-                machine_id: own.machine_id,
-                name: own.name,
-                build: Some(own.build),
-                status: MachineQueryStatus::Answered,
-                answered_at: Some(facade_base::time::iso_now()),
-            }],
+            machines: vec![row],
         })
     }
 
@@ -657,7 +662,7 @@ impl Daemon {
         self: &Arc<Self>,
         caller: &Caller,
         request: MachineQueryArgs,
-    ) -> Result<AgentListResult, ErrorBody> {
+    ) -> Result<AgentListing, ErrorBody> {
         let all_machines = self.machine_table()?;
         let targets = match request.machine {
             Some(machine) => vec![self.select_machine(machine_selector(&machine)?)?],
@@ -672,55 +677,41 @@ impl Daemon {
                 if target.machine_id == daemon.machine_id {
                     return daemon.local_agent_list(&caller);
                 }
-                let unreachable = target.is_unreachable();
-                let mut row = MachineQueryResult {
-                    short_id: short_machine_id(&target.machine_id),
-                    machine_id: target.machine_id.clone(),
-                    name: target.name,
-                    build: target.build,
-                    status: MachineQueryStatus::Unavailable,
-                    answered_at: None,
-                };
-                if !unreachable {
-                    let request = value_of(MachineQueryArgs { machine: None });
-                    let result = timeout_at(
-                        deadline,
-                        daemon.network_call(
+                let mut row = MachineStateRow::from(&target);
+                let mut agents = Vec::new();
+                if !row.unreachable {
+                    let params = machine_call(
+                        AgentList::NAME,
+                        value_of(MachineQueryArgs { machine: None }),
+                    );
+                    match daemon
+                        .network
+                        .call_with_receipt(
                             &row.machine_id,
                             caller,
-                            AgentList::NAME,
-                            request,
-                            Some(LIST_DEADLINE),
+                            "call".to_string(),
+                            params,
+                            Some(deadline),
                             None,
-                        ),
-                    )
-                    .await;
-                    match result {
-                        Ok(Ok(value)) => {
-                            if let Ok(list) = decode_arguments::<AgentListResult>(value) {
-                                return Ok(list);
-                            }
-                            row.status = MachineQueryStatus::Error;
-                            row.answered_at = Some(facade_base::time::iso_now());
+                        )
+                        .await
+                    {
+                        Ok((value, received_at)) => {
+                            agents = observe_agent_reply(&mut row, value, received_at);
                         }
-                        Ok(Err(error)) if error.data.reason != Reason::Unavailable => {
-                            row.status = MachineQueryStatus::Error;
-                            row.answered_at = Some(facade_base::time::iso_now());
+                        Err(failure) => {
+                            let (state, received_at) = failure.observation();
+                            row.observe(state, received_at);
                         }
-                        Ok(Err(_)) => {}
-                        Err(_) => row.status = MachineQueryStatus::TimedOut,
                     }
                 }
-                Ok(AgentListResult {
-                    agents: Vec::new(),
+                Ok(AgentListing {
+                    agents,
                     machines: vec![row],
                 })
             });
         }
-        let mut list = AgentListResult {
-            agents: Vec::new(),
-            machines: Vec::new(),
-        };
+        let mut list = AgentListing::default();
         while let Some(result) = queries.join_next().await {
             let mut answered = result.map_err(ErrorBody::internal)??;
             list.agents.append(&mut answered.agents);
@@ -748,6 +739,39 @@ impl Daemon {
         }
         Ok(list)
     }
+}
+
+fn machine_call(operation: &str, args: Value) -> Value {
+    value_of(ForwardCall {
+        call: CallParams {
+            op: operation.to_string(),
+            args,
+        },
+        by_model: false,
+        from_name: None,
+        from_window: None,
+        window_colors: None,
+    })
+}
+
+fn observe_agent_reply(
+    row: &mut MachineStateRow,
+    value: Value,
+    received_at: SystemTime,
+) -> Vec<AgentInfo> {
+    row.observe(MachineResponseState::Failed, Some(received_at));
+    let Ok(list) = decode_arguments::<AgentListResult>(value) else {
+        return Vec::new();
+    };
+    let Some(answering) = list.machines.into_iter().find(|machine| {
+        machine.machine_id == row.machine_id && machine.status == MachineQueryStatus::Answered
+    }) else {
+        return Vec::new();
+    };
+    row.name = answering.name;
+    row.build = answering.build;
+    row.observe(MachineResponseState::Responded, Some(received_at));
+    list.agents
 }
 
 pub(crate) fn request_id(args: &Value) -> Option<String> {

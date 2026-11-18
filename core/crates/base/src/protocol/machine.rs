@@ -1,10 +1,12 @@
 //! Machine identities, session parameters and the machine operations of the daemon protocol.
 
+use std::time::SystemTime;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::address::{exact_machine_selector, format_reference};
+use super::address::{exact_machine_selector, format_reference, short_machine_id};
 use super::daemon::{
     AgentInfo, CliInfo, LocationInfo, Message, StartArgs, TerminalColors, WindowDelivery, WindowRef,
 };
@@ -333,6 +335,58 @@ pub enum MachinesChange {
     Unknown,
 }
 
+/// What the originating machine knows about a query or the first snapshot of a subscription.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineResponseState {
+    Waiting,
+    Responded,
+    TimedOut,
+    Failed,
+    Unreachable,
+}
+
+/// A machine's contribution to an agent list or watch, before projecting it for a client.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MachineStateRow {
+    pub machine_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    pub state: MachineResponseState,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreachable: bool,
+    /// When this machine's response was received at the origin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responded_at: Option<String>,
+}
+
+impl From<&MachineInfo> for MachineStateRow {
+    fn from(machine: &MachineInfo) -> Self {
+        let unreachable = machine.is_unreachable();
+        Self {
+            machine_id: machine.machine_id.clone(),
+            name: machine.name.clone(),
+            build: machine.build.clone(),
+            state: if unreachable {
+                MachineResponseState::Unreachable
+            } else {
+                MachineResponseState::Waiting
+            },
+            unreachable,
+            responded_at: None,
+        }
+    }
+}
+
+impl MachineStateRow {
+    pub fn observe(&mut self, state: MachineResponseState, received_at: Option<SystemTime>) {
+        self.state = state;
+        self.unreachable = state == MachineResponseState::Unreachable;
+        self.responded_at = received_at.map(crate::time::iso_time);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MachineQueryStatus {
@@ -354,6 +408,27 @@ pub struct MachineQueryResult {
     /// The UTC time of the answer, to milliseconds, when a machine answered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<String>,
+}
+
+impl From<MachineStateRow> for MachineQueryResult {
+    fn from(row: MachineStateRow) -> Self {
+        let status = match row.state {
+            MachineResponseState::Responded => MachineQueryStatus::Answered,
+            MachineResponseState::TimedOut => MachineQueryStatus::TimedOut,
+            MachineResponseState::Failed => MachineQueryStatus::Error,
+            MachineResponseState::Waiting | MachineResponseState::Unreachable => {
+                MachineQueryStatus::Unavailable
+            }
+        };
+        Self {
+            short_id: short_machine_id(&row.machine_id),
+            machine_id: row.machine_id,
+            name: row.name,
+            build: row.build,
+            status,
+            answered_at: row.responded_at,
+        }
+    }
 }
 
 /// Selects a machine for a query. An omitted selector uses the operation's default.
@@ -610,5 +685,77 @@ mod tests {
         let local: MachineInfo = serde_json::from_value(wire.clone()).unwrap();
         assert!(!local.is_unreachable());
         assert_eq!(serde_json::to_value(local).unwrap(), wire);
+    }
+
+    #[test]
+    fn a_shared_machine_row_keeps_the_observation_and_projects_to_both_v2_shapes() {
+        use crate::daemon::{AgentMachineState, AgentMachineView};
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let route = json!({
+            "machine_id": "c07cafe7-9a12-4b73-8e9f-cc2d44289832", "name": "gpu",
+            "route": [], "build": "test", "connections": []
+        });
+        let machine: MachineInfo = serde_json::from_value(route).unwrap();
+        let mut row = MachineStateRow::from(&machine);
+        assert_eq!(row.state, MachineResponseState::Waiting);
+        let now = Some(UNIX_EPOCH + Duration::from_secs(1));
+        for (state, time, query, watch) in [
+            (
+                MachineResponseState::Waiting,
+                None,
+                "unavailable",
+                "pending",
+            ),
+            (MachineResponseState::Responded, now, "answered", "synced"),
+            (
+                MachineResponseState::TimedOut,
+                None,
+                "timed_out",
+                "unreachable",
+            ),
+            (MachineResponseState::Failed, now, "error", "unreachable"),
+            (
+                MachineResponseState::Unreachable,
+                None,
+                "unavailable",
+                "unreachable",
+            ),
+        ] {
+            row.observe(state, time);
+            let canonical = serde_json::to_value(&row).unwrap();
+            let mut expected = json!({
+                "machine_id": machine.machine_id, "name": "gpu", "build": "test",
+                "state": state,
+            });
+            let at = "1970-01-01T00:00:01.000Z";
+            if time.is_some() {
+                expected["responded_at"] = json!(at);
+            }
+            if state == MachineResponseState::Unreachable {
+                expected["unreachable"] = json!(true);
+            }
+            assert_eq!(canonical, expected);
+
+            let query_row = serde_json::to_value(MachineQueryResult::from(row.clone())).unwrap();
+            let mut expected = json!({
+                "machine_id": machine.machine_id, "short_id": "c07cafe7", "name": "gpu",
+                "build": "test", "status": query,
+            });
+            if time.is_some() {
+                expected["answered_at"] = json!(at);
+            }
+            assert_eq!(query_row, expected);
+            let watch_row = serde_json::to_value(AgentMachineState::from(AgentMachineView {
+                row: row.clone(),
+                agents: (state == MachineResponseState::Responded).then(Vec::new),
+            }))
+            .unwrap();
+            let mut expected = json!({ "machine_id": machine.machine_id, "state": watch });
+            if state == MachineResponseState::Responded {
+                expected["agents"] = json!([]);
+            }
+            assert_eq!(watch_row, expected);
+        }
     }
 }

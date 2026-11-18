@@ -11,13 +11,14 @@ mod wire;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{WatchParams, methods};
 use facade_base::jsonrpc::{ErrorBody, Notification, Reason, decode_arguments};
 use facade_base::machine::{
     AdvertiseParams, Caller, ConnectFailedParams, ConnectedParams, ConnectionKind,
-    ExecutionOutcome, ForwardParams, MachineHello, MachineInfo, MachineTransport,
+    ExecutionOutcome, ForwardParams, MachineHello, MachineInfo, MachineResponseState,
+    MachineTransport,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -31,6 +32,44 @@ use self::wire::{Forward, Reader};
 use crate::SavedConnection;
 
 pub(crate) use self::session::Subscription;
+
+#[derive(Debug)]
+pub(crate) enum RequestFailure {
+    Unreachable(ErrorBody),
+    TimedOut(ErrorBody),
+    Failed(ErrorBody, Option<SystemTime>),
+}
+
+impl RequestFailure {
+    fn from_reply(error: ErrorBody, received_at: SystemTime) -> Self {
+        // A relay can report that its route to the target ended using the v2 transport error.
+        if error.data.reason != Reason::Unavailable || error.data.unavailable.is_none() {
+            return Self::Failed(error, Some(received_at));
+        }
+        if wire::reports_timeout(&error) {
+            return Self::TimedOut(error);
+        }
+        Self::Unreachable(error)
+    }
+
+    pub(crate) fn observation(&self) -> (MachineResponseState, Option<SystemTime>) {
+        match self {
+            Self::Unreachable(_) => (MachineResponseState::Unreachable, None),
+            Self::TimedOut(_) => (MachineResponseState::TimedOut, None),
+            Self::Failed(_, at) => (MachineResponseState::Failed, *at),
+        }
+    }
+}
+
+impl From<RequestFailure> for ErrorBody {
+    fn from(failure: RequestFailure) -> Self {
+        match failure {
+            RequestFailure::Unreachable(error)
+            | RequestFailure::TimedOut(error)
+            | RequestFailure::Failed(error, _) => error,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct Network(Arc<Inner>);
@@ -213,7 +252,28 @@ impl Network {
         time_left: Option<Duration>,
         request_id: Option<String>,
     ) -> Result<Value, ErrorBody> {
-        let deadline = deadline_after(time_left);
+        let (value, _) = self
+            .call_with_receipt(
+                target,
+                caller,
+                method,
+                params,
+                deadline_after(time_left),
+                request_id,
+            )
+            .await?;
+        Ok(value)
+    }
+
+    pub(crate) async fn call_with_receipt(
+        &self,
+        target: &str,
+        caller: Caller,
+        method: String,
+        params: Value,
+        deadline: Option<tokio::time::Instant>,
+        request_id: Option<String>,
+    ) -> Result<(Value, SystemTime), RequestFailure> {
         let forward = ForwardParams {
             route: Vec::new(),
             caller,
@@ -223,12 +283,21 @@ impl Network {
             params,
         };
         match self
-            .request(target, Forward::from_origin(forward), deadline)?
+            .request(target, Forward::from_origin(forward), deadline)
+            .map_err(RequestFailure::Unreachable)?
             .answer(deadline)
             .await?
         {
-            Reply::Call(value) => Ok(value),
-            Reply::Watch { .. } => Err(ErrorBody::invalid_argument("Expected a call response.")),
+            Reply::Call {
+                result,
+                received_at,
+            } => result
+                .map(|value| (value, received_at))
+                .map_err(|error| RequestFailure::from_reply(error, received_at)),
+            Reply::Watch { received_at, .. } => Err(RequestFailure::Failed(
+                ErrorBody::invalid_argument("Expected a call response."),
+                Some(received_at),
+            )),
         }
     }
 
@@ -239,6 +308,18 @@ impl Network {
         params: WatchParams,
         time_left: Option<Duration>,
     ) -> Result<Subscription, ErrorBody> {
+        Ok(self
+            .watch_with_receipt(target, caller, params, time_left)
+            .await?)
+    }
+
+    pub(crate) async fn watch_with_receipt(
+        &self,
+        target: &str,
+        caller: Caller,
+        params: WatchParams,
+        time_left: Option<Duration>,
+    ) -> Result<Subscription, RequestFailure> {
         let deadline = deadline_after(time_left);
         let forward = ForwardParams {
             route: Vec::new(),
@@ -248,10 +329,23 @@ impl Network {
             method: methods::WATCH.to_owned(),
             params: serde_json::to_value(params).expect("watch parameters serialize"),
         };
-        let mut pending = self.request(target, Forward::from_origin(forward), deadline)?;
+        let mut pending = self
+            .request(target, Forward::from_origin(forward), deadline)
+            .map_err(RequestFailure::Unreachable)?;
         match pending.answer(deadline).await? {
-            Reply::Watch { snapshot, changes } => Ok(pending.watch(snapshot, changes)),
-            Reply::Call(_) => Err(ErrorBody::invalid_argument("Expected a watch response.")),
+            Reply::Watch {
+                snapshot,
+                changes,
+                received_at,
+            } => Ok(pending.watch(snapshot, changes, received_at)),
+            Reply::Call {
+                result: Err(error),
+                received_at,
+            } => Err(RequestFailure::from_reply(error, received_at)),
+            Reply::Call { received_at, .. } => Err(RequestFailure::Failed(
+                ErrorBody::invalid_argument("Expected a watch response."),
+                Some(received_at),
+            )),
         }
     }
 
@@ -326,7 +420,7 @@ impl Network {
             return Err(wire::unavailable(
                 identity,
                 ExecutionOutcome::NotExecuted,
-                "The request timed out before reaching the machine.",
+                wire::TIMEOUT_BEFORE_TARGET,
             ));
         }
         let forward = decode_arguments(forward.encode())?;
@@ -353,7 +447,7 @@ impl Network {
                 })
             },
             () = session::expires(deadline) => {
-                Err(wire::unavailable(identity, ExecutionOutcome::OutcomeUnknown, "The request timed out."))
+                Err(wire::unavailable(identity, ExecutionOutcome::OutcomeUnknown, wire::REQUEST_TIMEOUT))
             },
         }
     }

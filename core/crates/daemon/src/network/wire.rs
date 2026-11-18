@@ -24,6 +24,10 @@ const HELLO_ID: u64 = 0;
 const INITIAL_TABLE_ID: u64 = 1;
 pub(super) const FIRST_REQUEST_ID: u64 = INITIAL_TABLE_ID + 1;
 
+pub(super) const REQUEST_TIMEOUT: &str = "The request timed out.";
+pub(super) const TIMEOUT_BEFORE_SEND: &str = "The request timed out before it was sent.";
+pub(super) const TIMEOUT_BEFORE_TARGET: &str = "The request timed out before reaching the machine.";
+
 pub(super) enum Frame {
     Request(Request),
     Response(Response),
@@ -166,13 +170,9 @@ pub(super) fn unavailable(
     execution: ExecutionOutcome,
     detail: &str,
 ) -> ErrorBody {
-    let outcome = match execution {
-        ExecutionOutcome::NotExecuted => "The request did not run.",
-        ExecutionOutcome::OutcomeUnknown => "The result is unknown.",
-    };
     let mut error = ErrorBody::new(
         Reason::Unavailable,
-        format!("{}: {detail} {outcome}", machine.name),
+        unavailable_message(&machine, execution, detail),
     );
     error.data.unavailable = Some(Unavailable {
         execution,
@@ -182,6 +182,31 @@ pub(super) fn unavailable(
         unanswered: Vec::new(),
     });
     error
+}
+
+fn unavailable_message(
+    machine: &MachineIdentity,
+    execution: ExecutionOutcome,
+    detail: &str,
+) -> String {
+    let outcome = match execution {
+        ExecutionOutcome::NotExecuted => "The request did not run.",
+        ExecutionOutcome::OutcomeUnknown => "The result is unknown.",
+    };
+    format!("{}: {detail} {outcome}", machine.name)
+}
+
+/// A v2 hop reports its deadline using an existing transport error and diagnostic.
+pub(super) fn reports_timeout(error: &ErrorBody) -> bool {
+    let Some(details) = &error.data.unavailable else {
+        return false;
+    };
+    let Some(machine) = &details.machine else {
+        return false;
+    };
+    [REQUEST_TIMEOUT, TIMEOUT_BEFORE_SEND, TIMEOUT_BEFORE_TARGET]
+        .into_iter()
+        .any(|detail| error.message == unavailable_message(machine, details.execution, detail))
 }
 
 pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<(), ErrorBody> {

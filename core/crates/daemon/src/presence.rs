@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    AgentInfo, AgentState, AgentsChange, HookSession, LocationInfo, TERMINAL_WINDOW,
+    AgentInfo, AgentState, AgentsUpdate, HookSession, LocationInfo, TERMINAL_WINDOW,
     TerminalColors, WindowDescription, WindowRef, WorktreeCreateArgs,
 };
 use facade_base::jsonrpc::ErrorBody;
@@ -141,7 +141,7 @@ impl Daemon {
         };
         gate_for_test("before-guest-inbox-removal");
         self.messages.drop_inbox(id, gone);
-        let _ = self.changes.send(AgentsChange::Removed {
+        let _ = self.changes.send(AgentsUpdate::Removed {
             agent_id: id.to_string(),
             machine_id: self.machine_id.clone(),
         });
@@ -336,7 +336,7 @@ impl Daemon {
                 let _ = daemon
                     .network
                     .call(
-                        &state.machine_id,
+                        &state.row.machine_id,
                         caller,
                         "call".to_string(),
                         value_of(update),

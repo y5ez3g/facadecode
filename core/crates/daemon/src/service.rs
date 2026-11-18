@@ -9,7 +9,7 @@ use std::time::Duration;
 use facade_base::daemon::{
     self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
     AgentScreen, AgentSend, AgentStart, AgentStartArgs, AgentState, AgentStop, AgentType,
-    AgentsChange, ClientKind, DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog,
+    AgentsUpdate, ClientKind, DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog,
     DaemonLogArgs, DaemonLogResult, DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle,
     HookPrompt, HookSession, HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState,
     InspectResult, IntegrationAdd, IntegrationList, IntegrationRemove, MAX_SCREEN_LINES,
@@ -800,7 +800,7 @@ impl Daemon {
     /// A guest's state as its hooks tell it, shown to the agents' watchers where it changed.
     fn set_guest_state(&self, guest: &AgentHandle, state: AgentState) {
         if let Some(info) = guest.set_guest_state(state) {
-            let _ = self.changes.send(AgentsChange::Updated {
+            let _ = self.changes.send(AgentsUpdate::Updated {
                 agent: Box::new(info),
             });
         }

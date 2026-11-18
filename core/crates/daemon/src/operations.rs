@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
-    AgentInfo, AgentStartArgs, AgentState, AgentsChange, Message, ResumeArgs, StartResult,
+    AgentInfo, AgentStartArgs, AgentState, AgentsUpdate, Message, ResumeArgs, StartResult,
     StopResult, TERMINAL_WINDOW, ToolsState, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -170,7 +170,7 @@ impl Daemon {
 
     /// Tells the `agents` topic that `info` is an agent's record now.
     pub(crate) fn publish(&self, info: AgentInfo) {
-        let _ = self.changes.send(AgentsChange::Updated {
+        let _ = self.changes.send(AgentsUpdate::Updated {
             agent: Box::new(info),
         });
     }
@@ -999,7 +999,7 @@ impl Daemon {
         blocking(move || store.delete(&deleted)).await?;
         pause_for_test("after-record-delete");
         if self.agents.lock().unwrap().remove(&id).is_some() {
-            let _ = self.changes.send(AgentsChange::Removed {
+            let _ = self.changes.send(AgentsUpdate::Removed {
                 agent_id: id.clone(),
                 machine_id: self.machine_id.clone(),
             });

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use facade_base::daemon::{AgentsChange, TERMINAL_WINDOW, is_session_id};
+use facade_base::daemon::{AgentsUpdate, TERMINAL_WINDOW, is_session_id};
 use facade_base::daemon_client::{DaemonClient, Identity, upgrading};
 use facade_base::jsonrpc::ErrorBody;
 use serde_json::{Value, json};
@@ -149,7 +149,7 @@ impl Daemon {
             self.records.release_name(&name);
         }
         self.guests.register_member(&id, process);
-        let _ = self.changes.send(AgentsChange::Updated {
+        let _ = self.changes.send(AgentsUpdate::Updated {
             agent: Box::new(info),
         });
         Ok(id)

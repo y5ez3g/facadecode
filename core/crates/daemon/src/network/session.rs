@@ -9,7 +9,7 @@ use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, ready};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
     CancelParams, ChangedParams, UnwatchParams, WatchEndedParams, WatchResult, methods,
@@ -23,12 +23,23 @@ use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
-use super::TargetReply;
 use super::wire::{self, Forward, Frame, Reader};
+use super::{RequestFailure, TargetReply};
 
 type Change = Result<Value, ErrorBody>;
-type Answer = Result<Reply, ErrorBody>;
+type Answer = Result<Reply, RequestFailure>;
 pub(super) type Deadline = Option<Instant>;
+
+pub(crate) struct ReceivedChange {
+    pub(crate) value: Value,
+    pub(crate) received_at: SystemTime,
+}
+
+type WatchUpdate = Result<ReceivedChange, RequestFailure>;
+
+fn change_result(update: WatchUpdate) -> Change {
+    update.map(|change| change.value).map_err(Into::into)
+}
 
 /// Applies machine frames to the routes of this connection.
 pub(super) trait SessionHandler: Clone + Send + Sync + 'static {
@@ -44,22 +55,31 @@ pub(super) trait SessionHandler: Clone + Send + Sync + 'static {
 
 pub(crate) struct Subscription {
     pub(crate) snapshot: Value,
-    changes: mpsc::UnboundedReceiver<Change>,
+    pub(crate) received_at: SystemTime,
+    changes: mpsc::UnboundedReceiver<WatchUpdate>,
     _request: Pending,
 }
 
 impl Subscription {
     /// The final item is an error if the remote watch or its link ended.
     pub(crate) async fn next(&mut self) -> Option<Result<Value, ErrorBody>> {
+        self.next_with_receipt().await.map(change_result)
+    }
+
+    pub(crate) async fn next_with_receipt(&mut self) -> Option<WatchUpdate> {
         self.changes.recv().await
     }
 }
 
 pub(super) enum Reply {
-    Call(Value),
+    Call {
+        result: Result<Value, ErrorBody>,
+        received_at: SystemTime,
+    },
     Watch {
         snapshot: Value,
-        changes: mpsc::UnboundedReceiver<Change>,
+        changes: mpsc::UnboundedReceiver<WatchUpdate>,
+        received_at: SystemTime,
     },
 }
 
@@ -71,7 +91,7 @@ pub(super) enum Delivery {
 enum Changes {
     Local(mpsc::Receiver<Change>),
     Relayed {
-        changes: mpsc::UnboundedReceiver<Change>,
+        changes: mpsc::UnboundedReceiver<WatchUpdate>,
         _pending: Pending,
     },
 }
@@ -80,7 +100,7 @@ impl Changes {
     async fn next(&mut self) -> Option<Change> {
         match self {
             Self::Local(changes) => changes.recv().await,
-            Self::Relayed { changes, .. } => changes.recv().await,
+            Self::Relayed { changes, .. } => changes.recv().await.map(change_result),
         }
     }
 }
@@ -97,11 +117,11 @@ impl Pending {
         tokio::select! {
             biased;
             answer = &mut self.reply => answer.unwrap_or_else(|_| {
-                Err(wire::unavailable(
+                Err(RequestFailure::Unreachable(wire::unavailable(
                     self.machine.clone(),
                     ExecutionOutcome::OutcomeUnknown,
                     "The machine session closed.",
-                ))
+                )))
             }),
             () = expires(deadline) => {
                 let sent = self.peer.release(self.id);
@@ -109,11 +129,11 @@ impl Pending {
                 if sent.is_none() && let Ok(answer) = self.reply.try_recv() {
                     return answer;
                 }
-                Err(wire::unavailable(
+                Err(RequestFailure::TimedOut(wire::unavailable(
                     self.machine.clone(),
                     execution(sent.unwrap_or(true)),
-                    "The request timed out.",
-                ))
+                    wire::REQUEST_TIMEOUT,
+                )))
             },
         }
     }
@@ -121,10 +141,12 @@ impl Pending {
     pub(super) fn watch(
         self,
         snapshot: Value,
-        changes: mpsc::UnboundedReceiver<Change>,
+        changes: mpsc::UnboundedReceiver<WatchUpdate>,
+        received_at: SystemTime,
     ) -> Subscription {
         Subscription {
             snapshot,
+            received_at,
             changes,
             _request: self,
         }
@@ -186,7 +208,7 @@ enum Outgoing {
     Watching {
         machine: MachineIdentity,
         watch: u64,
-        changes: mpsc::UnboundedSender<Change>,
+        changes: mpsc::UnboundedSender<WatchUpdate>,
     },
 }
 
@@ -310,26 +332,27 @@ impl Peer {
                     sent,
                     reply,
                 } => {
-                    let _ = reply.send(Err(wire::unavailable(
+                    let _ = reply.send(Err(RequestFailure::Unreachable(wire::unavailable(
                         machine,
                         execution(sent),
                         "The machine session closed.",
-                    )));
+                    ))));
                 }
                 Outgoing::Watching {
                     machine, changes, ..
                 } => {
-                    let _ = changes.send(Err(wire::unavailable(
+                    let _ = changes.send(Err(RequestFailure::Unreachable(wire::unavailable(
                         machine,
                         ExecutionOutcome::OutcomeUnknown,
                         "The subscription ended when the machine session closed.",
-                    )));
+                    ))));
                 }
             }
         }
     }
 
     fn response(&self, response: Response) -> Result<(), ErrorBody> {
+        let received_at = SystemTime::now();
         let result = match (response.error, response.result) {
             (Some(error), None) => Err(error),
             (None, Some(value)) => Ok(value),
@@ -377,28 +400,37 @@ impl Peer {
             let _ = reply.send(Ok(Reply::Watch {
                 snapshot,
                 changes: receiver,
+                received_at,
             }));
         } else {
-            let _ = reply.send(result.map(Reply::Call));
+            let _ = reply.send(Ok(Reply::Call {
+                result,
+                received_at,
+            }));
         }
         Ok(())
     }
 
     fn changed(&self, ChangedParams { watch, change }: ChangedParams) {
+        let received_at = SystemTime::now();
         let state = self.state.lock().unwrap();
         if let Some(id) = state.watches.get(&watch)
             && let Some(Outgoing::Watching { changes, .. }) = state.outgoing.get(id)
         {
-            let _ = changes.send(Ok(change));
+            let _ = changes.send(Ok(ReceivedChange {
+                value: change,
+                received_at,
+            }));
         }
     }
 
     fn watch_ended(&self, WatchEndedParams { watch, error }: WatchEndedParams) {
+        let received_at = SystemTime::now();
         let mut state = self.state.lock().unwrap();
         if let Some(id) = state.watches.remove(&watch)
             && let Some(Outgoing::Watching { changes, .. }) = state.outgoing.remove(&id)
         {
-            let _ = changes.send(Err(error));
+            let _ = changes.send(Err(RequestFailure::from_reply(error, received_at)));
         }
     }
 
@@ -553,7 +585,9 @@ impl Peer {
         let line = wire::forward_line(id, forward, deadline.is_some());
         let end_bytes = left.map_or(0, |left| wire::forward_end(left).len());
         if line.len() + end_bytes > MAX_LINE_BYTES {
-            self.fail_unwritten(id, |_| ErrorBody::line_too_long());
+            self.fail_unwritten(id, |_| {
+                RequestFailure::Failed(ErrorBody::line_too_long(), None)
+            });
             return Ok(());
         }
 
@@ -611,7 +645,7 @@ impl Peer {
         .await
     }
 
-    fn fail_unwritten(&self, id: u64, error: impl FnOnce(MachineIdentity) -> ErrorBody) {
+    fn fail_unwritten(&self, id: u64, error: impl FnOnce(MachineIdentity) -> RequestFailure) {
         let mut state = self.state.lock().unwrap();
         if let Some(Outgoing::Waiting { machine, reply, .. }) = state.outgoing.remove(&id) {
             let _ = reply.send(Err(error(machine)));
@@ -640,12 +674,12 @@ async fn write_forward_end(
     writer.write_all(&end.as_bytes()[count..]).await
 }
 
-fn write_timeout(machine: MachineIdentity) -> ErrorBody {
-    wire::unavailable(
+fn write_timeout(machine: MachineIdentity) -> RequestFailure {
+    RequestFailure::TimedOut(wire::unavailable(
         machine,
         ExecutionOutcome::NotExecuted,
-        "The request timed out before it was sent.",
-    )
+        wire::TIMEOUT_BEFORE_SEND,
+    ))
 }
 
 /// A watch response has session metadata alongside its unchanged application snapshot.
@@ -677,8 +711,13 @@ impl Incoming {
             Ok(Delivery::Local(TargetReply::Watch { snapshot, changes })) => {
                 return self.watch(snapshot, Changes::Local(changes)).await;
             }
-            Ok(Delivery::Relayed(_, Reply::Call(value))) => Ok(value),
-            Ok(Delivery::Relayed(pending, Reply::Watch { snapshot, changes })) => {
+            Ok(Delivery::Relayed(_, Reply::Call { result, .. })) => result,
+            Ok(Delivery::Relayed(
+                pending,
+                Reply::Watch {
+                    snapshot, changes, ..
+                },
+            )) => {
                 return self
                     .watch(
                         snapshot,

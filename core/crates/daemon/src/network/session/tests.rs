@@ -203,8 +203,133 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
             .await
             .err()
             .expect("the closed session ends the wait");
-        assert_eq!(error.data.reason, Reason::Unavailable);
+        assert!(matches!(error, RequestFailure::Unreachable(_)));
+        assert_eq!(ErrorBody::from(error).data.reason, Reason::Unavailable);
     })
     .await
     .expect("the session exchanges its frames");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_error_reply_has_a_receipt_but_a_local_deadline_does_not() {
+    let (peer, _output) = Peer::new();
+    let machine = MachineIdentity {
+        machine_id: "peer".into(),
+        name: "peer".into(),
+    };
+    let forward = || Forward::decode(json!({ "route": ["peer"] })).unwrap();
+    let deadline = Some(Instant::now() + Duration::from_secs(3));
+    let mut answered = peer.request(forward(), deadline, machine.clone()).unwrap();
+    let mut unanswered = peer.request(forward(), deadline, machine).unwrap();
+    let error = ErrorBody::new(Reason::Unavailable, "the peer refused this operation");
+    peer.response(Response::failed(Some(answered.id), error.clone()))
+        .unwrap();
+    let Ok(Reply::Call {
+        result: Err(returned),
+        received_at,
+    }) = answered.answer(deadline).await
+    else {
+        panic!("a remote error is still a reply");
+    };
+    assert_eq!(returned, error);
+    assert_eq!(
+        RequestFailure::from_reply(returned, received_at).observation(),
+        (
+            facade_base::machine::MachineResponseState::Failed,
+            Some(received_at)
+        )
+    );
+    let timeout = unanswered.answer(deadline).await.err().expect("no reply");
+    assert!(matches!(timeout, RequestFailure::TimedOut(_)));
+    assert_eq!(
+        timeout.observation(),
+        (facade_base::machine::MachineResponseState::TimedOut, None)
+    );
+}
+
+#[test]
+fn v2_relay_deadlines_stay_distinct_from_a_lost_route() {
+    use facade_base::machine::MachineResponseState;
+
+    let machine = MachineIdentity {
+        machine_id: "target".into(),
+        name: "target".into(),
+    };
+    for (detail, state) in [
+        (wire::REQUEST_TIMEOUT, MachineResponseState::TimedOut),
+        (wire::TIMEOUT_BEFORE_SEND, MachineResponseState::TimedOut),
+        (wire::TIMEOUT_BEFORE_TARGET, MachineResponseState::TimedOut),
+        (
+            "The machine session closed.",
+            MachineResponseState::Unreachable,
+        ),
+    ] {
+        let sent = wire::unavailable(machine.clone(), ExecutionOutcome::OutcomeUnknown, detail);
+        let received: ErrorBody =
+            serde_json::from_value(serde_json::to_value(&sent).unwrap()).unwrap();
+        let failure = RequestFailure::from_reply(received, SystemTime::now());
+        assert_eq!(failure.observation(), (state, None));
+        assert_eq!(ErrorBody::from(failure), sent);
+    }
+}
+
+#[tokio::test]
+async fn watch_receipts_keep_the_frame_time_when_consumption_is_delayed() {
+    use facade_base::machine::MachineResponseState;
+
+    let (peer, _output) = Peer::new();
+    let machine = MachineIdentity {
+        machine_id: "peer".into(),
+        name: "peer".into(),
+    };
+    let forward = Forward::decode(json!({ "route": ["peer"] })).unwrap();
+    let mut pending = peer.request(forward, None, machine).unwrap();
+    let watch = 9;
+    peer.response(Response::ok(
+        pending.id,
+        WatchResult {
+            watch,
+            snapshot: json!({}),
+        },
+    ))
+    .unwrap();
+    let Reply::Watch {
+        snapshot,
+        changes,
+        received_at,
+    } = pending.answer(None).await.unwrap()
+    else {
+        panic!("the peer answered with a watch");
+    };
+    let mut subscription = pending.watch(snapshot, changes, received_at);
+
+    let before = SystemTime::now();
+    let change = json!({ "kind": "updated" });
+    peer.changed(ChangedParams {
+        watch,
+        change: change.clone(),
+    });
+    let error = ErrorBody::new(Reason::Refused, "the peer ended the watch");
+    peer.watch_ended(WatchEndedParams {
+        watch,
+        error: error.clone(),
+    });
+    let queued = SystemTime::now();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(SystemTime::now() > queued);
+
+    let received = subscription.next_with_receipt().await.unwrap().unwrap();
+    assert_eq!(received.value, change);
+    assert!((before..=queued).contains(&received.received_at));
+    let failed = subscription
+        .next_with_receipt()
+        .await
+        .unwrap()
+        .err()
+        .expect("the watch ended");
+    let (state, at) = failed.observation();
+    assert_eq!(state, MachineResponseState::Failed);
+    assert!((received.received_at..=queued).contains(&at.expect("an error frame was received")));
+    assert_eq!(ErrorBody::from(failed), error);
+    assert!(subscription.next_with_receipt().await.is_none());
 }

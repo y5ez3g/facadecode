@@ -53,7 +53,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
-    AgentsChange, DAEMON_PROTOCOL_VERSION, MIN_DAEMON_PROTOCOL_VERSION, WindowRef,
+    AgentsUpdate, DAEMON_PROTOCOL_VERSION, MIN_DAEMON_PROTOCOL_VERSION, WindowRef,
 };
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::{MachineHello, MachineInfo, new_boot_id};
@@ -213,7 +213,7 @@ pub(crate) struct Daemon {
     machine_views: broadcast::Sender<Vec<MachineInfo>>,
     remote_agents: Mutex<remote_agents::RemoteAgents>,
     /// Changes for clients following the `agents` topic.
-    changes: broadcast::Sender<AgentsChange>,
+    changes: broadcast::Sender<AgentsUpdate>,
     lifecycle: Arc<Lifecycle>,
     /// The starts under way with a request ID: a second call with the same ID waits for the
     /// first one's answer.

@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::{AgentInfo, AgentState, AgentsChange, InputInfo, WindowRef};
+use facade_base::daemon::{AgentInfo, AgentState, AgentsUpdate, InputInfo, WindowRef};
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
 use facade_screen::{Screen, TerminalColors};
@@ -284,7 +284,7 @@ pub(crate) fn spawn(
     start: ActorStart,
     rx: mpsc::Receiver<AgentCommand>,
     tx: mpsc::Sender<AgentCommand>,
-    changes: broadcast::Sender<AgentsChange>,
+    changes: broadcast::Sender<AgentsUpdate>,
 ) -> anyhow::Result<AgentHandle> {
     spawn_with_color_source(start, rx, tx, changes, None)
 }
@@ -294,7 +294,7 @@ pub(crate) fn spawn_with_color_source(
     start: ActorStart,
     rx: mpsc::Receiver<AgentCommand>,
     tx: mpsc::Sender<AgentCommand>,
-    changes: broadcast::Sender<AgentsChange>,
+    changes: broadcast::Sender<AgentsUpdate>,
     color_source: Option<WindowRef>,
 ) -> anyhow::Result<AgentHandle> {
     let shared = Arc::new(Shared::new(start.info.clone(), color_source));

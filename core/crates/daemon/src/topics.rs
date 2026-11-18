@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    self, AgentInfo, AgentsChange, AgentsSnapshot, AgentsTopic, AgentsWatchArgs, LocationInfo,
-    LocationKind, Message, MessagesChange, MessagesTopic, MessagesWatchArgs, ScreenChange,
-    ScreenSnapshot, ScreenTopic, ScreenWatchArgs, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL,
-    WatchParams, WindowInfo, WindowRef, WindowsChange, WindowsTopic,
+    self, AgentInfo, AgentsChange, AgentsSnapshot, AgentsTopic, AgentsUpdate, AgentsWatchArgs,
+    LocationInfo, LocationKind, Message, MessagesChange, MessagesTopic, MessagesWatchArgs,
+    ScreenChange, ScreenSnapshot, ScreenTopic, ScreenWatchArgs, TERMINAL_WINDOW,
+    TERMINAL_WINDOW_LABEL, WatchParams, WindowInfo, WindowRef, WindowsChange, WindowsTopic,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{Caller, MachinesChange, MachinesTopic};
@@ -295,6 +295,9 @@ impl Daemon {
             agents,
             machines: if include_remote {
                 self.remote_agent_states()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
             } else {
                 Vec::new()
             },
@@ -320,7 +323,7 @@ impl Daemon {
                                 daemon
                                     .remote_agent_states()
                                     .into_iter()
-                                    .map(|machine| AgentsChange::MachineState { machine }),
+                                    .map(|machine| AgentsUpdate::MachineState { machine }),
                             );
                         }
                         fresh
@@ -329,16 +332,16 @@ impl Daemon {
                 };
                 for mut change in received {
                     match &mut change {
-                        AgentsChange::Updated { agent } if reached(agent) => {
+                        AgentsUpdate::Updated { agent } if reached(agent) => {
                             known.insert(agent.agent_id.clone());
                             let Ok(machines) = daemon.machine_table() else {
                                 return;
                             };
                             daemon.project_agent(agent, &machines);
                         }
-                        AgentsChange::Updated { agent }
+                        AgentsUpdate::Updated { agent }
                             if include_remote && agent.machine_id != daemon.machine_id => {}
-                        AgentsChange::Removed {
+                        AgentsUpdate::Removed {
                             machine_id,
                             agent_id,
                         } if *machine_id == daemon.machine_id => {
@@ -346,11 +349,11 @@ impl Daemon {
                                 continue;
                             }
                         }
-                        AgentsChange::Removed { .. } | AgentsChange::MachineState { .. }
+                        AgentsUpdate::Removed { .. } | AgentsUpdate::MachineState { .. }
                             if include_remote => {}
                         _ => continue,
                     }
-                    if !send(&changes, &change).await {
+                    if !send(&changes, &AgentsChange::from(change)).await {
                         return;
                     }
                 }
@@ -662,16 +665,16 @@ fn resync_agents(
     known: &HashSet<String>,
     now: Vec<AgentInfo>,
     machine_id: &str,
-) -> Vec<AgentsChange> {
+) -> Vec<AgentsUpdate> {
     let gone = known
         .iter()
         .filter(|id| !now.iter().any(|info| &info.agent_id == *id))
-        .map(|id| AgentsChange::Removed {
+        .map(|id| AgentsUpdate::Removed {
             agent_id: id.clone(),
             machine_id: machine_id.to_string(),
         });
-    let mut changes: Vec<AgentsChange> = gone.collect();
-    changes.extend(now.into_iter().map(|info| AgentsChange::Updated {
+    let mut changes: Vec<AgentsUpdate> = gone.collect();
+    changes.extend(now.into_iter().map(|info| AgentsUpdate::Updated {
         agent: Box::new(info),
     }));
     changes

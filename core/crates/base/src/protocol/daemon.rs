@@ -1952,6 +1952,32 @@ pub struct AgentMachineState {
     pub agents: Option<Vec<AgentInfo>>,
 }
 
+/// An agent subscription's contribution from one machine.
+#[derive(Clone, Debug)]
+pub struct AgentMachineView {
+    pub row: crate::machine::MachineStateRow,
+    pub agents: Option<Vec<AgentInfo>>,
+}
+
+impl From<AgentMachineView> for AgentMachineState {
+    fn from(view: AgentMachineView) -> Self {
+        use crate::machine::MachineResponseState;
+
+        let state = match view.row.state {
+            MachineResponseState::Responded => AgentSyncState::Synced,
+            MachineResponseState::Waiting => AgentSyncState::Pending,
+            MachineResponseState::Unreachable
+            | MachineResponseState::TimedOut
+            | MachineResponseState::Failed => AgentSyncState::Unreachable,
+        };
+        Self {
+            machine_id: view.row.machine_id,
+            state,
+            agents: view.agents,
+        }
+    }
+}
+
 /// The agents view and the synchronization state of its remote contributors.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct AgentsSnapshot {
@@ -1977,6 +2003,39 @@ pub enum AgentsChange {
     #[serde(other)]
     #[schemars(skip)]
     Unknown,
+}
+
+/// A change in the daemon's agent view before choosing a client representation.
+#[derive(Clone, Debug)]
+pub enum AgentsUpdate {
+    Updated {
+        agent: Box<AgentInfo>,
+    },
+    Removed {
+        machine_id: String,
+        agent_id: String,
+    },
+    MachineState {
+        machine: AgentMachineView,
+    },
+}
+
+impl From<AgentsUpdate> for AgentsChange {
+    fn from(update: AgentsUpdate) -> Self {
+        match update {
+            AgentsUpdate::Updated { agent } => Self::Updated { agent },
+            AgentsUpdate::Removed {
+                machine_id,
+                agent_id,
+            } => Self::Removed {
+                machine_id,
+                agent_id,
+            },
+            AgentsUpdate::MachineState { machine } => Self::MachineState {
+                machine: machine.into(),
+            },
+        }
+    }
 }
 
 /// Arguments for the `messages` topic: which messages of the inbox to read. Without `ids` or `all`,

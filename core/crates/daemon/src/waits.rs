@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::daemon::{AgentInfo, AgentState, AgentsChange, FACADE, WaitKind, display_name};
+use facade_base::daemon::{AgentInfo, AgentState, AgentsUpdate, FACADE, WaitKind, display_name};
 use facade_base::process::ProcessState;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
@@ -77,8 +77,8 @@ pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
             .min();
         tokio::select! {
             change = changes.recv() => match change {
-                Ok(AgentsChange::Updated { agent }) => note(&mut waits, &agent),
-                Ok(AgentsChange::Removed { agent_id, .. }) => drop(waits.remove(&agent_id)),
+                Ok(AgentsUpdate::Updated { agent }) => note(&mut waits, &agent),
+                Ok(AgentsUpdate::Removed { agent_id, .. }) => drop(waits.remove(&agent_id)),
                 Ok(_) => {}
                 Err(RecvError::Lagged(_)) => {
                     let infos = daemon.agent_infos();
