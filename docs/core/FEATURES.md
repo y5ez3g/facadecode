@@ -102,6 +102,9 @@ The [MCP contract](../extension/engineering/MCP.md) gives every tool's arguments
   as it natively does.
 - **Reach**: an agent whose run has YOLO on reaches every agent. With YOLO off, it reaches its creation tree, the agents
   with its root. The person reaches every agent. A start can go anywhere, and the new agent joins its starter's tree.
+- **Across machines**: the machine that holds the target checks the caller, as its first machine filled it in. A tree
+  spans machines, and an agent with YOLO on reaches the agents of every machine it can reach. A new agent's YOLO comes
+  from the settings file of the machine it runs on. Only the person adds, connects, removes or renames machines.
 
 See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-trees).
 
@@ -123,8 +126,8 @@ See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-
   that environment's `PATH` or not, and whether a built-in is not installed.
 - When an editor window's last connection closes, as when it is closed or reloaded, its agents go on running and the
   window is listed as not connected. A reload gets its window back while that window is still bound to it: another
-  editor may have taken the window meanwhile, and an empty window that no agent record names is removed when the daemon
-  starts. Reopening a workspace takes back its earliest window that no editor holds, or else gets a new one; a second
+  editor may have taken the window meanwhile. A window is kept once made, since an agent on another machine may name
+  it. Reopening a workspace takes back its earliest window that no editor holds, or else gets a new one; a second
   editor window of the same workspace gets a window of its own.
 - A message to the person is handed to the current `messages` watch of each connected window the sending agent is in;
   a watch that takes it counts as delivered, and the send says which windows took it and why the others did not. When
@@ -135,6 +138,54 @@ See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-
 - Each Facade home has a machine ID, made once and kept in its store.
 
 See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
+
+## Machines
+
+- Each Facade home is a machine, with an ID made once and a name made once from the host name: the part before the
+  first dot, lowercase, with every other character than `a-z`, `0-9` and `-` made `-`, runs of `-` made one, and `-`
+  at either end dropped; an empty result is `machine`. Names may repeat;
+  `facade machine rename <machine> <name>` renames a machine from any machine that reaches it.
+- `facade machine add <ssh-destination> [--home <path>]` connects this machine with another and keeps the connection:
+  the daemon reconnects every 10 seconds, and a computer that restarted connects back the next time Facade runs. The
+  first connection, and any repair, runs in the terminal, where SSH asks for passwords, MFA and host keys; running add
+  again for a saved machine repairs it. `facade machine connect` stays connected only while the command runs. No port
+  is opened: SSH runs `facade machine serve` on the other machine. Once connected, both machines find each other's
+  agents.
+- A saved connection that needs a person stops retrying and says "SSH interaction required", with the command that
+  repairs it. A failed connection says why: SSH's own error, `facade` not found there, a startup file that writes to
+  standard output, versions that do not match, or two homes with one machine ID (a copied home: give the copy a new
+  empty home).
+- A connection that succeeds warns when the other machine is Linux and systemd will end that login's processes when
+  SSH ends (`KillUserProcesses` or `KillOnlyUsers` applying to the user): an administrator lists the user in
+  `KillExcludeUsers` there. Facade changes no system settings.
+- The first connection to a machine says what it trusts: agents with YOLO on, on any machine that can reach this one,
+  can operate this machine's agents.
+- `facade machine list` shows the machines this one reaches and those it saved but cannot reach now, each with its
+  route, connections and state; `facade machine remove <machine>` removes a saved connection only.
+- Calls go through other machines when no direct connection exists, by the route that passes the fewest machines.
+  When a connection ends, only the routes through it go, and a machine is unreachable only when no route is left.
+- An agent's address names its machine: `#a17@gpu`, or `#a17@id:3f9a2c1d` when names repeat; a message's is `#m42@gpu`.
+  Numbers without a machine mean this machine. A name alone, `@Pixel`, is looked up on every machine in reach and
+  every saved one, and only a single match among machines that all answered is used; otherwise the call says which
+  machines did not answer, or lists every match. `@Pixel@gpu` asks gpu only; when an agent here is literally named
+  `Pixel@gpu`, that meaning counts too, and finding both is an error that lists them.
+- `facade list` and `list_agents` ask every machine at once and answer when all have, or after 3 seconds, saying of
+  each machine whether it answered, is unreachable, timed out or failed.
+- `facade start --on <machine> [--cwd <path>]` and New Agent's machine step start an agent on another machine, in
+  that machine's login environment, in the folder given or else that machine's user's home folder; with
+  `start_agent`, `machine` names the machine and `path` must be an absolute path on it. Send,
+  screen, type, keys, stop, resume and `attach` work on agents of other machines. A remote `attach` pauses input when
+  the connection drops, and shows the screen again before it takes keys when it returns.
+- A message to an agent is kept, and numbered, on its recipient's machine; a sender on another machine is named with
+  `on <machine>`. A message to the person is kept on the sending agent's machine under one number and handed to the
+  windows the agent is in, on every machine; one window that took it is enough. A call that never
+  left says it was not run; one that left without an answer says its outcome is unknown. Nothing is kept to send later.
+- An editor window shows the agents of other machines that are in it, with a remote icon where the Pin would be; when
+  their machine cannot be reached they stay, marked disconnected.
+- A Remote-SSH window connects this computer's Facade with the remote one by itself, through a bridge over the
+  editor's existing connection: no second SSH login and no open port. Reloading or closing one window leaves another's connection alone.
+
+See [Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions).
 
 ## Guests
 

@@ -37,8 +37,9 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo run --release -p facade-scenar
 
 Core builds for macOS and for Linux, each on x64 and arm64, and for Windows 11 or Windows Server 2022 and later on x64
 and Windows 11 on arm64. Linux needs kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed. An agent
-keeps running when the SSH login that started it ends, except where systemd ends a user's processes at logout
-(`KillUserProcesses=yes`): there, run `loginctl enable-linger` first. Windows builds with the MSVC toolchain, and every
+keeps running when the SSH login that started it ends, except where systemd ends a login's processes when it ends
+(`KillUserProcesses=yes`, or `KillOnlyUsers` naming that user), which linger does not prevent: there, an administrator lists the user in
+`KillExcludeUsers`. Facade changes no system settings; `facade machine add` and `connect` say when it applies. Windows builds with the MSVC toolchain, and every
 Windows build carries the ConPTY package's files for its architecture, from [vendor/conpty](vendor/conpty/), which the
 build copies beside the programs.
 

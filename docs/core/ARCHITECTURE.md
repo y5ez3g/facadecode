@@ -81,6 +81,7 @@ exits. The keeper starts the launcher's daemon, now the new build. Every CLI run
 | A relay and the daemon | The daemon protocol's relay contract: a `hello` that names the relay contract, then MCP lines both ways. `closing` hands the calls without a response over to the next daemon | [PROTOCOL: The relay](../../core/protocol/PROTOCOL.md#the-relay) |
 | A CLI and its relay | MCP over standard input and output: Facade's eight tools | [MCP](../extension/engineering/MCP.md) |
 | A CLI and its hooks | The CLI runs `facade hook <event> …` with its hook input; the hook calls the daemon's `hook.*` operations and prints its output in the CLI's own format | [facade](islands/facade.md), [rules](islands/rules.md) |
+| Two daemons | A machine session: the daemon protocol with a `machine` hello, then calls, watches and changes both ways, forwarded along a route. It runs over SSH to `facade machine serve` on the other machine, or over a Remote-SSH window's bridge | [PROTOCOL: Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions) |
 | A CLI and the daemon | What the CLI draws in its terminal, and its own reports of what it does, the Program Status Protocol (OSC 7501) | [PROTOCOL: States](../../core/protocol/PROTOCOL.md#states) |
 
 The protocols' types, framing and client live in [base](islands/base.md); `core/protocol/` is generated from them. The
@@ -127,6 +128,7 @@ core
 │   ├── records     agent numbers, names and reach
 │   ├── windows     logical editor windows, their bindings and connections
 │   │   └── locations   a window's folders and worktrees
+│   ├── network     other machines: connections over SSH or a bridge, machine sessions, routes and forwarding
 │   ├── guests      guests, MCP members and integrations
 │   ├── lifecycle   the daemon's own life: idle exit, a newer build's takeover, its log
 │   ├── server      client connections
@@ -166,9 +168,9 @@ on no other Facade crate. Inside base, texts may use protocol, and protocol and 
   - Every client, the editor included, gets what it shows through the daemon protocol, and reads no file of core's.
   - The Linux code stays, in the three places that branch by operating system.
 
-## The daemon's eight orders
+## The daemon's nine orders
 
-Eight of the daemon's jobs cross several of its islands. Its layer calls the islands in a fixed order, so that a crash at
+Nine of the daemon's jobs cross several of its islands. Its layer calls the islands in a fixed order, so that a crash at
 any step leaves nothing that the next daemon cannot recover or explain.
 
 1. **Start**: records gives the agent its number first. Then runs starts the CLI. Then the record, with its first window
@@ -186,8 +188,16 @@ any step leaves nothing that the next daemon cannot recover or explain.
    ended, then the record and its inbox go in one transaction, and clients watching the inbox learn of each message that
    went.
 7. **A window adopts an agent**: the membership is kept first, then the agent's record goes out on the `agents` topic.
-8. **A message to the person**: a repeated request ID gets the earlier send's result. Otherwise the layer picks the
-   current `messages` watch of each connected window the sending agent is in; with none, the send fails as
-   `unavailable` and nothing is kept. Then messages numbers the message and keeps it pending, the layer puts it into
-   each picked watch, a watch that takes it counting as delivered, and messages keeps which windows took it before the
-   send responds. When no picked watch takes it, the message is withdrawn.
+8. **A message to the person**: it is kept on the sending agent's running machine, under one number. A repeated
+   request ID gets the earlier send's settlement. Otherwise the layer picks, for each window the agent is in on this
+   machine, that window's current `messages` watch, and gathers the member windows on other machines; with no window
+   to try, the send fails as `unavailable` and nothing is kept. Then messages numbers the message and keeps it pending,
+   the layer hands it to each picked watch here and forwards it to each other machine, which picks its windows' current
+   watches and hands it over there, and messages keeps each window's result, handed over, not handed over or unknown,
+   before the send responds. One window that took it makes the send succeed. The message is withdrawn only when every window is known
+   not to have taken it; with none that took it but some unknown, it stays, and the send, and any repeat of it, says
+   its outcome is unknown.
+9. **An agent's start with a prompt on another machine**: the starter's machine reserves the number of the result
+   message first, then forwards the start. The running machine keeps the record, its first prompt and the reserved
+   number in one transaction, so a retry or a new daemon finds the same result message. A person's start, or one
+   without a prompt, has no result message.
