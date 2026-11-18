@@ -463,7 +463,7 @@ impl Peer {
                 }
                 Frame::Request(request) if request.jsonrpc == "2.0" => {
                     match (request.method.as_str(), request.id) {
-                        (methods::MACHINE_FORWARD, Some(id)) => {
+                        (methods::FORWARD, Some(id)) => {
                             let forward = Forward::decode(request.params)?;
                             let deadline =
                                 deadline_after(forward.time_left_ms.map(Duration::from_millis));
@@ -471,7 +471,7 @@ impl Peer {
                             let network = network.clone();
                             tokio::spawn(incoming.serve(network, session, forward, deadline));
                         }
-                        (methods::MACHINE_TABLE, None) => {
+                        (methods::ADVERTISE, None) => {
                             if let Err(error) =
                                 network.replace_table(session, decode_arguments(request.params)?)
                             {

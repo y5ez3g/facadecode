@@ -11,7 +11,7 @@ use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Reason, Request, Response, decode_arguments, encode_line,
 };
 use facade_base::machine::{
-    ExecutionOutcome, ForwardParams, MachineHello, MachineIdentity, MachineTableParams,
+    AdvertiseParams, ExecutionOutcome, ForwardParams, MachineHello, MachineIdentity,
     ProtocolMismatch, Unavailable,
 };
 use facade_base::operations::EmptyResult;
@@ -73,11 +73,7 @@ impl Forward {
 /// For a timed call, leave the frame open so the remaining time is written after the body.
 pub(super) fn forward_line(id: u64, mut forward: Forward, timed: bool) -> Vec<u8> {
     forward.time_left_ms = None;
-    let mut line = encode_line(&Request::new(
-        Some(id),
-        methods::MACHINE_FORWARD,
-        forward.encode(),
-    ));
+    let mut line = encode_line(&Request::new(Some(id), methods::FORWARD, forward.encode()));
     if timed {
         let prefix = line
             .strip_suffix(b"}}\n")
@@ -269,13 +265,13 @@ pub(super) async fn exchange_tables<T>(
     read: &mut Reader<impl AsyncBufRead + Unpin>,
     write: &mut (impl AsyncWrite + Unpin),
     machines: Vec<facade_base::machine::MachineInfo>,
-    reserve: impl FnOnce(MachineTableParams) -> Result<T, ErrorBody>,
+    reserve: impl FnOnce(AdvertiseParams) -> Result<T, ErrorBody>,
 ) -> Result<T, ErrorBody> {
     let received = in_time(async {
         let table = Request::new(
             Some(INITIAL_TABLE_ID),
-            methods::MACHINE_TABLE,
-            MachineTableParams { machines },
+            methods::ADVERTISE,
+            AdvertiseParams { machines },
         );
         let sending = send(write, &table);
         let receiving = async {
@@ -283,7 +279,7 @@ pub(super) async fn exchange_tables<T>(
                 Frame::Request(request)
                     if request.jsonrpc == "2.0"
                         && request.id == Some(INITIAL_TABLE_ID)
-                        && request.method == methods::MACHINE_TABLE =>
+                        && request.method == methods::ADVERTISE =>
                 {
                     decode_arguments(request.params)
                 }

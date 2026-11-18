@@ -5,7 +5,7 @@
 import type { Socket } from 'net';
 import { timeout } from '../base/async';
 import { monotonic } from '../base/clock';
-import type { HelloParams, MachineConnectArgs, MachineConnectedParams, MachineConnectionFailedParams } from '../base/coreProtocol';
+import type { HelloParams, MachineConnectArgs, ConnectedParams, ConnectFailedParams } from '../base/coreProtocol';
 import { isJsonObject, type JsonObject } from '../base/json';
 import { MAX_JSON_LINE_BYTES } from '../base/lines';
 import { MACHINE_BRIDGE_CHUNK_BYTES } from '../base/windowIdentity';
@@ -99,18 +99,18 @@ class LocalMachine {
 	}
 
 	/** Core's local status notifications stop here. Machine traffic keeps its original bytes. */
-	async sendToWorkspace(write: (bytes?: Buffer) => Promise<void>, connected: (params: MachineConnectedParams) => void): Promise<void> {
+	async sendToWorkspace(write: (bytes?: Buffer) => Promise<void>, connected: (params: ConnectedParams) => void): Promise<void> {
 		const deadline = monotonic() + MACHINE_HELLO_WAIT_MS;
 		for (;;) {
 			const { frame, raw } = await withinMachineBridge(this.frame(), Math.max(0, deadline - monotonic()), 'The Facade machine handshake did not finish.', this.signal);
-			if (frame.id === undefined && frame.method === 'machine.connection_failed') {
-				const failed = frame.params as MachineConnectionFailedParams | undefined;
+			if (frame.id === undefined && frame.method === 'connect_failed') {
+				const failed = frame.params as ConnectFailedParams | undefined;
 				throw new Error(failed?.error?.message ?? 'Facade core could not connect to the remote machine.');
 			}
-			if (frame.id === undefined && frame.method === 'machine.connected') {
-				const params = frame.params as MachineConnectedParams | undefined;
+			if (frame.id === undefined && frame.method === 'connected') {
+				const params = frame.params as ConnectedParams | undefined;
 				if (!params?.machine || typeof params.machine.name !== 'string' || typeof params.first_connection !== 'boolean') {
-					throw new Error('The local Facade core sent an invalid machine.connected notification.');
+					throw new Error('The local Facade core sent an invalid `connected` notification.');
 				}
 				connected(params);
 				break;

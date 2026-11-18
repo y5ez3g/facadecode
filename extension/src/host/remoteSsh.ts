@@ -7,7 +7,7 @@ import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
 import * as vscode from 'vscode';
 import { timeout } from '../base/async';
-import type { MachineConnectedParams } from '../base/coreProtocol';
+import type { ConnectedParams } from '../base/coreProtocol';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { machineBridgeBytes, WORKSPACE_MACHINE_BRIDGE_COMMAND, type MachineBridgeAction, type MachineBridgeHandle, type MachineBridgePipe } from '../base/windowIdentity';
@@ -76,7 +76,7 @@ async function runRemoteSsh(options: BridgeOptions, signal: AbortSignal): Promis
 			void vscode.window.showWarningMessage(vscode.l10n.t('Facade Code couldn’t find the Facade core on this computer. Install Facade Code locally to connect this Remote-SSH window to your Facade network.'));
 		}
 	};
-	const connected = ({ machine, first_connection }: MachineConnectedParams) => {
+	const connected = ({ machine, first_connection }: ConnectedParams) => {
 		delay = FIRST_RETRY_MS;
 		failure = undefined;
 		if (first_connection) {
@@ -97,7 +97,7 @@ async function runRemoteSsh(options: BridgeOptions, signal: AbortSignal): Promis
 	}
 }
 
-async function bridgeRemoteSsh(options: BridgeOptions, stopping: AbortSignal, missing: () => void, connected: (params: MachineConnectedParams) => void): Promise<void> {
+async function bridgeRemoteSsh(options: BridgeOptions, stopping: AbortSignal, missing: () => void, connected: (params: ConnectedParams) => void): Promise<void> {
 	const handle: MachineBridgeHandle = { session: options.session, token: options.token, stream: randomUUID() };
 	const ended = new AbortController();
 	const signal = AbortSignal.any([stopping, ended.signal]);

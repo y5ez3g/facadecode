@@ -48,7 +48,7 @@ answers as usual, with what became of it. It withdraws only an `agent.send` whos
 [Agent messages](#agent-messages)); every other call goes on. Closing a connection withdraws nothing.
 
 Wait for a successful `hello` before using the connection. Its `ops` and `topics` list the operations and topics offered
-to clients, including machine management and queries. `machine.deliver_human` and `machine.deliver_start_result` are
+to clients, including machine management and queries. `window.deliver` and `agent.deliver_start_result` are
 reserved for machine sessions. In this example, `→` is a client message and `←` is a daemon message. The redraw's
 base64 value is abbreviated.
 
@@ -812,14 +812,14 @@ applies, advise the user to ask the remote administrator to add the SSH account 
 in `logind.conf`. The exclusion takes precedence over `KillOnlyUsers` and `KillUserProcesses`.
 
 Each direction numbers its JSON-RPC requests independently. After `hello`, each daemon sends its
-first full `machine.table` as a request with an `id`. The receiver verifies the machine ID and
+first full `advertise`, sent as a request with an `id`. The receiver verifies the machine ID and
 `boot_id` against the introduction, checks for conflicts, and checks whether the peer may join.
 It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon registers and
 advertises the neighbour only after accepting the peer's first table and receiving success for its
-own first table. Later `machine.table` updates are full-table notifications without an `id` and
+own first table. Later `advertise` updates are full-table notifications without an `id` and
 replace the neighbour's advertisement.
 
-The `route` of `machine.forward` lists the remaining hops through the destination.
+The `route` of `forward` lists the remaining hops through the destination.
 The forwarding machine removes its own hop and preserves the original `Caller`. The destination
 reads the method and arguments. A start or send can carry a request ID scoped to the original
 caller and target. A call that could not be sent is `not_executed`. A sent call that lost its
@@ -832,8 +832,8 @@ colors from the bound editor window on `agent.resize`. The destination reads the
 machine sessions. Local client calls use `CallParams`.
 
 `machine.connect` first answers the authorized local client, then switches that connection to
-machine frames. After the foreground handshake, the local daemon sends `machine.connected` or
-`machine.connection_failed` to that client. `machine.add` answers once the daemon has verified the
+machine frames. After the foreground handshake, the local daemon sends `connected` or
+`connect_failed` to that client. `machine.add` answers once the daemon has verified the
 saved destination on its own connection.
 
 Agent views identify a record by machine and agent number. The `agents` snapshot has local
@@ -853,10 +853,10 @@ distinguish delivery, confirmed failure and an unknown outcome.
 | `cancel` | Cancels a call still under way on this connection, by that call's request ID (`CancelParams`), and answers `{}`. It withdraws only an `agent.send` whose message's paste has not begun, which then answers `cancelled` and is not kept; every other call goes on, and its own answer says what it did. Closing the connection withdraws nothing. |
 | `changed` | Reports a change for one watch (`ChangedParams`). |
 | `watch_ended` | Ends a forwarded watch (`WatchEndedParams`). |
-| `machine.table` | Replaces a neighbour's machine table (`MachineTableParams`). |
-| `machine.forward` | Forwards a request to its destination (`ForwardParams`). |
-| `machine.connected` | Reports the foreground connection's successful handshake to the local CLI (`MachineConnectedParams`). |
-| `machine.connection_failed` | Reports a foreground connection failure to the local CLI (`MachineConnectionFailedParams`). |
+| `advertise` | Replaces a neighbour's machine table (`AdvertiseParams`). |
+| `forward` | Forwards a request to its destination (`ForwardParams`). |
+| `connected` | Reports the foreground connection's successful handshake to the local CLI (`ConnectedParams`). |
+| `connect_failed` | Reports a foreground connection failure to the local CLI (`ConnectFailedParams`). |
 | `closing` | From the daemon, a notification: a newer Facade takes over (`ClosingParams`). Every answer this connection waits for has been written. The client sends nothing more but `closing` back, a notification without params, and connects again; the new daemon answers within seconds. A client that does not answer within 0.2 seconds is cut. |
 
 ## Topics
@@ -909,8 +909,8 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `cli.list` | `MachineQueryArgs` | `CliListResult` | Lists the CLIs of the selected machine's login environment. |
 | `location.list` | `MachineQueryArgs` | `LocationListResult` | Lists locations the selected machine's windows supply. |
 | `agent.start_preflight` | `StartArgs` | `EmptyResult` | Checks a start's program and location without starting an agent or making a worktree. |
-| `machine.deliver_human` | `DeliverHumanArgs` | `WindowDelivery` | Offers a message to the listed local window subscriptions and returns their outcomes. Machine sessions only. |
-| `machine.deliver_start_result` | `DeliverStartResultArgs` | `EmptyResult` | Delivers the result of a start at its reserved message number. Machine sessions only. |
+| `window.deliver` | `DeliverArgs` | `WindowDelivery` | Offers a message to the listed local window subscriptions and returns their outcomes. Machine sessions only. |
+| `agent.deliver_start_result` | `DeliverStartResultArgs` | `EmptyResult` | Delivers the result of a start at its reserved message number. Machine sessions only. |
 
 ## Error reasons
 
@@ -937,6 +937,14 @@ The `data.reason` values of the daemon protocol.
 | `unsupported` | The CLI cannot do what the call asks of it: take a model or an effort it has no way to set, or resume a session that a CLI of another type had. |
 
 ## Types
+
+### AdvertiseParams
+
+The complete replacement of one neighbour's table. Every row has a route, build and boot ID.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machines` | `MachineInfo[]` | yes |  |
 
 ### AgentArgs
 
@@ -1045,7 +1053,7 @@ Arguments for the agents view. The member-machine filter is for internal forward
 
 Parameters for `call`.
 
-`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.adopt'; readonly args: AgentArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.add'; readonly args: MachineAddArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'agent.list'; readonly args: MachineQueryArgs } \| { readonly op: 'cli.list'; readonly args: MachineQueryArgs } \| { readonly op: 'location.list'; readonly args: MachineQueryArgs } \| { readonly op: 'agent.start_preflight'; readonly args: StartArgs } \| { readonly op: 'machine.deliver_human'; readonly args: DeliverHumanArgs } \| { readonly op: 'machine.deliver_start_result'; readonly args: DeliverStartResultArgs }`
+`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.adopt'; readonly args: AgentArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.add'; readonly args: MachineAddArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'agent.list'; readonly args: MachineQueryArgs } \| { readonly op: 'cli.list'; readonly args: MachineQueryArgs } \| { readonly op: 'location.list'; readonly args: MachineQueryArgs } \| { readonly op: 'agent.start_preflight'; readonly args: StartArgs } \| { readonly op: 'window.deliver'; readonly args: DeliverArgs } \| { readonly op: 'agent.deliver_start_result'; readonly args: DeliverStartResultArgs }`
 
 ### Caller
 
@@ -1088,6 +1096,23 @@ The kind of client connecting to the daemon.
 
 `'terminal' \| 'mcp' \| 'ide' \| 'machine'`
 
+### ConnectFailedParams
+
+Foreground handshake failed after local authorization.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `error` | `ErrorBody` | yes |  |
+
+### ConnectedParams
+
+Connection verified on the foreground stream.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `MachineHello` | yes |  |
+| `first_connection` | `boolean` | yes |  |
+
 ### ConnectionKind
 
 `'saved' \| 'temporary'`
@@ -1112,7 +1137,7 @@ The result of `daemon.log`.
 |---|---|---|---|
 | `lines` | `string[]` | yes | The last lines of `core/logs/daemon.log`, oldest first, the home folder written as `~`. Empty where there is no log. |
 
-### DeliverHumanArgs
+### DeliverArgs
 
 A single message for the person, offered to its member windows on another machine.
 
@@ -1224,7 +1249,7 @@ A call on a machine session with facts the originating daemon takes from the loc
 
 ### ForwardParams
 
-Parameters of `machine.forward`. The outer JSON-RPC ID identifies this hop.
+Parameters of `forward`. The outer JSON-RPC ID identifies this hop.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -1463,15 +1488,6 @@ Returned before switching the local client stream into a machine session.
 | `remote_home` | `string` | no |  |
 | `expected_machine_id` | `string` | no |  |
 
-### MachineConnectedParams
-
-Connection verified on the foreground stream.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machine` | `MachineHello` | yes |  |
-| `first_connection` | `boolean` | yes |  |
-
 ### MachineConnection
 
 One connection as seen from its machine table row.
@@ -1485,14 +1501,6 @@ One connection as seen from its machine table row.
 | `remote_home` | `string` | no |  |
 | `state` | `ConnectionState` | yes |  |
 | `ssh_interaction` | `SshInteraction` | no |  |
-
-### MachineConnectionFailedParams
-
-Foreground handshake failed after local authorization.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `error` | `ErrorBody` | yes |  |
 
 ### MachineHello
 
@@ -1601,14 +1609,6 @@ The outcome of asking one machine for its reachable agents.
 |---|---|---|---|
 | `machine_id` | `string` | yes |  |
 | `name` | `string` | yes |  |
-
-### MachineTableParams
-
-The complete replacement of one neighbour's table. Every row has a route, build and boot ID.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machines` | `MachineInfo[]` | yes |  |
 
 ### MachineTransport
 

@@ -18,7 +18,7 @@ use facade_base::daemon::{
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
-    AgentStartPreflight, Caller, DeliverHuman, DeliverStartResult, ForwardCall,
+    AgentDeliverStartResult, AgentStartPreflight, Caller, ForwardCall, WindowDeliver,
 };
 use facade_base::operations::{EmptyResult, Operation};
 use facade_base::process::ProcessState;
@@ -674,10 +674,10 @@ impl Daemon {
             crate::delivery::VERIFY_HUMAN_REPLY => {
                 self.verify_human_reply_at_store(&caller, decode_arguments(args)?)
             }
-            DeliverHuman::NAME => Ok(value_of(
+            WindowDeliver::NAME => Ok(value_of(
                 self.deliver_forwarded_human(&caller, decode_arguments(args)?)?,
             )),
-            DeliverStartResult::NAME => {
+            AgentDeliverStartResult::NAME => {
                 self.deliver_forwarded_result(&caller, decode_arguments(args)?, remaining)
                     .await?;
                 Ok(value_of(EmptyResult {}))

@@ -7,8 +7,8 @@ use facade_base::address::is_machine_name;
 use facade_base::daemon::methods;
 use facade_base::jsonrpc::{ErrorBody, Notification, Reason};
 use facade_base::machine::{
-    ConnectionKind, ConnectionState, MachineConnection, MachineHello, MachineIdConflict,
-    MachineIdentity, MachineInfo, MachineTableParams, MachineTransport, SshInteraction,
+    AdvertiseParams, ConnectionKind, ConnectionState, MachineConnection, MachineHello,
+    MachineIdConflict, MachineIdentity, MachineInfo, MachineTransport, SshInteraction,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -165,7 +165,7 @@ impl Topology {
         session: Option<SessionId>,
         remote: &MachineHello,
         origin: &Origin,
-        table: MachineTableParams,
+        table: AdvertiseParams,
     ) -> Result<BTreeMap<String, MachineInfo>, ErrorBody> {
         let source = origin.describe(remote);
         let mut identities = self.identities(session)?;
@@ -281,8 +281,8 @@ impl Topology {
         let machines = self.machines();
         if changed || joined.is_some() {
             let table = Notification::new(
-                methods::MACHINE_TABLE,
-                MachineTableParams {
+                methods::ADVERTISE,
+                AdvertiseParams {
                     machines: machines.clone(),
                 },
             );

@@ -14,10 +14,10 @@ use facade_base::jsonrpc::{
     RequestRead, ServerMessage, decode_arguments, read_request, read_server_message,
 };
 use facade_base::machine::{
-    ConnectionKind, ConnectionState, MachineAdd, MachineAddArgs, MachineConnect,
-    MachineConnectArgs, MachineConnectedParams, MachineConnectionFailedParams, MachineHello,
-    MachineIdentity, MachineInfo, MachineList, MachineRemove, MachineRemoveArgs, MachineRename,
-    MachineRenameArgs, MachineTransport,
+    ConnectFailedParams, ConnectedParams, ConnectionKind, ConnectionState, MachineAdd,
+    MachineAddArgs, MachineConnect, MachineConnectArgs, MachineHello, MachineIdentity, MachineInfo,
+    MachineList, MachineRemove, MachineRemoveArgs, MachineRename, MachineRenameArgs,
+    MachineTransport,
 };
 use facade_base::operations::NoArgs;
 use facade_base::paths::ClientSocket;
@@ -373,17 +373,16 @@ fn spawn_ssh(mut command: Command) -> io::Result<(Child, ChildStdin, ChildStdout
 fn forward_hello(
     from_daemon: &mut BufReader<ClientSocket>,
     to_ssh: &mut impl Write,
-) -> anyhow::Result<Option<MachineConnectedParams>> {
+) -> anyhow::Result<Option<ConnectedParams>> {
     let mut line = Vec::new();
     while let Some(frame) = read_server_message(from_daemon, &mut line)? {
         if let ServerMessage::Notification(notification) = frame {
             match notification.method.as_str() {
-                methods::MACHINE_CONNECTED => {
+                methods::CONNECTED => {
                     return Ok(Some(serde_json::from_value(notification.params)?));
                 }
-                methods::MACHINE_CONNECTION_FAILED => {
-                    let failed: MachineConnectionFailedParams =
-                        serde_json::from_value(notification.params)?;
+                methods::CONNECT_FAILED => {
+                    let failed: ConnectFailedParams = serde_json::from_value(notification.params)?;
                     return Err(failed.error.into());
                 }
                 _ => {}

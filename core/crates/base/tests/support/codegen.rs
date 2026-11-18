@@ -584,9 +584,9 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
         WatchEndedParams,
         machine::ForwardParams,
         machine::ForwardCall,
-        machine::MachineTableParams,
-        machine::MachineConnectedParams,
-        machine::MachineConnectionFailedParams
+        machine::AdvertiseParams,
+        machine::ConnectedParams,
+        machine::ConnectFailedParams
     );
     add!(AgentInfo, ProcessState, ProcessExit);
     let mut ops = OperationDocs(&mut types, Vec::new());

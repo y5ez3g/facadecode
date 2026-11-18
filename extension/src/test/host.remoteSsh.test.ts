@@ -132,7 +132,7 @@ suite('A6 Remote-SSH machine bridge', () => {
 				if (forwarded.length === 1) {
 					assert.deepStrictEqual(bytes, greeting);
 					await core.write(incoming);
-					socket.push(Buffer.concat([jsonLine({ method: 'machine.connected', params: { machine: remote, first_connection: true } }), machineBytes]));
+					socket.push(Buffer.concat([jsonLine({ method: 'connected', params: { machine: remote, first_connection: true } }), machineBytes]));
 					socket.push(null);
 				}
 			}, event => trust.push(event));

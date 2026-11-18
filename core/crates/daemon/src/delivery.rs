@@ -15,8 +15,8 @@ use facade_base::daemon::{
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
-    Caller, DeliverHuman, DeliverHumanArgs, DeliverStartResult, DeliverStartResultArgs,
-    ExecutionOutcome, ForwardCall, MachineIdentity, MessageRef,
+    AgentDeliverStartResult, Caller, DeliverArgs, DeliverStartResultArgs, ExecutionOutcome,
+    ForwardCall, MachineIdentity, MessageRef, WindowDeliver,
 };
 use facade_base::operations::Operation;
 use facade_rules::Rule;
@@ -863,7 +863,7 @@ impl Daemon {
         for (machine_id, windows) in remote {
             let daemon = self.clone();
             let caller = caller.clone();
-            let payload = DeliverHumanArgs {
+            let payload = DeliverArgs {
                 message_ref: reference.clone(),
                 message: message.clone(),
                 windows: windows.clone(),
@@ -876,7 +876,7 @@ impl Daemon {
                     .network_call(
                         &machine_id,
                         caller,
-                        DeliverHuman::NAME,
+                        WindowDeliver::NAME,
                         value_of(payload),
                         Some(left),
                         None,
@@ -934,7 +934,7 @@ impl Daemon {
     pub(crate) fn deliver_forwarded_human(
         &self,
         caller: &Caller,
-        args: DeliverHumanArgs,
+        args: DeliverArgs,
     ) -> Result<WindowDelivery, ErrorBody> {
         let Caller::Agent { agent, .. } = caller else {
             return Err(ErrorBody::refused(
@@ -1113,7 +1113,7 @@ pub(crate) async fn deliver_results(
                         .network_call(
                             &target,
                             caller,
-                            DeliverStartResult::NAME,
+                            AgentDeliverStartResult::NAME,
                             value_of(args),
                             Some(left),
                             None,

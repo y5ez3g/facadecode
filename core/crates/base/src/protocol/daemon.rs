@@ -133,10 +133,10 @@ pub mod methods {
     pub const CHANGED: &str = "changed";
     pub const CLOSING: &str = "closing";
     pub const WATCH_ENDED: &str = "watch_ended";
-    pub const MACHINE_TABLE: &str = "machine.table";
-    pub const MACHINE_FORWARD: &str = "machine.forward";
-    pub const MACHINE_CONNECTED: &str = "machine.connected";
-    pub const MACHINE_CONNECTION_FAILED: &str = "machine.connection_failed";
+    pub const ADVERTISE: &str = "advertise";
+    pub const FORWARD: &str = "forward";
+    pub const CONNECTED: &str = "connected";
+    pub const CONNECT_FAILED: &str = "connect_failed";
 }
 
 /// Method descriptions for the generated reference.
@@ -171,20 +171,20 @@ pub const METHODS: &[(&str, &str)] = &[
         "Ends a forwarded watch (`WatchEndedParams`).",
     ),
     (
-        methods::MACHINE_TABLE,
-        "Replaces a neighbour's machine table (`MachineTableParams`).",
+        methods::ADVERTISE,
+        "Replaces a neighbour's machine table (`AdvertiseParams`).",
     ),
     (
-        methods::MACHINE_FORWARD,
+        methods::FORWARD,
         "Forwards a request to its destination (`ForwardParams`).",
     ),
     (
-        methods::MACHINE_CONNECTED,
-        "Reports the foreground connection's successful handshake to the local CLI (`MachineConnectedParams`).",
+        methods::CONNECTED,
+        "Reports the foreground connection's successful handshake to the local CLI (`ConnectedParams`).",
     ),
     (
-        methods::MACHINE_CONNECTION_FAILED,
-        "Reports a foreground connection failure to the local CLI (`MachineConnectionFailedParams`).",
+        methods::CONNECT_FAILED,
+        "Reports a foreground connection failure to the local CLI (`ConnectFailedParams`).",
     ),
     (
         methods::CLOSING,

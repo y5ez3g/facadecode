@@ -42,7 +42,7 @@ answers as usual, with what became of it. It withdraws only an `agent.send` whos
 [Agent messages](#agent-messages)); every other call goes on. Closing a connection withdraws nothing.
 
 Wait for a successful `hello` before using the connection. Its `ops` and `topics` list the operations and topics offered
-to clients, including machine management and queries. `machine.deliver_human` and `machine.deliver_start_result` are
+to clients, including machine management and queries. `window.deliver` and `agent.deliver_start_result` are
 reserved for machine sessions. In this example, `→` is a client message and `←` is a daemon message. The redraw's
 base64 value is abbreviated.
 
@@ -806,14 +806,14 @@ applies, advise the user to ask the remote administrator to add the SSH account 
 in `logind.conf`. The exclusion takes precedence over `KillOnlyUsers` and `KillUserProcesses`.
 
 Each direction numbers its JSON-RPC requests independently. After `hello`, each daemon sends its
-first full `machine.table` as a request with an `id`. The receiver verifies the machine ID and
+first full `advertise`, sent as a request with an `id`. The receiver verifies the machine ID and
 `boot_id` against the introduction, checks for conflicts, and checks whether the peer may join.
 It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon registers and
 advertises the neighbour only after accepting the peer's first table and receiving success for its
-own first table. Later `machine.table` updates are full-table notifications without an `id` and
+own first table. Later `advertise` updates are full-table notifications without an `id` and
 replace the neighbour's advertisement.
 
-The `route` of `machine.forward` lists the remaining hops through the destination.
+The `route` of `forward` lists the remaining hops through the destination.
 The forwarding machine removes its own hop and preserves the original `Caller`. The destination
 reads the method and arguments. A start or send can carry a request ID scoped to the original
 caller and target. A call that could not be sent is `not_executed`. A sent call that lost its
@@ -826,8 +826,8 @@ colors from the bound editor window on `agent.resize`. The destination reads the
 machine sessions. Local client calls use `CallParams`.
 
 `machine.connect` first answers the authorized local client, then switches that connection to
-machine frames. After the foreground handshake, the local daemon sends `machine.connected` or
-`machine.connection_failed` to that client. `machine.add` answers once the daemon has verified the
+machine frames. After the foreground handshake, the local daemon sends `connected` or
+`connect_failed` to that client. `machine.add` answers once the daemon has verified the
 saved destination on its own connection.
 
 Agent views identify a record by machine and agent number. The `agents` snapshot has local

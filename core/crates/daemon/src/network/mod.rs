@@ -16,8 +16,8 @@ use std::time::Duration;
 use facade_base::daemon::{WatchParams, methods};
 use facade_base::jsonrpc::{ErrorBody, Notification, Reason, decode_arguments};
 use facade_base::machine::{
-    Caller, ConnectionKind, ExecutionOutcome, ForwardParams, MachineConnectedParams,
-    MachineConnectionFailedParams, MachineHello, MachineInfo, MachineTableParams, MachineTransport,
+    AdvertiseParams, Caller, ConnectFailedParams, ConnectedParams, ConnectionKind,
+    ExecutionOutcome, ForwardParams, MachineHello, MachineInfo, MachineTransport,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -185,8 +185,8 @@ impl Network {
             Ok(session) => session,
             Err(error) => {
                 let notification = Notification::new(
-                    methods::MACHINE_CONNECTION_FAILED,
-                    MachineConnectionFailedParams {
+                    methods::CONNECT_FAILED,
+                    ConnectFailedParams {
                         error: error.clone(),
                     },
                 );
@@ -197,8 +197,8 @@ impl Network {
         wire::send(
             &mut write,
             &Notification::new(
-                methods::MACHINE_CONNECTED,
-                MachineConnectedParams {
+                methods::CONNECTED,
+                ConnectedParams {
                     machine,
                     first_connection,
                 },
@@ -379,7 +379,7 @@ impl Network {
         &self,
         remote: MachineHello,
         origin: Origin,
-        table: MachineTableParams,
+        table: AdvertiseParams,
     ) -> Result<(Registered, mpsc::UnboundedReceiver<Output>), ErrorBody> {
         let mut state = self.0.state.lock().unwrap();
         state.check_peer(&remote, &origin)?;
@@ -405,11 +405,7 @@ impl Network {
         ))
     }
 
-    fn replace_table(
-        &self,
-        session: SessionId,
-        table: MachineTableParams,
-    ) -> Result<(), ErrorBody> {
+    fn replace_table(&self, session: SessionId, table: AdvertiseParams) -> Result<(), ErrorBody> {
         let mut state = self.0.state.lock().unwrap();
         let Some(link) = state.links.get(&session) else {
             return Err(ErrorBody::new(

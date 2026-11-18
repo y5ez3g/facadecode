@@ -12,10 +12,10 @@
     "cancel",
     "changed",
     "watch_ended",
-    "machine.table",
-    "machine.forward",
-    "machine.connected",
-    "machine.connection_failed",
+    "advertise",
+    "forward",
+    "connected",
+    "connect_failed",
     "closing"
   ],
   "topics": [
@@ -60,6 +60,21 @@
     "agent.start_preflight"
   ],
   "$defs": {
+    "AdvertiseParams": {
+      "type": "object",
+      "properties": {
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineInfo"
+          }
+        }
+      },
+      "required": [
+        "machines"
+      ],
+      "description": "The complete replacement of one neighbour's table. Every row has a route, build and boot ID."
+    },
     "AgentArgs": {
       "type": "object",
       "properties": {
@@ -912,10 +927,10 @@
           "type": "object",
           "properties": {
             "op": {
-              "const": "machine.deliver_human"
+              "const": "window.deliver"
             },
             "args": {
-              "$ref": "#/$defs/DeliverHumanArgs"
+              "$ref": "#/$defs/DeliverArgs"
             }
           },
           "required": [
@@ -927,7 +942,7 @@
           "type": "object",
           "properties": {
             "op": {
-              "const": "machine.deliver_start_result"
+              "const": "agent.deliver_start_result"
             },
             "args": {
               "$ref": "#/$defs/DeliverStartResultArgs"
@@ -1116,6 +1131,34 @@
       ],
       "description": "The kind of client connecting to the daemon."
     },
+    "ConnectFailedParams": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "description": "Foreground handshake failed after local authorization."
+    },
+    "ConnectedParams": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "$ref": "#/$defs/MachineHello"
+        },
+        "first_connection": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "machine",
+        "first_connection"
+      ],
+      "description": "Connection verified on the foreground stream."
+    },
     "ConnectionKind": {
       "type": "string",
       "enum": [
@@ -1159,7 +1202,7 @@
       ],
       "description": "The result of `daemon.log`."
     },
-    "DeliverHumanArgs": {
+    "DeliverArgs": {
       "type": "object",
       "properties": {
         "message_ref": {
@@ -1496,7 +1539,7 @@
         "method",
         "params"
       ],
-      "description": "Parameters of `machine.forward`. The outer JSON-RPC ID identifies this hop."
+      "description": "Parameters of `forward`. The outer JSON-RPC ID identifies this hop."
     },
     "HandOver": {
       "type": "object",
@@ -2090,22 +2133,6 @@
       },
       "description": "Returned before switching the local client stream into a machine session."
     },
-    "MachineConnectedParams": {
-      "type": "object",
-      "properties": {
-        "machine": {
-          "$ref": "#/$defs/MachineHello"
-        },
-        "first_connection": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "machine",
-        "first_connection"
-      ],
-      "description": "Connection verified on the foreground stream."
-    },
     "MachineConnection": {
       "type": "object",
       "properties": {
@@ -2139,18 +2166,6 @@
         "state"
       ],
       "description": "One connection as seen from its machine table row."
-    },
-    "MachineConnectionFailedParams": {
-      "type": "object",
-      "properties": {
-        "error": {
-          "$ref": "#/$defs/ErrorBody"
-        }
-      },
-      "required": [
-        "error"
-      ],
-      "description": "Foreground handshake failed after local authorization."
     },
     "MachineHello": {
       "type": "object",
@@ -2404,21 +2419,6 @@
         "machine_id",
         "name"
       ]
-    },
-    "MachineTableParams": {
-      "type": "object",
-      "properties": {
-        "machines": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/MachineInfo"
-          }
-        }
-      },
-      "required": [
-        "machines"
-      ],
-      "description": "The complete replacement of one neighbour's table. Every row has a route, build and boot ID."
     },
     "MachineTransport": {
       "oneOf": [

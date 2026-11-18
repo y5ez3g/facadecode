@@ -2,7 +2,7 @@
 
 export const PROTOCOL = 2;
 export const OLDEST_PROTOCOL = 2;
-export const METHODS = ["hello","call","watch","unwatch","cancel","changed","watch_ended","machine.table","machine.forward","machine.connected","machine.connection_failed","closing"] as const;
+export const METHODS = ["hello","call","watch","unwatch","cancel","changed","watch_ended","advertise","forward","connected","connect_failed","closing"] as const;
 export const TOPICS = ["agents","screen","messages","windows","machines"] as const;
 export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log","machine.connect","machine.add","machine.list","machine.remove","machine.rename","agent.list","cli.list","location.list","agent.start_preflight"] as const;
 export type Topic = typeof TOPICS[number];
@@ -87,7 +87,7 @@ export interface AgentsWatchArgs {
 }
 
 /** Parameters for `call`. */
-export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.adopt'; readonly args: AgentArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } | { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } | { readonly op: 'machine.add'; readonly args: MachineAddArgs } | { readonly op: 'machine.list'; readonly args: NoArgs } | { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } | { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } | { readonly op: 'agent.list'; readonly args: MachineQueryArgs } | { readonly op: 'cli.list'; readonly args: MachineQueryArgs } | { readonly op: 'location.list'; readonly args: MachineQueryArgs } | { readonly op: 'agent.start_preflight'; readonly args: StartArgs } | { readonly op: 'machine.deliver_human'; readonly args: DeliverHumanArgs } | { readonly op: 'machine.deliver_start_result'; readonly args: DeliverStartResultArgs };
+export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.adopt'; readonly args: AgentArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } | { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } | { readonly op: 'machine.add'; readonly args: MachineAddArgs } | { readonly op: 'machine.list'; readonly args: NoArgs } | { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } | { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } | { readonly op: 'agent.list'; readonly args: MachineQueryArgs } | { readonly op: 'cli.list'; readonly args: MachineQueryArgs } | { readonly op: 'location.list'; readonly args: MachineQueryArgs } | { readonly op: 'agent.start_preflight'; readonly args: StartArgs } | { readonly op: 'window.deliver'; readonly args: DeliverArgs } | { readonly op: 'agent.deliver_start_result'; readonly args: DeliverStartResultArgs };
 
 /** The identity supplied by the daemon that accepted a local call. */
 export type Caller = { readonly kind: 'terminal'; readonly machine_id: string } | { readonly kind: 'ide'; readonly window: WindowRef } | { readonly kind: 'agent'; readonly agent: AgentRef; readonly root: AgentRef; readonly yolo: boolean };
@@ -131,7 +131,7 @@ export interface DaemonLogResult {
 }
 
 /** A single message for the person, offered to its member windows on another machine. */
-export interface DeliverHumanArgs {
+export interface DeliverArgs {
 	readonly message_ref: MessageRef;
 	readonly message: Message;
 	readonly windows: WindowRef[];
@@ -205,7 +205,7 @@ export interface ForwardCall {
 	readonly window_colors?: TerminalColors;
 }
 
-/** Parameters of `machine.forward`. The outer JSON-RPC ID identifies this hop. */
+/** Parameters of `forward`. The outer JSON-RPC ID identifies this hop. */
 export interface ForwardParams {
 	readonly route: string[];
 	readonly caller: Caller;
@@ -375,7 +375,7 @@ export interface MachineConnectResult {
 }
 
 /** Connection verified on the foreground stream. */
-export interface MachineConnectedParams {
+export interface ConnectedParams {
 	readonly machine: MachineHello;
 	readonly first_connection: boolean;
 }
@@ -392,7 +392,7 @@ export interface MachineConnection {
 }
 
 /** Foreground handshake failed after local authorization. */
-export interface MachineConnectionFailedParams {
+export interface ConnectFailedParams {
 	readonly error: ErrorBody;
 }
 
@@ -473,7 +473,7 @@ export interface MachineRenameResult {
 }
 
 /** The complete replacement of one neighbour's table. Every row has a route, build and boot ID. */
-export interface MachineTableParams {
+export interface AdvertiseParams {
 	readonly machines: MachineInfo[];
 }
 
@@ -961,8 +961,8 @@ export interface Operations {
 	readonly "cli.list": { readonly args: MachineQueryArgs; readonly result: CliListResult };
 	readonly "location.list": { readonly args: MachineQueryArgs; readonly result: LocationListResult };
 	readonly "agent.start_preflight": { readonly args: StartArgs; readonly result: EmptyResult };
-	readonly "machine.deliver_human": { readonly args: DeliverHumanArgs; readonly result: WindowDelivery };
-	readonly "machine.deliver_start_result": { readonly args: DeliverStartResultArgs; readonly result: EmptyResult };
+	readonly "window.deliver": { readonly args: DeliverArgs; readonly result: WindowDelivery };
+	readonly "agent.deliver_start_result": { readonly args: DeliverStartResultArgs; readonly result: EmptyResult };
 }
 
 /** Argument, snapshot, and change types for each topic. Skip unknown change kinds. */

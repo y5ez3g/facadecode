@@ -150,7 +150,7 @@ pub struct MachineConnection {
 
 /// The complete replacement of one neighbour's table. Every row has a route, build and boot ID.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct MachineTableParams {
+pub struct AdvertiseParams {
     pub machines: Vec<MachineInfo>,
 }
 
@@ -181,7 +181,7 @@ impl Caller {
     }
 }
 
-/// Parameters of `machine.forward`. The outer JSON-RPC ID identifies this hop.
+/// Parameters of `forward`. The outer JSON-RPC ID identifies this hop.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ForwardParams {
     /// Remaining machine IDs. First is this hop's receiver and last is the final receiver.
@@ -250,14 +250,14 @@ pub struct MachineConnectResult {
 
 /// Connection verified on the foreground stream.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct MachineConnectedParams {
+pub struct ConnectedParams {
     pub machine: MachineHello,
     pub first_connection: bool,
 }
 
 /// Foreground handshake failed after local authorization.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct MachineConnectionFailedParams {
+pub struct ConnectFailedParams {
     pub error: ErrorBody,
 }
 
@@ -381,7 +381,7 @@ pub struct LocationListResult {
 
 /// A single message for the person, offered to its member windows on another machine.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct DeliverHumanArgs {
+pub struct DeliverArgs {
     pub message_ref: MessageRef,
     pub message: Message,
     pub windows: Vec<WindowRef>,
@@ -514,17 +514,17 @@ impl Operation for AgentStartPreflight {
     type Result = EmptyResult;
 }
 
-pub struct DeliverHuman;
-impl Operation for DeliverHuman {
-    const NAME: &'static str = "machine.deliver_human";
+pub struct WindowDeliver;
+impl Operation for WindowDeliver {
+    const NAME: &'static str = "window.deliver";
     const DOC: &'static str = "Offers a message to the listed local window subscriptions and returns their outcomes. Machine sessions only.";
-    type Args = DeliverHumanArgs;
+    type Args = DeliverArgs;
     type Result = WindowDelivery;
 }
 
-pub struct DeliverStartResult;
-impl Operation for DeliverStartResult {
-    const NAME: &'static str = "machine.deliver_start_result";
+pub struct AgentDeliverStartResult;
+impl Operation for AgentDeliverStartResult {
+    const NAME: &'static str = "agent.deliver_start_result";
     const DOC: &'static str =
         "Delivers the result of a start at its reserved message number. Machine sessions only.";
     type Args = DeliverStartResultArgs;
@@ -554,8 +554,8 @@ pub fn visit_operations(visitor: &mut impl OperationVisitor) {
 }
 
 pub fn visit_internal_operations(visitor: &mut impl OperationVisitor) {
-    visitor.operation::<DeliverHuman>();
-    visitor.operation::<DeliverStartResult>();
+    visitor.operation::<WindowDeliver>();
+    visitor.operation::<AgentDeliverStartResult>();
 }
 
 pub fn visit_topics(visitor: &mut impl TopicVisitor) {
