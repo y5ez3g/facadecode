@@ -501,7 +501,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				console.log('  ✔ Two Remote-SSH windows joined the local core automatically');
 				const name = 'Network QA worker';
 				const run = call(['start', '--name', name, 'claude']);
-				const id = /^#(a\d+) pid /u.exec(run)?.[1];
+				const id = /^a\d+$/u.exec(run.trim())?.[0];
 				assert.ok(id, run);
 				try {
 					const address = '#' + id + '@network-local';
@@ -524,7 +524,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 					console.log('  ✔ Go to Agent adopted the original remote agent and displayed the remote icon');
 					const message = 'Remote agent asks the person';
 					const sent = call(['send', '#human', message], id);
-					assert.match(sent, /handed to these window subscriptions/u);
+					assert.match(sent, / delivered to the human in /u);
 					await second.act({ kind: 'notifications' });
 					const workbench = await second.workbench();
 					try {
