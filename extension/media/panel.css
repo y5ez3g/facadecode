@@ -375,7 +375,7 @@ body.vscode-reduce-motion .dot.working::after {
  * The first line's end is a pinned card's Pin's, and while the pointer is on a card, or its menu or details are open, its buttons':
  * each over the line at the card's corner, the line's padding keeping their room and 4 px before it (PANEL-1.3)
  */
-.item.agent.pinned .line.top {
+.item.agent:is(.pinned, .remote-agent) .line.top {
 	padding-right: 16px;
 }
 
@@ -383,7 +383,7 @@ body.vscode-reduce-motion .dot.working::after {
 	padding-right: 38px;
 }
 
-.item.agent.pinnable:is(.hovered, .menu-open, .details-open) .line.top {
+.item.agent:is(.pinnable, .remote-agent):is(.hovered, .menu-open, .details-open) .line.top {
 	padding-right: 58px;
 }
 
@@ -424,7 +424,8 @@ body.vscode-reduce-motion .dot.working::after {
  * takes its place under the pointer (PANEL-1.3). A status at the line's right: its visible glyph stays smaller than the letters
  * without thinning to a tiny mark.
  */
-.pin {
+.pin,
+.remote-status {
 	position: absolute;
 	top: 7px;
 	right: 7px;
@@ -433,7 +434,8 @@ body.vscode-reduce-motion .dot.working::after {
 	color: var(--facade-dim);
 }
 
-.pin svg {
+.pin svg,
+.remote-status svg {
 	width: 14px;
 	height: 14px;
 	fill: currentColor;
@@ -457,6 +459,10 @@ body.vscode-reduce-motion .dot.working::after {
 
 .item.agent:is(.hovered, .menu-open, .details-open) .actions {
 	visibility: visible;
+}
+
+.item.agent.remote-agent .actions {
+	right: 25px;
 }
 
 .action {
@@ -652,13 +658,13 @@ body.vscode-reduce-motion .details.open {
 /* Chosen, its name in the list's selected colour and the rest a little quieter in it, as VS Code's lists keep a label's description */
 .item.selected .short-id,
 .item.selected .title,
-.item.selected .pin {
+.item.selected :is(.pin, .remote-status) {
 	color: inherit;
 	opacity: 0.8;
 }
 
 /* Whole where 80% of the theme's selected text would read below 4.5:1 on its selection (UX-2.1) */
-body.whole-quiet-text .item.selected :is(.short-id, .title, .pin, .action) {
+body.whole-quiet-text .item.selected :is(.short-id, .title, .pin, .remote-status, .action) {
 	opacity: 1;
 }
 
@@ -783,8 +789,8 @@ body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:is(:hove
 	outline-offset: -1px;
 }
 
-body.vscode-high-contrast .item.selected :is(.short-id, .title, .pin, .action),
-body.vscode-high-contrast-light .item.selected :is(.short-id, .title, .pin, .action) {
+body.vscode-high-contrast .item.selected :is(.short-id, .title, .pin, .remote-status, .action),
+body.vscode-high-contrast-light .item.selected :is(.short-id, .title, .pin, .remote-status, .action) {
 	opacity: 1;
 }
 

@@ -75,7 +75,7 @@ export class AgentActions {
 	/** Copies `@name #aN`, with no toast: Go to Agent's item button (LIFECYCLE-2.1). */
 	async copyReference(run: RunId, facts = this.deps.agents.get(run)): Promise<void> {
 		if (facts) {
-			await vscode.env.clipboard.writeText(referenceOf(facts));
+			await vscode.env.clipboard.writeText(referenceOf({ name: facts.name, alias: facts.address ?? facts.alias }));
 		}
 	}
 
@@ -83,10 +83,10 @@ export class AgentActions {
 	 * End Agent (LIFECYCLE-3.1): its card and terminal go at once and its process ends in the background. An actual failure to end it
 	 * goes to the person who asked; an unreachable process is not said to have ended.
 	 */
-	async close(run: RunId, outside?: { readonly facts: RunFacts; readonly stop: () => ReturnType<Agents['close']> }): Promise<void> {
+	async close(run: RunId, outside?: { readonly facts: RunFacts; readonly stop: () => ReturnType<Agents['close']> }): Promise<boolean> {
 		const facts = outside?.facts ?? this.deps.agents.get(run);
 		if (!facts) {
-			return;
+			return false;
 		}
 		try {
 			const outcome = await (outside ? outside.stop() : this.deps.agents.close(run));
@@ -96,10 +96,12 @@ export class AgentActions {
 				}
 				this.deps.notifyError(vscode.l10n.t("{0}'s card and terminal were closed, but its process could not be terminated.", labelOf(facts)), {});
 			}
+			return outcome === 'terminated' || outcome === 'already_exited' || outcome === 'already_ended';
 		} catch (err) {
 			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
 				this.deps.notifyError(vscode.l10n.t("Could not end {0}: {1}", labelOf(facts), reasonOf(err)), {});
 			}
+			return false;
 		}
 	}
 
@@ -146,7 +148,7 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 		on(COMMANDS.pinAgent, true, run => actions.pin(run, true)),
 		on(COMMANDS.unpinAgent, true, run => actions.pin(run, false)),
 		on(COMMANDS.renameAgent, true, run => actions.rename(run)),
-		on(COMMANDS.closeAgent, true, run => actions.close(run)),
+		on(COMMANDS.closeAgent, true, async run => { await actions.close(run); }),
 		// Notification navigation: the exact run it names, never another (UX-3.2)
 		vscode.commands.registerCommand(COMMANDS.revealAgent, (arg?: unknown) => {
 			if (arg === undefined) {

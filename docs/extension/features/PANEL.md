@@ -137,6 +137,12 @@ agent with no tab open keeping it hidden, and a Pin that cannot be saved opening
 follows the quieter text, including the selected foreground at 80% opacity; high-contrast selections use full opacity.
 The icon's internal space keeps its visible shape smaller than the name's letters.
 
+For an agent whose running machine ID differs from the window's Facade machine ID, show the remote codicon in the
+Pin position and place the details and menu buttons to its left. The icon has no action or Tab stop and stays visible
+while the buttons show. Its tooltip and the card's accessible label say `Running on {0}`, using the running machine's
+name with its short ID when names repeat. Remote agents have no Pin. A loss of connection keeps the card and
+shows the connection status until the running machine can be reached again.
+
 ### 1.4 Second line and dot
 
 **The second line says one of three kinds of thing: the person's input, another agent's message, or Facade's own.**
@@ -204,8 +210,8 @@ opens with a click.**
 A card's details open from its ⓘ, as Fluent's info button opens its popover, or from Show Agent Details for the
 keyboard (UX-2.3, 3.1), and close on Escape, a press elsewhere, the ⓘ again, the focus leaving them - Tab and Shift+Tab
 leave them - a scroll of the card list, the view losing the focus or the card going; a scroll within the details keeps
-them open. Nothing in the panel opens on hover and no element has a native tooltip:
-everything a card offers is one click (2.2). The details are as wide as the card, in the editor's hover colors, border
+them open. The remote status icon has the tooltip from 1.3. Each card action takes one click (2.2). The details are as
+wide as the card, in the editor's hover colors, border
 and corners, with Fluent's popover shadow, 12 px in, their arrow at the ⓘ; they open below the card, or above it where
 they do not fit below and there is more room above, stay on the side they opened on while they fit there, and scroll within themselves where neither side has
 room. They enter as Fluent's popover does, fading in as they slide 10 px in from the ⓘ's side over 400 ms, slowing to

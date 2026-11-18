@@ -660,6 +660,10 @@ export interface RunError {
 }
 
 export interface RunFacts {
+	/** The running machine's display name when its ID differs from the editor window's. */
+	readonly remoteMachine?: string;
+	/** The copyable, machine-qualified core reference. */
+	readonly address?: string;
 	readonly sessionId?: string;
 	readonly resumable?: boolean;
 	/**

@@ -822,17 +822,20 @@ suite('The agent panel in Chromium', function () {
 	test('PANEL-3.2: a state the extension sends is drawn whichever of a card\'s fields it has - two cards of one name with their short IDs among them; none is refused', async () => {
 		// Every field a card can have: a field the host's cards gain that the page's check does not know fails here, as `repeated` did
 		const every: { readonly [K in keyof Required<Card>]: Card[K] } = {
-			pinned: true, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
+			pinned: true, runningOn: undefined, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
 			dot: 'working', stateText: 'Working', line: '📨 Check the build',
 			details: { summary: { id: 'title', label: 'Title: ', value: 'Check the build' }, titleLabel: 'Title: ', untitled: 'No title yet', startedBy: 'Maker #a7', location: { id: 'location', label: 'Location: ', value: 'main', kind: 'repo' }, path: { id: 'path', label: 'Path: ', value: '/project' }, description: { title: 'Title: Check the build', place: 'Path: /project' } },
 			label: 'Ada, #a1, Working', startedAt: Date.now(), menu: { pin: false, unpin: true, moveUp: false, moveDown: true }
 		};
 		const twin: Card = { ...every, pinned: undefined, selected: false, runId: 'run-2', alias: '#a2', avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' }, menu: { pin: true, moveUp: true, moveDown: false } };
-		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3' };
+		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3@gpu',
+			runningOn: 'Running on gpu', menu: { moveUp: true, moveDown: false } };
 		await deliver({ type: 'state', state: { revision: 7, loading: false, cards: [every, twin, other], cardCount: 3, capabilities: { remote: false }, clockAt: Date.now() } });
 		await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
 		assert.deepStrictEqual(await evaluate(`[window.errors, [...document.querySelectorAll('.agent')].map(card => [card.querySelector('.name').textContent, card.querySelector('.short-id')?.textContent ?? null])]`),
 			[[], [['Ada', '#a1'], ['Ada', '#a2'], ['Cy', null]]]);
+		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.remote-status')].map(icon => [icon.tagName, icon.title, icon.closest('.agent').querySelector('.pin-button').hidden])`),
+			[['SPAN', 'Running on gpu', true]]);
 	});
 
 	test('PANEL-1.3: Pin and Unpin refit the same card, and a repeated name\'s ID comes and goes without losing its name', async () => {

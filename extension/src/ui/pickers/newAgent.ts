@@ -10,6 +10,7 @@ import { locationLabel, onePlaceOf } from '../cardView';
 import { COMMANDS } from '../catalog';
 import { cliIcon, launchFailureText, openSettingsLabel, plainText, reasonOf, reasonText } from '../presentation';
 import { chooseLocation, Destination, environmentLabel, type LocationDeps, worktreeSourceLabel } from './location';
+import { chooseMachine, launchOnMachine, type MachineLaunch } from './machineLaunch';
 import { BACK, Flow } from './stepping';
 
 export interface NewAgentDeps {
@@ -30,6 +31,7 @@ export interface NewAgentDeps {
 	readonly names?: () => readonly string[] | undefined;
 	/** The window's remote authority, as the local window component sees it: how its environment is named (LIFECYCLE-1.1). */
 	readonly remote?: string;
+	readonly network?: MachineLaunch;
 }
 
 /**
@@ -74,27 +76,48 @@ type Item = vscode.QuickPickItem & { readonly does?: Does; readonly cli?: CliCho
 export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promise<void> {
 	const title = vscode.l10n.t("New Agent");
 	const flow = new Flow();
+	const network = deps.network;
+	const machines = network?.machines();
+	// None left, or an empty `names`: the box starts blank, and the agent is named by its ID (LIFECYCLE-2.1)
+	const draft = { name: deps.suggest?.() ?? suggestName(deps.agents.list().map(run => run.name), deps.names?.()) ?? '' };
+	if (!network || !machines?.others.length) {
+		await newLocalAgent(flow, deps, title, draft, startAt);
+		return;
+	}
+	let current = machines.local.id;
+	for (;;) {
+		const available = network.machines();
+		if (!available || available.local.id !== machines.local.id) { flow.close(); return; }
+		const machine = await chooseMachine(flow, title, available, current);
+		if (!machine) { return; }
+		current = machine.id;
+		const result = current === machines.local.id
+			? await newLocalAgent(flow, deps, title, draft, startAt, true)
+			: await launchOnMachine(flow, { ...deps, network }, title, machine, draft);
+		if (result !== BACK) { return; }
+	}
+}
+
+async function newLocalAgent(flow: Flow, deps: NewAgentDeps, title: string, draft: { name: string }, startAt?: LocationId, back = false): Promise<typeof BACK | undefined> {
 	const catalog = deps.locations.snapshot();
 	if (!catalog.folders.length) {
-		return openFolder(flow, title);
+		return openFolder(flow, title, back);
 	}
 	// Opening a location catalog reads Git again where needed; plain folders are there meanwhile (WORKTREES-1.1, 1.3)
 	deps.locations.refresh().catch(err => deps.log.event(`Could not refresh the working locations: ${messageOf(err)}`));
 	const found = (startAt === undefined ? undefined : catalog.locations.find(each => each.id === startAt)) ?? defaultLocation(catalog, deps.history.last().location);
 	if (!found) {
-		return openFolder(flow, title);
+		return openFolder(flow, title, back);
 	}
 	let destination: Destination = { location: found };
-	// None left, or an empty `names`: the box starts blank, and the agent is named by its ID (LIFECYCLE-2.1)
-	let name = deps.suggest?.() ?? suggestName(deps.agents.list().map(run => run.name), deps.names?.()) ?? '';
 	for (; ;) {
-		const picked = await chooseCli(flow, deps, { title, destination, name });
-		if (!picked) {
-			return;
+		const picked = await chooseCli(flow, deps, { title, destination, name: draft.name }, back);
+		if (!picked || picked === BACK) {
+			return picked;
 		}
 		if (picked.does === 'start' && picked.cli) {
 			flow.close();
-			start(deps, name, destination, picked.cli);
+			start(deps, draft.name, destination, picked.cli);
 			return;
 		}
 		if (picked.does === 'settings') {
@@ -104,12 +127,12 @@ export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promis
 			return;
 		}
 		if (picked.does === 'name') {
-			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: name, placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"), back: true });
+			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: draft.name, placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"), back: true });
 			if (typed === undefined) {
 				return;
 			}
 			if (typed !== BACK) {
-				name = normalizeName(typed);
+				draft.name = normalizeName(typed);
 			}
 		} else if (picked.does === 'location') {
 			const chosen = await chooseLocation(flow, deps, {
@@ -153,7 +176,7 @@ function start(deps: NewAgentDeps, name: string, destination: Destination, cli: 
 }
 
 /** The picker's CLI step: the item chosen, or none where the person ended the flow. */
-async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: string; readonly destination: Destination; readonly name: string }): Promise<Item | undefined> {
+async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: string; readonly destination: Destination; readonly name: string }, back: boolean): Promise<Item | typeof BACK | undefined> {
 	const catalog = deps.locations.snapshot();
 	const { location, worktree } = at.destination;
 	const place = worktree ? vscode.l10n.t("New worktree {0} from {1}", worktree.branch, locationLabel({ ...location, label: worktreeSourceLabel(location) }, catalog)) : locationLabel(location, catalog);
@@ -215,6 +238,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		// Change item shown meanwhile would leave the focus on another CLI than the one preselected, which an Enter then starts
 		items: [],
 		busy: true,
+		back,
 		// The CLIs of the location's environment, found as the step shows (CLIS-1.1); the step up keeps its place meanwhile. Git metadata
 		// read later changes the bottom alone, the item in focus kept, so that an Enter right then takes what the person sees (LIFECYCLE-1.1)
 		live: picker => {
@@ -237,15 +261,17 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 			return { dispose: () => { up = false; listening.dispose(); } };
 		}
 	});
-	return picked && picked !== BACK ? picked.item : undefined;
+	return picked === BACK ? BACK : picked?.item;
 }
 
 /** No folder is open: the picker offers Open Folder (LIFECYCLE-1.1). */
-async function openFolder(flow: Flow, title: string): Promise<void> {
+async function openFolder(flow: Flow, title: string, back: boolean): Promise<typeof BACK | undefined> {
 	const item: Item = { label: vscode.l10n.t("Open Folder..."), detail: vscode.l10n.t("A workspace folder is required to run agents."), iconPath: new vscode.ThemeIcon('folder-opened'), does: 'openFolder' };
-	const picked = await flow.pick<Item>({ title, placeholder: vscode.l10n.t("Open a folder to continue"), items: [item], active: item });
+	const picked = await flow.pick<Item>({ title, placeholder: vscode.l10n.t("Open a folder to continue"), items: [item], active: item, back });
+	if (picked === BACK) { return BACK; }
 	flow.close();
-	if (picked && picked !== BACK) {
+	if (picked) {
 		await vscode.commands.executeCommand('vscode.openFolder');
 	}
+	return undefined;
 }

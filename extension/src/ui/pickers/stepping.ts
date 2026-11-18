@@ -23,7 +23,7 @@ interface TextCheckResult {
 
 interface PickOptions<T extends vscode.QuickPickItem> {
 	readonly title: string;
-	readonly placeholder: string;
+	readonly placeholder?: string;
 	readonly items: readonly T[];
 	readonly active?: T;
 	/** Whether the step has Back: it returns to the one before, which keeps what was chosen there (UX-1.1). */

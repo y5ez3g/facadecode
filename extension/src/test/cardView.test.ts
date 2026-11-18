@@ -22,6 +22,8 @@ const WORDS: CardWords = {
 	path: value => `Path: ${value}`,
 	untitledPending: 'No title yet',
 	untitledUnreadable: 'Title unavailable',
+	runningOn: machine => `Running on ${machine}`,
+	connectionLost: 'Connection lost · reconnecting',
 
 	starting: 'Starting',
 	startingCli: cli => `Starting ${cli}...`,
@@ -59,6 +61,19 @@ const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', 
 const menu = { moveUp: false, moveDown: true };
 
 suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', () => {
+
+	test('PANEL-1.3: the remote icon exposes the running machine in the accessible label', () => {
+		const card = cardOf(run({ alias: '#a1@gpu', remoteMachine: 'gpu (3f9a2c1d)' }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(card.runningOn, 'Running on gpu (3f9a2c1d)');
+		assert.ok(card.label.includes(card.runningOn));
+		assert.strictEqual(card.pinned, undefined);
+		const local = cardOf(run({ pinnable: true, pin: 'pin-1' }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(local.pinned, true);
+		assert.strictEqual(local.runningOn, undefined);
+		const disconnected = statusOf(run({ remoteMachine: 'gpu', disconnected: true }), WORDS);
+		assert.strictEqual(disconnected.dot, 'none');
+		assert.strictEqual(disconnected.stateText, WORDS.connectionLost);
+	});
 
 	test('all CLIs retain a blocker without a recognized kind, its full reason on its second line and in its label', () => {
 		const message = `Please review ${'a long explanation '.repeat(30)}👨‍👩‍👧‍👦`;

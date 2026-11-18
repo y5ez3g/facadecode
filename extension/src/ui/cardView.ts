@@ -22,6 +22,8 @@ export interface CardWords {
 	readonly path: (value: string) => string;
 
 	readonly pinned?: string;
+	readonly runningOn: (machine: string) => string;
+	readonly connectionLost: string;
 	readonly starting: string;
 	/** `Starting {0}…`, {0} the CLI's name: the startup stage while its process starts (LIFECYCLE-1.5). */
 	readonly startingCli: (cli: string) => string;
@@ -129,6 +131,9 @@ export interface CardSaid {
  * title. Never a completion claim.
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
+	if (facts.remoteMachine !== undefined && facts.disconnected) {
+		return { dot: 'none', stateText: words.connectionLost, ...noticeOf(words.connectionLost) };
+	}
 	const dot = dotOf(facts);
 	if (facts.error || facts.lifecycle === 'ended') {
 		// Its second line says why without `Error · `, which its red dot says; its state, as a screen reader hears it, keeps it (PANEL-1.4)
@@ -270,6 +275,8 @@ export function labelOf(format: (value: string) => string): string {
 export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly repeated?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly readsTitles?: boolean; readonly icon?: string }): Card {
 	const { place, words } = input;
 	const status = statusOf(facts, words);
+	const runningOn = facts.remoteMachine === undefined ? undefined : words.runningOn(facts.remoteMachine);
+	const pinned = facts.remoteMachine === undefined && !!facts.pin;
 	const field = (id: DetailId, format: (value: string) => string, value: string): DetailField => ({ id, label: labelOf(format), value });
 	// Its conversation's complete title as its CLI stores it, where its CLI saved one; else why there is none - not yet, or never, for
 	// a CLI Facade has no history reader for - after the same `Title: ` label (PANEL-1.5)
@@ -287,7 +294,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const restated = !status.said && (heard === status.stateText || words.error(heard) === status.stateText);
 	// What the state and the second line leave unsaid - why activity is unknown, tools still connecting - once (PANEL-1.4, 1.5)
 	const unsaid = status.reason && status.reason !== status.stateText && !heard.includes(status.reason) ? [status.reason] : [];
-	const label = [facts.name, facts.alias, ...(facts.pin && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...restated ? [] : [heard], ...unsaid].filter(Boolean).join(', ');
+	const label = [facts.name, facts.alias, runningOn, ...(pinned && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...restated ? [] : [heard], ...unsaid].filter(Boolean).join(', ');
 	// The label says the state, the location and the second line: the description says what else the details do, in their order - its
 	// title, then, after when it started, which the page says, where it works and its path
 	const spoken = new Set([status.stateText, status.line, ...status.notice ? [status.notice] : [], ...status.said ? [status.said.text] : []]);
@@ -298,7 +305,8 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const avatar = avatarOf(input.icon ?? facts.cli);
 	return {
 		runId: facts.id,
-		...(facts.pin ? { pinned: true } : {}),
+		...(pinned ? { pinned: true } : {}),
+		...(runningOn ? { runningOn } : {}),
 		selected: input.selected,
 		name: facts.name,
 		alias: facts.alias,

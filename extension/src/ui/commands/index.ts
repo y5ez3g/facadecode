@@ -83,6 +83,8 @@ function cardWords(): CardWords {
 		location: value => vscode.l10n.t("Location: {0}", value),
 		path: value => vscode.l10n.t("Path: {0}", value),
 		pinned: vscode.l10n.t("Pinned"),
+		runningOn: machine => vscode.l10n.t("Running on {0}", machine),
+		connectionLost: vscode.l10n.t("Connection lost · reconnecting"),
 		starting: vscode.l10n.t("Starting"),
 		// {0} is the CLI's name, such as Claude Code
 		startingCli: cli => vscode.l10n.t("Starting {0}…", cli),

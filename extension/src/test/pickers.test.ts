@@ -10,6 +10,7 @@ import { folderKeyOf } from '../base/files';
 import { locationIdOf } from '../core/locations/catalog';
 import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunChange, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
+import type { MachineLaunch, RemoteLaunchRequest } from '../ui/pickers/machineLaunch';
 import { TestEmitter, withModules } from './withModules';
 
 const BACK_BUTTON = { id: 'back' };
@@ -330,6 +331,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const { referencedRun } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
 			const runs = [{ id: `run-${'1'.padStart(32, '0')}`, alias: '#a1' }, { id: `run-${'2'.padStart(32, '0')}`, alias: '#a12' }];
 			assert.deepStrictEqual(['#a12', '@Old Name #a1', 'Ada #a1', ` ${runs[1].id} `, 'Ada', '#a9', 'a1'].map(search => referencedRun(search, runs)?.alias), ['#a12', '#a1', '#a1', '#a12', undefined, undefined, undefined]);
+			const remote = { id: 'remote-a1', alias: '#a1@gpu', address: '#a1@id:1234abcd' };
+			assert.strictEqual(referencedRun('@Old Name #a1@id:1234abcd', [...runs, remote]), remote);
+			assert.strictEqual(referencedRun('#a1', [remote, ...runs]), runs[0]);
 		});
 	});
 
@@ -355,7 +359,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		/** What the service refuses the launch with, before accepting it; none accepts it. */
 		let refusal: Error | undefined;
 
-		const start = (startAt?: string) => {
+		const start = (startAt?: string, network?: MachineLaunch) => {
 			const { newAgent } = load<typeof import('../ui/pickers/newAgent')>(require.resolve('../ui/pickers/newAgent'));
 			return newAgent({
 				agents: { launch: request => { if (refusal) { throw refusal; } launched.push(request); return 'run-new'; }, list: () => runs, close: async run => { closed.push(run); return 'terminated'; } },
@@ -367,7 +371,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				notifyError: text => errors.push(text),
 				log: { event: () => undefined },
 				media: { path: '/extension/media' } as never,
-				suggest: () => 'Ada'
+				suggest: () => 'Ada',
+				network
 			}, startAt);
 		};
 
@@ -400,6 +405,45 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				create: async () => { created++; throw new Error('the UI never creates'); },
 				remove: async (id, closeAgents) => { removing.push({ id, closeAgents }); await remove(id, closeAgents); }
 			};
+		});
+
+		test('LIFECYCLE-1.1: remote New Agent uses the chosen machine and preserves choices after a refused preflight', async () => {
+			const location = { label: 'GPU workspace', cwd: '/server/app', source: { machine_id: 'gpu-id', window_id: 'win-server' } };
+			const attempts: [string, RemoteLaunchRequest][] = [];
+			const starts: [string, RemoteLaunchRequest][] = [];
+			const network: MachineLaunch = {
+				machines: () => ({ local: { id: 'local-id', name: 'mbp' }, others: [{ id: 'gpu-id', name: 'gpu' }] }),
+				catalog: async machine => {
+					assert.strictEqual(machine, 'gpu-id');
+					return { locations: [location], clis: [cli('muse', 'Muse Code')] };
+				},
+				preflight: async (machine, request) => {
+					attempts.push([machine, request]);
+					if (attempts.length === 1) { throw new Error('Directory unavailable'); }
+				},
+				launch: (machine, request) => {
+					starts.push([machine, request]);
+					return 'remote-run';
+				}
+			};
+			const done = start(undefined, network);
+			assert.strictEqual(ui.current!.title, 'New Agent · Machine');
+			assert.deepStrictEqual(ui.current!.activeItems.map(item => [item.label, item.description]), [['This machine', 'mbp']]);
+			ui.current!.accept('gpu');
+			await settle();
+			ui.current!.accept('Change Working Location...');
+			await settle();
+			ui.current!.accept('GPU workspace');
+			await settle();
+			ui.current!.accept('Muse Code');
+			await settle();
+			assert.strictEqual(ui.current!.title, 'New Agent · Ada · gpu · GPU workspace');
+			assert.strictEqual(ui.current!.activeItems[0]?.detail, 'Directory unavailable');
+			assert.deepStrictEqual(starts, []);
+			ui.current!.accept();
+			await done;
+			const wanted: [string, RemoteLaunchRequest] = ['gpu-id', { name: 'Ada', cli: 'muse', location }];
+			assert.deepStrictEqual([attempts, starts, selected, listed], [[wanted, wanted], [wanted], ['remote-run'], []]);
 		});
 
 		test('J02: one picker titled New Agent - the last CLI first and selected but not started, the location with its environment and the editable name at the bottom; choosing a CLI closes it and starts the agent at once, selected', async () => {
@@ -1652,6 +1696,65 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			id: `run-${String(n).padStart(32, '0')}`, alias: `#a${n}`, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: MAIN.id,
 			cwd: MAIN.path, environment: 'local', yolo: true, createdAt: n, lifecycle: 'running', phase: 'running',
 			activity: 'working', reporting: true, root: `run-${String(n).padStart(32, '0')}`, origin: 'human', tools: 'not_injected', ...more
+		});
+
+		test('LIFECYCLE-2.3: local rows appear while remote discovery runs, and a qualified reference adopts the remote record', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const local = run(1);
+			const remote = run(1, { id: 'gpu-a1', alias: '#a1@gpu', address: '#a1@id:1234abcd', name: 'Remote Ada' });
+			const adopted: string[] = [];
+			const report = new TestEmitter<void>();
+			const done = goToAgent({
+				model: { ordered: () => [local], placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' }), placesShown: () => true },
+				agents: { onDidChange: new TestEmitter<RunChange>().event },
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined, copyReference: async () => undefined, close: async () => undefined,
+				others: { list: () => [], query: async () => [{ facts: remote, windows: [] }], onDidChange: report.event,
+					open: async id => void adopted.push(id), copyReference: async () => undefined, close: async () => false }
+			});
+			const picker = ui.current!;
+			assert.deepStrictEqual(picker.items.map(item => item.label), ['Ada']);
+			await settle();
+			assert.deepStrictEqual(picker.items.map(item => item.label), ['Ada', 'Remote Ada']);
+			picker.type('@Old Name #a1@id:1234abcd');
+			assert.deepStrictEqual(picker.items.map(item => item.label), ['Remote Ada']);
+			picker.accept('Remote Ada');
+			await done;
+			assert.deepStrictEqual(adopted, [remote.id]);
+		});
+
+		test('LIFECYCLE-2.3: a confirmed stop removes only the matching network candidate', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const gpu = run(1, { id: '#a1@id:1234abcd', alias: '#a1@gpu', name: 'GPU agent' });
+			const peer = run(1, { id: '#a1@id:4321abcd', alias: '#a1@server', name: 'Server agent' });
+			const report = new TestEmitter<void>();
+			const stopped: string[] = [];
+			let confirmed = false;
+			const done = goToAgent({
+				model: { ordered: () => [], placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' }), placesShown: () => true },
+				agents: { onDidChange: new TestEmitter<RunChange>().event },
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined, copyReference: async () => undefined, close: async () => undefined,
+				others: {
+					list: () => [], query: async () => [gpu, peer].map(facts => ({ facts, windows: [] })), onDidChange: report.event,
+					open: async () => undefined, copyReference: async () => undefined,
+					close: async facts => { stopped.push(facts.id); return confirmed; }
+				}
+			});
+			const picker = ui.current!;
+			await settle();
+			const end = picker.item('GPU agent').buttons![1];
+			picker.press(0, end);
+			await settle();
+			assert.deepStrictEqual(picker.labels(), ['GPU agent', 'Server agent']);
+			confirmed = true;
+			picker.press(0, end);
+			await settle();
+			report.fire();
+			assert.deepStrictEqual(picker.labels(), ['Server agent']);
+			assert.deepStrictEqual(stopped, [gpu.id, gpu.id]);
+			picker.hide();
+			await done;
 		});
 
 		test('U06, LIFECYCLE-2.3: single-line names, IDs, location and conversation titles - none where its CLI saved none, and never a state; empty/equal names, hidden CLI search, copied references and item actions', async () => {

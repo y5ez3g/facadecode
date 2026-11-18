@@ -58,6 +58,8 @@ export interface CardDetails {
 /** One card (PANEL-1.3-1.5), every text already in the person's language. */
 export interface Card {
 	readonly pinned?: boolean;
+	/** Tooltip of the passive remote icon in the Pin position. */
+	readonly runningOn?: string;
 	readonly runId: string;
 	readonly selected: boolean;
 	readonly name: string;

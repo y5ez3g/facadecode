@@ -2205,6 +2205,8 @@ suite('Agents started by agents, and their tools (RULES-4.3, LIFECYCLE-2.2, CLIS
 
 /** What the card says of its run, in these words. */
 const WORDS = {
+	runningOn: (machine: string) => `Running on ${machine}`,
+	connectionLost: 'Connection lost · reconnecting',
 	title: (value: string) => `Title: ${value}`, location: (value: string) => `Location: ${value}`, path: (value: string) => `Path: ${value}`, untitledPending: 'No title yet', untitledUnreadable: 'Title unavailable',
 	starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...',
 	started: 'New conversation started', resumed: 'Conversation resumed', working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error · ${reason}`,

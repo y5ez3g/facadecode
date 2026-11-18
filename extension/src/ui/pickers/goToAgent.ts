@@ -14,13 +14,15 @@ export interface GoToAgentDeps {
 	readonly media: vscode.Uri;
 	readonly reveal: (run: RunId) => Promise<unknown>;
 	readonly copyReference: (run: RunId) => Promise<void>;
-	readonly close: (run: RunId) => Promise<void>;
+	readonly close: (run: RunId) => Promise<unknown>;
 	readonly others?: {
 		list(): readonly OtherAgent[];
+		/** Network candidates, in addition to those already known by this window. */
+		query?(): Promise<readonly OtherAgent[]>;
 		readonly onDidChange: Event<void>;
 		open(agent: string): Promise<void>;
 		copyReference(facts: RunFacts): Promise<void>;
-		close(facts: RunFacts): Promise<void>;
+		close(facts: RunFacts): Promise<boolean>;
 	};
 	/** The icon each CLI shows, by its API ID (CONFIGURATION-2.4); none: each name's own. */
 	readonly icons?: () => (cli: string) => string;
@@ -30,14 +32,14 @@ export interface GoToAgentDeps {
  * The run a search names exactly (LIFECYCLE-2.3): a run ID, or a short ID - alone or ending a copied reference such as
  * `@Ada #a3`, whose name is only descriptive and may be stale. None where the search names no ID.
  */
-export function referencedRun(search: string, runs: readonly Pick<RunFacts, 'id' | 'alias'>[]): Pick<RunFacts, 'id' | 'alias'> | undefined {
+export function referencedRun<T extends Pick<RunFacts, 'id' | 'alias' | 'address'>>(search: string, runs: readonly T[]): T | undefined {
 	const text = search.trim();
 	const id = /^(?:run-[0-9a-f]{32}|a\d+)$/.exec(text)?.[0];
 	if (id) {
 		return runs.find(run => run.id === id);
 	}
-	const alias = /(?:^|\s)(#a\d+)$/.exec(text)?.[1];
-	return alias ? runs.find(run => run.alias === alias) : undefined;
+	const address = /(?:^|\s)(#a\d+(?:@[a-z0-9][a-z0-9:-]*)?)$/i.exec(text)?.[1]?.toLowerCase();
+	return address ? runs.find(run => run.alias === address || run.address === address) : undefined;
 }
 
 type Item = vscode.QuickPickItem & { readonly run: RunId; readonly other?: RunFacts };
@@ -70,6 +72,9 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	picker.matchOnDescription = true;
 	const icon = deps.icons?.() ?? ((cli: string) => cli);
 	const others = deps.others;
+	let network: readonly OtherAgent[] = [];
+	const stopped = new Set<RunId>();
+	let open = true;
 	const itemOf = (facts: RunFacts, placesShown: boolean, cwd?: string): Item => {
 		const place = deps.model.placeOf(facts).qualified;
 		const item: Item = {
@@ -93,7 +98,14 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 		}
 		shownFor = picker.value;
 		const runs = deps.model.ordered();
-		const elsewhere = others?.list() ?? [];
+		const here = new Set(runs.map(run => run.id));
+		const elsewhere: OtherAgent[] = [];
+		for (const candidate of [...(others?.list() ?? []), ...network]) {
+			if (!here.has(candidate.facts.id) && !stopped.has(candidate.facts.id)) {
+				here.add(candidate.facts.id);
+				elsewhere.push(candidate);
+			}
+		}
 		// An ID typed or pasted decides, whatever name comes with it.
 		const named = referencedRun(picker.value, [...runs, ...elsewhere.map(agent => agent.facts)]);
 		const active = picker.activeItems[0]?.run;
@@ -157,12 +169,22 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 			}),
 			picker.onDidTriggerItemButton(({ item, button }) => {
 				if (item.other && others) {
-					void (button === copy ? others.copyReference(item.other) : others.close(item.other));
+					if (button === copy) {
+						void others.copyReference(item.other);
+					} else {
+						void others.close(item.other).then(ended => {
+							if (ended && open) {
+								stopped.add(item.run);
+								refreshNow();
+							}
+						});
+					}
 				} else {
 					void (button === copy ? deps.copyReference(item.run) : deps.close(item.run));
 				}
 			}),
 			picker.onDidHide(() => {
+				open = false;
 				clearTimeout(reported);
 				subscriptions.forEach(each => each.dispose());
 				picker.dispose();
@@ -173,5 +195,17 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 			subscriptions.push(others.onDidChange(refreshNow));
 		}
 		picker.show();
+		if (others?.query) {
+			picker.busy = true;
+			void others.query().then(rows => {
+				if (open) {
+					network = rows;
+					picker.busy = false;
+					refreshNow();
+				}
+			}, () => {
+				if (open) { picker.busy = false; }
+			});
+		}
 	});
 }

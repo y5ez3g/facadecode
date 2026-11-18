@@ -16,6 +16,13 @@ document owns launch, naming, terminal, finding, closing, Resume and Pin interac
 
 **New Agent shows the working location, editable suggested name and CLI choices in one native picker.**
 
+On the Rust engine, offer a Machine step when the Facade network has another machine. Preselect This machine and show
+its name. The current window's Facade machine determines which machine is local. For another machine, offer the working
+locations its connected windows supply and allow an absolute path on that machine. With no selected path, use its login
+home. List only the CLIs available in its login environment. Allow returning to Machine while a query is pending, with a
+three-second bound on querying other machines. Changing machines clears the prior location and CLI choices. On confirmation,
+preflight the location and CLI before starting. A preflight failure preserves the choices and shows its reason.
+
 With a folder open, use `New Agent · {name} · {location}` as the title, or `New Agent · {name}` in the window's one
 place to work (1.3); placeholder: `Select a CLI`. In a multi-folder window, prefix a checkout's location with its
 workspace folder; do not repeat a plain folder's name. A proposed worktree appears as `{branch} (new)` in the title,
@@ -47,7 +54,7 @@ title segment (`New Agent ·  · main`). Change Name uses the title `New Agent �
 `Leave blank for an unused name, or its ID`. It prefills the current name with no prompt of its own; the editor
 supplies the Enter/Escape instructions. With no usable CLI, `Open Settings` has the detail `Install a supported CLI in this environment, or configure its
 path.`; where the CLIs cannot be listed at all, it carries that failure as its detail. A configuration error also
-offers this item. It follows the same Open Settings flow. With no folder, use PANEL-1.2's
+offers this item. It follows the same Open Settings flow. With no folder, a local launch uses PANEL-1.2's
 Open Folder prerequisite picker and its wording instead of the CLI step. Missing optional Git does not block creation or
 trigger a Git initialization suggestion. Cancel closes without effects or changing successful-launch history.
 
@@ -247,7 +254,7 @@ terminal in the editor area; an extension cannot change that.
 
 ### 2.3 Finding an agent
 
-**Go to Agent opens this window's agents and, on the Rust engine, lets the person adopt running agents on its local machine.**
+**Go to Agent opens this window's agents and, on the Rust engine, lets the person adopt reachable running agents.**
 
 Match name, CLI, title, working location and run ID. Accept the existing short ID and a copied agent reference as
 search input; an ID in a copied reference matches that run even if its descriptive name is stale. Use one native picker
@@ -261,10 +268,11 @@ and retained-error cards in panel order, whatever the panel's filter shows; rows
 open. Choosing a row closes the picker and reveals that terminal. Each row's buttons copy its reference (2.1) and end
 that exact agent with End Agent (3.1), both keeping the picker open.
 
-Rust adds one row per other running non-guest agent on the current machine, including ordinary terminal starts and
-agents of disconnected windows. Each of these rows appends the member window names in window-reference order and adds
+Rust adds one row per other reachable running non-guest agent, including ordinary terminal starts and agents of
+disconnected windows. Show this window's agents first while querying other machines, with a three-second bound.
+Each outside row appends the member window names in window-reference order and adds
 `Window disconnected` after each disconnected member. Window names and the status label are display fields. The search
-fields above and exact short-ID match are unchanged. Selecting an outside row adds the current window under RULES-4.1,
+fields above also accept the full reference of a remote agent. Selecting an outside row adds the current window under RULES-4.1,
 then opens its card and terminal here using the normal reveal path. Its other windows keep presenting it. Copy and End
 act on the row's exact numbered agent without adding this window. On the old engine the picker stays within the
 current window. For ended Rust agents, Resume uses the records of this window under 3.2.

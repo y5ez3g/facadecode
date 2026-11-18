@@ -248,6 +248,10 @@ export class PanelModel implements Disposable {
 
 	/** Where a run works, as its card says it (PANEL-1.3): its location's label, after its folder's name in a multi-folder window. */
 	placeOf(facts: RunFacts, catalog: Catalog = this.deps.locations.snapshot()): CardPlace {
+		if (facts.remoteMachine !== undefined) {
+			const label = baseName(facts.cwd);
+			return { label, qualified: label, context: label, path: facts.cwd, kind: 'folder' };
+		}
 		// A folder inside a main checkout, worktree or folder - a resumed conversation's own - shows as the location it is inside, with
 		// its own path (WORKTREES-1.2)
 		const own = this.known.get(facts.location) ?? catalog.locations.find(each => each.id === facts.location);
@@ -405,10 +409,11 @@ export class PanelModel implements Disposable {
 		const visible = (id: string) => shownSet.has(id);
 		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
+			const local = facts.remoteMachine === undefined;
 			const withinArea = (other: string) => visible(other) && !!byId.get(other)?.pin === !!facts.pin;
 			const menu: CardMenu = {
-				...(facts.pinnable && !facts.pin ? { pin: true } : {}),
-				...(facts.pin ? { unpin: true } : {}),
+				...(local && facts.pinnable && !facts.pin ? { pin: true } : {}),
+				...(local && facts.pin ? { unpin: true } : {}),
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
 				moveDown: moved(ids, id, 1, withinArea) !== undefined
 			};
@@ -418,6 +423,7 @@ export class PanelModel implements Disposable {
 		this.exited.clear();
 		const empty: PanelState['empty'] = this.loading || cards.length ? undefined : filter ? 'noMatch' : catalog.folders.length ? 'noAgents' : 'noFolder';
 		const selected = this.selectedRun === undefined ? undefined : byId.get(this.selectedRun);
+		const selectedLocal = selected?.remoteMachine === undefined;
 		return {
 			state: {
 				revision,
@@ -429,7 +435,7 @@ export class PanelModel implements Disposable {
 				capabilities: { remote: this.deps.remote },
 				...(exited.length ? { exited } : {})
 			},
-			...(selected ? { selection: { run: selected.id, ended: selected.lifecycle === 'ended', ...(selected.pin ? { pinned: true } : {}), ...(selected.pinnable ? { pinnable: true } : {}) } } : {})
+			...(selected ? { selection: { run: selected.id, ended: selected.lifecycle === 'ended', ...(selectedLocal && selected.pin ? { pinned: true } : {}), ...(selectedLocal && selected.pinnable ? { pinnable: true } : {}) } } : {})
 		};
 	}
 
@@ -476,6 +482,9 @@ export class PanelModel implements Disposable {
 		}
 		if (!filter) {
 			return true;
+		}
+		if (facts.remoteMachine !== undefined) {
+			return false;
 		}
 		if (filter.kind === 'location') {
 			return this.anchorOf(facts) === this.locationOf(filter.id);

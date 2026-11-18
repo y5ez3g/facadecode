@@ -54,7 +54,7 @@ const isDetails: Check = value => isShaped(value, { location: isFact(['location'
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString, alias: isString,
 	dot: value => DOTS.includes(value), stateText: isString, line: isString, details: isDetails, label: isString, menu: isMenu
-}, { avatar: isAvatar, startedAt: isNumber, pinned: isBoolean, repeated: value => value === true });
+}, { avatar: isAvatar, startedAt: isNumber, pinned: isBoolean, runningOn: isString, repeated: value => value === true });
 const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
@@ -732,15 +732,17 @@ function update(entry: Drawn, card: Card): void {
 		entry.dot.className = `dot ${card.dot}`;
 	}
 	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3)
-	const place = JSON.stringify([card.pinned, card.repeated && card.alias]);
+	const place = JSON.stringify([card.pinned, card.runningOn, card.repeated && card.alias]);
 	if (place !== entry.place) {
 		entry.place = place;
-		entry.top.replaceChildren(entry.name, ...card.repeated ? [el('span', 'short-id', card.alias)] : [], ...card.pinned ? [pin()] : [], entry.actions);
+		const status = card.runningOn ? remoteStatus(card.runningOn) : card.pinned ? pin() : undefined;
+		entry.top.replaceChildren(entry.name, ...card.repeated ? [el('span', 'short-id', card.alias)] : [], ...status ? [status] : [], entry.actions);
 	}
 	// The Pin button where the card can be pinned or unpinned, filled where it is pinned as its passive Pin is (PANEL-1.3)
 	const pinnable = card.menu.pin === true || card.menu.unpin === true;
 	element.classList.toggle('pinnable', pinnable);
 	element.classList.toggle('pinned', card.pinned === true);
+	element.classList.toggle('remote-agent', card.runningOn !== undefined);
 	entry.pinButton.hidden = !pinnable;
 	const pinLook = card.pinned ? 'filled' : 'outline';
 	if (entry.pinButton.dataset.look !== pinLook) {
@@ -800,6 +802,18 @@ function pin(): HTMLElement {
 	const element = el('span', 'pin');
 	element.setAttribute('aria-hidden', 'true');
 	element.append(pinIcon(true));
+	return element;
+}
+
+// VS Code codicon `remote`. The card's accessible label includes the same text as this status tooltip.
+const REMOTE_PATH = 'M3.14573 5.14704C3.34064 4.95221 3.65776 4.95237 3.85277 5.14704L7.85277 9.14704L7.85374 9.14606C8.04873 9.34105 8.0487 9.65809 7.85374 9.8531L3.85374 13.8531C3.7558 13.951 3.62815 13.9995 3.50023 13.9996C3.37223 13.9996 3.24373 13.9501 3.14573 13.8531C2.95103 13.6581 2.95083 13.341 3.14573 13.1461L6.79222 9.50056L3.14573 5.85407C2.95104 5.65905 2.95084 5.34194 3.14573 5.14704ZM12.1457 1.14704C12.3406 0.952206 12.6578 0.952371 12.8528 1.14704C13.0477 1.34202 13.0477 1.65907 12.8528 1.85407L9.20726 5.50056L12.8537 9.14704C13.0487 9.34202 13.0487 9.65907 12.8537 9.85407C12.7558 9.95101 12.6282 10.0005 12.5002 10.0006C12.3722 10.0006 12.2437 9.95207 12.1457 9.85407L8.14573 5.85407C7.95104 5.65905 7.95084 5.34194 8.14573 5.14704L12.1457 1.14704Z';
+
+function remoteStatus(title: string): HTMLElement {
+	const element = el('span', 'remote-status');
+	element.title = title;
+	element.setAttribute('aria-hidden', 'true');
+	element.append(icon('remote-icon', [['path', { d: REMOTE_PATH }]]));
+	element.addEventListener('click', event => event.stopPropagation());
 	return element;
 }
 
