@@ -29,7 +29,7 @@
         "location_source_window": {
           "type": "string",
           "minLength": 1,
-          "description": "Connected window ID on the running machine supplying the folder and any worktree."
+          "description": "ID or address of the running machine's connected window supplying the folder and worktree."
         },
         "name": {
           "type": "string",

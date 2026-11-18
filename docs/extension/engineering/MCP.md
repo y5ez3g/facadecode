@@ -142,7 +142,9 @@ or the running machine's login folder for a remote start. An explicitly empty fo
 
 The optional `window` selects initial membership and can be qualified with a machine. The optional
 `location_source_window` selects the connected window on the running machine that supplies the folder and worktree
-independently (RULES-2.4, RULES-4.1). The `worktree` argument is an object with a nonempty `branch` and optional nonempty
+independently (RULES-2.4, RULES-4.1). Use its bare ID or copy its `address` from `list_agents`. A qualified source window
+must match the running machine selected by `machine` or by its local default. The `worktree` argument is an object
+with a nonempty `branch` and optional nonempty
 `base_ref`, which defaults to `HEAD` of the selected checkout. It creates a new worktree. To start in an existing
 worktree, give its `folder`. Rust rejects `path` and a string `worktree` with `invalid_argument` and gives the
 corresponding argument or object to use.

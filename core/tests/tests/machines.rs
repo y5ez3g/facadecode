@@ -623,6 +623,35 @@ fn a_window_adopts_a_remote_agent_and_receives_its_message() {
         "{:?}",
         editor.changes(messages)
     );
+
+    let caller = local.start_named_fake("caller", &[]);
+    let mut mcp = McpTestClient::open(&local, &caller.id);
+    let listed = mcp.call("list_agents", json!({}));
+    let source = listed["data"]["windows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{listed}"))
+        .iter()
+        .find(|row| row["id"] == window.window_id)
+        .unwrap();
+    let refused = mcp.call(
+        "start_agent",
+        json!({
+            "name": "wrong-source", "cli": "fake", "machine": "remote",
+            "folder": source["locations"][0]["folder"], "window": source["address"],
+            "location_source_window": source["address"],
+        }),
+    );
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "invalid_argument", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("location_source_window must be on the running machine"),
+        "{refused}"
+    );
+    assert!(local.agent_from_list_json("wrong-source").is_none());
+    assert!(remote.agent_from_list_json("wrong-source").is_none());
 }
 
 /// The direct route supersedes two hops. After the direct link is lost, calls use the remaining

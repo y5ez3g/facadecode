@@ -40,15 +40,15 @@ pub(super) fn check_start(arguments: &Map<String, Value>, problems: &mut Problem
     }
 }
 
-/// Resolve both selectors against the same machine list, retained for result addresses.
-/// Either selector defaults to the caller's machine.
+/// Resolve the start's machine and window selectors against the same selectable machines.
 fn start_machines(
     client: &mut DaemonClient,
     running: Option<&str>,
     member: Option<&str>,
+    source: Option<&str>,
 ) -> Result<(String, String, Vec<MachineIdentity>), Value> {
     let local = client.hello_result.machine_id.clone();
-    if running.is_none() && member.is_none() {
+    if running.is_none() && member.is_none() && source.is_none() {
         return Ok((local.clone(), local, Vec::new()));
     }
     let machines: Vec<_> = client
@@ -65,7 +65,31 @@ fn start_machines(
         Some(selected) => select_machine(&machines, selected),
         None => Ok(local.clone()),
     };
-    Ok((resolve(running)?, resolve(member)?, machines))
+    let running = resolve(running)?;
+    if let Some(source) = source
+        && select_machine(&machines, source)? != running
+    {
+        return Err(envelope::failure(
+            "invalid_argument",
+            "location_source_window must be on the running machine. Choose a window there or select its machine with 'machine'. Nothing was started.",
+        ));
+    }
+    Ok((running, resolve(member)?, machines))
+}
+
+/// Both window roles accept a bare ID or an ID qualified by a machine selector.
+fn window_parts<'a>(
+    window: Option<&'a str>,
+    field: &str,
+) -> Result<(Option<&'a str>, Option<&'a str>), Value> {
+    match window.and_then(|id| id.split_once('@')) {
+        Some(("", _)) => Err(envelope::failure(
+            "invalid_argument",
+            format!("{field} requires a window ID"),
+        )),
+        Some((id, selector)) => Ok((Some(id), Some(selector))),
+        None => Ok((window, None)),
+    }
 }
 
 fn select_machine(machines: &[MachineIdentity], selected: &str) -> Result<String, Value> {
@@ -121,15 +145,18 @@ pub(super) fn start(
     };
     let machine = optional(arguments, "machine");
     let window = optional(arguments, "window");
-    let (window_id, member_selector) = match window.as_deref().and_then(|id| id.split_once('@')) {
-        Some(("", _)) => {
-            return envelope::failure("invalid_argument", "window requires a window ID");
-        }
-        Some((id, selector)) => (Some(id), Some(selector)),
-        None => (window.as_deref(), None),
+    let (window_id, member_selector) = match window_parts(window.as_deref(), "window") {
+        Ok(parts) => parts,
+        Err(failure) => return failure,
     };
+    let source_window = optional(arguments, "location_source_window");
+    let (source_id, source_selector) =
+        match window_parts(source_window.as_deref(), "location_source_window") {
+            Ok(parts) => parts,
+            Err(failure) => return failure,
+        };
     let (running_machine, member_machine, machines) =
-        match start_machines(client, machine.as_deref(), member_selector) {
+        match start_machines(client, machine.as_deref(), member_selector, source_selector) {
             Ok(machines) => machines,
             Err(failure) => return failure,
         };
@@ -137,11 +164,10 @@ pub(super) fn start(
         machine_id: member_machine,
         window_id: window_id.to_string(),
     });
-    let location_source_window =
-        optional(arguments, "location_source_window").map(|window_id| WindowRef {
-            machine_id: running_machine.clone(),
-            window_id,
-        });
+    let location_source_window = source_id.map(|window_id| WindowRef {
+        machine_id: running_machine.clone(),
+        window_id: window_id.to_string(),
+    });
     let folder = optional(arguments, "folder");
     let worktree = arguments
         .get("worktree")

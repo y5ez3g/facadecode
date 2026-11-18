@@ -787,6 +787,18 @@ fn starts_keep_members_and_location_sources_separate() {
         })
     );
 
+    let same = mcp.call(
+        "start_agent",
+        json!({
+            "name": "same-window", "cli": "fake", "folder": folder,
+            "window": connected["address"], "location_source_window": connected["address"],
+        }),
+    );
+    assert_eq!(same["status"], "success", "{same}");
+    assert_eq!(same["data"]["windows"], json!([source.window_id]), "{same}");
+    let same = home.agent_from_list_json("same-window").unwrap();
+    assert_eq!(same["location_source_window"], json!(source), "{same}");
+
     // One long label makes the same rows travel in a file.
     let mut description = window("win-empty", None, &[]);
     description["label"] = json!("x".repeat(8_000));
@@ -815,6 +827,11 @@ fn starts_keep_members_and_location_sources_separate() {
     from_head["name"] = json!("head-reviewer");
     from_head["worktree"] = json!({ "branch": "review-head" });
     from_head["window"] = offline["address"].clone();
+    from_head["location_source_window"] = json!(format!(
+        "{}@{}",
+        source.window_id,
+        facade_base::address::exact_machine_selector(&source.machine_id)
+    ));
     let made = mcp.call("start_agent", from_head);
     assert_eq!(made["status"], "success", "{made}");
     let folder = made["data"]["folder"].as_str().unwrap();
