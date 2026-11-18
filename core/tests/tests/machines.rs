@@ -675,8 +675,13 @@ fn three_machines_switch_routes_and_resolve_names_only_when_all_answer() {
     std::fs::write(third.folder().join("ssh-offline"), []).unwrap();
     drop(right);
     third.kill_home_processes();
-    assert!(wait_until(secs(15), || row(&first, &third_id)
-        .is_some_and(|machine| machine.route.is_none())));
+    assert!(wait_until(secs(15), || row(&first, &third_id).is_some_and(
+        |machine| machine.is_unreachable()
+            && machine
+                .connections
+                .iter()
+                .any(|connection| connection.state == ConnectionState::Disconnected)
+    )));
     let refused = connect(&first).call("agent.screen", json!({ "agent": "other" }));
     assert_eq!(error_reason(&refused), "unavailable", "{refused}");
     assert_eq!(

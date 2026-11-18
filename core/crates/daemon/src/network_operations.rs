@@ -274,7 +274,7 @@ impl Daemon {
             } => match self.select_machine(machine) {
                 Ok(target) => {
                     if let Some(id) = numbered_agent(agent) {
-                        if target.route.is_none() {
+                        if target.is_unreachable() {
                             return Err(unreachable_machine(target));
                         }
                         return Ok(AgentRef {
@@ -672,6 +672,7 @@ impl Daemon {
                 if target.machine_id == daemon.machine_id {
                     return daemon.local_agent_list(&caller);
                 }
+                let unreachable = target.is_unreachable();
                 let mut row = MachineQueryResult {
                     short_id: short_machine_id(&target.machine_id),
                     machine_id: target.machine_id.clone(),
@@ -680,7 +681,7 @@ impl Daemon {
                     status: MachineQueryStatus::Unavailable,
                     answered_at: None,
                 };
-                if target.route.is_some() {
+                if !unreachable {
                     let request = value_of(MachineQueryArgs { machine: None });
                     let result = timeout_at(
                         deadline,

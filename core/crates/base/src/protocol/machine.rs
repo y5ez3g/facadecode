@@ -117,6 +117,12 @@ pub struct MachineInfo {
     pub connections: Vec<MachineConnection>,
 }
 
+impl MachineInfo {
+    pub fn is_unreachable(&self) -> bool {
+        self.route.is_none()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionKind {
@@ -128,7 +134,8 @@ pub enum ConnectionKind {
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionState {
     Connected,
-    Unavailable,
+    #[serde(rename = "unavailable")]
+    Disconnected,
     SshInteractionRequired,
 }
 
@@ -571,4 +578,37 @@ pub fn operation_names() -> Vec<String> {
 
 pub fn topic_names() -> Vec<String> {
     super::operations::collect_names(visit_topics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn v2_keeps_the_original_connection_names_and_route_omission() {
+        for (state, word) in [
+            (ConnectionState::Connected, "connected"),
+            (ConnectionState::Disconnected, "unavailable"),
+            (
+                ConnectionState::SshInteractionRequired,
+                "ssh_interaction_required",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(state).unwrap(), json!(word));
+            assert_eq!(
+                serde_json::from_value::<ConnectionState>(json!(word)).unwrap(),
+                state
+            );
+        }
+
+        let mut wire = json!({ "machine_id": "here", "name": "desk", "connections": [] });
+        let offline: MachineInfo = serde_json::from_value(wire.clone()).unwrap();
+        assert!(offline.is_unreachable());
+        assert_eq!(serde_json::to_value(offline).unwrap(), wire);
+        wire["route"] = json!([]);
+        let local: MachineInfo = serde_json::from_value(wire.clone()).unwrap();
+        assert!(!local.is_unreachable());
+        assert_eq!(serde_json::to_value(local).unwrap(), wire);
+    }
 }

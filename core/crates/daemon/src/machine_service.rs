@@ -41,7 +41,7 @@ pub(crate) async fn follow_network(
             Event::RoutesChanged { machines } => {
                 for row in machines
                     .iter()
-                    .filter(|row| row.machine_id != daemon.machine_id && row.route.is_some())
+                    .filter(|row| row.machine_id != daemon.machine_id && !row.is_unreachable())
                 {
                     if let Err(error) = blocking_in_place(|| {
                         daemon.store.remember_machine(&row.machine_id, &row.name)
@@ -304,7 +304,7 @@ impl Daemon {
                     kind: ConnectionKind::Saved,
                     ssh_destination: Some(saved.ssh_destination),
                     remote_home: saved.remote_home,
-                    state: state.map_or(ConnectionState::Unavailable, |c| c.state),
+                    state: state.map_or(ConnectionState::Disconnected, |c| c.state),
                     ssh_interaction: state.and_then(|c| c.ssh_interaction.clone()),
                 }],
             });
@@ -446,7 +446,7 @@ impl Daemon {
             .network
             .machines()
             .iter()
-            .any(|row| row.machine_id == machine_id && row.route.is_some());
+            .any(|row| row.machine_id == machine_id && !row.is_unreachable());
         self.publish_machine_table();
         Ok(MachineRemoveResult {
             machine_id: saved.machine_id,

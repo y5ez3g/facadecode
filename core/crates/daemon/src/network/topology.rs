@@ -350,7 +350,7 @@ impl Topology {
                 state: match (&saved.interaction, saved.active) {
                     (_, Some(_)) => ConnectionState::Connected,
                     (Some(_), None) => ConnectionState::SshInteractionRequired,
-                    (None, None) => ConnectionState::Unavailable,
+                    (None, None) => ConnectionState::Disconnected,
                 },
                 ssh_interaction: saved.interaction.clone(),
             })

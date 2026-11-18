@@ -67,7 +67,7 @@ impl Daemon {
             if source.state != AgentSyncState::Unreachable
                 && !machines
                     .iter()
-                    .any(|row| &row.machine_id == id && row.route.is_some())
+                    .any(|row| &row.machine_id == id && !row.is_unreachable())
             {
                 source.disconnected();
                 let _ = self.changes.send(AgentsChange::MachineState {
@@ -270,6 +270,6 @@ impl Daemon {
         agent.unreachable = agent.machine_id != self.machine_id
             && !machines
                 .iter()
-                .any(|machine| machine.machine_id == agent.machine_id && machine.route.is_some());
+                .any(|machine| machine.machine_id == agent.machine_id && !machine.is_unreachable());
     }
 }
