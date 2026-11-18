@@ -961,7 +961,7 @@ An agent record.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `agent_id` | `string` | yes | The stable ID: `a` followed by a number, unique within the Facade home while its counter file remains. |
+| `agent_id` | `string` | yes | The stable ID is `a` followed by a number. It is unique within its Facade home while that home's SQLite database (`core/facade.db`) retains the agent number counter. |
 | `address` | `string` | no | The copyable address, including a machine selector. The serving daemon fills client views. |
 | `label` | `string` | no | The label in the serving client's machine view. |
 | `unreachable` | `boolean` | no | The running machine is currently unreachable. |

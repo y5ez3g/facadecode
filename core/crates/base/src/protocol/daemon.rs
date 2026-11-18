@@ -647,8 +647,8 @@ pub struct WatchEndedParams {
 /// An agent record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentInfo {
-    /// The stable ID: `a` followed by a number, unique within the Facade home while its counter
-    /// file remains.
+    /// The stable ID is `a` followed by a number. It is unique within its Facade home while
+    /// that home's SQLite database (`core/facade.db`) retains the agent number counter.
     pub agent_id: String,
     /// The copyable address, including a machine selector. The serving daemon fills client views.
     #[serde(skip_serializing_if = "Option::is_none")]

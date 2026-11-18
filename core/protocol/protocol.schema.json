@@ -93,7 +93,7 @@
       "properties": {
         "agent_id": {
           "type": "string",
-          "description": "The stable ID: `a` followed by a number, unique within the Facade home while its counter\nfile remains."
+          "description": "The stable ID is `a` followed by a number. It is unique within its Facade home while\nthat home's SQLite database (`core/facade.db`) retains the agent number counter."
         },
         "address": {
           "type": "string",
