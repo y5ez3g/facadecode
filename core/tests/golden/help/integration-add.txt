@@ -1,0 +1,17 @@
+Add Facade to a CLI's settings
+
+Usage: facade integration add [OPTIONS] <CLI>
+
+Let new sessions of this CLI join Facade as guests. Facade updates the CLI's user settings so that
+those sessions can use its tools and messages. Run this again to bring the settings up to date.
+
+Arguments:
+  <CLI>  claude, codex, opencode, pi, muse or agy
+
+Options:
+      --json  Print the result as JSON
+  -h, --help  Print help
+
+Examples:
+  # Add Facade to Claude Code's settings
+  facade integration add claude

@@ -22,6 +22,8 @@ mod daemon_client;
 mod errors;
 mod help;
 mod hooks;
+#[cfg(test)]
+mod tests;
 
 use std::fmt;
 use std::io::{IsTerminal, Write};

@@ -61,12 +61,7 @@ fn start(home: &TestHome, name: &str, env: &[(&str, &str)], shown: &str) -> Stri
         .output()
         .unwrap();
     assert!(started.status.success(), "{}", stderr(&started));
-    let id = stdout(&started)
-        .split_whitespace()
-        .next()
-        .and_then(|id| id.strip_prefix('#'))
-        .unwrap_or_else(|| panic!("{}", stdout(&started)))
-        .to_string();
+    let id = started_id(&stdout(&started));
     assert!(
         wait_for_screen_text(home, name, &format!("❯ {shown}")),
         "{}",

@@ -59,7 +59,7 @@ fn read_pid(home: &TestHome, file: &str) -> i32 {
 }
 
 /// The note shown while the attachment reconnects.
-const LOST_NOTE: &str = "[facade: connection lost; reconnecting; recent keys may not have arrived]";
+const LOST_NOTE: &str = "Reconnecting to Facade. Recent keys may be lost.";
 
 fn agent(home: &TestHome, id: &str) -> Option<Value> {
     home.agents()
@@ -212,7 +212,15 @@ fn a_removal_interrupted_after_its_record_is_deleted_is_finished_by_the_next_dae
     );
     // The ended run was released before the removal, so the keeper held nothing and ended with the
     // daemon. A command starts the next daemon.
-    assert!(home.run_facade_ok(&["list"]).contains("No agents"));
+    let listed = home.run_facade(&["list"]);
+    assert_eq!(
+        (listed.status.code(), stdout(&listed), stderr(&listed)),
+        (
+            Some(0),
+            String::new(),
+            "No agents. Run 'facade start claude' to start one.\n".to_string()
+        )
+    );
     assert!(
         wait_until(LOADED_TIMEOUT, || !home
             .path
@@ -385,7 +393,8 @@ fn keys_typed_while_attach_is_disconnected_are_sent_after_it_reconnects() {
     assert!(status.success(), "{status:?}");
     assert!(
         term.wait_for(secs(2), |text| text
-            .contains("[facade: detached; 10 typed bytes were not sent]")),
+            .contains("warning: 10 bytes you typed were not sent")
+            && text.contains("Detached from ")),
         "{}",
         term.text()
     );
@@ -430,10 +439,10 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         wait_until(secs(15), || !alive(&survivor_process)),
         "the CLI outlived its console"
     );
-    let line = home.list_line("survivor").expect("the agent stays listed");
-    assert!(
-        line.contains("ended (the terminal closed; the CLI may still be running)"),
-        "{line}"
+    assert_eq!(
+        home.list_state("survivor").as_deref(),
+        Some("ended"),
+        "the agent stays listed"
     );
     let ended = agent(&home, &agent_id).unwrap();
     assert!(
@@ -473,9 +482,8 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
     );
     let shown = |term: &TestTerminal| term.text_with_scrollback();
     assert!(
-        wait_until(secs(2), || shown(&term).contains(
-            "[facade: agent ended: the terminal closed; the CLI may still be running]"
-        )),
+        wait_until(secs(2), || shown(&term)
+            .contains("'s terminal closed. Its CLI may still be running.")),
         "{}",
         shown(&term)
     );
@@ -562,10 +570,9 @@ fn an_ended_run_whose_terminal_a_descendant_holds_does_not_hold_up_recovery() {
     // command starts the next one.
     let started = Instant::now();
     assert!(
-        home.list_line("parent")
-            .is_some_and(|line| line.contains("ended: crashed (code 3)")),
+        home.list_state("parent").as_deref() == Some("exited: code 3"),
         "{:?}",
-        home.list_line("parent")
+        home.list_table()
     );
     assert!(
         started.elapsed() < secs(4),
@@ -1123,7 +1130,8 @@ fn attach_keeps_retrying_while_recovery_waits_and_detaches_at_once() {
     assert!(status.success(), "{status:?}");
     assert!(
         term.wait_for(secs(2), |text| text
-            .contains("[facade: detached; 9 typed bytes were not sent]")),
+            .contains("warning: 9 bytes you typed were not sent")
+            && text.contains("Detached from ")),
         "{}",
         term.text()
     );

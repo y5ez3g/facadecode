@@ -1,0 +1,19 @@
+Print an agent's recent output
+
+Usage: facade screen [OPTIONS] <AGENT>
+
+Print what an agent has shown recently: the last lines of its screen and scrollback as plain text.
+
+Arguments:
+  <AGENT>  Agent ID or name
+
+Options:
+  -n, --lines <N>  Number of lines to print, from 1 to 2,000 [default: 50]
+  -h, --help       Print help
+
+Examples:
+  # Print agent a3's recent output
+  facade screen a3
+
+  # Print the last 200 lines
+  facade screen -n 200 a3

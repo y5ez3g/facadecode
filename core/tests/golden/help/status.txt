@@ -1,0 +1,15 @@
+Show Facade's status
+
+Usage: facade status [OPTIONS]
+
+Check whether Facade responds and see its Facade home, where it keeps settings and logs. If it
+responds, you also see this command's version, Facade's services and the agent count. This command
+never starts Facade.
+
+Options:
+      --json  Print the status as JSON
+  -h, --help  Print help
+
+Examples:
+  # Check whether Facade responds
+  facade status

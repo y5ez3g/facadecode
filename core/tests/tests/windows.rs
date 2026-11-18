@@ -410,7 +410,7 @@ fn an_editor_window_s_agents_outlive_a_daemon_restart() {
     );
 }
 
-/// What an agent of an editor window sends to `#human` goes to that window's `messages` watch and
+/// What an agent of an editor window sends to `human` goes to that window's `messages` watch and
 /// is delivered as it does, and stays readable by its ID. Another window's watch never sees it.
 /// Without a watch of its window, the send is refused and nothing is kept.
 #[test]
@@ -436,12 +436,12 @@ fn the_person_is_told_in_the_sending_agent_s_own_window() {
     let told = home
         .command(&test_binaries().facade)
         .env("FACADE_AGENT", &id)
-        .args(["send", "#human", "build is green"])
+        .args(["send", "human", "build is green"])
         .output()
         .unwrap();
     assert_eq!(
         stdout(&told).trim(),
-        "#m1 was handed to the person's editor window",
+        "m1 delivered to the human's editor window",
         "{}",
         stderr(&told)
     );

@@ -76,7 +76,7 @@ fn a_second_daemon_loses_the_home_lock_and_changes_nothing() {
         Some(first),
         "the lock record still names the first daemon"
     );
-    assert!(home.list_line("w1").is_some());
+    assert!(home.list_state("w1").is_some());
 }
 
 /// A paused keeper may delay starts and stops, but must not delay other daemon responses.
@@ -199,16 +199,10 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         wait_until(secs(10), || !alive(&agent.process)),
         "the replacement keeper stopped the CLI"
     );
-    let line = home.list_line("w1").expect("w1 is listed");
-    // A keeper that took a CLI over has its exit code on Windows, from the CLI's process handle;
-    // on Unix it is not the CLI's parent and has none.
-    #[cfg(unix)]
-    let said = "ended: stopped (exit status is unavailable)";
-    #[cfg(windows)]
-    let said = "ended: stopped (code 0xC000013A)";
-    assert!(
-        line.contains(said),
-        "Facade knows it stopped the CLI: {line}"
+    assert_eq!(
+        home.list_state("w1").as_deref(),
+        Some("stopped"),
+        "Facade knows it stopped the CLI"
     );
 }
 

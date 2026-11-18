@@ -1,0 +1,19 @@
+List agents
+
+Usage: facade list [OPTIONS]
+Alias: facade ls
+
+See what your agents are doing and which ones are waiting for you, oldest first. Ended agents stay
+listed until you remove them. Sessions that join through an integration are marked as guests.
+
+Options:
+  -q, --quiet  Print only agent IDs
+      --json   Print agents as JSON
+  -h, --help   Print help
+
+Examples:
+  # See which agents are working or waiting for you
+  facade list
+
+  # Print agent IDs, one per line
+  facade ls -q
