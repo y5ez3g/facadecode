@@ -347,7 +347,11 @@ impl Daemon {
         request_id: &str,
         mut cancel: Cancel,
     ) -> Result<SendResult, ErrorBody> {
-        let (Earlier::Settled(message) | Earlier::Delivering(message, _)) = &earlier;
+        let message = match &earlier {
+            Earlier::Settled(message) | Earlier::Delivering(message, _) => message,
+            Earlier::HumanReady(result) => &result.message,
+            Earlier::HumanInFlight(_) => unreachable!("person messages settle when posted"),
+        };
         log(
             "info",
             &format!(
@@ -357,6 +361,8 @@ impl Daemon {
         );
         let (message, withdrawn) = match earlier {
             Earlier::Settled(message) => (message, false),
+            Earlier::HumanReady(result) => return Ok(result),
+            Earlier::HumanInFlight(_) => unreachable!("person messages settle when posted"),
             // A guest's message waits with no deadline for its next turn: it answers as it stands.
             Earlier::Delivering(message, _) if message.delivery.deadline.is_none() => {
                 (message, false)

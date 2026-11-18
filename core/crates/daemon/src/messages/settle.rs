@@ -34,9 +34,15 @@ impl Messages {
         }
         {
             let mut open = self.deliveries.lock();
-            if !open.get(&number).is_some_and(|delivery| delivery.pasted) {
+            if !open
+                .agents
+                .get(&number)
+                .is_some_and(|delivery| delivery.pasted)
+            {
                 let timeout = Outcome::untyped(DeliveryFailure::Timeout);
-                return self.deliveries.settle_open(&mut open, &[number], timeout);
+                return self
+                    .deliveries
+                    .settle_open(&mut open.agents, &[number], timeout);
             }
         }
         if !ended_by(settled, Instant::now() + RESPONSE_GRACE).await {
@@ -60,7 +66,7 @@ impl Deliveries {
             return;
         }
         let mut open = self.lock();
-        self.settle_open(&mut open, numbers, outcome);
+        self.settle_open(&mut open.agents, numbers, outcome);
     }
 
     /// Ends the open deliveries among `numbers` as `outcome` says, `open` held: writes them and the

@@ -4,7 +4,7 @@ use std::time::SystemTime;
 
 use facade_base::daemon::{
     DEFAULT_MESSAGES_LIMIT, Delivery, DeliveryStatus, MAX_MESSAGE_IDS, MAX_MESSAGES_LIMIT, Message,
-    MessagesSnapshot, MessagesWatchArgs,
+    MessagesSnapshot, MessagesWatchArgs, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 
@@ -14,6 +14,11 @@ use super::{Deliveries, Due, KEPT_FOR, Messages, OpenMap, Settled, number, parse
 use crate::store::Gone;
 use crate::{blocking_in_place, pause_for_test};
 
+enum Inbox<'a> {
+    Recipient(&'a str),
+    Window(&'a WindowRef),
+}
+
 impl Messages {
     /// Reads `owner`'s inbox as `args` select, oldest first. Each message read that was not yet
     /// delivered is delivered by this read, in the table before the read returns: one its typist
@@ -22,6 +27,27 @@ impl Messages {
     pub(crate) fn read(
         &self,
         owner: &str,
+        args: &MessagesWatchArgs,
+    ) -> Result<MessagesSnapshot, ErrorBody> {
+        let mut open = self.deliveries.lock();
+        let mut snapshot = self.snapshot(Inbox::Recipient(owner), args)?;
+        self.deliveries
+            .deliver_read(&mut open.agents, &mut snapshot.messages)?;
+        Ok(snapshot)
+    }
+
+    /// Reads the history of messages already delivered to this window.
+    pub(crate) fn read_human(
+        &self,
+        window: &WindowRef,
+        args: &MessagesWatchArgs,
+    ) -> Result<MessagesSnapshot, ErrorBody> {
+        self.snapshot(Inbox::Window(window), args)
+    }
+
+    fn snapshot(
+        &self,
+        inbox: Inbox<'_>,
         args: &MessagesWatchArgs,
     ) -> Result<MessagesSnapshot, ErrorBody> {
         let limit = usize::from(page_limit(args)?);
@@ -34,20 +60,16 @@ impl Messages {
                 })
             })
             .transpose()?;
-        let mut open = self.deliveries.lock();
-        let mut snapshot = match &args.ids {
-            Some(ids) => self.by_ids(owner, ids, args)?,
-            None => self.page(owner, after.unwrap_or(0), args.all, limit)?,
-        };
-        self.deliveries
-            .deliver_read(&mut open, &mut snapshot.messages)?;
-        Ok(snapshot)
+        match &args.ids {
+            Some(ids) => self.by_ids(inbox, ids, args),
+            None => self.page(inbox, after.unwrap_or(0), args.all, limit),
+        }
     }
 
-    /// The messages among `ids` in `owner`'s inbox, and the IDs not found there.
+    /// The messages among `ids` in `inbox`, and the IDs not found there.
     fn by_ids(
         &self,
-        owner: &str,
+        inbox: Inbox<'_>,
         ids: &[String],
         args: &MessagesWatchArgs,
     ) -> Result<MessagesSnapshot, ErrorBody> {
@@ -62,8 +84,16 @@ impl Messages {
             )));
         }
         let wanted: Vec<u64> = ids.iter().filter_map(|id| parse_number(id)).collect();
-        let messages = blocking_in_place(|| self.deliveries.table.inbox_messages(owner, &wanted))
-            .map_err(ErrorBody::internal)?;
+        let table = &self.deliveries.table;
+        let messages = blocking_in_place(|| match inbox {
+            Inbox::Recipient(owner) => table.inbox_messages(owner, &wanted),
+            Inbox::Window(window) => {
+                let mut messages = table.human_inbox(window)?;
+                messages.retain(|message| wanted.contains(&number(message)));
+                Ok(messages)
+            }
+        })
+        .map_err(ErrorBody::internal)?;
         let found = |id: &String| {
             parse_number(id).is_some_and(|wanted| messages.iter().any(|m| number(m) == wanted))
         };
@@ -81,18 +111,24 @@ impl Messages {
         })
     }
 
-    /// Up to `limit` messages of `owner`'s after number `after`: the undelivered ones, or `all`.
+    /// Up to `limit` messages of `inbox` after number `after`. A recipient gets undelivered
+    /// messages by default, and a window gets its delivery history.
     fn page(
         &self,
-        owner: &str,
+        inbox: Inbox<'_>,
         after: u64,
         all: bool,
         limit: usize,
     ) -> Result<MessagesSnapshot, ErrorBody> {
-        let mut messages = blocking_in_place(|| {
-            self.deliveries
-                .table
-                .inbox_page(owner, after, all, limit + 1)
+        let table = &self.deliveries.table;
+        let mut messages = blocking_in_place(|| match inbox {
+            Inbox::Recipient(owner) => table.inbox_page(owner, after, all, limit + 1),
+            Inbox::Window(window) => Ok(table
+                .human_inbox(window)?
+                .into_iter()
+                .filter(|message| number(message) > after)
+                .take(limit + 1)
+                .collect()),
         })
         .map_err(ErrorBody::internal)?;
         let more = messages.len() > limit;
@@ -136,7 +172,8 @@ impl Messages {
     /// watchers that each message `gone` is. Sends waiting on its messages learn they went with it.
     pub(crate) fn drop_inbox(&self, owner: &str, gone: Vec<Gone>) {
         let mut open = self.deliveries.lock();
-        open.retain(|_, delivery| delivery.message.to != owner);
+        open.agents
+            .retain(|_, delivery| delivery.message.to != owner);
         for Gone { number, from, to } in gone {
             self.deliveries.removed(format!("m{number}"), from, to);
         }
