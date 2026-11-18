@@ -85,6 +85,14 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// The person, as a message's sender or recipient names it.
 pub(crate) const HUMAN: &str = "human";
 
+/// The SSH destination and optional Facade home saved for a machine.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SavedConnection {
+    pub(crate) machine_id: String,
+    pub(crate) ssh_destination: String,
+    pub(crate) remote_home: Option<String>,
+}
+
 /// A window and the daemon-local generation of its current instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WindowBinding {

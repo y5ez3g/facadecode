@@ -17,12 +17,11 @@ use tokio::io::BufReader;
 use tokio::sync::mpsc;
 
 use crate::lifecycle::Work;
-use crate::network::{Event, FrontConnection, SavedConnection as NetworkConnection};
+use crate::network::{Event, FrontConnection};
 use crate::records::root_of;
 use crate::server::Client;
 use crate::service::value_of;
-use crate::store::SavedConnection;
-use crate::{Daemon, blocking_in_place};
+use crate::{Daemon, SavedConnection, blocking_in_place};
 
 pub(crate) enum MachineStream {
     Incoming(MachineHello),
@@ -242,11 +241,7 @@ impl Daemon {
 
     pub(crate) fn restore_machine_connections(&self) -> anyhow::Result<()> {
         for saved in blocking_in_place(|| self.store.saved_connections())? {
-            drop(self.network.start_saved(NetworkConnection {
-                machine_id: saved.machine_id,
-                ssh_destination: saved.ssh_destination,
-                remote_home: saved.remote_home,
-            }));
+            drop(self.network.start_saved(saved));
         }
         Ok(())
     }
@@ -401,14 +396,7 @@ impl Daemon {
             ssh_destination: args.ssh_destination,
             remote_home: args.remote_home,
         };
-        let connected = self
-            .network
-            .start_saved(NetworkConnection {
-                machine_id: saved.machine_id.clone(),
-                ssh_destination: saved.ssh_destination.clone(),
-                remote_home: saved.remote_home.clone(),
-            })
-            .await;
+        let connected = self.network.start_saved(saved.clone()).await;
         let machine = match connected
             .map_err(ErrorBody::internal)
             .and_then(|machine| machine)

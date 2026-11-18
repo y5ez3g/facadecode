@@ -110,7 +110,8 @@ The layer's files:
 
 **Values the parts share**: `HUMAN` (the person's ID), `Sender` (an agent and its name then, or the
 person), `Caller` (the authenticated identity carried across machines), `Cancel` (a call's
-cancellation), `ToolsGiven` (how a run's CLI got Facade's tools), and the test gates and
+cancellation), `ToolsGiven` (how a run's CLI got Facade's tools), `SavedConnection` (the machine
+ID, SSH destination and optional Facade home shared by store and network), and the test gates and
 `blocking_in_place`.
 
 **Table handles**: `NumberTable` to records (agent numbers), `MessageTable` to messages,

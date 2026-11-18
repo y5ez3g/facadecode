@@ -5,13 +5,7 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::Store;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SavedConnection {
-    pub(crate) machine_id: String,
-    pub(crate) ssh_destination: String,
-    pub(crate) remote_home: Option<String>,
-}
+use crate::SavedConnection;
 
 pub(super) fn add_tables(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
@@ -134,5 +128,51 @@ impl Store {
                     .collect()
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_folder::TestFolder;
+
+    #[test]
+    fn saved_connections_keep_the_first_destination_and_home_after_reopening() {
+        let core = TestFolder::new("saved-connections");
+        let store = Store::open(&core, &[]).unwrap().store;
+        let saved = [
+            SavedConnection {
+                machine_id: "20992f22-a645-4b31-acbe-3bdaa29dead0".into(),
+                ssh_destination: "desk".into(),
+                remote_home: None,
+            },
+            SavedConnection {
+                machine_id: "7164b21c-c4d6-4406-817b-e4860fb1eb63".into(),
+                ssh_destination: "user@gpu".into(),
+                remote_home: Some("/var/lib/facade".into()),
+            },
+        ];
+        for connection in &saved {
+            assert_eq!(store.save_connection(connection).unwrap(), *connection);
+        }
+        let replacement = SavedConnection {
+            ssh_destination: "another-desk".into(),
+            remote_home: Some("/tmp/other-facade".into()),
+            ..saved[0].clone()
+        };
+        assert_eq!(store.save_connection(&replacement).unwrap(), saved[0]);
+
+        drop(store);
+        let store = Store::open(&core, &[]).unwrap().store;
+        assert_eq!(store.saved_connections().unwrap(), saved);
+        for connection in &saved {
+            let id = &connection.machine_id;
+            assert_eq!(
+                store.delete_connection(id).unwrap().as_ref(),
+                Some(connection)
+            );
+            assert_eq!(store.delete_connection(id).unwrap(), None);
+        }
+        assert!(store.saved_connections().unwrap().is_empty());
     }
 }

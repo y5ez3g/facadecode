@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use self::session::{Deadline, Delivery, Output, Peer, Pending, Reply, deadline_after, remaining};
 use self::topology::{Link, Origin, Topology};
 use self::wire::{Forward, Reader};
+use crate::SavedConnection;
 
 pub(crate) use self::session::Subscription;
 
@@ -45,13 +46,6 @@ pub(crate) struct FrontConnection {
     pub(crate) transport: MachineTransport,
     pub(crate) expected_machine_id: Option<String>,
     pub(crate) kind: ConnectionKind,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SavedConnection {
-    pub(crate) machine_id: String,
-    pub(crate) ssh_destination: String,
-    pub(crate) remote_home: Option<String>,
 }
 
 pub(crate) enum Event {

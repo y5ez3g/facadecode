@@ -14,7 +14,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::routes::{self, Conflict, LiveIdentities, is_uuid_v4};
 use super::session::Peer;
-use super::{Event, FrontConnection, SavedConnection, SessionId, wire};
+use super::{Event, FrontConnection, SessionId, wire};
+use crate::SavedConnection;
 
 pub(super) struct Topology {
     pub(super) local: MachineHello,

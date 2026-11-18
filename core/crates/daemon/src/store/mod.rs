@@ -38,7 +38,6 @@ mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use integrations::{IntegrationFile, IntegrationTable};
-pub(crate) use machines::SavedConnection;
 pub(crate) use membership::MembershipTable;
 pub(crate) use messages::{Gone, Kept, KeptMessage, MessageTable, RequestId, Settlement};
 pub(crate) use windows::WindowTable;

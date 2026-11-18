@@ -9,7 +9,8 @@ use tokio::sync::{oneshot, watch};
 use super::ssh::{Diagnostics, Pipes, RETRY_AFTER};
 use super::topology::{Origin, Saved, ssh_source};
 use super::wire::Reader;
-use super::{Event, Network, SavedConnection, expected, wire};
+use super::{Event, Network, expected, wire};
+use crate::SavedConnection;
 
 impl Network {
     /// Starts a saved connection, or resumes one whose background SSH needed interaction.
