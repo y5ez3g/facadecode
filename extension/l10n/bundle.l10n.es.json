@@ -206,6 +206,7 @@
 	"Search by name, CLI, title, location, or ID": "Buscar por nombre, CLI, título, ubicación o ID",
 	"Machine": "Máquina",
 	"This machine": "Esta máquina",
+	"Needs SSH login": "Requiere iniciar sesión por SSH",
 	"Running on {0}": "En ejecución en {0}",
 	"SSH interaction required": "SSH requiere interacción",
 	"Facade Code couldn’t find the Facade core on this computer. Install Facade Code locally to connect this Remote-SSH window to your Facade network.": "Facade Code no ha encontrado el núcleo de Facade en este equipo. Instale Facade Code de forma local para conectar esta ventana de Remote-SSH a su red de Facade.",

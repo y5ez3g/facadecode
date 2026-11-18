@@ -282,6 +282,7 @@
 	"Branch name": "Branch name",
 	"Starts from {0}": "Starts from {0}",
 	"This machine": "This machine",
+	"Needs SSH login": "Needs SSH login",
 	"Unavailable": "Unavailable",
 	"{0} · {1}": "{0} · {1}",
 	"Machine": "Machine",

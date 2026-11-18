@@ -206,6 +206,7 @@
 	"Search by name, CLI, title, location, or ID": "Ad, CLI, başlık, konum veya kimliğe göre arayın",
 	"Machine": "Makine",
 	"This machine": "Bu makine",
+	"Needs SSH login": "SSH ile oturum açmak gerekiyor",
 	"Running on {0}": "{0} üzerinde çalışıyor",
 	"SSH interaction required": "SSH için kullanıcı etkileşimi gerekiyor",
 	"Facade Code couldn’t find the Facade core on this computer. Install Facade Code locally to connect this Remote-SSH window to your Facade network.": "Bu bilgisayarda Facade çekirdeği bulunamadı. Bu Remote-SSH penceresini Facade ağınıza bağlamak için Facade Code'u yerel olarak yükleyin.",

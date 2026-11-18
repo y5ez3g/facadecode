@@ -368,4 +368,19 @@ suite('Localization: the words each language has for Facade\'s things (UX-2.4)',
 			}
 		}
 	});
+
+	test('the machine labels name a Facade home and the SSH caption calls for a login', () => {
+		const namesFacade = new Set(['de', 'ja', 'ko', 'pt-br', 'ru', 'zh-cn', 'zh-tw']);
+		const bundleOf = (locale: string) => readJson(path.join(ROOT, 'l10n', `bundle.l10n.${locale}.json`));
+		for (const locale of LOCALES) {
+			const bundle = bundleOf(locale);
+			for (const key of ['This machine', 'Machine']) {
+				assert.strictEqual(textOf(bundle[key]).includes('Facade'), namesFacade.has(locale), `${locale}: ${key}`);
+			}
+			assert.match(textOf(bundle['Needs SSH login']), /\bSSH\b/, locale);
+		}
+		assert.strictEqual(bundleOf('zh-cn')['Needs SSH login'], '需要 SSH 登录');
+		assert.strictEqual(bundleOf('zh-tw')['Needs SSH login'], '需要 SSH 登入');
+		assert.strictEqual(bundleOf('ru')['Unavailable'], 'Недоступно');
+	});
 });

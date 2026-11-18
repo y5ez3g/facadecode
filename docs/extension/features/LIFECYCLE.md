@@ -17,9 +17,12 @@ document owns launch, naming, terminal, finding, closing, Resume and Pin interac
 **New Agent shows the working location, editable suggested name and CLI choices in one native picker.**
 
 On the Rust engine, offer a Machine step when the Facade network has another machine. Preselect This machine and show
-its name. The current window's Facade machine determines which machine is local. For another machine, offer the working
-locations its connected windows supply and allow an absolute path on that machine. With no selected path, use its login
-home. List only the CLIs available in its login environment. Allow returning to Machine while a query is pending, with a
+its name. Each Facade home has its own machine ID. Use that ID for the current window and the chosen target, even when
+machines share an SSH host or saved name. Show the saved machine names. A machine without a route shows
+`Needs SSH login` when its saved connection needs interaction, or `Unavailable` otherwise. Enter on either row leaves
+the picker open. For another reachable machine, offer the working locations its connected windows supply and allow an
+absolute path on that machine. With no selected path, use its login home. List only the CLIs available in its login
+environment. Allow returning to Machine while a query is pending, with a
 three-second bound on querying other machines. Changing machines clears the prior location and CLI choices. On confirmation,
 preflight the location and CLI before starting. A preflight failure preserves the choices and shows its reason.
 

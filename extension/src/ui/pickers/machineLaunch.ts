@@ -37,14 +37,17 @@ export interface MachineLaunch {
 
 /** Which Facade machine runs the new agent (LIFECYCLE-1.1). */
 export async function chooseMachine(flow: Flow, title: string, machines: NonNullable<ReturnType<MachineLaunch['machines']>>, current: string): Promise<LaunchMachine | undefined> {
-	const items = [machines.local, ...machines.others].map(machine => ({
-		machine,
-		label: machine === machines.local ? vscode.l10n.t("This machine") : plainText(machine.name),
-		description: machine === machines.local ? plainText(machine.name) : undefined,
-		detail: machine.unavailable === 'ssh_interaction_required' ? vscode.l10n.t("SSH interaction required")
-			: machine.unavailable ? vscode.l10n.t("Unavailable") : undefined,
-		iconPath: new vscode.ThemeIcon(machine === machines.local ? 'device-desktop' : 'remote')
-	}));
+	const items = [machines.local, ...machines.others].map(machine => {
+		const local = machine.id === machines.local.id;
+		return {
+			machine,
+			label: local ? vscode.l10n.t("This machine") : plainText(machine.name),
+			description: local ? plainText(machine.name) : undefined,
+			detail: machine.unavailable === 'ssh_interaction_required' ? vscode.l10n.t("Needs SSH login")
+				: machine.unavailable ? vscode.l10n.t("Unavailable") : undefined,
+			iconPath: new vscode.ThemeIcon(local ? 'device-desktop' : 'remote')
+		};
+	});
 	const picked = await flow.pick({
 		title: vscode.l10n.t("{0} · {1}", title, vscode.l10n.t("Machine")),
 		items,

@@ -7,10 +7,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { tempDir } from './util';
 import { folderKeyOf } from '../base/files';
+import type { CliListResult, MachineInfo, MachinesChange } from '../base/coreProtocol';
 import { locationIdOf } from '../core/locations/catalog';
 import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunChange, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 import type { MachineLaunch, RemoteLaunchRequest } from '../ui/pickers/machineLaunch';
+import type { DaemonLink, WatchListener } from '../host/rust/types';
 import { TestEmitter, withModules } from './withModules';
 
 const BACK_BUTTON = { id: 'back' };
@@ -444,6 +446,81 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			const wanted: [string, RemoteLaunchRequest] = ['gpu-id', { name: 'Ada', cli: 'muse', location }];
 			assert.deepStrictEqual([attempts, starts, selected, listed], [[wanted, wanted], [wanted], ['remote-run'], []]);
+		});
+
+		test('LIFECYCLE-1.1: selects separate Facade homes on one SSH host by ID and blocks machines without a route', async () => {
+			const { RustMachines } = withModules({ vscode: {
+				EventEmitter: TestEmitter,
+				Disposable: { from: (...parts: { dispose(): void }[]) => ({ dispose: () => parts.forEach(part => part.dispose()) }) }
+			} })<typeof import('../host/rust/machines')>(require.resolve('../host/rust/machines'));
+			const [local, first, second, login, offline] = ['1', '2', '3', '4', '5'].map(digit => `${digit.repeat(8)}-0000-4000-8000-000000000000`);
+			const window = { machine_id: local, window_id: 'editor' };
+			const dispose = () => ({ dispose() { } });
+			let snapshot!: WatchListener<readonly MachineInfo[], MachinesChange>['snapshot'];
+			const queries: { op: string; machine: string }[] = [];
+			const clis: CliListResult = { clis: [{ cli: 'claude', display_name: 'Claude Code', available: true, overrides: { model: false, effort: false } }] };
+			const link = {
+				window, windowId: window.window_id, machineId: local, connected: true, onDidBind: dispose,
+				watch: (topic: string, _args: object, listener: WatchListener<readonly MachineInfo[], MachinesChange>) => {
+					assert.strictEqual(topic, 'machines');
+					snapshot = listener.snapshot;
+					return dispose();
+				},
+				call: async (op: string, { machine }: { machine: string }) => {
+					queries.push({ op, machine });
+					assert.ok(op === 'cli.list' || op === 'location.list', op);
+					return op === 'cli.list' ? clis : { locations: [] };
+				}
+			} as unknown as DaemonLink;
+			const machines = new RustMachines(link, () => id => id);
+			const connection = (machine_id: string, remote_home: string, state: MachineInfo['connections'][number]['state']) =>
+				({ machine_id, initiator_machine_id: local, remote_home, state, kind: 'saved' as const, ssh_destination: 'buildbox' });
+			try {
+				snapshot([
+					{ machine_id: local, name: 'editor', route: [], connections: [
+						connection(first, '~/facade-one', 'connected'),
+						connection(second, '~/facade-two', 'ssh_interaction_required'),
+						connection(login, '~/facade-login', 'ssh_interaction_required'),
+						connection(offline, '~/facade-offline', 'unavailable')
+					] },
+					{ machine_id: first, name: 'buildbox', route: [first], connections: [] },
+					{ machine_id: second, name: 'buildbox', route: [first, second], connections: [] },
+					{ machine_id: login, name: 'other home', connections: [] },
+					{ machine_id: offline, name: 'offline', connections: [] }
+				]);
+				const checks: string[] = [];
+				const starts: string[] = [];
+				const network: MachineLaunch = {
+					machines: () => machines.choices(), catalog: id => machines.catalog(id),
+					preflight: async id => { checks.push(id); },
+					launch: id => { starts.push(id); return 'remote-run'; }
+				};
+				for (const [index, id] of [[1, first], [2, second]] as const) {
+					const done = start(undefined, network);
+					const picker = ui.current!;
+					assert.deepStrictEqual(picker.items.map(item => [item.label, item.detail]), [
+						['This machine', undefined], ['buildbox (22222222)', undefined], ['buildbox (33333333)', undefined],
+						['other home', 'Needs SSH login'], ['offline', 'Unavailable']
+					]);
+					const before = queries.length;
+					for (const blocked of [3, 4]) {
+						picker.activate(blocked);
+						picker.accept();
+						await settle();
+						assert.strictEqual(ui.current, picker);
+					}
+					assert.strictEqual(queries.length, before);
+					picker.activate(index);
+					picker.accept();
+					await settle();
+					ui.current!.accept('Claude Code');
+					await done;
+					assert.deepStrictEqual(queries.slice(before), ['location.list', 'cli.list'].map(op => ({ op, machine: `id:${id.replace(/-/g, '')}` })));
+				}
+				assert.deepStrictEqual([checks, starts, selected], [[first, second], [first, second], ['remote-run', 'remote-run']]);
+			} finally {
+				machines.dispose();
+			}
 		});
 
 		test('J02: one picker titled New Agent - the last CLI first and selected but not started, the location with its environment and the editable name at the bottom; choosing a CLI closes it and starts the agent at once, selected', async () => {
