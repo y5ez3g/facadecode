@@ -281,7 +281,12 @@ fn start_folder_uses_the_invoking_shell_for_local_paths() {
         let id = stdout(&started);
         let record = home.agent_record(id.trim()).unwrap();
         assert_eq!(record["machine_id"], machine_id, "{record}");
-        assert_eq!(record["cwd"], real_path(folder).unwrap().to_str().unwrap());
+        let started_folder = Path::new(record["cwd"].as_str().unwrap());
+        assert_eq!(
+            real_path(started_folder).unwrap(),
+            real_path(folder).unwrap(),
+            "{record}"
+        );
     }
 }
 

@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::{Child, Stdio};
 
 use facade_base::address::exact_machine_selector;
+use facade_base::files::real_path;
 use facade_base::machine::{
     AgentRef, ConnectionKind, ConnectionState, MachineInfo, MachineListResult, MessageRef,
 };
@@ -545,8 +546,12 @@ fn start_folder_uses_the_remote_login_folder_and_requires_absolute_paths() {
     let fake = programs.fakecli.to_str().unwrap();
     first.run_facade_ok(&["start", "--machine", "second", "--name", "login", fake]);
     let agent = second.agent_from_list_json("login").unwrap();
-    let login_folder = facade_base::files::real_path(&second.user_home()).unwrap();
-    assert_eq!(agent["folder"], login_folder.to_str().unwrap(), "{agent}");
+    let started_folder = Path::new(agent["folder"].as_str().unwrap());
+    assert_eq!(
+        real_path(started_folder).unwrap(),
+        real_path(&second.user_home()).unwrap(),
+        "{agent}"
+    );
     assert_eq!(agent["machine_id"], second_id, "{agent}");
 
     let refused = first.run_facade(&[

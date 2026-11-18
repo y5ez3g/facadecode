@@ -1,5 +1,8 @@
 //! Terminal commands, and which of them start the daemon.
 
+use std::path::Path;
+
+use facade_base::files::real_path;
 use facade_scenarios::serde_json::json;
 use facade_scenarios::*;
 
@@ -97,8 +100,13 @@ fn commands_start_list_read_and_stop_agents() {
     assert!(
         table.cell(row, "ID") == "a1"
             && table.cell(row, "STATE") == "starting"
-            && table.cell(row, "CREATED").ends_with(" ago")
-            && table.cell(row, "FOLDER") == home.project.display().to_string(),
+            && table.cell(row, "CREATED").ends_with(" ago"),
+        "{table:?}"
+    );
+    let started_folder = Path::new(table.cell(row, "FOLDER"));
+    assert_eq!(
+        real_path(started_folder).unwrap(),
+        real_path(&home.project).unwrap(),
         "{table:?}"
     );
     assert!(
