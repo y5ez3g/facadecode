@@ -329,7 +329,7 @@ fn agent_row(agent: &AgentInfo, addresses: &Addresses<'_>) -> Value {
 fn location_row(location: &LocationInfo) -> Option<Value> {
     let kind = match location.kind {
         LocationKind::Folder => "folder",
-        LocationKind::Main => "main_checkout",
+        LocationKind::MainCheckout => "main_checkout",
         LocationKind::Worktree => "worktree",
         LocationKind::Unknown => return None,
     };

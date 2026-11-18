@@ -356,7 +356,8 @@ pub enum LocationKind {
     /// A folder outside any Git checkout, or one inside a checkout that is not its root.
     Folder,
     /// A repository's main checkout.
-    Main,
+    #[serde(rename = "main")]
+    MainCheckout,
     /// A linked worktree of a repository.
     Worktree,
     /// A kind this build does not recognize.

@@ -169,14 +169,14 @@ fn repository_places(opened: &str, listed: Vec<Checkout>) -> Vec<LocationInfo> {
         return places;
     };
     if !first.bare {
-        places.push(first.place(LocationKind::Main));
+        places.push(first.place(LocationKind::MainCheckout));
     }
     let opened_place = match checkouts
         .iter()
         .position(|checkout| same_folder(&checkout.path, opened))
     {
         Some(index) if !checkouts[index].bare => checkouts[index].place(if index == 0 {
-            LocationKind::Main
+            LocationKind::MainCheckout
         } else {
             LocationKind::Worktree
         }),
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(
             listed,
             [
-                (text(&repo), "main".into(), LocationKind::Main),
+                (text(&repo), "main".into(), LocationKind::MainCheckout),
                 (text(&repo.join("src")), "src".into(), LocationKind::Folder),
                 (
                     created.path.clone(),
