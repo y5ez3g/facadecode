@@ -11,7 +11,7 @@ use facade_scenarios::*;
 /// A connection acting for `agent` that follows its inbox from an empty snapshot.
 fn follow_inbox(home: &TestHome, agent: &str) -> (DaemonTestClient, u64) {
     let mut wire = DaemonTestClient::open(home);
-    assert!(wire.hello("terminal", [1, 1], json!({ "agent": agent }))["result"].is_object());
+    assert!(wire.hello("terminal", DAEMON_RANGE, json!({ "agent": agent }))["result"].is_object());
     let watching = wire.request("watch", json!({ "topic": "messages" }));
     assert_eq!(
         watching["result"]["snapshot"]["messages"],
@@ -1426,7 +1426,7 @@ fn reconnect_diagnostics(
             (
                 "hello",
                 "hello",
-                json!({ "protocol": [1, 1], "build": "test", "kind": "terminal" }),
+                json!({ "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" }),
             ),
             (
                 "inspect",
@@ -1578,7 +1578,7 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             .and_then(|hello| hello["pid"].as_i64())
             .unwrap() as i32;
         let mut wire = DaemonTestClient::open(&home);
-        assert!(wire.hello("terminal", [1, 1], json!({}))["result"].is_object());
+        assert!(wire.hello("terminal", DAEMON_RANGE, json!({}))["result"].is_object());
         let env = json!({
             "PATH": path, "HOME": own, "XDG_CONFIG_HOME": own.join(".config"),
             "FACADE_HOME": home.path, "FAKECLI_LOOK": "agy",
@@ -1645,6 +1645,14 @@ impl Golden {
             }
         }
         placeholders.push((env!("CARGO_PKG_VERSION").to_string(), "<version>"));
+        if let Some(machine) = home
+            .hello_result()
+            .as_ref()
+            .and_then(|hello| hello["machine_id"].as_str())
+            .filter(|id| !id.is_empty())
+        {
+            placeholders.push((machine.to_string(), "<machine ID>"));
+        }
         placeholders.sort_by_key(|(text, _)| std::cmp::Reverse(text.len()));
         Golden {
             cases: serde_json::Map::new(),

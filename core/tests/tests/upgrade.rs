@@ -347,7 +347,7 @@ fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
     // Earlier daemons use this setting to give recovered windows a 1.5-second grace period.
     home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "1500")]);
     let folder = facade_base::files::real_path(&home.project).unwrap();
-    let mut editor = ide(
+    let (mut editor, reference) = ide_binding(
         &home,
         &json!({
             "id": "win-1", "label": "Editor", "environment": "local", "workspace": "app",
@@ -358,7 +358,7 @@ fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
         "agent.start",
         json!({
             "command": [shell(), "-c", "echo BEFORE-UPGRADE; sleep 600"], "name": "kept",
-            "cwd": folder, "window_id": "win-1", "cols": 80, "rows": 24,
+            "cwd": folder, "location_source_window": reference, "cols": 80, "rows": 24,
             "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
         }),
     );
@@ -388,7 +388,8 @@ fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
         .agent_from_list_json("kept")
         .expect("the agent's record");
     assert_eq!(after["agent_id"], id);
-    assert_eq!(after["window_id"], "win-1");
+    assert_eq!(after["windows"], json!([reference]));
+    assert_eq!(after["location_source_window"], json!(reference));
     assert_eq!(after["process"], "running", "{after}");
     assert_eq!(after["pid"], before["pid"]);
     assert!(alive(&process), "the original process is still alive");
@@ -398,7 +399,7 @@ fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
         .as_array()
         .expect("the windows snapshot")
         .iter()
-        .find(|window| window["window_id"] == "win-1")
+        .find(|window| window["window_id"] == reference.window_id)
         .expect("the disconnected window stays listed");
     assert_eq!(window["connected"], false, "{window}");
 }
@@ -1161,7 +1162,7 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
         ),
     ] {
         let args = json!({
-            "program": program, "build": build, "daemon_protocol": [1, 1],
+            "program": program, "build": build, "daemon_protocol": DAEMON_RANGE,
             "keeper_protocol": [1, 1],
         });
         let asked = wire.send("call", json!({ "op": "daemon.upgrade", "args": args }));

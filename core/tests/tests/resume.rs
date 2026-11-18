@@ -613,8 +613,7 @@ fn a_hook_from_an_earlier_run_cannot_reach_the_resumed_run() {
 }
 
 #[test]
-fn a_resume_whose_commit_the_daemon_did_not_make_is_committed_by_recovery_and_a_second_resume_waits_for_none()
- {
+fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
     let home = TestHome::new("resumecrash");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-restart-commit")]);
     let held = home.start_named_fake("held", &[("FAKECLI_SESSION", FIRST)]);
@@ -637,12 +636,6 @@ fn a_resume_whose_commit_the_daemon_did_not_make_is_committed_by_recovery_and_a_
         command.spawn().unwrap()
     };
     home.wait_for_gate("before-restart-commit");
-    let twice = resume(&home, "held");
-    assert!(
-        stderr(&twice).contains("is running or already resuming"),
-        "{}",
-        stderr(&twice)
-    );
     let elsewhere = resume(&home, "other");
     assert!(
         elsewhere.status.success(),
@@ -670,6 +663,138 @@ fn a_resume_whose_commit_the_daemon_did_not_make_is_committed_by_recovery_and_a_
         &format!("session {FIRST}")
     ));
     assert!(stderr(&resume(&home, "held")).contains("is running or already resuming"));
+}
+
+/// Two member windows observe the same stop, join one overlapping resume, and lose the record
+/// together when it is removed.
+#[test]
+fn two_member_windows_resume_one_stopped_process() {
+    let home = TestHome::new("resumemembers");
+    home.start_facade_with(&[("FACADE_TEST_GATES", "before-restart-commit")]);
+    let folder = facade_base::files::real_path(&home.project).unwrap();
+    let describe = |id: &str| {
+        json!({
+            "id": id, "label": id, "workspace": id, "environment": "local", "folders": [folder],
+        })
+    };
+    let (mut first, left) = ide_binding(&home, &describe("first"));
+    let (mut second, right) = ide_binding(&home, &describe("second"));
+    let env = json!({
+        "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path,
+        "FAKECLI_LOG": home.fake_log, "FAKECLI_SESSION": FIRST,
+    });
+    // PowerShell needs SystemRoot to run the session hook on Windows.
+    #[cfg(windows)]
+    let env = {
+        let mut env = env;
+        env["SystemRoot"] = json!(std::env::var("SystemRoot").unwrap());
+        env
+    };
+    let started = first.call(
+        "agent.start",
+        json!({
+            "command": ["fake"], "name": "worker", "cwd": folder, "location_source_window": left,
+            "env": env, "cols": 80, "rows": 24,
+        }),
+    );
+    let record = &started["result"]["agent"];
+    let id = record["agent_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{started}"));
+    let pid = record["pid"].as_i64().expect("the original PID") as i32;
+    let original = process_identity(pid);
+    assert!(records_session(&home, "worker", Some(FIRST)));
+    let mut members = [left, right];
+    members.sort();
+    let adopted = second.call("agent.adopt", json!({ "agent": id }));
+    assert_eq!(adopted["result"]["windows"], json!(members), "{adopted}");
+
+    let watch = |wire: &mut DaemonTestClient| {
+        let reply = wire.request("watch", json!({ "topic": "agents" }));
+        reply["result"]["watch"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{reply}"))
+    };
+    let (a, b) = (watch(&mut first), watch(&mut second));
+    let stopped = first.call("agent.stop", json!({ "agent": id }));
+    assert!(stopped["result"].is_object(), "{stopped}");
+    assert!(
+        wait_until(secs(15), || !alive(&original)),
+        "the original process has ended"
+    );
+    for (wire, watch) in [(&first, a), (&second, b)] {
+        assert!(
+            wait_until(secs(10), || wire.changes(watch).iter().any(|event| {
+                let agent = &event["change"]["agent"];
+                agent["agent_id"] == id
+                    && agent["process"] == "ended"
+                    && agent["windows"] == json!(members)
+            })),
+            "both windows see the stopped record and its members: {:?}",
+            wire.changes(watch)
+        );
+    }
+
+    let resume = json!({ "op": "agent.resume", "args": { "agent": id, "env": env, "cols": 80, "rows": 24 } });
+    let pending = first.send("call", resume.clone());
+    home.wait_for_gate("before-restart-commit");
+    let joining = second.send("call", resume);
+    let premature = second.wait_for_response(joining, secs(1));
+    home.release_gate("before-restart-commit");
+    assert!(
+        premature.is_none(),
+        "the second request waits for the first: {premature:?}"
+    );
+    let a_result = first
+        .wait_for_response(pending, LOADED_TIMEOUT)
+        .expect("the first resume answers");
+    let b_result = second
+        .wait_for_response(joining, LOADED_TIMEOUT)
+        .expect("the second resume answers");
+    let next_pid = a_result["result"]["pid"]
+        .as_i64()
+        .expect("the first resume starts a process");
+    assert_ne!(next_pid, i64::from(pid));
+    for reply in [a_result, b_result] {
+        let resumed = &reply["result"];
+        assert_eq!(resumed["agent_id"], id, "{reply}");
+        assert_eq!(resumed["pid"], next_pid, "{reply}");
+        assert_eq!(resumed["windows"], json!(members), "{reply}");
+    }
+    assert_eq!(
+        home.agents()
+            .into_iter()
+            .map(|agent| agent["pid"].clone())
+            .collect::<Vec<_>>(),
+        [json!(next_pid)]
+    );
+
+    let removed = second.call("agent.remove", json!({ "agent": id }));
+    assert!(removed["result"].is_object(), "{removed}");
+    for (wire, watch) in [(&mut first, a), (&mut second, b)] {
+        assert!(
+            wait_until(secs(10), || wire
+                .changes(watch)
+                .iter()
+                .any(|event| event["change"]["kind"] == "removed"
+                    && event["change"]["agent_id"] == id)),
+            "{:?}",
+            wire.changes(watch)
+        );
+        let snapshot = wire.request("watch", json!({ "topic": "agents" }));
+        assert_eq!(snapshot["result"]["snapshot"], json!([]), "{snapshot}");
+        let refused = wire.call("agent.adopt", json!({ "agent": id }));
+        assert_eq!(error_reason(&refused), "not_found", "{refused}");
+    }
+    let memberships: i64 = rusqlite::Connection::open(home.path.join("core/facade.db"))
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM agent_windows WHERE agent_id = ?",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(memberships, 0, "removal deleted every stored membership");
 }
 
 #[test]

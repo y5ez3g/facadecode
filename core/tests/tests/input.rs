@@ -18,7 +18,7 @@ fn input_from_one_connection_preserves_order() {
     let home = TestHome::new("keyorder");
     let worker = home.start_fake("worker");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
     let mut sent = Vec::new();
     for round in 0..8 {
@@ -349,7 +349,7 @@ fn raw_keys_sent_after_text_follow_its_enter() {
     let home = TestHome::new("typeorder");
     let worker = home.start_fake("worker");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let typed = wire.send(
         "call",
         json!({
@@ -430,7 +430,7 @@ fn a_text_call_held_by_one_agent_holds_nothing_else_on_its_connection() {
     let deaf = home.start_named_fake("deaf", &[("FAKECLI_IGNORE_INPUT", "1")]);
     let worker = home.start_fake("worker");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     // More text than a terminal's input holds: the CLI reads none of it, so the call is not
     // answered while its CLI runs.
     let held = wire.send(

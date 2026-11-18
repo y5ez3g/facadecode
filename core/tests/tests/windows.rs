@@ -1,11 +1,12 @@
 //! Windows: an editor window's client describes its window, whose folders and their Git checkouts
 //! are where its agents start; its agents outlive a disconnect, reload or daemon restart;
-//! a window of the same workspace takes them over; the person is told what an agent of an
-//! editor window sends to `#human`; `start_agent` starts in a window's location, making a worktree
-//! there first where asked; and a message between windows names its sender's window.
+//! a window of the same workspace can reclaim the same logical reference; members can share a
+//! running agent and receive its messages to `#human`; a start's location source is independent of
+//! membership.
 
 use std::path::Path;
 
+use facade_base::daemon::WindowRef;
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
@@ -73,13 +74,13 @@ fn window(id: &str, workspace: Option<&str>, folders: &[String]) -> Value {
 fn start_shell(
     wire: &mut DaemonTestClient,
     home: &TestHome,
-    window: &str,
+    source: &WindowRef,
     cwd: &str,
     name: &str,
 ) -> String {
     let args = json!({
         "command": [SH.as_str(), "-c", "echo READY; sleep 600"], "name": name, "cwd": cwd,
-        "window_id": window, "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
+        "location_source_window": source, "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
         "cols": 80, "rows": 24,
     });
     let started = wire.call("agent.start", args);
@@ -93,7 +94,7 @@ fn start_shell(
 fn start_fake(
     wire: &mut DaemonTestClient,
     home: &TestHome,
-    window: &str,
+    source: &WindowRef,
     cwd: &str,
     name: &str,
 ) -> String {
@@ -102,7 +103,7 @@ fn start_fake(
         "FAKECLI_LOG": home.fake_log,
     });
     let args = json!({
-        "command": ["fake"], "name": name, "cwd": cwd, "window_id": window, "env": env, "cols": 80,
+        "command": ["fake"], "name": name, "cwd": cwd, "location_source_window": source, "env": env, "cols": 80,
         "rows": 24,
     });
     let started = wire.call("agent.start", args);
@@ -157,6 +158,22 @@ fn listed(home: &TestHome, id: &str) -> Option<Value> {
         .find(|window| window["window_id"] == id)
 }
 
+fn disconnected(home: &TestHome, window: &WindowRef) -> bool {
+    listed(home, &window.window_id).is_some_and(|listed| listed["connected"] == false)
+}
+
+fn memberships(windows: &[&WindowRef]) -> Value {
+    let mut windows = windows.to_vec();
+    windows.sort_unstable();
+    json!(windows)
+}
+
+fn adopt(wire: &mut DaemonTestClient, agent: &str) -> Value {
+    let adopted = wire.call("agent.adopt", json!({ "agent": agent }));
+    assert_eq!(adopted["result"]["agent_id"], agent, "{adopted}");
+    adopted["result"].clone()
+}
+
 /// Each location of window `listed` as its path and kind.
 fn places(listed: &Value) -> Vec<(String, String)> {
     listed["locations"]
@@ -195,8 +212,8 @@ fn an_editor_window_lists_its_folders_and_the_checkouts_of_their_repositories() 
         ],
     );
     let folders = vec![real(&repo.join("src")), real(&notes), real(&repo)];
-    let mut wire = ide(&home, &window("win-1", Some("k1"), &folders));
-    let shown = listed(&home, "win-1").expect("the window is listed");
+    let (mut wire, binding) = ide_binding(&home, &window("win-1", None, &folders));
+    let shown = listed(&home, &binding.window_id).expect("the window is listed");
     assert_eq!(
         (&shown["label"], &shown["environment"], &shown["connected"]),
         (&json!("win-1 window"), &json!("local"), &json!(true))
@@ -221,13 +238,10 @@ fn an_editor_window_lists_its_folders_and_the_checkouts_of_their_repositories() 
     let mut watcher = connect(&home);
     let watching = watcher.request("watch", json!({ "topic": "windows" }));
     let watch = watching["result"]["watch"].as_u64().unwrap();
-    let updated = wire.call(
-        "window.update",
-        window("win-1", Some("k1"), &[real(&notes)]),
-    );
+    let updated = wire.call("window.update", window("win-1", None, &[real(&notes)]));
     assert_eq!(updated["result"], json!({}), "{updated}");
     assert_eq!(
-        places(&listed(&home, "win-1").unwrap()),
+        places(&listed(&home, &binding.window_id).unwrap()),
         [(real(&notes), "folder".into())]
     );
     assert!(wait_until(secs(5), || watcher.changes(watch).iter().any(
@@ -248,15 +262,77 @@ fn an_editor_window_lists_its_folders_and_the_checkouts_of_their_repositories() 
     );
     let mut nameless = DaemonTestClient::open(&home);
     assert_eq!(
-        error_reason(&nameless.hello("ide", [1, 1], json!({}))),
+        error_reason(&nameless.hello("ide", DAEMON_RANGE, json!({}))),
         "invalid_argument",
         "an ide client describes its window"
     );
-    drop(wire);
-    assert!(
-        wait_until(secs(10), || listed(&home, "win-1").is_none()),
-        "a window with no agents goes with its last connection"
+}
+
+/// A disconnected window without a workspace can rebind until recovery. Recovery keeps windows
+/// referenced by an agent record as a member or as its location source.
+#[test]
+fn recovery_removes_only_unreferenced_windows_without_a_workspace() {
+    let home = TestHome::new("windowprune");
+    let empty = window("win-unused", None, &[]);
+    let (unused_wire, unused) = ide_binding(&home, &empty);
+    let (member_wire, member) = ide_binding(&home, &window("win-member", None, &[]));
+    let folder = real(&home.project);
+    let (mut source_wire, source) = ide_binding(
+        &home,
+        &window("win-source", None, std::slice::from_ref(&folder)),
     );
+    let mut terminal = connect(&home);
+    let started = terminal.call(
+        "agent.start",
+        json!({
+            "command": [SH.as_str(), "-c", "sleep 600"], "name": "kept", "cwd": folder,
+            "window": member, "location_source_window": source,
+            "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
+            "cols": 80, "rows": 24,
+        }),
+    );
+    let record = &started["result"]["agent"];
+    let id = record["agent_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("agent did not start: {started}"));
+    assert_eq!(record["windows"], memberships(&[&member]), "{record}");
+    assert_eq!(record["location_source_window"], json!(source), "{record}");
+    let stopped = terminal.call("agent.stop", json!({ "agent": id }));
+    assert!(stopped["result"].is_object(), "{stopped}");
+    let cleared = source_wire.call("window.update", window("win-source", None, &[]));
+    assert_eq!(cleared["result"], json!({}), "{cleared}");
+
+    drop((unused_wire, member_wire, source_wire));
+    for reference in [&unused, &member, &source] {
+        assert!(
+            wait_until(secs(5), || disconnected(&home, reference)),
+            "window {} did not stay listed as disconnected: {:?}",
+            reference.window_id,
+            windows(&home)
+        );
+    }
+    let (reloaded, before_recovery) = ide_binding(&home, &empty);
+    assert_eq!(before_recovery, unused);
+    drop((reloaded, terminal));
+    home.wait_for_idle_exit();
+
+    assert!(
+        listed(&home, &unused.window_id).is_none(),
+        "recovery removes the unreferenced window"
+    );
+    for (reference, label) in [
+        (&member, "win-member window"),
+        (&source, "win-source window"),
+    ] {
+        let restored =
+            listed(&home, &reference.window_id).unwrap_or_else(|| panic!("recovery lost {label}"));
+        assert_eq!(restored["connected"], false, "{restored}");
+        assert_eq!(restored["label"], label, "{restored}");
+    }
+    let record = agent(&home, id);
+    assert_eq!(record["process"], "ended", "{record}");
+    assert_eq!(record["windows"], memberships(&[&member]), "{record}");
+    assert_eq!(record["location_source_window"], json!(source), "{record}");
 }
 
 /// An editor window's agents keep running when its last connection ends, and a reload attaches
@@ -266,92 +342,85 @@ fn an_editor_window_s_agents_outlive_a_disconnect_and_reload() {
     let home = TestHome::new("windowdisconnect");
     // Earlier daemons use this setting to shorten their disconnect timer to 1.5 seconds.
     home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "1500")]);
-    let folders = vec![real(&home.project)];
-    let mut wire = ide(&home, &window("win-1", Some("k1"), &folders));
-    let id = start_shell(&mut wire, &home, "win-1", &real(&home.project), "kept");
+    let folder = real(&home.project);
+    let described = window("win-1", Some("k1"), std::slice::from_ref(&folder));
+    let (mut wire, reference) = ide_binding(&home, &described);
+    let id = start_shell(&mut wire, &home, &reference, &folder, "kept");
     let before = live_agent(&home, &id);
+    let record = agent(&home, &id);
+    assert_eq!(record["windows"], memberships(&[&reference]));
+    assert_eq!(record["location_source_window"], json!(reference));
     assert_eq!(
-        (
-            &agent(&home, &id)["window_id"],
-            &agent(&home, &id)["location_id"]
-        ),
-        (
-            &json!("win-1"),
-            &json!(facade_base::daemon::location_id(&real(&home.project)))
-        )
+        record["location_id"],
+        json!(facade_base::daemon::location_id(&folder))
     );
     drop(wire);
-    assert!(
-        wait_until(secs(5), || listed(&home, "win-1")
-            .is_some_and(|window| window["connected"] == false)),
-        "the window stays listed while disconnected"
-    );
+    assert!(wait_until(secs(5), || disconnected(&home, &reference)));
     std::thread::sleep(secs(3));
     assert_eq!(live_agent(&home, &id), before);
+    assert!(disconnected(&home, &reference));
+    let (_reloaded, returned) = ide_binding(&home, &described);
     assert_eq!(
-        listed(&home, "win-1").map(|window| window["connected"].clone()),
-        Some(json!(false))
+        returned, reference,
+        "a reload reuses the instance's logical window"
     );
-    let _reloaded = ide(&home, &window("win-1", Some("k1"), &folders));
     assert_eq!(live_agent(&home, &id), before);
-    assert_eq!(agent(&home, &id)["window_id"], "win-1");
+    assert_eq!(agent(&home, &id)["windows"], memberships(&[&reference]));
     assert_eq!(
-        listed(&home, "win-1").map(|window| window["connected"].clone()),
-        Some(json!(true))
+        listed(&home, &reference.window_id).unwrap()["connected"],
+        true
     );
 }
 
-/// A window of the same workspace takes over the running agents of a disconnected window;
-/// the first window, back, has none of them. A connected window keeps its agents.
+/// A reopened workspace binds its original logical window without moving its agents; an active
+/// second window and the late original instance each get another reference.
 #[test]
-fn a_window_of_the_same_workspace_takes_over_the_agents_of_one_that_went() {
-    let home = TestHome::new("windowtakeover");
+fn a_reopened_workspace_reclaims_its_logical_window_while_its_next_window_is_separate() {
+    let home = TestHome::new("windowrebind");
     // Earlier daemons use this setting to stop agents after 3 seconds without a window.
     home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "3000")]);
     let folders = vec![real(&home.project)];
-    let mut first = ide(&home, &window("win-1", Some("k"), &folders));
-    let id = start_shell(&mut first, &home, "win-1", &real(&home.project), "moving");
+    let first_description = window("win-1", Some("workspace"), &folders);
+    let (mut first, original) = ide_binding(&home, &first_description);
+    let id = start_shell(&mut first, &home, &original, &folders[0], "staying");
     let before = live_agent(&home, &id);
     drop(first);
-    assert!(wait_until(secs(5), || listed(&home, "win-1")
-        .is_some_and(|window| window["connected"] == false)));
+    assert!(wait_until(secs(5), || disconnected(&home, &original)));
     std::thread::sleep(secs(5));
-    let second = ide(&home, &window("win-2", Some("k"), &folders));
-    assert_eq!(
-        agent(&home, &id)["window_id"],
-        "win-2",
-        "the second window took the agent over"
-    );
-    assert!(
-        listed(&home, "win-1").is_none(),
-        "the first window went with its agents"
-    );
+
+    let (_reopened, reclaimed) = ide_binding(&home, &window("win-2", Some("workspace"), &folders));
+    assert_eq!(reclaimed, original);
     assert_eq!(live_agent(&home, &id), before);
-    let third = ide(&home, &window("win-3", Some("k"), &folders));
-    assert_eq!(
-        agent(&home, &id)["window_id"],
-        "win-2",
-        "a window still connected keeps its agents"
+    assert_eq!(agent(&home, &id)["windows"], memberships(&[&original]));
+
+    let (_second, separate) = ide_binding(&home, &window("win-3", Some("workspace"), &folders));
+    assert_ne!(
+        separate, original,
+        "an active window keeps its own reference"
     );
-    let back = ide(&home, &window("win-1", Some("other"), &folders));
-    assert_eq!(
-        home.agents()
-            .iter()
-            .filter(|agent| agent["window_id"] == "win-1")
-            .count(),
-        0,
-        "the first window, back, has none"
+    let (mut late, given) = ide_binding(&home, &first_description);
+    assert_ne!(
+        given, original,
+        "the old instance cannot take its old binding"
     );
-    let old = home.kill_daemon();
-    home.wait_for_daemon_after(old, secs(30))
-        .expect("the keeper starts the next daemon");
-    assert_eq!(
-        agent(&home, &id)["window_id"],
-        "win-2",
-        "the takeover is kept across a restart"
+    assert_ne!(
+        given, separate,
+        "the other active window keeps its binding too"
     );
+    let mut later = first_description;
+    later["label"] = json!("Late editor");
+    let reply = late.call("window.update", later);
+    assert_eq!(reply["result"], json!({}), "{reply}");
+    assert_eq!(
+        listed(&home, &given.window_id).unwrap()["label"],
+        "Late editor"
+    );
+    assert_eq!(
+        listed(&home, &original.window_id).unwrap()["label"],
+        "win-2 window"
+    );
+    assert_eq!(agent(&home, &id)["windows"], memberships(&[&original]));
     assert_eq!(live_agent(&home, &id), before);
-    drop((second, third, back));
 }
 
 /// A daemon restart leaves every editor window disconnected, and their agents keep running whether
@@ -362,217 +431,294 @@ fn an_editor_window_s_agents_outlive_a_daemon_restart() {
     // Earlier daemons use this setting to start a 4-second timer at restart for each window.
     home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "4000")]);
     let folders = vec![real(&home.project)];
-    let (mut back, mut gone) = (
-        ide(&home, &window("win-back", Some("k1"), &folders)),
-        ide(&home, &window("win-gone", Some("k2"), &folders)),
-    );
-    let kept = start_shell(&mut back, &home, "win-back", &real(&home.project), "kept");
-    let away = start_shell(&mut gone, &home, "win-gone", &real(&home.project), "away");
+    let first = window("win-back", Some("k1"), &folders);
+    let second = window("win-gone", Some("k2"), &folders);
+    let (mut back, back_ref) = ide_binding(&home, &first);
+    let (mut gone, gone_ref) = ide_binding(&home, &second);
+    let kept = start_shell(&mut back, &home, &back_ref, &folders[0], "kept");
+    let away = start_shell(&mut gone, &home, &gone_ref, &folders[0], "away");
     let kept_before = live_agent(&home, &kept);
     let away_before = live_agent(&home, &away);
     let old = home.kill_daemon();
     drop((back, gone));
     home.wait_for_daemon_after(old, secs(30))
         .expect("the keeper starts the next daemon");
-    for id in ["win-back", "win-gone"] {
-        let window = listed(&home, id).expect("a window with a running agent stays listed");
-        assert_eq!(window["connected"], false, "{window}");
-        assert_eq!(window["label"], json!(format!("{id} window")));
+    for (binding, label) in [
+        (&back_ref, "win-back window"),
+        (&gone_ref, "win-gone window"),
+    ] {
+        let persisted = listed(&home, &binding.window_id).expect("the logical window is restored");
+        assert_eq!(persisted["connected"], false, "{persisted}");
+        assert_eq!(persisted["label"], label);
+        assert_eq!(persisted["machine_id"], binding.machine_id);
     }
-    let _reconnected = ide(&home, &window("win-back", Some("k1"), &folders));
+    let (_reconnected, returned) = ide_binding(&home, &first);
+    assert_eq!(returned, back_ref);
     std::thread::sleep(secs(6));
     assert_eq!(live_agent(&home, &kept), kept_before);
     assert_eq!(live_agent(&home, &away), away_before);
-    for (id, connected) in [("win-back", true), ("win-gone", false)] {
-        assert_eq!(
-            listed(&home, id).map(|window| window["connected"].clone()),
-            Some(json!(connected)),
-            "{id}'s connection after the restart"
-        );
-    }
-    // The editor windows' rows: the terminal window's holds its YOLO alone.
-    let stored = || -> Vec<String> {
-        let store = rusqlite::Connection::open(home.path.join("core/facade.db")).unwrap();
-        let mut rows = store
-            .prepare(
-                "SELECT window_id FROM windows WHERE window_id != 'terminal' ORDER BY window_id",
-            )
-            .unwrap();
-        rows.query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect()
-    };
+    assert_eq!(agent(&home, &kept)["windows"], memberships(&[&back_ref]));
+    assert_eq!(agent(&home, &away)["windows"], memberships(&[&gone_ref]));
     assert_eq!(
-        stored(),
-        ["win-back", "win-gone"],
-        "a window that holds agents keeps its description for the next restart"
+        listed(&home, &back_ref.window_id).unwrap()["connected"],
+        true
     );
+    assert!(disconnected(&home, &gone_ref));
 }
 
-/// What an agent of an editor window sends to `#human` goes to that window's `messages` watch and
-/// is delivered as it does, and stays readable by its ID. Another window's watch never sees it.
-/// Without a watch of its window, the send is refused and nothing is kept.
+/// Adoption adds a member to the same record and process. Guest records stay in their own window.
 #[test]
-fn the_person_is_told_in_the_sending_agent_s_own_window() {
-    let home = TestHome::new("windowhuman");
-    let folders = vec![real(&home.project)];
-    let mut wire = ide(&home, &window("win-1", Some("k1"), &folders));
-    let mut other = ide(&home, &window("win-2", Some("k2"), &folders));
-    let id = start_shell(&mut wire, &home, "win-1", &real(&home.project), "teller");
-    let mine = wire.request("watch", json!({ "topic": "messages" }));
-    let theirs = other.request("watch", json!({ "topic": "messages" }));
+fn two_editors_share_a_running_agent_after_adoption() {
+    let home = TestHome::new("windowadopt");
+    let folder = real(&home.project);
+    let folders = std::slice::from_ref(&folder);
+    let (mut first, origin) = ide_binding(&home, &window("win-1", Some("one"), folders));
+    let (mut second, other) = ide_binding(&home, &window("win-2", Some("two"), folders));
+    let id = start_shell(&mut first, &home, &origin, &folder, "kept");
+    let before = live_agent(&home, &id);
     assert_eq!(
-        (
-            &mine["result"]["snapshot"]["messages"],
-            &theirs["result"]["snapshot"]["messages"]
-        ),
-        (&json!([]), &json!([]))
+        adopt(&mut second, &id)["windows"],
+        memberships(&[&origin, &other])
     );
-    let (mine, theirs) = (
-        mine["result"]["watch"].as_u64().unwrap(),
-        theirs["result"]["watch"].as_u64().unwrap(),
-    );
-    let told = home
-        .command(&test_binaries().facade)
-        .env("FACADE_AGENT", &id)
-        .args(["send", "#human", "build is green"])
-        .output()
-        .unwrap();
-    assert_eq!(
-        stdout(&told).trim(),
-        "#m1 was handed to the person's editor window",
-        "{}",
-        stderr(&told)
-    );
-    assert!(wait_until(secs(5), || wire.changes(mine).iter().any(
-        |change| change["change"]["message"]["text"] == "build is green"
-    )));
-    let message = wire.changes(mine)[0]["change"]["message"].clone();
-    assert_eq!(
-        (
-            &message["from"],
-            &message["to"],
-            &message["delivery"]["delivered_via"]
-        ),
-        (&json!(id), &json!("human"), &json!("notified"))
-    );
-    assert_eq!(message["delivery"]["status"], "success");
-    assert!(
-        other.changes(theirs).is_empty(),
-        "another window is never told"
-    );
-    let reread = wire.request(
-        "watch",
-        json!({ "topic": "messages", "args": { "ids": ["m1"] } }),
-    );
-    assert_eq!(
-        reread["result"]["snapshot"]["messages"][0]["text"], "build is green",
-        "a message to the person reads back by its ID"
-    );
-    for watch in [mine, reread["result"]["watch"].as_u64().unwrap()] {
+    for wire in [&mut first, &mut second] {
+        let reply = wire.request("watch", json!({ "topic": "agents" }));
+        let record = reply["result"]["snapshot"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["agent_id"] == id)
+            .unwrap_or_else(|| panic!("no {id} in {reply}"));
+        assert_eq!(record["pid"], before.0, "{record}");
+        assert_eq!(record["machine_id"], origin.machine_id, "{record}");
         assert_eq!(
-            wire.request("unwatch", json!({ "watch": watch }))["result"],
-            json!({})
+            record["windows"],
+            memberships(&[&origin, &other]),
+            "{record}"
         );
     }
-    let refused = home
+    assert_eq!(live_agent(&home, &id), before);
+
+    let mut guest = McpTestClient::open_guest(&home, "codex", &[]);
+    let joined = guest.call_in(
+        "list_agents",
+        json!({}),
+        json!({ "sessionId": "guest-session" }),
+    );
+    assert_eq!(joined["status"], "success", "{joined}");
+    let guest = home
+        .agents()
+        .into_iter()
+        .find(|agent| agent["session"] == "guest-session")
+        .expect("the fake guest joined");
+    assert_eq!(guest["guest"], true, "{guest}");
+    let refused = second.call("agent.adopt", json!({ "agent": guest["agent_id"] }));
+    assert_eq!(error_reason(&refused), "refused", "{refused}");
+}
+
+/// A message to the person has one number and reaches each member window's current subscription.
+#[test]
+fn messages_to_the_person_report_each_member_windows_delivery() {
+    let home = TestHome::new("windowhuman");
+    let folder = real(&home.project);
+    let folders = std::slice::from_ref(&folder);
+    let (mut first, left) = ide_binding(&home, &window("win-1", Some("one"), folders));
+    let (mut second, right) = ide_binding(&home, &window("win-2", Some("two"), folders));
+    let id = start_shell(&mut first, &home, &left, &folder, "teller");
+    adopt(&mut second, &id);
+    let watch = |wire: &mut DaemonTestClient| {
+        let response = wire.request("watch", json!({ "topic": "messages" }));
+        assert_eq!(
+            response["result"]["snapshot"]["messages"],
+            json!([]),
+            "{response}"
+        );
+        response["result"]["watch"].as_u64().unwrap()
+    };
+    let (mine, theirs) = (watch(&mut first), watch(&mut second));
+    let mut sender = DaemonTestClient::open(&home);
+    let hello = sender.hello("terminal", DAEMON_RANGE, json!({ "agent": id }));
+    assert_eq!(hello["result"]["agent"], id, "{hello}");
+    let sent = sender.call(
+        "agent.send",
+        json!({ "to": "#human", "text": "build is green" }),
+    );
+    let message = &sent["result"];
+    let number = message["message_id"].as_str().expect("one message number");
+    assert_eq!(
+        message["windows"]["delivered"],
+        memberships(&[&left, &right]),
+        "{sent}"
+    );
+    assert_eq!(message["windows"]["not_delivered"], json!([]));
+    for (wire, watch) in [(&first, mine), (&second, theirs)] {
+        assert!(
+            wait_until(secs(5), || wire
+                .changes(watch)
+                .iter()
+                .any(|change| change["change"]["message"]["message_id"] == number
+                    && change["change"]["message"]["text"] == "build is green")),
+            "both subscriptions see message {number}: {:?}",
+            wire.changes(watch)
+        );
+    }
+    let reread = first.request(
+        "watch",
+        json!({ "topic": "messages", "args": { "ids": [number] } }),
+    );
+    assert_eq!(
+        reread["result"]["snapshot"]["messages"][0]["text"],
+        "build is green"
+    );
+
+    drop(second);
+    assert!(wait_until(secs(5), || disconnected(&home, &right)));
+    let partial = sender.call(
+        "agent.send",
+        json!({ "to": "#human", "text": "one window is here" }),
+    );
+    assert_eq!(
+        partial["result"]["windows"]["delivered"],
+        memberships(&[&left]),
+        "{partial}"
+    );
+    assert_eq!(
+        partial["result"]["windows"]["not_delivered"],
+        json!([{ "window": right, "reason": "window_disconnected" }]),
+        "{partial}"
+    );
+    let command = home
         .command(&test_binaries().facade)
         .env("FACADE_AGENT", &id)
-        .args(["send", "#human", "nobody hears"])
+        .args(["send", "#human", "the command reports both outcomes"])
         .output()
         .unwrap();
-    assert!(!refused.status.success());
+    assert!(command.status.success(), "{}", stderr(&command));
+    let printed = stdout(&command);
+    let lines: Vec<_> = printed.lines().collect();
+    assert_eq!(lines.len(), 3, "{printed}");
     assert!(
-        stderr(&refused).contains("no editor shows #")
-            && stderr(&refused).contains("the person cannot be told"),
-        "{}",
-        stderr(&refused)
+        lines[0].starts_with("#m")
+            && lines[0].ends_with("was handed to these window subscriptions"),
+        "{printed}"
     );
-    let numbers: i64 = rusqlite::Connection::open(home.path.join("core/facade.db"))
+    assert!(
+        lines[1].contains(&left.window_id) && lines[1].contains(&left.machine_id),
+        "{printed}"
+    );
+    assert!(
+        lines[2].starts_with("Could not hand the message to")
+            && lines[2].contains(&right.window_id)
+            && lines[2].contains(&right.machine_id)
+            && lines[2].contains("window is disconnected"),
+        "{printed}"
+    );
+    drop(first);
+    assert!(wait_until(secs(5), || disconnected(&home, &left)));
+    let refused = sender.call(
+        "agent.send",
+        json!({ "to": "#human", "text": "nobody is here" }),
+    );
+    assert_eq!(error_reason(&refused), "unavailable", "{refused}");
+    let failures = refused["error"]["data"]["windows"].as_array().unwrap();
+    assert_eq!(failures.len(), 2, "{refused}");
+    for window in [&left, &right] {
+        assert!(
+            failures.contains(&json!({ "window": window, "reason": "window_disconnected" })),
+            "{refused}"
+        );
+    }
+    let kept: i64 = rusqlite::Connection::open(home.path.join("core/facade.db"))
         .unwrap()
         .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(numbers, 1, "a refused message is not kept");
+    assert_eq!(kept, 3, "only the delivered messages were saved");
+
+    let (mut late, _) = ide_binding(&home, &window("win-3", Some("three"), folders));
+    adopt(&mut late, &id);
+    watch(&mut late);
 }
 
-/// start_agent starts in a location of a window, refuses a location that window does not have and a
-/// window that is not there, and makes a worktree beside the main checkout first where asked, at
-/// the next free folder, saying it made it. A branch that exists fails before anything changes.
-/// list_agents shows the windows, their locations, and the agents in them.
+/// Editor and terminal starts derive their members from their caller. An agent inherits all of its
+/// creator's members by default; a chosen member and a location source can be different windows.
 #[test]
-fn start_agent_starts_in_a_window_s_location_and_makes_a_worktree_there_where_asked() {
+fn starts_keep_members_and_location_sources_separate() {
     let home = TestHome::new("windowstart");
     let repo = base(&home).join("app");
     repository(&repo);
     std::fs::create_dir_all(base(&home).join("app.worktrees/review")).unwrap();
-    let mut wire = ide(&home, &window("win-1", Some("k1"), &[real(&repo)]));
-    let boss = start_fake(&mut wire, &home, "win-1", &real(&repo), "boss");
-    let outside = json!({
-        "command": [SH.as_str()], "cwd": real(&home.project), "window_id": "win-1", "cols": 80,
-        "rows": 24,
-    });
-    let refused = wire.call("agent.start", outside);
-    assert_eq!(
-        error_reason(&refused),
-        "invalid_argument",
-        "a folder that is not a location of the window: {refused}"
-    );
-    let absent = json!({
-        "command": [SH.as_str()], "cwd": real(&repo), "window_id": "win-none", "cols": 80, "rows": 24,
-    });
-    assert_eq!(
-        error_reason(&wire.call("agent.start", absent)),
-        "unavailable",
-        "a window that is not there"
-    );
-    let mut away = ide(
-        &home,
-        &window("win-away", Some("k2"), &[real(&home.project)]),
-    );
-    start_shell(
-        &mut away,
-        &home,
-        "win-away",
-        &real(&home.project),
-        "waiting",
-    );
-    drop(away);
-    let mut mcp = McpTestClient::open(&home, &boss);
-    let instructions = mcp.request("initialize", json!({}))["result"]["instructions"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        instructions.contains("in window \"win-1 window\" (window win-1)"),
-        "{instructions}"
-    );
     let folder = real(&repo);
-    let start = |extra: Value| {
-        let mut args =
-            json!({ "name": "helper", "cli": "fake", "window": "win-1", "path": folder });
-        args.as_object_mut()
-            .unwrap()
-            .extend(extra.as_object().unwrap().clone());
-        args
-    };
-    let started = mcp.call("start_agent", start(json!({})));
+    let (mut wire, source) = ide_binding(
+        &home,
+        &window("win-1", Some("one"), std::slice::from_ref(&folder)),
+    );
+    let boss = start_fake(&mut wire, &home, &source, &folder, "boss");
+    let parent = agent(&home, &boss);
+    assert_eq!(parent["windows"], memberships(&[&source]));
+    assert_eq!(parent["location_source_window"], json!(source));
+
+    let terminal = home.start_named_fake("ordinary-terminal", &[]);
+    let terminal = agent(&home, &terminal.id);
     assert_eq!(
-        (&started["data"]["window"], &started["data"]["path"]),
-        (&json!("win-1"), &json!(folder)),
-        "{started}"
+        terminal["windows"],
+        json!([{ "machine_id": source.machine_id, "window_id": "terminal" }])
     );
-    let made = mcp.call(
-        "start_agent",
-        start(json!({ "name": "reviewer", "worktree": "review" })),
-    );
-    let path = real(&base(&home).join("app.worktrees/review-1"));
-    assert_eq!(made["data"]["path"], json!(path), "{made}");
     assert!(
-        places(&listed(&home, "win-1").unwrap()).contains(&(path.clone(), "worktree".into())),
-        "the worktree is a location now"
+        terminal.get("location_source_window").is_none(),
+        "{terminal}"
     );
-    let again = mcp.call("start_agent", start(json!({ "worktree": "review" })));
+
+    let outside = wire.call(
+        "agent.start",
+        json!({
+            "command": [SH.as_str()], "cwd": real(&home.project), "location_source_window": source,
+            "cols": 80, "rows": 24,
+        }),
+    );
+    assert_eq!(error_reason(&outside), "invalid_argument", "{outside}");
+    let (mut peer, away) = ide_binding(
+        &home,
+        &window("win-away", Some("two"), &[real(&home.project)]),
+    );
+    adopt(&mut peer, &boss);
+    drop(peer);
+    assert!(wait_until(secs(5), || disconnected(&home, &away)));
+
+    let output = home
+        .command(&test_binaries().facade)
+        .env("FACADE_AGENT", &boss)
+        .args(["start", "--name", "child-from-cli", "fake"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let child = agent(&home, &started_agent(&stdout(&output)).id);
+    assert_eq!(child["windows"], memberships(&[&source, &away]));
+    assert!(child.get("location_source_window").is_none(), "{child}");
+
+    let mut mcp = McpTestClient::open(&home, &boss);
+    let inherited = mcp.call(
+        "start_agent",
+        json!({ "name": "helper", "cli": "fake", "path": folder }),
+    );
+    assert_eq!(inherited["status"], "success", "{inherited}");
+    assert_eq!(inherited["data"]["windows"], memberships(&[&source, &away]));
+    assert_eq!(inherited["data"]["machine_id"], source.machine_id);
+    let worktree = json!({ "name": "reviewer", "cli": "fake", "path": folder, "worktree": "review",
+        "window": away.window_id, "location_source_window": source.window_id });
+    let made = mcp.call("start_agent", worktree.clone());
+    assert_eq!(made["status"], "success", "{made}");
+    let path = real(&base(&home).join("app.worktrees/review-1"));
+    assert_eq!(made["data"]["path"], path, "{made}");
+    assert_eq!(made["data"]["windows"], memberships(&[&away]));
+    let reviewer = home.agent_from_list_json("reviewer").unwrap();
+    assert_eq!(reviewer["location_source_window"], json!(source));
+    assert_eq!(reviewer["windows"], memberships(&[&away]));
+    assert!(
+        places(&listed(&home, &source.window_id).unwrap())
+            .contains(&(path.clone(), "worktree".into()))
+    );
+
+    let again = mcp.call("start_agent", worktree);
     assert!(
         again["message"]
             .as_str()
@@ -580,45 +726,29 @@ fn start_agent_starts_in_a_window_s_location_and_makes_a_worktree_there_where_as
             .starts_with("a branch named review already exists"),
         "{again}"
     );
-    let elsewhere = mcp.call(
-        "start_agent",
-        json!({ "name": "x", "cli": "fake", "window": "win-1", "path": real(&home.project) }),
-    );
-    assert_eq!(elsewhere["reason"], "invalid_argument", "{elsewhere}");
-    let gone = mcp.call(
-        "start_agent",
-        json!({ "name": "x", "cli": "fake", "window": "win-away", "path": folder }),
-    );
-    assert_eq!(gone["reason"], "unavailable", "{gone}");
     let list = mcp.call("list_agents", json!({}));
     let windows = list["data"]["windows"].as_array().unwrap();
-    assert_eq!(
-        windows
-            .iter()
-            .map(|window| window["id"].clone())
-            .collect::<Vec<_>>(),
-        [json!("win-1")],
-        "a window that is not there is not listed"
-    );
+    let connected = windows
+        .iter()
+        .find(|window| window["id"] == source.window_id)
+        .unwrap();
+    assert_eq!(connected["connected"], true, "{connected}");
     assert!(
-        windows[0]["folders"]
+        connected["folders"]
             .as_array()
             .unwrap()
-            .contains(&json!(path)),
-        "an agent can work in the worktree: {list}"
+            .contains(&json!(path))
     );
-    let reviewer = list["data"]["agents"]
-        .as_array()
-        .unwrap()
+    let offline = windows
         .iter()
-        .find(|agent| agent["name"] == "reviewer")
-        .cloned()
+        .find(|window| window["id"] == away.window_id)
         .unwrap();
-    assert_eq!(
-        (&reviewer["window"], &reviewer["path"]),
-        (&json!("win-1"), &json!(path))
+    assert_eq!(offline["connected"], false, "{offline}");
+    assert_eq!(offline["machine_id"], source.machine_id, "{offline}");
+    assert!(
+        offline.get("folders").is_none() && offline.get("clis").is_none(),
+        "{offline}"
     );
-    drop(wire);
 }
 
 /// Two creations of one branch sent together take turns: one makes the worktree, and the other is
@@ -656,9 +786,8 @@ fn two_creations_of_one_branch_never_claim_the_other_s_branch() {
         std::env::var("PATH").unwrap()
     );
     home.start_facade_with(&[("PATH", &path)]);
-    let mut wire = ide(&home, &window("win-1", Some("k1"), &[real(&repo)]));
-    let args =
-        json!({ "window_id": "win-1", "cwd": real(&repo), "branch": "review", "base_ref": "HEAD" });
+    let (mut wire, window_ref) = ide_binding(&home, &window("win-1", Some("k1"), &[real(&repo)]));
+    let args = json!({ "window_id": window_ref.window_id, "cwd": real(&repo), "branch": "review", "base_ref": "HEAD" });
     let first = wire.send("call", json!({ "op": "worktree.create", "args": args }));
     let second = wire.send("call", json!({ "op": "worktree.create", "args": args }));
     let answers = [
@@ -708,12 +837,29 @@ fn an_agent_ends_when_its_location_is_gone_from_its_window() {
     );
     let fix_path = real(&fix);
     let folders = vec![real(&repo), real(&notes)];
-    let mut wire = ide(&home, &window("win-1", Some("k1"), &folders));
-    let in_notes = start_shell(&mut wire, &home, "win-1", &real(&notes), "notes");
+    let (mut wire, source) = ide_binding(&home, &window("win-1", Some("k1"), &folders));
+    let in_notes = start_shell(&mut wire, &home, &source, &real(&notes), "notes");
     #[cfg_attr(windows, allow(unused_variables))]
-    let in_fix = start_shell(&mut wire, &home, "win-1", &fix_path, "fix");
-    let in_kept = start_shell(&mut wire, &home, "win-1", &real(&kept), "kept");
-    let in_main = start_shell(&mut wire, &home, "win-1", &real(&repo), "main");
+    let in_fix = start_shell(&mut wire, &home, &source, &fix_path, "fix");
+    let in_kept = start_shell(&mut wire, &home, &source, &real(&kept), "kept");
+    let in_main = start_shell(&mut wire, &home, &source, &real(&repo), "main");
+    let (mut other, _) = ide_binding(&home, &window("win-2", Some("other"), &folders));
+    adopt(&mut other, &in_notes);
+    let update = other.call(
+        "window.update",
+        window("win-2", Some("other"), &[real(&repo)]),
+    );
+    assert_eq!(update["result"], json!({}), "{update}");
+    let notes_end = format!("#{in_notes} ends: its location {}", real(&notes));
+    assert!(
+        !wait_until(secs(1), || home.daemon_log().contains(&notes_end)),
+        "a different member's update scheduled a stop: {}",
+        home.daemon_log()
+    );
+    assert!(
+        running(&home, &in_notes),
+        "a different member's removal does not stop the agent"
+    );
     // The kept worktree is no longer registered, but its folder stays: nothing proves it gone.
     std::fs::remove_dir_all(repo.join(".git/worktrees/app-kept")).unwrap();
     assert_eq!(
@@ -723,6 +869,14 @@ fn an_agent_ends_when_its_location_is_gone_from_its_window() {
     assert!(
         wait_until(secs(15), || !running(&home, &in_notes)),
         "an agent in a folder the window no longer has ends"
+    );
+    assert!(
+        home.daemon_log().contains(&format!(
+            "{notes_end} is gone from window {}",
+            source.window_id
+        )),
+        "missing stop decision for the source window: {}",
+        home.daemon_log()
     );
     // Windows deletes no folder a running agent works in: its worktree cannot go while it runs.
     #[cfg(unix)]
@@ -741,7 +895,7 @@ fn an_agent_ends_when_its_location_is_gone_from_its_window() {
                 wire.call("window.update", window("win-1", Some("k1"), &with_locked))["result"],
                 json!({})
             );
-            let problems = listed(&home, "win-1").unwrap()["problems"].clone();
+            let problems = listed(&home, &source.window_id).unwrap()["problems"].clone();
             std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o755))
                 .unwrap();
             assert!(
@@ -779,28 +933,31 @@ fn an_agent_ends_when_its_location_is_gone_from_its_window() {
     #[cfg(unix)]
     assert!(
         home.daemon_log().contains(&format!(
-            "#{in_fix} ends: its location {fix_path} is gone from window win-1"
+            "#{in_fix} ends: its location {fix_path} is gone from window {}",
+            source.window_id
         )),
         "{}",
         home.daemon_log()
     );
 }
 
-/// An agent resumes in the window of the client that resumes it, in its own folder: `facade resume`
-/// in the terminal window, an editor window's client in that window, which must have the folder
-/// among its locations. So an editor window's stopped agent runs again in a
-/// window the lists show.
+/// Both a terminal and another member can resume a stopped record. Its original location and
+/// members stay with the record, even when the member's workspace does not include that location.
 #[test]
-fn an_agent_resumes_in_the_window_of_the_client_that_resumes_it() {
+fn an_agent_resumes_with_its_original_members_and_location() {
     let home = TestHome::new("windowresume");
     let folder = real(&home.project);
-    let mut wire = ide(
+    let (mut first, source) = ide_binding(
         &home,
         &window("win-1", Some("k1"), std::slice::from_ref(&folder)),
     );
+    let elsewhere = base(&home).join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (mut other, member) = ide_binding(&home, &window("win-2", Some("k2"), &[real(&elsewhere)]));
+    let session = "11111111-2222-4333-8444-555555555555";
     let env = json!({
         "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path,
-        "FAKECLI_LOG": home.fake_log, "FAKECLI_SESSION": "11111111-2222-4333-8444-555555555555",
+        "FAKECLI_LOG": home.fake_log, "FAKECLI_SESSION": session,
     });
     // Windows PowerShell, which runs the session hook on Windows, does not start without it.
     #[cfg(windows)]
@@ -809,84 +966,48 @@ fn an_agent_resumes_in_the_window_of_the_client_that_resumes_it() {
         env["SystemRoot"] = json!(std::env::var("SystemRoot").unwrap());
         env
     };
-    let args = json!({
-        "command": ["fake"], "name": "kept", "cwd": folder, "window_id": "win-1", "env": env,
-        "cols": 80, "rows": 24,
-    });
-    let started = wire.call("agent.start", args);
+    let started = first.call(
+        "agent.start",
+        json!({
+            "command": ["fake"], "name": "kept", "cwd": folder, "location_source_window": source,
+            "env": env, "cols": 80, "rows": 24,
+        }),
+    );
     let id = started["result"]["agent"]["agent_id"]
         .as_str()
-        .unwrap_or_else(|| panic!("{started}"))
-        .to_string();
+        .unwrap_or_else(|| panic!("{started}"));
     assert!(
-        wait_until(secs(15), || agent(&home, &id)["session"].is_string()),
+        wait_until(secs(15), || agent(&home, id)["session"] == session),
         "{}",
-        agent(&home, &id)
+        agent(&home, id)
     );
-    let stopped = wire.call("agent.stop", json!({ "agent": id }));
-    assert!(
-        stopped["result"].is_object() && stopped["result"]["already_ended"] != true,
-        "{stopped}"
+    adopt(&mut other, id);
+    let check = |record: &Value| {
+        assert_eq!(record["agent_id"], id, "{record}");
+        assert_eq!(record["cwd"], folder, "{record}");
+        assert_eq!(record["session"], session, "{record}");
+        assert_eq!(
+            record["windows"],
+            memberships(&[&source, &member]),
+            "{record}"
+        );
+        assert_eq!(record["location_source_window"], json!(source), "{record}");
+        assert_eq!(record["process"], "running", "{record}");
+    };
+    home.run_facade_ok(&["stop", id]);
+    assert!(wait_until(secs(15), || !running(&home, id)));
+    home.run_facade_ok(&["resume", id]);
+    check(&agent(&home, id));
+
+    home.run_facade_ok(&["stop", id]);
+    assert!(wait_until(secs(15), || !running(&home, id)));
+    let resumed = other.call(
+        "agent.resume",
+        json!({ "agent": id, "env": env, "cols": 80, "rows": 24 }),
     );
-    assert!(
-        wait_until(secs(15), || !running(&home, &id)),
-        "the stop ends it: {}",
-        home.daemon_log()
-    );
-    drop(wire);
-    assert!(
-        wait_until(secs(5), || listed(&home, "win-1").is_none()),
-        "the window went"
-    );
-    let resumed = home
-        .command(&test_binaries().facade)
-        .env("PATH", home.path_with_test_programs())
-        .args(["resume", "kept"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
-    assert!(resumed.status.success(), "{}", stderr(&resumed));
-    assert!(
-        wait_until(secs(15), || running(&home, &id)),
-        "{}",
-        agent(&home, &id)
-    );
-    assert_eq!(
-        agent(&home, &id)["window_id"],
-        "terminal",
-        "resumed from a terminal, in the terminal window"
-    );
-    let terminal = listed(&home, "terminal")
-        .expect("the terminal window, listed while it holds a running agent");
-    assert_eq!(
-        places(&terminal),
-        [(folder.clone(), "folder".to_string())],
-        "{terminal}"
-    );
-    home.run_facade_ok(&["stop", "kept"]);
-    let other = base(&home).join("other");
-    std::fs::create_dir_all(&other).unwrap();
-    let mut elsewhere = ide(&home, &window("win-2", Some("k2"), &[real(&other)]));
-    let resume = json!({ "agent": id, "window_id": "win-2", "env": env, "cols": 80, "rows": 24 });
-    let refused = elsewhere.call("agent.resume", resume);
-    assert_eq!(
-        error_reason(&refused),
-        "invalid_argument",
-        "a window without the agent's folder: {refused}"
-    );
-    assert!(!running(&home, &id), "nothing started");
-    let mut here = ide(
-        &home,
-        &window("win-3", Some("k3"), std::slice::from_ref(&folder)),
-    );
-    let resume = json!({ "agent": id, "window_id": "win-3", "env": env, "cols": 80, "rows": 24 });
-    let resumed = here.call("agent.resume", resume);
-    assert_eq!(
-        resumed["result"]["window_id"], "win-3",
-        "resumed by an editor window, in that window: {resumed}"
-    );
-    assert_eq!(agent(&home, &id)["window_id"], "win-3");
-    drop(elsewhere);
+    assert!(resumed["result"].is_object(), "{resumed}");
+    check(&resumed["result"]);
+    check(&agent(&home, id));
 }
 
 /// A message from an agent of another window names that window in its header; one within a window
@@ -895,11 +1016,11 @@ fn an_agent_resumes_in_the_window_of_the_client_that_resumes_it() {
 fn a_message_between_windows_names_its_sender_s_window() {
     let home = TestHome::new("windowheader");
     let folders = vec![real(&home.project)];
-    let mut first = ide(&home, &window("win-1", Some("k1"), &folders));
-    let mut second = ide(&home, &window("win-2", Some("k2"), &folders));
-    let ada = start_fake(&mut first, &home, "win-1", &real(&home.project), "ada");
-    start_fake(&mut first, &home, "win-1", &real(&home.project), "bea");
-    start_fake(&mut second, &home, "win-2", &real(&home.project), "cal");
+    let (mut first, origin) = ide_binding(&home, &window("win-1", Some("k1"), &folders));
+    let (mut second, peer) = ide_binding(&home, &window("win-2", Some("k2"), &folders));
+    let ada = start_fake(&mut first, &home, &origin, &folders[0], "ada");
+    start_fake(&mut first, &home, &origin, &folders[0], "bea");
+    start_fake(&mut second, &home, &peer, &folders[0], "cal");
     let send = |to: &str, text: &str| {
         home.command(&test_binaries().facade)
             .env("FACADE_AGENT", &ada)
@@ -919,37 +1040,86 @@ fn a_message_between_windows_names_its_sender_s_window() {
     drop((first, second));
 }
 
-/// An editor window's agents reply to their CLI's color queries with the window's colors, each
-/// reply ended as its query was; after `window.update`, with the new colors.
+/// A member editor's resize selects its colors, even when it keeps the prior dimensions.
 #[test]
-fn an_editor_window_s_agents_answer_color_queries_with_its_colors() {
+fn an_agents_colors_follow_the_last_member_editor_to_resize() {
     let home = TestHome::new("windowcolors");
     let folder = real(&home.project);
     let mut described = window("win-1", Some("k1"), std::slice::from_ref(&folder));
     described["colors"] =
         json!({ "foreground": "#333333", "background": "#ffffff", "cursor": "#000000" });
-    let mut wire = ide(&home, &described);
-    let id = start_fake(&mut wire, &home, "win-1", &folder, "painter");
-    type_raw(&mut wire, &id, "/fake colors\r");
+    let (mut first, window_ref) = ide_binding(&home, &described);
+    let id = start_fake(&mut first, &home, &window_ref, &folder, "painter");
+    type_raw(&mut first, &id, "/fake colors\r");
     for reply in [
         "color 10;rgb:3333/3333/3333 bel",
         "color 11;rgb:ffff/ffff/ffff st",
         "color 12;rgb:0000/0000/0000 bel",
     ] {
         assert!(
-            wait_for_screen_text(&home, "painter", reply),
+            wait_for_screen_text(&home, &id, reply),
             "{reply}: {}",
-            home.screen("painter")
+            home.screen(&id)
         );
     }
+
     described["colors"]["background"] = json!("#1e1e1e");
-    let updated = wire.call("window.update", described);
+    let updated = first.call("window.update", described);
     assert_eq!(updated["result"], json!({}), "{updated}");
-    type_raw(&mut wire, &id, "/fake colors\r");
+    type_raw(&mut first, &id, "/fake colors\r");
+    assert!(wait_for_screen_text(
+        &home,
+        &id,
+        "color 11;rgb:1e1e/1e1e/1e1e st"
+    ));
+
+    let mut described = window("win-2", Some("k2"), std::slice::from_ref(&folder));
+    described["colors"] =
+        json!({ "foreground": "#eeeeee", "background": "#225588", "cursor": "#000000" });
+    let (mut second, _) = ide_binding(&home, &described);
+    adopt(&mut second, &id);
+    for wire in [&mut first, &mut second] {
+        let resize = wire.call(
+            "agent.resize",
+            json!({ "agent": id, "cols": 80, "rows": 24 }),
+        );
+        assert!(resize["result"].is_object(), "{resize}");
+    }
+    let theirs = "color 11;rgb:2222/5555/8888 st";
+    type_raw(&mut first, &id, "/fake colors\r");
     assert!(
-        wait_for_screen_text(&home, "painter", "color 11;rgb:1e1e/1e1e/1e1e st"),
-        "the new background: {}",
-        home.screen("painter")
+        wait_for_screen_text(&home, &id, theirs),
+        "{}",
+        home.screen(&id)
+    );
+
+    let mut terminal = TestTerminal::spawn(
+        home.command(&test_binaries().facade).args(["attach", &id]),
+        93,
+        31,
+    );
+    assert!(
+        wait_until(secs(10), || {
+            let observed = connect(&home).request(
+                "watch",
+                json!({ "topic": "screen", "args": { "agent": id } }),
+            );
+            let screen = &observed["result"]["snapshot"];
+            screen["cols"] == 93 && screen["rows"] == 31
+        }),
+        "the terminal attach sets the dimensions"
+    );
+    let was = home.screen(&id).matches(theirs).count();
+    type_raw(&mut first, &id, "/fake colors\r");
+    assert!(
+        wait_until(secs(10), || home.screen(&id).matches(theirs).count() > was),
+        "terminal attach leaves the editor's colors in use: {}",
+        home.screen(&id)
+    );
+    terminal.send(b"\x1d");
+    assert!(
+        terminal.wait_exit(secs(10)).is_some(),
+        "the attach detached"
     );
 }
 
@@ -963,19 +1133,27 @@ fn a_start_in_a_folder_inside_a_location_continues_its_session_there() {
     let nested = home.project.join("app").join("nested");
     std::fs::create_dir_all(&nested).unwrap();
     let nested = real(&nested);
-    let mut wire = ide(
+    let (mut wire, window_ref) = ide_binding(
         &home,
         &window("win-1", Some("k1"), std::slice::from_ref(&folder)),
     );
-    let location = listed(&home, "win-1").unwrap()["locations"][0]["location_id"].clone();
+    let location =
+        listed(&home, &window_ref.window_id).unwrap()["locations"][0]["location_id"].clone();
     let session = "11111111-2222-4333-8444-555555555555";
     let env = json!({
         "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path,
         "FAKECLI_LOG": home.fake_log,
     });
+    // PowerShell needs SystemRoot to run the session hook on Windows.
+    #[cfg(windows)]
+    let env = {
+        let mut env = env;
+        env["SystemRoot"] = json!(std::env::var("SystemRoot").unwrap());
+        env
+    };
     let args = json!({
         "command": ["fake"], "session": session, "name": "inside", "cwd": nested,
-        "window_id": "win-1", "env": env, "cols": 80, "rows": 24,
+        "location_source_window": window_ref, "env": env, "cols": 80, "rows": 24,
     });
     let started = wire.call("agent.start", args);
     let id = started["result"]["agent"]["agent_id"]
@@ -992,14 +1170,13 @@ fn a_start_in_a_folder_inside_a_location_continues_its_session_there() {
     assert_eq!(record["location_id"], location, "{record}");
 }
 
-/// A new window of the same workspace takes over the stopped agents of a closed window: its first
-/// snapshot lists them in the new window.
+/// A reopened workspace lists stopped agents in its original logical window.
 #[test]
-fn a_later_window_of_the_workspace_takes_over_the_ended_agents() {
+fn a_reopened_workspace_lists_its_ended_agents_under_the_same_logical_window() {
     let home = TestHome::new("windowended");
     let folders = vec![real(&home.project)];
-    let mut first = ide(&home, &window("win-old", Some("k1"), &folders));
-    let id = start_shell(&mut first, &home, "win-old", &real(&home.project), "kept");
+    let (mut first, original) = ide_binding(&home, &window("win-old", Some("k1"), &folders));
+    let id = start_shell(&mut first, &home, &original, &folders[0], "kept");
     let stopped = first.call("agent.stop", json!({ "agent": id }));
     assert!(
         stopped["result"].is_object() && stopped["result"]["already_ended"] != true,
@@ -1007,23 +1184,20 @@ fn a_later_window_of_the_workspace_takes_over_the_ended_agents() {
     );
     assert!(
         wait_until(secs(15), || !running(&home, &id)),
-        "the stop ends it: {}",
+        "{}",
         home.daemon_log()
     );
     drop(first);
-    assert!(
-        wait_until(secs(5), || listed(&home, "win-old").is_none()),
-        "the window went"
-    );
-    let mut later = ide(&home, &window("win-new", Some("k1"), &folders));
-    let watching = later.request("watch", json!({ "topic": "agents" }));
-    let taken = watching["result"]["snapshot"]
+    assert!(wait_until(secs(5), || disconnected(&home, &original)));
+    let (mut later, reclaimed) = ide_binding(&home, &window("win-new", Some("k1"), &folders));
+    assert_eq!(reclaimed, original);
+    let snapshot = later.request("watch", json!({ "topic": "agents" }));
+    let kept = snapshot["result"]["snapshot"]
         .as_array()
-        .unwrap_or_else(|| panic!("{watching}"))
+        .unwrap()
         .iter()
-        .find(|agent| agent["agent_id"] == id.as_str())
-        .cloned()
-        .unwrap_or_else(|| panic!("no {id} in the first snapshot: {watching}"));
-    assert_eq!(taken["window_id"], "win-new", "{taken}");
-    assert_ne!(taken["process"], "running", "{taken}");
+        .find(|record| record["agent_id"] == id)
+        .unwrap_or_else(|| panic!("no {id} in the first snapshot: {snapshot}"));
+    assert_eq!(kept["windows"], memberships(&[&original]), "{kept}");
+    assert_eq!(kept["process"], "ended", "{kept}");
 }

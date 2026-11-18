@@ -31,7 +31,7 @@ fn clear_draft(home: &TestHome, agent: &str) {
 fn acting_for(home: &TestHome, agent: &str) -> DaemonTestClient {
     drop(connect(home));
     let mut wire = DaemonTestClient::open(home);
-    assert!(wire.hello("terminal", [1, 1], json!({ "agent": agent }))["result"].is_object());
+    assert!(wire.hello("terminal", DAEMON_RANGE, json!({ "agent": agent }))["result"].is_object());
     wire
 }
 
@@ -260,7 +260,7 @@ fn a_repeated_send_to_a_guest_is_answered_at_once_as_its_first_call_was() {
     let home = TestHome::new("relguest");
     connect(&home);
     let mut hooks = DaemonTestClient::open(&home);
-    hooks.hello("terminal", [1, 1], json!({}));
+    hooks.hello("terminal", DAEMON_RANGE, json!({}));
     assert_eq!(
         hooks.call(
             "hook.session-start",

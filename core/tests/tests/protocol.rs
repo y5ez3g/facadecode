@@ -13,7 +13,17 @@ fn hello_reports_protocol_build_and_capabilities() {
     let mut wire = DaemonTestClient::open(&home);
     let welcome = wire.hello("terminal", [1, 9], json!({}));
     let result = &welcome["result"];
-    assert_eq!(result["protocol"], 1, "{welcome}");
+    assert_eq!(result["protocol"], 2, "{welcome}");
+    assert!(
+        result["machine_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "{welcome}"
+    );
+    assert!(
+        result.get("window").is_none(),
+        "only editors bind a window: {welcome}"
+    );
     assert!(
         result["build"]
             .as_str()
@@ -26,11 +36,14 @@ fn hello_reports_protocol_build_and_capabilities() {
         "{welcome}"
     );
     assert!(
-        result["ops"]
-            .as_array()
-            .is_some_and(|ops| ["agent.start", "agent.rename", "agent.send"]
-                .iter()
-                .all(|wanted| ops.iter().any(|op| op == wanted))),
+        result["ops"].as_array().is_some_and(|ops| [
+            "agent.start",
+            "agent.adopt",
+            "agent.rename",
+            "agent.send"
+        ]
+        .iter()
+        .all(|wanted| ops.iter().any(|op| op == wanted))),
         "{welcome}"
     );
     // Hello identifies the daemon, keeper, and agent count.
@@ -41,10 +54,18 @@ fn hello_reports_protocol_build_and_capabilities() {
     assert_eq!(result["agents"], 1, "{welcome}");
     // A second hello fails without closing the connection.
     assert_eq!(
-        error_reason(&wire.hello("terminal", [1, 1], json!({}))),
+        error_reason(&wire.hello("terminal", DAEMON_RANGE, json!({}))),
         "invalid_argument"
     );
     assert!(wire.call("agent.screen", json!({ "agent": "w1" }))["result"]["text"].is_string());
+    let (_editor, logical) = ide_binding(
+        &home,
+        &json!({
+            "id": "protocol-probe", "label": "Editor", "workspace": "workspace",
+            "environment": "local", "folders": [home.project],
+        }),
+    );
+    assert_eq!(result["machine_id"], logical.machine_id);
 }
 
 #[test]
@@ -58,14 +79,27 @@ fn a_client_without_a_shared_protocol_or_of_an_unknown_kind_is_refused() {
     );
     let mut newer = DaemonTestClient::open(&home);
     assert_eq!(
-        error_reason(&newer.hello("terminal", [2, 3], json!({}))),
+        error_reason(&newer.hello("terminal", [3, 3], json!({}))),
         "protocol_incompatible"
     );
     let mut stranger = DaemonTestClient::open(&home);
     assert_eq!(
-        error_reason(&stranger.hello("hologram", [1, 1], json!({}))),
+        error_reason(&stranger.hello("hologram", DAEMON_RANGE, json!({}))),
         "protocol_incompatible"
     );
+}
+
+#[test]
+fn a_v1_client_is_refused_and_the_keeper_keeps_the_live_process() {
+    let home = TestHome::new("v1refusal");
+    let agent = home.start_fake("kept");
+    let keeper = home.keeper_pid().expect("the keeper");
+    let mut client = DaemonTestClient::open(&home);
+    let v1 = client.hello("terminal", [1, 1], json!({}));
+    assert_eq!(error_reason(&v1), "protocol_incompatible", "{v1}");
+    assert_eq!(home.keeper_pid(), Some(keeper));
+    assert!(alive(&agent.process));
+    assert_eq!(home.agent_from_list_json("kept").unwrap()["pid"], agent.pid);
 }
 
 #[test]
@@ -78,7 +112,7 @@ fn requests_require_hello_and_reject_unknown_methods_operations_and_topics() {
             .as_str()
             .is_some_and(|m| m.contains("hello"))
     );
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     assert_eq!(
         error_reason(&wire.call("agent.teleport", json!({}))),
         "invalid_argument"
@@ -102,7 +136,7 @@ fn a_start_with_no_program_or_no_terminal_size_is_an_invalid_argument() {
     let home = TestHome::new("startargs");
     home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let cwd = home.project.to_string_lossy().into_owned();
     for args in [
         json!({ "command": [], "cwd": cwd, "cols": 80, "rows": 24 }),
@@ -198,7 +232,7 @@ fn unread_responses_backpressure_the_connection() {
                 "{}\n",
                 json!({
                     "jsonrpc": "2.0", "id": 0, "method": "hello",
-                    "params": { "protocol": [1, 1], "build": "t", "kind": "terminal" },
+                    "params": { "protocol": DAEMON_RANGE, "build": "t", "kind": "terminal" },
                 })
             )
             .as_bytes(),
@@ -255,7 +289,7 @@ fn the_person_s_client_reads_the_daemon_s_log_and_an_agent_s_call_is_refused() {
     );
     assert!(at("hello ada").is_none(), "{lines:#?}");
     let mut for_ada = DaemonTestClient::open(&home);
-    for_ada.hello("terminal", [1, 1], json!({ "agent": ada.id }));
+    for_ada.hello("terminal", DAEMON_RANGE, json!({ "agent": ada.id }));
     let refused = for_ada.call("daemon.log", json!({}));
     assert_eq!(error_reason(&refused), "refused", "{refused}");
 }

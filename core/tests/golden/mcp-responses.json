@@ -38,24 +38,29 @@
               "idempotentHint": false,
               "openWorldHint": false
             },
-            "description": "Start an agent: a CLI in a folder of a window. list_agents lists the windows, their folders, and the CLIs each can start. It answers once the new agent's CLI runs; with a prompt, a 🔔 result tells you once the prompt reached it. The new agent joins your creation tree.",
+            "description": "Start a CLI in a folder and add the new agent to your creation tree. It answers once the CLI runs with data.id, name, path, machine_id, and windows. With a prompt, a 🔔 result later says what became of the prompt.",
             "inputSchema": {
               "type": "object",
               "properties": {
                 "cli": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "A CLI that list_agents lists for the window, such as claude."
+                  "description": "A CLI entry such as claude. list_agents lists the CLIs available to start."
                 },
                 "path": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "The folder to start in: one of the folders list_agents lists for the window, or any folder in the terminal window. A relative path starts from your own folder."
+                  "description": "The folder to start in. A relative path starts from your own folder. If you give location_source_window, use one of its listed locations or a folder inside one."
                 },
                 "window": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "The window to start in, such as win-2, or terminal."
+                  "description": "Optional local window ID, such as win-2 or terminal. The new agent joins only this window. Omit it to inherit all your member windows."
+                },
+                "location_source_window": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Optional ID of a connected window on this machine. The window supplies the location for path and any worktree."
                 },
                 "name": {
                   "type": "string",
@@ -83,8 +88,7 @@
               },
               "required": [
                 "cli",
-                "path",
-                "window"
+                "path"
               ],
               "additionalProperties": false
             },
@@ -99,7 +103,7 @@
               "readOnlyHint": true,
               "openWorldHint": false
             },
-            "description": "List the windows on this computer, each with the folders its agents can work in and the CLIs it can start, and the agents you can reach, with what each is doing. Ended agents are listed too. A list too long to return here comes as a file.",
+            "description": "List agents you can reach, ended ones included, and the windows on this machine. Each agent has machine_id and windows, a list of references with machine_id and window_id. Windows have id, machine_id, name, and connected. Connected windows list their CLIs and editor windows also list folders. If the result is too long, data.file names a JSON file with the complete list.",
             "inputSchema": {
               "type": "object",
               "properties": {},
@@ -147,7 +151,7 @@
               "idempotentHint": false,
               "openWorldHint": false
             },
-            "description": "Send one complete message to one agent, or to the person as #human. It waits up to 30 seconds for the message to be typed into the recipient's input and submitted. `delivery` says how it reached them: typed_into_input; read_by_recipient, where they read it themselves first; shown_to_person, for #human; or waiting_in_inbox, for a guest, which takes its messages at its next turn. A message that could not be typed in time is withdrawn and the call fails, saying why: send it again later. Success is delivery, not a reply or a finished task.",
+            "description": "Send one complete message to an agent or to the person as #human. The call can wait up to 30 seconds. For an agent, data.delivery is typed_into_input, read_by_recipient, or waiting_in_inbox for a guest. A message that could not be typed in time is withdrawn and the call says why. For #human, delivered_to_windows means a window's subscription accepted the notification. data.windows lists delivered windows by name and gives a reason for each not_delivered window. If none accepted it, the call fails with unavailable and data.windows lists their reasons. If an earlier send's outcome is unknown, the call gives outcome_unknown and the original data.id.",
             "inputSchema": {
               "type": "object",
               "properties": {
@@ -336,7 +340,9 @@
         "windows": [
           {
             "id": "terminal",
+            "machine_id": "<machine ID>",
             "name": "Terminal",
+            "connected": true,
             "clis": [
               "fake"
             ]
@@ -347,7 +353,13 @@
             "id": "#a1",
             "name": "ada",
             "cli": "fake",
-            "window": "terminal",
+            "machine_id": "<machine ID>",
+            "windows": [
+              {
+                "machine_id": "<machine ID>",
+                "window_id": "terminal"
+              }
+            ],
             "path": "<test>/project",
             "state": "starting",
             "creator": "#human"
@@ -356,7 +368,13 @@
             "id": "#a2",
             "name": "bob",
             "cli": "fake",
-            "window": "terminal",
+            "machine_id": "<machine ID>",
+            "windows": [
+              {
+                "machine_id": "<machine ID>",
+                "window_id": "terminal"
+              }
+            ],
             "path": "<test>/project",
             "state": "starting",
             "creator": "#human"
@@ -381,7 +399,13 @@
         "id": "#a3",
         "name": "helper",
         "path": "<test>/project",
-        "window": "terminal"
+        "machine_id": "<machine ID>",
+        "windows": [
+          {
+            "machine_id": "<machine ID>",
+            "window_id": "terminal"
+          }
+        ]
       }
     }
   },
@@ -413,7 +437,7 @@
     "response": {
       "status": "failure",
       "reason": "invalid_argument",
-      "message": "window terminal starts no CLI nope; nothing was started; it starts fake"
+      "message": "No CLI \"nope\" is configured at <test>/project; the CLIs there are claude, codex, agy, muse, opencode, pi, fake."
     }
   },
   "send_message": {
@@ -470,7 +494,18 @@
     "response": {
       "status": "failure",
       "reason": "unavailable",
-      "message": "#a1 runs in the terminal window, not in an editor window, where Facade could tell the person"
+      "message": "no member window could tell the person",
+      "data": {
+        "windows": [
+          {
+            "window": {
+              "machine_id": "<machine ID>",
+              "window_id": "terminal"
+            },
+            "reason": "not_watching"
+          }
+        ]
+      }
     }
   },
   "read_messages with nothing new": {
@@ -724,7 +759,13 @@
         "id": "#a4",
         "name": "twin",
         "path": "<test>/project",
-        "window": "terminal"
+        "machine_id": "<machine ID>",
+        "windows": [
+          {
+            "machine_id": "<machine ID>",
+            "window_id": "terminal"
+          }
+        ]
       }
     }
   }

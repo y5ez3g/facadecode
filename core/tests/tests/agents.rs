@@ -11,7 +11,7 @@ fn remove_ends_a_running_agent_first_and_removes_an_ended_one() {
     let worker = home.start_fake("worker");
     let ended = home.start_fake("ended");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     // Removing a running agent must stop it before removing its record.
     let removed = wire.call("agent.remove", json!({ "agent": worker.id }));
     assert!(removed["error"].is_null(), "{removed}");

@@ -1,5 +1,6 @@
 //! Line-by-line daemon and keeper protocol connections for scenario tests.
 
+use facade_base::daemon::{DAEMON_PROTOCOL_VERSION, MIN_DAEMON_PROTOCOL_VERSION, WindowRef};
 use facade_base::paths::ClientSocket;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -9,6 +10,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::*;
+
+/// The ordinary daemon protocol used by this checkout.
+pub const DAEMON_RANGE: [u32; 2] = [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION];
 
 /// A raw daemon protocol connection to the test's Facade home.
 pub struct DaemonTestClient {
@@ -204,15 +208,28 @@ pub fn ide(home: &TestHome, window: &Value) -> DaemonTestClient {
 
 /// As [`ide`], with more fields of `hello`, such as `numbers_given`.
 pub fn ide_with(home: &TestHome, window: &Value, more: Value) -> DaemonTestClient {
+    ide_hello(home, window, more).0
+}
+
+/// An editor client and the logical window bound by its hello.
+pub fn ide_binding(home: &TestHome, window: &Value) -> (DaemonTestClient, WindowRef) {
+    let (wire, welcome) = ide_hello(home, window, json!({}));
+    let binding: WindowRef = serde_json::from_value(welcome["window"].clone())
+        .unwrap_or_else(|error| panic!("hello did not bind a logical window: {error}: {welcome}"));
+    assert_eq!(welcome["machine_id"], binding.machine_id, "{welcome}");
+    (wire, binding)
+}
+
+fn ide_hello(home: &TestHome, window: &Value, more: Value) -> (DaemonTestClient, Value) {
     drop(connect(home));
     let mut wire = DaemonTestClient::open(home);
     let mut params = json!({ "window": window });
     if let (Some(params), Some(more)) = (params.as_object_mut(), more.as_object()) {
         params.extend(more.clone());
     }
-    let welcome = wire.hello("ide", [1, 1], params);
+    let welcome = wire.hello("ide", DAEMON_RANGE, params);
     assert!(welcome["result"].is_object(), "{welcome}");
-    wire
+    (wire, welcome["result"].clone())
 }
 
 /// Starts the daemon if needed and connects to it. As `facade` does, it tries until a daemon
@@ -228,7 +245,7 @@ pub fn connect(home: &TestHome) -> DaemonTestClient {
         if let Some(mut wire) = DaemonTestClient::try_open(home) {
             let hello = wire.send(
                 "hello",
-                json!({ "protocol": [1, 1], "build": "test", "kind": "terminal" }),
+                json!({ "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" }),
             );
             if wire
                 .wait_for_response(hello, secs(10))
@@ -302,7 +319,7 @@ impl ManualReadClient {
         raw.send(
             0,
             "hello",
-            json!({ "protocol": [1, 1], "build": "test", "kind": "terminal" }),
+            json!({ "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" }),
         );
         assert!(
             raw.read_message()
