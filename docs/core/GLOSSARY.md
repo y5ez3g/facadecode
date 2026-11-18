@@ -21,7 +21,7 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | process | An operating system's process: its ID, its group (on Windows, its job), its exit | run (for this) |
 | session | A CLI's own session, the one it can resume | conversation |
 | guest | A CLI session a person started that joined Facade through an integration | — |
-| member, MCP member | An MCP client that neither Facade started nor a CLI's hooks report, listed as a guest through its relay | — |
+| MCP member | An MCP client that neither Facade started nor a CLI's hooks report, listed as a guest through its relay | — |
 | CLI | One of the coding CLIs Facade runs, such as Claude Code or Codex; `facade` itself is not one | tool, client (for this) |
 | rule | A CLI's built-in knowledge file, `core/rules/<cli>.json` | — |
 | entry | An item of `clis` in the settings file, named by its CLI's name, as `ErrorData.entry` gives the entry that caused an error | setup |
@@ -127,13 +127,19 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | Use | Means | Not these |
 |---|---|---|
 | window | An editor window that connects to the daemon | — |
-| terminal window | The window, ID `terminal`, that agents started from a terminal belong to | — |
+| logical window | The daemon's stable identity for a window. An editor instance can reconnect to it, and a reopened workspace can bind a new instance to it | instance, workspace (for this) |
+| window reference | The pair `{machine_id, window_id}` identifying a logical window on its machine, `WindowRef` in code | window ID alone, instance ID |
+| instance | One opening of an editor window. Its ID is `WindowDescription.id` in `hello`. A reload keeps the instance and reopening uses a new one | logical window, connection (for this) |
+| terminal window | The window with ID `terminal` on each machine. It is the default member when the person starts an agent from a plain terminal | — |
+| member, membership | A member is a logical window an agent belongs to. A membership is that relationship. `AgentInfo.windows` lists the agent's member window references | owner, ownership (for this) |
+| adopt | Add the calling editor's logical window as another member of an existing agent, through `agent.adopt` | take over, move, attach |
 | location | A place a window offers to start agents in: a checkout, a worktree or a folder; an agent's location is the innermost one that holds its folder | place |
+| location source window | The window on the running machine that supplied the start's location, recorded as the optional window reference `location_source_window`. A start from a direct path can omit it | member window (for this) |
 | folder | A folder on disk | directory, dir |
 | checkout | A Git working copy | working copy |
 | worktree | A further working copy Git made from a checkout | — |
-| grace | The time an agent keeps running after its window left, in case the window comes back | — |
-| take over | A newer one taking over what an older one had: a window of the same workspace taking the agents of one that left, or a newer build taking over the running Facade | hand over |
+| grace | On the old engine, the time runs keep going after their owning extension host disconnects, giving the workspace time to reconnect. On the Rust engine, agents keep running after their window disconnects | — |
+| take over | A newer build taking over the running Facade. On the old engine, a window taking over the runs of another window of the same workspace | hand over |
 | Rust engine | The editor extension running its agents on core, as its setting `facade.rustEngine` chooses; a word of the extension's, which core's code does not use | — |
 | old engine | The editor extension's own back end, from before core | original engine, legacy engine |
 
@@ -176,6 +182,7 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 |---|---|---|
 | keeper | The process that holds every agent's terminal and starts the daemon | service (for this) |
 | daemon | The process that runs agents, messages and the protocol | service (for this) |
+| machine ID | The persistent identity of a Facade home, stored as a lowercase UUID v4 in the home's database and given as `machine_id` | host name, OS machine ID, node ID, peer ID |
 | relay | `facade-mcp`: forwards MCP lines between an MCP client and the daemon, line by line | proxy, bridge, shim |
 | link | A long connection that reconnects when it breaks: the relay's `DaemonLink`, the daemon's keeper link | — |
 | program | An executable file | binary, executable |
