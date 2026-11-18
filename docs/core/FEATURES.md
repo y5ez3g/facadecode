@@ -113,9 +113,9 @@ See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-
   one of them, and can make a new worktree to start in.
 - An editor window describes its terminals' environment, and core lists the CLIs a start there can run, each found on
   that environment's `PATH` or not, and whether a built-in is not installed.
-- When an editor window's last connection closes, its agents wait for it: 90 seconds for a local window, five minutes
-  for another. A window of the same workspace can take them over. Once the time runs out, its running agents stop, and
-  their records stay.
+- When an editor window's last connection closes, as when it is closed or reloaded, its agents go on running and the
+  window is listed as not connected. The same window, or a window of the same workspace, has them again when it
+  connects.
 
 See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
 

@@ -165,7 +165,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	// One engine for this window, chosen now and kept until it reloads: core where it can run, else the extension's own
 	context.subscriptions.push(watchRustEngineSetting());
 	// Whether core could run this window but the old engine still has runs: only then does a reload switch it, once they are gone
-	let switchable = rustEngineSetting() === 'auto' && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
+	const automaticEngine = rustEngineSetting() === 'auto';
+	let switchable = automaticEngine && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
 	if (await chooseEngine(context, home) === 'rust') {
 		try {
 			return await activateRust(context, {
@@ -270,7 +271,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		human,
 		conversations,
 		titles: vendorHistory,
-		pinStore: new WorkspacePins(workspaceState, log),
+		pinStore: new WorkspacePins(workspaceState, log, automaticEngine),
 		newPinId: () => `pin-${crypto.randomBytes(16).toString('hex')}`,
 		retained: new RetainedFile<RetainedRun>(record.dir, writeIfOwned),
 		aliases: address !== undefined ? agentAliases(agentNumbers) : NO_AGENT_NUMBERS,

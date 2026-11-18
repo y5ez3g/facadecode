@@ -205,8 +205,9 @@ deletion under 1.3, close the agents whose launch location belongs to that workt
 anchor (1.2) whose directory a refresh finds missing - not merely unreadable - ends the agents working there the same way;
 its anchor and the anchor's other agents stay.
 Associate agents with a removed location by their launch location, never by scanning process working directories.
-Remove their card/terminal immediately, Unpin them (RULES-4.2) and clean up owned processes in the background. Do not
-leave a live card whose working location is gone. Do not equate temporary remote loss, failed Git reads or stale
+On the old engine, remove their card and terminal immediately, unpin them and clean up owned processes in the
+background. On the Rust engine, core stops the affected agents and the window removes their cards and tabs when it
+observes the stop. Their Pins follow RULES-4.2. Do not equate temporary remote loss, failed Git reads or stale
 registration with proven deletion. Do not automatically remove workspace roots, close editor windows or repair
 another tool's Git operation.
 

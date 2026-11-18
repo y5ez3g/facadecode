@@ -156,7 +156,8 @@ package carries core's `facade` program (`bin/facade.exe` on Windows, `bin/facad
 is still running in its execution environment - ptyd lists none without `exited`, whatever window started it; a ptyd
 that does not answer has none, and none is started to ask - and core responds. Otherwise, and always under `off`, it
 takes the old engine, all of 1.1-1.3 unchanged. A core that cannot start there, as on WSL 1 or in a container that
-forbids process descriptors, leaves the window on the old engine with one notification of why and how to stop trying. An
+forbids process descriptors, leaves the window on the old engine with one notification of why and how to stop trying. On
+any old-engine window under `auto`, Pins with Rust identities remain in storage for a Rust activation (RULES-4.2). An
 old-engine window under `auto` whose reload would switch asks again whether old runs remain after each change of its own
 agents, every 10 seconds and before restoring Pins; once none does, it says once that a reload switches it, and the
 person's New Agent, Resume and Pin restoration then say so instead of starting on the old engine. Agents never run on
@@ -177,14 +178,12 @@ person's language by their reason, core's own words after. The window starts no 
 keeps no record of its agents, and offers no Show Agent Launch. The window component is the same for both engines: an
 old-engine agent's request to a Rust window finds it unavailable.
 
-End Agent, a clean exit and a stop by Facade - `stop_agent`, a removed location, or a closed window's grace (RULES-4.1),
-whose agents a later window of the workspace takes over ended - record the conversation in `conversations/` for Resume
-and remove the agent from core, so core keeps no record or screen log of it; an agent that ended while no window of its
-workspace was there keeps its Pin, which restores it, and an agent that ended otherwise keeps its red card until End
-Agent. Resume resumes an ended agent that still shows its card, keeping its `#aN`, and otherwise continues the
-conversation's session as a new agent. Pins, the panel's order and filters, the last launch and where each agent's tab
-is are kept with the workspace's record, as on the old engine (2.2), so they follow a folder window that becomes a
-workspace. A Rust window's terminals get `<home>/core/bin` before `PATH` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`
+End Agent calls `agent.stop` for a running agent. End Agent and normal exit record the conversation in `conversations/`
+for Resume and leave the agent's record in core (RULES-4.1). The `agents` snapshot verifies Pins by home and number.
+Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN` (RULES-4.2).
+Pins, dismissed abnormal exits, the panel's order and filters, the last launch and where each agent's tab is are kept
+with the workspace's record (2.2), so they follow a folder window that becomes a workspace. A Rust window's terminals
+get `<home>/core/bin` before `PATH` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`
 (CLIS-1.2), so `facade` there reaches the window's agents; an old-engine window's get neither.
 
 ## 2 Ownership and recovery
@@ -210,11 +209,12 @@ not a product workflow.
 
 ### 2.2 Window lifetime is a proof obligation
 
-**Keep a window's runs across reload, extension-host restart and temporary disconnect by demonstrated editor behavior,
-and end them only by RULES-4.1's grace policy.**
+**Demonstrate reattachment of a window's runs under RULES-4.1 across reload, extension-host restart and temporary disconnect.**
 
-RULES-4.1 owns the contract: closure ends that window's runs, reload reconnects them and temporary remote loss does not
-itself terminate them. ptyd applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
+On the Rust engine, core owns the processes across window closure and daemon replacement. The window reconnects and
+uses its `agents` snapshot to show the original runs (RULES-4.1, LIFECYCLE-3.5).
+
+On the old engine, ptyd applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
 seconds where the claim says its window is local, five minutes otherwise; a successor activation's claim cancels it, and
 a remote network outage that leaves the remote extension host connected starts no timer. Each claim says whether its
 window is local; one that does not is taken for a remote window's. A claim of the workspace within the grace takes its
@@ -311,9 +311,9 @@ terminals, cannot identify unknown old terminals. This mechanism does not close 
 workspace conversion outside test mode, which refuses to enter a workspace.
 
 Gate G2 needs isolated traces for reload, extension-host restart, remote loss, close-one, close-last and immediate
-reopen. Deactivation, terminal closure, `sessionId`, a missing-heartbeat timer, a hidden terminal's death or the
-Shutdown exit reason does not alone prove a close, so Facade reports no closure from them and RULES-4.1's grace is the
-cleanup, as no claim of another window proves one either. A mechanism proven on the editor can take the place of a
+reopen. Deactivation, terminal closure, `sessionId`, a missing-heartbeat timer, a hidden terminal's death, the
+Shutdown exit reason and another window's claim alone provide too little evidence to report closure. The old engine
+uses RULES-4.1's grace for cleanup. A mechanism proven on the editor can take the place of a
 derived design; it cannot silently redefine RULES-4.1's behavior. This rule is a proof obligation, not a claim that
 every supported editor supplies a complete mechanism.
 
@@ -710,9 +710,10 @@ editor reports the component installed later. If it does not appear, the window 
 which the component reads, so it cannot tell which agents are its own and shows and starts none (RULES-4.1): the panel
 and one notification explain in plain words that the Facade Code Window Component must be installed and enabled on this
 computer, with an action that shows it in the Extensions view, Facade's commands repeat that explanation, and a reload
-is offered once the component is installed. The window's running agents go on for RULES-4.1's grace: a remote window's
-leaves time to install the component and reload, which shows them again, and a local window's does not. A window
-component without the client network, too old to carry requests, leaves its window's agents shown and usable: they reach
+is offered once the component is installed. Rust agents keep running in core. On the old engine, the running agents
+go on for RULES-4.1's grace. A remote window's grace leaves time to install the component and reload, which shows the
+agents again. A local window has less time. A window component without the client network, too old to carry requests,
+leaves its window's agents shown and usable: they reach
 this window's agents alone, list_agents and name resolution report the other windows unavailable (`complete: false`,
 MCP-3.1), and a new start or send is refused, saying to update the Facade Code Window Component on this computer and
 reload the window (1.1). Unpublished installation tests install that component locally as well as the platform-specific

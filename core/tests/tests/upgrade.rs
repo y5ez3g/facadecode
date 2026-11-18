@@ -340,6 +340,69 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
     }
 }
 
+/// A window whose connection ended during an upgrade keeps its running agent and screen.
+#[test]
+fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
+    let home = TestHome::new("windowupgrade");
+    // Earlier daemons use this setting to give recovered windows a 1.5-second grace period.
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "1500")]);
+    let folder = facade_base::files::real_path(&home.project).unwrap();
+    let mut editor = ide(
+        &home,
+        &json!({
+            "id": "win-1", "label": "Editor", "environment": "local", "workspace": "app",
+            "folders": [folder],
+        }),
+    );
+    let started = editor.call(
+        "agent.start",
+        json!({
+            "command": [shell(), "-c", "echo BEFORE-UPGRADE; sleep 600"], "name": "kept",
+            "cwd": folder, "window_id": "win-1", "cols": 80, "rows": 24,
+            "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
+        }),
+    );
+    let before = &started["result"]["agent"];
+    let id = before["agent_id"]
+        .as_str()
+        .expect("an editor agent started");
+    let process = process_identity(before["pid"].as_i64().expect("the agent has a PID") as i32);
+    assert!(wait_for_screen_text(&home, id, "BEFORE-UPGRADE"));
+    let screen = home.screen(id);
+    let daemon = home.daemon_pid().unwrap();
+
+    let next = newer();
+    let output = home
+        .command(program_of_build(&home, &next))
+        .arg("list")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let hello = home.hello_result().expect("the new daemon answers");
+    assert_eq!(hello["build"], next);
+    assert_ne!(hello["pid"], daemon);
+    drop(editor);
+
+    std::thread::sleep(secs(3));
+    let after = home
+        .agent_from_list_json("kept")
+        .expect("the agent's record");
+    assert_eq!(after["agent_id"], id);
+    assert_eq!(after["window_id"], "win-1");
+    assert_eq!(after["process"], "running", "{after}");
+    assert_eq!(after["pid"], before["pid"]);
+    assert!(alive(&process), "the original process is still alive");
+    assert_eq!(home.screen(id), screen);
+    let windows = connect(&home).request("watch", json!({ "topic": "windows" }));
+    let window = windows["result"]["snapshot"]
+        .as_array()
+        .expect("the windows snapshot")
+        .iter()
+        .find(|window| window["window_id"] == "win-1")
+        .expect("the disconnected window stays listed");
+    assert_eq!(window["connected"], false, "{window}");
+}
+
 /// A command of a newer build hands the running Facade over to it and says so on one line. The
 /// agents' CLIs and the keeper keep their processes, the keeper as the new build; a new daemon
 /// serves them. Once the new build proves healthy, the launchers point at it.

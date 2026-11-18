@@ -15,9 +15,19 @@ const KEY = 'facade.pins';
 export class WorkspacePins implements PinStore {
 	private ignored = false;
 
-	constructor(private readonly state: Pick<KeptWorkspaceState, 'get' | 'keep'>, private readonly log?: LogPort) { }
+	constructor(private readonly state: Pick<KeptWorkspaceState, 'get' | 'keep'>, private readonly log?: LogPort, private readonly hideRustPins = false) { }
 
 	list(): readonly Pin[] {
+		const pins = this.read();
+		return this.hideRustPins ? pins.filter(pin => this.visible(pin)) : pins;
+	}
+
+	/** On an old-engine window under auto, Pins tied to core wait for its records to be verified (RULES-4.2). */
+	private visible(pin: Pin): boolean {
+		return !this.hideRustPins || typeof pin.home !== 'string' || typeof pin.agent !== 'string';
+	}
+
+	private read(): readonly Pin[] {
 		const value = this.state.get<unknown>(KEY);
 		if (value === undefined) {
 			return [];
@@ -31,14 +41,18 @@ export class WorkspacePins implements PinStore {
 	}
 
 	save(pin: Pin): void {
-		const pins = this.list();
+		const pins = this.read();
 		const at = pins.findIndex(each => each.id === pin.id);
 		// A new Pin goes last among the Pins (PANEL-2.1)
-		this.write(at === -1 ? [...pins, pin] : pins.map(each => each.id === pin.id ? pin : each));
+		if (at === -1) {
+			this.write([...pins, pin]);
+		} else if (this.visible(pins[at])) {
+			this.write(pins.map(each => each.id === pin.id ? pin : each));
+		}
 	}
 
 	remove(id: string): void {
-		this.write(this.list().filter(each => each.id !== id));
+		this.write(this.read().filter(each => each.id !== id || !this.visible(each)));
 	}
 
 	private write(value: readonly Pin[]): void {
@@ -46,10 +60,12 @@ export class WorkspacePins implements PinStore {
 	}
 
 	reorder(ids: readonly string[]): void {
-		const pins = this.list();
+		const stored = this.read();
+		const pins = this.hideRustPins ? stored.filter(pin => this.visible(pin)) : stored;
 		const ordered = [...new Set(ids)].map(id => pins.find(pin => pin.id === id)).filter((pin): pin is Pin => !!pin);
 		ordered.push(...pins.filter(pin => !ids.includes(pin.id)));
-		this.write(ordered);
+		let next = 0;
+		this.write(this.hideRustPins ? stored.map(pin => this.visible(pin) ? ordered[next++] : pin) : ordered);
 	}
 }
 

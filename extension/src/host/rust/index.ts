@@ -35,6 +35,7 @@ import { watchSettingsFile } from '../showLaunch';
 import { windowAddress } from '../windowNetwork';
 import { RustAgents } from './agents';
 import { connectDaemon } from './connection';
+import { WorkspaceDismissedAgents } from './dismissedAgents';
 import { facadeInTerminals, startEnvironment } from './environment';
 import { RustClis, RustLocations, RustWorktrees } from './ports';
 import { DaemonTerminals } from './terminals';
@@ -232,6 +233,8 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		clis: (): readonly CliInfo[] => windowInfo?.clis ?? [],
 		environment: location => startEnvironment(location, root),
 		pins: new WorkspacePins(kept.state, log),
+		home: root,
+		dismissed: new WorkspaceDismissedAgents(kept.state, root, log),
 		conversations,
 		titles: vendorHistory,
 		history,
@@ -251,7 +254,7 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		log,
 		newRunId: () => `start-${crypto.randomBytes(16).toString('hex')}`
 	});
-	// A reload's or a reopening's Pins start again once this window's agents are known (LIFECYCLE-3.4, 3.5); then the tabs an
+	// Pins are verified and restored once this window's agents are known (LIFECYCLE-3.4, 3.5); then the tabs an
 	// earlier activation left are retired, also where no Pin opened one
 	void agents.restorePins().catch(err => log.event(`Could not restore pinned agents: ${messageOf(err)}`))
 		.then(() => terminals.pinnedSequenceOver()).catch(err => log.event(`Could not retire an earlier activation's tabs: ${messageOf(err)}`));

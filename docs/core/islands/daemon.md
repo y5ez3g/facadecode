@@ -92,7 +92,7 @@ The layer's files:
 | `store/` | `facade.db`: the schema, the cross-table transactions, the table handles. |
 | `operations.rs` | Start, resume, stop, remove, rename, a run's exit, the environment of an agent's CLI. Resume distinguishes a session the CLI has not saved yet from one never reported. |
 | `delivery.rs` | `agent.send`, start prompts, results, and input handed to an agent. |
-| `presence.rs` | Guests joining and ending; windows connecting, leaving and taking over. |
+| `presence.rs` | Joins and ends guests, handles window presence and takeover, and stops agents whose locations are gone. |
 | `topics.rs` | The four watch topics: snapshots, changes, resyncs, and what a watch's end lets go of. |
 | `relays.rs` | Relay hellos, the in-process connection the MCP tools use, MCP members. |
 | `service.rs` | The server's `Service` trait for the daemon: hello, calls, watches, relays. |
@@ -111,11 +111,12 @@ Facade's tools), and the test gates and `blocking_in_place`.
 `GuestTable` and `IntegrationTable` to guests, `WindowTable` to windows. A handle holds the store and
 offers only its table's methods.
 
-**Startup** (`start_and_serve`): take the home's daemon lock (a daemon that does not get it exits);
-take the clean-end note; hold this build's programs open; make runs and find the keeper; open the
-store; make the other parts; sweep; recover agents, then guests, pending messages and windows; let go
-of plugins no run uses; serve the keeper link; start the tasks that follow runs, windows, guests,
-results and long waits, and the hourly sweep; bind the socket; report the start; serve until idle.
+**Startup** (`start_and_serve`) takes the home's daemon lock and exits if it cannot get it. It takes
+the clean-end note, holds this build's programs open, makes runs, finds the keeper, opens the store,
+makes the other parts and sweeps. It recovers agents, guests and pending messages, then restores
+disconnected windows. It releases plugins no run uses and serves the keeper link. It starts the
+tasks that follow runs, windows, guests, results and long waits, and starts the hourly sweep. It
+then binds the socket, reports the start and serves until idle.
 
 **What each part gets and how it reports back**:
 
@@ -125,7 +126,7 @@ results and long waits, and the hourly sweep; bind the socket; report the start;
 | messages | `MessageTable` | return values; a receiver of the results it wrote |
 | runs | the home, the held programs, a `RunEvent` sender; per run, an `ExitSink` | `RunEvent::Exited`, `RunEvent::Session` (acknowledged once committed) |
 | records | `NumberTable` | return values |
-| windows | `WindowTable`, a `WindowEvent` sender | `WindowEvent::Left`, `WindowEvent::GraceEnded` |
+| windows | `WindowTable`, a `WindowEvent` sender | `WindowEvent::Left` |
 | guests | `GuestTable`, `IntegrationTable`, the held programs, a `GuestEvent` sender | `GuestEvent::Ended`, `GuestEvent::TurnIdle` |
 | server | the `Service` implementation, the idle exit's `closing` and `paused` | trait calls into this layer |
 | mcp | per relay: a `Connect` closure and a `JoinMember` closure | return values |
@@ -390,30 +391,28 @@ Agent IDs, default names, and what a reference names within a client's reach (`r
   - `agent_number(id) -> u64` to sort by; `normalize_agent_reference(reference)`: `a3`, `#a3` and `3` all become `a3`.
 
 ### windows
-The editor windows that `ide` clients describe: how many of each window's connections are open, its locations, and how long its agents wait for it once it leaves. `src/windows/`.
+The editor windows that `ide` clients describe, their open connections, and their locations. `src/windows/`.
 
 - **Owns:**
-  - Each editor window's description, open connections, open `messages` watches, locations as last read with the time of that read, and how many times it has left. One lock covers them all. It is a leaf lock: no await, no table write and no event is done while it is held.
+  - Each editor window's description, open connections, open `messages` watches, locations as last read with the time of that read, and how many times it has left. One leaf lock covers them all. Disconnect publishes the `windows` topic's `Updated` under the lock and sends `WindowEvent::Left` after releasing it. Table writes also run outside the lock.
   - The `windows` topic's changes (`WindowsChange`).
   - The `windows` table, through `WindowTable`: a row is written on every description and deleted when the window is removed, unless agents' records are still under it.
   - The worktree creations under way (`Creations`).
 - **Keeps:**
-  - A window leaves when its last connection closes. Each leaving has its own number, `departure`, and a grace or a removal for an earlier leaving does nothing once the window has connected again.
-  - A local window's agents wait 90 seconds for it, any other window's 5 minutes, and a window whose environment is unknown counts as remote. `FACADE_TEST_GRACE_MS` shortens the grace in a debug build.
+  - A window leaves when its last connection closes. It publishes `connected: false`, and its running agents keep running. Each leaving has its own number, `departure`. Removal requires that the window is still disconnected and has that departure number.
   - When a window of a workspace describes itself, every other window of that workspace with no connection left, listed or not, is taken over: its ID is returned so that its agents can move.
   - Window changes are sent only from here.
   - Locations are read when a window describes itself and after a worktree is made there, never on a timer.
 - **Never does:** stop or move agents; read the agent list; run Git (locations does that); list the terminal window or the CLIs (the daemon adds them).
 - **Interface** (called by the daemon in `presence.rs`, `topics.rs`, `operations.rs`, `delivery.rs`, `service.rs`):
   - `Windows::new(table: WindowTable, events: UnboundedSender<WindowEvent>) -> Windows`.
-  - `WindowEvent::Left { window_id, departure }`: the last connection closed. The daemon removes a window with no running agents and starts the grace of the others.
-  - `WindowEvent::GraceEnded { window_id, departure }`: the grace ran out with the window still away. The daemon stops the window's running agents, then removes it.
+  - `WindowEvent::Left { window_id, departure }` reports that the last connection closed. The daemon checks the agent list and removes the window only if it has no running agents.
   - `Windows::check(&WindowDescription) -> Result<(), ErrorBody>`: refuses an empty ID, the terminal window's ID, or a folder that is not an absolute path.
   - `describe(&WindowDescription, connecting: bool) -> Vec<String>`: takes the description, counts a connection when connecting, writes the row, and returns the windows of the same workspace that have no connection: listed ones, and windows that left and were removed while agents' records were under them. The daemon moves their agents in one transaction and then calls `taken_over(from)`, which sends `Removed`.
   - `connection(id) -> WindowConnection`: a guard whose drop closes one connection and may send `Left`.
   - `folders(id) -> Vec<String>` and `async read_locations(id, folders_before: Option<Vec<String>>) -> Option<LocationsRead>`: reads the locations again and sends `Updated`. `LocationsRead::is_gone(cwd)` is true when no location holds `cwd` and the window dropped the folder of one that did, or a read with no problem no longer finds it. The daemon stops the running agents whose folder is gone.
-  - `restore(running: &[String], agents: &[String]) -> Vec<String>`: at the daemon's start, takes back the windows that hold running agents as left once, with the description the table kept, or a remote window's grace where it is lost. Keeps unlisted the rows of windows that hold only ended agents, so that a later window of their workspace takes those agents over. Deletes the other rows. The daemon then calls `start_grace(id, 1)` for each one returned.
-  - `start_grace(id, departure)` and `remove(id, departure, has_agents)`: the removal sends `Removed`, and deletes the row unless agents' records are still under the window.
+  - `restore(running: &[String], agents: &[String])` restores editor windows with running agents as disconnected. It uses the saved description where available and the window ID as the label otherwise. It keeps the rows of windows with only ended agents outside the list so that another window of the same workspace can take those agents over. It deletes rows for windows with no agent records.
+  - `remove(id, departure, has_agents)` sends `Removed` and deletes the row if no agent records belong to the window.
   - `watch_person(id) -> PersonWatch` and `tells_person(id) -> bool`: whether the window's `ide` client watches its messages, so that the window can tell the person.
   - `label(id) -> String`, `subscribe() -> broadcast::Receiver<WindowsChange>`, `infos() -> Vec<WindowInfo>` (editor windows by ID, with no CLIs).
   - `colors(id) -> Option<TerminalColors>` and `env(id) -> Option<BTreeMap<String, String>>`: what the window last described; its `env` stays in memory only, never in the table.

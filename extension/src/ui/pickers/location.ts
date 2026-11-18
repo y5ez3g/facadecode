@@ -545,7 +545,7 @@ async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<v
 	const locations = deps.locations.snapshot().locations;
 	// True only once every agent's process is known to have ended: Git removes nothing a process may still be writing in
 	const closeAgents = async () => {
-		const results = await Promise.all(runsLaunchedIn(deps.agents.list(), worktree.path, locations, folderKeyOf).map(run => deps.agents.close(run.id).then(
+		const results = await Promise.all(runsLaunchedIn(deps.agents.list(), worktree.path, locations, folderKeyOf).map(run => deps.agents.close(run.id, { forWorktreeDeletion: true }).then(
 			result => {
 				deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`);
 				return result === 'terminated' || result === 'already_exited' || result === 'already_ended' || result === 'not_started';

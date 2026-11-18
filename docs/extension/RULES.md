@@ -195,10 +195,11 @@ another window.
 
 ### 1.9 Window closure and pending messages
 
-**Closing a window ends that window's agents and does not replay their old messages when it reopens.**
+**Message delivery follows the agent's lifetime under 4.1 and keeps its original deadline.**
 
-A window's runs end under 4.1. If the recipient ends before submission, fail to the current sender if reachable. A
-different still-open window continues its own work. If only A's window closes, already handed-off delivery at B may
+On the Rust engine, agents keep running after their window closes (4.1), and core continues delivering their messages.
+On the old engine, a window's runs end under 4.1. If the recipient ends before submission, fail to the current sender if
+reachable. A different still-open window continues its own work. If only A's window closes, already handed-off delivery at B may
 continue within its deadline; work still owned by the closing side can end with it. Do not add durable handover or
 recovery solely to guarantee this edge case, and do not cancel B's independent work just to enforce a global rule.
 
@@ -209,7 +210,7 @@ input is never pasted again, and only its own draft gets Enter (1.6). One whose 
 later restoration within that deadline; one whose recipient ended, or whose deadline passed, ends - an ordinary
 message's sender asking again with its request ID where it gave one (1.2), a prompt's told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries. A newly
 started agent receives only messages
-addressed to its new run. Closing every window naturally ends the remaining volatile delivery work.
+addressed to its new run. On the old engine, closing every window naturally ends the remaining volatile delivery work.
 No notification or message is scheduled for replay on the next opening.
 
 ### 1.10 Concurrent sends share the terminal without interleaving
@@ -359,8 +360,17 @@ transition.
 
 **A window owns its agents; creation relationships do not couple process lifetimes.**
 
-Closing a creator leaves its children running in their own windows. Closing a window ends all its runs and removes their
-UI, preserving Pin intent. No public editor signal tells a close from a reload, so a window's runs end a grace period
+Closing a creator leaves its children running in their own windows.
+
+On the Rust engine, Facade core keeps a window's agents running when the window closes, reloads or loses its extension
+host. Their processes also survive a compatible daemon restart or replacement. The window reconnects to its original
+agents, or a reopened window of the same workspace takes them over, with their numbers, processes and screens. End Agent
+immediately removes the card and terminal tab and asks core to stop a running agent in the background. The record,
+saved conversation and Pin stay. `facade remove` explicitly deletes the agent record. A stop failure goes to the initiator
+(LIFECYCLE-3.1). A still-running agent can reattach at the next opening or reload.
+
+The old engine uses the following policy until 0.2.0. Closing a window ends all its runs and removes their UI, preserving
+Pin intent. No public editor signal tells a close from a reload, so a window's runs end a grace period
 after its extension host disconnects from the execution supervisor, unless a reloaded or reopened window of the same
 workspace claims them first: 90 seconds for a local window, whose reload or extension host restart claims them well
 within it, and five minutes for a remote one, whose network may come back. A window that opens the workspace within the
@@ -385,17 +395,15 @@ keeps working through the execution supervisor that holds it (ARCHITECTURE-2.4).
 process, the card is red and says why (3.2); unknown activity alone shows no dot. Facade never leaves the agent out. The
 one exception is a window that cannot know its own identity, so cannot tell its agents from another window's: one whose
 identity record is damaged, where Facade does not start (ARCHITECTURE-2.2), and one without its window component, which
-is what reads that identity - it shows and starts no agents, and its running ones go on for the grace period above: a
-remote window's five minutes leave time to install the component and reload, which shows them again, while a local
-window's 90 seconds, most of them spent waiting for the component, do not (ARCHITECTURE-4.3). A window that another
+is what reads that identity. It shows and starts no agents. Its running agents on the Rust engine stay with core. On
+the old engine they go on for the grace period above (ARCHITECTURE-4.3). A window that another
 window of the same workspace took over shows none of its agents; that other window shows them.
 
-### 4.2 Restoration preserves intent, not an old process
+### 4.2 Restoration preserves conversation and location
 
-**Resume and Pin restore the exact conversation, original location in a new run.**
+**Resume and Pin restore the exact conversation in its original location.**
 
-Pin stores the conversation key - none yet for an agent pinned before its CLI named one (LIFECYCLE-3.4) - original
-location, name and order. Keep the conversation/location
+Pin stores the conversation key, original location, name and order (LIFECYCLE-3.4). Keep the conversation/location
 association for non-pinned Facade conversations too; short-lived message cleanup must not erase it. No copied account
 credentials. Keep the CLI entry name and type, and use its current settings and 4.3's current YOLO for the new run.
 Model and effort follow CONFIGURATION-3.3: this request, then the current entry, then the native saved session or
@@ -403,14 +411,28 @@ configuration. Historical requests are diagnostic only. A missing, disabled or c
 with the reason, without switching entries (CONFIGURATION-3.4).
 Existing processes keep their actual plan.
 
-Explicit agent close, a person's close of the agent's editor tab showing its pin mark (LIFECYCLE-3.4), normal exit or
-actual location removal Unpins. Abnormal exit, whole-window close and a tab hidden any other way preserve Pin. Unpin
-alone does not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation. Each activation,
+A person's close of an agent's editor tab showing its pin mark (LIFECYCLE-3.4) unpins it. Whole-window close and a tab
+hidden any other way preserve Pin. Unpin alone does not stop. Manual Resume does not silently re-pin a deliberately
+unpinned conversation. If the exact conversation already runs in Facade, later windows skip launching it. Human UX stays
+local. Facade does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
+
+On the Rust engine, a Pin also stores the agent's original Facade home and number. Reopening or reloading the workspace
+verifies that record in its home. It reattaches a running agent that belongs to this window. It resumes the same number
+after a normal exit or an actual abnormal exit whose card the person dismissed in this workspace. An abnormal exit keeps
+its red card and Pin until the person dismisses the card. A failed restoration call shows its reason on a red card, with
+one attempt per opening or reload. The error lasts for the current activation. End Agent and normal exit preserve the
+Pin. Facade's Delete Worktree command unpins the agents it ends for deletion. Other location removal keeps the Pin.
+A complete snapshot of the original home clears a Pin whose agent record is gone. An unavailable or different home leaves
+the Pin stored for later verification. When `facade.rustEngine` is `auto` and the window uses the old engine, Pins with
+Rust identities wait for a Rust activation. The Rust engine leaves preexisting Pins
+without an original home and number available to the old engine. The person can pin an existing agent again to record its
+identity. Manual Resume can restore a saved conversation under its retained agent number even after the card is dismissed.
+
+On the old engine, a Pin can initially have no conversation key (LIFECYCLE-3.4). Explicit agent close, normal exit or
+actual location removal unpins. Abnormal exit preserves Pin. Each activation,
 after reattachment, restores the Pins no run holds (LIFECYCLE-3.4's Pin restoration), so a reload restarts none that
 still run or were retained as failures; a failure is retained without a restart loop. Only their processes start in the
-background: their tabs then open in front, by LIFECYCLE-3.5's tab procedure. If the exact conversation already runs in Facade,
-later windows skip launching it. Human UX stays local. Facade does not inspect or block an external application's
-writer; vendor resume errors are returned as actual errors.
+background, and their tabs then open in front by LIFECYCLE-3.5's tab procedure.
 
 ### 4.3 Reach is client-wide and permissions remain explicit
 

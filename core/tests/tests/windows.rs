@@ -1,6 +1,6 @@
 //! Windows: an editor window's client describes its window, whose folders and their Git checkouts
-//! are where its agents start; its agents outlive a reload or a daemon restart and end after its
-//! grace; a window of the same workspace takes them over; the person is told what an agent of an
+//! are where its agents start; its agents outlive a disconnect, reload or daemon restart;
+//! a window of the same workspace takes them over; the person is told what an agent of an
 //! editor window sends to `#human`; `start_agent` starts in a window's location, making a worktree
 //! there first where asked; and a message between windows names its sender's window.
 
@@ -8,9 +8,6 @@ use std::path::Path;
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
-
-/// The grace the daemon gives a window that went, in milliseconds, in these tests.
-const GRACE_MS: &str = "1500";
 
 /// Runs `git args` in `folder` without the person's own Git settings.
 fn git(folder: &Path, args: &[&str]) {
@@ -133,6 +130,16 @@ fn running(home: &TestHome, id: &str) -> bool {
     agent(home, id)["process"] == "running"
 }
 
+/// A running agent's process and screen, read back by its original number.
+fn live_agent(home: &TestHome, id: &str) -> (i32, String) {
+    let record = agent(home, id);
+    assert_eq!(record["process"], "running", "{record}");
+    let pid = record["pid"].as_i64().expect("a running process has a PID") as i32;
+    assert!(alive(&process_identity(pid)), "#{id} PID {pid} is alive");
+    assert!(wait_for_screen_text(home, id, "READY"), "#{id}'s screen");
+    (pid, home.screen(id))
+}
+
 /// The windows the `windows` topic lists now.
 fn windows(home: &TestHome) -> Vec<Value> {
     let mut wire = connect(home);
@@ -252,19 +259,17 @@ fn an_editor_window_lists_its_folders_and_the_checkouts_of_their_repositories() 
     );
 }
 
-/// An editor window's agents outlive a reload: a connection of the same window within its grace
-/// keeps them. Once the window stays away for its grace, its running agents end as a stop ends
-/// them, and their records stay.
+/// An editor window's agents keep running when its last connection ends, and a reload attaches
+/// to the same processes and screens.
 #[test]
-fn an_editor_window_s_agents_outlive_a_reload_and_end_after_its_grace() {
-    let home = TestHome::new("windowgrace");
-    home.start_facade_with(&[
-        ("FACADE_TEST_GRACE_MS", GRACE_MS),
-        ("FACADE_TEST_GATES", "grace-window-back"),
-    ]);
+fn an_editor_window_s_agents_outlive_a_disconnect_and_reload() {
+    let home = TestHome::new("windowdisconnect");
+    // Earlier daemons use this setting to shorten their disconnect timer to 1.5 seconds.
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "1500")]);
     let folders = vec![real(&home.project)];
     let mut wire = ide(&home, &window("win-1", Some("k1"), &folders));
     let id = start_shell(&mut wire, &home, "win-1", &real(&home.project), "kept");
+    let before = live_agent(&home, &id);
     assert_eq!(
         (
             &agent(&home, &id)["window_id"],
@@ -279,54 +284,38 @@ fn an_editor_window_s_agents_outlive_a_reload_and_end_after_its_grace() {
     assert!(
         wait_until(secs(5), || listed(&home, "win-1")
             .is_some_and(|window| window["connected"] == false)),
-        "the window waits, not connected"
+        "the window stays listed while disconnected"
     );
-    let reloaded = ide(&home, &window("win-1", Some("k1"), &folders));
-    home.wait_for_gate("grace-window-back");
-    assert!(
-        running(&home, &id),
-        "a reload within the grace keeps the window's agents"
-    );
-    drop(reloaded);
-    assert!(
-        wait_until(secs(15), || !running(&home, &id)),
-        "{}",
-        home.daemon_log()
-    );
-    let ended = agent(&home, &id);
+    std::thread::sleep(secs(3));
+    assert_eq!(live_agent(&home, &id), before);
     assert_eq!(
-        (&ended["state"], &ended["state_detail"]["how"]),
-        (&json!("ended"), &json!("stopped")),
-        "{ended}"
+        listed(&home, "win-1").map(|window| window["connected"].clone()),
+        Some(json!(false))
     );
-    assert!(
-        home.daemon_log()
-            .contains("window win-1 did not come back within"),
-        "{}",
-        home.daemon_log()
-    );
-    assert!(
-        wait_until(secs(5), || listed(&home, "win-1").is_none()),
-        "the window goes once its agents ended"
+    let _reloaded = ide(&home, &window("win-1", Some("k1"), &folders));
+    assert_eq!(live_agent(&home, &id), before);
+    assert_eq!(agent(&home, &id)["window_id"], "win-1");
+    assert_eq!(
+        listed(&home, "win-1").map(|window| window["connected"].clone()),
+        Some(json!(true))
     );
 }
 
-/// A window of the same workspace takes over the agents of a window in its grace, as a reload does;
-/// the first window, back, has none of them. It never takes the agents of a window that is still
-/// connected.
+/// A window of the same workspace takes over the running agents of a disconnected window;
+/// the first window, back, has none of them. A connected window keeps its agents.
 #[test]
 fn a_window_of_the_same_workspace_takes_over_the_agents_of_one_that_went() {
     let home = TestHome::new("windowtakeover");
-    home.start_facade_with(&[
-        ("FACADE_TEST_GRACE_MS", "3000"),
-        ("FACADE_TEST_GATES", "grace-window-back"),
-    ]);
+    // Earlier daemons use this setting to stop agents after 3 seconds without a window.
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "3000")]);
     let folders = vec![real(&home.project)];
     let mut first = ide(&home, &window("win-1", Some("k"), &folders));
     let id = start_shell(&mut first, &home, "win-1", &real(&home.project), "moving");
+    let before = live_agent(&home, &id);
     drop(first);
     assert!(wait_until(secs(5), || listed(&home, "win-1")
         .is_some_and(|window| window["connected"] == false)));
+    std::thread::sleep(secs(5));
     let second = ide(&home, &window("win-2", Some("k"), &folders));
     assert_eq!(
         agent(&home, &id)["window_id"],
@@ -337,11 +326,7 @@ fn a_window_of_the_same_workspace_takes_over_the_agents_of_one_that_went() {
         listed(&home, "win-1").is_none(),
         "the first window went with its agents"
     );
-    home.wait_for_gate("grace-window-back");
-    assert!(
-        running(&home, &id),
-        "the first window's grace no longer ends the agent"
-    );
+    assert_eq!(live_agent(&home, &id), before);
     let third = ide(&home, &window("win-3", Some("k"), &folders));
     assert_eq!(
         agent(&home, &id)["window_id"],
@@ -365,15 +350,16 @@ fn a_window_of_the_same_workspace_takes_over_the_agents_of_one_that_went() {
         "win-2",
         "the takeover is kept across a restart"
     );
+    assert_eq!(live_agent(&home, &id), before);
     drop((second, third, back));
 }
 
-/// A daemon restart is a lost connection to every editor window, never a close: a window that
-/// connects again keeps its agents, and one that never comes back ends them once its grace, counted
-/// from the restart, runs out.
+/// A daemon restart leaves every editor window disconnected, and their agents keep running whether
+/// or not the windows reconnect.
 #[test]
-fn a_daemon_restart_gives_each_window_its_grace_from_the_restart() {
+fn an_editor_window_s_agents_outlive_a_daemon_restart() {
     let home = TestHome::new("windowrestart");
+    // Earlier daemons use this setting to start a 4-second timer at restart for each window.
     home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "4000")]);
     let folders = vec![real(&home.project)];
     let (mut back, mut gone) = (
@@ -381,22 +367,29 @@ fn a_daemon_restart_gives_each_window_its_grace_from_the_restart() {
         ide(&home, &window("win-gone", Some("k2"), &folders)),
     );
     let kept = start_shell(&mut back, &home, "win-back", &real(&home.project), "kept");
-    let ended = start_shell(&mut gone, &home, "win-gone", &real(&home.project), "ended");
+    let away = start_shell(&mut gone, &home, "win-gone", &real(&home.project), "away");
+    let kept_before = live_agent(&home, &kept);
+    let away_before = live_agent(&home, &away);
     let old = home.kill_daemon();
     drop((back, gone));
     home.wait_for_daemon_after(old, secs(30))
         .expect("the keeper starts the next daemon");
-    let restarted = std::time::Instant::now();
-    let reconnected = ide(&home, &window("win-back", Some("k1"), &folders));
-    assert!(
-        running(&home, &kept) && running(&home, &ended),
-        "nothing ends at the restart"
-    );
-    assert_eq!(
-        listed(&home, "win-gone").map(|window| window["label"].clone()),
-        Some(json!("win-gone window")),
-        "its name is kept"
-    );
+    for id in ["win-back", "win-gone"] {
+        let window = listed(&home, id).expect("a window with a running agent stays listed");
+        assert_eq!(window["connected"], false, "{window}");
+        assert_eq!(window["label"], json!(format!("{id} window")));
+    }
+    let _reconnected = ide(&home, &window("win-back", Some("k1"), &folders));
+    std::thread::sleep(secs(6));
+    assert_eq!(live_agent(&home, &kept), kept_before);
+    assert_eq!(live_agent(&home, &away), away_before);
+    for (id, connected) in [("win-back", true), ("win-gone", false)] {
+        assert_eq!(
+            listed(&home, id).map(|window| window["connected"].clone()),
+            Some(json!(connected)),
+            "{id}'s connection after the restart"
+        );
+    }
     // The editor windows' rows: the terminal window's holds its YOLO alone.
     let stored = || -> Vec<String> {
         let store = rusqlite::Connection::open(home.path.join("core/facade.db")).unwrap();
@@ -415,31 +408,6 @@ fn a_daemon_restart_gives_each_window_its_grace_from_the_restart() {
         ["win-back", "win-gone"],
         "a window that holds agents keeps its description for the next restart"
     );
-    assert!(
-        wait_until(secs(20), || !running(&home, &ended)),
-        "{}",
-        home.daemon_log()
-    );
-    assert!(
-        wait_until(secs(5), || listed(&home, "win-gone").is_none()),
-        "the window that never came back goes from the list"
-    );
-    assert_eq!(
-        stored(),
-        ["win-back", "win-gone"],
-        "a window that went keeps its row while its ended agents' records stay, for a later window \
-         of its workspace"
-    );
-    assert!(
-        restarted.elapsed() >= std::time::Duration::from_millis(3500),
-        "the grace counts from the restart: {:?}",
-        restarted.elapsed()
-    );
-    assert!(
-        running(&home, &kept),
-        "the window that came back keeps its agents"
-    );
-    drop(reconnected);
 }
 
 /// What an agent of an editor window sends to `#human` goes to that window's `messages` watch and
@@ -535,7 +503,6 @@ fn the_person_is_told_in_the_sending_agent_s_own_window() {
 #[test]
 fn start_agent_starts_in_a_window_s_location_and_makes_a_worktree_there_where_asked() {
     let home = TestHome::new("windowstart");
-    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "60000")]);
     let repo = base(&home).join("app");
     repository(&repo);
     std::fs::create_dir_all(base(&home).join("app.worktrees/review")).unwrap();
@@ -821,12 +788,11 @@ fn an_agent_ends_when_its_location_is_gone_from_its_window() {
 
 /// An agent resumes in the window of the client that resumes it, in its own folder: `facade resume`
 /// in the terminal window, an editor window's client in that window, which must have the folder
-/// among its locations. So an editor window's agent that its window's grace ended runs again in a
+/// among its locations. So an editor window's stopped agent runs again in a
 /// window the lists show.
 #[test]
 fn an_agent_resumes_in_the_window_of_the_client_that_resumes_it() {
     let home = TestHome::new("windowresume");
-    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
     let folder = real(&home.project);
     let mut wire = ide(
         &home,
@@ -850,12 +816,17 @@ fn an_agent_resumes_in_the_window_of_the_client_that_resumes_it() {
         "{}",
         agent(&home, &id)
     );
-    drop(wire);
+    let stopped = wire.call("agent.stop", json!({ "agent": id }));
+    assert!(
+        stopped["result"].is_object() && stopped["result"]["already_ended"] != true,
+        "{stopped}"
+    );
     assert!(
         wait_until(secs(15), || !running(&home, &id)),
-        "the window's grace ends it: {}",
+        "the stop ends it: {}",
         home.daemon_log()
     );
+    drop(wire);
     assert!(
         wait_until(secs(5), || listed(&home, "win-1").is_none()),
         "the window went"
@@ -946,7 +917,6 @@ fn a_message_between_windows_names_its_sender_s_window() {
 #[test]
 fn an_editor_window_s_agents_answer_color_queries_with_its_colors() {
     let home = TestHome::new("windowcolors");
-    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
     let folder = real(&home.project);
     let mut described = window("win-1", Some("k1"), std::slice::from_ref(&folder));
     described["colors"] =
@@ -982,7 +952,6 @@ fn an_editor_window_s_agents_answer_color_queries_with_its_colors() {
 #[test]
 fn a_start_in_a_folder_inside_a_location_continues_its_session_there() {
     let home = TestHome::new("windowinside");
-    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
     let folder = real(&home.project);
     let nested = home.project.join("app").join("nested");
     std::fs::create_dir_all(&nested).unwrap();
@@ -1016,21 +985,25 @@ fn a_start_in_a_folder_inside_a_location_continues_its_session_there() {
     assert_eq!(record["location_id"], location, "{record}");
 }
 
-/// A window of the same workspace that connects after an earlier window's grace ran out takes over
-/// that window's ended agents: its first snapshot lists them, in the new window.
+/// A new window of the same workspace takes over the stopped agents of a closed window: its first
+/// snapshot lists them in the new window.
 #[test]
 fn a_later_window_of_the_workspace_takes_over_the_ended_agents() {
-    let home = TestHome::new("windowexpired");
-    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
+    let home = TestHome::new("windowended");
     let folders = vec![real(&home.project)];
     let mut first = ide(&home, &window("win-old", Some("k1"), &folders));
     let id = start_shell(&mut first, &home, "win-old", &real(&home.project), "kept");
-    drop(first);
+    let stopped = first.call("agent.stop", json!({ "agent": id }));
+    assert!(
+        stopped["result"].is_object() && stopped["result"]["already_ended"] != true,
+        "{stopped}"
+    );
     assert!(
         wait_until(secs(15), || !running(&home, &id)),
-        "the grace ends it: {}",
+        "the stop ends it: {}",
         home.daemon_log()
     );
+    drop(first);
     assert!(
         wait_until(secs(5), || listed(&home, "win-old").is_none()),
         "the window went"

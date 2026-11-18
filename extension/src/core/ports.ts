@@ -565,6 +565,8 @@ export interface Pin {
 	readonly location: LocationId;
 	readonly cwd: string;
 	readonly name: string;
+	readonly home?: string;
+	readonly agent?: string;
 }
 
 /** Pins in workspace storage, in their saved order (ARCHITECTURE-3.1). */
@@ -887,7 +889,7 @@ export interface Agents {
 	/** Its post-start creation prompt was delivered or given up: its input is held for it no longer (RULES-1.10). */
 	creationSettled?(run: RunId): void;
 	/** End Agent, the single action ending for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
-	close(run: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'>;
+	close(run: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<CleanupResult | 'already_ended' | 'not_started'>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */
 	rename(run: RunId, name: string): void;
 	list(): readonly RunFacts[];
