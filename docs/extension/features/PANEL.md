@@ -161,8 +161,8 @@ shows the connection status until the running machine can be reached again.
    could not be made as `Worktree failed · {reason}`, the reason without its closing `.` or `。`, such as `Start failed ·
    claude was not found on PATH`, while their notifications keep their own sentences (UX-1.2, WORKTREES-2.2); an end
    Facade could not confirm, `Stop unconfirmed · check process` (LIFECYCLE-3.5); the Facade tools it cannot use; its
-   tools not connected past CLIS-2.3's bound, `Collaboration not connected yet`; or a start that did not become ready,
-   with why its activity is unknown, such as `No initial status · check terminal`. Before any message, with no notable
+   tools not connected past CLIS-2.3's bound, `Facade tools not connected yet`; or a start that did not become ready,
+   with why its activity is unknown, such as `No initial state · check terminal`. Before any message, with no notable
    state, it says `New session started` for a new session, `Agent resumed` when the same numbered agent returns,
    or `Session continued` when a new agent starts a saved session. Pin restoration follows the same numbering
    distinction (LIFECYCLE-3.3, 3.4).
@@ -183,23 +183,23 @@ The `🧑‍💻` and the `📨` are the editor's color emoji, at the second lin
 was sent to the agent, and by whom, shows at a glance; Facade's own words carry no emoji or other mark. The `📨` and the
 `🧑‍💻` come from who sent the item as its record keeps it, never from a name, the destination or an emoji the text
 begins with. It says where that item came from, not what the agent works on now or
-whether it read it. The last message, and whether the run resumed a conversation, are kept across a reload. A CLI
-without its Facade tools says so in plain words, for example `Collaboration off · move or rename {0}`, or
-`Collaboration stopped · end and resume` once its tools went away, and stays usable. The second line never says a
+whether it read it. The accessible label says `Last input: {0}` for the person's input. The card keeps the last item
+and its session opening across a reload. When tool injection fails, the second line says why, such as
+`Facade tools unavailable · move or rename {0}`. A run that loses its tool connection says `Facade tools disconnected`. The second line never says a
 title - its conversation's is the details' (1.5), and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
-or, without a red dot, `Status unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
+or, without a red dot, `State unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
 the dot's and the accessible label's, the label also saying why activity is unavailable. Idle alone proves neither an
 empty composer nor usable input; there is no separate first-message readiness claim. Never `Done, waiting for you`
 from a turn end. No popup solely for a native blocker.
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
-dot or notification rules. Tools injected but not yet connected say `Collaboration not connected yet` in the accessible
+dot or notification rules. Tools injected but not yet connected say `Facade tools not connected yet` in the accessible
 label; startup waits for them, and once CLIS-2.3's bound passed without them the dot is red and the second line says so. An
 actual tool connection removes the message; known injection failures or a lost existing connection keep their specific
 explanation. Ended cards do not claim a pending tool connection. The green dot, starting or working, breathes every 1.8 s using
 opacity only (0–65% overlay of row background); reduced motion is static. The accessible label says the state in words: `Starting`,
-`Working`, `Idle`, the native blocker's kind, `Attention needed`, `Error · {reason}` or `Status unavailable · check
-terminal`, and for a red dot without an error why it is red: the tools explanation, `Collaboration not connected yet` or why its
+`Working`, `Idle`, the native blocker's kind, `Attention needed`, `Error · {reason}` or `State unavailable · check
+terminal`, and for a red dot without an error why it is red: the tools explanation, `Facade tools not connected yet` or why its
 activity is unavailable. No unread dot, completed check, bold-name state or extra error badge.
 
 ### 1.5 Details and accessible content

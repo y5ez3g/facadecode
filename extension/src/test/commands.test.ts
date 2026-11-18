@@ -3,7 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { CleanupResult, Location, RunFacts } from '../core/ports';
+import type { CleanupResult, Location, RunChange, RunFacts } from '../core/ports';
+import type { PanelState } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
 
 const LOCATION: Location = { id: 'loc-main', path: '/shop', uri: 'file:///shop', environment: 'local', label: 'main', folders: [{ index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' }], kind: 'checkout', opened: true, git: 'ok', branch: 'main' };
@@ -49,6 +50,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let closed: string[];
 	let dismissed: string[];
 	let runs: Map<string, RunFacts>;
+	let runsChanged: TestEmitter<RunChange>;
 	let cleanup: CleanupResult | 'already_ended';
 	let did: string[];
 	let pinned: string[];
@@ -71,6 +73,12 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let fileProblems: { readonly setting: string; readonly problem: string }[];
 	const settle = () => new Promise(resolve => setImmediate(resolve));
 	const run = (id: string, arg?: unknown) => handlers.get(id)!(arg);
+	const openPanel = () => {
+		const said = new TestEmitter<unknown>();
+		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
+			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		return said;
+	};
 
 	setup(async () => {
 		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; dismissed = []; did = []; pinned = [];
@@ -96,13 +104,14 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		};
 		const { registerUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 		const changes = new TestEmitter<never>();
+		runsChanged = new TestEmitter<RunChange>();
 		settingsSaved = new TestEmitter<void>();
 		iconReads = 0;
 		runs = new Map([[RUN, FACTS]]);
 		const close = async (id: string) => { closed.push(id); runs.delete(id); return cleanup; };
 		disposables = registerUi({
 			agents: {
-				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: id => { pinned.push(id); order.push(`pin ${id}`); }, unpin: id => { unpinned.push(id); order.push(`unpin ${id}`); }, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
+				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: runsChanged.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: id => { pinned.push(id); order.push(`pin ${id}`); }, unpin: id => { unpinned.push(id); order.push(`unpin ${id}`); }, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
 			launch: () => RUN,
 				stop: close, dismiss: async id => { dismissed.push(id); runs.delete(id); }, close, rename: () => undefined
 			},
@@ -274,9 +283,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	});
 
 	test('UX-3.1, PANEL-1.5: Show Agent Details from the Command Palette opens the selected card\'s details, the view focused first; with no card selected it does nothing', async () => {
-		const said = new TestEmitter<unknown>();
-		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
-			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		const said = openPanel();
 		said.fire({ type: 'ready', page: '0'.repeat(31) + '1', reducedMotion: false });
 		await settle();
 		const focused = () => executed.filter(args => args[0] === 'facade.agents.focus').length;
@@ -290,9 +297,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	});
 
 	test('PANEL-1.3, 3.1: the card\'s Pin button\'s pin and unpin reach Pin and Unpin of its own run; a run gone answers gone, with nothing done', async () => {
-		const said = new TestEmitter<unknown>();
-		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
-			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		const said = openPanel();
 		const page = '0'.repeat(31) + '1';
 		said.fire({ type: 'ready', page, reducedMotion: false });
 		await settle();
@@ -302,6 +307,45 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		}
 		const outcomes = posted.filter(message => message.type === 'outcome').map(message => [message.action, message.reason ?? 'ok']);
 		assert.deepStrictEqual([order, outcomes], [[`pin ${RUN}`, `unpin ${RUN}`], [[`pin-${RUN}`, 'ok'], [`unpin-${RUN}`, 'ok'], ['pin-run-gone', 'gone'], ['unpin-run-gone', 'gone']]]);
+	});
+
+	test('PANEL-1.4: production card copy follows tool connection, CLI state and the source of input', async () => {
+		const noState = { activity: 'unknown', reporting: false } as const;
+		const waiting = { ...noState, notReady: true } as const;
+		const unavailable = { tools: 'unavailable' } as const;
+		const cases: [Partial<RunFacts>, string][] = [
+			[{ tools: 'connecting', notReady: true }, 'Facade tools not connected yet'],
+			[{ ...unavailable, toolsProblem: 'disconnected' }, 'Facade tools disconnected'],
+			[{ ...unavailable, toolsProblem: 'cmd' }, 'Facade tools unavailable · replace .cmd with CLI in facade.json'],
+			[{ ...unavailable, toolsProblem: 'conflict', toolsFile: 'SKILL.md' }, 'Facade tools unavailable · move or rename SKILL.md'],
+			[{ ...unavailable, toolsProblem: 'variable', toolsFile: 'OPENCODE_CONFIG_CONTENT' }, 'Facade tools unavailable · OPENCODE_CONFIG_CONTENT unreadable'],
+			[{ ...unavailable, toolsProblem: 'files' }, 'Facade tools unavailable · file creation failed'],
+			[{ ...waiting, activityUnknown: 'waiting' }, 'No initial state · check terminal'],
+			[{ ...waiting, activityUnknown: 'not_reporting' }, 'No state from CLI · check terminal'],
+			[{ ...waiting, activityUnknown: 'cleared' }, 'State cleared · check terminal'],
+			[{ ...waiting, activityUnknown: 'screen_unrecognized' }, 'State unrecognized · check terminal'],
+			[{ ...waiting, activityUnknown: 'screen_reset' }, 'State reset · check terminal'],
+		];
+		runs.set(RUN, { ...FACTS, ...noState, said: 'Check the log' });
+		runsChanged.fire({ run: RUN, kind: 'lifecycle' });
+		const expected = new Map(cases.map(([facts, line], index) => {
+			const id = `run-${String(index + 10).padStart(32, '0')}`;
+			runs.set(id, { ...FACTS, id, alias: `#a${index + 10}`, ...facts });
+			runsChanged.fire({ run: id, kind: 'added' });
+			return [id, line];
+		}));
+		await settle();
+		openPanel().fire({ type: 'ready', page: '0'.repeat(31) + '1', reducedMotion: false });
+		await settle();
+		const { cards } = posted.filter(message => message.type === 'state').at(-1)!.state as PanelState;
+		for (const [id, line] of expected) {
+			const card = cards.find(each => each.runId === id);
+			assert.deepStrictEqual([card?.line, card?.stateText], [line, line], id);
+		}
+		const own = cards.find(each => each.runId === RUN)!;
+		assert.deepStrictEqual([own.line, own.stateText], ['🧑‍💻 Check the log', 'State unavailable · check terminal']);
+		assert.match(own.label, /Last input: Check the log$/);
+		assert.doesNotMatch(own.label, /Facade tools/, 'a CLI without tool injection reports no tool problem');
 	});
 
 	test('notification navigation reveals the exact run and selects its card (UX-3.2)', async () => {

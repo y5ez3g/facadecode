@@ -2224,9 +2224,9 @@ const WORDS = {
 	title: (value: string) => `Title: ${value}`, location: (value: string) => `Location: ${value}`, path: (value: string) => `Path: ${value}`, untitledPending: 'No title yet', untitledUnreadable: 'Title unavailable',
 	starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...',
 	started: 'New session started', resumed: 'Agent resumed', continued: 'Session continued', working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error · ${reason}`,
-	activityUnavailable: 'Status unavailable · check terminal', activityUnknown: (why: string) => `Status ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Collaboration not connected yet', needsPermission: 'Permission needed',
+	activityUnavailable: 'State unavailable · check terminal', activityUnknown: (why: string) => `State ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Facade tools not connected yet', needsPermission: 'Permission needed',
 	needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed', exitedWithCode: (code: string) => `Process exited · code ${code}`, endedBySignal: (signal: string) => `Process terminated · ${signal}`,
-	exitUnknown: 'Process lost · reason unknown', toolsUnavailable: (problem?: string) => `Collaboration off · ${problem}`,
+	exitUnknown: 'Process lost · reason unknown', toolsUnavailable: (problem?: string) => `Facade tools unavailable · ${problem}`,
 	startFailed: (reason: string) => `Start failed · ${reason}`, worktreeFailed: (reason: string) => `Worktree failed · ${reason}`,
 	saidByAgent: (sender: string, line: string) => `${sender}: ${line}`, saidByPerson: (line: string) => line, saidByFacade: (line: string) => line
 } satisfies CardWords;

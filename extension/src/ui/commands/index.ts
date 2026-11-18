@@ -100,15 +100,15 @@ function cardWords(): CardWords {
 		notWorking: vscode.l10n.t("Idle"),
 		// {0} is why: the failure the agent ended with, or the error its CLI reported
 		error: reason => vscode.l10n.t("Error · {0}", reason),
-		activityUnavailable: vscode.l10n.t("Status unavailable · check terminal"),
+		activityUnavailable: vscode.l10n.t("State unavailable · check terminal"),
 		// Why its activity is unknown: no report yet since its start, none ever, one taken back, a screen not recognized, or a terminal reset
-		activityUnknown: why => why === 'waiting' ? vscode.l10n.t("No initial status · check terminal")
-			: why === 'not_reporting' ? vscode.l10n.t("No status from CLI · check terminal")
-				: why === 'cleared' ? vscode.l10n.t("Status cleared · check terminal")
-					: why === 'screen_unrecognized' ? vscode.l10n.t("Status unrecognized · check terminal")
-						: vscode.l10n.t("Status reset · check terminal"),
+		activityUnknown: why => why === 'waiting' ? vscode.l10n.t("No initial state · check terminal")
+			: why === 'not_reporting' ? vscode.l10n.t("No state from CLI · check terminal")
+				: why === 'cleared' ? vscode.l10n.t("State cleared · check terminal")
+					: why === 'screen_unrecognized' ? vscode.l10n.t("State unrecognized · check terminal")
+						: vscode.l10n.t("State reset · check terminal"),
 		needsAttention: vscode.l10n.t("Attention needed"),
-		toolsConnecting: vscode.l10n.t("Collaboration not connected yet"),
+		toolsConnecting: vscode.l10n.t("Facade tools not connected yet"),
 		needsPermission: vscode.l10n.t("Permission needed"),
 		needsSignIn: vscode.l10n.t("Sign-in needed"),
 		hasQuestion: vscode.l10n.t("Answer needed"),
@@ -123,20 +123,20 @@ function cardWords(): CardWords {
 		// {0} is why its new worktree could not be created, without its closing period
 		worktreeFailed: reason => vscode.l10n.t("Worktree failed · {0}", reason),
 		toolsUnavailable: (problem, file) => problem === 'cmd'
-			? vscode.l10n.t("Collaboration off · replace .cmd with CLI in facade.json")
+			? vscode.l10n.t("Facade tools unavailable · replace .cmd with CLI in facade.json")
 			: problem === 'conflict' && file
 				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
-				? vscode.l10n.t("Collaboration off · move or rename {0}", file)
+				? vscode.l10n.t("Facade tools unavailable · move or rename {0}", file)
 				: problem === 'variable' && file
 					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
-					? vscode.l10n.t("Collaboration off · {0} unreadable", file)
+					? vscode.l10n.t("Facade tools unavailable · {0} unreadable", file)
 					: problem === 'disconnected'
 						// The agent's CLI stopped the Facade tools it had started with, or they ended on their own
-						? vscode.l10n.t("Collaboration stopped · end and resume")
-						: vscode.l10n.t("Collaboration off · file creation failed"),
+						? vscode.l10n.t("Facade tools disconnected")
+						: vscode.l10n.t("Facade tools unavailable · file creation failed"),
 		// {0} the agent that sent it, with its window where that is another; {1} its text
 		saidByAgent: (sender, line) => vscode.l10n.t("Last message from agent {0}: {1}", sender, line),
-		saidByPerson: line => vscode.l10n.t("Your last input: {0}", line),
+		saidByPerson: line => vscode.l10n.t("Last input: {0}", line),
 		saidByFacade: line => vscode.l10n.t("Facade result: {0}", line)
 	};
 }

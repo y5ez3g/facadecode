@@ -21,9 +21,9 @@ const WORDS: CardWords = {
 	runningOn: machine => `Running on ${machine}`,
 	connectionLost: 'Connection lost · reconnecting',
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', started: 'New session started', resumed: 'Agent resumed', continued: 'Session continued', working: 'Working', notWorking: 'Idle', error: reason => `Error · ${reason}`,
-	activityUnavailable: 'Status unavailable · check terminal', activityUnknown: why => `Status ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Collaboration not connected yet', needsPermission: 'Permission needed', needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed',
+	activityUnavailable: 'State unavailable · check terminal', activityUnknown: why => `State ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Facade tools not connected yet', needsPermission: 'Permission needed', needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed',
 	exitedWithCode: code => `Process exited · code ${code}`, endedBySignal: signal => `Process terminated · ${signal}`,
-	toolsUnavailable: problem => `Collaboration off · ${problem}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
+	toolsUnavailable: problem => `Facade tools unavailable · ${problem}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
 	exitUnknown: 'Process lost · reason unknown', startFailed: reason => `Start failed · ${reason}`, worktreeFailed: reason => `Worktree failed · ${reason}`
 };
 
