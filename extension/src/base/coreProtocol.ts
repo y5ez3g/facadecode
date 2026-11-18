@@ -8,6 +8,11 @@ export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","age
 export type Topic = typeof TOPICS[number];
 export type Operation = keyof Operations;
 
+/** The complete replacement of one neighbour's table. Every row has a route, build and boot ID. */
+export interface AdvertiseParams {
+	readonly machines: MachineInfo[];
+}
+
 /** Arguments for an operation on one agent. */
 export interface AgentArgs {
 	readonly agent: string;
@@ -115,6 +120,17 @@ export interface CliListResult {
 
 /** The kind of client connecting to the daemon. */
 export type ClientKind = 'terminal' | 'mcp' | 'ide' | 'machine';
+
+/** Foreground handshake failed after local authorization. */
+export interface ConnectFailedParams {
+	readonly error: ErrorBody;
+}
+
+/** Connection verified on the foreground stream. */
+export interface ConnectedParams {
+	readonly machine: MachineHello;
+	readonly first_connection: boolean;
+}
 
 export type ConnectionKind = 'saved' | 'temporary';
 
@@ -374,12 +390,6 @@ export interface MachineConnectResult {
 	readonly expected_machine_id?: string;
 }
 
-/** Connection verified on the foreground stream. */
-export interface ConnectedParams {
-	readonly machine: MachineHello;
-	readonly first_connection: boolean;
-}
-
 /** One connection as seen from its machine table row. */
 export interface MachineConnection {
 	readonly machine_id: string;
@@ -389,11 +399,6 @@ export interface MachineConnection {
 	readonly remote_home?: string;
 	readonly state: ConnectionState;
 	readonly ssh_interaction?: SshInteraction;
-}
-
-/** Foreground handshake failed after local authorization. */
-export interface ConnectFailedParams {
-	readonly error: ErrorBody;
 }
 
 /** The introduction on each side of a machine hello. */
@@ -470,11 +475,6 @@ export interface MachineRenameArgs {
 export interface MachineRenameResult {
 	readonly machine_id: string;
 	readonly name: string;
-}
-
-/** The complete replacement of one neighbour's table. Every row has a route, build and boot ID. */
-export interface AdvertiseParams {
-	readonly machines: MachineInfo[];
 }
 
 /** The transport the local client will bridge to this machine session. */
