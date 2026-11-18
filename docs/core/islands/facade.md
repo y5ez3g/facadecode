@@ -109,9 +109,11 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 
 `src/commands.rs`: the terminal commands that ask the daemon something. Each one makes its protocol call on a connection the layer has already made, then prints the result for the person. Every word it prints follows the command line's copy style: tables with uppercase headers and one row per agent, bare IDs such as `a3`, lowercase state words, relative times, and `-q` and `--json` where a command has them.
 
-- **Owns:** no lasting state. It owns the arguments each command sends and how it prints the result: a table for `facade list` and `facade integration list`, IDs alone for `facade list -q`, aligned labels for `facade inspect` and `facade status`, or the protocol's JSON, pretty-printed, with `--json`. It also collects the environment that `agent.start`, `agent.resume` and the `integration.*` operations carry. Variables that are not UTF-8 are left out, and standard error names them.
+- **Owns:** no lasting state. It owns the arguments each command sends and how it prints the result: a table for `facade list` and `facade integration list`, IDs alone for `facade list -q`, aligned labels for `facade inspect` and `facade status`, or pretty-printed JSON with `--json`. It also collects the environment that `agent.start`, `agent.resume` and the `integration.*` operations carry. Variables that are not UTF-8 are left out, and standard error names them.
 - **Keeps:**
   - It reaches the daemon only through the `DaemonClient` it is given.
+  - The JSON agent records in `list` and `inspect` name the v2 `cwd` and `said` values `folder` and `last_input`.
+    Each field keeps its v2 value shape and omission rule.
   - `facade start` takes `--machine <MACHINE>` to select a machine and `--folder <FOLDER>` to select a folder.
     A local start uses this shell's current folder by default and resolves relative paths from it. The same rule
     applies if `--machine` selects the local machine. Another machine checks a supplied path there and uses its

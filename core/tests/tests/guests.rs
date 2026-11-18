@@ -458,7 +458,7 @@ fn a_guest_starts_an_agent_with_its_cli_s_environment() {
     connect(&home);
     // A guest starts an agent at its own location, in the terminal window.
     let start = |server: &mut McpTestClient, session: &str, name: &str, meta: Value| {
-        let path = with_session(&home, session).expect("the session joined")["cwd"].clone();
+        let path = with_session(&home, session).expect("the session joined")["folder"].clone();
         let arguments =
             json!({ "name": name, "cli": "fake", "window": "terminal", "folder": path });
         server.call_in("start_agent", arguments, meta)

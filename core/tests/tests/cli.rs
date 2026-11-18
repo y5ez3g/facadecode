@@ -109,6 +109,52 @@ fn start_d_prints_a_bare_id() {
     assert_eq!(said(&started), ("a2\n".to_string(), String::new(), Some(0)));
 }
 
+/// Both CLI JSON commands give the same agent values as v2, including omitted last input.
+#[test]
+fn agent_json_uses_folder_and_last_input_with_the_v2_values() {
+    let home = TestHome::new("agentjson");
+    let worker = home.start_fake("worker");
+    assert!(wait_for_screen_text(&home, &worker.id, "❯"));
+    let mut wire = connect(&home);
+    let compare = |cli: &Value, daemon: &Value| {
+        let mut cli_as_v2 = cli.clone();
+        let fields = cli_as_v2.as_object_mut().unwrap();
+        assert!(
+            !fields.contains_key("cwd") && !fields.contains_key("said"),
+            "{cli}"
+        );
+        let folder = fields.shift_remove("folder").unwrap();
+        fields.insert("cwd".into(), folder);
+        if let Some(input) = fields.shift_remove("last_input") {
+            fields.insert("said".into(), input);
+        }
+        assert_eq!(&cli_as_v2, daemon);
+    };
+    for text in [None, Some("check the JSON")] {
+        if let Some(text) = text {
+            home.run_facade_ok(&["type", &worker.id, text, "--enter"]);
+            assert!(wait_until(secs(10), || home
+                .agent_record(&worker.id)
+                .is_some_and(|agent| agent["said"]["text"] == text)));
+        }
+        let listed: Value = serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
+        let listed_wire = wire.call("agent.list", json!({}));
+        compare(&listed["agents"][0], &listed_wire["result"]["agents"][0]);
+        assert_eq!(
+            listed["agents"][0].get("last_input").is_some(),
+            text.is_some()
+        );
+
+        let inspected: Value =
+            serde_json::from_str(&home.run_facade_ok(&["inspect", "--json", &worker.id])).unwrap();
+        let inspected_wire = wire.call("agent.inspect", json!({ "agent": worker.id }));
+        let mut expected = inspected_wire["result"].clone();
+        compare(&inspected["agent"], &expected["agent"]);
+        expected["agent"] = inspected["agent"].clone();
+        assert_eq!(inspected, expected);
+    }
+}
+
 /// The values of `--name` and `--prompt` may begin with a dash, even one that spells an option of
 /// Facade's.
 #[test]

@@ -36,8 +36,9 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { AgentListResult, MachineListResult, WindowInfo } from '../../base/coreProtocol';
+import type { MachineListResult, WindowInfo } from '../../base/coreProtocol';
 import { EDITOR_FLAGS, endCore, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, until } from './editors';
+import type { ListedAgent } from './rustWindowDriver';
 import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
 
@@ -519,7 +520,8 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 						picker.close();
 					}
 					assert.equal(await second.act<string>({ kind: 'remote-card', agent: address }), address);
-					const record = (JSON.parse(call(['list', '--json'])) as AgentListResult).agents.find(agent => agent.agent_id === id && agent.machine_id === myId);
+					const { agents } = JSON.parse(call(['list', '--json'])) as { readonly agents: ListedAgent[] };
+					const record = agents.find(agent => agent.agent_id === id && agent.machine_id === myId);
 					assert.ok(record?.windows?.some(window => window.machine_id === theirId), JSON.stringify(record));
 					console.log('  ✔ Go to Agent adopted the original remote agent and displayed the remote icon');
 					const message = 'Remote agent asks the person';

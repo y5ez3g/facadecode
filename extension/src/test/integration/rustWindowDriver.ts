@@ -10,7 +10,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentInfo } from '../../base/coreProtocol';
+import type { AgentInfo, Said } from '../../base/coreProtocol';
 import type { Pin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
 import { normalizeDriveLetter, until, windowsInCore } from './editors';
@@ -18,7 +18,10 @@ import { normalizeDriveLetter, until, windowsInCore } from './editors';
 type Card = PanelState['cards'][number];
 type SavedPin = Pin & { readonly agent?: string; readonly home?: string; readonly machine_id?: string };
 
-export type ListedAgent = Pick<AgentInfo, 'agent_id' | 'machine_id' | 'windows' | 'cwd' | 'process' | 'pid' | 'session' | 'state_detail'>;
+export type ListedAgent = Omit<AgentInfo, 'cwd' | 'said'> & {
+	readonly folder: string;
+	readonly last_input?: Said;
+};
 
 export interface RunningAgent {
 	readonly id: string;
@@ -136,7 +139,7 @@ export async function running(id: string): Promise<RunningAgent> {
 		const agent = listed().find(each => each.agent_id === id);
 		if (!agent?.pid || !agent.session || agent.process !== 'running') { return undefined; }
 		process.kill(agent.pid, 0);
-		return { id, pid: agent.pid, session: agent.session, cwd: agent.cwd };
+		return { id, pid: agent.pid, session: agent.session, cwd: agent.folder };
 	});
 }
 

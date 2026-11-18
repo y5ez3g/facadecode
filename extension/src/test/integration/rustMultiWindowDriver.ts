@@ -9,7 +9,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentListResult, HelloResult, StartArgs, StartResult, WindowRef } from '../../base/coreProtocol';
+import type { HelloResult, StartArgs, StartResult, WindowRef } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
 import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
 import { agentTab, aliasOf, facade, facadeAs, hasAgentTab, keepConversation, listed, newCard, pickCard, pin, running, state, stop } from './rustWindowDriver';
@@ -214,8 +214,7 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'worktree-removed': {
 			await until('Git to remove the fixture worktree', () => !fs.existsSync(action.folder) || undefined);
-			const { agents } = JSON.parse(facade('list', '--json')) as AgentListResult;
-			const ended = agents.find(agent => agent.agent_id === action.id);
+			const ended = listed().find(agent => agent.agent_id === action.id);
 			assert.ok(ended?.process === 'ended' && ended.exit?.at, JSON.stringify(ended));
 			const trace = fs.readFileSync(gitTrace, 'utf8').trim().split('\n')
 				.map(line => JSON.parse(line) as { event: string; argv?: string[]; time: string });

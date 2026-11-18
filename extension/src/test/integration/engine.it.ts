@@ -11,10 +11,10 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentListResult } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
 import { until } from './editors';
 import { aliasOf, hasAgentTab, keepConversation, listed, newCard, resumeCard, state } from './rustWindowDriver';
+import type { ListedAgent } from './rustWindowDriver';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 /** The Facade root of this run: core's home, its settings file and its programs' state, as a terminal's `FACADE_HOME` names it. */
@@ -72,7 +72,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			await until('the terminal\'s `facade list`', () => fs.existsSync(`${out}.done`) ? true : undefined, 60_000);
 			assert.strictEqual(fs.readFileSync(`${out}.done`, 'utf8').trim(), '0', fs.existsSync(`${out}.json`) ? fs.readFileSync(`${out}.json`, 'utf8') : 'no output');
 			assert.strictEqual(path.basename(path.dirname(path.dirname(fs.readFileSync(`${out}.which`, 'utf8').trim()))), 'core', `the terminal runs core's own facade: ${fs.readFileSync(`${out}.which`, 'utf8')}`);
-			const { agents } = JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as AgentListResult;
+			const { agents } = JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as { readonly agents: ListedAgent[] };
 			const seen = agents.find(agent => `#${agent.agent_id}` === alias);
 			assert.ok(seen, `the terminal lists ${alias}: ${fs.readFileSync(`${out}.json`, 'utf8')}`);
 			assert.ok(seen.machine_id && seen.windows?.length === 1 && seen.windows[0].machine_id === seen.machine_id

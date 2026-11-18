@@ -26,7 +26,7 @@ use facade_base::operations::{NoArgs, Operation};
 use facade_base::process::{EndReason, ProcessState};
 use facade_base::time::parse_iso_time;
 use facade_rules::integration::command_program;
-use serde_json::json;
+use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
 use crate::errors::{Change, Problem, about_agent, about_change, about_send, about_start, bare_id};
@@ -232,7 +232,14 @@ fn exact_id(agent: &AgentInfo, here: &str) -> String {
 pub(crate) fn list(client: &mut DaemonClient, listing: Listing) -> anyhow::Result<()> {
     let listed = client.call::<AgentList>(MachineQueryArgs { machine: None })?;
     if let Listing::Json = listing {
-        println_or_end!("{}", serde_json::to_string_pretty(&listed)?);
+        let mut json = serde_json::to_value(listed)?;
+        for agent in json["agents"]
+            .as_array_mut()
+            .expect("agent list is an array")
+        {
+            name_agent_json_fields(agent);
+        }
+        println_or_end!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
     for machine in &listed.machines {
@@ -276,9 +283,29 @@ pub(crate) fn inspect(
         .map_err(|error| about_agent(&agent, error))?;
     match format {
         Format::Text => println_or_end!("{}", inspect_text(&inspected, SystemTime::now())),
-        Format::Json => println_or_end!("{}", serde_json::to_string_pretty(&inspected)?),
+        Format::Json => {
+            let mut json = serde_json::to_value(inspected)?;
+            name_agent_json_fields(&mut json["agent"]);
+            println_or_end!("{}", serde_json::to_string_pretty(&json)?);
+        }
     }
     Ok(())
+}
+
+/// Names the two CLI fields in a serialized v2 agent, keeping its field order and values.
+fn name_agent_json_fields(agent: &mut Value) {
+    let fields = agent.as_object_mut().expect("agent record is an object");
+    *fields = std::mem::take(fields)
+        .into_iter()
+        .map(|(name, value)| {
+            let name = match name.as_str() {
+                "cwd" => "folder".into(),
+                "said" => "last_input".into(),
+                _ => name,
+            };
+            (name, value)
+        })
+        .collect();
 }
 
 /// Prints the requested number of screen and scrollback lines as plain text.

@@ -11,7 +11,7 @@ use facade_scenarios::*;
 /// the server and the location of boss's folder in the terminal window.
 fn boss(home: &TestHome) -> (McpTestClient, String) {
     home.start_named_fake("boss", &[]);
-    let cwd = home.agent_from_list_json("boss").unwrap()["cwd"]
+    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -217,7 +217,7 @@ fn a_prompt_whose_agent_ends_before_its_tools_settle_fails_as_ended() {
     // The child takes boss's environment, so its CLI starts its Facade server a minute after its
     // own start.
     home.start_named_fake("boss", &[("FAKECLI_MCP_DELAY_MS", "60000")]);
-    let cwd = home.agent_from_list_json("boss").unwrap()["cwd"]
+    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();

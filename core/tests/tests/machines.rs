@@ -8,11 +8,10 @@ use std::process::{Child, Stdio};
 
 use facade_base::address::exact_machine_selector;
 use facade_base::machine::{
-    AgentListResult, AgentRef, ConnectionKind, ConnectionState, MachineInfo, MachineListResult,
-    MessageRef,
+    AgentRef, ConnectionKind, ConnectionState, MachineInfo, MachineListResult, MessageRef,
 };
 use facade_base::ssh::{SshMode, decode_home_hex, machine_ssh_args};
-use facade_scenarios::serde_json::{self, json};
+use facade_scenarios::serde_json::{self, Value, json};
 use facade_scenarios::*;
 
 /// Stdio accepts a machine introduction as its first frame before opening the local daemon.
@@ -250,12 +249,11 @@ fn agent_lists_are_oldest_first_across_machines() {
     let table = first.list_table();
     let table_ids: Vec<_> = table.rows.iter().map(|row| table.cell(row, "ID")).collect();
     assert_eq!(table_ids, expected);
-    let listed: AgentListResult =
-        serde_json::from_str(&first.run_facade_ok(&["list", "--json"])).unwrap();
-    let labels: Vec<_> = listed
-        .agents
+    let listed: Value = serde_json::from_str(&first.run_facade_ok(&["list", "--json"])).unwrap();
+    let agents = listed["agents"].as_array().unwrap();
+    let labels: Vec<_> = agents
         .iter()
-        .map(|agent| agent.label.as_deref().unwrap().trim_start_matches('#'))
+        .map(|agent| agent["label"].as_str().unwrap().trim_start_matches('#'))
         .collect();
     assert_eq!(labels, expected);
 
@@ -264,10 +262,9 @@ fn agent_lists_are_oldest_first_across_machines() {
     let rows = response["data"]["agents"]
         .as_array()
         .expect("listed agents");
-    let addresses: Vec<_> = listed
-        .agents
+    let addresses: Vec<_> = agents
         .iter()
-        .map(|agent| agent.address.as_deref())
+        .map(|agent| agent["address"].as_str())
         .collect();
     let mcp_addresses: Vec<_> = rows.iter().map(|row| row["address"].as_str()).collect();
     assert_eq!(mcp_addresses, addresses);
@@ -315,7 +312,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert_eq!(started, format!("{id}@second\n"));
     let target = address(&second_id, id);
     let from = address(&first_id, &sender.id);
-    assert_eq!(worker["cwd"], project, "{worker}");
+    assert_eq!(worker["folder"], project, "{worker}");
     assert_eq!(worker["machine_id"], second_id, "{worker}");
     assert_eq!(
         first.agent_from_list_json("worker").unwrap()["pid"],
@@ -457,7 +454,7 @@ fn start_folder_uses_the_remote_login_folder_and_requires_absolute_paths() {
     first.run_facade_ok(&["start", "--machine", "second", "--name", "login", fake]);
     let agent = second.agent_from_list_json("login").unwrap();
     let login_folder = facade_base::files::real_path(&second.user_home()).unwrap();
-    assert_eq!(agent["cwd"], login_folder.to_str().unwrap(), "{agent}");
+    assert_eq!(agent["folder"], login_folder.to_str().unwrap(), "{agent}");
     assert_eq!(agent["machine_id"], second_id, "{agent}");
 
     let refused = first.run_facade(&[

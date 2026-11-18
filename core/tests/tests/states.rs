@@ -74,17 +74,20 @@ fn a_turn_is_working_then_just_done_until_a_terminal_shows_the_agent() {
     assert!(
         home.agent_from_list_json("w1")
             .unwrap()
-            .get("said")
+            .get("last_input")
             .is_none(),
         "nothing was said yet"
     );
     submit(&home, "w1", "fix the\nbuild");
     let working = reaches(&home, "w1", "working");
-    assert_eq!(working["said"]["text"], "fix the build", "said is one line");
+    assert_eq!(
+        working["last_input"]["text"], "fix the build",
+        "last input is one line"
+    );
     home.run_facade_ok(&["type", "w1", "half a thought"]);
     reaches(&home, "w1", "just_done");
     assert_eq!(
-        home.agent_from_list_json("w1").unwrap()["said"]["text"],
+        home.agent_from_list_json("w1").unwrap()["last_input"]["text"],
         "fix the build",
         "text without Enter says nothing"
     );
@@ -266,12 +269,12 @@ fn a_wait_for_the_person_is_published_at_once() {
     );
 }
 
-/// The agent's record once its `said` is `text`.
+/// The agent's CLI record once its last input is `text`.
 fn said(home: &TestHome, name: &str, text: &str) -> Value {
     let mut agent = Value::Null;
     let reached = wait_until(secs(10), || {
         agent = home.agent_from_list_json(name).unwrap_or_default();
-        agent["said"]["text"] == text
+        agent["last_input"]["text"] == text
     });
     assert!(reached, "{name} was not said {text:?}: {agent}");
     agent
@@ -318,7 +321,10 @@ fn the_person_s_enter_is_said_once_the_cli_takes_what_it_submits() {
     term.send(b"\r");
     let agent = said(&home, "w1", "fix the build");
     assert_eq!(
-        (&agent["said"]["from"], agent["said"].get("from_name")),
+        (
+            &agent["last_input"]["from"],
+            agent["last_input"].get("from_name")
+        ),
         (&json!("human"), None)
     );
     // Keys and their Enter in one write, which the CLI draws 300 ms later.
@@ -341,7 +347,7 @@ fn the_person_s_enter_is_said_once_the_cli_takes_what_it_submits() {
         "❯ draft [Pasted text #1 +1 lines]",
     );
     assert_eq!(
-        home.agent_from_list_json("w1").unwrap()["said"]["text"],
+        home.agent_from_list_json("w1").unwrap()["last_input"]["text"],
         "ship it"
     );
 }
@@ -371,7 +377,10 @@ fn an_enter_whose_keys_are_not_drawn_in_time_says_nothing() {
         "{:?}",
         home.submitted_messages()
     );
-    assert_eq!(home.agent_from_list_json("w1").unwrap().get("said"), None);
+    assert_eq!(
+        home.agent_from_list_json("w1").unwrap().get("last_input"),
+        None
+    );
 }
 
 /// A CLI that draws the keys before an Enter inside a synchronized update has its draft read once
@@ -559,7 +568,7 @@ fn an_enter_the_cli_does_not_take_says_nothing() {
     assert!(
         home.agent_from_list_json("w1")
             .unwrap()
-            .get("said")
+            .get("last_input")
             .is_none()
     );
 }
@@ -584,7 +593,10 @@ fn what_an_agent_types_or_sends_is_said_by_that_agent() {
     as_ada(&["type", "bob", "from ada", "--enter"]);
     let typed = said(&home, "bob", "from ada");
     assert_eq!(
-        (&typed["said"]["from"], &typed["said"]["from_name"]),
+        (
+            &typed["last_input"]["from"],
+            &typed["last_input"]["from_name"]
+        ),
         (&json!(ada.id), &json!("ada"))
     );
     as_ada(&["send", "bob", "run the tests"]);
@@ -599,7 +611,10 @@ fn what_an_agent_types_or_sends_is_said_by_that_agent() {
     home.run_facade_ok(&["send", "bob", "hello"]);
     let sent = said(&home, "bob", "hello");
     assert_eq!(
-        (&sent["said"]["from"], sent["said"].get("from_name")),
+        (
+            &sent["last_input"]["from"],
+            sent["last_input"].get("from_name")
+        ),
         (&json!("human"), None)
     );
 }
@@ -826,7 +841,7 @@ fn an_agent_waiting_for_the_person_for_20_seconds_is_told_to_its_creator_once() 
     let home = TestHome::new("waitingtold");
     // The agents boss starts report their status as boss does: they get boss's environment.
     let boss = home.start_named_fake("boss", &[("FAKECLI_STATUS", "1")]);
-    let cwd = home.agent_from_list_json("boss").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("boss").unwrap()["folder"].clone();
     let mut server = McpTestClient::open(&home, &boss.id);
     let started = server.call(
         "start_agent",

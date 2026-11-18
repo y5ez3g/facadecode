@@ -116,7 +116,7 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
 fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     let home = TestHome::new("yolobadfile");
     home.start_named_fake("ada", &[]);
-    let cwd = record(&home, "ada")["cwd"].as_str().unwrap().to_string();
+    let cwd = record(&home, "ada")["folder"].as_str().unwrap().to_string();
     let file = home.path.join("facade.json").display().to_string();
     settings(&home, "{\n  \"yolo\": \"false\",\n  \"colour\": 1\n}");
     let said = format!(
@@ -160,7 +160,7 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
 fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
     let home = TestHome::new("yolotrees");
     home.start_named_fake("ada", &[]);
-    let cwd = record(&home, "ada")["cwd"].as_str().unwrap().to_string();
+    let cwd = record(&home, "ada")["folder"].as_str().unwrap().to_string();
     let mut ada = McpTestClient::open(&home, "a1");
     let child = |server: &mut McpTestClient, name: &str| {
         let started = server.call(
@@ -727,7 +727,7 @@ fn each_cli_launches_with_yolo_on_as_its_rule_says_and_with_yolo_off_as_it_nativ
         assert!(started.status.success(), "{cli}: {}", stderr(&started));
         (
             arguments(&argv),
-            record(&home, name)["cwd"].as_str().unwrap().to_string(),
+            record(&home, name)["folder"].as_str().unwrap().to_string(),
         )
     };
     let clis = ["claude", "codex", "agy", "muse", "opencode", "pi"];

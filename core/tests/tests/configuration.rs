@@ -216,7 +216,7 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
     });
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     let rows = ada.call("list_agents", json!({}))["data"]["windows"][0]["clis"].clone();
     let rows = rows.as_array().unwrap();
@@ -505,7 +505,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
     let mut ada = McpTestClient::open(&home, "a1");
-    let folder = home.agent_from_list_json("ada").unwrap()["cwd"]
+    let folder = home.agent_from_list_json("ada").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -575,7 +575,7 @@ fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
     let mut ada = McpTestClient::open(&home, "a1");
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
         json!({ "name": "w", "cli": "off reads", "window": "terminal", "folder": cwd }),
@@ -597,7 +597,7 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
     let mut ada = McpTestClient::open(&home, "a1");
     let window = ada.call("list_agents", json!({}))["data"]["windows"][0].clone();
     assert_eq!(window["clis"], json!([]), "{window}");
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
         json!({ "name": "w", "cli": "fake", "window": "terminal", "folder": cwd }),
@@ -617,7 +617,7 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
 fn start_agent_refuses_a_blank_model_or_effort() {
     let home = TestHome::new("configblank");
     home.start_named_fake("ada", &[]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     let refused = ada.call(
         "start_agent",
@@ -975,7 +975,7 @@ fn an_agent_starts_agents_with_its_own_environment() {
         "{}",
         home.screen("ada")
     );
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     for (name, cli) in [("kid", "fake"), ("dumper", "dump")] {
         let started = ada.call(

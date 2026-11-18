@@ -530,7 +530,7 @@ fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     // the CLI logs it.
     let said = || {
         home.agent_from_list_json("ada")
-            .is_some_and(|row| row["said"]["text"] == "say hi")
+            .is_some_and(|row| row["last_input"]["text"] == "say hi")
     };
     assert!(
         wait_until(secs(10), said),
@@ -541,8 +541,8 @@ fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     assert_eq!(
         (
             &row["tools_state"],
-            &row["said"]["text"],
-            &row["said"]["from"]
+            &row["last_input"]["text"],
+            &row["last_input"]["from"]
         ),
         (&json!("available"), &json!("say hi"), &json!("human")),
         "{row}"
@@ -1312,7 +1312,7 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
         let id = record["agent_id"].as_str().unwrap();
         let place = format!(
             "You are Facade agent #{id}, working in {} in window \"Terminal\" (window terminal).",
-            record["cwd"].as_str().unwrap(),
+            record["folder"].as_str().unwrap(),
         );
         let run = [("FACADE_AGENT", id), ("MUSE_SESSION_ID", "s1")];
         let given: Value = serde_json::from_str(&run_hook(
@@ -1569,7 +1569,7 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     let home = TestHome::new("mcpenv");
     home.start_named_fake("boss", &[("FAKECLI_NAME", "named by the boss")]);
     let mut boss = McpTestClient::open_stripped(&home, "a1");
-    let cwd = home.agent_from_list_json("boss").unwrap()["cwd"]
+    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -1979,7 +1979,7 @@ fn each_tool_responds_as_recorded(through: Through) {
     home.start_named_fake("ada", &[]);
     home.start_named_fake("bob", &[]);
     wait_for_tools(&home, &["ada", "bob"]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = through.open(&home, "a1");
     let mut golden = Golden::new(&home);
     golden.record(

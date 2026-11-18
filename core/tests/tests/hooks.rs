@@ -102,7 +102,7 @@ fn a_session_joins_as_a_guest_works_ends_its_turns_and_leaves() {
             &json!("unknown")
         )
     );
-    assert_eq!(guest["cwd"], project);
+    assert_eq!(guest["folder"], project);
     // Facade knows no process or terminal of a guest's, so it names none.
     assert!(
         ["pid", "cols", "rows"]

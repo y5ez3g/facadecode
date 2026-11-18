@@ -265,3 +265,5 @@ See [Disconnections and recovery](../../core/protocol/PROTOCOL.md#disconnections
   `daemon.log`. A client that acts for an agent cannot.
 - `list`, `inspect`, `status`, `version`, `machine list` and each `integration` subcommand accept `--json`. Data goes
   to stdout and diagnostics go to stderr. CLI failures return 1, while usage errors return 2.
+- Agent records in `list --json` and `inspect --json` give the startup directory as `folder`. When Facade records a
+  submission, `last_input` gives its `text`, `from` and `at`, plus `from_name` when known.
