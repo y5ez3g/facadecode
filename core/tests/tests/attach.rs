@@ -419,12 +419,12 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         Some(1)
     );
     assert!(
-        term.wait_for_output(secs(2), "could not reconnect to Facade"),
+        term.wait_for_output(secs(2), "error: could not reconnect to Facade"),
         "{}",
         term.text_with_scrollback()
     );
     assert!(
-        term.wait_for_output(secs(2), "9 typed bytes were not sent"),
+        term.wait_for_output(secs(2), "warning: 9 bytes you typed were not sent"),
         "{}",
         term.text_with_scrollback()
     );
