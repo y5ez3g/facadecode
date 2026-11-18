@@ -2214,7 +2214,7 @@ const WORDS = {
 	connectionLost: 'Connection lost · reconnecting',
 	title: (value: string) => `Title: ${value}`, location: (value: string) => `Location: ${value}`, path: (value: string) => `Path: ${value}`, untitledPending: 'No title yet', untitledUnreadable: 'Title unavailable',
 	starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...',
-	started: 'New conversation started', resumed: 'Conversation resumed', working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error · ${reason}`,
+	started: 'New session started', resumed: 'Agent resumed', continued: 'Session continued', working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error · ${reason}`,
 	activityUnavailable: 'Status unavailable · check terminal', activityUnknown: (why: string) => `Status ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Collaboration not connected yet', needsPermission: 'Permission needed',
 	needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed', exitedWithCode: (code: string) => `Process exited · code ${code}`, endedBySignal: (signal: string) => `Process terminated · ${signal}`,
 	exitUnknown: 'Process lost · reason unknown', toolsUnavailable: (problem?: string) => `Collaboration off · ${problem}`,
@@ -2478,13 +2478,13 @@ suite('A run\'s title: its conversation\'s, as its CLI keeps it (CLIS-2.4, PANEL
 		await settle();
 		const restored = world.agents.list().find(run => run.pin === 'pin-2')!;
 		const fresh = world.agents.list().find(run => run.pin === 'pin-new')!;
-		const shown = (run: RunId) => { const facts = world.agents.get(run)!; return [facts.title, facts.resumed, statusOf(facts, WORDS).line]; };
+		const shown = (run: RunId) => { const facts = world.agents.get(run)!; return [facts.title, facts.sessionOpening, statusOf(facts, WORDS).line]; };
 		const before = [shown(resumed), kept(world, resumed).resumed, shown(restored.id), shown(fresh.id), store.reads.map(read => read.key.sessionId)];
 		world.execution.identities.fire({ run: fresh.id, sessionId: 'sess-3' });
 		await settle();
 		assert.deepStrictEqual([accepted, before, store.reads.map(read => read.key.sessionId)], [
 			[['sess-1', '/work/app']],
-			[['Saved work', true, 'Conversation resumed'], true, ['Pinned work', true, 'Conversation resumed'], [undefined, undefined, 'New conversation started'], ['sess-1', 'sess-2']],
+			[['Saved work', 'continued', 'Session continued'], true, ['Pinned work', 'continued', 'Session continued'], [undefined, undefined, 'New session started'], ['sess-1', 'sess-2']],
 			['sess-1', 'sess-2', 'sess-3']
 		]);
 	});
@@ -2507,17 +2507,18 @@ suite('A run\'s title: its conversation\'s, as its CLI keeps it (CLIS-2.4, PANEL
 		await reload.agents.restore();
 		await settle();
 		const facts = reload.agents.get(id)!;
-		const shown = [meta.title, meta.resumed, facts.title, facts.resumed, statusOf(facts, WORDS).line, later.reads.map(read => read.key.sessionId)];
+		const shown = [meta.title, meta.resumed, facts.title, facts.sessionOpening, statusOf(facts, WORDS).line, later.reads.map(read => read.key.sessionId)];
 		// A start that failed is kept red with what it was: that it resumed among it
 		const failing = setUp({ sessions: true });
 		failing.execution.spawnError = new Error('could not start');
 		const failed = failing.agents.resume(ENTRY, { reveal: true }) as RunId;
 		await failing.agents.started(failed);
 		const again = setUp({ sessions: true });
-		again.retained.set(failed, failing.retained.get(failed)!);
+		const { sessionOpening: _opening, ...legacy } = failing.retained.get(failed)!;
+		again.retained.set(failed, { ...legacy, ...{ resumed: true } });
 		await again.agents.restore();
-		assert.deepStrictEqual([shown, failing.retained.get(failed)?.resumed, again.agents.get(failed)?.resumed], [
-			['Saved work', true, 'Saved work', true, 'Conversation resumed', ['sess-1']], true, true
+		assert.deepStrictEqual([shown, failing.retained.get(failed)?.sessionOpening, again.agents.get(failed)?.sessionOpening], [
+			['Saved work', true, 'Saved work', 'continued', 'Session continued', ['sess-1']], 'continued', 'continued'
 		]);
 	});
 

@@ -92,9 +92,10 @@ function cardWords(): CardWords {
 		// {0} is the CLI's name, such as Claude Code
 		startingCli: cli => vscode.l10n.t("Starting {0}…", cli),
 		creatingWorktree: vscode.l10n.t("Creating worktree…"),
-		// A card's second line before any message: its agent began a new conversation, or resumed one
-		started: vscode.l10n.t("New conversation started"),
-		resumed: vscode.l10n.t("Conversation resumed"),
+		// A card's opening before any message (PANEL-1.4).
+		started: vscode.l10n.t("New session started"),
+		resumed: vscode.l10n.t("Agent resumed"),
+		continued: vscode.l10n.t("Session continued"),
 		working: vscode.l10n.t("Working"),
 		notWorking: vscode.l10n.t("Idle"),
 		// {0} is why: the failure the agent ended with, or the error its CLI reported

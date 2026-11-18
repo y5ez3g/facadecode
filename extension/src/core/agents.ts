@@ -858,8 +858,7 @@ export class AgentService implements Agents, Disposable {
 		}
 		run.exactResume = plan.exactResume;
 		const sessionId = plan.sessionId ?? run.facts.sessionId;
-		// Its launch resumes the conversation it was asked to by its ID - Resume Agent's, or a restored Pin's: its card says so before any
-		// message (PANEL-1.4), also where its CLI could not be given what keeps naming its conversation
+		// The old engine continues a saved session in a new run, for Continue Session or a restored Pin (PANEL-1.4).
 		const resuming = !!options.resume && sessionId === options.resume.key.sessionId;
 		// A conversation it resumes is saved already: it can be pinned from the start, its Pin following its CLI should that name
 		// another (LIFECYCLE-3.4). A new one, an ID given it or not, waits for its CLI to name it.
@@ -874,7 +873,7 @@ export class AgentService implements Agents, Disposable {
 			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: resumed,
 			...plan.builtIn !== undefined ? { builtIn: plan.builtIn } : {},
 			...titleStore !== undefined ? { titleStore } : {},
-			...resuming ? { resumed: true as const } : {},
+			...resuming ? { sessionOpening: 'continued' as const } : {},
 			...(plan.version !== undefined ? { version: plan.version } : {}),
 			tools: plan.tools.state === 'injected' ? 'connecting' : plan.tools.state === 'unavailable' ? 'unavailable' : 'not_injected',
 			...(plan.tools.state === 'unavailable' && plan.tools.reason ? { toolsReason: plan.tools.reason } : {}),
@@ -1745,12 +1744,12 @@ function retainedFacts(kept: RunFacts): RunFacts {
 	const record = kept as RunFacts & { readonly [key: string]: unknown };
 	// Ended, it can be pinned where its conversation is saved (LIFECYCLE-3.4). Its title only where it is proven its conversation's: an
 	// earlier build kept a CLI report's title as well, which is no conversation title (CLIS-2.4)
-	const { pinnable: _pinnable, resumed: _resumed, title, titleSource: _titleSource, ...facts } = kept;
+	const { pinnable: _pinnable, resumed: legacyResumed, sessionOpening, title, titleSource: _titleSource, ...facts } = record;
 	return {
 		...facts,
 		...title && record.titleSource === 'conversation' ? { title, titleSource: 'conversation' as const } : {},
 		...kept.resumable ? { pinnable: true } : {},
-		...record.resumed === true ? { resumed: true as const } : {},
+		...legacyResumed === true || sessionOpening === 'continued' ? { sessionOpening: 'continued' as const } : {},
 		root: typeof record.root === 'string' && record.root ? record.root : kept.id,
 		origin: record.origin === 'agent' ? 'agent' : 'human',
 		tools: record.tools === 'connecting' || record.tools === 'available' || record.tools === 'unavailable' ? record.tools : 'not_injected'
@@ -1813,7 +1812,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		// A title proven to be its conversation's; an earlier build's, which may be a CLI report's, is dropped and read again (CLIS-2.4)
 		...(typeof meta.title === 'string' && meta.title && meta.titleSource === 'conversation' ? { title: meta.title, titleSource: 'conversation' as const } : {}),
 		...(typeof meta.titleStore === 'string' && meta.titleStore ? { titleStore: meta.titleStore } : {}),
-		...(meta.resumed === true ? { resumed: true as const } : {}),
+		...(meta.resumed === true ? { sessionOpening: 'continued' as const } : {}),
 		...(typeof meta.said === 'string' && meta.said ? { said: meta.said } : {}),
 		...(isSaidSource(meta.saidSource) ? { saidSource: meta.saidSource } : {}),
 		...(isTabPlace(meta.tab) ? { tab: tabOf(meta.tab) } : {}),
@@ -1857,7 +1856,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
 		...(facts.title !== undefined && facts.titleSource === 'conversation' ? { title: facts.title, titleSource: 'conversation' as const } : {}),
 		...(facts.titleStore !== undefined ? { titleStore: facts.titleStore } : {}),
-		...(facts.resumed ? { resumed: true as const } : {}),
+		...(facts.sessionOpening === 'continued' ? { resumed: true as const } : {}),
 		...(facts.said !== undefined ? { said: facts.said } : {}),
 		...(facts.saidSource !== undefined ? { saidSource: facts.saidSource } : {}),
 		...(facts.tab !== undefined ? { tab: facts.tab } : {}),

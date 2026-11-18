@@ -462,7 +462,7 @@ export interface RunMeta {
 	readonly titleSource?: 'conversation';
 	/** The conversation store its launch used, where its titles are read (CLIS-2.4). */
 	readonly titleStore?: string;
-	/** Whether it resumed a conversation rather than beginning one (PANEL-1.4), kept across a reload. */
+	/** The old engine's persisted flag for a saved session started in a new run (PANEL-1.4). */
 	readonly resumed?: true;
 	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4). */
 	readonly said?: string;
@@ -733,11 +733,8 @@ export interface RunFacts {
 	 * while it runs and after a reattachment, whatever its CLI's settings say since (CLIS-2.4).
 	 */
 	readonly titleStore?: string;
-	/**
-	 * It resumed a conversation by its ID - Resume Agent's, or a restored Pin's - rather than beginning a new one: its card's second line
-	 * says so before any message (PANEL-1.4).
-	 */
-	readonly resumed?: true;
+	/** The opening of a saved session. Resume reuses its agent number. Continue starts another agent (PANEL-1.4). */
+	readonly sessionOpening?: 'resumed' | 'continued';
 	/**
 	 * The last message sent to it (PANEL-1.4): what its CLI took from its input after the person's Enter, or a message Facade
 	 * delivered. Its card's second line says it from then on.

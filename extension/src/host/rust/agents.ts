@@ -113,8 +113,8 @@ interface Run {
 	closeAfterLaunch?: PromiseWithResolvers<AgentCloseResult>;
 	/** A start or resume core refused: red until dismissal (UX-2.4). */
 	failure?: RunError;
-	/** It continues a session - Recent's, a Pin's, or its own resumed - rather than beginning one (PANEL-1.4). */
-	resumed?: boolean;
+	/** Whether a saved session opened under the old or a new number (PANEL-1.4). */
+	sessionOpening?: RunFacts['sessionOpening'];
 	spinning?: boolean;
 	/** Where its tab is (LIFECYCLE-3.5). */
 	tab?: TabPlace;
@@ -300,7 +300,7 @@ export class RustAgents implements Agents, Disposable {
 		const settled = deferred<StartOutcome>();
 		const pending: Pending = { name, cli: options.cli, location: options.location, machine: remote?.machine, cwd, createdAt: Date.now(), worktree: !!options.worktree,
 			sessionId: options.session, settled: settled.promise };
-		const run: Run = { id, pending, resumed: recent, facts: undefined! };
+		const run: Run = { id, pending, ...recent ? { sessionOpening: 'continued' } : {}, facts: undefined! };
 		const args: StartArgs = remote ? { ...this.remoteArgs(remote.machine, remote.request), request_id: id } : {
 			command: [options.cli], cwd, window, location_source_window: window,
 			env: this.deps.environment(options.location), cols: COLS, rows: ROWS, request_id: id,
@@ -949,7 +949,7 @@ export class RustAgents implements Agents, Disposable {
 				return undefined;
 			}
 			const run = this.runOf(agent) ?? this.recordRun(agent);
-			run.resumed = true;
+			run.sessionOpening = 'resumed';
 			this.fail(run, err, undefined);
 			return run;
 		}
@@ -1216,13 +1216,13 @@ export class RustAgents implements Agents, Disposable {
 			return undefined;
 		}
 		if (run) {
-			run.resumed ||= resumed || restarted;
+			if (resumed || restarted) { run.sessionOpening = 'resumed'; }
 			this.refresh(run, undefined, restarted);
 			return run;
 		}
 		if ((!force && this.starting.size && !info.creator) || (info.process === 'ended' && this.deps.dismissed?.has(agent))) { return undefined; }
 		const added = this.recordRun(agent);
-		added.resumed = resumed || restarted;
+		if (resumed || restarted) { added.sessionOpening = 'resumed'; }
 		this.addRun(added);
 		return added;
 	}
@@ -1364,7 +1364,7 @@ export class RustAgents implements Agents, Disposable {
 		}
 		this.emit({ run: run.id, kind: kind ?? (before.name !== after.name ? 'renamed'
 			: before.lifecycle !== after.lifecycle || before.error !== after.error || before.pin !== after.pin
-				|| before.disconnected !== after.disconnected || before.endUnconfirmed !== after.endUnconfirmed ? 'lifecycle' : 'reported') });
+				|| before.disconnected !== after.disconnected || before.endUnconfirmed !== after.endUnconfirmed || before.sessionOpening !== after.sessionOpening ? 'lifecycle' : 'reported') });
 	}
 
 	/**
@@ -1395,7 +1395,7 @@ export class RustAgents implements Agents, Disposable {
 					...!this.deps.link.connected ? { disconnected: true } : {} } : {},
 				createdAt: pending.createdAt, lifecycle: failure ? 'ended' : 'starting', phase: pending.worktree ? 'creating_worktree' : 'launching_cli',
 				activity: 'unknown', reporting: false, root: run.id, origin: 'human', tools: 'not_injected',
-				...pending.sessionId ? { sessionId: pending.sessionId, resumed: true as const } : {},
+				...pending.sessionId ? { sessionId: pending.sessionId, sessionOpening: run.sessionOpening } : {},
 				...failure ? { error: failure, end: { kind: 'failed' as const, at: failure.at } } : {},
 				...this.unconfirmedStarts.has(run.id) ? { endUnconfirmed: true as const } : {}
 			};
@@ -1424,7 +1424,7 @@ export class RustAgents implements Agents, Disposable {
 			const source = saidSourceOf(info.said.from, info.said.from_name);
 			if (source) { facts.saidSource = source; }
 		}
-		if (run.resumed) { facts.resumed = true; }
+		if (run.sessionOpening) { facts.sessionOpening = run.sessionOpening; }
 		if (run.tab) { facts.tab = run.tab; }
 		const title = this.titleOf(info);
 		if (title) { facts.title = title; facts.titleSource = 'conversation'; }

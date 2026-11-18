@@ -163,9 +163,9 @@ shows the connection status until the running machine can be reached again.
    Facade could not confirm, `Stop unconfirmed · check process` (LIFECYCLE-3.5); the Facade tools it cannot use; its
    tools not connected past CLIS-2.3's bound, `Collaboration not connected yet`; or a start that did not become ready,
    with why its activity is unknown, such as `No initial status · check terminal`. Before any message, with no notable
-   state, it says how the run began: `New conversation started` for a new conversation, `Conversation resumed` for one
-   it resumed through Resume Agent, Continue Session or an exact-session Pin
-   (LIFECYCLE-3.4).
+   state, it says `New session started` for a new session, `Agent resumed` when the same numbered agent returns,
+   or `Session continued` when a new agent starts a saved session. Pin restoration follows the same numbering
+   distinction (LIFECYCLE-3.3, 3.4).
 
 What the second line says is the first of these that holds, in this order of precedence:
 

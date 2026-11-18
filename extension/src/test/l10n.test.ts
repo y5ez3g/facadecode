@@ -65,8 +65,9 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 
 	test('PANEL-1.4: the card\'s renamed words are in every bundle under their new English texts, and no bundle keeps an old one', () => {
 		const renamed: readonly (readonly [old: string, now: string])[] = [
-			['Started', 'New conversation started'],
-			['Resumed', 'Conversation resumed'],
+			['New conversation started', 'New session started'],
+			['Resumed', 'Agent resumed'],
+			['Conversation resumed', 'Session continued'],
 			['Needs permission', 'Permission needed'],
 			['Needs sign-in', 'Sign-in needed'],
 			['Needs an answer', 'Answer needed'],

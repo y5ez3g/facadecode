@@ -90,6 +90,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		const alias = aliasOf(first);
 		const id = alias.slice(1);
 		const launch = await launchOf(alias);
+		await until('the new-session opening', async () => (await state()).cards.find(card => card.alias === alias)?.line === 'New session started' || undefined);
 		// Core learns the conversation's ID from Claude Code's SessionStart hook
 		const session = await until('its session in core', () => listed().find(agent => agent.agent_id === id)?.session);
 		keepConversation(launch.cwd, session, 'Engine journey conversation');
@@ -115,6 +116,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		try {
 			assert.strictEqual(aliasOf(second), alias, 'Resume Agent shows the original number');
 			assert.strictEqual(second.pinned, true, 'Resume Agent preserves the original Pin');
+			await until('the same-agent opening', async () => (await state()).cards.find(card => card.alias === alias)?.line === 'Agent resumed' || undefined);
 			const resumed = await until('the CLI to resume its original session', async () => {
 				const launch = await launchOf(alias);
 				return launch.args[launch.args.indexOf('--resume') + 1] === session ? launch : undefined;
@@ -143,6 +145,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 				const copy = aliasOf(continued);
 				assert.notStrictEqual(copy, alias, 'the history entry starts a new numbered agent');
 				assert.ok(!continued.pinned, 'the Pin stays with the original agent');
+				await until('the continued-session opening', async () => (await state()).cards.find(card => card.alias === copy)?.line === 'Session continued' || undefined);
 				const saved = await until('the new agent to hold the saved session', () =>
 					listed().find(each => each.agent_id === copy.slice(1) && each.session === session));
 				assert.strictEqual(fs.realpathSync(saved.folder), fs.realpathSync(launch.cwd));
