@@ -143,10 +143,12 @@ fn start_agent_s_prompt_goes_first_and_its_caller_gets_one_result() {
             .is_some_and(|text| text.contains("child (#a2) has started")),
         "a result says what it is in words: {read}"
     );
-    // The address a result gives, #m2@id:…, is taken back as it is.
-    let address = row["address"].as_str().unwrap().replacen("#m2@", "#m1@", 1);
-    let again = boss.call("read_messages", json!({ "after": address }));
-    assert_eq!(again["data"]["messages"][0]["id"], "#m2", "{again}");
+    assert_eq!(started["data"]["result_message"], row["id"], "{started}");
+    for after in [&row["address"], &started["data"]["result_message"]] {
+        let again = boss.call("read_messages", json!({ "after": after }));
+        assert_eq!(again["status"], "success", "{again}");
+        assert_eq!(again["data"]["messages"], json!([]), "{again}");
+    }
 }
 
 /// A message sent to the new agent while its prompt waits for the tools goes after the prompt.

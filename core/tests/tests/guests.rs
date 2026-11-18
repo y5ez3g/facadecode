@@ -634,45 +634,63 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
     let (mut member, record) = member(&home);
     let to = format!("#{}", record["agent_id"].as_str().unwrap());
     let mut sender = McpTestClient::open(&home, &ada.id);
+    let text = |n| {
+        if matches!(n, 4 | 5) {
+            format!("message {n} {}", "x".repeat(4_500))
+        } else {
+            format!("message {n}")
+        }
+    };
     let mut send = |from: u32, to_number: u32| {
         for n in from..=to_number {
-            let sent = sender.call(
-                "send_message",
-                json!({ "to": to, "text": format!("message {n}") }),
-            );
+            let sent = sender.call("send_message", json!({ "to": to, "text": text(n) }));
             assert_eq!(sent["data"]["delivery"], "waiting_in_inbox", "{sent}");
         }
     };
     let mut read = |arguments: Value| {
         let read = member.call("read_messages", arguments);
         assert_eq!(read["status"], "success", "{read}");
-        let texts: Vec<String> = read["data"]["messages"]
+        let file = read["data"]["file"].as_str().map(|path| {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(path).unwrap()).unwrap()
+        });
+        let texts: Vec<String> = file
+            .as_ref()
+            .unwrap_or(&read["data"]["messages"])
             .as_array()
             .unwrap()
             .iter()
             .map(|message| message["text"].as_str().unwrap().to_string())
             .collect();
-        (texts, read["data"].get("next_cursor").cloned())
+        (
+            texts,
+            read["data"].get("next_cursor").cloned(),
+            file.is_some(),
+        )
     };
-    let numbered = |numbers: std::ops::RangeInclusive<u32>| -> Vec<String> {
-        numbers.map(|n| format!("message {n}")).collect()
-    };
+    let numbered =
+        |numbers: std::ops::RangeInclusive<u32>| -> Vec<String> { numbers.map(text).collect() };
 
     send(1, 3);
-    assert_eq!(read(json!({ "last": 1 })), (numbered(3..=3), None));
+    assert_eq!(read(json!({ "last": 1 })), (numbered(3..=3), None, false));
     assert_eq!(
         read(json!({})),
-        (numbered(1..=2), None),
+        (numbered(1..=2), None, false),
         "the older two wait"
     );
-    assert_eq!(read(json!({})), (Vec::new(), None));
+    assert_eq!(read(json!({})), (Vec::new(), None, false));
 
     send(4, 111);
-    assert_eq!(read(json!({ "last": 1 })), (numbered(111..=111), None));
-    let (first, next) = read(json!({}));
+    assert_eq!(
+        read(json!({ "last": 1 })),
+        (numbered(111..=111), None, false)
+    );
+    let (first, next, in_file) = read(json!({}));
+    assert!(in_file, "the first page is written to a file");
     assert_eq!(first, numbered(4..=103));
     let next = next.expect("a cursor for the next page");
-    assert_eq!(read(json!({})), (numbered(104..=110), None));
-    let (after, more) = read(json!({ "after": next }));
-    assert_eq!((after, more), (numbered(104..=111), None));
+    assert_eq!(read(json!({})), (numbered(104..=110), None, false));
+    assert_eq!(
+        read(json!({ "after": next })),
+        (numbered(104..=111), None, false)
+    );
 }

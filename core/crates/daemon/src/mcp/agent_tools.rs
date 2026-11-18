@@ -14,6 +14,7 @@ use facade_base::operations::NoArgs;
 use facade_base::process::ProcessState;
 use serde_json::{Map, Value, json};
 
+use super::addresses::Addresses;
 use super::daemon_calls::{CONNECT_TIMEOUT, agent_failed, failed};
 use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
@@ -39,16 +40,16 @@ pub(super) fn check_start(arguments: &Map<String, Value>, problems: &mut Problem
     }
 }
 
-/// Resolve both selectors against the same machine list. Either selector defaults to the
-/// caller's machine.
+/// Resolve both selectors against the same machine list, retained for result addresses.
+/// Either selector defaults to the caller's machine.
 fn start_machines(
     client: &mut DaemonClient,
     running: Option<&str>,
     member: Option<&str>,
-) -> Result<(String, String), Value> {
+) -> Result<(String, String, Vec<MachineIdentity>), Value> {
     let local = client.hello_result.machine_id.clone();
     if running.is_none() && member.is_none() {
-        return Ok((local.clone(), local));
+        return Ok((local.clone(), local, Vec::new()));
     }
     let machines: Vec<_> = client
         .call::<MachineList>(NoArgs {})
@@ -64,7 +65,7 @@ fn start_machines(
         Some(selected) => select_machine(&machines, selected),
         None => Ok(local.clone()),
     };
-    Ok((resolve(running)?, resolve(member)?))
+    Ok((resolve(running)?, resolve(member)?, machines))
 }
 
 fn select_machine(machines: &[MachineIdentity], selected: &str) -> Result<String, Value> {
@@ -127,7 +128,7 @@ pub(super) fn start(
         Some((id, selector)) => (Some(id), Some(selector)),
         None => (window.as_deref(), None),
     };
-    let (running_machine, member_machine) =
+    let (running_machine, member_machine, machines) =
         match start_machines(client, machine.as_deref(), member_selector) {
             Ok(machines) => machines,
             Err(failure) => return failure,
@@ -173,25 +174,29 @@ pub(super) fn start(
         effort: optional(arguments, "effort"),
         session: None,
     };
-    let err = match client.call_with_request_id::<AgentStart>(start, true) {
+    let started = client.call_with_request_id::<AgentStart>(start, true);
+    let addresses = Addresses {
+        here: &client.hello_result.machine_id,
+        machines: &machines,
+    };
+    let err = match started {
         Ok((started, _)) => {
             let agent = started.agent;
             let mut data = json!({
                 "id": format!("#{}", agent.agent_id), "name": agent.name, "folder": agent.cwd,
             });
-            show_members(&mut data, &agent);
+            show_members(&mut data, &agent, &addresses);
             if let (Some(id), Some(machine_id)) =
                 (started.result_message_id, started.result_message_machine_id)
             {
-                data["result_message_id"] = json!(id);
-                data["result_message_machine_id"] = json!(machine_id);
+                data["result_message"] = json!(addresses.role(&format!("#{id}"), &machine_id));
             }
             return envelope::success(data);
         }
         Err(err) => err,
     };
     match err.downcast_ref::<ErrorBody>() {
-        Some(error) => start_refused(error),
+        Some(error) => start_refused(error, &addresses),
         None => failed(
             &err,
             "whether the agent started is not known: list_agents lists it if it did",
@@ -201,8 +206,8 @@ pub(super) fn start(
 
 /// A start the daemon refused, saying where a worktree it made stays. A window or folder it does
 /// not find is the caller's argument.
-fn start_refused(error: &ErrorBody) -> Value {
-    let mut refused = envelope::refusal(error);
+fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
+    let mut refused = envelope::refusal_with_addresses(error, addresses);
     if let Some(unavailable) = &error.data.unavailable {
         refused["data"]["execution"] = json!(unavailable.execution);
     }
@@ -249,25 +254,27 @@ fn state_word(agent: &AgentInfo) -> &'static str {
 }
 
 /// Adds the window membership to an agent's list row or start result.
-fn show_members(row: &mut Value, agent: &AgentInfo) {
-    row["address"] = json!(
-        agent
-            .address
-            .clone()
-            .unwrap_or_else(|| exact_address(agent))
-    );
+fn show_members(row: &mut Value, agent: &AgentInfo, addresses: &Addresses<'_>) {
+    row["address"] = json!(agent.address.clone().unwrap_or_else(|| {
+        addresses.qualified(&format!("#{}", agent.agent_id), &agent.machine_id)
+    }));
     row["machine_id"] = json!(agent.machine_id);
-    row["windows"] = json!(agent.windows);
+    let windows: Vec<_> = agent
+        .windows
+        .iter()
+        .map(|window| addresses.window(window))
+        .collect();
+    row["windows"] = json!(windows);
 }
 
 /// An agent as `list_agents` shows it: who and where it is, what it is doing, what it waits for
 /// while it waits for the person, and who started it.
-fn agent_row(agent: &AgentInfo, local_machine: &str) -> Value {
+fn agent_row(agent: &AgentInfo, addresses: &Addresses<'_>) -> Value {
     let state = state_word(agent);
     let mut row = json!({
         "id": format!("#{}", agent.agent_id), "name": agent.name, "cli": agent.cli,
     });
-    show_members(&mut row, agent);
+    show_members(&mut row, agent, addresses);
     row["folder"] = json!(agent.cwd);
     row["state"] = json!(state);
     if state == "waiting_for_you" {
@@ -288,11 +295,7 @@ fn agent_row(agent: &AgentInfo, local_machine: &str) -> Value {
                 .creator_machine_id
                 .as_deref()
                 .unwrap_or(&agent.machine_id);
-            AgentRef {
-                machine_id: machine_id.to_string(),
-                agent_id: creator.clone(),
-            }
-            .label(local_machine, &exact_machine_selector(machine_id))
+            addresses.role(&format!("#{creator}"), machine_id)
         }
         None => "#human".to_string(),
     };
@@ -315,9 +318,10 @@ fn location_row(location: &LocationInfo) -> Option<Value> {
 }
 
 /// A window as `list_agents` shows it, including launch locations and CLI facts while connected.
-fn window_row(window: &WindowInfo) -> Value {
+fn window_row(window: &WindowInfo, addresses: &Addresses<'_>) -> Value {
     let mut row = json!({
-        "id": window.window_id, "machine_id": window.machine_id,
+        "id": window.window_id, "address": addresses.qualified(&window.window_id, &window.machine_id),
+        "machine_id": window.machine_id,
         "name": window.label, "connected": window.connected,
     });
     if window.connected {
@@ -345,12 +349,26 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
         Ok(listed) => listed,
         Err(err) => return failed(&err, nothing),
     };
-    let local_machine = &client.hello_result.machine_id;
-    let windows: Vec<Value> = windows.iter().map(window_row).collect();
+    let machines: Vec<_> = listed
+        .machines
+        .iter()
+        .map(|machine| MachineIdentity {
+            machine_id: machine.machine_id.clone(),
+            name: machine.name.clone(),
+        })
+        .collect();
+    let addresses = Addresses {
+        here: &client.hello_result.machine_id,
+        machines: &machines,
+    };
+    let windows: Vec<Value> = windows
+        .iter()
+        .map(|window| window_row(window, &addresses))
+        .collect();
     let agents: Vec<Value> = listed
         .agents
         .iter()
-        .map(|agent| agent_row(agent, local_machine))
+        .map(|agent| agent_row(agent, &addresses))
         .collect();
     let data = json!({ "windows": windows, "agents": agents, "machines": listed.machines });
     let written = data.to_string();
@@ -427,7 +445,7 @@ mod tests {
             branch: Some("review".into()),
             path: Some("/work/review".into()),
         });
-        let refused = start_refused(&error);
+        let refused = start_refused(&error, &Addresses::default());
         assert_eq!(refused["reason"], "worktree_failed");
         assert_eq!(
             refused["data"]["kept"],

@@ -184,8 +184,9 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
 On Rust, `data.folder` is the resulting launch directory, including the new worktree where one was made. The result
-also gives `id`, `name`, `address`, `machine_id` and member `windows`. With a prompt, it can give `result_message_id`
-and `result_message_machine_id`. A failure can give the worktree facts kept as `data.kept.branch` and `data.kept.folder`.
+also gives `id`, `name`, `address`, `machine_id` and member `windows` as window address strings. With a prompt,
+`result_message` can give the address of the result owed to the caller. A failure can give the worktree facts kept
+as `data.kept.branch` and `data.kept.folder`.
 
 An old-engine success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's
 folder. It does not expose process/tools state, requested settings, prompt details, effects or call correlation IDs.
@@ -227,14 +228,18 @@ or automatic creator progress report.
 
 **One query returns window discovery and agents within the caller's reach.**
 
-On Rust, a disconnected window gives `id`, `machine_id`, `name` and `connected`. A connected window, including the
-terminal window, also gives `locations` and `clis` arrays, including when empty. A location gives `location_id`, `label`,
-its absolute path as `folder`, and `kind` as `folder`, `main_checkout` or `worktree`. Each CLI gives `cli`,
+On Rust, a disconnected window gives `id`, `address`, `machine_id`, `name` and `connected`. A connected window, including
+the terminal window, also gives `locations` and `clis` arrays, including when empty. A location gives `location_id`,
+`label`, its absolute path as `folder`, and `kind` as `folder`, `main_checkout` or `worktree`. Each CLI gives `cli`,
 `display_name`, `available` and `overrides` with `model` and `effort` booleans. It can also give `problem` and
 `not_installed: true`. A long result writes the complete list object to the file named by `data.file`, with the same rows.
 
-An agent row has its launch `folder`, `machine_id` and a `windows` array of references containing `machine_id`
-and `window_id`. Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
+An agent row has its `id`, `address`, launch `folder` and `machine_id`. Its `windows` are window address strings, and
+`creator` is the creator's address or `#human`. Bare role references name the caller's machine. Copy an object's
+machine-qualified `address` into a tool argument. A machine name is used when unique among the selectable machines.
+Otherwise, the selector uses an unambiguous `id:` prefix, with the full ID available when the machine set is unavailable.
+
+Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
 Equal timestamps are ordered by machine ID, then by numeric agent ID.
 The rest of this rule describes the old-engine result and its connected-window scope.
 
@@ -293,8 +298,11 @@ Text beginning with `[Earlier output truncated]` lost its beginning on its way: 
 and type_text refuse it as invalid_argument before any effect, asking for shorter parts.
 
 Within thirty seconds (1.3), return the message's `id` and `delivery` in data for agent delivery and old-engine human
-contact, as below. Rust `#human` success uses `delivered_to_windows` and the delivered and undelivered windows under
-`data.windows`. A zero-delivery failure includes the reasons for each window. Delivery counts handoff to the window's
+contact, as below. Rust also gives the message's `address`. Rust `#human` success uses `delivered_to_windows` and groups
+its receipts under `data.windows` as `delivered`, `not_delivered` and `outcome_unknown`. A confirmed zero-delivery
+failure gives its failure rows in `data.windows`. An unconfirmed send can give the retained message's `id` and `address`
+and its known groups under `data.window_delivery`. Window references in those groups and failure rows are address
+strings. Delivery counts handoff to the window's
 subscription under COLLABORATION-2.3.
 
 | Delivery | Meaning |
@@ -352,6 +360,7 @@ A send to a guest answers:
 **Read only the calling agent's incoming messages, never its sent messages or another inbox; reading delivers.**
 
 Arguments: `after?:string` naming a message ID, or `last?:integer` (1–100). Giving both is `invalid_argument`.
+Rust also accepts the message's returned `address` as `after` for the caller's own inbox.
 With neither, return messages not yet delivered. after returns the retained messages after that ID; last returns
 the newest messages up to that count. One read returns at most 100 messages; where more follow, `data.next_cursor` is
 the after that reads them. There are no ids, all, cursor or limit arguments. Selection stays inside the caller's inbox,
@@ -359,8 +368,9 @@ including with YOLO. Every returned message is delivered, including unread messa
 no other message is. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
 
 Return `data.messages`, oldest first. Each record has `id`, `from`, `at` and the complete body as `text`, plus
-`reply_to` when given. from is the sender's `@name #aN`, its ID alone when unnamed, `#human` for the person, or
-`facade` for a Facade result. A Facade result's text is plain English; there is no nested result object, kind, delivery
+`reply_to` when given. Rust also returns each message's `address`. Its `from` and `reply_to` fields are address
+strings. The person is `#human`, and Facade results give `facade` as `from`. On the old engine, `from` is the sender's
+`@name #aN`, its ID alone when unnamed, `#human` for the person, or `facade` for a Facade result. A Facade result's text is plain English; there is no nested result object, kind, delivery
 record, call ID, window or environment. A system result is separate from the message it concerns.
 
 The golden inbox read of a message held back by a draft answers:

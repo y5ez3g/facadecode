@@ -252,7 +252,11 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
         "start_agent",
         json!({ "name": "cy", "cli": "fake", "window": reference.window_id, "folder": folder }),
     );
-    assert_eq!(started["data"]["windows"], json!([reference]), "{started}");
+    assert_eq!(
+        started["data"]["windows"],
+        json!([reference.window_id]),
+        "{started}"
+    );
     assert_eq!(record(&home, "cy")["root"], "a1");
     let listed = ada.call("list_agents", json!({}));
     let ids: Vec<&Value> = listed["data"]["agents"]

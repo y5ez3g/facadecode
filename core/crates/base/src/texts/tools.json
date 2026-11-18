@@ -7,7 +7,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Start a CLI in your creation tree. Returns its id, address, name, folder, machine_id and windows. A prompt can return result_message_id and result_message_machine_id.",
+    "description": "Start a CLI in your creation tree. Returns its id, address, name, folder, machine_id and windows. A prompt can return a result_message address.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -86,7 +86,7 @@
       "readOnlyHint": true,
       "openWorldHint": false
     },
-    "description": "List reachable agents. Connected windows give locations and clis. Agents give address, machine_id and windows. Machines give machine_id, short_id, name, build, status and answered_at. Long lists use data.file.",
+    "description": "List reachable agents. Connected windows give locations and clis. Windows and agents give id and address. Agents give machine_id and windows. Machines give machine_id, short_id, name, build, status and answered_at. Long lists use data.file.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -126,7 +126,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Send to an agent or #human within 30 seconds. Agent delivery may be typed, read or waiting for a guest. Human results list each window's delivery, failure or unknown outcome. A request can fail before executing or return an unknown outcome.",
+    "description": "Send to an agent or #human within 30 seconds. Agent delivery may be typed, read or waiting for a guest. Human results list each window's delivery, failure or unknown outcome. Receipts use id, address and window references. A request can fail before executing or return an unknown outcome.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -161,14 +161,14 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Read your own inbox without waiting. With neither after nor last, it returns your undelivered messages. after reads messages after the one it names. last selects the newest ones. Reading delivers only the messages returned. One read returns at most 100. Use next_cursor as after to read the next page. Message and sender addresses include their machines. In text from another machine, bare agent IDs point to the sender's machine. New messages arrive by themselves, even after your turn ends. Do not poll. Messages from Facade are its 🔔 results. A long list returns data.file.",
+    "description": "Read your own inbox without waiting. With neither after nor last, it returns your undelivered messages. after reads messages after the one it names. last selects the newest ones. Reading delivers only the messages returned. One read returns at most 100. Use next_cursor as after to read the next page. Messages have id and address. from and reply_to are references. In text from another machine, bare agent IDs point to the sender's machine. New messages arrive by themselves, even after your turn ends. Do not poll. Messages from Facade are its 🔔 results. A long list returns data.file.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "after": {
           "type": "string",
           "minLength": 1,
-          "description": "A message ID, such as #m4: every message after it."
+          "description": "Read after an inbox message ID, address or next_cursor."
         },
         "last": {
           "type": "integer",

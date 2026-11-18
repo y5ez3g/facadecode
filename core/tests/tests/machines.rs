@@ -279,6 +279,24 @@ fn agent_lists_are_oldest_first_across_machines() {
         .collect();
     let mcp_addresses: Vec<_> = rows.iter().map(|row| row["address"].as_str()).collect();
     assert_eq!(mcp_addresses, addresses);
+
+    let target = &rows[2]["address"];
+    assert_eq!(target, "#a1@second");
+    let screen = mcp.call("read_screen", json!({ "agent": target }));
+    assert_eq!(screen["status"], "success", "{screen}");
+
+    name_machine(&second, "first");
+    assert!(wait_until(secs(10), || row(&first, &second_id)
+        .is_some_and(|row| row.name == "first")));
+    let duplicate = mcp.call("list_agents", json!({}));
+    let target = &duplicate["data"]["agents"][2]["address"];
+    let selector = target.as_str().unwrap().strip_prefix("#a1@id:").unwrap();
+    assert!(
+        selector.len() >= 8 && second_id.replace('-', "").starts_with(selector),
+        "{duplicate}"
+    );
+    let screen = mcp.call("read_screen", json!({ "agent": target }));
+    assert_eq!(screen["status"], "success", "{screen}");
 }
 
 /// A temporary link is symmetric. The agent stays on its running machine through a disconnected
@@ -371,6 +389,37 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         received["reply_to_machine_id"], original.machine_id,
         "{received}"
     );
+    let mut mcp = McpTestClient::open(&first, &sender.id);
+    let read = mcp.call("read_messages", json!({ "last": 1 }));
+    let message = &read["data"]["messages"][0];
+    assert_eq!(message["from"], format!("#{id}@second"), "{read}");
+    assert_eq!(
+        message["reply_to"],
+        format!("#{}@second", original.message_id),
+        "{read}"
+    );
+    let address = &message["address"];
+    let sent = mcp.call(
+        "send_message",
+        json!({
+            "to": message["from"], "reply_to": address, "text": "copied both addresses",
+        }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(
+        sent["data"]["address"],
+        format!(
+            "{}@{}",
+            sent["data"]["id"].as_str().unwrap(),
+            facade_base::address::exact_machine_selector(&second_id)
+        ),
+        "{sent}",
+    );
+    let after = mcp.call("read_messages", json!({ "after": address }));
+    assert_eq!(after["data"]["messages"], json!([]), "{after}");
+    let foreign = mcp.call("read_messages", json!({ "after": sent["data"]["address"] }));
+    assert_eq!(foreign["reason"], "invalid_argument", "{foreign}");
+
     // What the command line printed, and a name with its machine, name the same agent.
     for agent in [target.as_str(), started.trim(), "worker@second"] {
         assert!(

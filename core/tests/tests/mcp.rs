@@ -148,7 +148,11 @@ fn a_long_read_puts_the_messages_in_a_file() {
     // The two sends ran at once, so either text may have the lower number.
     texts.sort_unstable();
     assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
-    assert_eq!(messages[0]["from"], "@bob #a2");
+    assert_eq!(messages[0]["from"], "#a2");
+    assert!(messages[0]["address"].as_str().unwrap().contains("@id:"));
+    let inline = ada.call("read_messages", json!({ "after": messages[0]["address"] }));
+    assert_eq!(inline["status"], "success", "{inline}");
+    assert_eq!(inline["data"]["messages"], json!([messages[1]]), "{inline}");
 }
 
 /// facade-mcp serves the agent Facade started it for; started outside a Facade run, it joins as a

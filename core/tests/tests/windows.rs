@@ -715,7 +715,9 @@ fn starts_keep_members_and_location_sources_separate() {
         json!({ "name": "helper", "cli": "fake", "folder": folder }),
     );
     assert_eq!(inherited["status"], "success", "{inherited}");
-    assert_eq!(inherited["data"]["windows"], memberships(&[&source, &away]));
+    let mut expected_windows = [&source.window_id, &away.window_id];
+    expected_windows.sort_unstable();
+    assert_eq!(inherited["data"]["windows"], json!(expected_windows));
     assert_eq!(inherited["data"]["machine_id"], source.machine_id);
     let worktree = json!({
         "name": "reviewer", "cli": "fake", "folder": folder,
@@ -727,7 +729,7 @@ fn starts_keep_members_and_location_sources_separate() {
     let path = real(&base(&home).join("app.worktrees/review-1"));
     assert_eq!(made["data"]["folder"], path, "{made}");
     assert!(!Path::new(&path).join("head-only").exists());
-    assert_eq!(made["data"]["windows"], memberships(&[&away]));
+    assert_eq!(made["data"]["windows"], json!([away.window_id]));
     let reviewer = home.agent_from_list_json("reviewer").unwrap();
     assert_eq!(reviewer["location_source_window"], json!(source));
     assert_eq!(reviewer["windows"], memberships(&[&away]));
@@ -776,11 +778,12 @@ fn starts_keep_members_and_location_sources_separate() {
         .iter()
         .find(|window| window["id"] == away.window_id)
         .unwrap();
+    let machine = list["data"]["machines"][0]["name"].as_str().unwrap();
     assert_eq!(
         offline,
         &json!({
-            "id": away.window_id, "machine_id": away.machine_id,
-            "name": "win-away window", "connected": false,
+            "id": away.window_id, "address": format!("{}@{machine}", away.window_id),
+            "machine_id": away.machine_id, "name": "win-away window", "connected": false,
         })
     );
 
@@ -811,6 +814,7 @@ fn starts_keep_members_and_location_sources_separate() {
     let mut from_head = worktree;
     from_head["name"] = json!("head-reviewer");
     from_head["worktree"] = json!({ "branch": "review-head" });
+    from_head["window"] = offline["address"].clone();
     let made = mcp.call("start_agent", from_head);
     assert_eq!(made["status"], "success", "{made}");
     let folder = made["data"]["folder"].as_str().unwrap();

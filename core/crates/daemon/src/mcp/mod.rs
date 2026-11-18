@@ -8,6 +8,7 @@
 //! CLI the person started (`--guest <cli>`), a member (any other MCP client, which joins as a guest
 //! when it initializes), or no one.
 
+mod addresses;
 mod agent_tools;
 mod daemon_calls;
 mod envelope;

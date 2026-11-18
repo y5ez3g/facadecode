@@ -99,8 +99,8 @@ it. It has eight tools:
 
 | Tool | What it does |
 | --- | --- |
-| `list_agents` | Lists the windows, their folders and CLIs, and the agents in reach |
-| `start_agent` | Starts an agent: a CLI in a folder of a window, in a new worktree if asked, with a first prompt if given |
+| `list_agents` | Lists reachable agents, windows, and their available launch locations and CLI facts |
+| `start_agent` | Starts a CLI in a folder, with an optional new worktree and first prompt |
 | `stop_agent` | Stops an agent's CLI; the agents it started keep running |
 | `send_message` | Sends one message to an agent or to `#human`, and responds with its delivery |
 | `read_messages` | Reads the caller's own inbox |
@@ -108,9 +108,16 @@ it. It has eight tools:
 | `type_text` | Types text into an agent's terminal |
 | `press_keys` | Presses keys in an agent's terminal |
 
-Each tool responds `{status, data}` when it succeeds and `{status, reason, message}` when it fails. Golden files in the
-scenario tests hold every tool's responses. An agent's record says whether its CLI can use the tools (`tools_state`).
-The [MCP contract](../extension/engineering/MCP.md) gives every tool's arguments and responses.
+Tool results give `status` and any result `data`. A failure gives `reason` and `message`, and can include structured facts
+in `data`. In Rust MCP, agents, messages and windows have an `id` and an `address` that can be copied into a tool call.
+References to their roles, such as `from`, `reply_to` and member windows, are address strings.
+
+A Rust MCP send to the person returns `delivered_to_windows` when a window has taken it. Its `data.windows` groups
+delivered windows, failures with their reasons, and unknown outcomes. An unconfirmed send can report its known
+receipts under `data.window_delivery`. These window references use the same address strings.
+
+Golden files in the scenario tests hold the tools' responses. An agent's record says whether its CLI can use the tools
+(`tools_state`). The [MCP contract](../extension/engineering/MCP.md) describes the arguments and responses.
 
 ## YOLO and reach
 
@@ -195,8 +202,10 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
 - `facade start --folder <FOLDER>` takes an absolute path or a path relative to the current folder on this machine.
   Omit it to use the current folder, including when `--machine` selects this machine explicitly. With another machine,
   give an absolute path there or omit `--folder` to use that user's login home. Remote starts from the command line
-  and New Agent use the other machine's login environment. In `start_agent`, `machine` names the machine and `path`
-  must be an absolute path on it. Send, screen, type, keys, stop, resume and `attach` work on agents of other machines.
+  and New Agent use the other machine's login environment. In Rust MCP `start_agent`, `machine` names the running
+  machine. A local `folder` can be relative to the caller's launch folder. A remote `folder` must be absolute on the
+  running machine. Omit it to use the caller's recorded folder locally or the other machine's login folder remotely.
+  Send, screen, type, keys, stop, resume and `attach` work on agents of other machines.
   A remote `attach` pauses input when the connection drops, and shows the screen again before it takes keys when it returns.
 - A message to an agent is kept, and numbered, on its recipient's machine; a sender on another machine is named with
   `on <machine>`. A message to the person is kept on the sending agent's machine under one number and handed to the

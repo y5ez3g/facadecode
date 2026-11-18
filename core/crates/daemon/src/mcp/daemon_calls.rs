@@ -12,6 +12,7 @@ use facade_base::operations::NoArgs;
 use serde_json::{Value, json};
 
 use super::Relay;
+use super::addresses::Addresses;
 use super::envelope;
 
 /// How long a call waits for the daemon to answer, as a `facade` command does. While an agent runs,
@@ -93,10 +94,17 @@ pub(super) fn agent_failed(
     consequence: &str,
     timeout: Option<Duration>,
 ) -> Value {
-    let mut reply = failed(err, consequence);
-    if let Some(error) = err.downcast_ref::<ErrorBody>()
-        && let Some(message) = missing_agent_message(client, error, requested, timeout)
-    {
+    let Some(error) = err.downcast_ref::<ErrorBody>() else {
+        return failed(err, consequence);
+    };
+    let mut reply = envelope::refusal_with_addresses(
+        error,
+        &Addresses {
+            here: &client.hello_result.machine_id,
+            machines: &[],
+        },
+    );
+    if let Some(message) = missing_agent_message(client, error, requested, timeout) {
         reply["message"] = json!(message);
     }
     reply
