@@ -404,7 +404,7 @@ before the disabled check. New Agent lists invalid entries under Unavailable, ev
 offers Open Settings. With a file-level problem, Resume Agent and Continue Session each show one row per problem,
 labeled by the file, with the reason as detail, a gear icon and an Open Settings gear button as in New Agent.
 Choosing the row or its button runs Open Settings. It does not show
-"No saved conversations in this window's folders" for a bad file. An entry's own error leaves its conversations out
+"No saved sessions in this window's folders" for a bad file. An entry's own error leaves its conversations out
 of the list. A valid disabled entry is hidden. LIFECYCLE-1.1 owns how missing
 installations and valid disabled entries are displayed. File errors give the file path, and line and column when
 known. An I/O error gives its real reason instead of invented line numbers.

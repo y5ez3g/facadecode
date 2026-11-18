@@ -258,7 +258,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		await actions.stop(RUN);
 		facts = { ...FACTS, lifecycle: 'ended' };
 		await actions.dismiss(RUN);
-		refusal = new FacadeError('INVALID', 'unsupported', 'Ada Lovelace\'s CLI cannot resume this exact conversation, so it cannot be pinned.', { kind: 'pin_unsupported', values: [] });
+		refusal = new FacadeError('INVALID', 'unsupported', 'Ada Lovelace\'s CLI cannot resume this exact session, so it cannot be pinned.', { kind: 'pin_unsupported', values: [] });
 		actions.pin(RUN, true);
 		refusal = new FacadeError('NOT_FOUND', 'not_found', `No agent ${RUN} in this window.`);
 		actions.pin(RUN, true);
@@ -269,7 +269,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 			['No CLI "gone" is configured; add it to clis in ~/.facade/facade.json.', 'EACCES: permission denied'], 'a system error keeps its own words');
 		assert.deepStrictEqual(notified, [
 			`Could not pin Ada Lovelace: ${owned}`, `Could not unpin Ada Lovelace: ${owned}`, `Could not stop Ada Lovelace: ${owned}`, `Could not dismiss Ada Lovelace: ${owned}`,
-			'Could not pin Ada Lovelace: Its CLI cannot resume this exact conversation, so it cannot be pinned.'
+			'Could not pin Ada Lovelace: Its CLI cannot resume this exact session, so it cannot be pinned.'
 		]);
 	});
 
@@ -320,7 +320,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const read = [opened, pickers[0].busy, pickers[0].placeholder];
 		pickers[0].hide();
 		await done;
-		assert.deepStrictEqual([reading, read, errors], [[1, true, true, 0], [1, false, 'No saved conversations in this window\'s folders'], []]);
+		assert.deepStrictEqual([reading, read, errors], [[1, true, true, 0], [1, false, 'No saved sessions in this window\'s folders'], []]);
 	});
 
 	test('CONFIGURATION-4.1: Continue Session says a settings file wrong as a whole, as the CLIs read it, and opens no history', async () => {

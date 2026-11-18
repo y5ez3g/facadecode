@@ -106,6 +106,51 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 		assert.deepStrictEqual(wrong, []);
 	});
 
+	test('Continue Session and custom CLI help use the same session terminology in each language', () => {
+		const sessionWords = {
+			'zh-cn': /会话/, 'zh-tw': /工作階段/, 'pt-br': /sess(?:ão|ões)/i, es: /sesi(?:ón|ones)/i,
+			ru: /бесед/i, de: /Sitzung/, ja: /セッション/, fr: /session/i, ko: /세션/, tr: /oturum/i, pl: /sesj/i,
+		};
+		const ids = new Set([
+			'Untitled session',
+			"No saved sessions in this window's folders",
+			'Could not read the saved sessions: {0}',
+			"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it",
+			'Its CLI cannot resume this exact session, so it cannot be pinned.',
+			'config.custom.launch',
+			'config.custom.launch.start',
+			'config.custom.launch.resume',
+		]);
+		for (const locale of LOCALES) {
+			const texts = textsOf(locale).filter(each => ids.has(each.id));
+			assert.strictEqual(texts.length, ids.size, locale);
+			for (const each of texts) {
+				assert.match(each.text, sessionWords[locale], shown(each));
+				if (each.id === 'config.custom.launch.resume') {
+					assert.ok(each.text.includes('`${sessionId}`'), shown(each));
+				}
+			}
+		}
+		const traditional = textsOf('zh-tw');
+		assert.match(traditional.find(each => each.id === 'config.custom.launch.resume')!.text, /用於恢復/);
+		assert.strictEqual(traditional.find(each => each.id === 'Open a folder to continue a saved session.')!.text,
+			'請開啟資料夾以接續已儲存的工作階段。');
+		assert.match(textsOf('ru').find(each => each.id === 'config.custom.launch.resume')!.text, /идентификатором этой беседы/);
+	});
+
+	test('settings repairs keep the quoted type and say which line or item to remove in Chinese and Korean', () => {
+		const typeChange = '{0} cannot change the {1} entry\'s type: it is {2}\'s; set it back to "{1}" or remove the line';
+		const checks = {
+			'zh-cn': [/请改回 "\{1\}" 或删掉该行/, /请删掉该项/],
+			ko: [/"\{1\}"\(으\)로 다시 설정하거나 해당 줄을 지우세요/, /해당 항목을 지우세요/],
+		} as const;
+		for (const [locale, [line, item]] of Object.entries(checks)) {
+			const texts = textsOf(locale);
+			assert.match(texts.find(each => each.id === typeChange)!.text, line);
+			assert.match(texts.find(each => each.id === '{0}[{1}] is {2}, which Facade sets or decides itself; remove it')!.text, item);
+		}
+	});
+
 	suite('the checker finds each problem it owns', () => {
 		let root: string;
 		const write = (file: string, content: unknown): void => {

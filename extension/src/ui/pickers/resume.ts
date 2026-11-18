@@ -107,7 +107,7 @@ export function pickSession(deps: SessionDeps): Promise<void> {
 	const itemOf = (choice: Choice): Item => {
 		const { entry, name, retained } = choice;
 		const item: Item = {
-			label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled conversation")),
+			label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled session")),
 			description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).filter(Boolean).join(', '), name, retained?.alias].filter(Boolean).map(text => plainText(text!)).join(' · '),
 			iconPath: cliIcon(deps.media, icon(entry.key.cli)),
 			choice
@@ -126,7 +126,7 @@ export function pickSession(deps: SessionDeps): Promise<void> {
 		}
 		if (done && !choices.length) {
 			picker.placeholder = deps.kind === 'resume' ? vscode.l10n.t("No agents to resume in this window")
-				: vscode.l10n.t("No saved conversations in this window's folders");
+				: vscode.l10n.t("No saved sessions in this window's folders");
 		}
 	};
 	/** Reads the next batch, once at a time; deduplicated by environment, CLI and session ID, most recent first. */
@@ -153,7 +153,7 @@ export function pickSession(deps: SessionDeps): Promise<void> {
 		} catch (err) {
 			done = true;
 			if (open) {
-				deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {});
+				deps.notifyError(vscode.l10n.t("Could not read the saved sessions: {0}", messageOf(err)), {});
 			}
 		} finally {
 			reading = undefined;
@@ -238,7 +238,7 @@ export function pickSession(deps: SessionDeps): Promise<void> {
 				if (!choice || accepting) { return; }
 				accepting = true;
 				picker.hide();
-				const name = choice.entry.title?.trim() || choice.name || choice.retained?.alias || vscode.l10n.t("Untitled conversation");
+				const name = choice.entry.title?.trim() || choice.name || choice.retained?.alias || vscode.l10n.t("Untitled session");
 				let result: ResumeResult;
 				try {
 					if (deps.kind === 'resume') {
@@ -283,7 +283,7 @@ export function pickSession(deps: SessionDeps): Promise<void> {
 		void begin().catch(err => {
 			if (open) {
 				picker.hide();
-				deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {});
+				deps.notifyError(vscode.l10n.t("Could not read the saved sessions: {0}", messageOf(err)), {});
 			}
 		});
 	});

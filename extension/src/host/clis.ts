@@ -138,15 +138,15 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		const entry = entryOf(catalog, cli);
 		// The entry that started it, as it is now: gone, wrong, turned off or of another type, it is said, never another chosen
 		// (CONFIGURATION-3.4); what is wrong with it before its being turned off, as New Agent and a start say it (CONFIGURATION-4.1)
-		if (!entry) { return `${JSON.stringify(cli)} is no longer in clis of ${catalog.file}, so this conversation cannot be resumed with it.`; }
+		if (!entry) { return `${JSON.stringify(cli)} is no longer in clis of ${catalog.file}, so this session cannot be resumed with it.`; }
 		const problems = configurationProblems(entry, this.destination(location));
 		if (problems.length) { return problems.map(each => each.text).join('; '); }
 		if (!entry.enabled) { return turnedOffError(entry.adapter).message; }
 		const runs = builtInOf(entry.adapter.id, entry.adapter.builtIn);
 		if (store !== undefined && runs !== store) {
-			return `${entry.entry.setting} runs ${runs === undefined ? 'a program' : entryOf(catalog, runs)?.adapter.displayName ?? runs} now, so this conversation cannot be resumed with it.`;
+			return `${entry.entry.setting} runs ${runs === undefined ? 'a program' : entryOf(catalog, runs)?.adapter.displayName ?? runs} now, so this session cannot be resumed with it.`;
 		}
-		if (isProgram(entry) || !entry.adapter.groups.resume) { return 'This CLI cannot resume conversations here.'; }
+		if (isProgram(entry) || !entry.adapter.groups.resume) { return 'This CLI cannot resume sessions here.'; }
 		const found = discoverEntry(entry, this.destination(location), location.path);
 		return found.available ? undefined : found.problem ?? 'This CLI is unavailable.';
 	}

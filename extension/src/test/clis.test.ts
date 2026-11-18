@@ -301,7 +301,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		// A program is never resumed: no conversation of it can be found or told apart (CONFIGURATION-2.3)
 		assert.throws(() => plan({ cli: 'mine', resume: { sessionId: '$& literal' } }, {
 			mine: { type: 'custom', command: program(temp.dir, 'custom'), args: ['start-only'] }
-		}), (err: unknown) => err instanceof Error && /cannot resume this exact conversation/.test(err.message));
+		}), (err: unknown) => err instanceof Error && /cannot resume this exact session/.test(err.message));
 		// An added CLI of a built-in's type resumes as its built-in does, with its own entry (CONFIGURATION-2.3)
 		const own = plan({ cli: 'Codex two', resume: { sessionId: 'selected-session' }, sessionFile: '/isolated/run.session.json', sessionHook: 'capture-session', yolo: false }, {
 			'Codex two': { type: 'codex', args: ['--profile', 'two'] }

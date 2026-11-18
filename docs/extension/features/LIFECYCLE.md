@@ -333,14 +333,14 @@ conversation store. There is no 30-day age cutoff. Deduplicate by environment/CL
 same single-line native presentation as Go to Agent: its entry's icon (CONFIGURATION-2.4) and prominent
 conversation title, then quieter
 activity time, original location - none for the window's one place to work itself (1.3), which search still matches, a
-subfolder of it still named - and saved Facade name, in that order. A conversation without a title is `Untitled
-conversation`. Omit a missing or empty name without generating one while browsing. Keep the saved name even when it
-equals the title. The icon names the CLI, so no CLI name is repeated as text; search covers title, saved name, CLI and
+subfolder of it still named - and saved Facade name, in that order. A session without a title is `Untitled session`.
+Omit a missing or empty name without generating one while browsing. Keep the saved name even when it equals the
+title. The icon names the CLI, so no CLI name is repeated as text; search covers title, saved name, CLI and
 location, including beyond the first page. Use the vendor's saved display title and conversation activity time,
 including native renames; file maintenance does not make an old conversation recently active. Ordering remains correct
 across page boundaries. Omit a history segment whose vendor continuation points to an existing resumable conversation.
-With nothing to list, the placeholder says `No saved conversations in this window's folders`. If the histories or the
-window's state cannot be read, a notification says `Could not read the saved conversations: {0}`. Omit a CLI history
+With nothing to list, the placeholder says `No saved sessions in this window's folders`. If the histories or the
+window's state cannot be read, a notification says `Could not read the saved sessions: {0}`. Omit a CLI history
 entry whose working directory is gone, whose CLI is turned off or unavailable in this environment, or whose
 conversation a running agent already holds (CLIS-2.4). Do not list unrelated projects, or
 provide delete, hide or show-hidden controls. The panel's display filter does not change this history scope. When a

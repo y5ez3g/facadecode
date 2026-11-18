@@ -417,13 +417,13 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		const was = BUILT_IN_ADAPTERS.find(each => each.id === input.builtIn)?.displayName ?? input.builtIn;
 		const now = builtIn === undefined ? 'a program' : BUILT_IN_ADAPTERS.find(each => each.id === builtIn)?.displayName ?? builtIn;
 		throw input.resume
-			? new CliPlanError(`${entry.entry.setting} runs ${now} now, but this conversation is ${was}'s; it cannot be resumed with it`, 'unsupported',
+			? new CliPlanError(`${entry.entry.setting} runs ${now} now, but this session is ${was}'s; it cannot be resumed with it`, 'unsupported',
 				{ kind: 'resume_type_changed', values: [entry.entry.setting, was] })
 			: new CliPlanError(`${entry.entry.setting} runs ${now} now, but this agent ran ${was}; it cannot be restored with it`, 'unsupported',
 				{ kind: 'pin_type_changed', values: [entry.entry.setting, was] });
 	}
 	if (input.resume && (!input.resume.sessionId || input.resume.sessionId.includes('\0') || !adapter.groups.resume)) {
-		throw new CliPlanError(`${adapter.displayName} cannot resume this exact conversation`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
+		throw new CliPlanError(`${adapter.displayName} cannot resume this exact session`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
 	}
 	const sessionId = input.resume?.sessionId ?? (adapter.groups.session && input.sessionFile ? newSessionId() : undefined);
 	const takes = takesThrough(adapter, target.throughCmd, input.cwd, platform);

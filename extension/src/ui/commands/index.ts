@@ -192,7 +192,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				reveal: run => agent.reveal(run), select: run => model.select(run),
 				notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
 				...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
-		} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
+		} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved sessions: {0}", messageOf(err)), {}); }
 	};
 	const flows = {
 		newAgent: (startAt?: LocationId) => {

@@ -1173,7 +1173,7 @@ export class AgentService implements Agents, Disposable {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
 		if (!run.facts.pinnable) {
-			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI cannot resume this exact conversation, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
+			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI cannot resume this exact session, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
 		}
 		if (run.facts.pin) {
 			return;
@@ -1438,7 +1438,7 @@ export class AgentService implements Agents, Disposable {
 			} else if (run.facts.pinnable) {
 				this.pin(id);
 			} else {
-				this.deps.log.event(`${run.facts.alias}'s tab was pinned, but its CLI cannot resume this exact conversation; no restoration intent was saved`);
+				this.deps.log.event(`${run.facts.alias}'s tab was pinned, but its CLI cannot resume this exact session; no restoration intent was saved`);
 				this.deps.execution.pinTab?.(id, !!run.facts.pin);
 			}
 		} catch (err) {

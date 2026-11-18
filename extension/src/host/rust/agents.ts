@@ -706,10 +706,10 @@ export class RustAgents implements Agents, Disposable {
 		if (entry.unavailable) {
 			throw new FacadeError('INVALID', 'unsupported', entry.unavailable);
 		}
-		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact conversation ID is required.'); }
+		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact session ID is required.'); }
 		const meta = this.deps.conversations.get(entry.key);
 		if (entry.cwdChoices?.length && !meta?.cwd) {
-			throw invalid('invalid_argument', 'Choose a working location before resuming this conversation.');
+			throw invalid('invalid_argument', 'Choose a working location before continuing this session.');
 		}
 		const cwd = meta?.cwd ?? entry.cwd;
 		const location = this.locationFor(meta?.location, cwd);
@@ -855,7 +855,7 @@ export class RustAgents implements Agents, Disposable {
 		const info = run.agent ? this.all.get(run.agent) : undefined;
 		const { environment, cli, sessionId } = run.facts;
 		if (!info || !this.local(info) || !run.facts.pinnable || !sessionId) {
-			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI has not named its conversation, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
+			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI has not named its session, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
 		}
 		this.deps.pins.pinAgent({
 			id: `pin-${randomBytes(16).toString('hex')}`, conversation: { environment, cli, sessionId },
