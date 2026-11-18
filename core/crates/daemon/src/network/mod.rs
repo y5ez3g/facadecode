@@ -23,7 +23,9 @@ use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
 
-use self::session::{Deadline, Delivery, Output, Peer, Pending, Reply, deadline_after, remaining};
+use self::session::{
+    Deadline, Delivery, Output, Peer, Pending, Reply, SessionHandler, deadline_after, remaining,
+};
 use self::topology::{Link, Origin, Topology};
 use self::wire::{Forward, Reader};
 use crate::SavedConnection;
@@ -447,6 +449,29 @@ struct Registered {
     peer: Arc<Peer>,
 }
 
+#[derive(Clone)]
+struct SessionHandle {
+    network: Network,
+    source: SessionId,
+}
+
+impl SessionHandler for SessionHandle {
+    fn replace_table(&self, table: AdvertiseParams) -> Result<(), ErrorBody> {
+        self.network.replace_table(self.source, table)
+    }
+
+    async fn receive(
+        &self,
+        forward: Forward,
+        deadline: Deadline,
+        cancelled: watch::Receiver<bool>,
+    ) -> Result<Delivery, ErrorBody> {
+        self.network
+            .receive(self.source, forward, deadline, cancelled)
+            .await
+    }
+}
+
 impl Registered {
     /// Turns the reserved identities into visible routes once both sides confirmed.
     fn activate(&self) -> Result<(), ErrorBody> {
@@ -487,9 +512,11 @@ impl Registered {
         write: W,
         output: mpsc::UnboundedReceiver<Output>,
     ) -> Result<(), ErrorBody> {
-        self.peer
-            .run(&self.network, self.id, read, write, output)
-            .await
+        let handler = SessionHandle {
+            network: self.network.clone(),
+            source: self.id,
+        };
+        self.peer.run(handler, read, write, output).await
     }
 }
 

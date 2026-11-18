@@ -1,7 +1,10 @@
 //! Requests, responses and watches multiplexed over one machine link.
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::HashMap;
-use std::future::poll_fn;
+use std::future::{Future, poll_fn};
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -14,18 +17,30 @@ use facade_base::daemon::{
 use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Notification, Reason, Response, decode_arguments,
 };
-use facade_base::machine::{ExecutionOutcome, MachineIdentity};
+use facade_base::machine::{AdvertiseParams, ExecutionOutcome, MachineIdentity};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
+use super::TargetReply;
 use super::wire::{self, Forward, Frame, Reader};
-use super::{Network, SessionId, TargetReply};
 
 type Change = Result<Value, ErrorBody>;
 type Answer = Result<Reply, ErrorBody>;
 pub(super) type Deadline = Option<Instant>;
+
+/// Applies machine frames to the routes of this connection.
+pub(super) trait SessionHandler: Clone + Send + Sync + 'static {
+    fn replace_table(&self, table: AdvertiseParams) -> Result<(), ErrorBody>;
+
+    fn receive(
+        &self,
+        forward: Forward,
+        deadline: Deadline,
+        cancelled: watch::Receiver<bool>,
+    ) -> impl Future<Output = Result<Delivery, ErrorBody>> + Send;
+}
 
 pub(crate) struct Subscription {
     pub(crate) snapshot: Value,
@@ -417,10 +432,9 @@ impl Peer {
         })
     }
 
-    pub(super) async fn run<R, W>(
+    pub(super) async fn run<R, W, H>(
         self: &Arc<Self>,
-        network: &Network,
-        session: SessionId,
+        handler: H,
         mut read: Reader<R>,
         mut write: W,
         mut output: mpsc::UnboundedReceiver<Output>,
@@ -428,11 +442,12 @@ impl Peer {
     where
         R: AsyncBufRead + Unpin,
         W: AsyncWrite + Unpin,
+        H: SessionHandler,
     {
         let mut stopped = self.stopped.subscribe();
         let mut writing_frame = false;
         let ended = tokio::select! {
-            result = self.read(network, session, &mut read) => result?,
+            result = self.read(&handler, &mut read) => result?,
             result = self.write(&mut write, &mut output, &mut writing_frame) => {
                 result?;
                 ReadEnd::Closed
@@ -452,8 +467,7 @@ impl Peer {
 
     async fn read(
         self: &Arc<Self>,
-        network: &Network,
-        session: SessionId,
+        handler: &impl SessionHandler,
         read: &mut Reader<impl AsyncBufRead + Unpin>,
     ) -> Result<ReadEnd, ErrorBody> {
         while let Some(frame) = read.next().await? {
@@ -468,12 +482,11 @@ impl Peer {
                             let deadline =
                                 deadline_after(forward.time_left_ms.map(Duration::from_millis));
                             let incoming = self.begin(id)?;
-                            let network = network.clone();
-                            tokio::spawn(incoming.serve(network, session, forward, deadline));
+                            tokio::spawn(incoming.serve(handler.clone(), forward, deadline));
                         }
                         (methods::ADVERTISE, None) => {
                             if let Err(error) =
-                                network.replace_table(session, decode_arguments(request.params)?)
+                                handler.replace_table(decode_arguments(request.params)?)
                             {
                                 return Ok(ReadEnd::Rejected(error));
                             }
@@ -651,18 +664,12 @@ struct Incoming {
 }
 
 impl Incoming {
-    async fn serve(
-        mut self,
-        network: Network,
-        session: SessionId,
-        forward: Forward,
-        deadline: Deadline,
-    ) {
+    async fn serve(mut self, handler: impl SessionHandler, forward: Forward, deadline: Deadline) {
         let mut cancelled = self.cancelled.clone();
         let result = tokio::select! {
             biased;
             _ = cancelled.wait_for(|cancelled| *cancelled) => return,
-            result = network.receive(session, forward, deadline, self.cancelled.clone()) => result,
+            result = handler.receive(forward, deadline, self.cancelled.clone()) => result,
         };
         let result = match result {
             Err(error) => Err(error),

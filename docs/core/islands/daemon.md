@@ -478,6 +478,9 @@ The machine sessions, their routes and the SSH processes they use. `src/network/
     and passes the original caller and payload onward.
   - Closing a session ends its calls, subscriptions and watchers. Saved SSH connections try
     again every ten seconds and pause when SSH needs the person to interact.
+  - Each registered connection gives its session a handler for its table updates and forwarded
+    requests. The session manages frames, watches and cancellation. The network manages routes
+    and releases the registration when its session ends.
 - **Interface:** `Network::new`, `local_hello`, `check_peer`, `machines`, `rename_local`,
   `accept` and `connect` for authorized streams, `start_saved` and `remove_saved`, and async
   `call` and `watch`. `Event::Target` delivers a call or subscription with its cancellation and
