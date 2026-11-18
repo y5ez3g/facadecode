@@ -19,6 +19,7 @@ mod attach;
 mod commands;
 mod daemon_client;
 mod hooks;
+mod machine;
 
 use std::fmt;
 use std::io::{IsTerminal, Write};
@@ -30,6 +31,7 @@ use facade_base::process::{EndReason, ProcessExit};
 use commands::{Format, IntegrationAction};
 use daemon_client::{connect_or_start, reconnect};
 use hooks::HookEvent;
+use machine::MachineAction;
 
 #[derive(Parser)]
 #[command(
@@ -45,8 +47,8 @@ struct Arguments {
 /// The agent a command acts on.
 #[derive(clap::Args)]
 struct Target {
-    /// An agent ID (a3, '#a3', or 3), a unique name with or without @, or a name and its ID,
-    /// such as '@Pixel #a3'.
+    /// An agent ID (a3, '#a3', or 3), a unique name, or an address such as '#a3@gpu' or
+    /// '@Pixel@gpu'.
     agent: String,
 }
 
@@ -67,14 +69,17 @@ enum Command {
     /// CLI of the settings file takes one. The first turn counts only when its prompt comes through
     /// `--prompt`; words after the CLI's name are the CLI's own.
     ///
+    /// `--on <machine>` selects the running machine. Use `--cwd <path>` with `--on` to give an
+    /// absolute directory on that machine. A start on another machine uses that user's home
+    /// directory by default.
+    ///
     /// In a terminal, Ctrl-] detaches; the agent keeps running. If the agent ends, this command
     /// exits with its code, or 128 plus the terminating signal number. An unavailable exit status
     /// returns code 1. If the connection closes, reconnect by agent ID and start the daemon if
     /// needed. Keys wait for the screen to be redrawn; Ctrl-] waits at most one second to send
     /// them. Without a terminal, start the agent in the background and print its ID.
     Start {
-        /// Facade's options, `--name <name>` and `--prompt <text>`, then the CLI program and its
-        /// arguments.
+        /// Facade's options, then the CLI program and its arguments.
         #[arg(
             trailing_var_arg = true,
             allow_hyphen_values = true,
@@ -103,7 +108,7 @@ enum Command {
     /// error, ended (with how), or unknown. The CLI's own words and the last thing said to the
     /// agent follow on lines of their own.
     List {
-        /// Print complete agent records as JSON.
+        /// Print the agent records and machine query results as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -111,9 +116,8 @@ enum Command {
     ///
     /// Ctrl-] detaches; the agent keeps running. If the agent ends, exit with its code or 128 plus
     /// the signal number. An unavailable exit status returns code 1. If the connection closes,
-    /// reconnect by agent ID and start the daemon if needed. Keys wait for the screen to be
-    /// redrawn; Ctrl-] waits at most one second to send them. Bytes handed to a connection are
-    /// never sent again: they may have arrived.
+    /// reconnect to the same agent. On another machine, input is paused until the screen has
+    /// refreshed. Ctrl-] can detach while the connection is down.
     Attach(Target),
     /// Type text or press keys in an agent's terminal.
     ///
@@ -174,12 +178,11 @@ enum Command {
     /// its next turn and returns at once. Otherwise return once the message is delivered, or fail
     /// within 30 seconds saying why.
     Send {
-        /// The recipient: an agent ID (a3, '#a3', or 3), a unique name of a running agent with or
-        /// without @, a name and its ID, or '#human' for the person.
+        /// An agent ID, unique name, address such as '#a3@gpu', or '#human' for the person.
         to: String,
         /// The message: at most 8,000 characters and 540 lines of text, tabs, and line breaks.
         text: String,
-        /// The message this one answers: one in the sender's inbox, such as m4.
+        /// The message this one answers, such as m4 or '#m4@gpu'.
         #[arg(long, value_name = "MESSAGE")]
         reply_to: Option<String>,
     },
@@ -205,6 +208,11 @@ enum Command {
     },
     /// Show Facade's version, process IDs, and agent count; start the daemon if needed.
     Status,
+    /// Manage connections between Facade machines.
+    Machine {
+        #[command(subcommand)]
+        action: MachineAction,
+    },
     /// Let the sessions of a CLI that you start yourself join Facade as guests:
     /// `facade integration add claude`.
     ///
@@ -269,9 +277,16 @@ fn main() {
     };
     // A command whose output is closed early, as by `facade list | head`, ends without an error,
     // like other shell tools: by SIGPIPE where the system has it, else through `write_or_end`. The
-    // keeper and the daemon keep the default of Rust programs: a peer that closes is an error they
-    // handle.
-    if !matches!(command, Command::Keeper | Command::Daemon { .. }) {
+    // services and SSH streams handle broken pipes themselves so the command can report the
+    // handshake outcome or the SSH exit status.
+    if !matches!(
+        command,
+        Command::Keeper
+            | Command::Daemon { .. }
+            | Command::Machine {
+                action: MachineAction::Add(_) | MachineAction::Connect(_) | MachineAction::Serve(_)
+            }
+    ) {
         facade_base::service::default_broken_pipe();
     }
     let code = run(command).unwrap_or_else(|error| {
@@ -363,6 +378,14 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Keeper => facade_keeper::serve().map(|()| 0),
         Command::Daemon { detach: false } => facade_daemon::run().map(|()| 0),
         Command::Daemon { detach: true } => daemon_client::detach(),
+        Command::Machine { action } => machine::run(action, &connect_or_start, &|home| {
+            if let Some(home) = home {
+                // SAFETY: the initial command chooses the home before opening a socket or starting
+                // any threads. The keeper and daemon inherit this home if started below.
+                unsafe { std::env::set_var("FACADE_HOME", home) };
+            }
+            daemon_client::machine_socket()
+        }),
         Command::Start { command_line } => {
             // Words Facade cannot use fail before Facade starts.
             let words = commands::start_words(command_line)?;

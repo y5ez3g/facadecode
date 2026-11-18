@@ -1,7 +1,7 @@
 //! Shows an agent's terminal in the person's terminal and forwards their keys and size changes.
-//! When the connection closes, it reconnects by agent ID through the reconnect it is given and
-//! redraws before sending the keys typed meanwhile. Up to 1 MiB of keys waits; keys that do not fit
-//! are counted as unsent.
+//! When the connection closes, it reconnects by exact agent address and
+//! redraws before sending input. For a local agent, up to 1 MiB of keys typed meanwhile waits.
+//! For a remote agent, input is paused until the redraw. Discarded keys are counted as unsent.
 //!
 //! Every end of an attachment restores the person's terminal exactly once and prints its note after
 //! the restoration. Ctrl-] waits up to one second for the keys typed before it; termination signals
@@ -51,20 +51,19 @@ pub(crate) fn terminal_size() -> Option<(u16, u16)> {
 }
 
 /// Shows the agent's terminal until the person detaches or the agent exits or is removed. Whenever
-/// the connection closes, `reconnect` reaches the daemon again and the watch resumes by agent ID.
+/// the connection closes, `reconnect` reaches the daemon again and the watch resumes at the
+/// agent's exact address.
 /// Returns the command's exit code.
 pub(crate) fn attach(
     client: DaemonClient,
     agent: &str,
     reconnect: &Reconnect,
 ) -> anyhow::Result<i32> {
-    let mut client = client;
-    // The agent takes the person's size before its snapshot; if it cannot, the watch says why.
-    let _ = resize_agent(&mut client, agent);
     // The person's scrollback stays above the agent's screen, which brings its own.
     let screen = watch_screen(client, agent, true)?;
-    // Reconnects use the ID, never the name the person typed.
-    let input = Arc::new(AgentInput::new(screen.snapshot.agent_id.clone()));
+    let remote = screen.snapshot.machine_id != screen.client.hello_result.machine_id;
+    let address = screen.snapshot.reference().exact_address();
+    let input = Arc::new(AgentInput::new(address, remote));
     spawn_with(&input, AgentInput::send_queued);
     // Signal handling comes before raw mode, so that termination restores the terminal.
     follow_signals(input.clone())?;
@@ -197,13 +196,18 @@ fn follow_agent(
         if let Some(end) = show_until_closed(&mut screen, input)? {
             return Ok(end);
         }
+        let closing = screen.client.closing.clone();
+        if input.remote && closing.is_none() {
+            // A forwarded watch can end while the socket is open. Retire it before reconnecting
+            // so keys already taken by the writer cannot go through a recovered route.
+            let _ = screen.client.writer.shutdown(std::net::Shutdown::Both);
+        }
         input.disconnected();
         if input.is_detached() {
             return Ok(AttachEnd::Detached);
         }
-        let note = match screen.client.closing.clone() {
-            // A newer Facade takes over: the keys handed to this connection go before the
-            // response, and keys typed meanwhile wait for the next connection.
+        let note = match closing {
+            // Wait for input already handed to this connection before acknowledging the daemon.
             Some(build) => {
                 input.wait_for_write();
                 screen.client.respond_to_closing();
@@ -211,7 +215,11 @@ fn follow_agent(
             }
             None => "connection lost; reconnecting; recent keys may not have arrived".into(),
         };
-        show_note(&note);
+        show_note(if input.remote {
+            "connection lost. Input paused"
+        } else {
+            &note
+        });
         screen = match reconnect_screen(input, reconnect) {
             Ok(again) => again,
             Err(end) => return Ok(end),
@@ -255,8 +263,8 @@ fn show_until_closed(
 }
 
 /// Reaches the daemon again and watches the same agent, trying again after [`RECONNECT_DELAY`]
-/// while failures are temporary. Detaching cancels the attempt, hello included. A permission,
-/// protocol or settings error, or the agent's removal, ends the attachment.
+/// while failures are temporary, including an unavailable remote machine. Detaching cancels the
+/// attempt, hello included. A permanent daemon connection error or the agent's removal ends it.
 fn reconnect_screen(input: &AgentInput, reconnect: &Reconnect) -> Result<ScreenWatch, AttachEnd> {
     while !input.is_detached() {
         let mut client =
@@ -265,16 +273,22 @@ fn reconnect_screen(input: &AgentInput, reconnect: &Reconnect) -> Result<ScreenW
                 Err(ConnectFailure::Cancelled) => break,
                 Err(ConnectFailure::Permanent(_)) => return Err(AttachEnd::Unreachable),
                 Err(ConnectFailure::Timeout(_)) => {
-                    std::thread::sleep(RECONNECT_DELAY);
+                    input.wait_before_reconnect();
                     continue;
                 }
             };
-        let watched = resize_agent(&mut client, &input.agent_id)
-            .and_then(|()| watch_screen(client, &input.agent_id, false));
+        let watched = if input.remote {
+            // Wait for the running machine's snapshot before forwarding resize or keys.
+            watch_screen(client, &input.agent, false)
+        } else {
+            resize_agent(&mut client, &input.agent)
+                .and_then(|()| watch_screen(client, &input.agent, false))
+        };
         match watched {
+            _ if input.is_detached() => break,
             Ok(screen) => return Ok(screen),
             Err(error) if not_found(&error) => return Err(AttachEnd::Removed),
-            Err(_) => std::thread::sleep(RECONNECT_DELAY),
+            Err(_) => input.wait_before_reconnect(),
         }
     }
     Err(AttachEnd::Detached)
@@ -372,7 +386,8 @@ fn is_detach_record(keys: &[u8]) -> bool {
 /// At most [`MAX_QUEUED_KEY_BYTES`] wait; keys that do not fit are counted. Keys handed to a
 /// connection are never sent again, even when the write fails, since they may have arrived.
 struct AgentInput {
-    agent_id: String,
+    agent: String,
+    remote: bool,
     queue: Mutex<InputQueue>,
     /// Wakes the writer for new input, a new connection or the end, and wakes whoever waits for a
     /// write to end.
@@ -384,7 +399,7 @@ struct InputQueue {
     waiting: VecDeque<Outgoing>,
     /// The key bytes in `waiting`.
     waiting_key_bytes: usize,
-    /// Typed bytes that did not fit.
+    /// Typed bytes discarded while disconnected or when the queue was full.
     dropped_bytes: usize,
     /// The connection to send on; none while disconnected. A failed write ends it only if it is
     /// still the one the write used.
@@ -437,9 +452,10 @@ fn notification<O: Operation>(args: O::Args) -> Vec<u8> {
 }
 
 impl AgentInput {
-    fn new(agent_id: String) -> Self {
+    fn new(agent: String, remote: bool) -> Self {
         AgentInput {
-            agent_id,
+            agent,
+            remote,
             queue: Mutex::default(),
             wake: Condvar::new(),
         }
@@ -453,6 +469,15 @@ impl AgentInput {
         self.lock().detached
     }
 
+    /// Waits until the retry delay elapses or the person detaches.
+    fn wait_before_reconnect(&self) {
+        drop(
+            self.wake
+                .wait_timeout_while(self.lock(), RECONNECT_DELAY, |queue| !queue.detached)
+                .unwrap(),
+        );
+    }
+
     /// Queues a size change, unless one already waits.
     fn push_resize(&self) {
         let mut queue = self.lock();
@@ -463,13 +488,15 @@ impl AgentInput {
         }
     }
 
-    /// Queues typed keys, or counts them as dropped when they do not fit.
+    /// Queues typed keys, or counts them as dropped when they do not fit or remote input is paused.
     fn push_keys(&self, keys: &[u8]) {
         if keys.is_empty() {
             return;
         }
         let mut queue = self.lock();
-        if queue.waiting_key_bytes + keys.len() > MAX_QUEUED_KEY_BYTES {
+        if (self.remote && queue.connection.is_none())
+            || queue.waiting_key_bytes + keys.len() > MAX_QUEUED_KEY_BYTES
+        {
             queue.dropped_bytes += keys.len();
             return;
         }
@@ -494,7 +521,16 @@ impl AgentInput {
     }
 
     fn disconnected(&self) {
-        self.lock().connection = None;
+        self.clear_connection(&mut self.lock());
+    }
+
+    fn clear_connection(&self, queue: &mut InputQueue) {
+        queue.connection = None;
+        if self.remote {
+            queue.dropped_bytes += queue.waiting_key_bytes;
+            queue.waiting_key_bytes = 0;
+            queue.waiting.clear();
+        }
     }
 
     /// Notes a connection being opened, so that detaching can shut it down. False once the
@@ -548,7 +584,7 @@ impl AgentInput {
     /// The writer thread: sends the waiting input in order until the attachment ends.
     fn send_queued(&self) {
         while let Some((connection, outgoing)) = self.next_to_send() {
-            let sent = match outgoing.line(&self.agent_id) {
+            let sent = match outgoing.line(&self.agent) {
                 Some(line) => (&*connection).write_all(&line),
                 None => Ok(()),
             };
@@ -559,7 +595,7 @@ impl AgentInput {
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, &connection));
             if sent.is_err() && still_current {
-                queue.connection = None;
+                self.clear_connection(&mut queue);
             }
             // Ctrl-] or a takeover may wait for this write.
             self.wake.notify_all();
@@ -740,7 +776,7 @@ mod tests {
 
     /// An input queue with its writer thread running.
     fn input() -> Arc<AgentInput> {
-        let input = Arc::new(AgentInput::new("a1".into()));
+        let input = Arc::new(AgentInput::new("a1".into(), false));
         spawn_with(&input, AgentInput::send_queued);
         input
     }

@@ -9,7 +9,7 @@ use facade_base::daemon::{
     ClientKind, DAEMON_PROTOCOL_VERSION, DaemonUpgrade, MIN_DAEMON_PROTOCOL_VERSION, UpgradeArgs,
     UpgradeResult,
 };
-use facade_base::daemon_client::{DaemonClient, Identity, takeover_timeout};
+use facade_base::daemon_client::{DaemonClient, Identity, takeover_timeout, transient_transport};
 use facade_base::keeper::{KEEPER_PROTOCOL_VERSION, MIN_KEEPER_PROTOCOL_VERSION};
 use facade_base::paths::ClientSocket;
 use facade_base::service::{self, Candidate, Report, Service};
@@ -123,7 +123,7 @@ pub(super) fn connect_or_start_for(agent: &str) -> anyhow::Result<DaemonClient> 
 
 /// Makes a command's first connection with default callbacks.
 fn first_connection(identity: &Identity) -> Result<DaemonClient, ConnectFailure> {
-    attempt_as(identity, &|| false, &mut |_| true)
+    connect_with_takeover(|timeout| reach(identity, &|| false, &mut |_| true, timeout))
 }
 
 /// Reconnects an attached terminal. `cancelled` ends the attempt. `opening` sees each
@@ -132,22 +132,26 @@ pub(super) fn reconnect(
     cancelled: &dyn Fn() -> bool,
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure> {
-    attempt_as(&identity_for(terminal_agent(), true), cancelled, opening)
+    let identity = identity_for(terminal_agent(), true);
+    connect_with_takeover(|timeout| {
+        let mut client = reach(&identity, cancelled, opening, timeout)?;
+        // Let attach reopen the connection so every socket goes through its cancellation callback.
+        client.disable_auto_reconnect();
+        Ok(client)
+    })
 }
 
 /// Reaches the daemon and asks an eligible older build to hand over before using the connection.
-fn attempt_as(
-    identity: &Identity,
-    cancelled: &dyn Fn() -> bool,
-    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+fn connect_with_takeover(
+    mut connect: impl FnMut(Duration) -> Result<DaemonClient, ConnectFailure>,
 ) -> Result<DaemonClient, ConnectFailure> {
-    let mut client = reach(identity, cancelled, opening, DAEMON_CONNECT_TIMEOUT)?;
+    let mut client = connect(DAEMON_CONNECT_TIMEOUT)?;
     let ours = facade_base::build_id();
     if facade_base::takes_over(&ours, &client.hello_result.build)
         && let Some(handed) = ask_to_take_over(&mut client, &ours)?
     {
         drop(client);
-        client = follow_takeover(identity, cancelled, opening, &ours, handed)?;
+        client = follow_takeover(connect, &ours, handed)?;
     }
     // A test can hold a command here, after its hello and before its call.
     service::gate_for_test("command-connected");
@@ -190,14 +194,12 @@ fn ask_to_take_over(
 /// Waits, after a handover began, for the daemon of this build, and says on one line how it went.
 /// A command goes on with the older build if it answers again.
 fn follow_takeover(
-    identity: &Identity,
-    cancelled: &dyn Fn() -> bool,
-    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+    connect: impl FnOnce(Duration) -> Result<DaemonClient, ConnectFailure>,
     ours: &str,
     (asked, handed): (Instant, UpgradeResult),
 ) -> Result<DaemonClient, ConnectFailure> {
     let timeout = takeover_timeout();
-    match reach(identity, cancelled, opening, timeout) {
+    match connect(timeout) {
         Ok(client) if client.hello_result.build == ours => {
             eprintln!(
                 "facade: Facade {ours} took over from {}; {} kept running ({:.1} s)",
@@ -322,6 +324,29 @@ fn reach(
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
     timeout: Duration,
 ) -> Result<DaemonClient, ConnectFailure> {
+    reach_daemon(cancelled, timeout, |socket, deadline| {
+        DaemonClient::connect(socket, identity, deadline, opening)
+    })
+}
+
+/// Opens the daemon's socket for the machine hello arriving from SSH.
+pub(super) fn machine_socket() -> anyhow::Result<ClientSocket> {
+    Ok(reach_daemon(
+        &|| false,
+        DAEMON_CONNECT_TIMEOUT,
+        |socket, _| match ClientSocket::connect(socket) {
+            Ok(client) => Ok(Some(client)),
+            Err(error) if transient_transport(&error) => Ok(None),
+            Err(error) => anyhow::bail!("cannot connect to {}: {error}", socket.display()),
+        },
+    )?)
+}
+
+fn reach_daemon<T>(
+    cancelled: &dyn Fn() -> bool,
+    timeout: Duration,
+    mut open: impl FnMut(&Path, Instant) -> anyhow::Result<Option<T>>,
+) -> Result<T, ConnectFailure> {
     let home = service::create_private_home().map_err(permanent)?;
     let logs = home.join("logs");
     let socket = facade_base::paths::daemon_socket().map_err(permanent)?;
@@ -331,9 +356,7 @@ fn reach(
         if cancelled() {
             return Err(ConnectFailure::Cancelled);
         }
-        if let Some(client) =
-            DaemonClient::connect(&socket, identity, deadline, opening).map_err(permanent)?
-        {
+        if let Some(client) = open(&socket, deadline).map_err(permanent)? {
             return Ok(client);
         }
         keeper.check(&logs)?;

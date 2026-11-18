@@ -4,26 +4,33 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use facade_base::address::{display_machine_selector, exact_machine_selector};
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResume, AgentScreen,
-    AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsTopic, AgentsWatchArgs,
-    DEFAULT_TERMINAL_SIZE, DeliveredVia, DeliveryStatus, InspectResult, IntegrationAdd,
-    IntegrationArgs, IntegrationInfo, IntegrationList, IntegrationRemove, IntegrationsArgs,
-    MessagesTopic, MessagesWatchArgs, PartState, RenameArgs, ResumeArgs, Said, ScreenArgs,
-    SendArgs, StartArgs, StateReason, TypeArgs, WindowDeliveryFailure, WindowRef, display_name,
+    AgentSend, AgentStart, AgentState, AgentStop, AgentType, DEFAULT_TERMINAL_SIZE, DeliveredVia,
+    DeliveryStatus, InspectResult, IntegrationAdd, IntegrationArgs, IntegrationInfo,
+    IntegrationList, IntegrationRemove, IntegrationsArgs, MessagesTopic, MessagesWatchArgs,
+    PartState, RenameArgs, ResumeArgs, Said, ScreenArgs, SendArgs, StartArgs, StateReason,
+    TypeArgs, WindowDeliveryFailure, WindowRef, display_name, typed_text_with_machines,
 };
 use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine::{
+    AgentList, AgentRef, MachineIdentity, MachineList, MachineQueryArgs, MachineQueryStatus,
+    MessageRef,
+};
+use facade_base::operations::NoArgs;
 use facade_base::process::EndReason;
 use unicode_width::UnicodeWidthStr;
 
 use crate::ExitText;
 
-/// What `facade start` takes from its words: its own options, `--name` and `--prompt`, before the
-/// CLI's name, and the CLI's name with every word after it, which are the CLI's.
+/// The options before the CLI's name, followed by the CLI's name and arguments.
 pub(crate) struct StartWords {
     name: Option<String>,
     prompt: Option<String>,
+    machine: Option<String>,
+    cwd: Option<String>,
     command: Vec<String>,
 }
 
@@ -33,6 +40,8 @@ pub(crate) fn start_words(command_line: Vec<String>) -> anyhow::Result<StartWord
     let mut start = StartWords {
         name: None,
         prompt: None,
+        machine: None,
+        cwd: None,
         command: Vec::new(),
     };
     let mut words = command_line.into_iter();
@@ -47,11 +56,17 @@ pub(crate) fn start_words(command_line: Vec<String>) -> anyhow::Result<StartWord
                 &mut start.prompt,
                 "--prompt requires the agent's first message",
             ),
+            "--on" => (&mut start.machine, "--on requires a machine name or ID"),
+            "--cwd" => (&mut start.cwd, "--cwd requires a directory on the machine"),
             _ if word.starts_with('-') => anyhow::bail!(
-                "{word} is not an option of facade start, which takes --name and --prompt; the \
-                 CLI's own options go after its name"
+                "{word} is not an option of facade start. Use --name, --prompt, --on, or --cwd \
+                 before the CLI's name. Put the CLI's own options after its name"
             ),
             _ => {
+                anyhow::ensure!(
+                    start.cwd.is_none() || start.machine.is_some(),
+                    "--cwd requires --on"
+                );
                 start.command.push(word);
                 start.command.extend(words);
                 return Ok(start);
@@ -73,12 +88,17 @@ pub(crate) fn start(
     terminal: Option<(u16, u16)>,
 ) -> anyhow::Result<Option<String>> {
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
+    let cwd_is_default = words.cwd.is_none();
+    let cwd = match words.cwd {
+        Some(cwd) => cwd,
+        None => std::env::current_dir()?.to_string_lossy().into_owned(),
+    };
     let args = StartArgs {
         command: words.command,
         name: words.name,
-        cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
-        machine: None,
-        cwd_is_default: true,
+        machine: words.machine,
+        cwd,
+        cwd_is_default,
         window: None,
         initial_windows: None,
         location_source_window: None,
@@ -98,7 +118,12 @@ pub(crate) fn start(
         session: None,
     };
     let (started, _) = client.call_with_request_id::<AgentStart>(args, false)?;
-    Ok(announce(&started.agent, "started", terminal))
+    Ok(announce(
+        &started.agent,
+        &client.hello_result.machine_id,
+        "started",
+        terminal,
+    ))
 }
 
 /// Resumes an agent's session in a new run, as `start` does, and warns first when its earlier
@@ -110,36 +135,60 @@ pub(crate) fn resume(
 ) -> anyhow::Result<Option<String>> {
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
     let earlier = client.call::<AgentInspect>(AgentArgs { agent })?.agent;
+    let local_machine_id = &client.hello_result.machine_id;
+    let address = record_address(&earlier, local_machine_id);
+    let env = if earlier.machine_id == *local_machine_id {
+        environment()
+    } else {
+        BTreeMap::new()
+    };
     if earlier.exit.as_ref().and_then(|exit| exit.reason) == Some(EndReason::TerminalClosed) {
         eprintln!(
-            "facade: #{}'s earlier CLI may still be running: its terminal closed while no Facade \
-             service held it",
-            earlier.agent_id
+            "facade: {address}'s earlier CLI may still be running: its terminal closed while no \
+             Facade service held it"
         );
     }
     let resumed = client.call::<AgentResume>(ResumeArgs {
-        agent: earlier.agent_id,
-        env: environment(),
+        agent: address,
+        env,
         cols,
         rows,
     })?;
-    Ok(announce(&resumed, "resumed", terminal))
+    Ok(announce(
+        &resumed,
+        &client.hello_result.machine_id,
+        "resumed",
+        terminal,
+    ))
+}
+
+/// The local record's number or the remote record's exact address.
+fn record_address(agent: &AgentInfo, local_machine_id: &str) -> String {
+    if agent.machine_id == local_machine_id {
+        return format!("#{}", agent.agent_id);
+    }
+    agent.reference().exact_address()
 }
 
 /// Tells the person an agent's run began. Without their terminal the agent keeps running alone,
-/// and its ID is all they need; with it, the agent comes back to be attached to.
-fn announce(agent: &AgentInfo, began: &str, terminal: Option<(u16, u16)>) -> Option<String> {
+/// and its address is all they need; with it, the agent comes back to be attached to.
+fn announce(
+    agent: &AgentInfo,
+    local_machine_id: &str,
+    began: &str,
+    terminal: Option<(u16, u16)>,
+) -> Option<String> {
+    let address = record_address(agent, local_machine_id);
     if terminal.is_none() {
-        println_or_end!("#{}{}", agent.agent_id, pid_of(agent));
+        println_or_end!("{address}{}", pid_of(agent));
         return None;
     }
     eprintln!(
-        "[facade: #{id} {name} {began}; Ctrl-] detaches and the agent keeps running; reconnect \
-         with `facade attach {id}`]",
-        id = agent.agent_id,
+        "[facade: {address} {name} {began}. Ctrl-] detaches and the agent keeps running. Reconnect \
+         with `facade attach '{address}'`]",
         name = display_name(&agent.name),
     );
-    Some(agent.agent_id.clone())
+    Some(address)
 }
 
 /// How a command prints its answer: for the person, or as the protocol's JSON (`--json`).
@@ -148,25 +197,59 @@ pub(crate) enum Format {
     Json,
 }
 
-/// Prints every agent, one line each in aligned columns, with what it waits for and what was last
-/// said to it below.
+/// Lists agents by running machine and reports the outcome of each machine's query.
 pub(crate) fn list(client: &mut DaemonClient, format: Format) -> anyhow::Result<()> {
-    let agents = client
-        .snapshot::<AgentsTopic>(AgentsWatchArgs::default())?
-        .agents;
+    let listed = client.call::<AgentList>(MachineQueryArgs { machine: None })?;
     if let Format::Json = format {
-        println_or_end!("{}", serde_json::to_string_pretty(&agents)?);
+        println_or_end!("{}", serde_json::to_string_pretty(&listed)?);
         return Ok(());
     }
+    let local = &client.hello_result.machine_id;
+    for machine in &listed.machines {
+        let state = match machine.status {
+            MachineQueryStatus::Answered => "answered",
+            MachineQueryStatus::Unavailable => "unreachable",
+            MachineQueryStatus::TimedOut => "timed out",
+            MachineQueryStatus::Error => "error",
+        };
+        let at = machine
+            .answered_at
+            .as_deref()
+            .map_or_else(String::new, |at| format!(" at {at}"));
+        let build = machine
+            .build
+            .as_deref()
+            .map_or_else(String::new, |build| format!(" · Facade {build}"));
+        println_or_end!(
+            "{} (id:{}){build} · {state}{at}",
+            display_name(&machine.name),
+            machine.short_id,
+        );
+        if machine.status == MachineQueryStatus::Answered {
+            let agents: Vec<_> = listed
+                .agents
+                .iter()
+                .filter(|agent| agent.machine_id == machine.machine_id)
+                .collect();
+            print_agent_rows(&agents, local);
+        }
+    }
+    Ok(())
+}
+
+fn print_agent_rows(agents: &[&AgentInfo], local: &str) {
     if agents.is_empty() {
         println_or_end!("No agents.");
-        return Ok(());
+        return;
     }
     let rows: Vec<[String; 4]> = agents
         .iter()
         .map(|agent| {
             [
-                format!("#{}", agent.agent_id),
+                agent
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| record_address(agent, local)),
                 display_name(&agent.name),
                 agent.cli.clone(),
                 state_of(agent),
@@ -200,8 +283,11 @@ pub(crate) fn list(client: &mut DaemonClient, format: Format) -> anyhow::Result<
         if let Some(said) = &agent.said {
             println_or_end!("       {} said: {}", speaker(said), said.text);
         }
+        let windows: Vec<_> = agent.windows.iter().map(window_text).collect();
+        if !windows.is_empty() {
+            println_or_end!("       Windows {}", windows.join(", "));
+        }
     }
-    Ok(())
 }
 
 /// Prints one agent in full: one fact a line, or the protocol's JSON.
@@ -213,7 +299,7 @@ pub(crate) fn inspect(
     let inspected = client.call::<AgentInspect>(AgentArgs { agent })?;
     match format {
         Format::Json => println_or_end!("{}", serde_json::to_string_pretty(&inspected)?),
-        Format::Text => print_inspection(&inspected),
+        Format::Text => print_inspection(&inspected, &client.hello_result.machine_id),
     }
     Ok(())
 }
@@ -265,49 +351,78 @@ pub(crate) fn send(
         request_id: Some(made_request_id()),
         time_left_ms: None,
     };
+    let local = client.hello_result.machine_id.clone();
     let (sent, _) = client
         .call_with_request_id::<AgentSend>(args, false)
         .inspect_err(|error| {
-            if let Some(windows) = error
-                .downcast_ref::<ErrorBody>()
-                .and_then(|body| body.data.windows.as_deref())
-            {
+            let Some(body) = error.downcast_ref::<ErrorBody>() else {
+                return;
+            };
+            if let Some(reference) = &body.data.message_ref {
+                eprintln!("facade: Message {}", message_address(reference, &local));
+            }
+            if let Some(delivery) = &body.data.window_delivery {
+                for failure in &delivery.not_delivered {
+                    eprintln!("facade: {}", window_failure(failure));
+                }
+                for window in &delivery.outcome_unknown {
+                    eprintln!("facade: {}", window_outcome_unknown(window));
+                }
+            } else if let Some(windows) = &body.data.windows {
                 for failure in windows {
                     eprintln!("facade: {}", window_failure(failure));
                 }
             }
         })?;
     let message = sent.message;
-    let (id, to) = (&message.message_id, &message.to);
+    let id = match &message.message_ref {
+        Some(reference) => message_address(reference, &local),
+        None => format!("#{}", message.message_id),
+    };
+    let to = match &message.message_ref {
+        Some(reference) if reference.machine_id != local && message.to != "human" => AgentRef {
+            machine_id: reference.machine_id.clone(),
+            agent_id: message.to.clone(),
+        }
+        .exact_address(),
+        _ => format!("#{}", message.to),
+    };
     if let Some(windows) = sent.windows {
-        println_or_end!("#{id} was handed to these window subscriptions");
+        println_or_end!("{id} was handed to these window subscriptions");
         for window in windows.delivered {
             println_or_end!("  {}", window_text(&window));
         }
         for failure in windows.not_delivered {
             println_or_end!("{}", window_failure(&failure));
         }
+        for window in windows.outcome_unknown {
+            println_or_end!("{}", window_outcome_unknown(&window));
+        }
         return Ok(());
     }
-    if to == "human" {
+    if message.to == "human" {
         if message.delivery.status == DeliveryStatus::Pending && sent.repeated {
-            anyhow::bail!("delivery outcome is unknown for #{id} to #human")
+            anyhow::bail!("delivery outcome is unknown for {id} to #human")
         }
-        anyhow::bail!("missing window delivery receipt for #{id} to #human");
+        anyhow::bail!("missing window delivery receipt for {id} to #human");
     }
     match (message.delivery.status, message.delivery.delivered_via) {
         // A guest takes its messages at its next turn.
-        (DeliveryStatus::Pending, _) => println_or_end!("#{id} waits for #{to}'s next turn"),
+        (DeliveryStatus::Pending, _) => println_or_end!("{id} waits for {to}'s next turn"),
         (DeliveryStatus::Success, Some(DeliveredVia::Read)) => {
-            println_or_end!("#{id} was read by #{to}")
+            println_or_end!("{id} was read by {to}")
         }
-        (DeliveryStatus::Success, _) => println_or_end!("#{id} was typed into #{to}"),
-        _ => anyhow::bail!(
-            "#{id} to #{to}: {}",
-            message.delivery.failure_words(&format!("#{to}"))
-        ),
+        (DeliveryStatus::Success, _) => println_or_end!("{id} was typed into {to}"),
+        _ => anyhow::bail!("{id} to {to}: {}", message.delivery.failure_words(&to)),
     }
     Ok(())
+}
+
+fn message_address(reference: &MessageRef, local: &str) -> String {
+    if reference.machine_id == local {
+        return format!("#{}", reference.message_id);
+    }
+    reference.exact_address()
 }
 
 /// Identifies a window by its logical ID and machine.
@@ -322,6 +437,7 @@ fn window_text(window: &WindowRef) -> String {
 /// Why the message could not be handed to this window.
 fn window_failure(failure: &WindowDeliveryFailure) -> String {
     let reason = match failure.reason.as_str() {
+        "machine_unavailable" => "machine is unreachable",
         "window_disconnected" => "window is disconnected",
         "not_watching" => "window has no active messages subscription",
         reason => reason,
@@ -333,15 +449,54 @@ fn window_failure(failure: &WindowDeliveryFailure) -> String {
     )
 }
 
+fn window_outcome_unknown(window: &WindowRef) -> String {
+    format!("Delivery outcome is unknown for {}", window_text(window))
+}
+
 /// Prints the messages waiting for the agent the connection speaks for, as its terminal would show
 /// them; reading them delivers them.
 pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
     // A page holds up to 100; the rest wait for the next read.
     let inbox = client.snapshot::<MessagesTopic>(MessagesWatchArgs::default())?;
+    let local = client.hello_result.machine_id.clone();
+    let remote = |id: Option<&str>| id.is_some_and(|id| id != local);
+    let has_remote_messages = inbox.messages.iter().any(|message| {
+        remote(message.from_machine_id.as_deref()) || remote(message.reply_to_machine_id.as_deref())
+    });
+    // The snapshot already delivered these messages. Fall back to exact IDs if the lookup fails.
+    let machines: Vec<_> =
+        if has_remote_messages && let Ok(listed) = client.call::<MachineList>(NoArgs {}) {
+            listed
+                .machines
+                .into_iter()
+                .map(|machine| MachineIdentity {
+                    machine_id: machine.machine_id,
+                    name: machine.name,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+    let selector = |id: Option<&str>| {
+        let id = id.filter(|id| *id != local)?;
+        Some(
+            machines
+                .iter()
+                .find(|machine| machine.machine_id == id)
+                .map(|machine| display_machine_selector(machine, &machines))
+                .unwrap_or_else(|| exact_machine_selector(id)),
+        )
+    };
     let shown: Vec<String> = inbox
         .messages
         .iter()
-        .map(facade_base::daemon::typed_text)
+        .map(|message| {
+            typed_text_with_machines(
+                message,
+                selector(message.from_machine_id.as_deref()).as_deref(),
+                selector(message.reply_to_machine_id.as_deref()).as_deref(),
+            )
+        })
         .collect();
     if !shown.is_empty() {
         println_or_end!("{}", shown.join("\n\n"));
@@ -352,7 +507,11 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
 /// Renames an agent and prints it with its new name.
 pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> anyhow::Result<()> {
     let renamed = client.call::<AgentRename>(RenameArgs { agent, name })?;
-    println_or_end!("#{} {}", renamed.agent_id, display_name(&renamed.name));
+    println_or_end!(
+        "{} {}",
+        record_address(&renamed, &client.hello_result.machine_id),
+        display_name(&renamed.name)
+    );
     Ok(())
 }
 
@@ -469,7 +628,7 @@ fn pid_of(agent: &AgentInfo) -> String {
 
 /// Prints an inspection one line a fact: the agent, its rule, its folder, its run's YOLO, its
 /// state, its Facade tools, its input, what was last said to it, and its session.
-fn print_inspection(inspected: &InspectResult) {
+fn print_inspection(inspected: &InspectResult, local_machine_id: &str) {
     let agent = &inspected.agent;
     let guest = if agent.guest { " guest" } else { "" };
     let mut process = agent.process.as_str().to_string();
@@ -477,8 +636,8 @@ fn print_inspection(inspected: &InspectResult) {
         let _ = write!(process, " ({})", ExitText(exit));
     }
     println_or_end!(
-        "#{} {}: {}{guest}, {process}",
-        agent.agent_id,
+        "{} {}: {}{guest}, {process}",
+        record_address(agent, local_machine_id),
         display_name(&agent.name),
         agent.cli
     );
@@ -615,6 +774,18 @@ mod tests {
             started(&["claude"]).unwrap(),
             (None, None, words(&["claude"]))
         );
+        let remote = start_words(words(&[
+            "--on=gpu",
+            "--cwd",
+            "C:\\Work Files",
+            "codex",
+            "--on",
+            "its own",
+        ]))
+        .unwrap();
+        assert_eq!(remote.machine.as_deref(), Some("gpu"));
+        assert_eq!(remote.cwd.as_deref(), Some("C:\\Work Files"));
+        assert_eq!(remote.command, words(&["codex", "--on", "its own"]));
         for (line, why) in [
             (&["--name", "x"][..], "specify a CLI program"),
             (&["--name"][..], "--name requires an agent name"),
@@ -622,6 +793,9 @@ mod tests {
                 &["--prompt"][..],
                 "--prompt requires the agent's first message",
             ),
+            (&["--on"][..], "--on requires a machine name or ID"),
+            (&["--cwd"][..], "--cwd requires a directory on the machine"),
+            (&["--cwd", "/work", "codex"][..], "--cwd requires --on"),
             (
                 &["--model", "opus", "claude"][..],
                 "--model is not an option of facade start",

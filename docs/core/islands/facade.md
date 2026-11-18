@@ -6,6 +6,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 - The program's command line: its commands, arguments, help text and exit codes.
 - How a command reaches the daemon: connecting, starting Facade when nothing responds, and taking over from an older build.
+- The foreground SSH sessions used to connect a machine and to authenticate a saved connection.
 - The person's terminal while a command shows an agent (see [attach](#attach)).
 - No files of its own. It never opens the database or the daemon's files. Hooks read a run's instructions and skill and write a run's session file (see [hooks](#hooks)).
 
@@ -26,7 +27,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 ## Interface
 
-**People and agents** use the commands: `start`, `stop`, `remove`, `list`, `attach`, `type`, `resume`, `inspect`, `send`, `messages`, `rename`, `screen`, `status` and `integration`. What each does is in [FEATURES.md](../FEATURES.md).
+**People and agents** use `start`, `stop`, `remove`, `list`, `attach`, `type`, `resume`, `inspect`, `send`, `messages`, `rename`, `screen`, `status`, `integration` and `machine list`. Machine management commands require a person. What each command does is in [FEATURES.md](../FEATURES.md).
 
 **CLIs** run `facade hook <event>` lines, which [rules](rules.md) writes into a run's settings and into an integration's entries. See [hooks](#hooks).
 
@@ -34,7 +35,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 **The services** run from the launcher `core/bin/facade` that [base](base.md) installs: `facade keeper` runs `facade_keeper::serve`, and `facade daemon` runs `facade_daemon::run`. A command starts the keeper with `facade keeper` through the launcher.
 
-**The daemon protocol** ([PROTOCOL.md](../../../core/protocol/PROTOCOL.md)): every command connects as a `terminal` client. It says `hello` with the agent it acts for and the CLI sessions its environment names. It calls `daemon.upgrade` to take over from an older build. The other operations are listed under each child island.
+**The daemon protocol** ([PROTOCOL.md](../../../core/protocol/PROTOCOL.md)) uses a `terminal` hello for ordinary commands, including the local authorization for machine connections. Ordinary hello includes the agent and CLI sessions named by the command's environment. The SSH receiver, `facade machine serve`, forwards the initiating daemon's `machine` hello and the frames that follow.
 
 **Exit codes:** 0 for success. 1 for a failure, with `facade: <error>` on standard error. 2 for a usage error, as clap reports it. A command that shows an agent exits with the agent's code, or 128 plus its signal, once the agent ends (see [attach](#attach)). A hook always exits 0.
 
@@ -60,6 +61,7 @@ flowchart LR
   run["main.rs run"] -->|"&mut DaemonClient"| commands
   run -->|"client, agent ID, reconnect"| attach
   run -->|"event, agent, connect"| hooks
+  run -->|"action, connect, serve socket"| machine
   run --> dc["daemon_client.rs"]
   commands -.->|"agent to show"| run
   attach -.->|"exit code"| run
@@ -70,6 +72,7 @@ What `run` does for each kind of command:
 - **start, resume:** `commands::start_words` checks the words first (start only). If standard input and output are both terminals, `attach::terminal_size` gives the first frame's size. Then `run` connects and calls `commands::start` or `commands::resume`. If one returns an agent, `run` passes the same connection and `reconnect` to `attach::attach`.
 - **attach:** connect, then `attach::attach(client, agent, &reconnect)`.
 - **messages:** `agent_of_terminal` finds the terminal's agent, or the command fails saying this is no agent's terminal. Then `run` connects as that agent and calls `commands::messages`.
+- **machine:** `machine::run` gets the ordinary connection function and the function that opens a socket for an SSH session. For `serve` the layer applies the home option before reaching the daemon.
 - **other commands:** connect, then the matching function in commands.
 - **hook:** `hooks::run(event, FACADE_AGENT, connect)`, where `connect` reaches a running daemon only, acting for `FACADE_AGENT`, and gives `None` after 2 seconds.
 - **keeper, daemon:** call the service; `daemon --detach` calls `daemon_client::detach`.
@@ -84,7 +87,8 @@ Shared with the children:
 
 `daemon_client.rs` reaches the daemon:
 
-- `reach` tries to connect every 25 ms until its deadline, which is 10 seconds for an initial connection. While nothing responds, it reads what a keeper it started has reported so far. A keeper that lost the lock to another is let go, and the attempt waits for the other keeper's daemon. A keeper that exits before it reports fails the attempt, with the last line of `keeper.log`, which says why. Facade starts a keeper only when nothing holds the daemon lock and no keeper runs, because a daemon holding the lock may be recovering. Starting one installs the running build, and points the launcher at it where the launcher names no build, one this build takes over from, or one without a version. Then it starts `facade keeper`.
+- `reach_daemon` tries to connect every 25 ms until its deadline, which is 10 seconds for an initial connection. While nothing responds, it reads what a keeper it started has reported so far. A keeper that lost the lock to another is let go, and the attempt waits for the other keeper's daemon. A keeper that exits before it reports fails the attempt, with the last line of `keeper.log`, which says why. Facade starts a keeper only when nothing holds the daemon lock and no keeper runs, because a daemon holding the lock may be recovering. Starting one installs the running build, and points the launcher at it where the launcher names no build, one this build takes over from, or one without a version. Then it starts `facade keeper`.
+- `reach` uses an ordinary `DaemonClient` hello. `machine_socket` opens the socket and leaves the machine hello to the SSH session.
 - `StartedKeeper` waits for the keeper's process on a thread however the attempt ends, so it never stays a zombie.
 - `attempt_as` checks the build after an ordinary hello. If `takes_over(ours, theirs)`, it sends `daemon.upgrade` with this program, its build and its protocol ranges. Then it waits up to base's `takeover_timeout` for its own build. If the old build answers an ordinary hello again, the command reports the failed takeover and goes on with that build.
 - `connect_or_start`, `agent_of_terminal` and `reconnect` send `FACADE_AGENT` and the CLI sessions. `connect_or_start_for` and `connect_running` send only the agent.
@@ -98,22 +102,43 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 - **Owns:** no lasting state. It owns the arguments each command sends and how it prints the result: aligned columns for `facade list`, one fact per line for `facade inspect`, or the protocol's JSON with `--json`. It also collects the environment that `agent.start`, `agent.resume` and the `integration.*` operations carry. Variables that are not UTF-8 are left out, and standard error names them.
 - **Keeps:**
   - It reaches the daemon only through the `DaemonClient` it is given.
-  - `facade start` takes its own options, `--name` and `--prompt`, only before the CLI's name. The CLI's name and every word after it belong to the CLI.
+  - `facade start` takes `--name`, `--prompt`, `--on` and `--cwd` before the CLI's name. The CLI's name and every word after it belong to the CLI. `--on` is a machine selector. `--cwd` with `--on` gives a directory on that machine. An omitted `--cwd` lets the daemon use the shell's directory for a local run or the remote login user's home for a remote run.
   - `agent.start` and `agent.send` carry a request ID. If a newer Facade cuts the call off when it takes over, the call is repeated, and the result says what was done.
-  - Without the person's terminal, `start` and `resume` print `#aN pid N` and return no agent. With it, they print on standard error how to detach and reconnect, and return the agent to show. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
+  - Without the person's terminal, `start` and `resume` print the agent's address and PID. With it, they print on standard error how to detach and reconnect, and return the address to show. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
   - `resume` first warns when the earlier CLI may still be running, because its terminal closed while no Facade service held it.
-  - `send` to `#human` uses the window receipt to report success, listing which subscriptions took the message and why the other windows could not take it. If no window took the message or the receipt is missing, it reports an error on standard error and exits 1. A repeated send that is still pending reports an unknown outcome. A message that waits for a guest's next turn succeeds.
+  - `send` to `#human` reports which window subscriptions took the message, which could not take it and which have unknown outcomes. Success requires at least one confirmed delivery. On failure it reports the message address when the daemon has kept the message. A message that waits for a guest's next turn succeeds.
 - **Never does:** connect to or start the daemon; show an agent or change terminal modes; read hook input; work out which agent a terminal belongs to.
 - **Interface:** only `run` calls it. Every call blocks until the daemon responds.
   - `start_words(Vec<String>) -> Result<StartWords>`, then `start(&mut DaemonClient, StartWords, Option<(u16, u16)>) -> Result<Option<String>>`. `resume(&mut DaemonClient, agent, Option<(u16, u16)>)` returns the same.
-  - `list` and `inspect` take a `Format` (`Text` or `Json`). Their JSON carries the protocol's `AgentInfo` with its running machine, window memberships and optional location source. `screen`, `type_input`, `send`, `messages`, `rename`, `stop` and `remove` take the command's words.
+  - `list` and `inspect` take a `Format` (`Text` or `Json`). `list --json` returns the agent records and the outcome of each machine's query. `inspect --json` returns the inspection with its agent record. Commands that target an agent accept machine-qualified addresses. `send --reply-to` also accepts a machine-qualified message address.
   - `integration(&mut DaemonClient, IntegrationAction)`, where `IntegrationAction` is `Add { cli }`, `Remove { cli }` or `List`.
   - `status(&DaemonClient)` prints the `hello` result: the build, the daemon's pid, the agent count and the keeper.
-  - Operations it calls: `agent.start`, `agent.resume`, `agent.inspect`, `agent.screen`, `agent.type`, `agent.send`, `agent.rename`, `agent.stop`, `agent.remove`, `integration.add`, `integration.remove` and `integration.list`. Topics it reads one snapshot of: `agents` and `messages`.
+  - Operations it calls include `agent.list`, `agent.start`, `agent.resume`, `agent.inspect`, `agent.screen`, `agent.type`, `agent.send`, `agent.rename`, `agent.stop`, `agent.remove` and the integrations. It reads a snapshot of `messages`.
+
+### machine
+
+`src/machine.rs` presents the machine table and runs temporary connections and the foreground part of saved
+connections. It gets the daemon's permission through `machine.connect` before starting SSH. Its two directions carry
+machine frames over the same connection. The local daemon's handshake result supplies the machine identity, the
+first-connection trust notice and Linux's SSH logout information.
+
+- `machine connect` keeps its session open in the foreground. `machine add` holds the foreground session while a
+  separate ordinary call to `machine.add` waits for the daemon to verify its saved session to the same machine ID.
+  The foreground relay flushes buffered bytes between the daemon and SSH's pipes as soon as it reads them.
+- `machine list` shows machines, reachability, routes and connections. `machine remove` removes a locally saved
+  connection and prints the remaining reachability. `machine rename` requests a name change on the selected machine.
+  Saved connections that need SSH interaction show a repair command or list its arguments when an argument
+  needs shell-specific escaping.
+- `machine serve` validates the initiating daemon's machine hello before opening the local socket in the selected
+  home. It forwards the hello and reply byte for byte. After the daemon accepts the hello, it copies the remaining
+  session traffic through the same buffered readers, flushing each block as it arrives. A transfer error reports
+  its direction and kind on standard error.
+- When Linux logind is configured to clean up this user's SSH session processes, the connection output explains
+  the applicable policy and points to `KillExcludeUsers`.
 
 ### attach
 
-`src/attach.rs`: shows one agent's terminal in the person's terminal and sends the person's keys and size changes to it. It reconnects by agent ID until the person detaches or the agent ends.
+`src/attach.rs`: shows one agent's terminal in the person's terminal and sends the person's keys and size changes to it. It reconnects by exact agent address until the person detaches or the agent ends.
 
 - **Owns:**
   - The person's console while attached: raw mode and the console's VT modes (`facade_base::console::VtModes`), whether the agent's output switched to the alternate screen, and a lock that every write and the restoration take. These are statics that no other code touches.
@@ -124,17 +149,19 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
   - Every end restores the person's terminal exactly once, with the note after the restoration. The ends are a detach, the agent ending, its removal, a termination signal and an error. Once the terminal is restored, no more of the agent's output is written.
   - Ctrl-] detaches, in plain input, in the kitty encoding, and as a win32-input-mode key-down record of the character 0x1D (`CSI <vk>;<sc>;29;1;<cs>;<rc>_`). Keys before it in the same read are still sent, and it waits up to 1 second for them. Signals do not wait.
   - The agent's output goes to the person's console unchanged. On Windows the agent's console host turns win32-input-mode on and off; the person's console follows it, so keys arrive in either form, and go to the agent as they come. The restoration turns win32-input-mode off.
-  - While disconnected, at most 1 MiB of keys waits. Keys that do not fit are dropped, and the final note counts them with the keys still waiting.
+  - While disconnected from a local agent, at most 1 MiB of keys waits. When a remote watch ends, attach closes its socket and pauses input. The next snapshot is drawn before sending new input. The final note counts discarded keys.
   - Keys handed to a connection are never sent again, even when the write fails.
   - On a takeover, the keys handed to the old connection are written before its response to `closing`.
-  - It reconnects by the agent ID of the first snapshot, never by the name the person typed. Only the first watch includes scrollback.
-  - A connect timeout, or a failed resize or watch, is retried every 500 ms for as long as the attachment lasts. A permanent failure ends it ("could not reconnect to Facade; see <logs>"), and so does `not_found`, as a removed agent. Detaching cancels a reconnect in progress, `hello` included.
+  - It reconnects using the machine and agent IDs from the first snapshot. Only the first watch includes scrollback.
+  - A connect timeout or temporary screen failure is retried every 500 ms. When a remote machine is unavailable, attach stays paused and retries its screen watch directly. It queues any needed resize after drawing the new snapshot. For a local agent, a reconnect sizes the agent before opening the watch.
+  - A `removed` change or `not_found` from the running machine ends the attachment as removed. A permanent daemon connection failure ends it and points to the Facade logs.
+  - During reconnect, `upgrading` returns to the attach retry loop. Each attempt registers its socket before `hello` so Ctrl-] can close it during a pending hello or screen watch. Ctrl-] also cancels the retry delay.
   - The exit code is 0 after a detach, the agent's own code or 128 plus its signal after it ends, and 1 otherwise.
 - **Never does:** connect to the daemon on its own (it only uses the `reconnect` it is given); interpret the CLI's output beyond following the alternate screen.
 - **Interface:** only `run` calls it.
   - `terminal_size() -> Option<(u16, u16)>`: the person's terminal size, when both sides are nonzero.
   - `attach(DaemonClient, agent: &str, reconnect: &Reconnect) -> Result<i32>`: blocks until the attachment ends and returns the command's exit code.
-  - Operations it calls: `agent.resize` before each watch of the `screen` topic; while attached, `agent.type` and `agent.resize` as notifications.
+  - It opens a watch of the `screen` topic and sizes the agent to the viewer's terminal. While attached it sends `agent.type` and `agent.resize` as notifications.
 
 ### hooks
 
@@ -159,4 +186,5 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 2. `daemon_client.rs`, `attempt_as`, `reach` and `follow_takeover`: connecting, starting Facade, taking over.
 3. `commands.rs`, `start`: one command from words to output.
 4. `attach.rs`, `attach`, then `follow_agent`: showing an agent and reconnecting.
-5. `hooks.rs`, `run`, then `report_guest`: the run hooks and the guest hooks.
+5. `machine.rs`, `run`, then `foreground`: machine commands and SSH.
+6. `hooks.rs`, `run`, then `report_guest`: the run hooks and the guest hooks.
