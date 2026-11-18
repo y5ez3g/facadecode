@@ -1,0 +1,13 @@
+Read the inbox of the agent in this terminal
+
+Usage: facade messages
+
+Read up to 100 messages waiting for the agent of this terminal and mark them as delivered. Run this
+command in an agent's terminal.
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Read waiting messages in an agent's terminal
+  facade messages

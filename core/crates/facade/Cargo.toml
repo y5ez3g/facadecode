@@ -17,6 +17,7 @@ facade-keeper.workspace = true
 facade-daemon.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 crossterm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

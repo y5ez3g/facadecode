@@ -54,12 +54,12 @@ fn interactive_start_propagates_process_exit_status() {
     let home = TestHome::new("exitcode");
     // An end by a signal is Unix's alone.
     #[cfg_attr(windows, allow(unused_mut))]
-    let mut ends = vec![("sleep 1; exit 3", 3, "ended with code 3")];
+    let mut ends = vec![("sleep 1; exit 3", 3, "a1 exited with code 3.")];
     #[cfg(unix)]
     ends.push((
         "sleep 1; kill -TERM $$",
         128 + libc::SIGTERM,
-        "ended with SIGTERM",
+        "a2 was ended by SIGTERM.",
     ));
     for (script, code, said) in ends {
         let mut term = TestTerminal::spawn(
@@ -87,12 +87,19 @@ fn commands_start_list_read_and_stop_agents() {
     let home = TestHome::new("trial");
     let agent = home.start_fake("w1");
     assert_eq!(agent.id, "a1");
-    let line = home.list_line("w1").expect("w1 is listed");
+    let table = home.list_table();
+    assert_eq!(
+        table.header,
+        ["ID", "NAME", "CLI", "STATE", "CREATED", "FOLDER"],
+        "{table:?}"
+    );
+    let row = table.row("NAME", "w1").expect("w1 is listed");
     assert!(
-        line.starts_with("#a1")
-            && line.contains(" starting ")
-            && line.contains(&format!("pid {}", agent.pid)),
-        "{line}"
+        table.cell(row, "ID") == "a1"
+            && table.cell(row, "STATE") == "starting"
+            && table.cell(row, "CREATED").ends_with(" ago")
+            && table.cell(row, "FOLDER") == home.project.display().to_string(),
+        "{table:?}"
     );
     assert!(
         home.screen("w1").contains("fakecli (Facade test CLI)"),
@@ -111,11 +118,10 @@ fn commands_start_list_read_and_stop_agents() {
         agent.pid
     );
     assert!(
-        wait_until(secs(5), || home
-            .list_line("w1")
-            .is_some_and(|line| line.contains(" ended: stopped ("))),
+        wait_until(secs(5), || home.list_state("w1").as_deref()
+            == Some("stopped")),
         "{:?}",
-        home.list_line("w1")
+        home.list_table()
     );
     assert!(home.agent_from_list_json("w2").expect("w2 is listed")["process"] == "running");
 }
@@ -129,26 +135,41 @@ fn list_and_inspect_show_names_on_one_line_in_aligned_columns() {
     home.start_fake("w2");
     home.run_facade_ok(&["stop", "w2"]);
     assert!(
-        wait_until(secs(10), || home
-            .list_line("w2")
-            .is_some_and(|line| line.contains(" ended: stopped ("))),
+        wait_until(secs(10), || home.list_state("w2").as_deref()
+            == Some("stopped")),
         "{:?}",
-        home.list_line("w2")
+        home.list_table()
     );
     let list = home.run_facade_ok(&["list"]);
-    assert!(!list.contains('\u{1b}'), "{list}");
-    let rows: Vec<&str> = list.lines().filter(|line| line.starts_with("#a")).collect();
+    assert!(!list.contains('\u{1b}') && !list.contains('\r'), "{list:?}");
+    let lines: Vec<&str> = list.lines().collect();
+    assert_eq!(lines.len(), 3, "a header and one line per agent: {list}");
+    let table = Table::parse(&list);
+    let name = table.cell(&table.rows[0], "NAME");
     assert!(
-        rows.len() == 2 && rows[0].starts_with("#a1 evil [2J name "),
+        table.cell(&table.rows[0], "ID") == "a1"
+            && name.starts_with("evil [2J")
+            && name.ends_with("name")
+            && table.cell(&table.rows[1], "STATE") == "stopped",
         "{list}"
     );
-    let pid_at: Vec<Option<usize>> = rows.iter().map(|row| row.find(" pid ")).collect();
+    // Each column begins at the same place on every line: three spaces, then the cell.
+    let state_at = lines[0].find("STATE").unwrap();
     assert!(
-        pid_at[0].is_some() && pid_at[0] == pid_at[1],
-        "every row's pid column starts at the same place: {list}"
+        lines
+            .iter()
+            .all(|line| line[..state_at].ends_with("   ") && !line[state_at..].starts_with(' ')),
+        "every line's STATE column starts at the same place: {list}"
     );
     let inspected = home.run_facade_ok(&["inspect", "a1"]);
-    assert!(inspected.starts_with("#a1 evil [2J name: "), "{inspected}");
+    let named = inspected
+        .lines()
+        .find(|line| line.starts_with("Name:"))
+        .unwrap_or_default();
+    assert!(
+        !inspected.contains('\u{1b}') && named.contains("evil [2J") && named.ends_with("name"),
+        "{inspected}"
+    );
 }
 
 /// A command whose reader closes before it prints, as `facade list | head -0` does, ends quietly.
@@ -190,7 +211,7 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
         "its own",
         "-p",
     ]);
-    assert!(named.starts_with("#a1 "), "{named}");
+    assert_eq!(named, "a1\n");
     assert!(
         wait_until(secs(10), || home
             .screen("echoer")
@@ -201,10 +222,8 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
     // Unnamed agents use unused suggested names while available.
     home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
     home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
-    let listed: Vec<String> = stdout(&home.run_facade(&["list"]))
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
-        .collect();
+    let table = home.list_table();
+    let listed = table.column("NAME");
     assert_eq!(listed.len(), 3, "{listed:?}");
     assert!(
         listed[1] != listed[2]
@@ -228,7 +247,9 @@ fn commands_resolve_agent_ids_numbers_and_names() {
     }
     let none = home.run_facade(&["screen", "a9"]);
     assert!(
-        !none.status.success() && stderr(&none).contains("no agent a9"),
+        none.status.code() == Some(1)
+            && stderr(&none)
+                == "error: no agent 'a9'\n  tip: run 'facade list' to see your agents\n",
         "{}",
         stderr(&none)
     );

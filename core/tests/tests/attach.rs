@@ -30,7 +30,7 @@ fn attach_restores_bracketed_paste_and_cooked_mode_on_signal() {
         assert!(!status.success(), "{name}: {status:?}");
         assert!(
             term.wait_for(secs(5), |t| t
-                .contains(&format!("[facade: attachment ended by {name}]"))),
+                .contains(&format!("Attachment ended by {name}."))),
             "{name}: {}",
             term.text()
         );
@@ -58,13 +58,18 @@ fn attach_restores_main_screen_on_detach_or_signal() {
         "printf '\\033[?1049hALT-READY'; sleep 60",
     );
     assert!(wait_for_screen_text(&home, &agent, "ALT-READY"));
+    let detached = format!("Detached from {agent}. Run 'facade attach {agent}' to return.");
     // Termination signals reach attach on Unix alone.
     #[cfg_attr(windows, allow(unused_mut))]
-    let mut ends = vec![("ctrl-]", "detached", 0)];
+    let mut ends = vec![("ctrl-]", detached.as_str(), 0)];
     #[cfg(unix)]
     ends.extend([
-        ("SIGTERM", "ended by SIGTERM", 128 + libc::SIGTERM),
-        ("SIGHUP", "ended by SIGHUP", 128 + libc::SIGHUP),
+        (
+            "SIGTERM",
+            "Attachment ended by SIGTERM.",
+            128 + libc::SIGTERM,
+        ),
+        ("SIGHUP", "Attachment ended by SIGHUP.", 128 + libc::SIGHUP),
     ]);
     for (end, note, code) in ends {
         let mut term = TestTerminal::spawn(
@@ -151,7 +156,7 @@ fn nothing_of_the_agent_follows_the_note_of_a_signal() {
     // attachment wrote.
     assert!(
         term.wait_for(secs(5), |text| text
-            .contains("[facade: attachment ended by SIGTERM]")),
+            .contains("Attachment ended by SIGTERM.")),
         "{}",
         term.text()
     );
@@ -167,7 +172,7 @@ fn nothing_of_the_agent_follows_the_note_of_a_signal() {
         "the agent's output turned bracketed paste back on; last row {last:?}"
     );
     assert!(
-        last.contains("[facade: attachment ended by SIGTERM]"),
+        last.contains("Attachment ended by SIGTERM."),
         "the agent's output came after the note: {last:?}"
     );
 }
@@ -214,7 +219,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
     // attachment wrote.
     assert!(
         term.wait_for(secs(5), |text| text
-            .contains("[facade: attachment ended by SIGTERM]")),
+            .contains("Attachment ended by SIGTERM.")),
         "{}",
         term.text()
     );
@@ -226,8 +231,8 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
         .cloned()
         .unwrap_or_default();
     assert!(
-        last.contains("[facade: attachment ended by SIGTERM]")
-            && !term.text().contains("connection lost"),
+        last.contains("Attachment ended by SIGTERM.")
+            && !term.text().contains("Reconnecting to Facade"),
         "{}",
         term.text()
     );
@@ -269,7 +274,9 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
             .is_some_and(|status| status.success())
     );
     assert!(
-        term.wait_for(secs(2), |text| text.contains("detached")),
+        term.wait_for(secs(2), |text| text.contains(&format!(
+            "Detached from {agent}. Run 'facade attach {agent}' to return."
+        ))),
         "{}",
         term.text()
     );
@@ -412,12 +419,12 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         Some(1)
     );
     assert!(
-        term.wait_for_output(secs(2), "could not reconnect to Facade"),
+        term.wait_for_output(secs(2), "error: could not reconnect to Facade"),
         "{}",
         term.text_with_scrollback()
     );
     assert!(
-        term.wait_for_output(secs(2), "9 typed bytes were not sent"),
+        term.wait_for_output(secs(2), "warning: 9 bytes you typed were not sent"),
         "{}",
         term.text_with_scrollback()
     );

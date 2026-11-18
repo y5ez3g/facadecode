@@ -88,15 +88,13 @@ fn a_turn_is_working_then_just_done_until_a_terminal_shows_the_agent() {
         "fix the build",
         "text without Enter says nothing"
     );
-    let listed = home.run_facade_ok(&["list"]);
-    let line = home.list_line("w1").unwrap();
+    assert_eq!(home.list_state("w1").as_deref(), Some("turn finished"));
+    let inspected = home.run_facade_ok(&["inspect", "w1"]);
     assert!(
-        line.split_whitespace().nth(3) == Some("just_done"),
-        "{listed}"
-    );
-    assert!(
-        listed.contains("\n       you said: fix the build\n"),
-        "{listed}"
+        inspected.lines().any(|line| line.starts_with("Last input:")
+            && line.contains("human, ")
+            && line.ends_with(": fix the build")),
+        "{inspected}"
     );
     let _term = attach(&home, "w1");
     reaches(&home, "w1", "idle");
@@ -124,16 +122,20 @@ fn waiting_for_you_says_what_for_an_error_says_the_cli_s_words_and_a_report_take
         waiting["state_detail"],
         json!({ "kind": "permission", "text": "Run npm test?" })
     );
-    assert!(
-        home.list_line("w1")
-            .unwrap()
-            .contains(" waiting_for_you: permission "),
-        "{:?}",
-        home.list_line("w1")
+    assert_eq!(
+        home.list_state("w1").as_deref(),
+        Some("waiting for you: permission")
     );
+    let inspected = home.run_facade_ok(&["inspect", "w1"]);
+    let state = inspected
+        .split_once("\nState:")
+        .map(|(_, rest)| rest.lines().take(2).collect::<Vec<_>>())
+        .unwrap_or_default();
     assert!(
-        home.run_facade_ok(&["list"])
-            .contains("\n       Run npm test?\n")
+        state.len() == 2
+            && state[0].trim() == "waiting for you: permission"
+            && state[1].trim() == "Run npm test?",
+        "{inspected}"
     );
     submit(&home, "w1", "/fake error Out of credits");
     let error = reaches(&home, "w1", "error");
@@ -143,13 +145,15 @@ fn waiting_for_you_says_what_for_an_error_says_the_cli_s_words_and_a_report_take
     assert_eq!(unknown["state_detail"], json!({ "reason": "taken_back" }));
     let inspected = home.run_facade_ok(&["inspect", "w1"]);
     assert!(
-        inspected.contains("\nState: unknown; its CLI took back what it reported\n"),
+        inspected
+            .lines()
+            .any(|line| line.starts_with("State:") && line[6..].trim_start().starts_with("unknown")),
         "{inspected}"
     );
     assert!(
-        inspected
-            .lines()
-            .any(|line| line.starts_with("Said by you at ") && line.ends_with(": /fake clear")),
+        inspected.lines().any(|line| line.starts_with("Last input:")
+            && line.contains("human, ")
+            && line.ends_with(": /fake clear")),
         "{inspected}"
     );
 }
@@ -171,12 +175,13 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
         let ended = reaches(&home, name, "ended");
         assert_eq!(ended["state_detail"], json!({ "how": how }), "{name}");
     }
+    let table = home.list_table();
     assert!(
-        home.list_line("crashed")
-            .unwrap()
-            .contains(" ended: crashed (code 3) "),
-        "{:?}",
-        home.list_line("crashed")
+        ["normal", "crashed", "stopped"]
+            .iter()
+            .map(|name| table.cell(table.row("NAME", name).unwrap(), "STATE"))
+            .eq(["exited: code 0", "exited: code 3", "stopped"]),
+        "{table:?}"
     );
 }
 
@@ -584,9 +589,12 @@ fn what_an_agent_types_or_sends_is_said_by_that_agent() {
     );
     as_ada(&["send", "bob", "run the tests"]);
     said(&home, "bob", "run the tests");
+    let inspected = home.run_facade_ok(&["inspect", "bob"]);
     assert!(
-        home.run_facade_ok(&["list"])
-            .contains(&format!("\n       @ada #{} said: run the tests\n", ada.id))
+        inspected.lines().any(|line| line.starts_with("Last input:")
+            && line.contains(&format!(" {}, ", ada.id))
+            && line.ends_with(": run the tests")),
+        "{inspected}"
     );
     home.run_facade_ok(&["send", "bob", "hello"]);
     let sent = said(&home, "bob", "hello");

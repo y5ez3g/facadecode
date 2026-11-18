@@ -1,0 +1,28 @@
+Type text or press keys in an agent's terminal
+
+Usage: facade type <AGENT> <TEXT> [--enter]
+       facade type <AGENT> --key <KEY>...
+
+Type text into the agent's terminal, or press keys to answer its menus. Add '--enter' to press Enter
+after the text. To give the agent a task or ask it a question, use 'facade send'.
+
+Arguments:
+  <AGENT>  Agent ID or name
+  <TEXT>   Text to type; put '--' before text that starts with '-'
+
+Options:
+      --enter      Press Enter after the text
+  -k, --key <KEY>  Press a key; repeat for more: Enter, Esc, Tab, Shift+Tab, Backspace, Delete, Up,
+                   Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z or one
+                   character
+  -h, --help       Print help
+
+Examples:
+  # Type text and press Enter
+  facade type a3 "run the tests" --enter
+
+  # Press Esc
+  facade type a3 --key Esc
+
+  # Pick the second item of a menu
+  facade type a3 -k Down -k Enter

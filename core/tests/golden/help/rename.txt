@@ -1,0 +1,19 @@
+Rename an agent
+
+Usage: facade rename <AGENT> <NAME>
+
+Give the agent a new name, or pass a space in quotes to let Facade choose one.
+
+Arguments:
+  <AGENT>  Agent ID or name
+  <NAME>   New name, or " " for one chosen by Facade
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Rename agent a3 to reviewer
+  facade rename a3 reviewer
+
+  # Let Facade choose a new name for agent a3
+  facade rename a3 " "
