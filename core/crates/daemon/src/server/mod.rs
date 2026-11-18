@@ -10,6 +10,7 @@ mod relay;
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use facade_base::daemon::{HelloParams, HelloResult, methods};
@@ -29,6 +30,12 @@ pub(crate) struct Client {
     pub(crate) window: Option<WindowBinding>,
     /// The agent the client acts for, by ID: the one its hello named, or the one its sessions name.
     pub(crate) agent: Option<String>,
+}
+
+/// An ID shared by local and forwarded watches on this daemon.
+pub(crate) fn next_viewer() -> u64 {
+    static NEXT_VIEWER: AtomicU64 = AtomicU64::new(1);
+    NEXT_VIEWER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A watch the service started: its snapshot, then its changes. The watch ends when the sender of

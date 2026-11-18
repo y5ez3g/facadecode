@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::net::Shutdown;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,9 +34,6 @@ const MAX_CALLS_IN_FLIGHT: usize = 16;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a client has to answer `closing`; one that does not, such as an older one, is cut off.
 const CLOSING_ANSWERED_WITHIN: Duration = Duration::from_millis(200);
-
-/// Screen viewers, numbered across all connections.
-static NEXT_VIEWER: AtomicU64 = AtomicU64::new(1);
 
 pub(super) type Reader = BufReader<ServerReader>;
 
@@ -364,7 +361,7 @@ impl<S: Service> Connection<S> {
         if let Some(refused) = self.service.draining() {
             return Err(refused);
         }
-        let viewer = NEXT_VIEWER.fetch_add(1, Ordering::Relaxed);
+        let viewer = super::next_viewer();
         let started = self.service.watch(&client, &topic, args, viewer).await?;
         self.last_watch += 1;
         let number = self.last_watch;
