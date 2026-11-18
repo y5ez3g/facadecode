@@ -8,21 +8,34 @@ on:
       - 'docs/extension/**'
       - '.github/workflows/extension-check.yml'
   workflow_dispatch:
+    inputs:
+      sign:
+        description: Sign the Windows packages' programs, as a release does
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       ref:
         description: The tag or commit to build and test
         required: true
         type: string
+      sign:
+        description: Sign the Windows packages' programs
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  # For azure/login alone, which signs in to Azure only from the extension-signing environment
+  id-token: write
 
 jobs:
   verify:
     name: Extension on ${{ matrix.target }}, ${{ matrix.engine }} engine
     # Every target runs the editor journeys on the old engine (`facade.rustEngine` off) and runs them
     # again on the Rust engine in a job of its own, which builds and tests nothing else.
+    # A signing run's Windows packages are signed (ARCHITECTURE-4.3) in the environment Azure trusts with the signing identity.
+    environment: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.engine == 'old' && 'extension-signing' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +56,7 @@ jobs:
     timeout-minutes: 45
     env:
       FACADE_PACKAGE_TARGET: ${{ matrix.target }}
+      FACADE_SIGN: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.engine == 'old' && '--sign' || '' }}
       CARGO_INCREMENTAL: '0'
     defaults:
       run:
@@ -90,7 +104,29 @@ jobs:
         if: matrix.engine == 'old'
       - run: python ../docs/extension/audit/check_spec.py
         if: matrix.engine == 'old'
-      - run: npm run package -- --target "$FACADE_PACKAGE_TARGET"
+      # Signing: the Artifact Signing client, made for x64 alone, on an x64 .NET 8 - emulated on Arm - and Azure's sign-in
+      - uses: actions/setup-dotnet@v5
+        if: env.FACADE_SIGN
+        with:
+          dotnet-version: 8.0.x
+          architecture: x64
+      - name: Artifact Signing client
+        if: env.FACADE_SIGN
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\artifact-signing"
+          Invoke-WebRequest https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/1.0.151/microsoft.artifactsigning.client.1.0.151.nupkg -OutFile "$dir.zip"
+          if ((Get-FileHash "$dir.zip" -Algorithm SHA256).Hash -ne '35375A4BC4E1102DA729FC3D8D9925F774C3BAAE6B8B7FF6398D948CA9AB0D8A') { throw 'The Artifact Signing client is not the one this workflow names.' }
+          Expand-Archive "$dir.zip" $dir
+          "ARTIFACT_SIGNING_DLIB=$dir\bin\x64\Azure.CodeSigning.Dlib.dll" >> $env:GITHUB_ENV
+      # The identity's one role is on the certificate profile: it signs, and needs no subscription
+      - uses: azure/login@v2
+        if: env.FACADE_SIGN
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - run: npm run package -- --target "$FACADE_PACKAGE_TARGET" $FACADE_SIGN
         if: matrix.engine == 'old'
       - run: npm run test:package
         if: matrix.engine == 'old'
