@@ -1,7 +1,7 @@
 //! The keeper and the daemon, as services of a Facade home.
 //!
-//! **The lock.** Before a service opens its store or sockets, it checks that the home is private
-//! and takes its lock, `core/keeper.lock` or `core/daemon.lock`, until it exits. It writes who it
+//! **The lock.** Before a service opens its store or sockets, it checks that the home is this
+//! user's and takes its lock, `core/keeper.lock` or `core/daemon.lock`, until it exits. It writes who it
 //! is, `{"pid":…,"birth":"…"}`, into the lock file, which is never replaced; that record is how
 //! the other service, and its clients, know it. A process that cannot take the lock leaves the
 //! holder's record, store and sockets as they are.
@@ -92,8 +92,10 @@ impl Service {
 }
 
 /// Makes the home and its `core/` and `core/logs/` where they are missing, checks that they are
-/// private before anything in them is trusted, and returns `core/`. The person may choose the home
-/// through a symbolic link: what it leads to is checked.
+/// this user's before anything in them is trusted, makes `core/` and `core/logs/` this user's
+/// alone, and returns `core/`. The home's own mode is the person's to choose: a home its group may
+/// write, as a umask of 002 makes it, is used as it is. The person may choose the home through a
+/// symbolic link: what it leads to is checked.
 #[cfg(unix)]
 pub fn create_private_home() -> anyhow::Result<PathBuf> {
     let home = crate::paths::facade_home()?;
@@ -101,14 +103,14 @@ pub fn create_private_home() -> anyhow::Result<PathBuf> {
         .recursive(true)
         .mode(0o700)
         .create(&home)?;
-    refuse_unless_private(&home.canonicalize()?)?;
+    refuse_unless_ours(&home.canonicalize()?)?;
     let core = home.join("core");
     make_private_dir(&core)?;
     make_private_dir(&core.join("logs"))?;
     Ok(core)
 }
 
-/// Makes `dir` where it is missing, checks it is private, and makes it this user's alone.
+/// Makes `dir` where it is missing, checks it is this user's, and makes it this user's alone.
 #[cfg(unix)]
 fn make_private_dir(dir: &Path) -> anyhow::Result<()> {
     if let Err(err) = DirBuilder::new().mode(0o700).create(dir)
@@ -116,22 +118,19 @@ fn make_private_dir(dir: &Path) -> anyhow::Result<()> {
     {
         return Err(err.into());
     }
-    refuse_unless_private(dir)?;
+    refuse_unless_ours(dir)?;
     std::fs::set_permissions(dir, Permissions::from_mode(0o700))?;
     Ok(())
 }
 
-/// Refuses `dir` unless it is a folder of this user's that neither its group nor others may write.
+/// Refuses `dir` unless it is a folder of this user's.
 #[cfg(unix)]
-fn refuse_unless_private(dir: &Path) -> anyhow::Result<()> {
+fn refuse_unless_ours(dir: &Path) -> anyhow::Result<()> {
     let meta = std::fs::symlink_metadata(dir)?;
-    let dir = dir.display();
     if !meta.is_dir() || meta.uid() != this_user() {
-        anyhow::bail!("cannot use {dir}: it is not a directory owned by this user");
-    }
-    if meta.mode() & 0o022 != 0 {
         anyhow::bail!(
-            "cannot use {dir}: it is writable by its group or others; run chmod go-w on that path"
+            "cannot use {}: it is not a directory owned by this user",
+            dir.display()
         );
     }
     Ok(())

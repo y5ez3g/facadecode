@@ -219,8 +219,9 @@ What Facade asks of the operating system. `core/crates/base/src/platform/`.
   `FORK_LOCK` elsewhere. A process is known by its ID and birth, never its ID alone, and a group
   is signalled only while a member shows it is the same group. The socket folder is this user's
   alone (0700), and on Windows each pipe lets in its owner alone and a client checks the server's
-  user. On Unix the home, `core/` and `core/logs/` must be this user's and writable by no one
-  else, or a service refuses to start in them; on Windows they inherit their folders' access. A run is only ever given a
+  user. On Unix the home, `core/` and `core/logs/` must be this user's, or a service refuses to
+  start in them; `core/` and `core/logs/` are made this user's alone, and the home keeps the mode
+  the person gave it; on Windows they inherit their folders' access. A run is only ever given a
   launcher's path, never a build's program, so its next hook or MCP server is the current build's.
   Installed programs and Windows launchers are refreshed when their bytes differ, even with the
   same build ID.

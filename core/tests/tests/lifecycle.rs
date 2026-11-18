@@ -258,30 +258,25 @@ fn detach_reports_a_living_worker_still_recovering_as_starting() {
 
 #[cfg(unix)]
 #[test]
-fn a_writable_home_is_refused_and_a_lock_keeps_its_inode_when_made_private() {
+fn a_writable_home_is_used_as_it_is_and_a_lock_keeps_its_inode_when_made_private() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let home = TestHome::new("privatehome");
+    let home = TestHome::new("writablehome");
     std::fs::set_permissions(&home.path, std::fs::Permissions::from_mode(0o777)).unwrap();
-    let refused = home.run_facade(&["list"]);
-    assert!(
-        !refused.status.success()
-            && stderr(&refused).contains("writable by its group or others; run chmod go-w")
-            && stderr(&refused).contains(&home.path.display().to_string()),
-        "{}",
-        stderr(&refused)
-    );
-    assert_eq!(
-        std::fs::metadata(&home.path).unwrap().mode() & 0o777,
-        0o777,
-        "the home is not silently changed"
-    );
-    std::fs::set_permissions(&home.path, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::create_dir(home.path.join("core")).unwrap();
+    std::fs::set_permissions(
+        home.path.join("core"),
+        std::fs::Permissions::from_mode(0o775),
+    )
+    .unwrap();
     let lock = home.path.join("core/daemon.lock");
     std::fs::write(&lock, "").unwrap();
     std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o666)).unwrap();
     let inode = std::fs::metadata(&lock).unwrap().ino();
     home.run_facade_ok(&["list"]);
+    let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().mode() & 0o777;
+    assert_eq!(mode(&home.path), 0o777, "the home is not changed");
+    assert_eq!(mode(&home.path.join("core")), 0o700);
+    assert_eq!(mode(&home.path.join("core/logs")), 0o700);
     let meta = std::fs::metadata(&lock).unwrap();
     assert_eq!((meta.ino(), meta.mode() & 0o777), (inode, 0o600));
 }
