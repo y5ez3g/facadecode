@@ -28,7 +28,7 @@ fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
         .output()
         .unwrap();
     assert!(started.status.success(), "{}", stderr(&started));
-    let first = started_agent(&stdout(&started));
+    let first = home.started_agent(&stdout(&started));
     assert!(
         records_session(&home, "codex", Some(FIRST)),
         "Codex's PowerShell SessionStart hook did not report its session: {}",
@@ -44,7 +44,7 @@ fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
         .output()
         .unwrap();
     assert!(resumed.status.success(), "{}", stderr(&resumed));
-    let second = started_agent(&stdout(&resumed));
+    let second = home.started_agent(&stdout(&resumed));
     assert_eq!(second.id, first.id);
     assert_ne!(second.pid, first.pid);
     let resumed_session = session_file(&home, &second.id);
@@ -79,7 +79,7 @@ fn reports_session_through_cmd_quoted(cli: &str) {
         .output()
         .unwrap();
     assert!(started.status.success(), "{}", stderr(&started));
-    let agent = started_agent(&stdout(&started));
+    let agent = home.started_agent(&stdout(&started));
     assert!(
         records_session(&home, cli, Some(FIRST)),
         "{cli}'s command did not report its session: {}",
@@ -517,7 +517,7 @@ fn a_resumed_agent_keeps_its_id_name_record_and_screen_and_continues_its_session
         stdout(&resumed),
         stderr(&resumed)
     );
-    let second = started_agent(&stdout(&resumed));
+    let second = home.started_agent(&stdout(&resumed));
     assert_eq!(second.id, first.id, "the agent keeps its ID");
     assert_ne!(second.pid, first.pid);
     let after = home.agent_from_list_json("worker").unwrap();
@@ -559,20 +559,31 @@ fn resume_refuses_a_running_agent_one_without_a_rule_and_one_without_a_session()
     let raw = home.start_fake("raw");
     let silent = home.start_named_fake("silent", &[]);
     let mut wire = connect(&home);
-    let refused = |home: &TestHome, agent: &str, why: &str| {
+    let refused = |home: &TestHome, agent: &str| {
         let output = resume(home, agent);
-        assert!(!output.status.success());
-        let said = stderr(&output);
-        assert!(
-            said.contains(why) && said.ends_with("(unavailable)\n"),
-            "{agent}: {said}"
-        );
+        assert_eq!(output.status.code(), Some(1), "{agent}");
+        stderr(&output)
     };
-    refused(&home, "running", "is running or already resuming");
+    assert_eq!(
+        refused(&home, "running"),
+        "error: a1 is still running\n  tip: run 'facade attach a1' to watch it\n"
+    );
     wire.call("agent.stop", json!({ "agent": raw.id }));
-    refused(&home, "raw", "was not started by a CLI rule");
+    assert_eq!(
+        refused(&home, "raw"),
+        format!(
+            "error: {} was started as a plain program and cannot resume\n",
+            raw.id
+        )
+    );
     wire.call("agent.stop", json!({ "agent": silent.id }));
-    refused(&home, "silent", "has no recorded session");
+    let said = refused(&home, "silent");
+    assert!(
+        said.starts_with("error: ")
+            && said.contains("has no recorded session")
+            && !said.contains("(unavailable)"),
+        "{said}"
+    );
     assert_eq!(
         home.agent_from_list_json("silent").unwrap()["process"],
         "ended",
@@ -662,7 +673,15 @@ fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
         "held",
         &format!("session {FIRST}")
     ));
-    assert!(stderr(&resume(&home, "held")).contains("is running or already resuming"));
+    let again = stderr(&resume(&home, "held"));
+    assert!(
+        again
+            == format!(
+                "error: {} is still running\n  tip: run 'facade attach {}' to watch it\n",
+                held.id, held.id
+            ),
+        "{again}"
+    );
 }
 
 /// Two member windows observe the same stop, join one overlapping resume, and lose the record
@@ -815,8 +834,7 @@ fn an_agent_whose_terminal_closed_resumes_with_a_warning_and_keeps_logging_its_s
     assert_eq!(
         stderr(&resumed),
         format!(
-            "facade: #{}'s earlier CLI may still be running: its terminal closed while no Facade \
-             service held it\n",
+            "warning: {}'s earlier CLI may still be running because its terminal closed\n",
             agent.id
         )
     );
@@ -955,7 +973,7 @@ fn a_resume_waits_for_the_ended_run_s_exit_to_be_saved_before_saving_its_own_run
     std::fs::remove_file(home.path.join("core/fail-exit-commit")).unwrap();
     let resumed = resuming.wait_with_output().unwrap();
     assert!(resumed.status.success(), "{}", stderr(&resumed));
-    let new = started_agent(&stdout(&resumed));
+    let new = home.started_agent(&stdout(&resumed));
     let database = rusqlite::Connection::open(home.path.join("core/facade.db")).unwrap();
     let (pid, exit_at): (i64, Option<String>) = database
         .query_row(

@@ -53,42 +53,33 @@ fn detach_starts_a_daemon_once_one_that_held_the_lock_has_ended() {
 #[test]
 fn commands_starting_facade_together_start_one_keeper_and_one_daemon() {
     let home = TestHome::new("coldstart");
-    let said: Vec<String> = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let commands: Vec<_> = (0..4)
-            .map(|_| scope.spawn(|| home.run_facade(&["status"])))
+            .map(|_| scope.spawn(|| home.run_facade(&["list"])))
             .collect();
-        commands
-            .into_iter()
-            .map(|command| {
-                let status = command.join().unwrap();
-                assert!(status.status.success(), "{}", stderr(&status));
-                stdout(&status)
-            })
-            .collect()
+        for command in commands {
+            let listed = command.join().unwrap();
+            assert!(listed.status.success(), "{}", stderr(&listed));
+        }
     });
-    // Each status names the daemon and the keeper that served it: one of each, whatever ran when.
-    let served: std::collections::HashSet<String> = said
-        .iter()
-        .map(|status| {
-            let daemon = status
-                .split("daemon pid ")
-                .nth(1)
-                .and_then(|rest| rest.split(' ').next());
-            let keeper = status
-                .split("keeper pid ")
-                .nth(1)
-                .and_then(|rest| rest.split(' ').next());
-            match (daemon, keeper) {
-                (Some(daemon), Some(keeper)) => format!("{daemon} {keeper}"),
-                _ => panic!("{status}"),
-            }
-        })
-        .collect();
-    assert_eq!(served.len(), 1, "{said:?}");
+    // One keeper holds the lock and started one daemon, which is the one that answers.
+    let hello = home.hello_result().expect("a daemon answers");
+    assert_eq!(
+        (
+            home.started_daemons(),
+            hello["keeper"]["pid"].as_i64().map(|pid| pid as i32)
+        ),
+        (
+            vec![hello["pid"].as_i64().unwrap() as i32],
+            home.lock_record("keeper").map(|record| record.0)
+        ),
+        "{}",
+        home.keeper_log()
+    );
 }
 
 /// A command starts the daemon, then its terminal closes before the daemon is ready. The daemon
-/// continues in its own session without a controlling terminal. Reading status starts no keeper.
+/// continues in its own session without a controlling terminal.
 #[test]
 #[cfg_attr(
     not(debug_assertions),
@@ -98,7 +89,7 @@ fn a_daemon_outlives_the_terminal_that_launched_it() {
     let home = TestHome::new("detached");
     let mut command = home.command(&test_binaries().facade);
     command
-        .arg("status")
+        .arg("list")
         .env("FACADE_TEST_PAUSE_AT", "after-daemon-lock");
     let mut term = TestTerminal::spawn(&mut command, 80, 24);
     assert!(
@@ -134,7 +125,7 @@ fn a_daemon_outlives_the_terminal_that_launched_it() {
 
 /// With no agent running, the keeper exits on the daemon's next idle offer. The daemon stays while
 /// a client is connected and exits 5 seconds after the last one leaves, removing its socket last.
-/// Records, screens, and numbering survive; status then starts only the daemon.
+/// Records, screens, and numbering survive, and the next command starts Facade again.
 #[test]
 fn the_services_exit_when_idle_and_the_records_survive() {
     let home = TestHome::new("idle");
@@ -179,14 +170,13 @@ fn the_services_exit_when_idle_and_the_records_survive() {
         !socket_exists(&home.daemon_socket()) && !socket_exists(&home.keeper_socket()),
         "the sockets are removed"
     );
-    let status = home.run_facade_ok(&["status"]);
-    assert!(status.contains("with 1 agents"), "{status}");
-    assert!(
-        home.list_line("brief")
-            .is_some_and(|line| line.contains("ended: crashed (code 4)")),
+    assert_eq!(
+        home.list_state("brief").as_deref(),
+        Some("exited: code 4"),
         "{:?}",
-        home.list_line("brief")
+        home.list_table()
     );
+    assert_eq!(home.hello_result().unwrap()["agents"], 1);
     assert!(home.screen(&agent).contains("LAST-WORDS"));
     assert_eq!(
         start_script(&mut connect(&home), &home, "next", "sleep 60"),
@@ -211,20 +201,16 @@ fn a_client_arriving_as_the_daemon_exits_reaches_the_next_daemon() {
         wait_until(secs(15), || stopped(exiting)),
         "the idle daemon did not stop after deciding to exit"
     );
-    let status = std::thread::scope(|scope| {
-        let status = scope.spawn(|| home.run_facade(&["status"]));
+    let listed = std::thread::scope(|scope| {
+        let listed = scope.spawn(|| home.run_facade(&["list"]));
         std::thread::sleep(Duration::from_millis(500));
         resume_process(exiting);
-        status.join().unwrap()
+        listed.join().unwrap()
     });
-    assert!(status.status.success(), "{}", stderr(&status));
+    assert!(listed.status.success(), "{}", stderr(&listed));
     let next = home.lock_record("daemon").unwrap().0;
     assert_ne!(next, exiting, "the exiting daemon served the late client");
-    assert!(
-        stdout(&status).contains(&format!("daemon pid {next} ")),
-        "{}",
-        stdout(&status)
-    );
+    assert_eq!(home.daemon_pid(), Some(next));
     assert!(!alive(&exiting_process));
 }
 
@@ -393,7 +379,7 @@ fn nonregular_lock_paths_fail_promptly_with_the_owned_regular_file_message() {
             }
             // Exercise the read path used by a client and the write path used by a foreground
             // worker.
-            for args in [vec!["status"], vec![service]] {
+            for args in [vec!["list"], vec![service]] {
                 let output_file = home.path.join("failure");
                 let mut child = home
                     .command(&test_binaries().facade)

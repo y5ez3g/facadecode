@@ -101,8 +101,8 @@ else
 fi
 
 # 3. Log in again: both run; two's screen is as it was, and typing reaches it.
-ssh -o BatchMode=yes "$dest" "$login facade list" > "$tmp/list.out" 2>&1
-if grep -qE '^#a[0-9]+ +one .* pid [0-9]+' "$tmp/list.out" && grep -qE '^#a[0-9]+ +two .* pid [0-9]+' "$tmp/list.out"; then
+ssh -o BatchMode=yes "$dest" "$login facade inspect one && facade inspect two" > "$tmp/list.out" 2>&1
+if [ "$(grep -cE '^Process: +running, pid [0-9]+$' "$tmp/list.out")" -eq 2 ]; then
 	ok "3 a new login lists one and two running"
 else
 	fail "3 a new login does not list one and two running: see $tmp/list.out"

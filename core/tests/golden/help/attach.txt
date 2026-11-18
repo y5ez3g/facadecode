@@ -1,0 +1,20 @@
+Watch an agent and use its terminal
+
+Usage: facade attach <AGENT>
+
+Watch the agent work and use its terminal here, or see its saved screen if it has already ended.
+Press Ctrl-] to detach and leave it running. This command exits with the agent's exit code when the
+agent ends or after showing its saved screen.
+
+Arguments:
+  <AGENT>  Agent ID or name
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Watch agent a3
+  facade attach a3
+
+  # Watch the agent named Pixel
+  facade attach Pixel

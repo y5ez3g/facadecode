@@ -61,6 +61,9 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | sender, recipient | Who sent a message and who it is for | from, to (outside the wire fields) |
 | first prompt | The task an agent is started with, delivered once its CLI is ready | — |
 
+Public `facade` help and the text the command line writes call the person "the human". Where a command prints the
+identity itself, it uses `human`, as in `Started by: human`. Help addresses the reader as "you".
+
 ## Input
 
 | Use | Means | Not these |
@@ -196,6 +199,10 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | quiet | An agent that neither types nor reads during a takeover | paused, frozen |
 | roll back | Go back to the build before | revert |
 | upgrade | A person installing a newer version; in text for people only | — |
+
+In public `facade` diagnostics, "upgrade the running Facade" means switching the running services to the newer
+command's build. Installation instructions use "upgrade" for installing a newer version. Code and protocol call the
+service switch a takeover.
 
 ## Core's parts
 

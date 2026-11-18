@@ -691,7 +691,7 @@ fn starts_keep_members_and_location_sources_separate() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
-    let child = agent(&home, &started_agent(&stdout(&output)).id);
+    let child = agent(&home, &started_id(&stdout(&output)));
     assert_eq!(child["windows"], memberships(&[&source, &away]));
     assert!(child.get("location_source_window").is_none(), "{child}");
 

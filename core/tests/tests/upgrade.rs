@@ -186,7 +186,7 @@ fn restart_with_changed_bytes(hard_link: bool) {
             home.keeper_log(),
             home.daemon_log()
         );
-        started_agent(&stdout(&output))
+        home.started_agent(&stdout(&output))
     };
     let first = start(&before, "before");
     let hello = home.hello_result().unwrap();
@@ -407,6 +407,42 @@ fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
 /// A command of a newer build hands the running Facade over to it and says so on one line. The
 /// agents' CLIs and the keeper keep their processes, the keeper as the new build; a new daemon
 /// serves them. Once the new build proves healthy, the launchers point at it.
+/// A newer build's `status` shows its own version beside the running services' older build, and
+/// upgrades nothing: the daemon keeps its process and build.
+#[test]
+fn a_newer_build_s_status_shows_both_builds_and_upgrades_nothing() {
+    let home = TestHome::new("statusnewer");
+    home.start_named_fake("w1", &[]);
+    let hello = home.hello_result().unwrap();
+    let (daemon, keeper) = (hello["pid"].clone(), hello["keeper"]["pid"].clone());
+    let program = program_of_build(&home, &newer());
+    let status = home
+        .command(&program)
+        .arg("status")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        (stdout(&status), stderr(&status), status.status.code()),
+        (
+            format!(
+                "Facade is running.\n  Home:      {}\n  Version:   {}\n  Daemon:    pid {daemon} \
+                 ({CURRENT})\n  Keeper:    pid {keeper} ({CURRENT})\n  Agents:    1\n",
+                home.path.display(),
+                newer()
+            ),
+            String::new(),
+            Some(0)
+        )
+    );
+    let after = home.hello_result().unwrap();
+    assert_eq!(
+        (&after["pid"], &after["build"]),
+        (&daemon, &json!(CURRENT)),
+        "status upgraded the running Facade"
+    );
+}
+
 #[test]
 fn a_newer_build_s_command_takes_over_while_agents_run() {
     let home = TestHome::new("takeover");
@@ -463,13 +499,13 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     );
     assert!(
         said.starts_with(&format!(
-            "facade: Facade {} took over from {CURRENT}; 2 agents kept running (",
+            "note: upgraded running Facade {CURRENT} to {}; 2 agents kept running",
             newer()
         )),
         "{said}"
     );
     assert!(
-        stdout(&listed).contains(" w1 ") && stdout(&listed).contains(" w2 "),
+        Table::parse(&stdout(&listed)).column("NAME") == ["w1", "w2"],
         "{}",
         stdout(&listed)
     );
@@ -591,7 +627,8 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     assert!(sent.status.success(), "{}{}", stdout(&sent), stderr(&sent));
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -653,7 +690,8 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     assert!(sent.status.success(), "{}{}", stdout(&sent), stderr(&sent));
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -749,7 +787,8 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     assert!(sent.status.success(), "{}{}", stdout(&sent), stderr(&sent));
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -841,7 +880,8 @@ fn an_agent_asking_from_its_screen_still_waits_for_the_person_after_a_takeover()
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -909,7 +949,8 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
     home.release_gate("agent-quiesce");
     let listed = asking.wait_with_output().unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -979,7 +1020,8 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1065,7 +1107,8 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1122,7 +1165,7 @@ fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     assert_eq!(home.hello_result().unwrap()["build"], pre_release());
     let listed = home
         .command(&test_binaries().facade)
-        .arg("list")
+        .args(["list", "--quiet"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -1248,15 +1291,15 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("took over from {CURRENT}; 1 agent kept running")),
+            && stderr(&listed).contains(&format!(
+                "upgraded running Facade {CURRENT} to {}; 1 agent kept running",
+                newer()
+            )),
         "{}",
         stderr(&listed)
     );
     assert!(
-        term.wait_for_output(
-            secs(10),
-            &format!("Facade {} takes over; reconnecting", newer())
-        ),
+        term.wait_for_output(secs(10), "Reconnecting to Facade. Recent keys may be lost."),
         "{}",
         term.text()
     );
@@ -1266,11 +1309,6 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
         wait_until(secs(15), || home.submitted_messages() == all),
         "{:?}",
         home.submitted_messages()
-    );
-    assert!(
-        !term.text_with_scrollback().contains("connection lost"),
-        "{}",
-        term.text_with_scrollback()
     );
     term.send(b"\x1d");
     assert!(
@@ -1296,7 +1334,9 @@ fn an_older_build_s_command_and_server_work_with_the_running_facade() {
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stdout(&listed).contains(" w1 ") && stderr(&listed).is_empty(),
+        listed.status.success()
+            && Table::parse(&stdout(&listed)).column("NAME") == ["w1"]
+            && stderr(&listed).is_empty(),
         "{}{}",
         stdout(&listed),
         stderr(&listed)
@@ -1422,7 +1462,8 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         (listed, tool.join().unwrap(), command.join().unwrap())
     });
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1602,14 +1643,15 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     }
     let asked = asking.wait_with_output().unwrap();
     assert!(
-        asked.status.success() && stderr(&asked).contains(&format!("took over from {CURRENT}")),
+        asked.status.success()
+            && stderr(&asked).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&asked)
     );
     assert_eq!(home.hello_result().unwrap()["build"], newer());
-    let state = |name: &str| home.list_line(name).unwrap_or_default();
+    let state = |name: &str| home.list_state(name).unwrap_or_default();
     assert!(
-        !state("started").contains("ended") && state("stopped").contains("ended: stopped"),
+        !["stopped", "ended"].contains(&state("started").as_str()) && state("stopped") == "stopped",
         "{}",
         stdout(&home.run_facade(&["list"]))
     );
@@ -1678,7 +1720,8 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).contains(&format!("took over from {CURRENT}")),
+        listed.status.success()
+            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );

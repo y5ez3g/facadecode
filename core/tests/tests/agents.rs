@@ -165,12 +165,11 @@ fn stop_sends_sigkill_after_the_kill_delay() {
         "-c",
         "trap '' HUP; echo ready; while :; do sleep 1; done",
     ]);
-    let pid: i32 = started
-        .split_whitespace()
-        .nth(2)
-        .and_then(|pid| pid.parse().ok())
-        .unwrap_or_else(|| panic!("no pid in {started}"));
-    let pid_process = process_identity(pid);
+    let TestAgent {
+        pid,
+        process: pid_process,
+        ..
+    } = home.started_agent(&started);
     assert!(
         wait_until(secs(30), || home.screen("stubborn").contains("ready")),
         "{}",
@@ -249,7 +248,7 @@ fn immediate_exit_is_listed_with_exit_code() {
     let home = TestHome::new("quick");
     // An immediate exit must be recorded even if it arrives before the agent is listed.
     let started = home.run_facade_ok(&["start", "--name", "quick", SH.as_str(), "-c", "exit 3"]);
-    assert!(started.starts_with("#a1 pid "), "{started}");
+    assert_eq!(started, "a1\n");
     assert!(
         wait_until(secs(10), || home.agent_from_list_json("quick").is_some_and(
             |record| record["process"] == "ended" && record["exit"]["code"] == 3
@@ -265,8 +264,7 @@ fn immediate_exit_is_listed_with_exit_code() {
             && record["exit"].get("signal").is_none(),
         "{record}"
     );
-    let line = home.list_line("quick").expect("listed");
-    assert!(line.contains("ended: crashed (code 3)"), "{line}");
+    assert_eq!(home.list_state("quick").as_deref(), Some("exited: code 3"));
 }
 
 #[test]

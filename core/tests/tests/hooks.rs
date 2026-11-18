@@ -110,20 +110,27 @@ fn a_session_joins_as_a_guest_works_ends_its_turns_and_leaves() {
             .all(|fact| guest.get(*fact).is_none()),
         "{guest}"
     );
-    // The list marks a guest where a run shows its pid, in a column as wide; inspect calls it its
-    // CLI's guest.
-    let listed = home.run_facade_ok(&["list"]);
+    // The list marks a guest beside its CLI; inspect shows it has no process of Facade's, and names
+    // no creator or kind.
+    let table = home.list_table();
+    let row = table.row("ID", "a1").expect("a1 is listed");
     assert!(
-        listed.lines().any(|line| line.starts_with("#a1 ")
-            && line.ends_with(&format!(" {:<11} {project}", "guest"))),
-        "{listed}"
+        table.cell(row, "CLI") == "claude (guest)" && table.cell(row, "FOLDER") == project,
+        "{table:?}"
     );
     let inspected = home.run_facade_ok(&["inspect", "a1"]);
-    assert!(
+    let label = |name: &str| {
         inspected
             .lines()
-            .next()
-            .is_some_and(|first| first.starts_with("#a1 ") && first.contains(": claude guest, ")),
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+            .map(str::trim)
+    };
+    assert!(
+        label("ID") == Some("a1")
+            && label("CLI") == Some("claude (guest)")
+            && label("Process") == Some("none (guest)")
+            && label("Kind").is_none()
+            && label("Started by").is_none(),
         "{inspected}"
     );
     let sent = wire.call("agent.send", json!({ "to": "a1", "text": "one" }));

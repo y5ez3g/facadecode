@@ -161,7 +161,7 @@ fn a_message_sent_while_the_prompt_waits_goes_after_it() {
     home.release_gate("before-prompt-delivery");
     assert_eq!(
         stdout(&send.wait_with_output().unwrap()).trim(),
-        "#m3 was typed into #a2"
+        "m3 delivered to a2"
     );
     assert_eq!(
         submitted(&home, "📨"),
@@ -548,7 +548,7 @@ fn a_caller_removed_before_its_result_gets_none() {
     );
     assert_eq!(
         home.run_facade_ok(&["send", "child", "next"]).trim(),
-        "#m3 was typed into #a2"
+        "m3 delivered to a2"
     );
     assert_eq!(kept(&home, 2), None, "no result");
     assert_eq!(submitted(&home, "🔔"), Vec::<String>::new());

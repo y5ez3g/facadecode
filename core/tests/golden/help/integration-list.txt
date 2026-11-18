@@ -1,0 +1,16 @@
+List CLI integrations
+
+Usage: facade integration list [OPTIONS]
+
+Check which CLIs are set up to join Facade and which need attention.
+
+Options:
+      --json  Print integrations as JSON
+  -h, --help  Print help
+
+Examples:
+  # See which CLIs are set up to join Facade
+  facade integration list
+
+  # Print every integration as JSON
+  facade integration list --json

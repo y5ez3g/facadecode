@@ -698,7 +698,12 @@ The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry core's re
 programs, `bin/facade.exe` and `bin/facade-mcp.exe`, built for `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`
 respectively, and ConPTY for the same architecture, `bin/conpty/conpty.dll` and `bin/conpty/OpenConsole.exe`. Packaging
 refuses a package where any of these four is missing or a binary is of another target; executable-mode and static-musl
-checks apply only to Unix. Third-party notices name core's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
+checks apply only to Unix. A release signs the Windows packages' programs with the publisher's certificate, the IDE's
+(Azure Artifact Signing, IDENTITY I6), each signature timestamped: packaging with `--sign` signs every program and library
+in `bin/` that has no trusted signature - ConPTY's come signed by Microsoft - and packages none that still has none.
+Unsigned, the 0.1.6 `facade.exe` was quarantined by Microsoft Defender as `Trojan:Win32/Bearfoos.A!ml`, which ended the
+running core and every agent with it, and Smart App Control refuses an unsigned program outright. Pull request checks
+package them unsigned. Third-party notices name core's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
 they name node-pty's. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
 win32-arm64, together with the window component. Publication requires each platform's build and verification evidence
 from the release run. The version advances when preparing a release; already published versions retain their original
@@ -713,15 +718,18 @@ Artifacts and editor logs name the target. A configured CI target does not estab
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 
 Releases go to GitHub first and to the stores second. A pushed tag `extension/<version>`, which must name the manifest's
-version, starts the release workflow: the extension checks workflow builds and tests that tag on every native runner, and
-the release job puts all platform VSIX files, the window component and `SHA256SUMS` on the tag's GitHub Release, with
-the changelog's section as notes, marking the newest extension version Latest. It then downloads the Release again and
-checks each file's hash and its own manifests (publisher, component, version, target). The stores job waits for approval
-in the `extension-stores` environment, downloads the Release's files, checks them against `SHA256SUMS`, publishes the
-window component before the platform packages to VS Code Marketplace and Open VSX, skips files a store already lists,
-and passes only once both stores serve every file byte for byte. Nothing is rebuilt or repacked between the CI run, the
-Release and the stores. An existing Release is never overwritten: a same-named file with other bytes stops the release,
-and only missing files are added; a rerun for a complete Release finishes the stores without building again.
+version, starts the release workflow: the extension checks workflow builds and tests that tag on every native runner,
+its two Windows packaging jobs signing in the `extension-signing` environment, the only one whose OIDC sign-in Azure
+accepts for the signing identity (its variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` name it); a manual run of that
+workflow with `sign` signs the same way without releasing. The release job puts all platform VSIX files, the window
+component and `SHA256SUMS` on the tag's GitHub Release, with the changelog's section as notes, marking the newest
+extension version Latest. It then downloads the Release again and checks each file's hash and its own manifests
+(publisher, component, version, target). The stores job waits for approval in the `extension-stores` environment,
+downloads the Release's files, checks them against `SHA256SUMS`, publishes the window component before the platform
+packages to VS Code Marketplace and Open VSX, skips files a store already lists, and passes only once both stores serve
+every file byte for byte. Nothing is rebuilt or repacked between the CI run, the Release and the stores. An existing
+Release is never overwritten: a same-named file with other bytes stops the release, and only missing files are added; a
+rerun for a complete Release finishes the stores without building again.
 
 Versions first published to the stores, before this order, are listed in `extension/archive/`'s catalog with their
 source, evidence and original Marketplace files and hashes. Catalog validation requires the historical three-platform

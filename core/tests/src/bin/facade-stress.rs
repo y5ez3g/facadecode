@@ -191,8 +191,8 @@ fn start_many(
             let name = format!("{prefix}{i}");
             let mut args = vec!["start", "--name", &name];
             args.extend_from_slice(command);
-            let agent = started_agent(&home.run_facade_ok(&args));
-            (agent.id, name)
+            let id = started_id(&home.run_facade_ok(&args));
+            (id, name)
         })
         .collect();
     (agents, began.elapsed())

@@ -308,12 +308,17 @@ fn type_pastes_text_and_presses_keys() {
         stderr(&control)
     );
     home.run_facade_ok(&["stop", "worker"]);
-    let ended = home.run_facade(&["type", "worker", "late", "--enter"]);
-    assert!(
-        !ended.status.success() && stderr(&ended).contains("#a1 ended; nothing was typed"),
-        "{}",
-        stderr(&ended)
-    );
+    for given in ["a1", "#a1", "1", "worker"] {
+        let ended = home.run_facade(&["type", given, "late", "--enter"]);
+        assert!(
+            ended.status.code() == Some(1)
+                && stderr(&ended)
+                    == "error: a1 has ended\n  tip: run 'facade inspect a1' to check for a saved \
+                        session\n",
+            "{given}: {}",
+            stderr(&ended)
+        );
+    }
     assert_eq!(home.submitted_messages().len(), wanted.len());
 }
 

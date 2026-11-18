@@ -1,0 +1,25 @@
+Print a shell completion script
+
+Usage: facade completion <SHELL>
+
+Print a script that lets your shell complete facade's commands and options when you press Tab. Load
+it as the example for your shell shows.
+
+Arguments:
+  <SHELL>  bash, zsh, fish or powershell
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Turn on completion in this PowerShell session
+  facade completion powershell | Out-String | Invoke-Expression
+
+  # Turn on completion in this Bash session
+  source <(facade completion bash)
+
+  # Turn on completion in this Zsh session, after compinit
+  source <(facade completion zsh)
+
+  # Turn on completion in this Fish session
+  facade completion fish | source

@@ -108,12 +108,14 @@ fn an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says() {
         "fake work"
     );
     let inspected = home.run_facade_ok(&["inspect", "worker"]);
-    assert!(
+    let label = |name: &str| {
         inspected
             .lines()
-            .next()
-            .is_some_and(|first| first.contains(": fake work, "))
-            && inspected.contains("Rule: fake"),
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+            .map(str::trim)
+    };
+    assert!(
+        label("CLI") == Some("fake work") && label("Kind") == Some("fake"),
         "{inspected}"
     );
 }
@@ -308,7 +310,7 @@ fn a_resume_runs_the_entry_as_it_is_now_and_refuses_one_retyped_or_gone() {
     );
     let retyped = facade(&home, &["resume", "worker"], &[]);
     let said = "clis[\"fake work\"] runs a program now, but this conversation is Fake CLI's; it \
-                cannot be resumed with it (unsupported)";
+                cannot be resumed with it";
     assert!(
         !retyped.status.success() && stderr(&retyped).contains(said),
         "{}",
@@ -524,7 +526,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         assert_eq!(mcp["message"], problem, "{mcp}");
         let refused = refused(&home, cli);
         assert!(
-            refused.contains(&format!("{problem} (not_found)")),
+            refused.contains(&problem) && !refused.contains("(not_found)"),
             "{refused}"
         );
     }
@@ -632,11 +634,11 @@ fn a_resume_refuses_an_entry_turned_off_or_wrong() {
     for (more, said) in [
         (
             json!({ "enabled": false }),
-            "fake work is turned off by clis[\"fake work\"].enabled (unavailable)",
+            "fake work is turned off by clis[\"fake work\"].enabled",
         ),
         (
             json!({ "args": [42] }),
-            "clis[\"fake work\"].args[0] must be a string; received number (configuration_invalid)",
+            "clis[\"fake work\"].args[0] must be a string; received number",
         ),
     ] {
         settings(&home, &entry(more));
