@@ -10,22 +10,15 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { AgentInfo } from '../../base/coreProtocol';
 import type { Pin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
-import { until, windowsInCore } from './editors';
+import { normalizeDriveLetter, until, windowsInCore } from './editors';
 
 type Card = PanelState['cards'][number];
-type SavedPin = Pin & { readonly agent?: string; readonly home?: string };
+type SavedPin = Pin & { readonly agent?: string; readonly home?: string; readonly machine_id?: string };
 
-export interface ListedAgent {
-	readonly agent_id: string;
-	readonly window_id: string;
-	readonly cwd: string;
-	readonly process: string;
-	readonly pid?: number;
-	readonly session?: string;
-	readonly state_detail?: { readonly how: string };
-}
+export type ListedAgent = Pick<AgentInfo, 'agent_id' | 'machine_id' | 'windows' | 'cwd' | 'process' | 'pid' | 'session' | 'state_detail'>;
 
 export interface RunningAgent {
 	readonly id: string;
@@ -38,7 +31,6 @@ export interface LegacyPinFixture {
 	readonly agent: RunningAgent;
 	readonly pin: Pin;
 	readonly mirror: string;
-	readonly database: string;
 }
 
 type Closing =
@@ -61,7 +53,7 @@ export async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
 }
 
-async function pickCard(command: string): Promise<Card> {
+export async function pickCard(command: string): Promise<Card> {
 	const before = new Set((await state()).cards.map(card => card.runId));
 	void vscode.commands.executeCommand(command);
 	return until(`a card from ${command}`, async () => {
@@ -80,7 +72,7 @@ export function aliasOf(card: Card): string {
 	return card.alias;
 }
 
-function agentTab(card: Card): vscode.Tab | undefined {
+export function agentTab(card: Card): vscode.Tab | undefined {
 	return vscode.window.tabGroups.all.flatMap(group => group.tabs).find(tab => {
 		const label = tab.label.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /u, '');
 		return tab.input instanceof vscode.TabInputTerminal && (label === card.name || label.startsWith(`${card.name} `));
@@ -89,9 +81,14 @@ function agentTab(card: Card): vscode.Tab | undefined {
 
 export const hasAgentTab = (card: Card) => agentTab(card) !== undefined;
 
-function facade(...args: string[]): string {
+export function facade(...args: string[]): string {
+	return facadeAs(undefined, ...args);
+}
+
+export function facadeAs(agent: string | undefined, ...args: string[]): string {
 	const program = path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade');
 	const { FACADE_AGENT: _agent, ...env } = process.env;
+	if (agent !== undefined) { env.FACADE_AGENT = agent; }
 	return execFileSync(program, args, { env, encoding: 'utf8', timeout: 20_000 });
 }
 
@@ -101,8 +98,8 @@ export function listed(): ListedAgent[] {
 
 function windowOf(id: string): string {
 	const record = listed().find(each => each.agent_id === id);
-	assert.ok(record?.window_id && record.window_id !== 'terminal', `#${id} belongs to an editor window`);
-	return record.window_id;
+	assert.ok(record?.windows?.length === 1 && record.windows[0].window_id !== 'terminal', `#${id} belongs to one editor window`);
+	return record.windows[0].window_id;
 }
 
 function servicePids(): { readonly daemon: number; readonly keeper: number } {
@@ -132,7 +129,7 @@ function closeWindow(step: Closing): void {
 	void vscode.commands.executeCommand('workbench.action.closeWindow').then(undefined, () => undefined);
 }
 
-async function running(id: string): Promise<RunningAgent> {
+export async function running(id: string): Promise<RunningAgent> {
 	return until(`#${id} to run with its session`, () => {
 		const agent = listed().find(each => each.agent_id === id);
 		if (!agent?.pid || !agent.session || agent.process !== 'running') { return undefined; }
@@ -148,7 +145,7 @@ async function pinnedCard(id: string): Promise<Card> {
 	});
 }
 
-async function pin(card: Card): Promise<void> {
+export async function pin(card: Card): Promise<void> {
 	await until('Pin to be offered', async () => (await state()).cards.find(each => each.alias === card.alias)?.menu.pin || undefined);
 	await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 	await pinnedCard(card.alias.slice(1));
@@ -160,12 +157,14 @@ function verifyScreen(id: string): void {
 
 async function checkLive(before: RunningAgent): Promise<void> {
 	await pinnedCard(before.id);
-	assert.deepStrictEqual(await running(before.id), before, 'the original number, PID and session');
+	const restored = await running(before.id);
+	assert.deepStrictEqual({ ...restored, cwd: normalizeDriveLetter(restored.cwd) },
+		{ ...before, cwd: normalizeDriveLetter(before.cwd) }, 'the original number, PID, session and working folder');
 	verifyScreen(before.id);
 	assert.deepStrictEqual(listed().map(each => each.agent_id), [before.id]);
 }
 
-async function stop(card: Card): Promise<void> {
+export async function stop(card: Card): Promise<void> {
 	await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	await until(`#${card.alias.slice(1)} to stop and its card to close`, async () => {
 		const agent = listed().find(each => `#${each.agent_id}` === card.alias);
@@ -186,8 +185,9 @@ function pins(file = workspaceFile()): readonly SavedPin[] {
 }
 
 function savedPin(agent: RunningAgent): SavedPin {
-	const saved = pins().find(pin => pin.agent === agent.id && pin.home === path.resolve(HOME));
-	assert.ok(saved, `#${agent.id} has a saved Pin for this Facade home`);
+	const machine = listed().find(record => record.agent_id === agent.id)?.machine_id;
+	const saved = pins().find(pin => pin.agent === agent.id && !!machine && pin.machine_id === machine);
+	assert.ok(saved, `#${agent.id} has a saved Pin for this Facade machine`);
 	return saved;
 }
 
@@ -199,7 +199,7 @@ async function restored(before: RunningAgent): Promise<RunningAgent> {
 	return after;
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(): Promise<void> {
 	try {
 		assert.ok(HOME.startsWith(`${path.dirname(OUT)}${path.sep}`), 'this editor uses the journey’s own Facade home');
 		const remote = vscode.env.remoteName;
@@ -254,11 +254,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await stop(unpinned);
 			await stop(await pinnedCard(began.agent.id));
 			await stop(legacyCard);
-			const { home: _home, agent: _agent, ...pinWithoutIdentity } = savedPin(legacyAgent);
+			const { home: _home, agent: _agent, machine_id: _machine, ...pinWithoutIdentity } = savedPin(legacyAgent);
 			savedPin(began.agent);
 			savedPin(removedAgent);
 			keepConversation(legacyAgent.cwd, legacyAgent.session, 'Legacy Pin conversation');
-			const legacy = { agent: legacyAgent, pin: pinWithoutIdentity, mirror: workspaceFile(), database: path.join(path.dirname(context.storageUri!.fsPath), 'state.vscdb') };
+			const legacy = { agent: legacyAgent, pin: pinWithoutIdentity, mirror: workspaceFile() };
 			closeWindow({ after: 'pins', before: began.agent, unpinned: unpinnedAgent, removed: removedAgent.id, legacy });
 			return;
 		}

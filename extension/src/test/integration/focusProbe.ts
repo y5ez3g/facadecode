@@ -15,10 +15,9 @@
 import { spawn } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { Workbench } from './cdpInput';
+import { freePort, Workbench } from './cdpInput';
 import { EDITOR_FLAGS, endEditors, endMatching } from './editors';
 
 export interface FocusProbeContext {
@@ -71,18 +70,6 @@ const SESSIONS: readonly { readonly name: string; readonly short: string; readon
 ];
 
 interface Line { readonly phase: string; readonly at?: number; readonly [key: string]: unknown }
-
-function freePort(): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const server = net.createServer();
-		server.unref();
-		server.on('error', reject);
-		server.listen(0, '127.0.0.1', () => {
-			const { port } = server.address() as net.AddressInfo;
-			server.close(() => resolve(port));
-		});
-	});
-}
 
 /** One session's editor, until its driver says it is done or failed: what it wrote. */
 async function session(ctx: FocusProbeContext, name: string, short: string, withFacade: boolean): Promise<{ lines: Line[]; output: string }> {

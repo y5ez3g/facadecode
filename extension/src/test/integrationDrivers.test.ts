@@ -23,7 +23,7 @@ suite('Integration drivers: copied alone into a test window (VERIFICATION)', () 
 			'pinsDriver.js': allowed,
 			'updateDriver.js': allowed,
 			'focusProbeDriver.js': [...allowed, './cdpInput'],
-			'cdpInput.js': ['crypto', 'http']
+			'cdpInput.js': ['crypto', 'http', 'net']
 		};
 		const wrong = Object.entries(drivers).flatMap(([file, may]) => required(path.join(dir, file)).filter(module => !may.includes(module)).map(module => `${file}: ${module}`));
 		assert.deepStrictEqual(wrong, []);

@@ -13,6 +13,11 @@ import * as path from 'path';
 import { createInterface } from 'readline';
 import type { HelloParams, Response, WatchResult, WindowInfo } from '../../base/coreProtocol';
 
+/** VS Code's fsPath lowercases the drive letter. Compare it like a path from Node or core. */
+export function normalizeDriveLetter(file: string): string {
+	return process.platform === 'win32' ? file.replace(/^[A-Z]:/u, drive => drive.toLowerCase()) : file;
+}
+
 /** The official VS Code `VSCODE_EXECUTABLE` names, else macOS's standard installation where there is one. */
 export function officialEditor(): string {
 	const standard = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
@@ -209,24 +214,37 @@ export function coreProgram(bin: string): string {
 	return path.join(bin, process.platform === 'win32' ? 'facade.exe' : 'facade');
 }
 
+/** Reads the daemon's hello result as a terminal client. */
+export async function helloInCore(home: string): Promise<Response> {
+	return await readCore(home, { build: 'facade-editor-test', protocol: [2, 2], kind: 'terminal' });
+}
+
 /** Reads a windows snapshot as a terminal client without keeping an editor window connected. */
 export async function windowsInCore(home: string): Promise<readonly WindowInfo[]> {
+	const response = await readCore(home, { build: 'facade-editor-test', protocol: [2, 2], kind: 'terminal' }, { method: 'watch', params: { topic: 'windows' } });
+	if (response.error) { throw new Error(response.error.message); }
+	return (response.result as WatchResult).snapshot as WindowInfo[];
+}
+
+export async function callInCore(home: string, op: string, args: object): Promise<Response> {
+	return await readCore(home, { build: 'facade-editor-test', protocol: [2, 2], kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
+}
+
+async function readCore(home: string, hello: HelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
 	const socket = createConnection(coreSocket(home));
 	const lines = createInterface({ input: socket });
-	const timer = setTimeout(() => socket.destroy(new Error('The driver could not read the windows topic within 5 seconds')), 5_000);
+	const timer = setTimeout(() => socket.destroy(new Error(`The test driver could not read core within ${timeout} ms`)), timeout);
 	const send = (id: number, method: string, params: object) => socket.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
 	try {
-		return await new Promise<WindowInfo[]>((resolve, reject) => {
-			const hello: HelloParams = { build: 'window-lifetime-test', protocol: [1, 1], kind: 'terminal' };
+		return await new Promise<Response>((resolve, reject) => {
 			socket.once('connect', () => send(1, 'hello', hello));
 			socket.once('error', reject);
-			socket.once('close', () => reject(new Error('The windows topic connection closed')));
+			socket.once('close', () => reject(new Error('The test driver connection closed')));
 			lines.on('line', line => {
 				try {
 					const response = JSON.parse(line) as Response;
-					if (response.error) { throw new Error(response.error.message); }
-					if (response.id === 1) { send(2, 'watch', { topic: 'windows' }); }
-					if (response.id === 2) { resolve((response.result as WatchResult).snapshot as WindowInfo[]); }
+					if (response.id === 1 && next && !response.error) { send(2, next.method, next.params); }
+					else if (response.id === 1 || response.id === 2) { resolve(response); }
 				} catch (error) { reject(error); }
 			});
 		});
