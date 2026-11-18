@@ -178,8 +178,25 @@ impl Person {
 }
 
 /// The line `facade integration` prints for a file's state.
-fn line(file: &Path, state: &str) -> String {
-    format!("  {}: {state}\n", file.display())
+/// The words `facade integration add` or `remove` printed for the part `label`, a settings file or
+/// a CLI's own MCP servers: its line is indented two spaces, and the words follow the padded label.
+fn part<'a>(said: &'a str, label: &str) -> Option<&'a str> {
+    said.lines().find_map(|line| {
+        let rest = line.strip_prefix("  ")?.strip_prefix(label)?;
+        rest.starts_with("   ").then(|| rest.trim())
+    })
+}
+
+/// The STATUS and ADDED that `facade integration list` shows for `cli`.
+fn listed_as(listed: &str, cli: &str) -> (String, String) {
+    let table = Table::parse(listed);
+    let row = table
+        .row("CLI", cli)
+        .unwrap_or_else(|| panic!("{cli} is not listed: {listed}"));
+    (
+        table.cell(row, "STATUS").to_string(),
+        table.cell(row, "ADDED").to_string(),
+    )
 }
 
 /// The agent whose session is `session`.
@@ -207,18 +224,17 @@ fn claude_s_sessions_join_through_what_add_writes_and_remove_puts_it_back() {
     person.write(".claude.json", r#"{"mcpServers": {"facade": {"type": "stdio", "command": "/old/facade-mcp", "args": ["--guest", "claude"]}}}"#);
     let settings_file = person.file(".claude/settings.json");
     let listed = person.facade_ok(&test, &["integration", "list"]);
-    assert!(
-        listed.starts_with(&format!(
-            "claude\n{}  claude mcp: Facade's entries, changed\n",
-            line(&settings_file, "none of Facade's")
-        )),
+    assert_eq!(
+        listed_as(&listed, "claude"),
+        ("needs attention".to_string(), String::new()),
         "{listed}"
     );
     let added = person.facade_ok(&test, &["integration", "add", "claude"]);
-    assert!(added.starts_with("claude: added "), "{added}");
+    let settings_label = settings_file.display().to_string();
     assert!(
-        added.contains(&line(&settings_file, "Facade's entries"))
-            && added.contains("  claude mcp: Facade's entries\n"),
+        added.starts_with("Added Facade to claude.\n")
+            && part(&added, &settings_label) == Some("up to date")
+            && part(&added, "Claude Code MCP servers") == Some("up to date"),
         "{added}"
     );
     let settings = person.json(".claude/settings.json");
@@ -321,16 +337,11 @@ fn claude_s_sessions_join_through_what_add_writes_and_remove_puts_it_back() {
         person.claude_ran()
     );
     let listed = person.facade_ok(&test, &["integration", "list"]);
-    assert!(
-        listed.starts_with("claude: added ")
-            && listed.contains(&line(&settings_file, "Facade's entries")),
-        "{listed}"
-    );
-    assert!(
-        listed.contains(&format!(
-            "\ncodex\n{}",
-            line(&person.file(".codex/config.toml"), "none of Facade's")
-        )),
+    let (status, at) = listed_as(&listed, "claude");
+    assert!(status == "added" && at.ends_with(" ago"), "{listed}");
+    assert_eq!(
+        listed_as(&listed, "codex"),
+        ("not added".to_string(), String::new()),
         "{listed}"
     );
     let removed = person.facade_ok(&test, &["integration", "remove", "claude"]);
@@ -344,12 +355,12 @@ fn claude_s_sessions_join_through_what_add_writes_and_remove_puts_it_back() {
         Some("mcp remove --scope user facade")
     );
     assert_eq!(person.json(".claude.json")["mcpServers"], json!({}));
-    assert_eq!(
-        removed,
-        format!(
-            "claude\n{}  claude mcp: none of Facade's\n",
-            line(&settings_file, "none of Facade's")
-        )
+    assert!(
+        removed.starts_with("Removed Facade from claude.\n")
+            && part(&removed, &settings_label) == Some("no Facade settings")
+            && part(&removed, "Claude Code MCP servers") == Some("no Facade settings")
+            && removed.lines().count() == 3,
+        "{removed}"
     );
 }
 
@@ -394,17 +405,20 @@ fn remove_keeps_the_person_s_changes_and_names_a_changed_entry_that_stays() {
     );
     settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["timeout"] = json!(5);
     person.write(settings_file, &settings.to_string());
-    let removed = person.facade_ok(&test, &["integration", "remove", "claude"]);
+    let removing = person.facade(&test, &["integration", "remove", "claude"]);
+    assert!(removing.status.success(), "{removing:?}");
+    let (removed, noted) = (stdout(&removing), stderr(&removing));
     let file = person.file(".claude/settings.json");
     assert!(
-        removed.contains(&format!(
-            "  {}: Facade's hooks.UserPromptSubmit stays: it changed since it was written\n",
+        noted.contains(&format!(
+            "note: {}: Facade's hooks.UserPromptSubmit stays: it changed since it was written\n",
             file.display()
         )),
-        "{removed}"
+        "{noted}"
     );
     assert!(
-        removed.contains(&line(&file, "Facade's entries, changed")),
+        removed.starts_with("Check claude's settings to confirm removal.\n")
+            && part(&removed, &file.display().to_string()) == Some("needs attention"),
         "{removed}"
     );
     let left = person.json(settings_file);
@@ -452,7 +466,8 @@ fn codex_opencode_and_pi_entries_are_written_and_taken_out() {
         std::os::unix::fs::PermissionsExt::from_mode(0o600),
     )
     .unwrap();
-    let added = person.facade_ok(&test, &["integration", "add", "codex"]);
+    let added = person.facade(&test, &["integration", "add", "codex"]);
+    assert!(added.status.success(), "{added:?}");
     #[cfg(unix)]
     assert_eq!(
         std::os::unix::fs::PermissionsExt::mode(
@@ -466,11 +481,11 @@ fn codex_opencode_and_pi_entries_are_written_and_taken_out() {
         "the file's mode stays"
     );
     assert!(
-        added.contains(
-            "  Codex asks you to review new hooks once, when it next starts: approve Facade's for \
-             its sessions to join.\n"
+        stderr(&added).contains(
+            "note: Codex asks you to review new hooks once, when it next starts: approve Facade's \
+             for its sessions to join\n"
         ),
-        "{added}"
+        "{added:?}"
     );
     let config = person.read(".codex/config.toml").unwrap();
     assert!(
@@ -525,17 +540,8 @@ fn codex_opencode_and_pi_entries_are_written_and_taken_out() {
         "{extension}"
     );
     let listed = person.facade_ok(&test, &["integration", "list"]);
-    for file in [
-        ".codex/config.toml",
-        ".codex/hooks.json",
-        ".config/opencode/opencode.json",
-        ".config/opencode/plugins/facade/index.js",
-        ".pi/agent/extensions/facade.js",
-    ] {
-        assert!(
-            listed.contains(&line(&person.file(file), "Facade's entries")),
-            "{file}: {listed}"
-        );
+    for cli in ["codex", "opencode", "pi"] {
+        assert_eq!(listed_as(&listed, cli).0, "added", "{cli}: {listed}");
     }
     for cli in ["codex", "opencode", "pi"] {
         person.facade_ok(&test, &["integration", "remove", cli]);
@@ -557,7 +563,10 @@ fn codex_opencode_and_pi_entries_are_written_and_taken_out() {
     );
     let listed = person.facade_ok(&test, &["integration", "list"]);
     assert!(
-        !listed.contains("Facade's entries") && !listed.contains("added"),
+        Table::parse(&listed)
+            .column("STATUS")
+            .iter()
+            .all(|status| *status == "not added"),
         "{listed}"
     );
 }
@@ -577,7 +586,7 @@ fn muse_and_antigravity_entries_are_written_and_their_hooks_join_and_end_session
     let person = Person::new(&test);
     // The help names these two among the CLIs `add` takes, as it names the other four.
     let help = person
-        .facade_ok(&test, &["integration", "--help"])
+        .facade_ok(&test, &["integration", "add", "--help"])
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -812,8 +821,9 @@ fn nothing_is_written_where_the_person_has_a_facade_of_their_own() {
     );
     let other = person.facade(&test, &["integration", "add", "vim"]);
     assert!(
-        stderr(&other)
-            .contains("no CLI vim; Facade integrates claude, codex, opencode, pi, muse, agy"),
+        other.status.code() == Some(2)
+            && stderr(&other).contains("'vim'")
+            && stderr(&other).contains("claude, codex, opencode, pi, muse, agy"),
         "{other:?}"
     );
 }
@@ -829,10 +839,8 @@ fn a_run_beside_the_integration_keeps_facade_s_tools_and_skill() {
         let test = TestHome::new("beside-list");
         Person::new(&test).facade_ok(&test, &["integration", "list"])
     };
-    let clis: Vec<&str> = listed
-        .lines()
-        .filter(|line| !line.is_empty() && !line.starts_with(' '))
-        .collect();
+    let table = Table::parse(&listed);
+    let clis = table.column("CLI");
     assert_eq!(
         clis,
         ["claude", "codex", "opencode", "pi", "muse", "agy"],

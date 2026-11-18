@@ -1,103 +1,76 @@
-//! The terminal commands that call the daemon: each one makes its protocol call on the connection
-//! it is given and prints the answer for the person, as text or JSON.
+//! The terminal commands: each uses the connection it is given and prints the result.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::path::Path;
+use std::time::SystemTime;
 
 use facade_base::address::{display_machine_selector, exact_machine_selector};
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResume, AgentScreen,
     AgentSend, AgentStart, AgentState, AgentStop, AgentType, DEFAULT_TERMINAL_SIZE, DeliveredVia,
-    DeliveryStatus, InspectResult, IntegrationAdd, IntegrationArgs, IntegrationInfo,
-    IntegrationList, IntegrationRemove, IntegrationsArgs, MessagesTopic, MessagesWatchArgs,
-    PartState, RenameArgs, ResumeArgs, Said, ScreenArgs, SendArgs, StartArgs, StateReason,
-    TypeArgs, WindowDeliveryFailure, WindowRef, display_name, typed_text_with_machines,
+    DeliveryFailure, DeliveryStatus, HelloResult, HowEnded, InputInfo, InputState, InspectResult,
+    IntegrationAdd, IntegrationArgs, IntegrationInfo, IntegrationList, IntegrationRemove,
+    IntegrationsArgs, Message, MessagesTopic, MessagesWatchArgs, PartState, RenameArgs, ResumeArgs,
+    ScreenArgs, SendArgs, StartArgs, TextWritten, ToolsState, TypeArgs, WaitKind,
+    WindowDeliveryFailure, WindowRef, typed_text_with_machines,
 };
 use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::{
-    AgentList, AgentRef, MachineIdentity, MachineList, MachineQueryArgs, MachineQueryStatus,
-    MessageRef,
+    AgentList, MachineIdentity, MachineList, MachineQueryArgs, MachineQueryStatus,
 };
-use facade_base::operations::NoArgs;
-use facade_base::process::EndReason;
+use facade_base::operations::{NoArgs, Operation};
+use facade_base::process::{EndReason, ProcessState};
+use facade_base::time::parse_iso_time;
+use facade_rules::integration::command_program;
+use serde_json::json;
 use unicode_width::UnicodeWidthStr;
 
-use crate::ExitText;
+use crate::errors::{Problem, about_agent, about_send, bare_id};
+use crate::{ExitText, Opening, Shown};
 
-/// The options before the CLI's name, followed by the CLI's name and arguments.
-pub(crate) struct StartWords {
-    name: Option<String>,
-    prompt: Option<String>,
-    machine: Option<String>,
-    cwd: Option<String>,
-    command: Vec<String>,
+/// How a command prints: for the reader, or as JSON.
+pub(crate) enum Format {
+    Text,
+    Json,
 }
 
-/// Splits `facade start`'s words into its own options and the CLI's command line. Words it cannot
-/// use fail here, before any daemon is reached.
-pub(crate) fn start_words(command_line: Vec<String>) -> anyhow::Result<StartWords> {
-    let mut start = StartWords {
-        name: None,
-        prompt: None,
-        machine: None,
-        cwd: None,
-        command: Vec::new(),
-    };
-    let mut words = command_line.into_iter();
-    while let Some(word) = words.next() {
-        let (option, value) = match word.split_once('=') {
-            Some((option, value)) if word.starts_with("--") => (option, Some(value.to_string())),
-            _ => (word.as_str(), None),
-        };
-        let (slot, missing) = match option {
-            "--name" => (&mut start.name, "--name requires an agent name"),
-            "--prompt" => (
-                &mut start.prompt,
-                "--prompt requires the agent's first message",
-            ),
-            "--on" => (&mut start.machine, "--on requires a machine name or ID"),
-            "--cwd" => (&mut start.cwd, "--cwd requires a directory on the machine"),
-            _ if word.starts_with('-') => anyhow::bail!(
-                "{word} is not an option of facade start. Use --name, --prompt, --on, or --cwd \
-                 before the CLI's name. Put the CLI's own options after its name"
-            ),
-            _ => {
-                anyhow::ensure!(
-                    start.cwd.is_none() || start.machine.is_some(),
-                    "--cwd requires --on"
-                );
-                start.command.push(word);
-                start.command.extend(words);
-                return Ok(start);
-            }
-        };
-        *slot = Some(match value {
-            Some(value) => value,
-            None => words.next().ok_or_else(|| anyhow::anyhow!(missing))?,
-        });
-    }
-    anyhow::bail!("specify a CLI program, for example: facade start claude")
+/// The three ways to list agents.
+pub(crate) enum Listing {
+    Table,
+    Quiet,
+    Json,
 }
 
-/// Starts an agent. With the person's terminal, says how to detach and returns the agent to attach
-/// to; without one, prints the agent and its process.
+/// The available integration operations.
+pub(crate) enum IntegrationAction {
+    Add { cli: String },
+    Remove { cli: String },
+    List,
+}
+
+/// Starts an agent. Returns it for attachment, or prints its ID when detached.
 pub(crate) fn start(
     client: &mut DaemonClient,
-    words: StartWords,
+    name: Option<String>,
+    prompt: Option<String>,
+    (machine, cwd): (Option<String>, Option<String>),
+    command: Vec<String>,
     terminal: Option<(u16, u16)>,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<Shown>> {
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
-    let cwd_is_default = words.cwd.is_none();
-    let cwd = match words.cwd {
+    // On another machine without --cwd, the daemon starts the agent in that user's home folder.
+    let cwd_is_default = cwd.is_none();
+    let cwd = match cwd {
         Some(cwd) => cwd,
         None => std::env::current_dir()?.to_string_lossy().into_owned(),
     };
     let args = StartArgs {
-        command: words.command,
-        name: words.name,
-        machine: words.machine,
+        command,
+        name,
         cwd,
+        machine,
         cwd_is_default,
         window: None,
         initial_windows: None,
@@ -105,12 +78,10 @@ pub(crate) fn start(
         env: environment(),
         cols,
         rows,
-        prompt: words.prompt,
+        prompt,
         call_id: None,
         result_message_id: None,
         result_message_machine_id: None,
-        // Where a newer Facade taking over cuts the start off, its request ID repeats it, and the
-        // answer says what it did.
         request_id: Some(made_request_id()),
         worktree: None,
         model: None,
@@ -118,207 +89,164 @@ pub(crate) fn start(
         session: None,
     };
     let (started, _) = client.call_with_request_id::<AgentStart>(args, false)?;
-    Ok(announce(
-        &started.agent,
-        &client.hello_result.machine_id,
-        "started",
-        terminal,
-    ))
+    let here = client.hello_result.machine_id.clone();
+    let opening = Opening::Started {
+        name: started.agent.name.clone(),
+    };
+    Ok(show(&started.agent, &here, opening, terminal))
 }
 
-/// Resumes an agent's session in a new run, as `start` does, and warns first when its earlier
-/// CLI may still be running.
+/// Inspects the earlier run before resuming its session in a new run.
 pub(crate) fn resume(
     client: &mut DaemonClient,
     agent: String,
     terminal: Option<(u16, u16)>,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<Shown>> {
+    let earlier = client
+        .call::<AgentInspect>(AgentArgs {
+            agent: agent.clone(),
+        })
+        .map_err(|error| about_agent(&agent, error))?;
+    let here = client.hello_result.machine_id.clone();
+    let remote = earlier.agent.machine_id != here;
+    let exact = exact_id(&earlier.agent, &here);
+    let id = shown_id(&earlier.agent);
+    if earlier.agent.guest {
+        return Err(Problem::Guest { id }.into());
+    }
+    if earlier.agent.process == ProcessState::Running {
+        return Err(Problem::StillRunning { id }.into());
+    }
+    if earlier.rule.is_none() {
+        return Err(Problem::PlainProgram { id }.into());
+    }
+    if earlier.agent.exit.and_then(|exit| exit.reason) == Some(EndReason::TerminalClosed) {
+        eprintln!("warning: {id}'s earlier CLI may still be running because its terminal closed");
+    }
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
-    let earlier = client.call::<AgentInspect>(AgentArgs { agent })?.agent;
-    let local_machine_id = &client.hello_result.machine_id;
-    let address = record_address(&earlier, local_machine_id);
-    let env = if earlier.machine_id == *local_machine_id {
-        environment()
-    } else {
-        BTreeMap::new()
+    let resumed = client
+        .call::<AgentResume>(ResumeArgs {
+            agent: exact,
+            // The run on another machine takes that machine's login environment.
+            env: if remote {
+                BTreeMap::new()
+            } else {
+                environment()
+            },
+            cols,
+            rows,
+        })
+        .map_err(|error| about_agent(&agent, error))?;
+    let opening = Opening::Resumed {
+        name: resumed.name.clone(),
     };
-    if earlier.exit.as_ref().and_then(|exit| exit.reason) == Some(EndReason::TerminalClosed) {
-        eprintln!(
-            "facade: {address}'s earlier CLI may still be running: its terminal closed while no \
-             Facade service held it"
-        );
-    }
-    let resumed = client.call::<AgentResume>(ResumeArgs {
-        agent: address,
-        env,
-        cols,
-        rows,
-    })?;
-    Ok(announce(
-        &resumed,
-        &client.hello_result.machine_id,
-        "resumed",
-        terminal,
-    ))
+    Ok(show(&resumed, &here, opening, terminal))
 }
 
-/// The local record's number or the remote record's exact address.
-fn record_address(agent: &AgentInfo, local_machine_id: &str) -> String {
-    if agent.machine_id == local_machine_id {
-        return format!("#{}", agent.agent_id);
-    }
-    agent.reference().exact_address()
-}
-
-/// Tells the person an agent's run began. Without their terminal the agent keeps running alone,
-/// and its address is all they need; with it, the agent comes back to be attached to.
-fn announce(
+/// Returns the agent to attach to, by its exact address, or prints its ID when detached.
+fn show(
     agent: &AgentInfo,
-    local_machine_id: &str,
-    began: &str,
+    here: &str,
+    opening: Opening,
     terminal: Option<(u16, u16)>,
-) -> Option<String> {
-    let address = record_address(agent, local_machine_id);
-    if terminal.is_none() {
-        println_or_end!("{address}{}", pid_of(agent));
-        return None;
+) -> Option<Shown> {
+    if terminal.is_some() {
+        return Some(Shown {
+            agent: exact_id(agent, here),
+            opening,
+        });
     }
-    eprintln!(
-        "[facade: {address} {name} {began}. Ctrl-] detaches and the agent keeps running. Reconnect \
-         with `facade attach '{address}'`]",
-        name = display_name(&agent.name),
-    );
-    Some(address)
+    println_or_end!("{}", shown_id(agent));
+    None
 }
 
-/// How a command prints its answer: for the person, or as the protocol's JSON (`--json`).
-pub(crate) enum Format {
-    Text,
-    Json,
+/// The agent as the command line prints it: `a3` here, `a17@gpu` on another machine.
+fn shown_id(agent: &AgentInfo) -> String {
+    agent
+        .label
+        .as_deref()
+        .map_or(agent.agent_id.as_str(), |label| {
+            label.trim_start_matches('#')
+        })
+        .to_string()
 }
 
-/// Lists agents by running machine and reports the outcome of each machine's query.
-pub(crate) fn list(client: &mut DaemonClient, format: Format) -> anyhow::Result<()> {
+/// The agent as a later call names it: its ID here, its exact address on another machine.
+fn exact_id(agent: &AgentInfo, here: &str) -> String {
+    match agent.machine_id == here {
+        true => agent.agent_id.clone(),
+        false => agent.reference().exact_address(),
+    }
+}
+
+/// Prints one row or one bare ID per agent, or the agent array as JSON.
+pub(crate) fn list(client: &mut DaemonClient, listing: Listing) -> anyhow::Result<()> {
     let listed = client.call::<AgentList>(MachineQueryArgs { machine: None })?;
-    if let Format::Json = format {
+    if let Listing::Json = listing {
         println_or_end!("{}", serde_json::to_string_pretty(&listed)?);
         return Ok(());
     }
-    let local = &client.hello_result.machine_id;
     for machine in &listed.machines {
-        let state = match machine.status {
-            MachineQueryStatus::Answered => "answered",
-            MachineQueryStatus::Unavailable => "unreachable",
-            MachineQueryStatus::TimedOut => "timed out",
-            MachineQueryStatus::Error => "error",
+        let why = match machine.status {
+            MachineQueryStatus::Answered => continue,
+            MachineQueryStatus::Unavailable => "it is unreachable",
+            MachineQueryStatus::TimedOut => "it did not answer within 3 seconds",
+            MachineQueryStatus::Error => "it failed",
         };
-        let at = machine
-            .answered_at
-            .as_deref()
-            .map_or_else(String::new, |at| format!(" at {at}"));
-        let build = machine
-            .build
-            .as_deref()
-            .map_or_else(String::new, |build| format!(" · Facade {build}"));
-        println_or_end!(
-            "{} (id:{}){build} · {state}{at}",
-            display_name(&machine.name),
-            machine.short_id,
+        eprintln!(
+            "warning: could not list the agents on {}: {why}",
+            single_line(&machine.name)
         );
-        if machine.status == MachineQueryStatus::Answered {
-            let agents: Vec<_> = listed
-                .agents
-                .iter()
-                .filter(|agent| agent.machine_id == machine.machine_id)
-                .collect();
-            print_agent_rows(&agents, local);
+    }
+    let agents = listed.agents;
+    match listing {
+        Listing::Table => {
+            let text = list_text(&agents, SystemTime::now());
+            if text.is_empty() {
+                eprintln!("No agents. Run 'facade start claude' to start one.");
+            } else {
+                println_or_end!("{text}");
+            }
         }
+        Listing::Quiet if !agents.is_empty() => println_or_end!("{}", quiet_text(&agents)),
+        Listing::Quiet => {}
+        Listing::Json => {}
     }
     Ok(())
 }
 
-fn print_agent_rows(agents: &[&AgentInfo], local: &str) {
-    if agents.is_empty() {
-        println_or_end!("No agents.");
-        return;
-    }
-    let rows: Vec<[String; 4]> = agents
-        .iter()
-        .map(|agent| {
-            [
-                agent
-                    .label
-                    .clone()
-                    .unwrap_or_else(|| record_address(agent, local)),
-                display_name(&agent.name),
-                agent.cli.clone(),
-                state_of(agent),
-            ]
-        })
-        .collect();
-    // Each column is as wide as its widest cell, so a long name or state shifts no other column.
-    let mut widths = [0; 4];
-    for row in &rows {
-        for (width, cell) in widths.iter_mut().zip(row) {
-            *width = cell.width().max(*width);
-        }
-    }
-    for (agent, row) in agents.iter().zip(&rows) {
-        let mut line = String::new();
-        for (cell, width) in row.iter().zip(widths) {
-            let _ = write!(line, "{cell}{:pad$} ", "", pad = width - cell.width());
-        }
-        let process = if agent.guest {
-            "guest".to_string()
-        } else {
-            agent
-                .pid
-                .map(|pid| format!("pid {pid}"))
-                .unwrap_or_default()
-        };
-        println_or_end!("{line}{process:<11} {}", agent.cwd);
-        if let Some(text) = agent.state_detail.as_ref().and_then(|d| d.text.as_ref()) {
-            println_or_end!("       {text}");
-        }
-        if let Some(said) = &agent.said {
-            println_or_end!("       {} said: {}", speaker(said), said.text);
-        }
-        let windows: Vec<_> = agent.windows.iter().map(window_text).collect();
-        if !windows.is_empty() {
-            println_or_end!("       Windows {}", windows.join(", "));
-        }
-    }
-}
-
-/// Prints one agent in full: one fact a line, or the protocol's JSON.
 pub(crate) fn inspect(
     client: &mut DaemonClient,
     agent: String,
     format: Format,
 ) -> anyhow::Result<()> {
-    let inspected = client.call::<AgentInspect>(AgentArgs { agent })?;
+    let inspected = client
+        .call::<AgentInspect>(AgentArgs {
+            agent: agent.clone(),
+        })
+        .map_err(|error| about_agent(&agent, error))?;
     match format {
+        Format::Text => println_or_end!("{}", inspect_text(&inspected, SystemTime::now())),
         Format::Json => println_or_end!("{}", serde_json::to_string_pretty(&inspected)?),
-        Format::Text => print_inspection(&inspected, &client.hello_result.machine_id),
     }
     Ok(())
 }
 
-/// Prints an agent's screen as plain text, the last `lines` of it when given.
-pub(crate) fn screen(
-    client: &mut DaemonClient,
-    agent: String,
-    lines: Option<u16>,
-) -> anyhow::Result<()> {
-    // The daemon renders the screen, so this needs no terminal parser.
-    let screen = client.call::<AgentScreen>(ScreenArgs { agent, lines })?;
+/// Prints the requested number of screen and scrollback lines as plain text.
+pub(crate) fn screen(client: &mut DaemonClient, agent: String, lines: u16) -> anyhow::Result<()> {
+    let screen = client
+        .call::<AgentScreen>(ScreenArgs {
+            agent: agent.clone(),
+            lines: Some(lines),
+        })
+        .map_err(|error| about_agent(&agent, error))?;
     if screen.line_count > 0 {
         println_or_end!("{}", facade_base::daemon::plain(&screen.text));
     }
     Ok(())
 }
 
-/// `facade type`: types text, then Enter if asked, or presses the named keys, into an agent.
+/// Types text, then Enter if asked, or presses the named keys.
 pub(crate) fn type_input(
     client: &mut DaemonClient,
     agent: String,
@@ -326,17 +254,18 @@ pub(crate) fn type_input(
     enter: bool,
     keys: Vec<String>,
 ) -> anyhow::Result<()> {
-    client.call::<AgentType>(TypeArgs {
-        agent,
-        raw: None,
-        text,
-        enter,
-        keys: (!keys.is_empty()).then_some(keys),
-    })?;
+    client
+        .call::<AgentType>(TypeArgs {
+            agent: agent.clone(),
+            raw: None,
+            text,
+            enter,
+            keys: (!keys.is_empty()).then_some(keys),
+        })
+        .map_err(|error| about_agent(&agent, error))?;
     Ok(())
 }
 
-/// Sends a message and says how it reached the recipient; one that did not reach it is an error.
 pub(crate) fn send(
     client: &mut DaemonClient,
     to: String,
@@ -344,128 +273,129 @@ pub(crate) fn send(
     reply_to: Option<String>,
 ) -> anyhow::Result<()> {
     let args = SendArgs {
-        to,
+        to: to.clone(),
         text,
         reply_to,
         reply_to_machine_id: None,
         request_id: Some(made_request_id()),
         time_left_ms: None,
     };
-    let local = client.hello_result.machine_id.clone();
-    let (sent, _) = client
+    let here = client.hello_result.machine_id.clone();
+    let (result, _) = client
         .call_with_request_id::<AgentSend>(args, false)
-        .inspect_err(|error| {
-            let Some(body) = error.downcast_ref::<ErrorBody>() else {
-                return;
-            };
-            if let Some(reference) = &body.data.message_ref {
-                eprintln!("facade: Message {}", message_address(reference, &local));
-            }
-            if let Some(delivery) = &body.data.window_delivery {
-                for failure in &delivery.not_delivered {
-                    eprintln!("facade: {}", window_failure(failure));
-                }
-                for window in &delivery.outcome_unknown {
-                    eprintln!("facade: {}", window_outcome_unknown(window));
-                }
-            } else if let Some(windows) = &body.data.windows {
-                for failure in windows {
-                    eprintln!("facade: {}", window_failure(failure));
-                }
-            }
+        .map_err(|error| match not_shown(&error, &here) {
+            Some(problem) => problem.into(),
+            None => about_send(&to, error),
         })?;
-    let message = sent.message;
-    let id = match &message.message_ref {
-        Some(reference) => message_address(reference, &local),
-        None => format!("#{}", message.message_id),
-    };
-    let to = match &message.message_ref {
-        Some(reference) if reference.machine_id != local && message.to != "human" => AgentRef {
-            machine_id: reference.machine_id.clone(),
-            agent_id: message.to.clone(),
+    let mut message = result.message;
+    if let Some(reference) = message.message_ref.clone()
+        && reference.machine_id != here
+    {
+        // A message to an agent on another machine is numbered there: m42@gpu to a17@gpu.
+        let machine = machine_selector(client, &reference.machine_id);
+        message.message_id = format!("{}@{machine}", message.message_id);
+        if message.to != "human" {
+            message.to = format!("{}@{machine}", message.to);
         }
-        .exact_address(),
-        _ => format!("#{}", message.to),
-    };
-    if let Some(windows) = sent.windows {
-        println_or_end!("{id} was handed to these window subscriptions");
-        for window in windows.delivered {
-            println_or_end!("  {}", window_text(&window));
-        }
-        for failure in windows.not_delivered {
-            println_or_end!("{}", window_failure(&failure));
-        }
-        for window in windows.outcome_unknown {
-            println_or_end!("{}", window_outcome_unknown(&window));
-        }
+    }
+    let message = &message;
+    if message.to != "human" {
+        println_or_end!("{}", sent(message)?);
         return Ok(());
     }
-    if message.to == "human" {
-        if message.delivery.status == DeliveryStatus::Pending && sent.repeated {
-            anyhow::bail!("delivery outcome is unknown for {id} to #human")
+    let id = &message.message_id;
+    // Without the windows' outcome, the daemon ended before it saved them.
+    let Some(windows) = result
+        .windows
+        .filter(|windows| !windows.delivered.is_empty())
+    else {
+        return Err(Problem::HumanUnconfirmed {
+            message: id.clone(),
         }
-        anyhow::bail!("missing window delivery receipt for {id} to #human");
+        .into());
+    };
+    for window in &windows.delivered {
+        println_or_end!(
+            "{id} delivered to the human in {}",
+            window_name(window, &here)
+        );
     }
-    match (message.delivery.status, message.delivery.delivered_via) {
-        // A guest takes its messages at its next turn.
-        (DeliveryStatus::Pending, _) => println_or_end!("{id} waits for {to}'s next turn"),
-        (DeliveryStatus::Success, Some(DeliveredVia::Read)) => {
-            println_or_end!("{id} was read by {to}")
-        }
-        (DeliveryStatus::Success, _) => println_or_end!("{id} was typed into {to}"),
-        _ => anyhow::bail!("{id} to {to}: {}", message.delivery.failure_words(&to)),
+    for failure in &windows.not_delivered {
+        eprintln!(
+            "warning: {id} was not shown because {}",
+            window_failure(failure, &here)
+        );
+    }
+    for window in &windows.outcome_unknown {
+        eprintln!(
+            "warning: could not confirm that {} showed {id}",
+            window_name(window, &here)
+        );
     }
     Ok(())
 }
 
-fn message_address(reference: &MessageRef, local: &str) -> String {
-    if reference.machine_id == local {
-        return format!("#{}", reference.message_id);
+/// The refusal of a message to the human that none of the sender's windows showed.
+fn not_shown(error: &anyhow::Error, here: &str) -> Option<Problem> {
+    let data = &error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ErrorBody>())?
+        .data;
+    let why: Vec<String> = match (&data.window_delivery, &data.windows) {
+        (Some(delivery), _) => delivery
+            .not_delivered
+            .iter()
+            .map(|failure| window_failure(failure, here))
+            .chain(
+                delivery
+                    .outcome_unknown
+                    .iter()
+                    .map(|window| format!("{} may not have shown it", window_name(window, here))),
+            )
+            .collect(),
+        (None, Some(windows)) if windows.is_empty() => return Some(Problem::InNoWindow),
+        (None, Some(windows)) => windows
+            .iter()
+            .map(|failure| window_failure(failure, here))
+            .collect(),
+        (None, None) => return None,
+    };
+    Some(Problem::NotShown {
+        why: why.join("; "),
+    })
+}
+
+/// A window as the reader names it: `the terminal window` or `window w2`, with `@machine` where
+/// another machine owns it.
+fn window_name(window: &WindowRef, here: &str) -> String {
+    let id = &window.window_id;
+    let name = match id.as_str() {
+        "terminal" => "the terminal window".to_string(),
+        _ => format!("window {id}"),
+    };
+    match window.machine_id == here {
+        true => name,
+        false => format!("{name}@{}", window.machine_id),
     }
-    reference.exact_address()
 }
 
-/// Identifies a window by its logical ID and machine.
-fn window_text(window: &WindowRef) -> String {
-    format!(
-        "window {} on machine {}",
-        display_name(&window.window_id),
-        display_name(&window.machine_id)
-    )
-}
-
-/// Why the message could not be handed to this window.
-fn window_failure(failure: &WindowDeliveryFailure) -> String {
-    let reason = match failure.reason.as_str() {
-        "machine_unavailable" => "machine is unreachable",
-        "window_disconnected" => "window is disconnected",
-        "not_watching" => "window has no active messages subscription",
+/// Why a window did not show the message: `window w2 is closed`.
+fn window_failure(failure: &WindowDeliveryFailure, here: &str) -> String {
+    let why = match failure.reason.as_str() {
+        "window_disconnected" => "is closed",
+        "not_watching" => "is not showing Facade messages",
+        "machine_unavailable" => "is on a machine that cannot be reached",
         reason => reason,
     };
-    format!(
-        "Could not hand the message to {} ({})",
-        window_text(&failure.window),
-        display_name(reason)
-    )
+    format!("{} {why}", window_name(&failure.window, here))
 }
 
-fn window_outcome_unknown(window: &WindowRef) -> String {
-    format!("Delivery outcome is unknown for {}", window_text(window))
-}
-
-/// Prints the messages waiting for the agent the connection speaks for, as its terminal would show
-/// them; reading them delivers them.
-pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
-    // A page holds up to 100; the rest wait for the next read.
-    let inbox = client.snapshot::<MessagesTopic>(MessagesWatchArgs::default())?;
-    let local = client.hello_result.machine_id.clone();
-    let remote = |id: Option<&str>| id.is_some_and(|id| id != local);
-    let has_remote_messages = inbox.messages.iter().any(|message| {
-        remote(message.from_machine_id.as_deref()) || remote(message.reply_to_machine_id.as_deref())
-    });
-    // The snapshot already delivered these messages. Fall back to exact IDs if the lookup fails.
-    let machines: Vec<_> =
-        if has_remote_messages && let Ok(listed) = client.call::<MachineList>(NoArgs {}) {
+/// The machines this one knows, to name them; none where the lookup fails, as the inbox read has
+/// already delivered its messages.
+fn machines(client: &mut DaemonClient) -> Vec<MachineIdentity> {
+    client
+        .call::<MachineList>(NoArgs {})
+        .map(|listed| {
             listed
                 .machines
                 .into_iter()
@@ -474,335 +404,607 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
                     name: machine.name,
                 })
                 .collect()
-        } else {
-            Vec::new()
-        };
-    let selector = |id: Option<&str>| {
-        let id = id.filter(|id| *id != local)?;
-        Some(
-            machines
-                .iter()
-                .find(|machine| machine.machine_id == id)
-                .map(|machine| display_machine_selector(machine, &machines))
-                .unwrap_or_else(|| exact_machine_selector(id)),
-        )
-    };
-    let shown: Vec<String> = inbox
-        .messages
-        .iter()
-        .map(|message| {
-            typed_text_with_machines(
-                message,
-                selector(message.from_machine_id.as_deref()).as_deref(),
-                selector(message.reply_to_machine_id.as_deref()).as_deref(),
-            )
         })
-        .collect();
-    if !shown.is_empty() {
+        .unwrap_or_default()
+}
+
+/// How a reader names the machine `id` among `machines`: its name where unique, else `id:` and
+/// enough of its ID.
+fn selector_among(machines: &[MachineIdentity], id: &str) -> String {
+    machines
+        .iter()
+        .find(|machine| machine.machine_id == id)
+        .map(|machine| display_machine_selector(machine, machines))
+        .unwrap_or_else(|| exact_machine_selector(id))
+}
+
+/// How a reader names the machine `id`.
+fn machine_selector(client: &mut DaemonClient, id: &str) -> String {
+    selector_among(&machines(client), id)
+}
+
+/// Prints and delivers up to 100 inbox messages as the recipient's terminal would show them.
+pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
+    let inbox = client.snapshot::<MessagesTopic>(MessagesWatchArgs::default())?;
+    if inbox.messages.is_empty() {
+        eprintln!("No messages waiting.");
+    } else {
+        let here = client.hello_result.machine_id.clone();
+        let remote = |id: Option<&str>| id.is_some_and(|id| id != here);
+        let machines = match inbox.messages.iter().any(|message| {
+            remote(message.from_machine_id.as_deref())
+                || remote(message.reply_to_machine_id.as_deref())
+        }) {
+            true => machines(client),
+            false => Vec::new(),
+        };
+        let selector = |id: Option<&str>| {
+            let id = id.filter(|id| *id != here)?;
+            Some(selector_among(&machines, id))
+        };
+        let shown: Vec<String> = inbox
+            .messages
+            .iter()
+            .map(|message| {
+                typed_text_with_machines(
+                    message,
+                    selector(message.from_machine_id.as_deref()).as_deref(),
+                    selector(message.reply_to_machine_id.as_deref()).as_deref(),
+                )
+            })
+            .collect();
         println_or_end!("{}", shown.join("\n\n"));
     }
     Ok(())
 }
 
-/// Renames an agent and prints it with its new name.
 pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> anyhow::Result<()> {
-    let renamed = client.call::<AgentRename>(RenameArgs { agent, name })?;
-    println_or_end!(
-        "{} {}",
-        record_address(&renamed, &client.hello_result.machine_id),
-        display_name(&renamed.name)
-    );
+    let renamed = client
+        .call::<AgentRename>(RenameArgs {
+            agent: agent.clone(),
+            name,
+        })
+        .map_err(|error| about_agent(&agent, error))?;
+    println_or_end!("{} {}", shown_id(&renamed), single_line(&renamed.name));
     Ok(())
 }
 
-/// Stops an agent's run.
-pub(crate) fn stop(client: &mut DaemonClient, agent: String) -> anyhow::Result<()> {
-    client.call::<AgentStop>(AgentArgs { agent })?;
-    Ok(())
+pub(crate) fn stop(
+    client: &mut DaemonClient,
+    agents: Vec<String>,
+    report: &dyn Fn(&anyhow::Error) -> i32,
+) -> anyhow::Result<i32> {
+    Ok(change_agents::<AgentStop>(client, agents, report))
 }
 
-/// Removes an ended agent.
-pub(crate) fn remove(client: &mut DaemonClient, agent: String) -> anyhow::Result<()> {
-    client.call::<AgentRemove>(AgentArgs { agent })?;
-    Ok(())
+pub(crate) fn remove(
+    client: &mut DaemonClient,
+    agents: Vec<String>,
+    report: &dyn Fn(&anyhow::Error) -> i32,
+) -> anyhow::Result<i32> {
+    Ok(change_agents::<AgentRemove>(client, agents, report))
 }
 
-#[derive(clap::Subcommand)]
-pub(crate) enum IntegrationAction {
-    /// Write Facade's entries for a CLI: claude, codex, opencode, pi, muse or agy. Prints each
-    /// file's state.
-    Add { cli: String },
-    /// Take Facade's entries for a CLI out. Prints each file's state, and any of Facade's entries
-    /// that stay because they changed.
-    Remove { cli: String },
-    /// Print, for each CLI, whether its configuration holds Facade's entries as they would be
-    /// written now.
-    List,
+/// Run one operation per argument. A service refusal leaves the connection usable.
+fn change_agents<O: Operation<Args = AgentArgs>>(
+    client: &mut DaemonClient,
+    agents: Vec<String>,
+    report: &dyn Fn(&anyhow::Error) -> i32,
+) -> i32 {
+    let mut code = 0;
+    for agent in agents {
+        match client.call::<O>(AgentArgs {
+            agent: agent.clone(),
+        }) {
+            Ok(_) => println_or_end!("{}", single_line(&agent)),
+            Err(error) => {
+                let refused = error.chain().any(|cause| cause.is::<ErrorBody>());
+                report(&about_agent(&agent, error));
+                if !refused {
+                    return 1;
+                }
+                code = 1;
+            }
+        }
+    }
+    code
 }
 
-/// Adds, removes or lists Facade's entries in the CLIs' configurations, and prints each CLI's.
 pub(crate) fn integration(
     client: &mut DaemonClient,
     action: IntegrationAction,
+    format: Format,
 ) -> anyhow::Result<()> {
     let env = environment();
-    let integrations = match action {
+    let removing = matches!(action, IntegrationAction::Remove { .. });
+    let info = match action {
         IntegrationAction::Add { cli } => {
-            vec![client.call::<IntegrationAdd>(IntegrationArgs { cli, env })?]
+            client.call::<IntegrationAdd>(IntegrationArgs { cli, env })?
         }
         IntegrationAction::Remove { cli } => {
-            vec![client.call::<IntegrationRemove>(IntegrationArgs { cli, env })?]
+            client.call::<IntegrationRemove>(IntegrationArgs { cli, env })?
         }
         IntegrationAction::List => {
-            client
-                .call::<IntegrationList>(IntegrationsArgs { env })?
-                .integrations
+            let list = client.call::<IntegrationList>(IntegrationsArgs { env })?;
+            match format {
+                Format::Text => {
+                    println_or_end!(
+                        "{}",
+                        integrations_text(&list.integrations, SystemTime::now())
+                    );
+                }
+                Format::Json => println_or_end!("{}", serde_json::to_string_pretty(&list)?),
+            }
+            return Ok(());
         }
     };
-    integrations.iter().for_each(print_integration);
+    match format {
+        Format::Text => {
+            println_or_end!("{}", integration_text(&info, removing));
+            for note in &info.notes {
+                eprintln!("note: {}", note.trim_end_matches('.'));
+            }
+        }
+        Format::Json => println_or_end!("{}", serde_json::to_string_pretty(&info)?),
+    }
     Ok(())
 }
 
-/// Prints the Facade that answered: its build, its daemon and agents, and its keeper.
-pub(crate) fn status(client: &DaemonClient) {
-    let hello = &client.hello_result;
-    let daemon = format!(
-        "Facade {}: daemon pid {} with {} agents",
-        hello.build, hello.pid, hello.agents
-    );
-    match &hello.keeper {
-        Some(keeper) => println_or_end!("{daemon}, keeper pid {} ({})", keeper.pid, keeper.build),
-        None => println_or_end!("{daemon}; no keeper is running"),
+pub(crate) fn status(
+    home: &Path,
+    reply: Option<&DaemonClient>,
+    format: Format,
+) -> anyhow::Result<()> {
+    let hello = reply.map(|client| &client.hello_result);
+    let version = facade_base::version();
+    match format {
+        Format::Text => {
+            println_or_end!(
+                "{}",
+                status_text(home, hello, &version, &facade_base::build_id())
+            );
+            if hello.is_none() {
+                eprintln!("Facade starts by itself when a command needs it.");
+            }
+        }
+        Format::Json => {
+            let value = match hello {
+                Some(hello) => json!({
+                    "running": true,
+                    "home": home.to_string_lossy(),
+                    "version": version,
+                    "daemon": { "pid": hello.pid, "build": hello.build },
+                    "keeper": hello.keeper,
+                    "agents": hello.agents,
+                }),
+                None => json!({ "running": false, "home": home.to_string_lossy() }),
+            };
+            println_or_end!("{}", serde_json::to_string_pretty(&value)?);
+        }
     }
+    Ok(())
 }
 
-/// This process's environment, for the daemon to start or configure CLIs with. Variables that are
-/// not UTF-8 cannot travel, and stderr names them.
+pub(crate) fn version(format: Format) -> anyhow::Result<()> {
+    let version = facade_base::version();
+    match format {
+        Format::Text => println_or_end!("facade {version}"),
+        Format::Json => println_or_end!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "version": version }))?
+        ),
+    }
+    Ok(())
+}
+
+/// Pass the environment to the daemon to start or configure CLIs.
 fn environment() -> BTreeMap<String, String> {
     let (variables, left_out) = facade_base::daemon_client::environment();
     if !left_out.is_empty() {
         eprintln!(
-            "facade: omitted non-UTF-8 environment variables: {}",
+            "warning: omitted non-UTF-8 environment variables: {}",
             left_out.join(", ")
         );
     }
     variables
 }
 
-/// An agent's state, with what it waits for or how it ended, and its exit:
-/// `waiting_for_you: permission`, `ended: crashed (code 3)`.
-fn state_of(agent: &AgentInfo) -> String {
-    let mut state = agent.state.as_str().to_string();
-    let detail = agent.state_detail.as_ref();
-    if let Some(word) = detail.and_then(|d| {
-        d.kind
-            .map(|kind| kind.as_str())
-            .or(d.how.map(|how| how.as_str()))
-    }) {
-        let _ = write!(state, ": {word}");
-    }
-    if agent.state == AgentState::Ended
-        && let Some(exit) = &agent.exit
-    {
-        let _ = write!(state, " ({})", ExitText(exit));
-    }
-    state
+fn single_line(text: &str) -> String {
+    text.replace(
+        |ch: char| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'),
+        " ",
+    )
 }
 
-/// Who said something to an agent: `you` for the person, or the agent as `@name #a3`.
-fn speaker(said: &Said) -> String {
-    match (said.from.as_str(), &said.from_name) {
-        ("human", _) => "you".into(),
-        (id, Some(name)) => format!("@{} #{id}", display_name(name)),
-        (id, None) => format!("#{id}"),
-    }
-}
-
-/// ` pid 123` for an agent's process, or nothing for a guest, whose process Facade does not know.
-fn pid_of(agent: &AgentInfo) -> String {
-    agent
-        .pid
-        .map(|pid| format!(" pid {pid}"))
-        .unwrap_or_default()
-}
-
-/// Prints an inspection one line a fact: the agent, its rule, its folder, its run's YOLO, its
-/// state, its Facade tools, its input, what was last said to it, and its session.
-fn print_inspection(inspected: &InspectResult, local_machine_id: &str) {
-    let agent = &inspected.agent;
-    let guest = if agent.guest { " guest" } else { "" };
-    let mut process = agent.process.as_str().to_string();
-    if let Some(exit) = &agent.exit {
-        let _ = write!(process, " ({})", ExitText(exit));
-    }
-    println_or_end!(
-        "{} {}: {}{guest}, {process}",
-        record_address(agent, local_machine_id),
-        display_name(&agent.name),
-        agent.cli
-    );
-    println_or_end!("Rule: {}", inspected.rule.as_deref().unwrap_or("none"));
-    println_or_end!("Folder: {}", agent.cwd);
-    println_or_end!("YOLO: {}", if agent.yolo { "on" } else { "off" });
-
-    let why = agent
-        .state_detail
-        .as_ref()
-        .and_then(|d| d.text.as_deref().or(d.reason.map(StateReason::words)));
-    println_or_end!("State: {}{}", state_of(agent), reason(why));
-    let tools_why = agent.tools_reason.map(|why| why.words());
-    println_or_end!("Tools: {}{}", agent.tools_state.as_str(), reason(tools_why));
-
-    let input = &inspected.input;
-    let mechanism = input
-        .mechanism
-        .map(|mechanism| format!(" ({})", mechanism.as_str()))
-        .unwrap_or_default();
-    println_or_end!(
-        "Input: {}{mechanism}; {}",
-        input.state.as_str(),
-        input.evidence
-    );
-    if let Some(hidden) = input.hidden {
-        println_or_end!(
-            "Hidden draft rows: {} above, {} below",
-            hidden.above,
-            hidden.below
-        );
-    }
-
-    let said = match &agent.said {
-        Some(said) => format!("Said by {} at {}: {}", speaker(said), said.at, said.text),
-        None => "Said: nothing yet".to_string(),
-    };
-    println_or_end!("{said}");
-    let session = agent.session.as_deref().unwrap_or("unknown");
-    println_or_end!("Session: {session}");
-    let tracking = if inspected.session_tracking {
-        "available"
-    } else {
-        "unavailable"
-    };
-    println_or_end!("Session tracking: {tracking}");
-}
-
-/// `; why` after a state, or nothing when there is no why.
-fn reason(why: Option<&str>) -> String {
-    why.map(|why| format!("; {why}")).unwrap_or_default()
-}
-
-/// Prints a CLI's integration: each file and its state, then what the person should know.
-fn print_integration(info: &IntegrationInfo) {
-    let added = info
-        .added_at
-        .as_ref()
-        .map(|at| format!(": added {at}"))
-        .unwrap_or_default();
-    println_or_end!("{}{added}", info.cli);
-    for part in &info.parts {
-        println_or_end!("  {}: {}", part.file, entries(part.state));
-    }
-    for note in &info.notes {
-        println_or_end!("  {note}");
-    }
-}
-
-/// Whether a file holds Facade's entries, as `facade integration` names it.
-fn entries(state: PartState) -> &'static str {
-    match state {
-        PartState::AsWritten => "Facade's entries",
-        PartState::Changed => "Facade's entries, changed",
-        PartState::Missing | PartState::Unknown => "none of Facade's",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn words(line: &[&str]) -> Vec<String> {
-        line.iter().map(|word| word.to_string()).collect()
-    }
-
-    #[test]
-    fn facade_s_options_come_before_the_cli_s_name_and_every_word_after_it_is_the_cli_s() {
-        let started = |line: &[&str]| {
-            start_words(words(line)).map(|start| (start.name, start.prompt, start.command))
-        };
-        assert_eq!(
-            started(&[
-                "--name",
-                "review",
-                "--prompt",
-                "fix the bug",
-                "claude",
-                "--model",
-                "haiku"
-            ])
-            .unwrap(),
-            (
-                Some("review".into()),
-                Some("fix the bug".into()),
-                words(&["claude", "--model", "haiku"])
-            )
-        );
-        assert_eq!(
-            started(&[
-                "--prompt=-a dash first",
-                "--name=boss",
-                "codex",
-                "--",
-                "--name-like"
-            ])
-            .unwrap(),
-            (
-                Some("boss".into()),
-                Some("-a dash first".into()),
-                words(&["codex", "--", "--name-like"])
-            )
-        );
-        assert_eq!(
-            started(&["opencode", "--name", "review", "--prompt", "its own"]).unwrap(),
-            (
-                None,
-                None,
-                words(&["opencode", "--name", "review", "--prompt", "its own"])
-            ),
-            "after the CLI's name, both are the CLI's"
-        );
-        assert_eq!(
-            started(&["claude"]).unwrap(),
-            (None, None, words(&["claude"]))
-        );
-        let remote = start_words(words(&[
-            "--on=gpu",
-            "--cwd",
-            "C:\\Work Files",
-            "codex",
-            "--on",
-            "its own",
-        ]))
-        .unwrap();
-        assert_eq!(remote.machine.as_deref(), Some("gpu"));
-        assert_eq!(remote.cwd.as_deref(), Some("C:\\Work Files"));
-        assert_eq!(remote.command, words(&["codex", "--on", "its own"]));
-        for (line, why) in [
-            (&["--name", "x"][..], "specify a CLI program"),
-            (&["--name"][..], "--name requires an agent name"),
-            (
-                &["--prompt"][..],
-                "--prompt requires the agent's first message",
-            ),
-            (&["--on"][..], "--on requires a machine name or ID"),
-            (&["--cwd"][..], "--cwd requires a directory on the machine"),
-            (&["--cwd", "/work", "codex"][..], "--cwd requires --on"),
-            (
-                &["--model", "opus", "claude"][..],
-                "--model is not an option of facade start",
-            ),
-        ] {
-            let refused = started(line).unwrap_err().to_string();
-            assert!(refused.starts_with(why), "{line:?}: {refused}");
+/// Align columns by the width of their headers and cells.
+pub(crate) fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| row.iter().map(|cell| single_line(cell)).collect())
+        .collect();
+    let mut widths: Vec<usize> = headers.iter().map(|header| header.width()).collect();
+    for row in &rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.width());
         }
+    }
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    lines.push(table_row(headers.iter().copied(), &widths));
+    for row in &rows {
+        lines.push(table_row(row.iter().map(String::as_str), &widths));
+    }
+    lines.join("\n")
+}
+
+fn table_row<'a>(cells: impl Iterator<Item = &'a str>, widths: &[usize]) -> String {
+    let mut line = String::new();
+    for (column, (cell, width)) in cells.zip(widths).enumerate() {
+        if column > 0 {
+            line.push_str("   ");
+        }
+        line.push_str(cell);
+        if column + 1 < widths.len() {
+            let _ = write!(line, "{:pad$}", "", pad = width - cell.width());
+        }
+    }
+    line.truncate(line.trim_end_matches(' ').len());
+    line
+}
+
+pub(crate) fn ago(at: SystemTime, now: SystemTime) -> String {
+    let seconds = now.duration_since(at).unwrap_or_default().as_secs();
+    let (count, unit) = match seconds {
+        0..=59 => (seconds, "second"),
+        60..=3599 => (seconds / 60, "minute"),
+        3600..=7199 => return "about an hour ago".into(),
+        7200..=86399 => (seconds / 3600, "hour"),
+        86400..=1209599 => (seconds / 86400, "day"),
+        _ => (seconds / 604800, "week"),
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{} {unit}{plural} ago", quantity(count))
+}
+
+/// Add grouping to quantities, leaving IDs, PIDs and dates as they are.
+fn quantity(count: u64) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+fn relative_time(time: &str, now: SystemTime) -> String {
+    parse_iso_time(time).map_or_else(|| single_line(time), |at| ago(at, now))
+}
+
+fn detailed_time(time: &str, now: SystemTime) -> String {
+    match parse_iso_time(time) {
+        Some(at) => format!("{} ({} {} UTC)", ago(at, now), &time[..10], &time[11..19]),
+        None => single_line(time),
+    }
+}
+
+pub(crate) fn state_words(agent: &AgentInfo) -> String {
+    match agent.state {
+        AgentState::WaitingForYou => {
+            match agent.state_detail.as_ref().and_then(|detail| detail.kind) {
+                Some(WaitKind::Permission) => "waiting for you: permission".into(),
+                Some(WaitKind::Question) => "waiting for you: question".into(),
+                Some(WaitKind::Auth) => "waiting for you: sign-in".into(),
+                _ => "waiting for you".into(),
+            }
+        }
+        AgentState::JustDone => "turn finished".into(),
+        AgentState::Ended => ended_words(agent),
+        AgentState::Unrecognized => "unknown".into(),
+        state => state.as_str().into(),
+    }
+}
+
+fn ended_words(agent: &AgentInfo) -> String {
+    if agent.state_detail.as_ref().and_then(|detail| detail.how) == Some(HowEnded::Stopped) {
+        return "stopped".into();
+    }
+    match &agent.exit {
+        Some(exit) if exit.code.is_some() => format!("exited: {}", ExitText(exit)),
+        Some(exit) if exit.signal.is_some() => format!("ended by {}", ExitText(exit)),
+        _ => "ended".into(),
+    }
+}
+
+pub(crate) fn input_words(input: &InputInfo) -> String {
+    let word = match input.state {
+        InputState::Usable => "empty",
+        InputState::Draft => "draft",
+        InputState::Interaction => "menu or question",
+        InputState::Unknown | InputState::Unrecognized => "unknown",
+    };
+    if let Some(hidden) = input.hidden {
+        let above = quantity(hidden.above.into());
+        let below = quantity(hidden.below.into());
+        let lines = if hidden.above == 1 { "line" } else { "lines" };
+        return format!("{word} ({above} more {lines} above, {below} below)");
+    }
+    word.into()
+}
+
+pub(crate) fn tools_words(agent: &AgentInfo) -> String {
+    match agent.tools_state {
+        ToolsState::NotInjected => "not provided".into(),
+        ToolsState::Unavailable => match agent.tools_reason {
+            Some(reason) => format!("unavailable: {}", reason.words()),
+            None => "unavailable".into(),
+        },
+        state => state.as_str().into(),
+    }
+}
+
+pub(crate) fn list_text(agents: &[AgentInfo], now: SystemTime) -> String {
+    if agents.is_empty() {
+        return String::new();
+    }
+    let rows: Vec<Vec<String>> = agents
+        .iter()
+        .map(|agent| {
+            let cli = if agent.guest {
+                format!("{} (guest)", agent.cli)
+            } else {
+                agent.cli.clone()
+            };
+            vec![
+                shown_id(agent),
+                agent.name.clone(),
+                cli,
+                state_words(agent),
+                relative_time(&agent.created_at, now),
+                agent.cwd.clone(),
+            ]
+        })
+        .collect();
+    table(&["ID", "NAME", "CLI", "STATE", "CREATED", "FOLDER"], &rows)
+}
+
+pub(crate) fn quiet_text(agents: &[AgentInfo]) -> String {
+    agents.iter().map(shown_id).collect::<Vec<_>>().join("\n")
+}
+
+pub(crate) fn inspect_text(inspected: &InspectResult, now: SystemTime) -> String {
+    let agent = &inspected.agent;
+    let mut lines = Vec::new();
+    let mut field =
+        |label: &str, value: &str| lines.push(format!("{label:<15}{}", single_line(value)));
+    field("ID:", &shown_id(agent));
+    field("Name:", &agent.name);
+    let cli = if agent.guest {
+        format!("{} (guest)", agent.cli)
+    } else {
+        agent.cli.clone()
+    };
+    field("CLI:", &cli);
+    if !agent.guest {
+        match inspected.rule.as_deref() {
+            Some(rule) if rule != agent.cli => field("Kind:", rule),
+            None => field("Kind:", "plain program"),
+            Some(_) => {}
+        }
+    }
+    field("Folder:", &agent.cwd);
+    field("Created:", &detailed_time(&agent.created_at, now));
+    if !agent.guest {
+        field("Started by:", agent.creator.as_deref().unwrap_or("human"));
+    }
+    field("Process:", &process_words(agent, now));
+    field(
+        "YOLO:",
+        if agent.yolo {
+            "on: can address every agent"
+        } else {
+            "off"
+        },
+    );
+    field("State:", &state_words(agent));
+    if let Some(detail) = agent.state_detail.as_ref().and_then(|detail| {
+        detail
+            .text
+            .as_deref()
+            .or_else(|| detail.reason.map(|reason| reason.words()))
+    }) {
+        field("", detail);
+    }
+    field("Facade tools:", &tools_words(agent));
+    field("Input box:", &input_words(&inspected.input));
+    let last_input = match &agent.said {
+        Some(said) => format!(
+            "{}, {}: {}",
+            said.from,
+            detailed_time(&said.at, now),
+            said.text
+        ),
+        None => "none".into(),
+    };
+    field("Last input:", &last_input);
+    let session = agent.session.as_deref().unwrap_or(
+        if agent.process == ProcessState::Running && !inspected.session_tracking {
+            "none (not tracked)"
+        } else {
+            "none"
+        },
+    );
+    field("Session:", session);
+    lines.join("\n")
+}
+
+fn process_words(agent: &AgentInfo, now: SystemTime) -> String {
+    if agent.guest {
+        return "none (guest)".into();
+    }
+    match agent.process {
+        ProcessState::Running => agent
+            .pid
+            .map_or_else(|| "running".into(), |pid| format!("running, pid {pid}")),
+        ProcessState::Ended => {
+            let end = ended_words(agent);
+            match &agent.exit {
+                Some(exit) => format!("{end}, {}", detailed_time(&exit.at, now)),
+                None => end,
+            }
+        }
+        ProcessState::Unknown => "unknown".into(),
+    }
+}
+
+pub(crate) fn part_words(state: PartState) -> &'static str {
+    match state {
+        PartState::AsWritten => "up to date",
+        PartState::Changed => "needs attention",
+        PartState::Missing => "no Facade settings",
+        PartState::Unknown => "unknown",
+    }
+}
+
+pub(crate) fn integration_status(info: &IntegrationInfo) -> &'static str {
+    if info
+        .parts
+        .iter()
+        .any(|part| part.state == PartState::Unknown)
+    {
+        "unknown"
+    } else if info
+        .parts
+        .iter()
+        .all(|part| part.state == PartState::AsWritten)
+    {
+        "added"
+    } else if info
+        .parts
+        .iter()
+        .all(|part| part.state == PartState::Missing)
+    {
+        "not added"
+    } else {
+        "needs attention"
+    }
+}
+
+pub(crate) fn integration_text(info: &IntegrationInfo, removing: bool) -> String {
+    let cli = single_line(&info.cli);
+    let mut text = if !removing {
+        format!("Added Facade to {cli}.")
+    } else if info
+        .parts
+        .iter()
+        .all(|part| part.state == PartState::Missing)
+    {
+        format!("Removed Facade from {cli}.")
+    } else {
+        format!("Check {cli}'s settings to confirm removal.")
+    };
+    let command_label = command_program(&info.cli).map(|program| format!("{program} mcp"));
+    let rows: Vec<(String, &str)> = info
+        .parts
+        .iter()
+        .map(|part| {
+            let label = if command_label.as_deref() == Some(&part.file)
+                && let Ok(Some(rule)) = facade_rules::find(&info.cli)
+            {
+                format!("{} MCP servers", rule.display_name)
+            } else {
+                single_line(&part.file)
+            };
+            (label, part_words(part.state))
+        })
+        .collect();
+    let width = rows
+        .iter()
+        .map(|(label, _)| label.width())
+        .max()
+        .unwrap_or_default();
+    for (label, state) in rows {
+        let _ = write!(
+            text,
+            "\n  {label}{:pad$}   {state}",
+            "",
+            pad = width - label.width()
+        );
+    }
+    text
+}
+
+pub(crate) fn integrations_text(list: &[IntegrationInfo], now: SystemTime) -> String {
+    let rows: Vec<Vec<String>> = list
+        .iter()
+        .map(|info| {
+            vec![
+                info.cli.clone(),
+                integration_status(info).into(),
+                info.added_at
+                    .as_deref()
+                    .map_or_else(String::new, |time| relative_time(time, now)),
+            ]
+        })
+        .collect();
+    table(&["CLI", "STATUS", "ADDED"], &rows)
+}
+
+pub(crate) fn status_text(
+    home: &Path,
+    hello: Option<&HelloResult>,
+    version: &str,
+    build: &str,
+) -> String {
+    let home = single_line(&home.to_string_lossy());
+    let Some(hello) = hello else {
+        return format!("Facade did not respond.\n  Home:      {home}");
+    };
+    let service = |pid, service_build: &str| {
+        if service_build == build {
+            format!("pid {pid}")
+        } else {
+            format!("pid {pid} ({service_build})")
+        }
+    };
+    let daemon = service(hello.pid, &hello.build);
+    let keeper = hello.keeper.as_ref().map_or_else(
+        || "none".into(),
+        |keeper| service(keeper.pid, &keeper.build),
+    );
+    let agents = quantity(hello.agents as u64);
+    format!(
+        "Facade is running.\n  Home:      {home}\n  Version:   {version}\n  Daemon:    {daemon}\n  Keeper:    {keeper}\n  Agents:    {agents}"
+    )
+}
+
+/// Word a send result using the recipient and delivery facts returned by the service.
+pub(crate) fn sent(message: &Message) -> Result<String, Problem> {
+    let id = &message.message_id;
+    let to = &message.to;
+    let delivery = &message.delivery;
+    match (delivery.status, delivery.delivered_via) {
+        (DeliveryStatus::Pending, _) => Ok(format!("{id} waiting in {to}'s inbox")),
+        (DeliveryStatus::Success, Some(DeliveredVia::Read)) => Ok(format!("{id} read by {to}")),
+        (DeliveryStatus::Success, _) => Ok(format!("{id} delivered to {to}")),
+        _ if delivery.reason == Some(DeliveryFailure::SubmissionUnconfirmed) => {
+            Err(Problem::Unconfirmed {
+                message: id.clone(),
+                to: to.clone(),
+                progress: delivery.failure_words(to),
+            })
+        }
+        _ if delivery.reason == Some(DeliveryFailure::Ended)
+            && delivery.text_written == TextWritten::None
+            && let Some(agent) = bare_id(to) =>
+        {
+            Err(Problem::Ended { agent })
+        }
+        _ => Err(Problem::NotDelivered {
+            message: id.clone(),
+            to: to.clone(),
+            why: delivery.failure_words(to),
+        }),
     }
 }

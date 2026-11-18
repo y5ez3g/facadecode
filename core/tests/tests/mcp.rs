@@ -2180,7 +2180,7 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
             .output()
             .unwrap();
         assert!(started.status.success(), "{}", stderr(&started));
-        let run = started_agent(&stdout(&started)).id;
+        let run = started_id(&stdout(&started));
         let mut entry = through.open_guest(&home, cli, &[("FACADE_AGENT", &run)]);
         let server = json!({ "method": "initialize", "server": ["--guest", cli], "environment": { "FACADE_AGENT": run } });
         golden.record(

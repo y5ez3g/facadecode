@@ -54,15 +54,18 @@ for that agent, which a new home does not list; `unset FACADE_AGENT` first.
 ```sh
 export FACADE_HOME=$(mktemp -d)
 export PATH="$PWD/target/debug:$PATH"
-facade start fake                          # shows the agent here; Ctrl-] detaches and it keeps running
-facade start --name two fake </dev/null    # starts in the background and prints "#a2 pid …"
+facade --help
+facade start --help
+facade start fake                          # Ctrl-] detaches and leaves the agent running
+facade start -d --name two fake            # starts in the background and prints a bare ID
 facade list
+facade ls -q                              # one ID per line
 facade type two "hello" --enter
-facade send two "a message"                # typed once its input is empty; prints how it went
-facade screen two --lines 20
-facade inspect two                         # its rule, state, tools, input as its screen shows it, session
-facade stop two                            # ends it; its record stays
-facade remove two
+facade send two "a message"                # prints how the message was delivered
+facade screen -n 20 two
+facade inspect two                         # state, Facade tools, input box, last input and session
+facade stop two                            # ends the CLI and keeps the agent in the list
+facade rm two
 ```
 
 `fake` is the test CLI's rule. Only builds with debug assertions, such as `cargo build`'s, have it. A CLI's rule tells
@@ -70,56 +73,91 @@ Facade how to start the CLI, read its input box and resume its session. The test
 `FAKECLI_SESSION` names, so this agent can resume:
 
 ```sh
-FAKECLI_SESSION=86da4482-2bae-4a45-b193-a5664c19826a facade start --name three fake </dev/null
-facade stop three
-facade resume three        # the same agent, a new run of its CLI, continuing its session
+FAKECLI_SESSION=86da4482-2bae-4a45-b193-a5664c19826a facade start -d --name three fake
+facade inspect three
 ```
 
-The logs are `$FACADE_HOME/core/logs/daemon.log` and `keeper.log`. `facade status` shows both services' process IDs,
-and starts them when they are not running.
-
-To clean up, remove every agent. The daemon exits 5 seconds after it has no running agent, client or unfinished work,
-and the keeper exits with it. The daemon's socket goes when it exits. Then delete the home:
+Once `inspect` shows the session ID, stop and resume the agent:
 
 ```sh
-for agent in $(facade list --json | sed -n 's/^ *"agent_id": "\(.*\)",$/\1/p'); do facade remove "$agent"; done
-socket=/tmp/facade-core-$(id -u)/daemon-$(printf %s "$FACADE_HOME" | shasum -a 256 | cut -c1-10).sock
-while [ -e "$socket" ]; do sleep 0.2; done
-rm -rf "$FACADE_HOME"
+facade stop three
+facade resume -d three                    # continues the session and prints the same agent ID
 ```
 
-On Windows, the same steps in PowerShell. Empty input starts an agent in the background, as `</dev/null` does. Name
-an agent as `two`, `a2` or `2`: `#` begins a comment in PowerShell, as in sh, so `facade stop #a2` passes no agent,
-and `#a2` needs quotes, `'#a2'`:
+Use an agent's name or a bare ID from the list, such as `a2`. Message headers still show `#a2`. In Bash and
+PowerShell, `#` starts a comment, so quote that form as in `facade inspect '#a2'`.
+
+`facade status` shows the Facade home and, when it responds, this command's version, the running services and the
+agent count. A service using a different build shows its build beside its PID. Status makes one connection attempt
+without starting or upgrading Facade. The logs are in `$FACADE_HOME/core/logs/`. `facade version` prints the
+command's version locally.
+
+To clean up this temporary home, collect its IDs once and remove them after a successful, nonempty listing. The
+daemon exits 5 seconds after it has no running agent, client or unfinished work. The keeper exits with it.
+
+```sh
+if agents=$(facade ls -q) && [ -n "$agents" ]; then
+    facade rm $agents
+fi
+socket=/tmp/facade-core-$(id -u)/daemon-$(printf %s "$FACADE_HOME" | shasum -a 256 | cut -c1-10).sock
+while [ -e "$socket" ]; do sleep 0.2; done
+rm -rf "${FACADE_HOME:?}"
+```
+
+On Windows, run the same commands in PowerShell with a temporary home:
 
 ```powershell
 $env:FACADE_HOME = Join-Path ([IO.Path]::GetTempPath()) "facade-try-$(Get-Random)"
 $env:PATH = "$PWD\target\debug;$env:PATH"
-facade start fake                          # shows the agent here; Ctrl-] detaches and it keeps running
-$null | facade start --name two fake       # starts in the background and prints "#a2 pid …"
+facade --help
+facade start --help
+facade start fake                          # Ctrl-] detaches and leaves the agent running
+facade start -d --name two fake
 facade list
+facade ls -q
 facade type two "hello" --enter
 facade send two "a message"
-facade screen two --lines 20
+facade screen -n 20 two
 facade inspect two
 facade stop two
-facade remove two
+facade rm two
 $env:FAKECLI_SESSION = '86da4482-2bae-4a45-b193-a5664c19826a'
-$null | facade start --name three fake; Remove-Item Env:FAKECLI_SESSION
-Start-Sleep 2                              # the CLI reports its session once it runs
-facade stop three
-facade resume three
+facade start -d --name three fake
+Remove-Item Env:FAKECLI_SESSION
+facade inspect three                      # check for the session ID before stopping
 ```
 
-The services listen on named pipes instead of sockets, and the keeper exits last. To clean up:
+Once the session ID appears:
 
 ```powershell
-foreach ($agent in (facade list --json | ConvertFrom-Json).agent_id) { facade remove $agent }
+facade stop three
+facade resume -d three
+```
+
+To clean up the temporary home, wait for the keeper's named pipe to close before deleting the folder:
+
+```powershell
+$agents = @(facade ls -q)
+if ($LASTEXITCODE -eq 0 -and $agents.Count -gt 0) {
+    facade rm $agents
+}
 $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($env:FACADE_HOME))
 $pipe = "\\.\pipe\facade-core-keeper-" + (-join ($sha[0..4] | ForEach-Object { $_.ToString('x2') }))
 while ([IO.Directory]::GetFiles('\\.\pipe\') -contains $pipe) { Start-Sleep -Milliseconds 200 }
-Remove-Item -Recurse -Force $env:FACADE_HOME
+Remove-Item -LiteralPath $env:FACADE_HOME -Recurse -Force
 ```
+
+## Shell completion
+
+`facade completion <SHELL>` prints a script for completing commands, aliases and options. Put `facade` on your shell's
+`PATH` before configuring it.
+
+- **Bash.** Add `source <(facade completion bash)` to `~/.bashrc`.
+- **Zsh.** Add `source <(facade completion zsh)` to `~/.zshrc` after `compinit`.
+- **Fish.** Save the output of `facade completion fish` to `~/.config/fish/completions/facade.fish`, creating the
+  directory if needed.
+- **PowerShell.** Add `facade completion powershell | Out-String | Invoke-Expression` to your PowerShell profile
+  (`$PROFILE`).
 
 ## What is in this folder
 

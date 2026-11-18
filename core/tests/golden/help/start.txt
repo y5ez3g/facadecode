@@ -1,0 +1,27 @@
+Start an agent
+
+Usage: facade start [OPTIONS] <PROGRAM> [ARGS]...
+
+Start PROGRAM as an agent. In an interactive terminal it opens here; press Ctrl-] to detach and
+leave it running. Use '--detach' to start it in the background instead.
+
+Arguments:
+  <PROGRAM>  Built-in or configured CLI, such as claude or codex, or another program name or path
+  [ARGS]...  Arguments for the program; put Facade's options before PROGRAM
+
+Options:
+      --name <NAME>    Name the agent [default: chosen by Facade]
+      --prompt <TEXT>  Give the agent its first prompt when its CLI is ready; use a CLI that
+                       supports Facade messages, such as claude or codex
+  -d, --detach         Start in the background and print the agent's ID
+  -h, --help           Print help
+
+Examples:
+  # Start Claude Code and work with it here
+  facade start claude
+
+  # Name the agent and pass options to Codex
+  facade start --name review codex --model gpt-6.2-sol
+
+  # Start in the background with a first prompt
+  facade start -d --prompt "Fix the failing test in parser.rs" claude

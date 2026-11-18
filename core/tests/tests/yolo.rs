@@ -100,16 +100,13 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
     home.start_named_fake("after-restart", &[]);
     assert_eq!(record(&home, "after-restart")["yolo"], false);
     assert_eq!(record(&home, "on")["yolo"], true, "kept across the restart");
-    assert!(
-        home.run_facade_ok(&["inspect", "after-restart"])
+    let yolo = |agent: &str| {
+        home.run_facade_ok(&["inspect", agent])
             .lines()
-            .any(|line| line == "YOLO: off")
-    );
-    assert!(
-        home.run_facade_ok(&["inspect", "on"])
-            .lines()
-            .any(|line| line == "YOLO: on")
-    );
+            .find_map(|line| Some(line.strip_prefix("YOLO:")?.trim().to_string()))
+    };
+    assert_eq!(yolo("after-restart").as_deref(), Some("off"));
+    assert_eq!(yolo("on").as_deref(), Some("on: can address every agent"));
 }
 
 /// A settings file Facade cannot read as it must refuses every start, `facade start` and

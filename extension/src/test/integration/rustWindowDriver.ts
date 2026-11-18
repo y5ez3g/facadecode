@@ -102,11 +102,13 @@ function windowOf(id: string): string {
 	return record.windows[0].window_id;
 }
 
-function servicePids(): { readonly daemon: number; readonly keeper: number } {
-	const status = facade('status');
-	const matched = /daemon pid (\d+).*keeper pid (\d+)/u.exec(status);
-	assert.ok(matched, status);
-	return { daemon: Number(matched[1]), keeper: Number(matched[2]) };
+/** The services of the Facade that responds, or undefined while none does: `facade status` never starts Facade. */
+function servicePids(): { readonly daemon: number; readonly keeper: number } | undefined {
+	const text = facade('status', '--json');
+	const status = JSON.parse(text) as { running?: boolean; daemon?: { pid?: number }; keeper?: { pid?: number } | null };
+	if (status.running !== true) { return undefined; }
+	assert.ok(typeof status.daemon?.pid === 'number' && typeof status.keeper?.pid === 'number', text);
+	return { daemon: status.daemon.pid, keeper: status.keeper.pid };
 }
 
 /** The fake CLI reports the session to core. Give its transcript a title and an activity time for the Resume picker. */
@@ -230,11 +232,12 @@ export async function activate(): Promise<void> {
 			write({ phase: 'reopened', detail: began.agent });
 			const windowId = windowOf(began.agent.id);
 			const before = servicePids();
-			assert.ok(Number.isSafeInteger(before.daemon) && before.daemon > 1);
+			assert.ok(before && Number.isSafeInteger(before.daemon) && before.daemon > 1, 'Facade runs with this window');
 			process.kill(before.daemon, 'SIGKILL');
+			// Until the keeper starts the replacement, no Facade responds
 			const replacement = await until('the replacement daemon', () => {
 				const next = servicePids();
-				return next.daemon !== before.daemon ? next : undefined;
+				return next && next.daemon !== before.daemon ? next : undefined;
 			});
 			assert.strictEqual(replacement.keeper, before.keeper, 'the same keeper starts the replacement daemon');
 			await until(`window ${windowId} to reconnect to the new daemon`, async () =>

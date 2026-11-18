@@ -87,18 +87,81 @@ pub struct TestAgent {
 
 static HOMES: AtomicU64 = AtomicU64::new(0);
 
-/// The agent `facade start` or `facade resume` printed without a terminal: `#a1 pid 123`.
-pub fn started_agent(out: &str) -> TestAgent {
-    let words: Vec<&str> = out.split_whitespace().collect();
+/// The agent ID that `facade start` or `facade resume` printed in the background: one bare ID and a
+/// line break, such as `a1\n`.
+pub fn started_id(out: &str) -> String {
+    let id = out.strip_suffix('\n').unwrap_or(out);
+    let id = id.strip_suffix('\r').unwrap_or(id);
     assert!(
-        words.len() >= 3 && words[0].starts_with("#a") && words[1] == "pid",
-        "unexpected start output: {out}"
+        id.strip_prefix('a').is_some_and(
+            |number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        ),
+        "unexpected start output: {out:?}"
     );
-    let pid = words[2].parse().expect("expected a process ID");
-    TestAgent {
-        process: process_identity(pid),
-        id: words[0].trim_start_matches('#').to_string(),
-        pid,
+    id.to_string()
+}
+
+/// A table that a `facade` command printed: its header's labels, and each row's cells, split where
+/// the header's columns begin. Every cell is padded to its column and three spaces part the columns,
+/// so a column begins where a header label follows three spaces.
+#[derive(Clone, Debug)]
+pub struct Table {
+    pub header: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+impl Table {
+    pub fn parse(text: &str) -> Table {
+        let mut lines = text.lines();
+        let header = lines.next().unwrap_or_default();
+        let chars: Vec<char> = header.chars().collect();
+        let starts: Vec<usize> = (0..chars.len())
+            .filter(|&at| {
+                chars[at] != ' ' && (at == 0 || (at >= 3 && chars[at - 3..at] == [' '; 3]))
+            })
+            .collect();
+        let split = |line: &str| -> Vec<String> {
+            let chars: Vec<char> = line.chars().collect();
+            starts
+                .iter()
+                .enumerate()
+                .map(|(n, &start)| {
+                    let end = match starts.get(n + 1) {
+                        Some(&next) => next.min(chars.len()),
+                        None => chars.len(),
+                    };
+                    let cell: String = chars[start.min(end)..end].iter().collect();
+                    cell.trim_end().to_string()
+                })
+                .collect()
+        };
+        Table {
+            header: split(header),
+            rows: lines.map(split).collect(),
+        }
+    }
+
+    /// The cell of `row` under the header `label`.
+    pub fn cell<'a>(&self, row: &'a [String], label: &str) -> &'a str {
+        let at = self
+            .header
+            .iter()
+            .position(|given| given == label)
+            .unwrap_or_else(|| panic!("no column {label} in {:?}", self.header));
+        row.get(at).map(String::as_str).unwrap_or_default()
+    }
+
+    /// The first row whose cell under `label` is `value`.
+    pub fn row(&self, label: &str, value: &str) -> Option<&[String]> {
+        self.rows
+            .iter()
+            .find(|row| self.cell(row, label) == value)
+            .map(Vec::as_slice)
+    }
+
+    /// The cells under `label`, one per row.
+    pub fn column(&self, label: &str) -> Vec<&str> {
+        self.rows.iter().map(|row| self.cell(row, label)).collect()
     }
 }
 
@@ -341,7 +404,7 @@ impl TestHome {
             stdout(&output),
             stderr(&output)
         );
-        let agent = started_agent(&stdout(&output));
+        let agent = self.started_agent(&stdout(&output));
         // Allow up to 30 seconds for parallel tests on a busy machine; return as soon as the
         // condition holds.
         assert!(
@@ -363,12 +426,41 @@ impl TestHome {
             .cloned()
     }
 
-    /// Returns the `facade list` row for the named agent.
-    pub fn list_line(&self, name: &str) -> Option<String> {
-        stdout(&self.run_facade(&["list"]))
-            .lines()
-            .find(|line| line.starts_with("#a") && line.split_whitespace().nth(1) == Some(name))
-            .map(str::to_string)
+    /// The agent whose ID `facade start` or `facade resume` printed in the background, and the
+    /// process its record names.
+    pub fn started_agent(&self, out: &str) -> TestAgent {
+        let id = started_id(out);
+        let record = self
+            .agent_record(&id)
+            .unwrap_or_else(|| panic!("{id} is not listed"));
+        let pid = record["pid"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("{id}'s record names no process: {record}"))
+            as i32;
+        TestAgent {
+            process: process_identity(pid),
+            id,
+            pid,
+        }
+    }
+
+    /// The record of the agent with this ID, from the `agents` topic.
+    pub fn agent_record(&self, id: &str) -> Option<Value> {
+        self.agents()
+            .into_iter()
+            .find(|agent| agent["agent_id"] == id)
+    }
+
+    /// The table `facade list` prints.
+    pub fn list_table(&self) -> Table {
+        Table::parse(&self.run_facade_ok(&["list"]))
+    }
+
+    /// The STATE `facade list` shows for the named agent, if it is listed.
+    pub fn list_state(&self, name: &str) -> Option<String> {
+        let table = self.list_table();
+        let row = table.row("NAME", name)?;
+        Some(table.cell(row, "STATE").to_string())
     }
 
     pub fn screen(&self, agent: &str) -> String {
@@ -385,15 +477,11 @@ impl TestHome {
             .collect()
     }
 
-    /// Reads the daemon PID from `facade status`, which starts the daemon if needed.
+    /// The PID of the daemon that answers `hello`, if one does. It starts nothing.
     pub fn daemon_pid(&self) -> Option<i32> {
-        let out = stdout(&self.run_facade(&["status"]));
-        let words: Vec<&str> = out.split_whitespace().collect();
-        words
-            .iter()
-            .position(|word| *word == "pid")
-            .and_then(|at| words.get(at + 1))
-            .and_then(|pid| pid.parse().ok())
+        self.hello_result()
+            .and_then(|hello| hello["pid"].as_i64())
+            .map(|pid| pid as i32)
     }
 
     /// Finds this test's processes: those whose environment selects its Facade home, and those

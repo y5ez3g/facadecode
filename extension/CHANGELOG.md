@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Signed on Windows.** `facade.exe` and `facade-mcp.exe` now carry the publisher's code signature. Unsigned in 0.1.6,
+  `facade.exe` was quarantined by Microsoft Defender as a trojan, a false positive, which stopped Facade core and every
+  agent with it.
 - **Closing a window on the Rust engine leaves its agents running.** Reopen the workspace to return to the same
   processes and screens. On the old engine, agents still stop after 90 seconds for a local window or five minutes for
   a remote one if the workspace stays closed. The old engine remains available until 0.2.0.

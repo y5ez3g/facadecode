@@ -13,44 +13,58 @@ Windows it is a native program, and each CLI runs in a pseudo console.
 
 An agent is a CLI that Facade runs in a terminal it keeps, or a session that joined from outside, a guest.
 
-- **Start**: `facade start [--name <name>] [--prompt <text>] <cli> [<the CLI's own words>…]`. A CLI of the settings
-  file starts as its entry says: the six built-ins, `claude`, `codex`, `agy` (Antigravity), `muse` (Muse Code),
-  `opencode` and `pi`, and each entry that the file's `clis` adds. Any other program, a path included, runs as given,
-  without a rule. In a terminal, the command then shows the agent; elsewhere it prints the agent's ID.
+- **Start**: `facade start [OPTIONS] <PROGRAM> [ARGS]...`. Put Facade's options, such as `--name` and `--prompt`,
+  before PROGRAM. The arguments after it go to that program. A CLI of the settings file starts as its entry says:
+  the six built-ins, `claude`, `codex`, `agy` (Antigravity), `muse` (Muse Code), `opencode` and `pi`, and each entry
+  that the file's `clis` adds. Any other program, a path included, runs as given. In an interactive terminal, Facade
+  attaches to the agent. Use `-d` or `--detach` to start it in the background and print its ID. A start with
+  redirected input or output also runs in the background.
 - **Model and effort**: an entry's `model` and `effort`, unless the CLI's own words choose them.
-- **First prompt**: `--prompt` is the agent's first message. Facade sends it once the CLI's tools have connected, or
-  will not, so that the first turn has them.
+- **First prompt**: Use `--prompt` to give an agent its first prompt. The CLI must support Facade messages. Facade waits
+  until the CLI's tools have connected or will not connect before trying to deliver the prompt.
 - **Numbers and names**: every agent gets the next `#aN`, which its home never gives again. An agent without a name gets
   one from the settings file's `names`, else from Facade's own. `facade rename` changes it. An editor window says at
   `hello` the highest agent and message numbers its editor gave before, and core numbers above them from then on.
-- **States**: `facade list` shows what each agent is doing: `starting`, `working`, `waiting_for_you` (on a permission, a
-  question or a sign-in), `just_done`, `idle`, `error`, `ended` or `unknown`. A state comes from what the CLI reports of
-  itself, and from its screen where its rule reads it. See [States](../../core/protocol/PROTOCOL.md#states).
+- **List**: `facade list` or `facade ls` shows one row per visible agent, with its ID, name, CLI, state, age and
+  folder. Ended agents stay in the list until removed. A guest's CLI is marked `(guest)`. Use `-q` for one bare ID
+  per line or `--json` for the agent records.
+- **States**: The table describes an agent's state in words such as `working`, `waiting for you: question`,
+  `turn finished`, `stopped` or `exited: code 0`. A state comes from what the CLI reports and what Facade reads
+  from its screen. JSON keeps the protocol values. See [States](../../core/protocol/PROTOCOL.md#states).
 - **A started agent that waits**: when an agent that another agent of the same window started waits 20 seconds in a row
   on a permission, a question or a sign-in, its creator gets one message saying so. The person gets no message.
-- **Stop and remove**: `facade stop` ends the CLI: SIGHUP to its process group, then SIGKILL 3 seconds later to anything
-  left. On Windows its pseudo console closes, which sends `CTRL_CLOSE_EVENT` to every program in it, and its job ends 3
-  seconds later. The record stays. `facade remove` stops the agent if it runs, then removes the record.
+- **Stop and remove**: `facade stop` ends the CLI and keeps the agent listed. On Unix it sends SIGHUP to its process
+  group, then SIGKILL 3 seconds later to anything left. On Windows its pseudo console closes, which sends
+  `CTRL_CLOSE_EVENT` to every program in it, and its job ends 3 seconds later. `facade remove` (alias `rm`) stops the
+  agent if it runs, then removes it and its saved screen and inbox. Both accept several IDs or names and handle them
+  in order. Each success prints the ID or name as you gave it. They continue after an individual failure and exit 1
+  if any failed.
 - **Resume**: `facade resume` starts an ended agent's CLI again, continuing the session the CLI reported. The agent
-  keeps its ID, `#aN`, name and screen; the resume is a new run of its CLI. An agent can resume when it was started by a
-  CLI's name and its CLI reported a session. See [Resume](../../core/protocol/PROTOCOL.md#resume).
+  keeps its ID, name and screen. An agent can resume when Facade started it with a CLI that supports resuming and
+  saved a session. Use `-d` or `--detach` to resume in the background and print the same ID.
+  See [Resume](../../core/protocol/PROTOCOL.md#resume).
 - **Continue a session**: a start can continue a CLI's session as a new agent, with its own `#aN`, with the arguments
   its rule gives to continue it: an editor does this to bring back a pinned or recent session. See `StartArgs.session` in
   [PROTOCOL](../../core/protocol/PROTOCOL.md#startargs).
-- **Inspect**: `facade inspect` shows an agent's rule, state, tools, its input box as its screen shows it now, what was
-  last said to it, and its session.
+- **Inspect**: `facade inspect` shows an agent's state, process, Facade tools, input box, last submitted text and saved
+  session. Its times include UTC. `--json` prints the full inspection.
+
+The command line prints bare IDs such as `a3`. It accepts that form, a quoted `'#a3'`, a number or an agent name.
+Message headers continue to use IDs such as `#a3` and `#m42`.
 
 ## Terminals
 
-- **Show and type**: `facade attach <agent>` shows the agent's terminal and sends it your keys. Ctrl-] detaches, and the
-  agent keeps running. An interactive `facade start` or `facade resume` attaches the same way.
+- **Show and type**: `facade attach <agent>` shows the agent's terminal for you to watch and use. Ctrl-] detaches and
+  leaves the agent running. An interactive `facade start` or `facade resume` attaches the same way. Attach to an ended
+  agent to see its saved screen. The command exits with the agent's exit code when the agent ends or after showing
+  its saved screen.
 - **One size**: every viewer of an agent sees the same terminal size, and the last resize wins. Each viewer then gets a
   full redraw.
 - **Reconnect**: when the daemon goes away, an attachment reconnects by agent ID, and starts Facade if needed. Keys
   typed meanwhile wait, up to 1 MiB, and go after the redraw.
 - **Type from a script**: `facade type <agent> "<text>" [--enter]` pastes text; `facade type <agent> --key Esc --key
   Enter` presses keys.
-- **Read**: `facade screen <agent> [--lines <n>]` prints the last lines of the screen and its scrollback.
+- **Read**: `facade screen [-n <lines>] <agent>` prints the last lines of the screen and its scrollback.
 - **Colors**: an agent in an editor window replies to its CLI's color queries (OSC 10, 11 and 12) with the colors the
   window's terminals draw with, so a CLI that picks its colors by the background suits the editor's theme.
 
@@ -66,8 +80,9 @@ An agent is a CLI that Facade runs in a terminal it keeps, or a session that joi
   a send also withdraws its message while the paste has not begun.
 - **Inbox**: `facade messages` in an agent's terminal, or the `read_messages` tool, reads the messages waiting for that
   agent and so delivers them.
-- **To the person**: a message to `#human` from an agent of an editor window goes to that window, which shows it to the
-  person.
+- **To the person**: a message to `human` from an agent goes to each of the agent's editor windows that shows Facade
+  messages, and the command reports each window. If an agent is also named human, quote `'#human'` for the human or use the agent's ID. The command line
+  says 'the human' for the person using Facade. The ID is `human`. Message headers show it as `#human`.
 - **Kept**: messages and their deliveries are kept 30 days, across daemon restarts. A delivery under way goes on after a
   restart, within its 30 seconds. A send that repeats its request ID gets the first send's response, and nothing is sent
   again.
@@ -191,7 +206,7 @@ See [Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions).
 
 - **Sessions you start yourself**: `facade integration add <cli>` writes Facade's entries into that CLI's user
   settings: Facade's MCP server, the approval of its own tools, and the hooks that report each session. Every
-  session you then start with that CLI joins as a guest: it gets a `#aN`, shows in `facade list`, and takes its
+  session you then start with that CLI joins as a guest: it gets an ID, shows in `facade list` and takes its
   messages at its next turn. `facade integration remove <cli>` takes the entries out, and a file nothing else changed
   goes back byte for byte. `facade integration list` shows what is written. It works for `claude`, `codex`, `opencode`,
   `pi`, `muse` and `agy`.
@@ -232,9 +247,16 @@ See [Disconnections and recovery](../../core/protocol/PROTOCOL.md#disconnections
 
 ## Diagnostics
 
-- `facade status` shows the version, both services' process IDs, and how many agents there are.
+- `facade --help` groups the commands. Use `facade <command> --help` for the options and examples of one command.
+- `facade status` makes one connection attempt. It shows the Facade home and, when the daemon responds, this
+  command's version, the services' process IDs and the agent count. Services using a different build show it beside
+  their PID. Status leaves the running services as it finds them.
+- `facade version` and `facade --version` show the version of the command.
+- `facade completion <shell>` prints completion for Bash, Zsh, Fish or PowerShell. See
+  [Shell completion](../../core/README.md#shell-completion) for setup.
 - The logs are `core/logs/daemon.log` and `keeper.log` in the Facade home. The daemon's log is also the agents' log:
   which agents started and ended, and who sent whom a message. It is kept 30 days.
 - The person's clients, such as the editor, can read the daemon log's last lines, up to 200, with the protocol's
   `daemon.log`. A client that acts for an agent cannot.
-- `facade list --json` and `facade inspect --json` print complete records.
+- `list`, `inspect`, `status`, `version` and each `integration` subcommand accept `--json`. Data goes to stdout and
+  diagnostics go to stderr. CLI failures return 1, while usage errors return 2.

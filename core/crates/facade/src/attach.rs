@@ -3,12 +3,12 @@
 //! redraws before sending input. For a local agent, up to 1 MiB of keys typed meanwhile waits.
 //! For a remote agent, input is paused until the redraw. Discarded keys are counted as unsent.
 //!
-//! Every end of an attachment restores the person's terminal exactly once and prints its note after
-//! the restoration. Ctrl-] waits up to one second for the keys typed before it; termination signals
-//! do not wait.
+//! Every end of an attachment restores the person's terminal exactly once and reports the result to
+//! stderr. Ctrl-] waits up to one second for the keys typed before it. Termination signals do not wait.
 
 use std::collections::VecDeque;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
@@ -18,13 +18,14 @@ use facade_base::daemon::{self, ScreenChange, ScreenSnapshot, ScreenTopic};
 use facade_base::daemon_client::{DaemonClient, RECONNECT_DELAY};
 use facade_base::jsonrpc::{self, ErrorBody, Reason};
 use facade_base::operations::{CallParams, Operation};
-use facade_base::paths::ClientSocket;
-use facade_base::process::ProcessExit;
+use facade_base::paths::{ClientSocket, core_dir};
+use facade_base::process::{EndReason, ProcessExit};
 use facade_base::unix_process::signal_number;
 use facade_base::{base64, service};
 
-use crate::ExitText;
 use crate::daemon_client::{ConnectFailure, Reconnect};
+use crate::errors::about_agent;
+use crate::{ExitText, Opening};
 
 /// Ctrl-], as plain input and in the kitty keyboard encoding. In win32-input-mode it comes as a
 /// key-down record of its character, which [`is_detach_record`] recognizes.
@@ -33,6 +34,12 @@ const DETACH_KEYS: [&[u8]; 2] = [b"\x1d", b"\x1b[93;5u"];
 const DETACH_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 /// The most typed bytes that wait while there is no connection or the write is blocked.
 const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
+/// The bottom row while the attachment reconnects.
+pub(crate) const RECONNECTING: &str = "Reconnecting to Facade. Recent keys may be lost.";
+
+/// The bottom row while an agent on another machine reconnects: its input is paused.
+pub(crate) const RECONNECTING_PAUSED: &str =
+    "Reconnecting to Facade. Keys you type now are not sent.";
 
 /// Whether raw mode is on and the person's terminal still has to be restored.
 static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -57,23 +64,32 @@ pub(crate) fn terminal_size() -> Option<(u16, u16)> {
 pub(crate) fn attach(
     client: DaemonClient,
     agent: &str,
+    opening: Opening,
     reconnect: &Reconnect,
 ) -> anyhow::Result<i32> {
     // The person's scrollback stays above the agent's screen, which brings its own.
-    let screen = watch_screen(client, agent, true)?;
+    let screen = watch_screen(client, agent, true).map_err(|error| about_agent(agent, error))?;
+    // Reconnects use the agent's exact address, never the name the person typed.
     let remote = screen.snapshot.machine_id != screen.client.hello_result.machine_id;
-    let address = screen.snapshot.reference().exact_address();
-    let input = Arc::new(AgentInput::new(address, remote));
-    spawn_with(&input, AgentInput::send_queued);
-    // Signal handling comes before raw mode, so that termination restores the terminal.
-    follow_signals(input.clone())?;
-    enter_raw_mode()?;
-    spawn_with(&input, read_keys);
-    let (note, code) = match follow_agent(screen, &input, reconnect) {
-        Ok(end) => end.note_and_code(),
-        Err(error) => (format!("attachment failed: {error:#}"), 1),
+    let address = match remote {
+        true => screen.snapshot.reference().exact_address(),
+        false => screen.snapshot.agent_id.clone(),
     };
-    restore_terminal(&with_unsent(note, input.unsent_bytes()));
+    let input = Arc::new(AgentInput::new(address, remote));
+    // Register before entering raw mode so a termination signal can be handled even during setup.
+    let signals = ConsoleSignals::new().map_err(|error| about_agent(agent, error.into()))?;
+    let _ = writeln!(
+        std::io::stderr(),
+        "{}",
+        opening_line(&opening, &input.agent)
+    );
+    enter_raw_mode().map_err(|error| about_agent(agent, error.into()))?;
+    follow_signals(signals, input.clone());
+    spawn_with(&input, AgentInput::send_queued);
+    spawn_with(&input, read_keys);
+    let end = follow_agent(screen, &input, reconnect);
+    let code = end.as_ref().map_or(1, AttachEnd::code);
+    finish_attachment(&input, end);
     input.detach();
     Ok(code)
 }
@@ -105,37 +121,60 @@ fn lock_vt_modes() -> MutexGuard<'static, Option<VtModes>> {
 }
 
 /// Why an attachment ended.
-enum AttachEnd {
+pub(crate) enum AttachEnd {
     Detached,
     AgentExited(ProcessExit),
     Removed,
     /// A permission, protocol or settings error stops every reconnect.
     Unreachable,
+    Signal(String),
 }
 
 impl AttachEnd {
-    /// The note for the person and the command's exit code.
-    fn note_and_code(&self) -> (String, i32) {
+    fn code(&self) -> i32 {
         match self {
-            AttachEnd::Detached => ("detached".into(), 0),
-            AttachEnd::AgentExited(exit) => {
-                let note = if exit.code.is_none() && exit.signal.is_none() {
-                    format!("agent ended: {}", ExitText(exit))
-                } else {
-                    format!("the agent ended with {}", ExitText(exit))
-                };
-                (note, exit_code(exit))
-            }
-            AttachEnd::Removed => ("the agent was removed".into(), 1),
-            AttachEnd::Unreachable => {
-                let logs = facade_base::paths::core_dir().map_or_else(
-                    |_| "the Facade logs".into(),
-                    |core| core.join("logs").display().to_string(),
-                );
-                (format!("could not reconnect to Facade; see {logs}"), 1)
-            }
+            AttachEnd::Detached => 0,
+            AttachEnd::AgentExited(exit) => exit_code(exit),
+            AttachEnd::Removed | AttachEnd::Unreachable => 1,
+            AttachEnd::Signal(name) => signal_number(name).map_or(1, |number| 128 + number),
         }
     }
+}
+
+/// The line shown before the first redraw, using the agent ID from the screen snapshot.
+pub(crate) fn opening_line(opening: &Opening, id: &str) -> String {
+    let began = match opening {
+        Opening::Started { name } => format!("Started {id} ({}).", daemon::display_name(name)),
+        Opening::Resumed { name } => format!("Resumed {id} ({}).", daemon::display_name(name)),
+        Opening::Attached => format!("Attached to {id}."),
+    };
+    format!("{began} Press Ctrl-] to detach.")
+}
+
+/// The result shown after restoring the person's terminal.
+pub(crate) fn result_line(end: &AttachEnd, id: &str, logs: &Path) -> String {
+    match end {
+        AttachEnd::Detached => format!("Detached from {id}. Run 'facade attach {id}' to return."),
+        AttachEnd::AgentExited(exit) => match (exit.code, &exit.signal, exit.reason) {
+            (Some(_), _, _) => format!("{id} exited with {}.", ExitText(exit)),
+            (None, Some(_), _) => format!("{id} was ended by {}.", ExitText(exit)),
+            (None, None, Some(EndReason::TerminalClosed)) => {
+                format!("{id}'s terminal closed. Its CLI may still be running.")
+            }
+            (None, None, _) => format!("{id} ended; its exit status is unknown."),
+        },
+        AttachEnd::Removed => format!("error: {id} was removed"),
+        AttachEnd::Unreachable => format!(
+            "error: could not reconnect to Facade\n  tip: check '{}/' for details",
+            logs.display()
+        ),
+        AttachEnd::Signal(name) => format!("Attachment ended by {name}."),
+    }
+}
+
+/// The final warning when typed input was left waiting or dropped.
+pub(crate) fn unsent_line(unsent: usize) -> Option<String> {
+    (unsent > 0).then(|| format!("warning: {unsent} bytes you typed were not sent"))
 }
 
 /// The agent's exit code, 128 plus the number of the signal that ended it, or 1 with neither.
@@ -206,20 +245,13 @@ fn follow_agent(
         if input.is_detached() {
             return Ok(AttachEnd::Detached);
         }
-        let note = match closing {
-            // Wait for input already handed to this connection before acknowledging the daemon.
-            Some(build) => {
-                input.wait_for_write();
-                screen.client.respond_to_closing();
-                format!("Facade {build} takes over; reconnecting")
-            }
-            None => "connection lost; reconnecting; recent keys may not have arrived".into(),
-        };
-        show_note(if input.remote {
-            "connection lost. Input paused"
-        } else {
-            &note
-        });
+        if closing.is_some() {
+            // A newer Facade takes over: the keys handed to this connection go before the
+            // response, and keys typed meanwhile wait for the next connection.
+            input.wait_for_write();
+            screen.client.respond_to_closing();
+        }
+        show_reconnecting(input.remote);
         screen = match reconnect_screen(input, reconnect) {
             Ok(again) => again,
             Err(end) => return Ok(end),
@@ -303,8 +335,7 @@ fn not_found(error: &anyhow::Error) -> bool {
 
 /// Queues a resize on each size change; on a termination signal, restores the terminal and exits
 /// with 128 plus the signal's number.
-fn follow_signals(input: Arc<AgentInput>) -> anyhow::Result<()> {
-    let signals = ConsoleSignals::new()?;
+fn follow_signals(signals: ConsoleSignals, input: Arc<AgentInput>) {
     std::thread::spawn(move || {
         for signal in signals {
             let (name, number) = match signal {
@@ -314,15 +345,13 @@ fn follow_signals(input: Arc<AgentInput>) -> anyhow::Result<()> {
                 }
                 ConsoleSignal::Ended { name, number } => (name, number),
             };
-            let note = format!("attachment ended by {name}");
-            restore_terminal(&with_unsent(note, input.unsent_bytes()));
+            finish_attachment(&input, Ok(AttachEnd::Signal(name.into())));
             // A test holds the exit here, as a loaded machine can, while the agent's output
             // keeps coming.
             service::gate_for_test("attach-restored");
             std::process::exit(128 + number);
         }
     });
-    Ok(())
 }
 
 /// The one reader of the person's keys and, where the console reports them with its keys, its size
@@ -644,7 +673,7 @@ fn write_terminal(bytes: &[u8]) {
 
 /// Writes the agent's terminal bytes, base64 as the daemon sends them, while the person's terminal
 /// is the attachment's. After the restoration more output would turn the agent's modes back on and
-/// cover the note.
+/// cover the result.
 fn write_output(data: &str) {
     let Ok(bytes) = base64::decode(data) else {
         return;
@@ -688,15 +717,17 @@ fn track_alternate_screen(bytes: &[u8]) {
 /// Shows a note on the bottom row while reconnecting. It saves and restores the cursor around the
 /// note and keeps it narrower than the terminal so that nothing scrolls; the redraw after
 /// reconnecting replaces both.
-fn show_note(note: &str) {
+fn show_reconnecting(remote: bool) {
     let Some(_terminal) = attached_terminal() else {
         return;
     };
+    let note = if remote {
+        RECONNECTING_PAUSED
+    } else {
+        RECONNECTING
+    };
     let width = terminal_size().map_or(80, |(cols, _)| usize::from(cols));
-    let shown: String = format!("[facade: {note}]")
-        .chars()
-        .take(width.saturating_sub(1))
-        .collect();
+    let shown = &note[..note.len().min(width.saturating_sub(1))];
     write_terminal(format!("\x1b7\x1b[999;1H\x1b[0m\x1b[2K{shown}\x1b8").as_bytes());
 }
 
@@ -709,39 +740,45 @@ const RESTORE_TERMINAL_SEQUENCE: &[u8] =
       1006l\x1b[?1015l\x1b[?1004l\x1b[?9001l\x1b[<u\x1b[>4m\x1b[?2026l\x1b[?7h\x1b(B\x0f\x1b7\
       \x1b[r\x1b8";
 
-/// Restores the person's terminal and prints why the attachment ended below the agent's screen.
+/// Restores the person's terminal and writes the result and any unsent warning to stderr.
 /// Only the first call does anything, so a signal cannot restore a half-restored terminal again.
 /// The sequences go out while the console still reads them; then its modes go back, those entered
 /// after raw mode first.
-fn restore_terminal(note: &str) {
+fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
     let _terminal = lock_terminal();
     if !RAW_MODE_ACTIVE.swap(false, SeqCst) {
         return;
     }
-    write_terminal(&restoration(note));
+    write_terminal(&restoration());
     drop(lock_vt_modes().take());
     let _ = crossterm::terminal::disable_raw_mode();
+
+    let line = match end {
+        Ok(end) => {
+            let logs =
+                core_dir().map_or_else(|_| PathBuf::from("core/logs"), |core| core.join("logs"));
+            result_line(&end, &input.agent, &logs)
+        }
+        Err(error) => format!("error: attachment failed: {error:#}"),
+    };
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{line}");
+    if let Some(warning) = unsent_line(input.unsent_bytes()) {
+        let _ = writeln!(stderr, "{warning}");
+    }
 }
 
-/// What restores the person's terminal, with the note below the agent's screen.
-fn restoration(note: &str) -> Vec<u8> {
+/// What restores the person's terminal and moves below the agent's screen.
+fn restoration() -> Vec<u8> {
     // CAN ends any escape sequence the agent's output left open.
     let mut restoration = b"\x18".to_vec();
     if ALTERNATE_SCREEN_ACTIVE.load(SeqCst) {
         restoration.extend_from_slice(b"\x1b[?1049l");
     }
     restoration.extend_from_slice(RESTORE_TERMINAL_SEQUENCE);
-    // From the last row, the line feed scrolls the agent's screen up above the note.
-    restoration.extend_from_slice(format!("\x1b[999;1H\r\n[facade: {note}]\r\n").as_bytes());
+    // From the last row, the line feed scrolls the agent's screen up above the result.
+    restoration.extend_from_slice(b"\x1b[999;1H\r\n");
     restoration
-}
-
-/// Adds how many typed bytes were not sent, if any.
-fn with_unsent(note: String, unsent: usize) -> String {
-    match unsent {
-        0 => note,
-        _ => format!("{note}; {unsent} typed bytes were not sent"),
-    }
 }
 
 #[cfg(test)]

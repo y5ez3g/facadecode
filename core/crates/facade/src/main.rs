@@ -16,237 +16,44 @@ macro_rules! println_or_end {
 }
 
 mod attach;
+mod cli;
 mod commands;
 mod daemon_client;
+mod errors;
+mod help;
 mod hooks;
 mod machine;
+#[cfg(test)]
+mod tests;
 
 use std::fmt;
 use std::io::{IsTerminal, Write};
 
-use clap::{Parser, Subcommand};
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
+use facade_base::daemon_client::DaemonClient;
 use facade_base::process::{EndReason, ProcessExit};
 
-use commands::{Format, IntegrationAction};
+use cli::{Command, Integration, Target, Targets};
+use commands::{Format, IntegrationAction, Listing};
 use daemon_client::{connect_or_start, reconnect};
-use hooks::HookEvent;
+use errors::Problem;
 use machine::MachineAction;
 
-#[derive(Parser)]
-#[command(
-    name = "facade",
-    version,
-    about = "Run agents, view their terminals, and send input."
-)]
-struct Arguments {
-    #[command(subcommand)]
-    command: Command,
+/// How an attachment began, for the line before the agent's screen.
+pub(crate) enum Opening {
+    /// `start` began the agent in this terminal: its record's name.
+    Started { name: String },
+    /// `resume` began it: its record's name.
+    Resumed { name: String },
+    /// `facade attach`.
+    Attached,
 }
 
-/// The agent a command acts on.
-#[derive(clap::Args)]
-struct Target {
-    /// An agent ID (a3, '#a3', or 3), a unique name, or an address such as '#a3@gpu' or
-    /// '@Pixel@gpu'.
-    agent: String,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Start an agent and show its terminal when run interactively.
-    ///
-    /// Examples: `facade start claude`, `facade start --name review codex --model gpt-6`, or
-    /// `facade start --prompt "fix the failing test" claude`. A CLI of Facade's settings file, by
-    /// its name - a built-in's (claude, codex, agy, muse, opencode, pi) or one its `clis` adds -
-    /// starts as its entry says; any other program, including a path, runs as given. Facade's own
-    /// options come before the CLI's name, and every word after it is the CLI's own.
-    ///
-    /// `--name <name>` names the agent; a missing or blank name gets one from the settings file's
-    /// `names`, else the built-in names, or its ID once every one is taken. `--prompt <text>` is
-    /// the agent's first message: Facade sends it as `facade send` does, once the CLI's tools are
-    /// connected or will not be, so that its first turn has them, the same for every CLI. Only a
-    /// CLI of the settings file takes one. The first turn counts only when its prompt comes through
-    /// `--prompt`; words after the CLI's name are the CLI's own.
-    ///
-    /// `--on <machine>` selects the running machine. Use `--cwd <path>` with `--on` to give an
-    /// absolute directory on that machine. A start on another machine uses that user's home
-    /// directory by default.
-    ///
-    /// In a terminal, Ctrl-] detaches; the agent keeps running. If the agent ends, this command
-    /// exits with its code, or 128 plus the terminating signal number. An unavailable exit status
-    /// returns code 1. If the connection closes, reconnect by agent ID and start the daemon if
-    /// needed. Keys wait for the screen to be redrawn; Ctrl-] waits at most one second to send
-    /// them. Without a terminal, start the agent in the background and print its ID.
-    Start {
-        /// Facade's options, then the CLI program and its arguments.
-        #[arg(
-            trailing_var_arg = true,
-            allow_hyphen_values = true,
-            required = true,
-            value_name = "CLI [ARGS]"
-        )]
-        command_line: Vec<String>,
-    },
-    /// Stop an agent and keep its record in the list.
-    ///
-    /// Hang up a running agent's terminal, then kill the CLI and the processes it started if any
-    /// are left 3 seconds after Facade accepted the first stop. On macOS and Linux that is SIGHUP,
-    /// then SIGKILL, to its process group; on Windows, closing its pseudo console, then killing.
-    /// Return the recorded exit once the agent ends; an ended agent returns it without another
-    /// signal.
-    Stop(Target),
-    /// Remove an agent record.
-    ///
-    /// Stop a running agent first; see facade stop --help for signal timing. Removing an ended
-    /// agent sends no additional signal. Processes left by a CLI that ended by itself can keep
-    /// running if they ignore terminal hangup.
-    Remove(Target),
-    /// List agents with what each is doing.
-    ///
-    /// Each agent's state is starting, working, waiting_for_you (with what for), just_done, idle,
-    /// error, ended (with how), or unknown. The CLI's own words and the last thing said to the
-    /// agent follow on lines of their own.
-    List {
-        /// Print the agent records and machine query results as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show an agent's terminal and send it your input.
-    ///
-    /// Ctrl-] detaches; the agent keeps running. If the agent ends, exit with its code or 128 plus
-    /// the signal number. An unavailable exit status returns code 1. If the connection closes,
-    /// reconnect to the same agent. On another machine, input is paused until the screen has
-    /// refreshed. Ctrl-] can detach while the connection is down.
-    Attach(Target),
-    /// Type text or press keys in an agent's terminal.
-    ///
-    /// Examples: `facade type a3 "run the tests" --enter` or
-    /// `facade type a3 --key Esc --key Down --key Enter`. Text is pasted as one input. --enter
-    /// presses Enter in a write of its own once the CLI can have read the text. Keys are pressed in
-    /// order, as a terminal sends them in the CLI's modes. Return once the input reached the
-    /// terminal; if the agent ends first, the error says what was typed.
-    #[command(
-        override_usage = "facade type <AGENT> <TEXT> [--enter]\n       facade type <AGENT> \
-                          --key <KEY>...",
-        group(clap::ArgGroup::new("input").required(true).args(["text", "keys"]))
-    )]
-    Type {
-        #[command(flatten)]
-        target: Target,
-        /// The text to paste: printable characters, tabs, and line breaks. Put `--` before text
-        /// that starts with `-`.
-        text: Option<String>,
-        /// Press Enter after the text. With empty text, press Enter alone.
-        #[arg(long, requires = "text")]
-        enter: bool,
-        /// A key to press; repeat for more. Enter, Esc, Tab, Shift+Tab, Backspace, Delete, Up,
-        /// Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z, in any letter
-        /// case, or one character.
-        #[arg(long = "key", value_name = "KEY")]
-        keys: Vec<String>,
-    },
-    /// Start an ended agent's CLI again in its terminal, continuing its recorded session.
-    ///
-    /// The agent keeps its ID, name, and screen. The CLI starts with your environment and terminal
-    /// size and the CLI's current rule; the session's own settings stay the CLI's. Only an agent
-    /// started by a CLI's name, such as `facade start claude`, whose CLI reported its session, can
-    /// resume. In a terminal, show the agent as `facade start` does; otherwise print its ID and
-    /// process ID.
-    Resume(Target),
-    /// Show an agent's CLI rule, its state, its message input as its screen shows it now, what was
-    /// last said to it, and its session.
-    ///
-    /// Reads the screen without sending keys. Input reads unknown for an ended agent, one without a
-    /// rule, and one whose CLI has not written since it started, resumed, or was recovered. A
-    /// reading never means input may be typed.
-    Inspect {
-        #[command(flatten)]
-        target: Target,
-        /// Print the inspection as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Send a message to an agent, or to the person, and print how it was delivered.
-    ///
-    /// Once the agent's input is empty, its typist pastes the message under a header naming its
-    /// sender, such as `📨 Message from #human · #m5`, and presses Enter; it never types over a
-    /// draft. In an agent's terminal, the message comes from that agent; elsewhere, from the
-    /// person. A message to '#human' goes to the active messages subscriptions of the sender's
-    /// windows. The command reports the outcome for each window and succeeds if at least one
-    /// subscription took the message. A message to a guest, a CLI the person started, waits for
-    /// its next turn and returns at once. Otherwise return once the message is delivered, or fail
-    /// within 30 seconds saying why.
-    Send {
-        /// An agent ID, unique name, address such as '#a3@gpu', or '#human' for the person.
-        to: String,
-        /// The message: at most 8,000 characters and 540 lines of text, tabs, and line breaks.
-        text: String,
-        /// The message this one answers, such as m4 or '#m4@gpu'.
-        #[arg(long, value_name = "MESSAGE")]
-        reply_to: Option<String>,
-    },
-    /// Print the messages waiting for the agent of this terminal, which delivers them.
-    ///
-    /// Each message shows under its header, such as `📨 Message from Ada (#a1) · #m5`, as the
-    /// agent's terminal would show it, and its sender learns that it was read.
-    Messages,
-    /// Rename an agent and print its ID and new name.
-    Rename {
-        #[command(flatten)]
-        target: Target,
-        /// The new name. A blank name gets one as a start without a name does.
-        name: String,
-    },
-    /// Print the last lines of an agent's screen and scrollback.
-    Screen {
-        #[command(flatten)]
-        target: Target,
-        /// The number of lines to print, from 1 to 2000. Defaults to 50.
-        #[arg(long)]
-        lines: Option<u16>,
-    },
-    /// Show Facade's version, process IDs, and agent count; start the daemon if needed.
-    Status,
-    /// Manage connections between Facade machines.
-    Machine {
-        #[command(subcommand)]
-        action: MachineAction,
-    },
-    /// Let the sessions of a CLI that you start yourself join Facade as guests:
-    /// `facade integration add claude`.
-    ///
-    /// Adding writes Facade's entries in the CLI's user configuration: Facade's MCP server, the
-    /// approval of its own tools only, and the hooks or extension that report each session's start,
-    /// turns and end. Nothing else changes, and nothing is written where a file cannot be read as
-    /// its CLI writes it or holds a facade entry of your own. Adding again brings Facade's entries
-    /// up to date. Removing takes them out; a file nothing else changed since goes back as it was.
-    Integration {
-        #[command(subcommand)]
-        action: IntegrationAction,
-    },
-    /// For CLIs: the hooks a CLI's rule installs in its runs, which report the run's session, give
-    /// the model its instructions, and approve Facade's own tools; and a guest's hooks, which
-    /// report its session and its turns and give its model its messages.
-    #[command(hide = true)]
-    Hook {
-        #[command(subcommand)]
-        event: HookEvent,
-    },
-    /// Internal: run the keeper, which a command starts with Facade, or a daemon whose keeper
-    /// ended.
-    #[command(hide = true)]
-    Keeper,
-    /// For programs: run the daemon, or with --detach start Facade in the background: the keeper,
-    /// which starts the daemon.
-    #[command(hide = true)]
-    Daemon {
-        /// Start the daemon in the background. Return code 0 when it starts, another daemon holds
-        /// the daemon lock, or it is still starting after 10 seconds. Print startup failures and
-        /// return code 1. Connect and send hello to confirm readiness.
-        #[arg(long)]
-        detach: bool,
-    },
+/// An agent that `start` or `resume` began in this terminal, to attach to.
+pub(crate) struct Shown {
+    /// The agent's ID, such as `a3`.
+    pub(crate) agent: String,
+    pub(crate) opening: Opening,
 }
 
 /// An agent's exit as a person reads it: `code 3`, the signal's name, or what is known of an exit
@@ -270,10 +77,15 @@ impl fmt::Display for ExitText<'_> {
 
 fn main() {
     facade_base::take_test_build();
-    let command = match Arguments::try_parse() {
-        Ok(arguments) => arguments.command,
+    let arguments = match cli::parse() {
+        Ok(arguments) => arguments,
         Err(error) if error.use_stderr() && is_hook_line() => skip_hook_line(&error),
         Err(error) => error.exit(),
+    };
+    let Some(command) = arguments.command else {
+        // `facade` alone prints the root page, as help does.
+        let _ = cli::cli().print_help();
+        std::process::exit(0)
     };
     // A command whose output is closed early, as by `facade list | head`, ends without an error,
     // like other shell tools: by SIGPIPE where the system has it, else through `write_or_end`. The
@@ -289,9 +101,17 @@ fn main() {
     ) {
         facade_base::service::default_broken_pipe();
     }
+    let hidden = matches!(
+        command,
+        Command::Hook { .. } | Command::Keeper | Command::Daemon { .. }
+    );
     let code = run(command).unwrap_or_else(|error| {
-        eprintln!("facade: {error:#}");
-        1
+        if hidden {
+            eprintln!("facade: {error:#}");
+            1
+        } else {
+            errors::report(&error)
+        }
     });
     std::process::exit(code)
 }
@@ -346,21 +166,23 @@ fn skip_hook_line(error: &clap::Error) -> ! {
     std::process::exit(0)
 }
 
+/// Whether this command's standard input and output are both terminals, where it can show an
+/// agent.
+fn interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
 /// The size of the person's terminal for an agent's first frame, where this command shows the
-/// agent: its standard input and output are both terminals.
-fn shown_terminal() -> Option<(u16, u16)> {
-    (std::io::stdin().is_terminal() && std::io::stdout().is_terminal())
-        .then(|| attach::terminal_size().unwrap_or(DEFAULT_TERMINAL_SIZE))
+/// agent: it is interactive and `detach` does not keep the agent in the background.
+fn shown_terminal(detach: bool) -> Option<(u16, u16)> {
+    (!detach && interactive()).then(|| attach::terminal_size().unwrap_or(DEFAULT_TERMINAL_SIZE))
 }
 
 /// Shows the agent a start or resume returned, until the person detaches or it ends; exits 0 where
 /// there is none to show.
-fn show(
-    client: facade_base::daemon_client::DaemonClient,
-    agent: Option<String>,
-) -> anyhow::Result<i32> {
-    match agent {
-        Some(agent) => attach::attach(client, &agent, &reconnect),
+fn show(client: DaemonClient, shown: Option<Shown>) -> anyhow::Result<i32> {
+    match shown {
+        Some(Shown { agent, opening }) => attach::attach(client, &agent, opening, &reconnect),
         None => Ok(0),
     }
 }
@@ -386,41 +208,64 @@ fn run(command: Command) -> anyhow::Result<i32> {
             }
             daemon_client::machine_socket()
         }),
-        Command::Start { command_line } => {
-            // Words Facade cannot use fail before Facade starts.
-            let words = commands::start_words(command_line)?;
-            let terminal = shown_terminal();
+        Command::Start {
+            name,
+            prompt,
+            detach,
+            machine,
+            cwd,
+            command_line,
+        } => {
+            // An option Facade does not know fails before Facade is reached.
+            cli::check_start(&command_line)?;
+            let terminal = shown_terminal(detach);
             let mut client = connect_or_start()?;
-            let shown = commands::start(&mut client, words, terminal)?;
+            let shown = commands::start(
+                &mut client,
+                name,
+                prompt,
+                (machine, cwd),
+                command_line,
+                terminal,
+            )?;
             show(client, shown)
         }
-        Command::Resume(Target { agent }) => {
-            let terminal = shown_terminal();
+        Command::Resume {
+            detach,
+            target: Target { agent },
+        } => {
+            let terminal = shown_terminal(detach);
             let mut client = connect_or_start()?;
             let shown = commands::resume(&mut client, agent, terminal)?;
             show(client, shown)
         }
         Command::Attach(Target { agent }) => {
-            attach::attach(connect_or_start()?, &agent, &reconnect)
+            if !interactive() {
+                return Err(Problem::NotInteractive { given: agent }.into());
+            }
+            attach::attach(connect_or_start()?, &agent, Opening::Attached, &reconnect)
         }
         Command::Messages => {
             let Some(agent) = daemon_client::agent_of_terminal()? else {
-                anyhow::bail!(
-                    "facade messages reads the inbox of the agent whose terminal it runs in, and \
-                     this is no agent's terminal"
-                );
+                return Err(Problem::NotAgentTerminal.into());
             };
-            commands::messages(&mut daemon_client::connect_or_start_for(&agent)?)?;
-            Ok(0)
+            commands::messages(&mut daemon_client::connect_or_start_for(&agent)?).map(done)
         }
-        Command::List { json } => commands::list(&mut connect_or_start()?, format(json)).map(done),
+        Command::List { quiet, json } => {
+            let listing = match (quiet, json) {
+                (true, _) => Listing::Quiet,
+                (_, true) => Listing::Json,
+                _ => Listing::Table,
+            };
+            commands::list(&mut connect_or_start()?, listing).map(done)
+        }
         Command::Inspect {
-            target: Target { agent },
             json,
+            target: Target { agent },
         } => commands::inspect(&mut connect_or_start()?, agent, format(json)).map(done),
         Command::Screen {
-            target: Target { agent },
             lines,
+            target: Target { agent },
         } => commands::screen(&mut connect_or_start()?, agent, lines).map(done),
         Command::Type {
             target: Target { agent },
@@ -435,17 +280,30 @@ fn run(command: Command) -> anyhow::Result<i32> {
             target: Target { agent },
             name,
         } => commands::rename(&mut connect_or_start()?, agent, name).map(done),
-        Command::Stop(Target { agent }) => {
-            commands::stop(&mut connect_or_start()?, agent).map(done)
+        Command::Stop(Targets { agents }) => {
+            commands::stop(&mut connect_or_start()?, agents, &errors::report)
         }
-        Command::Remove(Target { agent }) => {
-            commands::remove(&mut connect_or_start()?, agent).map(done)
+        Command::Remove(Targets { agents }) => {
+            commands::remove(&mut connect_or_start()?, agents, &errors::report)
         }
         Command::Integration { action } => {
-            commands::integration(&mut connect_or_start()?, action).map(done)
+            let (action, json) = match action {
+                Integration::Add { json, cli } => (IntegrationAction::Add { cli: cli.cli }, json),
+                Integration::Remove { json, cli } => {
+                    (IntegrationAction::Remove { cli: cli.cli }, json)
+                }
+                Integration::List { json } => (IntegrationAction::List, json),
+            };
+            commands::integration(&mut connect_or_start()?, action, format(json)).map(done)
         }
-        Command::Status => {
-            commands::status(&connect_or_start()?);
+        Command::Status { json } => {
+            let home = facade_base::paths::facade_home()?;
+            let reply = daemon_client::probe()?;
+            commands::status(&home, reply.as_ref(), format(json)).map(done)
+        }
+        Command::Version { json } => commands::version(format(json)).map(done),
+        Command::Completion { shell } => {
+            cli::completion(&shell);
             Ok(0)
         }
     }

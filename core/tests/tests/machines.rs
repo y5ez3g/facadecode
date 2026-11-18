@@ -302,7 +302,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     );
     drop(link);
     assert!(
-        terminal.wait_for_output(secs(15), "Input paused"),
+        terminal.wait_for_output(secs(15), "Keys you type now are not sent"),
         "{}",
         terminal.text()
     );
@@ -447,7 +447,7 @@ fn three_machines_switch_routes_and_resolve_names_only_when_all_answer() {
             .contains("through the middle")
     );
 
-    let nearby = started_agent(&first.run_facade_ok(&["start", "--name", "lookout", "fake"]));
+    let nearby = first.started_agent(&first.run_facade_ok(&["start", "--name", "lookout", "fake"]));
     assert!(wait_for_screen_text(&first, &nearby.id, "❯"));
     let refused = connect(&first).call("agent.screen", json!({ "agent": "lookout" }));
     assert_eq!(error_reason(&refused), "ambiguous_reference", "{refused}");
@@ -496,7 +496,7 @@ fn three_machines_switch_routes_and_resolve_names_only_when_all_answer() {
     ]);
     assert!(!conflict.status.success(), "{conflict:?}");
     assert!(
-        stderr(&conflict).contains("(machine_id_conflict)")
+        stderr(&conflict).contains("is in use by two running daemons")
             && stderr(&conflict).contains("SSH duplicate"),
         "{}",
         stderr(&conflict)

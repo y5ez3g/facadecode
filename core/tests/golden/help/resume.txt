@@ -1,0 +1,21 @@
+Resume an ended agent's session
+
+Usage: facade resume [OPTIONS] <AGENT>
+
+Pick up where an ended agent that Facade started left off, with the same ID, name and screen, if its
+CLI supports resuming and saved a session. In an interactive terminal it opens here; press Ctrl-] to
+detach and leave it running. Use '--detach' to resume it in the background instead.
+
+Arguments:
+  <AGENT>  Agent ID or name
+
+Options:
+  -d, --detach  Resume in the background and print the agent's ID
+  -h, --help    Print help
+
+Examples:
+  # Resume agent a3 and work with it here
+  facade resume a3
+
+  # Resume agent a3 in the background
+  facade resume -d a3

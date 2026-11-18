@@ -28,15 +28,19 @@ fn a_rule_s_name_runs_its_cli_and_a_path_runs_the_program_as_given() {
         "a program started by its path has no rule"
     );
     let plain = home.run_facade_ok(&["inspect", "raw"]);
+    let label = |name: &str| {
+        plain
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+            .map(str::trim)
+    };
     assert!(
-        plain.contains("Rule: none\n")
-            && plain.contains("Session: unknown\n")
-            && plain.contains("Session tracking: unavailable\n"),
+        label("Kind") == Some("plain program") && label("Session") == Some("none (not tracked)"),
         "{plain}"
     );
     let help = home.run_facade_ok(&["start", "--help"]);
     assert!(
-        help.contains("(claude, codex, agy, muse, opencode, pi)") && !help.contains("fake"),
+        help.contains("claude") && !help.contains("fake"),
         "the help names what a release carries: {help}"
     );
 }
@@ -176,33 +180,78 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
         inspect(&home, "reader")
     );
     let plain = home.run_facade_ok(&["inspect", "reader"]);
-    let lines: Vec<&str> = plain.lines().collect();
-    assert_eq!(lines.len(), 10, "{plain}");
+    // Each line is a label in sentence case, padded to one column, and its value.
+    let fields: Vec<(&str, &str)> = plain
+        .lines()
+        .map(|line| {
+            let (label, value) = line.split_once(':').unwrap_or_else(|| panic!("{plain}"));
+            assert_eq!(
+                label.len() + 1 + value.len() - value.trim_start().len(),
+                15,
+                "{plain}"
+            );
+            (label, value.trim())
+        })
+        .collect();
+    let value = |label: &str| {
+        fields
+            .iter()
+            .find(|(given, _)| *given == label)
+            .map(|(_, value)| *value)
+    };
     assert_eq!(
-        (lines[0], lines[1]),
-        (
-            format!("#{} reader: fake, running", agent.id).as_str(),
-            "Rule: fake"
-        )
+        fields.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+        [
+            "ID",
+            "Name",
+            "CLI",
+            "Folder",
+            "Created",
+            "Started by",
+            "Process",
+            "YOLO",
+            "State",
+            "Facade tools",
+            "Input box",
+            "Last input",
+            "Session"
+        ],
+        "{plain}"
     );
     assert!(
-        lines[2]
-            .strip_prefix("Folder: ")
+        value("Folder")
             .map(std::path::Path::new)
             .is_some_and(|folder| folder.is_absolute() && folder.ends_with("project")),
         "{plain}"
     );
     assert_eq!(
-        &lines[3..],
-        [
-            "YOLO: on",
-            "State: starting",
-            "Tools: available",
-            "Input: draft (prompt_row); the prompt row at row 28 holds text",
-            "Said: nothing yet",
-            "Session: unknown",
-            "Session tracking: available"
-        ]
+        (
+            value("ID"),
+            value("Name"),
+            value("CLI"),
+            value("Started by"),
+            value("Process"),
+            value("YOLO"),
+            value("State"),
+            value("Facade tools"),
+            value("Input box"),
+            value("Last input"),
+            value("Session"),
+        ),
+        (
+            Some(agent.id.as_str()),
+            Some("reader"),
+            Some("fake"),
+            Some("human"),
+            Some(format!("running, pid {}", agent.pid).as_str()),
+            Some("on: can address every agent"),
+            Some("starting"),
+            Some("available"),
+            Some("draft"),
+            Some("none"),
+            Some("none")
+        ),
+        "{plain}"
     );
     wire.call("agent.stop", json!({ "agent": agent.id }));
     let ended = inspect(&home, "reader");

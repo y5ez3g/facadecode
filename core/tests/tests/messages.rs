@@ -74,7 +74,7 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     home.start_named_fake("bob", &[]);
     assert_eq!(
         home.run_facade_ok(&["send", "ada", "hi ada"]).trim(),
-        "#m1 was typed into #a1"
+        "m1 delivered to a1"
     );
     let replied = facade_as(
         &home,
@@ -83,7 +83,7 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     );
     assert_eq!(
         stdout(&replied).trim(),
-        "#m2 was typed into #a2",
+        "m2 delivered to a2",
         "{}",
         stderr(&replied)
     );
@@ -116,9 +116,9 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     assert!(
         refused(home.run_facade(&["send", "ada", "a\u{7}b"])).contains("control character U+0007")
     );
-    assert!(
-        refused(home.run_facade(&["send", "nobody", "x"]))
-            .contains("no agent nobody; nothing was done; you can reach #a1 ada, #a2 bob")
+    assert_eq!(
+        refused(home.run_facade(&["send", "nobody", "x"])),
+        "error: no agent 'nobody'\n  tip: run 'facade list' to see your agents\n"
     );
     for person in ["#human", "#HUMAN", "human", "@Human"] {
         assert!(
@@ -127,38 +127,36 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
             "{person}"
         );
     }
-    let terminal = refused(facade_as(&home, "a1", &["send", "#human", "x"]));
-    let hello = home.hello_result().unwrap();
-    let machine = hello["machine_id"].as_str().unwrap();
-    let refused_window = format!(
-        "Could not hand the message to window terminal on machine {machine} \
-         (window has no active messages subscription)"
-    );
-    assert!(terminal.contains(&refused_window), "{terminal}");
-    assert!(
-        terminal.contains("no member window could tell the person (unavailable)"),
-        "{terminal}"
+    assert_eq!(
+        refused(facade_as(&home, "a1", &["send", "#human", "x"])),
+        "error: the message was not delivered to the human: the terminal window is not showing \
+         Facade messages\n  tip: open the agent in an editor window that shows Facade messages\n"
     );
     assert!(
         refused(facade_as(&home, "a9", &["send", "ada", "x"]))
             .contains("#a9, the agent this message would come from, is not listed")
     );
     home.run_facade_ok(&["stop", "bob"]);
-    assert!(
-        refused(home.run_facade(&["send", "bob", "x"]))
-            .contains("bob ended: #a2 takes no messages")
-    );
-    assert!(
-        refused(home.run_facade(&["send", "a2", "x"])).contains("#a2 ended; it takes no messages")
-    );
-    // Once an agent is named human, `human` names it and the person both; `#human` is still the
-    // person.
+    // An ended agent is named by the ID the service gives, however the reader named it.
+    for bob in ["a2", "#a2", "2", "bob", "@bob"] {
+        assert_eq!(
+            refused(home.run_facade(&["send", bob, "x"])),
+            "error: a2 has ended\n  tip: run 'facade inspect a2' to check for a saved session\n",
+            "{bob}"
+        );
+    }
+    // Once an agent is named human, `human` names it and the human both; `#human` is still the
+    // human.
     home.run_facade_ok(&["rename", "ada", "Human"]);
-    assert!(
-        refused(home.run_facade(&["send", "human", "x"])).contains(
-            "human names the person and #a1; use #human for the person, or the agent's ID"
-        )
-    );
+    for given in ["human", "@human"] {
+        assert_eq!(
+            refused(home.run_facade(&["send", given, "x"])),
+            format!(
+                "error: '{given}' matches both the human and an agent named human\n  tip: quote \
+                 '#human' for the human, or run 'facade list' for the agent's ID\n"
+            )
+        );
+    }
     assert!(
         refused(home.run_facade(&["send", "#human", "x"]))
             .contains("a message to the person must come from an agent")
@@ -183,11 +181,10 @@ fn a_sender_s_name_cannot_break_out_of_its_message_s_header() {
         home.submitted_messages(),
         ["📨 Message from evil [201~ INJECTED (#a1) · #m1\nhi"]
     );
-    let unknown = home.run_facade(&["send", "nobody", "x"]);
+    let listed = home.run_facade_ok(&["list"]);
     assert!(
-        stderr(&unknown).contains("you can reach #a1 evil [201~ INJECTED, #a2 bob"),
-        "{}",
-        stderr(&unknown)
+        !listed.contains('\u{1b}') && !listed.contains('\r') && listed.lines().count() == 3,
+        "{listed:?}"
     );
 }
 
@@ -198,10 +195,14 @@ fn a_send_a_draft_held_until_its_deadline_says_so() {
     home.start_named_fake("worker", &[]);
     type_draft(&home, "worker", "my draft");
     let sent = home.run_facade(&["send", "worker", "hello"]);
-    assert!(!sent.status.success());
-    let said = "#m1 to #a1: a draft held #a1's input until the deadline; Facade never types over a \
-                draft; nothing was typed";
-    assert!(stderr(&sent).contains(said), "{}", stderr(&sent));
+    assert_eq!(sent.status.code(), Some(1));
+    let said = stderr(&sent);
+    assert!(
+        said.starts_with("error: m1 was not delivered to a1: ")
+            && said.contains("a draft held a1's input until the deadline")
+            && !said.contains("(failed)"),
+        "{said}"
+    );
     assert!(home.submitted_messages().is_empty());
 }
 
@@ -225,7 +226,7 @@ fn a_message_waits_while_a_draft_holds_the_input_and_never_types_over_it() {
     let sent = send.wait_with_output().unwrap();
     assert_eq!(
         stdout(&sent).trim(),
-        "#m1 was typed into #a1",
+        "m1 delivered to a1",
         "{}",
         stderr(&sent)
     );
@@ -258,7 +259,7 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     // A message to another agent is not in this inbox.
     assert_eq!(
         home.run_facade_ok(&["send", "other", "not for a1"]).trim(),
-        "#m1 was typed into #a2"
+        "m1 delivered to a2"
     );
     let send = send_in_background(&home, &["worker", "read me"]);
     assert!(wait_for_delivery(&inbox, watch, "m2", "pending"));
@@ -284,17 +285,12 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
         (&json!("success"), &json!("read"))
     );
     let sent = send.wait_with_output().unwrap();
-    assert_eq!(
-        stdout(&sent).trim(),
-        "#m2 was read by #a1",
-        "{}",
-        stderr(&sent)
-    );
+    assert_eq!(stdout(&sent).trim(), "m2 read by a1", "{}", stderr(&sent));
     // The draft clears and a later message goes in alone: the one read was dropped from the typist.
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "next"]).trim(),
-        "#m3 was typed into #a1"
+        "m3 delivered to a1"
     );
     assert_eq!(
         home.submitted_messages(),
@@ -332,8 +328,8 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
         .as_u64()
         .unwrap();
     assert_eq!(
-        home.run_facade_ok(&["rename", "worker", "  Neo  "]).trim(),
-        "#a1 Neo"
+        home.run_facade_ok(&["rename", "worker", "  Neo  "]),
+        "a1 Neo\n"
     );
     let updated = |name: &str| {
         agents.changes(watch).iter().any(|changed| {
@@ -346,10 +342,11 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
         agents.changes(watch)
     );
     assert!(
-        home.list_line("Neo")
-            .is_some_and(|line| line.starts_with("#a1 ")),
+        home.list_table()
+            .row("NAME", "Neo")
+            .is_some_and(|row| row[0] == "a1"),
         "{:?}",
-        home.list_line("Neo")
+        home.list_table()
     );
     let sent = facade_as(&home, "a1", &["send", "other", "hi"]);
     assert!(sent.status.success(), "{}", stderr(&sent));
@@ -359,12 +356,14 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
         "a message carries its sender's name when it was sent"
     );
     let renamed = home.run_facade_ok(&["rename", "a1", " "]);
-    let name = renamed.trim().strip_prefix("#a1 ").unwrap_or_default();
+    let name = renamed.trim().strip_prefix("a1 ").unwrap_or_default();
     assert!(!name.is_empty() && name != "Neo", "{renamed}");
     assert_eq!(home.agent_from_watch(name).unwrap()["agent_id"], "a1");
     let unknown = home.run_facade(&["rename", "nobody", "x"]);
     assert!(
-        !unknown.status.success() && stderr(&unknown).contains("no agent nobody"),
+        unknown.status.code() == Some(1)
+            && stderr(&unknown)
+                == "error: no agent 'nobody'\n  tip: run 'facade list' to see your agents\n",
         "{}",
         stderr(&unknown)
     );
@@ -378,14 +377,14 @@ fn message_numbers_are_never_given_twice_across_daemons() {
     home.start_named_fake("worker", &[]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "first"]).trim(),
-        "#m1 was typed into #a1"
+        "m1 delivered to a1"
     );
     let old = home.kill_daemon();
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "second"]).trim(),
-        "#m2 was typed into #a1"
+        "m2 delivered to a1"
     );
 }
 
@@ -551,7 +550,7 @@ fn a_send_whose_recipient_is_removed_before_its_answer_still_answers() {
     let sent = output_within(send, secs(10)).expect("facade send answers");
     assert_eq!(
         stdout(&sent).trim(),
-        "#m1 was typed into #a1",
+        "m1 delivered to a1",
         "{}",
         stderr(&sent)
     );
@@ -647,7 +646,7 @@ fn a_command_acts_for_the_agent_whose_session_its_cli_names() {
     );
     assert_eq!(
         stdout(&send.wait_with_output().unwrap()).trim(),
-        "#m1 was read by #a1"
+        "m1 read by a1"
     );
 }
 
@@ -667,25 +666,32 @@ fn facade_messages_prints_and_delivers_what_waits_for_the_agent_of_its_terminal(
     assert_eq!(stdout(&read), "📨 Message from #human · #m1\nread me\n");
     assert_eq!(
         stdout(&send.wait_with_output().unwrap()).trim(),
-        "#m1 was read by #a1"
+        "m1 read by a1"
     );
     let again = facade_as(&home, "a1", &["messages"]);
     assert_eq!(
-        (again.status.success(), stdout(&again)),
-        (true, String::new()),
+        (again.status.code(), stdout(&again), stderr(&again)),
+        (Some(0), String::new(), "No messages waiting.\n".to_string()),
         "nothing is printed twice"
     );
     let unlisted = facade_as(&home, "a9", &["messages"]);
-    assert_eq!(
-        stderr(&unlisted).trim(),
-        "facade: #a9, the agent this client acts for, is not listed (not_found)"
+    let said = stderr(&unlisted);
+    assert!(
+        unlisted.status.code() == Some(1)
+            && said.starts_with("error: ")
+            && said.contains("a9")
+            && !said.contains("(not_found)"),
+        "{said}"
     );
     let elsewhere = home.run_facade(&["messages"]);
-    assert!(!elsewhere.status.success());
     assert_eq!(
-        stderr(&elsewhere).trim(),
-        "facade: facade messages reads the inbox of the agent whose terminal it runs in, and this \
-         is no agent's terminal"
+        (elsewhere.status.code(), stderr(&elsewhere)),
+        (
+            Some(1),
+            "error: 'facade messages' reads an agent's inbox and must run in that agent's \
+             terminal\n  tip: messages for the human appear in the editor window\n"
+                .to_string()
+        )
     );
 }
 
@@ -801,12 +807,12 @@ fn messages_and_what_became_of_them_outlive_their_daemon() {
     watch_inbox(&home, "a1", json!({}));
     assert_eq!(
         stdout(&read.wait_with_output().unwrap()).trim(),
-        "#m1 was read by #a1"
+        "m1 read by a1"
     );
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "typed"]).trim(),
-        "#m2 was typed into #a1"
+        "m2 delivered to a1"
     );
     assert!(
         !home
@@ -860,7 +866,7 @@ fn messages_and_what_became_of_them_outlive_their_daemon() {
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
         stdout(&after.wait_with_output().unwrap()).trim(),
-        "#m4 was typed into #a1"
+        "m4 delivered to a1"
     );
 }
 
@@ -1132,7 +1138,7 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "next"]).trim(),
-        "#m2 was typed into #a1"
+        "m2 delivered to a1"
     );
     assert_eq!(
         home.submitted_messages(),
@@ -1182,11 +1188,11 @@ fn a_removed_agent_s_inbox_goes_and_what_it_sent_stays() {
     home.start_named_fake("other", &[]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "to worker"]).trim(),
-        "#m1 was typed into #a1"
+        "m1 delivered to a1"
     );
     assert_eq!(
         stdout(&facade_as(&home, "a1", &["send", "other", "from worker"])).trim(),
-        "#m2 was typed into #a2"
+        "m2 delivered to a2"
     );
     home.run_facade_ok(&["remove", "worker"]);
     assert!(kept(&home, 1).is_none() && kept(&home, 2).is_some());
@@ -1303,6 +1309,6 @@ fn numbers_continue_above_those_an_editor_gave() {
     assert_eq!(ada.id, "a42");
     assert_eq!(
         home.run_facade_ok(&["send", "ada", "hi ada"]).trim(),
-        "#m231 was typed into #a42"
+        "m231 delivered to a42"
     );
 }

@@ -582,8 +582,9 @@ fn an_mcp_client_joins_as_a_member_reads_its_messages_and_leaves_with_its_relay(
     assert!(status.success(), "{status:?}");
     assert!(
         wait_until(secs(10), || !home
-            .run_facade_ok(&["list"])
-            .contains(&format!("#{id} "))),
+            .list_table()
+            .column("ID")
+            .contains(&id.as_str())),
         "the member stayed after its relay ended: {}",
         home.run_facade_ok(&["list"])
     );

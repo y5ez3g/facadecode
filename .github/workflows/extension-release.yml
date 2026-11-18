@@ -46,9 +46,14 @@ jobs:
     name: Build and test
     needs: plan
     if: needs.plan.outputs.build == 'true'
+    # Its Windows jobs sign in to Azure to sign the packages' programs
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/extension-check.yml
     with:
       ref: ${{ needs.plan.outputs.tag }}
+      sign: true
 
   release:
     name: GitHub Release
