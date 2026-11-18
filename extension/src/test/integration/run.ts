@@ -610,9 +610,9 @@ async function main(): Promise<void> {
 					return undefined;
 				}
 			})();
-			// Each built-in shows its eight fields - its type and icon, the moved command, args and env - and the file the built-in names
+			// Each built-in shows its type, icon, enabled flag, args, env and migrated program. The file keeps the built-in names.
 			const moved = { yolo: true, names: [...BUILT_IN_NAMES], clis: Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
-				type: cli.id, icon: cli.id, enabled: cli.id === 'claude', args: [], env: {}, command: launchers[cli.id] ?? fake
+				type: cli.id, icon: cli.id, enabled: cli.id === 'claude', args: [], env: {}, program: launchers[cli.id] ?? fake
 			}])) };
 			const hidden = await ask(started.alias);
 			fs.writeFileSync(`${out}.open`, '');

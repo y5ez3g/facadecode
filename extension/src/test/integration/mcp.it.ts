@@ -303,12 +303,22 @@ function block(id: string, from: string, window: string, text: string): RegExp {
 	return new RegExp(String.raw`📨 Message from [^\n]*\(${escaped(from)}\) · ${escaped(id)}(?: · From ${escaped(label)})?\n${escaped(text)}$`);
 }
 
-/** The list_agents step that finds the window and folder a start goes to, and the start_agent step: core's arguments and result on the Rust engine, the old tools' otherwise. */
+interface RustWindow {
+	readonly id: string;
+	readonly address: string;
+	readonly name: string;
+	readonly machine_id: string;
+	readonly connected: boolean;
+	readonly locations?: readonly { folder: string }[];
+	readonly clis?: readonly { cli: string; available: boolean }[];
+}
+
+/** The discovery and start steps for each engine. The Rust address goes back into tool calls. */
 const discover = (): Step => RUST
-	? { tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.id', path: 'data.windows.0.folders.0' } }
+	? { tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.address', folder: 'data.windows.0.locations.0.folder' } }
 	: { tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } };
 const startChild = (name: string, prompt: string): Step => RUST
-	? { tool: 'start_agent', arguments: { name, window: '$window', path: '$path', cli: CLI, prompt }, save: { child: 'data.id', childAlias: 'data.id' } }
+	? { tool: 'start_agent', arguments: { name, window: '$window', folder: '$folder', cli: CLI, prompt }, save: { child: 'data.address', childAlias: 'data.id' } }
 	: { tool: 'start_agent', arguments: { name, window_id: '$window', location_id: '$location', cli: CLI, prompt }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } };
 /** The ID a start_agent answer gives its child. */
 const childOf = (started: { data: { id?: string; agent_id?: string } }): string => (RUST ? started.data.id : started.data.agent_id)!;
@@ -333,8 +343,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.ok(initialize?.instructions?.includes(alias), 'the instructions name the agent');
 		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), EIGHT);
 		const ran = await script(alias, [
-			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.id', path: 'data.windows.0.folders.0' } },
-			{ tool: 'start_agent', arguments: { name: 'Reviewer', window: '$window', path: '$path', cli: CLI, prompt: 'Review the README.' }, save: { child: 'data.id' } },
+			discover(),
+			startChild('Reviewer', 'Review the README.'),
 			{ tool: 'list_agents', arguments: {} },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', wait: 30_000 },
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'typed by its creator' } },
@@ -352,7 +362,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('typed by its creator'), 'direct text is a draft in its box');
 		assert.strictEqual(ran.content('press_keys')?.status, 'success', JSON.stringify(ran.content('press_keys')));
 		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
-		const stop = await script(alias, [{ tool: 'stop_agent', arguments: { agent: child } }, { tool: 'list_agents', arguments: {} }]);
+		const stop = await script(alias, [{ tool: 'stop_agent', arguments: { agent: started.data.address } }, { tool: 'list_agents', arguments: {} }]);
 		assert.strictEqual(stop.content('stop_agent')?.status, 'success', JSON.stringify(stop.content('stop_agent')));
 		assert.ok(card.runId);
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
@@ -484,13 +494,14 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			// A draft left in its box: the next message never goes over it, waiting for it within its thirty seconds (RULES-1.4, 1.5)
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'half-written' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'half-written' },
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Second message.' }, save: { second: 'data.message_id' } },
+			{ tool: 'send_message', arguments: { to: '$child', text: 'Second message.' }, ...RUST ? {} : { save: { second: 'data.message_id' } } },
 			{ tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } }
 		]);
 
 		if (RUST) {
 			// Core's results: a send answers how it went in, a refused one why (MCP-1.2, RULES-1.4, 1.5)
-			const recipientWindow = first.content('list_agents')?.data.windows.find((entry: { name: string }) => entry.name === window);
+			const windows = first.content('list_agents')?.data.windows as RustWindow[] | undefined;
+			const recipientWindow = windows?.find(entry => entry.name === window);
 			assert.ok(recipientWindow, `the sender's window ${window} is listed`);
 			const [delivered, held, human] = [0, 1, 2].map(nth => sending.content('send_message', nth));
 			assert.deepStrictEqual([delivered?.status, delivered?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(delivered));
@@ -498,11 +509,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.ok(JSON.stringify(sending.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
 			assert.deepStrictEqual([held?.status, held?.reason], ['failure', 'input_draft'], JSON.stringify(held));
 			assert.deepStrictEqual([human?.status, human?.data.delivery], ['success', 'delivered_to_windows'], JSON.stringify(human));
-			assert.deepStrictEqual(human?.data.windows, {
-				delivered: [{ machine_id: recipientWindow.machine_id, window_id: recipientWindow.id, name: window }],
-				not_delivered: [],
-				outcome_unknown: []
-			}, JSON.stringify(human));
+			assert.deepStrictEqual(human?.data.window_delivery, [
+				{ window: recipientWindow.id, state: 'delivered' }
+			], JSON.stringify(human));
 			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
 			await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
 			await new Promise(resolve => setTimeout(resolve, 8_000));
@@ -618,11 +627,12 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		this.timeout(120_000);
 		const { alias } = await personAgent();
 		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"name":${JSON.stringify(PEER)}`, wait: 30_000 }]);
-		const peer = (found.content('list_agents')?.data.windows as { id: string; name: string; machine_id: string; connected: boolean; folders?: string[]; clis?: string[] }[]).find(each => each.name === PEER);
-		const folder = peer?.folders?.[0];
-		assert.ok(peer?.connected && peer.machine_id && folder && peer.clis?.includes('claude'), `the other window is listed with its CLIs: ${JSON.stringify(found.content('list_agents'))}`);
+		const windows = found.content('list_agents')?.data.windows as RustWindow[] | undefined;
+		const peer = windows?.find(each => each.name === PEER);
+		const folder = peer?.locations?.[0]?.folder;
+		assert.ok(peer?.connected && peer.address && folder && peer.clis?.some(cli => cli.cli === 'claude' && cli.available), `the other window is listed with its locations and CLIs: ${JSON.stringify(found.content('list_agents'))}`);
 		const ran = await script(alias, [
-			{ tool: 'start_agent', arguments: { name: 'Remote helper', window: peer.id, location_source_window: peer.id, path: folder, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.id' } },
+			{ tool: 'start_agent', arguments: { name: 'Remote helper', window: peer.address, location_source_window: peer.address, folder, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.address' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
@@ -632,15 +642,16 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		], 90_000);
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		const membership = [{ machine_id: peer.machine_id, window_id: peer.id }];
+		const membership = [peer.id];
 		assert.deepStrictEqual(started.data.windows, membership, 'it started in the other window');
 		assert.strictEqual(started.data.machine_id, peer.machine_id);
+		assert.strictEqual(normalizeDriveLetter(started.data.folder), normalizeDriveLetter(folder));
 		const child = started.data.id as string;
 		assert.deepStrictEqual([ran.content('send_message')?.status, ran.content('send_message')?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(ran.content('send_message')));
 		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('Hello across windows.'), 'its screen shows the message');
 		assert.ok(!(await state()).cards.some(each => each.alias === child), 'its card is in its own window, not this one');
-		const listed = ran.content('list_agents')?.data.agents as { id: string; machine_id: string; windows: unknown; path: string }[];
-		assert.deepStrictEqual(listed.filter(each => each.id === child).map(each => [each.machine_id, each.windows, normalizeDriveLetter(each.path)]),
+		const listed = ran.content('list_agents')?.data.agents as { id: string; address: string; machine_id: string; windows: string[]; folder: string }[];
+		assert.deepStrictEqual(listed.filter(each => each.id === child && each.address === started.data.address).map(each => [each.machine_id, each.windows, normalizeDriveLetter(each.folder)]),
 			[[peer.machine_id, membership, normalizeDriveLetter(folder)]], 'its CLI runs in the other window\'s folder');
 		assert.strictEqual(ran.content('stop_agent')?.status, 'success', JSON.stringify(ran.content('stop_agent')));
 		// Core keeps a stopped agent's record, ended, until its window records its conversation and removes it, a moment later
