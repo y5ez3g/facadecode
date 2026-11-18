@@ -2,25 +2,28 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// This window's agents on the Rust engine: core keeps them, and the window shows its own - the `agents` topic's records whose
-// `window_id` is this window's - as the panel's cards, through the same `Agents` the old engine gives the UI (ARCHITECTURE-1.3).
+// Core owns the records. This editor projects records of which its logical window is a member (ARCHITECTURE-1.3).
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
 import { messageOf } from '../../base/errors';
+import { folderKeyOf } from '../../base/files';
 import { displayLine } from '../../base/text';
-import type { AgentInfo, AgentsChange, CliInfo, Message, MessagesChange, MessagesSnapshot, ResumeArgs, StartArgs, StartResult, StopResult } from '../../base/coreProtocol';
+import type {
+	AgentInfo, AgentsChange, CliInfo, Message, MessagesChange, MessagesSnapshot, ResumeArgs, StartArgs, StartResult, StopResult, WindowInfo, WindowRef
+} from '../../base/coreProtocol';
 import { FacadeError, invalid } from '../../core/errors';
+import { isWithin } from '../../core/locations/catalog';
 import type { MessageRecord } from '../../core/messagePorts';
 import { keptName, labelOf, repeatedNames, suggestName } from '../../core/names';
+import { conversationId } from '../../core/ports';
 import { dotOf } from '../../core/status';
 import type {
 	ActivityUnknown, Agents, CleanupResult, ConversationEntry, ConversationKey, ConversationTitlePort, Disposable, Event, HumanPort,
-	LaunchHistoryPort, LaunchRequest, Location, LocationId, LocationPort, LogPort, PairFacts, Pin, PinStore, RunChange, RunError,
-	RunFacts, RunId, SaidSource, StartOutcome, TabPlace
+	LaunchHistoryPort, LaunchRequest, Location, LocationId, LocationPort, LogPort, OtherAgent, PairFacts, Pin, ResumeResult, RetainedConversation,
+	RunChange, RunError, RunFacts, RunId, RustPin, RustPinStore, SaidSource, StartOutcome, TabPlace
 } from '../../core/ports';
 import type { ConversationFile } from '../../record/conversations';
-import { facadeRoot } from '../../record/paths';
 import type { WindowContact } from '../contact';
 import { DaemonError, type DaemonLink, type RustTerminals } from './types';
 
@@ -29,8 +32,10 @@ export interface RustAgentsDeps {
 	readonly terminals: RustTerminals;
 	readonly locations: LocationPort;
 	readonly clis: () => readonly CliInfo[];
-	readonly environment: (location: Location) => Record<string, string>;
-	readonly pins: PinStore;
+	readonly windows: () => readonly WindowInfo[];
+	readonly onDidChangeWindows: Event<void>;
+	readonly environment: (location?: Location) => Record<string, string>;
+	readonly pins: RustPinStore;
 	readonly conversations: ConversationFile;
 	readonly titles: ConversationTitlePort;
 	readonly history: LaunchHistoryPort;
@@ -38,8 +43,6 @@ export interface RustAgentsDeps {
 	readonly contact: WindowContact;
 	readonly describe: (err: DaemonError) => string;
 	readonly log: LogPort;
-	/** The exact Facade home used to connect to core. */
-	readonly home?: string;
 	readonly dismissed?: DismissedAgents;
 	/** A start's whole run ID, `start-<32 hex>`. */
 	readonly newRunId: () => string;
@@ -65,17 +68,33 @@ export interface DismissedAgents {
 }
 
 type EndResult = CleanupResult | 'already_ended' | 'not_started';
-type RustPin = Pin & { readonly agent: string };
 
 /** What a start of this window is before core answers it, and how it went. */
 interface Pending {
 	readonly name: string;
 	readonly cli: string;
 	readonly location: Location;
+	readonly cwd: string;
 	readonly createdAt: number;
 	readonly worktree: boolean;
 	readonly sessionId?: string;
 	readonly settled: Promise<StartOutcome>;
+}
+
+interface ResumeAttempt {
+	readonly result: Promise<AgentInfo>;
+	closing?: Promise<EndResult>;
+}
+
+interface StopAttempt {
+	readonly info: AgentInfo;
+	readonly result: Promise<EndResult>;
+}
+
+interface UnconfirmedStart {
+	readonly cwd: string;
+	readonly conversation?: ConversationKey;
+	readonly error: unknown;
 }
 
 interface Run {
@@ -85,16 +104,11 @@ interface Run {
 	/** A start this window asked for, until core gives it an agent. */
 	pending?: Pending;
 	/** End Agent during launch answers once the launch and any resulting stop are settled. */
-	closeAfterLaunch?: (result: EndResult | Promise<EndResult>) => void;
+	closeAfterLaunch?: PromiseWithResolvers<EndResult>;
 	/** A start or resume core refused: red until End Agent (UX-2.4). */
 	failure?: RunError;
-	/** The original error when core may have started a process despite the failed reply. */
-	unconfirmedLaunch?: { readonly error: unknown; readonly before?: AgentInfo };
-	/** A resume asked and not answered yet. */
-	resuming?: boolean;
 	/** It continues a session - Recent's, a Pin's, or its own resumed - rather than beginning one (PANEL-1.4). */
 	resumed?: boolean;
-	title?: string;
 	spinning?: boolean;
 	/** Where its tab is (LIFECYCLE-3.5). */
 	tab?: TabPlace;
@@ -117,47 +131,66 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] };
  * of this window, a start this window asked for shown from its acceptance (LIFECYCLE-1.5). Pins and Recent's names stay the window's.
  */
 export class RustAgents implements Agents, Disposable {
-	readonly ready: Promise<void>;
+	get ready(): Promise<void> { return this.snapshotReady.promise; }
+
 	readonly onDidChange: Event<RunChange> = listener => {
 		this.listeners.add(listener);
 		return { dispose: () => this.listeners.delete(listener) };
 	};
+	readonly onDidChangeOtherAgents: Event<void> = listener => {
+		this.otherListeners.add(listener);
+		return { dispose: () => this.otherListeners.delete(listener) };
+	};
 
 	private readonly listeners = new Set<(change: RunChange) => void>();
+	private readonly otherListeners = new Set<() => void>();
 	private readonly runs = new Map<RunId, Run>();
 	private readonly byAgent = new Map<string, RunId>();
 	/** Starts awaiting a number, including those whose cards were closed before core answered. */
-	private readonly starting = new Set<RunId>();
-	/** Every agent the `agents` topic lists, of any window: a session running elsewhere is held there (LIFECYCLE-3.2). */
+	private readonly starting = new Map<RunId, Run>();
+	/** The reply may have been lost after the process started. Keep this evidence even after End Agent removes the card. */
+	private readonly unconfirmedStarts = new Map<RunId, UnconfirmedStart>();
+	private readonly adopting = new Map<string, Promise<AgentInfo>>();
+	private readonly resuming = new Map<string, ResumeAttempt>();
+	private readonly unconfirmedResumes = new Map<string, { readonly before: AgentInfo; readonly error: unknown }>();
+	private readonly stopping = new Map<string, StopAttempt>();
+	/** All records on the bound machine, including ended records and agents without a card here. */
 	private readonly all = new Map<string, AgentInfo>();
-	/** Automatic resumes wait for core before showing a card (LIFECYCLE-3.4). */
-	private readonly restoring = new Set<string>();
-	/** Cards closed in this activation, including runs whose stop could not be confirmed. */
-	private readonly closed = new Set<string>();
-	private readonly home: string;
-	/** Messages to the person already told (COLLABORATION-2.3). */
+	private readonly removedAgents = new Set<string>();
+	/** A close suppresses the card for that process. A later resume of the same agent may open it again. */
+	private readonly closed = new Map<string, AgentInfo>();
+	private readonly titles = new Map<string, { readonly session: string; readonly cwd: string; readonly title: string }>();
+	private window: WindowRef;
+	private generation = 0;
+	private snapshotReady = deferred<void>();
+	private complete = false;
+	/** Messages already observed in this window, including its inbox snapshots (COLLABORATION-2.3). */
 	private readonly told = new Map<string, MessageRecord>();
 	private readonly subscriptions: Disposable[] = [];
-	private pinsRestored = false;
+	private pinsRequested = false;
+	private pinRestore?: { readonly generation: number; readonly result: Promise<void> };
+	private readonly checkedPins = new Set<string>();
+	private readonly openedPins = new Set<string>();
 	private disposed = false;
 
 	constructor(private readonly deps: RustAgentsDeps) {
 		const { link, terminals } = deps;
-		this.home = deps.home ?? facadeRoot();
-		let first!: () => void;
-		this.ready = new Promise(resolve => first = resolve);
+		this.window = link.window;
 		this.subscriptions.push(
+			link.onDidBind(window => this.bound(window)),
+			deps.onDidChangeWindows(() => this.windowsChanged()),
 			link.watch<AgentInfo[], AgentsChange>('agents', {}, {
-				snapshot: agents => {
-					this.snapshot(agents);
-					first();
-				},
-				change: change => change.kind === 'updated' ? this.updated(change.agent) : change.kind === 'removed' ? this.removed(change.agent_id) : undefined
+				snapshot: agents => this.snapshot(agents),
+				change: change => {
+					if (!this.complete) { return; }
+					if (change.kind === 'updated') { this.updated(change.agent); }
+					else if (change.kind === 'removed') { this.removed(change.agent_id); }
+				}
 			}),
 			// The person's inbox: what this window's agents send #human (0.1, COLLABORATION-2.3)
 			link.watch<MessagesSnapshot, MessagesChange>('messages', {}, {
-				snapshot: inbox => inbox.messages.forEach(message => this.message(message)),
-				change: change => { if (change.kind === 'updated') { this.message(change.message); } }
+				snapshot: inbox => inbox.messages.forEach(message => this.message(message, false)),
+				change: change => { if (change.kind === 'updated') { this.message(change.message, true); } }
 			}),
 			terminals.onDidClosePair?.(({ run, marked }) => this.tabClosed(run, marked)) ?? { dispose() { } },
 			terminals.onDidPinTab?.(({ run, pinned }) => this.tabPinned(run, pinned)) ?? { dispose() { } },
@@ -168,8 +201,10 @@ export class RustAgents implements Agents, Disposable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.snapshotReady.resolve();
 		this.subscriptions.forEach(each => each.dispose());
 		this.listeners.clear();
+		this.otherListeners.clear();
 	}
 
 	list(): readonly RunFacts[] {
@@ -212,7 +247,7 @@ export class RustAgents implements Agents, Disposable {
 		}
 		return this.start({ name: request.name.trim(), cli: request.cli, location, reveal: true,
 			...request.worktree ? { worktree: { branch: request.worktree.branch, base_ref: request.worktree.baseRef ?? 'HEAD' } } : {},
-			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {} });
+			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {} }).id;
 	}
 
 	async started(id: RunId): Promise<StartOutcome> {
@@ -221,22 +256,24 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	/**
-	 * A start this window asks for: its card and tab at once (LIFECYCLE-1.5), then `agent.start`, whose answer binds the run to its
-	 * agent; a refusal makes it red with the reason's words (UX-2.4).
+	 * New Agent opens its pair at acceptance (LIFECYCLE-1.5). Resume from vendor history waits for the actual start.
 	 */
 	private start(options: {
 		readonly name: string; readonly cli: string; readonly location: Location; readonly reveal: boolean; readonly cwd?: string;
 		readonly worktree?: StartArgs['worktree']; readonly model?: string; readonly effort?: string; readonly session?: string;
-	}): RunId {
+	}): { readonly id: RunId; readonly result: Promise<RunId> } {
 		const id = this.deps.newRunId();
+		const window = this.window;
+		const cwd = options.cwd ?? options.location.path;
+		const recent = options.session !== undefined;
 		// A blank name is filled in at once, as the old engine fills it, and core starts the agent under it (LIFECYCLE-2.1)
 		const name = options.name || suggestName(this.list().map(run => run.name), this.deps.names?.()) || '';
-		let settle!: (outcome: StartOutcome) => void;
-		const pending: Pending = { name, cli: options.cli, location: options.location, createdAt: Date.now(), worktree: !!options.worktree,
-			...options.session !== undefined ? { sessionId: options.session } : {}, settled: new Promise(resolve => settle = resolve) };
-		const run: Run = { id, pending, ...options.session ? { resumed: true } : {}, facts: undefined! };
+		const settled = deferred<StartOutcome>();
+		const pending: Pending = { name, cli: options.cli, location: options.location, cwd, createdAt: Date.now(), worktree: !!options.worktree,
+			sessionId: options.session, settled: settled.promise };
+		const run: Run = { id, pending, resumed: recent, facts: undefined! };
 		const args: StartArgs = {
-			command: [options.cli], cwd: options.cwd ?? options.location.path, window_id: this.deps.link.windowId,
+			command: [options.cli], cwd, window, location_source_window: window,
 			env: this.deps.environment(options.location), cols: COLS, rows: ROWS, request_id: id,
 			...name ? { name } : {},
 			...options.worktree ? { worktree: options.worktree } : {},
@@ -244,46 +281,73 @@ export class RustAgents implements Agents, Disposable {
 			...options.effort !== undefined ? { effort: options.effort } : {},
 			...options.session !== undefined ? { session: options.session } : {}
 		};
-		this.starting.add(id);
-		this.addRun(run, options.reveal, false);
+		this.starting.set(id, run);
+		if (!recent) { this.addRun(run, options.reveal, false); }
 		this.deps.log.event(`Asked core to start ${options.cli} in ${args.cwd} [${id}]`);
-		this.deps.link.call<StartResult>('agent.start', args).then(result => {
-			const agent = result.agent.agent_id;
-			const info = this.all.get(agent) ?? result.agent;
-			if (run.closeAfterLaunch) {
-				this.closed.add(agent);
-				this.updated(info, false);
-				run.closeAfterLaunch(this.stop(info));
-				return settle({ state: 'closed' });
+		const result = this.deps.link.call<StartResult>('agent.start', args).then(async ({ agent: reported }) => {
+			await this.waitForSnapshot(window);
+			const agent = reported.agent_id;
+			if (this.removedAgents.has(agent)) {
+				run.closeAfterLaunch?.resolve('already_ended');
+				this.drop(run, 'close');
+				throw agentMissing(agent);
 			}
+			const info = this.all.get(agent) ?? reported;
+			if (!this.isMember(info)) { throw agentMissing(agent); }
+			if (run.closeAfterLaunch) {
+				this.closed.set(agent, info);
+				this.updated(info);
+				run.closeAfterLaunch.resolve(this.stop(info));
+				return id;
+			}
+			this.updated(info, false);
 			run.agent = agent;
 			run.pending = undefined;
-			this.byAgent.set(agent, id);
-			this.deps.terminals.bind(id, agent);
-			if (run.tab) { this.deps.places?.set(agent, run.tab); }
+			if (recent) {
+				if (!this.cleanExit(info)) { this.addRun(run); }
+			} else {
+				this.byAgent.set(agent, id);
+				this.deps.terminals.bind(id, agent);
+				if (run.tab) { this.keepPlace(agent, run.tab); }
+				this.project(info);
+			}
 			this.deps.history.remember(options.location.id, options.cli);
 			this.deps.log.event(`Started #${agent} (${options.cli}) [${id}]`);
-			this.updated(info);
-			settle({ state: 'running' });
-		}, (err: unknown) => {
-			if (run.closeAfterLaunch) {
-				run.closeAfterLaunch(launchRefused(err) ? 'not_started' : Promise.reject(err));
-				return settle({ state: 'closed' });
+			if (recent && options.reveal && this.runs.has(id)) {
+				await this.deps.terminals.reveal(id, { preserveFocus: false });
 			}
-			const reason = this.fail(run, err, labelOf({ name, alias: options.cli }));
-			settle({ state: 'failed', error: reason });
+			return id;
+		}, (err: unknown) => {
+			const refused = launchRefused(err);
+			if (this.owns(window)) {
+				if (!refused) {
+					const kept = err instanceof DaemonError ? err.data.kept?.path : undefined;
+					const conversation = options.session === undefined ? undefined
+						: { environment: options.location.environment, cli: options.cli, sessionId: options.session };
+					this.unconfirmedStarts.set(id, { cwd: kept ?? cwd, conversation, error: err });
+				}
+				if (!run.closeAfterLaunch && !recent) { this.fail(run, err, labelOf({ name, alias: options.cli })); }
+			}
+			if (refused) { run.closeAfterLaunch?.resolve('not_started'); }
+			throw err;
 		}).finally(() => {
-			this.starting.delete(id);
-			this.adopt();
+			if (this.starting.get(id) === run) {
+				this.starting.delete(id);
+				this.projectAll();
+			}
 		});
-		return id;
+		void result.then(
+			() => settled.resolve({ state: run.closeAfterLaunch ? 'closed' : 'running' }),
+			(err: unknown) => {
+				run.closeAfterLaunch?.reject(err);
+				settled.resolve(run.closeAfterLaunch || !this.owns(window) ? { state: 'closed' } : { state: 'failed', error: messageOf(err) });
+			}
+		);
+		return { id, result };
 	}
 
 	/** Makes `run` red with why its start or resume was refused, said in its terminal and, where `told`, to the person (UX-2.4, RULES-1.8). */
-	private fail(run: Run, err: unknown, told: string | undefined, before?: AgentInfo): string {
-		if (!launchRefused(err)) {
-			run.unconfirmedLaunch = { error: err, before };
-		}
+	private fail(run: Run, err: unknown, told: string | undefined): void {
 		const daemon = err instanceof DaemonError ? err : undefined;
 		const english = messageOf(err);
 		const reason = daemon ? this.deps.describe(daemon) : english;
@@ -297,7 +361,6 @@ export class RustAgents implements Agents, Disposable {
 			const settingsFile = !!daemon && (!!daemon.data.entry || daemon.reason === 'configuration_invalid');
 			this.deps.human.failed({ kind: 'start', name: told, reason, ...worktree ? { worktree } : {} }, { show: run.id, ...settingsFile ? { settingsFile } : {} });
 		}
-		return english;
 	}
 
 	// -----------------------------------------------------------------------------------------------------------------------------
@@ -305,37 +368,107 @@ export class RustAgents implements Agents, Disposable {
 
 	async close(id: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<EndResult> {
 		const run = this.runs.get(id);
-		if (!run) {
-			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
-		}
-		const agent = run.agent;
-		const info = agent ? this.all.get(agent) : undefined;
-		if (run.unconfirmedLaunch) {
-			const { error, before } = run.unconfirmedLaunch;
-			// The exit recorded before Resume cannot confirm that the resumed process ended.
-			const resumedAndEnded = before && info?.process === 'ended'
-				&& ((info.pid !== undefined && info.pid !== before.pid) || (info.exit && before.exit && info.exit.at !== before.exit.at));
-			if (!resumedAndEnded) { throw error; }
-		}
-		if (options?.forWorktreeDeletion) { this.unpin(id); }
-		if (run.resuming || (this.starting.has(id) && !run.failure)) {
-			const closed = new Promise<EndResult>(resolve => { run.closeAfterLaunch = resolve; });
-			if (agent) { this.closed.add(agent); }
-			this.drop(run, 'close');
-			return closed;
-		}
-		if (info?.process === 'ended' && !this.cleanExit(info) && !run.failure && this.deps.dismissed) {
-			// Keep the card if the workspace refuses to save its dismissal (LIFECYCLE-3.4).
-			this.deps.dismissed.set(info.agent_id, true);
-		}
-		if (agent) { this.closed.add(agent); }
+		if (!run) { throw agentMissing(id); }
+		const uncertain = this.unconfirmedStarts.get(id);
+		if (uncertain) { throw uncertain.error; }
+		if (this.starting.has(id) && run.pending && !run.failure) { return this.closeStart(run); }
+		const info = run.agent ? this.all.get(run.agent) : undefined;
+		if (info) { return this.closeRecord(info, options?.forWorktreeDeletion); }
 		this.drop(run, 'close');
-		if (!info || run.failure) { return 'already_ended'; }
-		if (info.process === 'ended') {
+		return 'already_ended';
+	}
+
+	private closeStart(run: Run): Promise<EndResult> {
+		run.closeAfterLaunch ??= deferred<EndResult>();
+		this.drop(run, 'close');
+		return run.closeAfterLaunch.promise;
+	}
+
+	private async closeRecord(info: AgentInfo, forWorktreeDeletion = false): Promise<EndResult> {
+		const agent = info.agent_id;
+		const resuming = this.resuming.get(agent);
+		const uncertain = this.unconfirmedResumes.get(agent);
+		// The exit before Resume does not establish the outcome of the new attempt.
+		if (uncertain && !resuming && !(this.hasSnapshot() && isNewProcess(uncertain.before, info))) {
+			throw uncertain.error;
+		}
+		if (forWorktreeDeletion) {
+			this.deps.pins.removeAgentPins(this.window.machine_id, agent);
+		}
+		const run = this.runOf(agent);
+		if (run && !run.failure && !resuming && this.hasSnapshot() && info.process === 'ended' && !this.cleanExit(info)) {
+			// Keep the card if the workspace refuses to save its dismissal (LIFECYCLE-3.4).
+			this.deps.dismissed?.set(agent, true);
+		}
+		if (this.isMember(info)) { this.closed.set(agent, info); }
+		if (run) { this.drop(run, 'close'); }
+		if (resuming) {
+			const window = this.window;
+			resuming.closing ??= resuming.result.then(resumed => {
+				if (!this.owns(window)) { throw bindingChanged(); }
+				return this.removedAgents.has(agent) ? 'already_ended' : this.stop(resumed);
+			}, (err: unknown) => {
+				if (this.owns(window) && this.removedAgents.has(agent)) { return 'already_ended'; }
+				if (resumeRefused(agent, err)) { return 'not_started'; }
+				throw err;
+			});
+			return resuming.closing;
+		}
+		if (this.hasSnapshot() && info.process === 'ended') {
 			this.remember(info);
 			return 'already_ended';
 		}
 		return this.stop(info);
+	}
+
+	worktreeAgents(path: string): number {
+		const { records, starts, uncertain } = this.worktreeSelection(path);
+		return records.length + starts.length + uncertain.length;
+	}
+
+	async closeWorktreeAgents(path: string): Promise<boolean> {
+		const generation = this.generation;
+		const checked = new Map<string, AgentInfo>();
+		for (;;) {
+			if (!this.hasSnapshot() || this.generation !== generation) { return false; }
+			const { records, starts, uncertain } = this.worktreeSelection(path);
+			const pending = starts.map(run => ({
+				id: run.id, result: this.closeStart(run)
+			}));
+			for (const info of records) {
+				const agent = info.agent_id;
+				const before = checked.get(agent);
+				if (before && !this.resuming.has(agent) && !isNewProcess(before, info)) { continue; }
+				checked.set(agent, info);
+				pending.push({ id: `#${agent}`, result: this.closeRecord(info, true) });
+			}
+			for (const [id, start] of uncertain) {
+				this.deps.log.event(`Could not close ${id} to delete its worktree: ${messageOf(start.error)}`);
+			}
+			if (!pending.length) { return !uncertain.length; }
+			const ended = await Promise.all(pending.map(async ({ id, result }) => {
+				try {
+					const outcome = await result;
+					this.deps.log.event(`Closed ${id} to delete its worktree: ${outcome}`);
+					return outcome !== 'failed' && outcome !== 'unconfirmed';
+				} catch (err) {
+					this.deps.log.event(`Could not close ${id} to delete its worktree: ${messageOf(err)}`);
+					return false;
+				}
+			}));
+			if (uncertain.length || ended.some(result => !result)) { return false; }
+			// Starts and resumes can have settled while an earlier stop was in flight.
+		}
+	}
+
+	private worktreeSelection(path: string) {
+		const key = folderKeyOf(path);
+		const inside = (cwd: string) => isWithin(folderKeyOf(cwd), key);
+		const records = this.hasSnapshot() ? [...this.all.values()].filter(info => info.location_source_window
+			&& sameWindow(info.location_source_window, this.window) && inside(info.cwd)) : [];
+		const starts = [...this.starting.values()].filter(run => run.pending && inside(run.pending.cwd));
+		const uncertain = [...this.unconfirmedStarts].filter(([, start]) => inside(start.cwd));
+		return { records, starts, uncertain };
 	}
 
 	/** Keeps the agent's saved conversation and name for Recent (LIFECYCLE-3.2). */
@@ -350,18 +483,22 @@ export class RustAgents implements Agents, Disposable {
 		}
 	}
 
-	private async stop(info: AgentInfo): Promise<EndResult> {
+	private stop(info: AgentInfo): Promise<EndResult> {
 		const agent = info.agent_id;
+		const stopping = this.stopping.get(agent);
+		if (stopping && !isNewProcess(stopping.info, info)) { return stopping.result; }
 		this.remember(info);
-		try {
-			const stopped = await this.deps.link.call<StopResult>('agent.stop', { agent });
+		const result = this.deps.link.call<StopResult>('agent.stop', { agent }).then((stopped): EndResult => {
 			this.deps.log.event(`Ended #${agent}: ${stopped.already_ended ? 'already ended' : 'stopped'}`);
 			return stopped.already_ended ? 'already_exited' : 'terminated';
-		} catch (err) {
+		}, (err: unknown): EndResult => {
+			if (this.stopping.get(agent)?.result === result) { this.stopping.delete(agent); }
 			this.deps.log.event(`Could not stop #${agent} in core: ${messageOf(err)}`);
 			if (stopRefused(err)) { return 'failed'; }
 			throw err;
-		}
+		});
+		this.stopping.set(agent, { info, result });
+		return result;
 	}
 
 	rename(id: RunId, name: string): void {
@@ -372,28 +509,106 @@ export class RustAgents implements Agents, Disposable {
 		if (!run.agent) {
 			throw invalid('unavailable', `${labelOf(run.facts)} has not started yet.`);
 		}
-		this.deps.link.call<AgentInfo>('agent.rename', { agent: run.agent, name }).then(info => this.updated(info), (err: unknown) => {
+		const window = this.window;
+		const before = this.all.get(run.agent);
+		void this.deps.link.call<AgentInfo>('agent.rename', { agent: run.agent, name }).then(info => {
+			if (this.owns(window) && this.complete && this.all.get(info.agent_id) === before) { this.updated(info); }
+		}, (err: unknown) => {
 			const reason = err instanceof DaemonError ? this.deps.describe(err) : messageOf(err);
 			this.deps.human.error(vscode.l10n.t("Could not rename {0}: {1}", labelOf(run.facts), reason), { show: id });
 		});
 	}
 
 	// -----------------------------------------------------------------------------------------------------------------------------
-	// Recent (LIFECYCLE-3.2, 3.3)
+	// Go to Agent and Resume (LIFECYCLE-2.3, 3.2, 3.3)
 
-	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' } {
+	otherAgents(): readonly OtherAgent[] {
+		if (!this.hasSnapshot()) { return []; }
+		const windows = this.deps.windows();
+		return [...this.all.values()].filter(info => this.isOtherAgent(info)).map(info => ({
+			facts: this.factsOf({ id: info.agent_id, facts: undefined! }, info),
+			windows: (info.windows ?? []).map(ref => {
+				const row = windows.find(window => window.machine_id === ref.machine_id && window.window_id === ref.window_id);
+				return { label: row?.label || ref.window_id, connected: row?.connected ?? false };
+			})
+		}));
+	}
+
+	async adoptAgent(agent: string): Promise<RunId> {
+		const window = this.window;
+		await this.adoptRecord(this.requireAgent(agent));
+		if (!this.owns(window)) { throw bindingChanged(); }
+		return (this.runOf(agent) ?? this.project(this.requireAgent(agent), undefined, true))?.id ?? agent;
+	}
+
+	async closeOtherAgent(agent: string): Promise<EndResult> {
+		const info = this.requireAgent(agent);
+		if (info.guest) { throw agentMissing(agent); }
+		return this.closeRecord(info);
+	}
+
+	private adoptRecord(info: AgentInfo): Promise<AgentInfo> {
+		const agent = info.agent_id;
+		const adopting = this.adopting.get(agent);
+		if (adopting) { return adopting; }
+		if (this.isMember(info)) { return Promise.resolve(info); }
+		const result = this.adoptReply(info, this.window).finally(() => {
+			if (this.adopting.get(agent) !== result) { return; }
+			this.adopting.delete(agent);
+			const current = this.all.get(agent);
+			if (current && this.complete) { this.project(current, undefined, true); }
+		});
+		this.adopting.set(agent, result);
+		return result;
+	}
+
+	private async adoptReply(info: AgentInfo, window: WindowRef): Promise<AgentInfo> {
+		const agent = info.agent_id;
+		let response: AgentInfo;
+		try {
+			response = await this.deps.link.call<AgentInfo>('agent.adopt', { agent });
+		} catch (err) {
+			// Adoption's not_found refers to the record itself, unlike a failure to resume its CLI.
+			if (this.owns(window) && err instanceof DaemonError && err.reason === 'not_found') { this.removed(agent); }
+			throw err;
+		}
+		await this.waitForSnapshot(window);
+		const current = this.requireAgent(agent);
+		if (response.agent_id !== agent || !this.isMember(response)) { throw agentMissing(agent); }
+		const adopted = current === info ? mergeWindows(response, current) : mergeWindows(current, response);
+		this.updated(adopted, false);
+		return adopted;
+	}
+
+	retainedConversations(): readonly RetainedConversation[] {
+		if (!this.hasSnapshot()) { return []; }
+		const retained: RetainedConversation[] = [];
+		for (const info of this.all.values()) {
+			if (!this.isMember(info) || info.process !== 'ended' || !info.session) { continue; }
+			const title = this.titleOf(info);
+			retained.push({
+				agent: info.agent_id,
+				name: keptName({ name: info.name, alias: `#${info.agent_id}` }),
+				entry: { key: this.conversationKey(info, info.session), cwd: info.cwd, title, activityAt: Date.parse(info.exit?.at ?? info.created_at) }
+			});
+		}
+		return retained;
+	}
+
+	async resume(entry: ConversationEntry, options: { readonly reveal: boolean }): Promise<ResumeResult> {
+		await this.waitForSnapshot(this.window);
+		const retained = [...this.all.values()].find(info => this.isMember(info) && this.matchesConversation(info, entry.key)
+			&& (info.process === 'ended' || this.resuming.has(info.agent_id)));
+		if (retained && this.resuming.has(retained.agent_id)) { return this.resumeRetained(retained.agent_id, options); }
 		const running = this.holding(entry.key);
 		if (running) {
 			return { running };
 		}
+		if (retained) { return this.resumeRetained(retained.agent_id, options); }
+		const uncertain = this.uncertainConversation(entry.key);
+		if (uncertain) { throw uncertain.error; }
 		if (entry.unavailable) {
 			throw new FacadeError('INVALID', 'unsupported', entry.unavailable);
-		}
-		// The record can outlive its card. Resume this window's agent under its original number (RULES-4.2).
-		const ended = [...this.all.values()].find(info => info.window_id === this.deps.link.windowId && info.process === 'ended'
-			&& info.session === entry.key.sessionId && info.cli === entry.key.cli && this.environmentOf(info.location_id) === entry.key.environment);
-		if (ended) {
-			return this.resumeAgent(ended, options.reveal);
 		}
 		const meta = this.deps.conversations.get(entry.key);
 		if (entry.cwdChoices?.length && !meta?.cwd) {
@@ -404,78 +619,126 @@ export class RustAgents implements Agents, Disposable {
 		if (!location) {
 			throw new FacadeError('INVALID', 'not_found', vscode.l10n.t("The working location {0} is not available in this window.", cwd));
 		}
-		return this.start({ name: meta?.name.trim() ?? '', cli: entry.key.cli, location, cwd, reveal: options.reveal, session: entry.key.sessionId });
+		return this.start({ name: meta?.name.trim() ?? '', cli: entry.key.cli, location, cwd, reveal: options.reveal, session: entry.key.sessionId }).result;
 	}
 
-	/** Manual Resume shows the accepted start immediately (LIFECYCLE-3.3). */
-	private resumeAgent(info: AgentInfo, reveal: boolean): RunId {
-		const agent = info.agent_id;
-		this.closed.delete(agent);
-		const existing = this.runOf(agent);
-		const run = existing ?? this.recordRun(agent);
-		run.resuming = true;
-		run.resumed = true;
-		run.failure = undefined;
-		if (existing) { this.refresh(run); } else { this.addRun(run); }
-		if (reveal) { void this.deps.terminals.reveal(run.id, { preserveFocus: false }); }
-		void this.requestResume(info).then(resumed => {
-			run.resuming = false;
-			run.unconfirmedLaunch = undefined;
-			if (run.closeAfterLaunch) {
-				run.closeAfterLaunch(this.stop(resumed));
-			} else if (this.runs.get(run.id) === run) {
-				if (resumed.window_id === this.deps.link.windowId) {
-					this.deps.history.remember(resumed.location_id, resumed.cli);
+	async resumeRetained(agent: string, options: { readonly reveal: boolean }): Promise<RunId> {
+		const window = this.window;
+		const info = this.requireAgent(agent);
+		if (!this.isMember(info)) { throw agentMissing(agent); }
+		let attempt = this.resuming.get(agent);
+		if (!attempt && (info.process !== 'running' || !this.hasSnapshot())) {
+			if (info.session) {
+				const key = this.conversationKey(info, info.session);
+				if (this.holding(key, agent)) {
+					throw invalid('unavailable', vscode.l10n.t("{0} is already running in another window.", info.name || `#${agent}`));
 				}
-				this.updated(resumed);
-				void this.readTitle(run);
+				const uncertain = this.uncertainConversation(key, agent);
+				if (uncertain) { throw uncertain.error; }
 			}
-		}, (err: unknown) => {
-			run.resuming = false;
-			const elsewhere = resumeElsewhere(agent, err);
-			if (run.closeAfterLaunch) {
-				run.closeAfterLaunch(!elsewhere && launchRefused(err) ? 'not_started' : Promise.reject(err));
-			} else if (this.runs.get(run.id) === run) {
-				if (elsewhere) {
-					this.closed.add(agent);
-					this.drop(run, 'transfer');
-				} else {
-					this.fail(run, err, labelOf(run.facts), info);
-				}
-			}
-		});
-		return run.id;
+			attempt = this.requestResume(info);
+		}
+		if (attempt) {
+			const resumed = await attempt.result;
+			if (!this.owns(window)) { throw bindingChanged(); }
+			this.deps.history.remember(resumed.location_id, resumed.cli);
+		}
+		const current = this.requireAgent(agent);
+		const run = this.project(current, undefined, true);
+		if (run && options.reveal) { await this.deps.terminals.reveal(run.id, { preserveFocus: false }); }
+		return run?.id ?? agent;
 	}
 
-	/** Core validates the record's cwd and session. Send this window's current launch environment (LIFECYCLE-3.3, 3.4). */
-	private async requestResume(info: AgentInfo): Promise<AgentInfo> {
+	/** Share one local attempt. Core serializes requests from separate windows under the same agent number. */
+	private requestResume(info: AgentInfo): ResumeAttempt {
 		const agent = info.agent_id;
+		const ongoing = this.resuming.get(agent);
+		if (ongoing) { return ongoing; }
+		const window = this.window;
 		const location = this.locationFor(info.location_id, info.cwd);
-		const args: ResumeArgs = { agent, env: location ? this.deps.environment(location) : {}, cols: COLS, rows: ROWS, window_id: this.deps.link.windowId };
-		const resumed = await this.deps.link.call<AgentInfo>('agent.resume', args);
-		if (!this.disposed) { this.clearDismissal(agent); }
-		// A report about the new process can arrive before the answer, including a quick exit.
-		const observed = this.all.get(agent);
-		return observed && observed !== info && observed.pid === resumed.pid ? observed : resumed;
+		const args: ResumeArgs = { agent, env: this.deps.environment(location), cols: COLS, rows: ROWS };
+		const result = this.resumeReply(info, args, window).then(resumed => {
+			if (!this.owns(window)) { throw bindingChanged(); }
+			this.resuming.delete(agent);
+			const current = this.requireAgent(agent);
+			// A report can overtake the reply, including a quick exit of the newly installed process.
+			const confirmed = isNewProcess(info, current) ? mergeWindows(current, resumed) : mergeWindows(resumed, current);
+			this.unconfirmedResumes.delete(agent);
+			if (attempt.closing) {
+				this.closed.set(agent, confirmed);
+			} else {
+				this.closed.delete(agent);
+				this.clearDismissal(agent);
+			}
+			this.updated(confirmed, true, true);
+			return confirmed;
+		}, (err: unknown) => {
+			if (this.owns(window)) {
+				this.resuming.delete(agent);
+				const current = this.all.get(agent);
+				if (current && !attempt.closing) { this.project(current); }
+			}
+			throw err;
+		});
+		const attempt: ResumeAttempt = { result };
+		this.resuming.set(agent, attempt);
+		return attempt;
 	}
 
-	holding(key: ConversationKey): RunId | 'elsewhere' | undefined {
+	/** A refusal can cross a report that the same record is already running in this window. */
+	private async resumeReply(info: AgentInfo, args: ResumeArgs, window: WindowRef): Promise<AgentInfo> {
+		const agent = info.agent_id;
+		let resumed: AgentInfo;
+		try {
+			resumed = await this.deps.link.call<AgentInfo>('agent.resume', args);
+		} catch (err) {
+			const current = this.owns(window) ? this.all.get(agent) : undefined;
+			if (current && this.hasSnapshot() && this.isMember(current) && current.process === 'running') { return current; }
+			if (current && !resumeRefused(agent, err) && !(this.hasSnapshot() && isNewProcess(info, current))) {
+				this.unconfirmedResumes.set(agent, { before: info, error: err });
+			}
+			throw err;
+		}
+		await this.waitForSnapshot(window);
+		if (resumed.agent_id !== agent || !this.isMember(resumed)) { throw agentMissing(agent); }
+		return resumed;
+	}
+
+	holding(key: ConversationKey, except?: string): RunId | 'elsewhere' | undefined {
 		for (const run of this.runs.values()) {
-			if (run.facts.lifecycle !== 'ended' && run.facts.sessionId === key.sessionId && run.facts.cli === key.cli) {
+			if ((!except || run.agent !== except) && run.facts.lifecycle !== 'ended' && run.facts.sessionId === key.sessionId
+				&& run.facts.cli === key.cli && run.facts.environment === key.environment) {
+				return run.id;
+			}
+		}
+		for (const run of this.starting.values()) {
+			const pending = run.pending;
+			if (pending?.sessionId === key.sessionId && pending.cli === key.cli && pending.location.environment === key.environment) {
 				return run.id;
 			}
 		}
 		for (const info of this.all.values()) {
-			if ((info.process === 'running' || this.restoring.has(info.agent_id)) && info.session === key.sessionId && info.cli === key.cli) {
+			if (info.agent_id !== except && (info.process === 'running' || this.resuming.has(info.agent_id)) && this.matchesConversation(info, key)) {
 				return 'elsewhere';
 			}
 		}
 		return undefined;
 	}
 
+	private uncertainConversation(key: ConversationKey, except?: string): { readonly error: unknown } | undefined {
+		const id = conversationId(key);
+		for (const start of this.unconfirmedStarts.values()) {
+			if (start.conversation && conversationId(start.conversation) === id) { return start; }
+		}
+		for (const [agent, resume] of this.unconfirmedResumes) {
+			if (agent !== except && this.matchesConversation(resume.before, key)) { return resume; }
+		}
+		return undefined;
+	}
+
 	/** Reads the titles of this window's agents' conversations again (CLIS-2.4). */
 	async refreshConversations(): Promise<void> {
-		await Promise.all([...this.runs.values()].map(run => this.readTitle(run)));
+		await Promise.all([...this.all.values()].filter(info => info.process === 'running' && this.isMember(info)).map(info => this.readTitle(info)));
 	}
 
 	// -----------------------------------------------------------------------------------------------------------------------------
@@ -491,16 +754,10 @@ export class RustAgents implements Agents, Disposable {
 		if (!agent || !run.facts.pinnable || !sessionId) {
 			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI has not named its conversation, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
 		}
-		if (run.facts.pin) {
-			return;
-		}
-		const legacy = this.deps.pins.list().find(pin => pin.agent === undefined && pin.conversation.environment === environment
-			&& pin.conversation.cli === cli && pin.conversation.sessionId === sessionId);
-		const pin: Pin = {
-			id: legacy?.id ?? `pin-${randomBytes(16).toString('hex')}`, conversation: { ...legacy?.conversation, environment, cli, sessionId },
-			location: run.facts.location, cwd: run.facts.cwd, name: keptName(run.facts), home: this.home, agent
-		};
-		this.deps.pins.save(pin);
+		this.deps.pins.pinAgent({
+			id: `pin-${randomBytes(16).toString('hex')}`, conversation: { environment, cli, sessionId },
+			location: run.facts.location, cwd: run.facts.cwd, name: keptName(run.facts), machine_id: this.window.machine_id, agent
+		});
 		this.refresh(run, 'lifecycle');
 		this.deps.terminals.pinTab?.(id, true);
 	}
@@ -519,30 +776,34 @@ export class RustAgents implements Agents, Disposable {
 
 	/** Resumes eligible Pins under their saved agent numbers, then opens the pinned tabs in one sequence (LIFECYCLE-3.4, 3.5). */
 	async restorePins(): Promise<void> {
-		if (this.pinsRestored || this.disposed) { return; }
-		this.pinsRestored = true;
-		await this.ready;
 		if (this.disposed) { return; }
-		const legacy = this.deps.pins.list().filter(pin => pin.home === undefined || pin.agent === undefined);
-		if (legacy.length) {
-			const conversations = legacy.map(pin => JSON.stringify(pin.conversation)).join(', ');
-			this.deps.log.event(`Skipped ${legacy.length} stored Pins without an original home and agent number: ${conversations}`);
-		}
-		const attempts: Promise<Run | undefined>[] = [];
-		for (const pin of this.pins()) {
-			const info = this.all.get(pin.agent);
-			if (!info || info.process === 'running' || this.closed.has(pin.agent) || this.restoring.has(pin.agent)
-				|| (!this.cleanExit(info) && !this.deps.dismissed?.has(pin.agent))) {
-				continue;
-			}
-			if (info.session && this.holding({ environment: this.environmentOf(info.location_id), cli: info.cli, sessionId: info.session })) {
-				continue;
-			}
-			attempts.push(this.restoreAgent(info));
-		}
-		const outcomes = await Promise.all(attempts);
+		const first = !this.pinsRequested;
+		this.pinsRequested = true;
+		while (!this.complete && !this.disposed) { await this.ready; }
 		if (this.disposed) { return; }
-		await this.openPinnedTabs();
+		if (first) {
+			const legacy = this.deps.pins.list().filter(pin => pin.agent === undefined);
+			if (legacy.length) {
+				const conversations = legacy.map(pin => JSON.stringify(pin.conversation)).join(', ');
+				this.deps.log.event(`Skipped ${legacy.length} session-only Pins for Rust restoration: ${conversations}`);
+			}
+		}
+		await this.restoreVerifiedPins();
+	}
+
+	private restoreVerifiedPins(): Promise<void> {
+		if (this.pinRestore?.generation === this.generation) { return this.pinRestore.result; }
+		if (!this.hasSnapshot()) { return Promise.resolve(); }
+		const generation = this.generation;
+		const result = this.restoreWindowPins(this.window, generation);
+		this.pinRestore = { generation, result };
+		return result;
+	}
+
+	private async restoreWindowPins(window: WindowRef, generation: number): Promise<void> {
+		const outcomes = await Promise.all(this.pins().map(pin => this.restorePin(pin, window, generation)));
+		if (!this.owns(window)) { return; }
+		if (this.generation === generation) { await this.openPinnedTabs(generation); }
 		const failed = outcomes.filter(run => run && this.runs.get(run.id) === run && run.failure);
 		const first = failed[0];
 		if (first?.failure && !this.disposed) {
@@ -550,37 +811,61 @@ export class RustAgents implements Agents, Disposable {
 		}
 	}
 
-	/** Automatic Resume only shows a card after core answers (LIFECYCLE-3.4). */
-	private restoreAgent(info: AgentInfo): Promise<Run | undefined> {
-		const agent = info.agent_id;
-		this.restoring.add(agent);
-		return this.requestResume(info).then(resumed => {
-			if (!this.disposed && this.all.has(agent)) {
-				this.updated(resumed, false);
-				if (resumed.window_id === this.deps.link.windowId && !this.cleanExit(resumed)) {
-					this.addRecord(resumed, true);
-				}
-			}
+	/** Verify the membership before using the retained number to reopen a pinned conversation (LIFECYCLE-3.4). */
+	private async restorePin(pin: RustPin, window: WindowRef, generation: number): Promise<Run | undefined> {
+		const agent = pin.agent;
+		const before = this.all.get(agent);
+		if (!before) { return undefined; }
+		try {
+			await this.adoptRecord(before);
+		} catch (err) {
+			this.deps.log.event(`Could not adopt #${agent} for its Pin: ${messageOf(err)}`);
 			return undefined;
-		}, (err: unknown) => {
-			if (this.disposed || !this.all.has(agent) || resumeElsewhere(agent, err)) { return undefined; }
-			const run = this.recordRun(agent);
+		}
+		if (this.generation !== generation || !this.hasSnapshot()) { return undefined; }
+		const info = this.all.get(agent);
+		const attemptKey = `${window.machine_id}:${agent}`;
+		if (!info || !this.pinOf(agent) || !this.isMember(info) || this.checkedPins.has(attemptKey)) {
+			return undefined;
+		}
+		this.checkedPins.add(attemptKey);
+		if (before.process === 'running' || info.process === 'running' || this.closed.has(agent)
+			|| (!this.cleanExit(info) && !this.deps.dismissed?.has(agent))) {
+			return undefined;
+		}
+		if (info.session) {
+			const key = this.conversationKey(info, info.session);
+			if (this.holding(key, agent) || this.uncertainConversation(key, agent)) { return undefined; }
+		}
+		try {
+			await this.requestResume(info).result;
+		} catch (err) {
+			const current = this.owns(window) ? this.all.get(agent) : undefined;
+			if (!current || !this.pinOf(agent) || !this.isMember(current) || this.closed.has(agent)) { return undefined; }
+			if (this.hasSnapshot() && current.process === 'running') {
+				this.project(current, undefined, true);
+				return undefined;
+			}
+			const run = this.runOf(agent) ?? this.recordRun(agent);
 			run.resumed = true;
-			this.fail(run, err, undefined, info);
+			this.fail(run, err, undefined);
 			return run;
-		}).finally(() => this.restoring.delete(agent));
+		}
+		return undefined;
 	}
 
 	/** Opens pinned agents' tabs one at a time, in the Pins' order, then lets the panel select the last (LIFECYCLE-3.5, PANEL-2.1). */
-	private async openPinnedTabs(): Promise<void> {
+	private async openPinnedTabs(generation: number): Promise<void> {
 		let opened = false;
 		for (const pin of this.pins()) {
+			if (!this.hasSnapshot() || generation !== this.generation) { return; }
 			const run = this.runOf(pin.agent);
-			if (this.disposed || run?.facts.pin !== pin.id || run.failure || run.facts.lifecycle === 'starting') { continue; }
+			if (!run || this.openedPins.has(pin.id) || run.facts.pin !== pin.id || run.failure || run.facts.lifecycle === 'starting') { continue; }
+			this.openedPins.add(pin.id);
 			await this.deps.terminals.openPinned?.(run.id).catch(err => this.deps.log.event(`Could not open ${run.id}'s pinned tab: ${messageOf(err)}`));
 			opened = true;
 		}
-		if (opened && !this.disposed) { this.deps.terminals.pinnedOpened?.(); }
+		if (opened && this.hasSnapshot() && this.generation === generation) { this.deps.terminals.pinnedOpened?.(); }
 	}
 
 	/** Where the run's tab is now, kept for a reload to bring a pinned agent's back there (LIFECYCLE-3.5). */
@@ -590,7 +875,7 @@ export class RustAgents implements Agents, Disposable {
 			return;
 		}
 		run.tab = place;
-		if (run.agent) { this.deps.places?.set(run.agent, place); }
+		if (run.agent) { this.keepPlace(run.agent, place); }
 	}
 
 	private tabClosed(id: RunId, marked: boolean): void {
@@ -613,7 +898,7 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private isPinHere(pin: Pin): pin is RustPin {
-		return pin.home === this.home && typeof pin.agent === 'string' && /^a[1-9]\d*$/.test(pin.agent);
+		return pin.machine_id === this.window.machine_id && typeof pin.agent === 'string' && /^a[1-9]\d*$/.test(pin.agent);
 	}
 
 	private pinOf(agent: string): RustPin | undefined {
@@ -623,60 +908,181 @@ export class RustAgents implements Agents, Disposable {
 	// -----------------------------------------------------------------------------------------------------------------------------
 	// The `agents` topic
 
-	private snapshot(agents: readonly AgentInfo[]): void {
-		if (this.disposed) { return; }
-		const listed = new Set(agents.map(each => each.agent_id));
-		const known = new Set([...this.all.keys(), ...this.pins().map(pin => pin.agent)]);
-		for (const id of known) {
-			if (!listed.has(id)) { this.removed(id, false); }
+	private bound(window: WindowRef): void {
+		this.generation++;
+		this.complete = false;
+		this.snapshotReady.resolve();
+		this.snapshotReady = deferred<void>();
+		this.stopping.clear();
+		if (!sameWindow(this.window, window)) {
+			this.window = window;
+			this.all.clear();
+			this.removedAgents.clear();
+			this.closed.clear();
+			this.starting.clear();
+			this.adopting.clear();
+			this.resuming.clear();
+			this.unconfirmedStarts.clear();
+			this.unconfirmedResumes.clear();
+			this.titles.clear();
+			this.told.clear();
+			this.openedPins.clear();
+			for (const run of this.runs.values()) { this.drop(run, 'transfer'); }
 		}
+		this.emitOtherAgents();
+	}
+
+	private owns(window: WindowRef): boolean {
+		return !this.disposed && this.window === window;
+	}
+
+	private hasSnapshot(): boolean {
+		return this.complete && this.deps.link.connected && !this.disposed;
+	}
+
+	private async waitForSnapshot(window: WindowRef): Promise<void> {
+		while (this.owns(window) && !this.complete) { await this.ready; }
+		if (!this.owns(window)) { throw bindingChanged(); }
+	}
+
+	private requireAgent(agent: string): AgentInfo {
+		const info = this.all.get(agent);
+		if (!info) { throw agentMissing(agent); }
+		return info;
+	}
+
+	private isMember(info: AgentInfo): boolean {
+		return info.machine_id === this.window.machine_id && !!info.windows?.some(window => sameWindow(window, this.window));
+	}
+
+	private isOtherAgent(info: AgentInfo): boolean {
+		return info.machine_id === this.window.machine_id && !info.guest && info.process === 'running' && !this.isMember(info);
+	}
+
+	private windowsChanged(): void {
+		if (this.hasSnapshot()) {
+			for (const run of this.runs.values()) {
+				const info = run.agent ? this.all.get(run.agent) : undefined;
+				if (info && !this.resuming.has(info.agent_id) && run.facts.environment !== this.environmentOf(info.location_id)) {
+					this.refresh(run, 'reported');
+				}
+			}
+		}
+		this.emitOtherAgents();
+	}
+
+	private snapshot(agents: readonly AgentInfo[]): void {
+		if (this.disposed || !this.deps.link.connected) { return; }
+		const before = new Map(this.all);
+		this.all.clear();
+		for (const info of agents) {
+			if (info.machine_id === this.window.machine_id) { this.all.set(info.agent_id, info); }
+		}
+		this.complete = true;
+		for (const id of before.keys()) {
+			if (!this.all.has(id)) { this.removed(id, false); }
+		}
+		this.verifyPins();
 		try {
-			this.deps.dismissed?.retain(listed);
+			this.deps.dismissed?.retain(new Set(this.all.keys()));
 		} catch (err) {
 			this.deps.log.event(`Could not reconcile dismissed agent cards: ${messageOf(err)}`);
 		}
-		for (const info of agents) {
-			this.updated(info, false);
+		for (const info of this.all.values()) {
+			this.reconcile(info, before.get(info.agent_id), true, false);
 		}
-		this.adopt();
+		this.snapshotReady.resolve();
+		this.emitOtherAgents();
+		if (this.pinsRequested) {
+			void this.restoreVerifiedPins().catch(err => this.deps.log.event(`Could not restore pinned agents: ${messageOf(err)}`));
+		}
 	}
 
-	private updated(info: AgentInfo, adopt = true): void {
-		if (this.disposed) { return; }
+	private updated(info: AgentInfo, project = true, resumed = false): void {
 		const agent = info.agent_id;
+		if (this.disposed || info.machine_id !== this.window.machine_id || this.removedAgents.has(agent)) { return; }
 		const before = this.all.get(agent);
 		this.all.set(agent, info);
-		if (info.process === 'running' && (!adopt || before?.process !== 'running' || before.pid !== info.pid)) {
+		this.reconcile(info, before, project, resumed);
+		if (this.isOtherAgent(info) || (before && this.isOtherAgent(before))) { this.emitOtherAgents(); }
+	}
+
+	private reconcile(info: AgentInfo, before: AgentInfo | undefined, project: boolean, resumed: boolean): void {
+		const agent = info.agent_id;
+		const stopping = this.stopping.get(agent);
+		if (stopping && (info.process === 'ended' || isNewProcess(stopping.info, info))) { this.stopping.delete(agent); }
+		const closed = this.closed.get(agent);
+		if (closed) {
+			if (isNewProcess(closed, info)) { this.closed.delete(agent); }
+			else if (info.process === 'ended') { this.closed.set(agent, info); }
+		}
+		const uncertain = this.unconfirmedResumes.get(agent);
+		if (uncertain && isNewProcess(uncertain.before, info)) { this.unconfirmedResumes.delete(agent); }
+		this.keepPin(info);
+		const restarted = before && isNewProcess(before, info);
+		if (restarted || (info.process === 'running' && before?.process !== 'running')) {
 			this.clearDismissal(agent);
 		}
-		const run = this.runOf(agent);
-		if (info.window_id !== this.deps.link.windowId) {
-			// A resume in progress still has to hear whether core gave it to this window.
-			if (run && !run.resuming) { this.drop(run, 'transfer'); }
-			return;
+		if (project) { this.project(info, before, resumed, resumed); }
+		const turnEnded = before?.state === 'working' && (info.state === 'idle' || info.state === 'just_done');
+		if (info.process === 'running' && (before?.session !== info.session || before?.process !== 'running'
+			|| before?.cwd !== info.cwd || restarted || turnEnded)) {
+			void this.readTitle(info);
 		}
-		this.keepPin(info);
-		if (!run) {
-			if (this.cleanExit(info) && (!before || !this.cleanExit(before) || before.window_id !== info.window_id
-				|| before.session !== info.session || before.name !== info.name || before.cwd !== info.cwd || before.location_id !== info.location_id)) {
+	}
+
+	private project(info: AgentInfo, before?: AgentInfo, force = false, resumed = false): Run | undefined {
+		const agent = info.agent_id;
+		const run = this.runOf(agent);
+		if (!this.isMember(info)) {
+			if (run) { this.drop(run, 'transfer'); }
+			if (before?.process === 'running' && this.cleanExit(info)) { this.closed.set(agent, info); }
+			return undefined;
+		}
+		if (this.adopting.has(agent) || this.resuming.has(agent) || this.closed.has(agent)) { return undefined; }
+		const restarted = !!before && isNewProcess(before, info);
+		if (run && (resumed || restarted || info.process === 'running')) { run.failure = undefined; }
+		if (this.cleanExit(info) && !run?.failure) {
+			if (!before || !this.isMember(before) || !this.cleanExit(before) || before.exit?.at !== info.exit?.at
+				|| before.session !== info.session || before.name !== info.name || before.cwd !== info.cwd || before.location_id !== info.location_id) {
 				this.remember(info);
 			}
-			if (adopt) { this.adopt(); }
-			return;
+			if (run || before?.process === 'running' || resumed) { this.closed.set(agent, info); }
+			if (run) { this.drop(run, 'exit'); }
+			return undefined;
 		}
-		if (info.process === 'running') {
-			run.failure = undefined;
-			run.unconfirmedLaunch = undefined;
+		if (run) {
+			run.resumed ||= resumed || restarted;
+			this.refresh(run, undefined, restarted);
+			return run;
 		}
-		const turnEnded = before?.state === 'working' && (info.state === 'idle' || info.state === 'just_done');
-		const sessionChanged = before?.session !== info.session;
-		this.refresh(run);
-		if (sessionChanged || turnEnded) { void this.readTitle(run); }
+		if ((!force && this.starting.size && !info.creator) || (info.process === 'ended' && this.deps.dismissed?.has(agent))) { return undefined; }
+		const added = this.recordRun(agent);
+		added.resumed = resumed || restarted;
+		this.addRun(added);
+		return added;
+	}
+
+	/** Unbound starts defer projection of human starts until their own replies identify them (LIFECYCLE-2.2). */
+	private projectAll(): void {
+		if (!this.complete || this.disposed) { return; }
+		for (const info of this.all.values()) {
+			if (!this.byAgent.has(info.agent_id) && !this.cleanExit(info)) { this.project(info); }
+		}
 	}
 
 	private runOf(agent: string): Run | undefined {
 		const id = this.byAgent.get(agent);
 		return id === undefined ? undefined : this.runs.get(id);
+	}
+
+	/** A complete snapshot of the bound machine proves which pinned records still exist. */
+	private verifyPins(): void {
+		for (const pin of this.pins()) {
+			if (!this.all.has(pin.agent)) {
+				this.clearPin(pin);
+			}
+		}
 	}
 
 	/** Updates the conversation details of this exact Pin (LIFECYCLE-3.4). */
@@ -687,7 +1093,7 @@ export class RustAgents implements Agents, Disposable {
 		const sessionId = info.session ?? pin.conversation.sessionId;
 		if (pin.name === name && pin.location === info.location_id && pin.cwd === info.cwd && pin.conversation.sessionId === sessionId) { return; }
 		try {
-			this.deps.pins.save({ ...pin, name, location: info.location_id, cwd: info.cwd, conversation: { ...pin.conversation, sessionId } });
+			this.deps.pins.updatePin(pin, { ...pin, name, location: info.location_id, cwd: info.cwd, conversation: { ...pin.conversation, sessionId } });
 		} catch (err) {
 			this.deps.log.event(`Could not update #${info.agent_id}'s Pin: ${messageOf(err)}`);
 		}
@@ -696,19 +1102,29 @@ export class RustAgents implements Agents, Disposable {
 	private removed(agent: string, reported = true): void {
 		if (this.disposed) { return; }
 		this.all.delete(agent);
+		this.removedAgents.add(agent);
 		this.closed.delete(agent);
+		this.stopping.delete(agent);
+		this.unconfirmedResumes.delete(agent);
+		this.titles.delete(agent);
 		const run = this.runOf(agent);
 		if (run) { this.drop(run, 'close'); }
-		const pin = this.pinOf(agent);
-		if (pin) {
-			try {
-				this.deps.pins.remove(pin.id);
-			} catch (err) {
-				this.deps.log.event(`Could not clear #${agent}'s Pin: ${messageOf(err)}`);
+		if (reported) {
+			for (const pin of this.pins()) {
+				if (pin.agent === agent) { this.clearPin(pin); }
 			}
+			this.clearDismissal(agent);
+			this.emitOtherAgents();
 		}
-		if (reported) { this.clearDismissal(agent); }
-		this.deps.places?.set(agent, undefined);
+		this.keepPlace(agent, undefined);
+	}
+
+	private clearPin(pin: Pin): void {
+		try {
+			this.deps.pins.remove(pin.id);
+		} catch (err) {
+			this.deps.log.event(`Could not clear #${pin.agent}'s Pin: ${messageOf(err)}`);
+		}
 	}
 
 	private clearDismissal(agent: string): void {
@@ -720,32 +1136,16 @@ export class RustAgents implements Agents, Disposable {
 		}
 	}
 
-	/**
-	 * Shows this window's agents that have no card yet: one another agent started opens its card alone, its tab hidden (LIFECYCLE-2.2).
-	 * While a start of this window waits for its answer, an agent the person started waits too: it is that start's.
-	 */
-	private adopt(): void {
-		if (this.disposed) { return; }
-		for (const info of this.all.values()) {
-			const agent = info.agent_id;
-			if (info.window_id !== this.deps.link.windowId || this.byAgent.has(agent) || this.closed.has(agent) || this.restoring.has(agent)
-				|| (this.starting.size && !info.creator) || this.cleanExit(info)
-				|| (info.process === 'ended' && this.deps.dismissed?.has(agent))) {
-				continue;
-			}
-			this.addRecord(info);
+	private keepPlace(agent: string, place: TabPlace | undefined): void {
+		try {
+			this.deps.places?.set(agent, place);
+		} catch (err) {
+			this.deps.log.event(`Could not keep #${agent}'s tab position: ${messageOf(err)}`);
 		}
 	}
 
 	private recordRun(agent: string): Run {
 		return { id: agent, agent, tab: this.deps.places?.get(agent), facts: undefined! };
-	}
-
-	private addRecord(info: AgentInfo, resumed = false): void {
-		const run = this.recordRun(info.agent_id);
-		run.resumed = resumed;
-		this.addRun(run);
-		void this.readTitle(run);
 	}
 
 	private addRun(run: Run, reveal = false, hidden = true): void {
@@ -763,7 +1163,7 @@ export class RustAgents implements Agents, Disposable {
 		if (run.facts.lifecycle === 'ended' && !run.failure) { terminals.exited(run.id, this.endText(run.facts)); }
 	}
 
-	/** Its card and tab go: End Agent, a clean exit, its removal from core, or another window taking it (UX-2.2). */
+	/** Its card and tab go together (UX-2.2). */
 	private drop(run: Run, cause: NonNullable<RunChange['cause']>): void {
 		if (this.runs.get(run.id) !== run) { return; }
 		this.runs.delete(run.id);
@@ -773,12 +1173,12 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	/** Recomputes `run`'s facts from its record, and tells what changed. */
-	private refresh(run: Run, kind?: RunChange['kind']): void {
+	private refresh(run: Run, kind?: RunChange['kind'], restarted = false): void {
 		const before = run.facts;
 		const after = this.factsOf(run);
 		run.facts = after;
 		if (this.runs.get(run.id) !== run) { return; }
-		if (before.lifecycle === 'ended' && after.lifecycle !== 'ended') {
+		if (restarted || before.lifecycle === 'ended' && after.lifecycle !== 'ended') {
 			// The old pseudoterminal stopped taking input at exit. Bind a fresh one to the same agent.
 			const hidden = !this.deps.terminals.tabOpen(run.id);
 			this.deps.terminals.removePair(run.id);
@@ -786,14 +1186,7 @@ export class RustAgents implements Agents, Disposable {
 		} else if (before.name !== after.name) {
 			this.deps.terminals.rename(run.id, after.name);
 		}
-		if (before.lifecycle !== 'ended' && after.lifecycle === 'ended' && !run.failure) {
-			const info = run.agent ? this.all.get(run.agent) : undefined;
-			if (info && this.cleanExit(info)) {
-				this.closed.add(info.agent_id);
-				this.remember(info);
-				this.drop(run, 'exit');
-				return;
-			}
+		if (!restarted && before.lifecycle !== 'ended' && after.lifecycle === 'ended' && !run.failure) {
 			this.deps.terminals.exited(run.id, this.endText(after));
 		}
 		this.emit({ run: run.id, kind: kind ?? (before.name !== after.name ? 'renamed'
@@ -815,15 +1208,14 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	/** `RunFacts` from core's record, or from a start not answered yet. */
-	private factsOf(run: Run): RunFacts {
-		const info = run.agent ? this.all.get(run.agent) : undefined;
-		const pin = info && this.pinOf(info.agent_id)?.id;
+	private factsOf(run: Run, info = run.agent ? this.all.get(run.agent) : undefined): RunFacts {
+		const pin = info && this.isMember(info) ? this.pinOf(info.agent_id)?.id : undefined;
 		const failure = run.failure;
 		if (!info) {
 			const pending = run.pending!;
 			return {
 				id: run.id, alias: '', name: pending.name, cli: pending.cli, displayName: this.displayName(pending.cli), command: pending.cli,
-				location: pending.location.id, cwd: pending.location.path, environment: pending.location.environment, yolo: false,
+				location: pending.location.id, cwd: pending.cwd, environment: pending.location.environment, yolo: false,
 				createdAt: pending.createdAt, lifecycle: failure ? 'ended' : 'starting', phase: pending.worktree ? 'creating_worktree' : 'launching_cli',
 				activity: 'unknown', reporting: false, root: run.id, origin: 'human', tools: 'not_injected',
 				...pending.sessionId ? { sessionId: pending.sessionId, resumed: true as const } : {},
@@ -848,16 +1240,14 @@ export class RustAgents implements Agents, Disposable {
 		}
 		if (run.resumed) { facts.resumed = true; }
 		if (run.tab) { facts.tab = run.tab; }
-		if (run.title) { facts.title = run.title; facts.titleSource = 'conversation'; }
+		const title = this.titleOf(info);
+		if (title) { facts.title = title; facts.titleSource = 'conversation'; }
 		if (pin) { facts.pin = pin; }
 		const detail = info.state_detail;
 		if (failure) {
 			facts.lifecycle = 'ended';
 			facts.error = failure;
 			facts.end = { kind: 'failed', at: failure.at };
-		} else if (run.resuming) {
-			facts.lifecycle = 'starting';
-			facts.phase = 'launching_cli';
 		} else if (info.process === 'ended') {
 			const at = Date.parse(info.exit?.at ?? '') || Date.now();
 			facts.lifecycle = 'ended';
@@ -891,8 +1281,18 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	/** A location's environment: `local` or the window's remote authority, the same for every location of the window. */
-	private environmentOf(location: LocationId): string {
-		return (this.deps.locations.resolve(location) ?? this.deps.locations.snapshot().locations[0])?.environment ?? 'local';
+	private environmentOf(location?: LocationId): string {
+		const local = (location === undefined ? undefined : this.deps.locations.resolve(location)) ?? this.deps.locations.snapshot().locations[0];
+		if (local) { return local.environment; }
+		return this.deps.windows().find(window => window.machine_id === this.window.machine_id && window.window_id === this.window.window_id)?.environment ?? 'local';
+	}
+
+	private conversationKey(info: AgentInfo, sessionId: string): ConversationKey {
+		return { environment: this.environmentOf(info.location_id), cli: info.cli, sessionId };
+	}
+
+	private matchesConversation(info: AgentInfo, key: ConversationKey): boolean {
+		return info.session === key.sessionId && info.cli === key.cli && this.environmentOf(info.location_id) === key.environment;
 	}
 
 	private locationFor(id: LocationId | undefined, cwd: string): Location | undefined {
@@ -903,45 +1303,50 @@ export class RustAgents implements Agents, Disposable {
 		return this.deps.locations.snapshot().locations.find(each => each.path === cwd) ?? this.deps.locations.conversationLocation?.(cwd);
 	}
 
-	/** Reads `run`'s conversation's title from its CLI's own history (CLIS-2.4); a read that fails is said in the log, never shown. */
-	private async readTitle(run: Run): Promise<void> {
-		const facts = run.facts;
-		if (!facts.sessionId || facts.lifecycle === 'ended') {
-			return;
-		}
-		const key = { environment: facts.environment, cli: facts.cli, sessionId: facts.sessionId };
+	private titleOf(info: AgentInfo): string | undefined {
+		const read = this.titles.get(info.agent_id);
+		return read?.session === info.session && read?.cwd === info.cwd ? read?.title : undefined;
+	}
+
+	/** Reads the CLI's own history for Go to Agent and the panel (CLIS-2.4, LIFECYCLE-2.3). */
+	private async readTitle(info: AgentInfo): Promise<void> {
+		const { agent_id: agent, cli, cwd, session } = info;
+		if (!session) { return; }
+		const window = this.window;
+		const key = this.conversationKey(info, session);
 		try {
-			const title = await this.deps.titles.title(key, facts.cwd, this.deps.titles.storeOf?.(facts.cli, facts.cwd));
-			if (title && title !== run.title && run.facts.sessionId === key.sessionId && this.runs.get(run.id) === run) {
-				run.title = title;
-				this.refresh(run, 'reported');
-			}
+			const title = await this.deps.titles.title(key, cwd, this.deps.titles.storeOf?.(cli, cwd));
+			const current = this.owns(window) ? this.all.get(agent) : undefined;
+			if (!title || !current || current.session !== session || current.cwd !== cwd || this.titleOf(current) === title) { return; }
+			this.titles.set(agent, { session, cwd, title });
+			const run = this.runOf(agent);
+			if (run && !this.resuming.has(agent)) { this.refresh(run, 'reported'); }
+			if (this.isOtherAgent(current)) { this.emitOtherAgents(); }
 		} catch (err) {
-			this.deps.log.event(`Could not read the title of ${facts.alias}'s conversation: ${messageOf(err)}`);
+			this.deps.log.event(`Could not read the title of #${agent}'s conversation: ${messageOf(err)}`);
 		}
 	}
 
 	// -----------------------------------------------------------------------------------------------------------------------------
 	// The person's inbox
 
-	/** A message an agent of this window sent the person: told once, as the old engine tells one (COLLABORATION-2.3). */
-	private message(message: Message): void {
-		if (this.told.has(message.message_id) || message.to !== 'human') {
-			return;
-		}
+	/** A snapshot supplies the saved message. A first live change can also notify this window (COLLABORATION-2.3). */
+	private message(message: Message, live: boolean): void {
+		if (this.disposed || message.to !== 'human') { return; }
 		const record = this.recordOf(message);
+		const seen = this.told.has(record.id);
 		this.told.set(message.message_id, record);
-		this.deps.contact.contact(record, id => this.told.get(id));
+		if (live && !seen) { this.deps.contact.contact(record, id => this.told.get(id)); }
 	}
 
 	private recordOf(message: Message): MessageRecord {
 		const from = message.from === 'facade' ? { run: 'facade' as const }
 			: { run: this.byAgent.get(message.from) ?? message.from, alias: `#${message.from}`, ...message.from_name ? { name: message.from_name } : {} };
-		const environment = this.deps.locations.snapshot().locations[0]?.environment ?? 'local';
+		const environment = this.environmentOf();
 		const delivery = message.delivery;
 		return {
 			id: message.message_id, alias: `#${message.message_id}`, kind: message.from === 'facade' ? 'result' : 'message', from, to: { run: '@human' },
-			window: this.deps.link.windowId, environment, at: Date.parse(message.at) || Date.now(), text: message.text, length: [...message.text].length,
+			window: this.window.window_id, environment, at: Date.parse(message.at) || Date.now(), text: message.text, length: [...message.text].length,
 			...message.reply_to ? { replyTo: message.reply_to } : {},
 			delivery: {
 				status: delivery.status, ...delivery.reason ? { reason: delivery.reason } : {}, attempts: 1, via: 'notification',
@@ -949,6 +1354,10 @@ export class RustAgents implements Agents, Disposable {
 				...delivery.delivered_at ? { deliveredAt: Date.parse(delivery.delivered_at) } : {}
 			}
 		};
+	}
+
+	private emitOtherAgents(): void {
+		for (const listener of [...this.otherListeners]) { listener(); }
 	}
 
 	private emit(change: RunChange): void {
@@ -974,7 +1383,46 @@ export class RustAgents implements Agents, Disposable {
 	}
 }
 
-/** A v1 refusal known to have left the CLI unstarted. A missing answer carries its original reason. */
+function sameWindow(left: WindowRef, right: WindowRef): boolean {
+	return left.machine_id === right.machine_id && left.window_id === right.window_id;
+}
+
+/** Membership grows while the record exists. Keep later observations when a mutation reply crosses a topic update. */
+function mergeWindows(info: AgentInfo, observed: AgentInfo): AgentInfo {
+	const windows = [...(info.windows ?? [])];
+	for (const ref of observed.windows ?? []) {
+		if (!windows.some(window => sameWindow(window, ref))) { windows.push(ref); }
+	}
+	if (windows.length === info.windows?.length) { return info; }
+	windows.sort((a, b) => a.machine_id.localeCompare(b.machine_id) || a.window_id.localeCompare(b.window_id));
+	return { ...info, windows };
+}
+
+function isNewProcess(before: AgentInfo, after: AgentInfo): boolean {
+	const differentPid = before.pid !== undefined && after.pid !== undefined && before.pid !== after.pid;
+	const differentExit = before.exit !== undefined && after.exit !== undefined && before.exit.at !== after.exit.at;
+	return differentPid || (before.process === 'ended' && (after.process === 'running' || differentExit));
+}
+
+function agentMissing(agent: string): FacadeError {
+	return new FacadeError('NOT_FOUND', 'not_found', `No agent ${agent} in this window.`);
+}
+
+function bindingChanged(): DaemonError {
+	return new DaemonError('The connection to Facade core was closed.', 'unavailable', { reason: 'unavailable' });
+}
+
+function deferred<T>(): PromiseWithResolvers<T> {
+	let resolve!: PromiseWithResolvers<T>['resolve'];
+	let reject!: PromiseWithResolvers<T>['reject'];
+	const promise = new Promise<T>((done, failed) => {
+		resolve = done;
+		reject = failed;
+	});
+	return { promise, resolve, reject };
+}
+
+/** A refusal known to have left the CLI unstarted. A missing answer carries its original reason. */
 function launchRefused(err: unknown): boolean {
 	return err instanceof DaemonError && err.reason !== 'internal' && !(
 		err.message.includes('the call may or may not have run') || err.message.includes('the outcome is unknown')
@@ -982,7 +1430,12 @@ function launchRefused(err: unknown): boolean {
 	);
 }
 
-/** v1 uses `unavailable` for both refusals and unconfirmed stops. Only explicit refusals establish failure. */
+function resumeRefused(agent: string, err: unknown): boolean {
+	return launchRefused(err) && !(err instanceof DaemonError && err.reason === 'unavailable'
+		&& (err.message === `agent #${agent} is running or already resuming` || err.message === `agent #${agent} is running`));
+}
+
+/** Core uses `unavailable` for both refusals and unconfirmed stops. Only explicit refusals establish failure. */
 function stopRefused(err: unknown): boolean {
 	if (!(err instanceof DaemonError)) { return false; }
 	switch (err.reason) {
@@ -992,10 +1445,6 @@ function stopRefused(err: unknown): boolean {
 			return err.message.endsWith('nothing was sent') || err.message.endsWith('was not stopped yet')
 				|| err.message.startsWith('keeper request queue is full:') || err.message.includes('runs in a terminal of its own;');
 	}
-}
-
-function resumeElsewhere(agent: string, err: unknown): boolean {
-	return err instanceof DaemonError && err.reason === 'unavailable' && err.message === `agent #${agent} is running or already resuming`;
 }
 
 /** Who said a card's second line (PANEL-1.4): the person's own input has none. */
