@@ -120,11 +120,10 @@ pub(crate) struct KeptMessage {
     pub(crate) human_windows: Option<WindowDelivery>,
 }
 
-/// A message deleted from the store: its number, sender and recipient.
+/// A message deleted from the store: its number and recipient.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Gone {
     pub(crate) number: u64,
-    pub(crate) from: String,
     pub(crate) to: String,
 }
 
@@ -309,13 +308,12 @@ fn delete_returning(
     value: &str,
 ) -> rusqlite::Result<Vec<Gone>> {
     let mut statement = connection.prepare(&format!(
-        "DELETE FROM messages WHERE {filter} RETURNING number, \"from\", \"to\""
+        "DELETE FROM messages WHERE {filter} RETURNING number, \"to\""
     ))?;
     let gone = statement.query_map([value], |row| {
         Ok(Gone {
             number: row.get::<_, i64>(0)? as u64,
-            from: row.get(1)?,
-            to: row.get(2)?,
+            to: row.get(1)?,
         })
     })?;
     gone.collect()
@@ -1506,7 +1504,6 @@ mod tests {
                 .unwrap(),
             [Gone {
                 number: 1,
-                from: "a1".into(),
                 to: "a2".into()
             }]
         );

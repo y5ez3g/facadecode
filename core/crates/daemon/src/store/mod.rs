@@ -798,11 +798,6 @@ impl Store {
             |transaction| messages::delete_inbox(transaction, owner),
         )
     }
-    pub(crate) fn windows(
-        self: &Arc<Self>,
-    ) -> anyhow::Result<Vec<facade_base::daemon::WindowDescription>> {
-        self.window_table().windows()
-    }
     pub(crate) fn keep_integration_file(
         self: &Arc<Self>,
         cli: &str,
