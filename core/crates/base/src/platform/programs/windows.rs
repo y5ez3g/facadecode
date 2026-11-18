@@ -112,19 +112,20 @@ fn extension(file: &Path) -> String {
     extension.to_string_lossy().to_lowercase()
 }
 
-/// The application and the command line `CreateProcessW` takes for `agent.start`'s `command`, with
-/// its environment and folder. `.exe` and `.com` run as they are; `.cmd` and `.bat` through
+/// The application and the command line `CreateProcessW` takes for a program with its
+/// arguments, environment and folder. `.exe` and `.com` run as they are; `.cmd` and `.bat` through
 /// `cmd.exe /d /s /c` with batch quoting, refusing an argument cmd.exe would read as its own;
 /// `.ps1` is refused. For the keeper. The command line ends with its NUL, ready to be passed.
 pub fn quoted_command(
-    command: &[String],
+    named: &str,
+    arguments: &[String],
     env: &BTreeMap<String, String>,
     cwd: &Path,
 ) -> Result<(PathBuf, Vec<u16>), String> {
-    let Some((named, arguments)) = command.split_first() else {
-        return Err("the command is empty".to_string());
-    };
-    if let Some(at) = command.iter().position(|part| part.contains('\0')) {
+    if let Some(at) = std::iter::once(named)
+        .chain(arguments.iter().map(String::as_str))
+        .position(|part| part.contains('\0'))
+    {
         return Err(format!("part {at} of the command holds a NUL character"));
     }
     let program = if named.contains(['/', '\\']) {

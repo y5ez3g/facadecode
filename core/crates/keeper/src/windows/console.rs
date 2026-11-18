@@ -14,7 +14,7 @@ use std::path::Path;
 use std::ptr;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::StartArgs;
+use facade_base::keeper::KeeperStartArgs;
 use facade_base::programs::{self, CONPTY_FOLDER};
 use facade_base::terminal::PtyMaster;
 use windows_sys::Win32::Foundation::{
@@ -133,23 +133,22 @@ impl ConPty {
     /// that does not kill it on close. Returns as soon as the CLI runs.
     pub(super) fn start(
         &self,
-        args: &StartArgs,
+        args: &KeeperStartArgs,
         cols: u16,
         rows: u16,
     ) -> Result<Started, ErrorBody> {
-        let program = match args.command.first() {
-            Some(program) if !program.is_empty() => program,
-            _ => {
-                return Err(ErrorBody::invalid_argument(
-                    "command must start with the CLI's program",
-                ));
-            }
-        };
+        let program = &args.launch.program;
+        if program.is_empty() {
+            return Err(ErrorBody::invalid_argument(
+                "command must start with the CLI's program",
+            ));
+        }
         let cannot_start =
             |detail: String| unavailable(format!("could not start {program}: {detail}"));
-        let folder = Path::new(&args.path);
+        let folder = Path::new(&args.launch.folder);
         let (application, mut command_line) =
-            programs::quoted_command(&args.command, &args.env, folder).map_err(cannot_start)?;
+            programs::quoted_command(program, &args.launch.args, &args.env, folder)
+                .map_err(cannot_start)?;
         if command_line.last() != Some(&0) {
             command_line.push(0);
         }
@@ -479,7 +478,7 @@ fn owned(handle: HANDLE) -> io::Result<OwnedHandle> {
 
 /// The CLI's environment as CreateProcessW takes it: `name=value` strings, each ending in NUL,
 /// then one more NUL.
-fn environment_block(args: &StartArgs) -> Result<Vec<u16>, ErrorBody> {
+fn environment_block(args: &KeeperStartArgs) -> Result<Vec<u16>, ErrorBody> {
     let mut block = Vec::new();
     for (name, value) in &args.env {
         if name.contains('\0') || value.contains('\0') {

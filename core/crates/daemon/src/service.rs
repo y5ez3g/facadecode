@@ -2,18 +2,20 @@
 //! The server reads, decodes and answers; here each call meets the agents, the messages and the
 //! windows. Topics are in `topics.rs`, relays in `relays.rs`.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
     self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
-    AgentScreen, AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsChange, ClientKind,
-    DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog, DaemonLogArgs, DaemonLogResult,
-    DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle, HookPrompt, HookSession,
-    HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState, InspectResult,
-    IntegrationAdd, IntegrationList, IntegrationRemove, MAX_SCREEN_LINES, RenameArgs, ResizeArgs,
-    ResumeArgs, ScreenArgs, ScreenBuffer, ScreenText, SendArgs, SessionStartResult, StartArgs,
-    TypeArgs, WindowDescription, WindowUpdate, WorktreeCreate, WorktreeCreateArgs,
+    AgentScreen, AgentSend, AgentStart, AgentStartArgs, AgentState, AgentStop, AgentType,
+    AgentsChange, ClientKind, DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog,
+    DaemonLogArgs, DaemonLogResult, DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle,
+    HookPrompt, HookSession, HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState,
+    InspectResult, IntegrationAdd, IntegrationList, IntegrationRemove, MAX_SCREEN_LINES,
+    RenameArgs, ResizeArgs, ResumeArgs, ScreenArgs, ScreenBuffer, ScreenText, SendArgs,
+    SessionStartResult, StartArgs, TypeArgs, WindowDescription, WindowUpdate, WorktreeCreate,
+    WorktreeCreateArgs,
 };
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
@@ -467,18 +469,11 @@ impl Daemon {
             .unwrap_or_else(|| self.machine_id.clone());
         let by_model = client.identity.kind == ClientKind::Mcp;
         if target == self.machine_id {
-            if by_model
-                && !std::path::Path::new(&args.cwd).is_absolute()
-                && let Some(parent) = client.agent.as_deref().and_then(|id| self.get_agent(id))
-            {
-                args.cwd = std::path::Path::new(&parent.info().cwd)
-                    .join(&args.cwd)
-                    .to_string_lossy()
-                    .into_owned();
-            }
-            let args = self
-                .checked_start(args, client.agent.as_deref(), by_model)
+            let mut args = args.into_start(false);
+            let folder = self
+                .check_start(&mut args, client.agent.as_deref(), by_model, None)
                 .await?;
+            args.launch.folder = Some(folder);
             let origin = crate::operations::StartOrigin {
                 sender: self.sender_of(client.agent.as_deref()),
                 caller,
@@ -508,9 +503,6 @@ impl Daemon {
         };
         args.initial_windows = Some(members);
         args.env.clear();
-        if args.cwd_is_default {
-            args.cwd.clear();
-        }
         if !preflight && matches!(caller, Caller::Agent { .. }) && args.prompt.is_some() {
             let reserved = self.messages.reserve_result()?;
             args.result_message_id = Some(reserved.message_id);
@@ -522,7 +514,7 @@ impl Daemon {
             AgentStart::NAME
         };
         let request_id = (!preflight).then(|| args.request_id.clone()).flatten();
-        let forwarded = self.forwarded_call(client, operation, value_of(args))?;
+        let forwarded = self.forwarded_call(client, operation, value_of(args.for_forwarding()))?;
         if cancel.is_requested() {
             return Err(ErrorBody::new(
                 Reason::Cancelled,
@@ -577,34 +569,37 @@ impl Daemon {
             from_window: forwarded.from_window,
             colors: forwarded.window_colors,
         };
-        if preflight {
-            args = self.prepare_forwarded_start(args, origin.by_model).await?;
-        }
-        self.finish_start(args, origin, preflight).await
+        self.finish_start(args.into_start(true), origin, preflight)
+            .await
     }
 
-    /// Prepares a new forwarded start after the destination has claimed its request key.
-    pub(crate) async fn prepare_forwarded_start(
+    /// Takes the checked local folder, or resolves and checks a forwarded start on the
+    /// running machine. An actual forwarded start calls this after claiming its request key.
+    pub(crate) async fn prepare_start(
         &self,
-        mut args: StartArgs,
+        args: &mut AgentStartArgs,
         by_model: bool,
-    ) -> Result<StartArgs, ErrorBody> {
-        let (environment, home) = self.login_environment().await?;
-        if args.cwd_is_default {
-            args.cwd = home;
+    ) -> Result<String, ErrorBody> {
+        if args.initial_windows.is_none() {
+            return Ok(args
+                .launch
+                .folder
+                .take()
+                .expect("the local folder was checked"));
         }
+        let (environment, home) = self.login_environment().await?;
         args.env = environment;
-        self.checked_start(args, None, by_model).await
+        self.check_start(args, None, by_model, Some(home)).await
     }
 
     async fn finish_start(
         self: &Arc<Self>,
-        args: StartArgs,
+        args: AgentStartArgs,
         origin: crate::operations::StartOrigin,
         preflight: bool,
     ) -> Result<Value, ErrorBody> {
         if preflight {
-            self.preflight_start(args, &origin)?;
+            self.preflight_start(args, &origin).await?;
             Ok(value_of(EmptyResult {}))
         } else {
             Ok(value_of(self.start(args, origin).await?))
@@ -811,31 +806,32 @@ impl Daemon {
         }
     }
 
-    /// The arguments of a start, checked. A start from facade-mcp names one CLI of Facade's
-    /// settings file and nothing more, and runs with its agent's own environment, as a CLI chooses
-    /// what it gives its MCP server.
-    async fn checked_start(
+    /// Resolves the folder on this machine and checks the arguments of a start or preflight.
+    /// Local facade-mcp starts take the acting agent's environment and resolve folders from its
+    /// record. A forwarded start already has this machine's login environment.
+    async fn check_start(
         &self,
-        mut args: StartArgs,
+        args: &mut AgentStartArgs,
         acting: Option<&str>,
         by_model: bool,
-    ) -> Result<StartArgs, ErrorBody> {
-        if args
-            .command
-            .first()
-            .is_none_or(|program| program.is_empty())
-        {
+        login_folder: Option<String>,
+    ) -> Result<String, ErrorBody> {
+        if args.launch.program.is_empty() {
             return Err(ErrorBody::invalid_argument(
                 "command must start with the CLI program",
             ));
         }
-        if !std::path::Path::new(&args.cwd).is_absolute() {
-            let message = format!("cwd must be an absolute path, not {}", args.cwd);
-            return Err(ErrorBody::invalid_argument(message));
-        }
+        let caller_folder = if by_model {
+            acting
+                .and_then(|id| self.get_agent(id))
+                .map(|parent| parent.info().cwd)
+        } else {
+            None
+        };
+        let folder = start_folder(args.launch.folder.take(), caller_folder, login_folder)?;
         check_size(args.cols, args.rows)?;
         if by_model {
-            if args.command.len() > 1 {
+            if !args.launch.args.is_empty() {
                 return Err(ErrorBody::invalid_argument(
                     "a start from facade-mcp names one CLI of Facade's settings file, and \
                      nothing more",
@@ -850,7 +846,7 @@ impl Daemon {
                 args.env = self.environment_of(agent).await?;
             }
         }
-        Ok(args)
+        Ok(folder)
     }
 
     /// What `agent` shows: a guest's input cannot be read, as its terminal is its own.
@@ -1158,6 +1154,52 @@ pub(crate) fn check_size(cols: u16, rows: u16) -> Result<(), ErrorBody> {
         return Err(ErrorBody::invalid_argument(message));
     }
     Ok(())
+}
+
+fn start_folder(
+    supplied: Option<String>,
+    caller_folder: Option<String>,
+    login_folder: Option<String>,
+) -> Result<String, ErrorBody> {
+    let folder = match (supplied, caller_folder) {
+        (Some(folder), Some(caller)) if !folder.is_empty() && Path::new(&folder).is_relative() => {
+            Path::new(&caller)
+                .join(folder)
+                .to_string_lossy()
+                .into_owned()
+        }
+        (Some(folder), _) => folder,
+        (None, caller) => caller.or(login_folder).unwrap_or_default(),
+    };
+    if !Path::new(&folder).is_absolute() {
+        return Err(ErrorBody::invalid_argument(format!(
+            "cwd must be an absolute path, not {folder}"
+        )));
+    }
+    Ok(folder)
+}
+
+#[cfg(test)]
+#[test]
+fn start_folders_default_only_when_omitted() {
+    let (caller, login) = if cfg!(windows) {
+        (r"C:\caller", r"D:\login")
+    } else {
+        ("/caller", "/login")
+    };
+    let from_caller = |folder| start_folder(folder, Some(caller.into()), None);
+    let on_remote = |folder| start_folder(folder, None, Some(login.into()));
+    assert_eq!(from_caller(None).unwrap(), caller);
+    assert_eq!(
+        Path::new(&from_caller(Some("inside".into())).unwrap()),
+        Path::new(caller).join("inside")
+    );
+    assert_eq!(on_remote(None).unwrap(), login);
+    assert_eq!(on_remote(Some(caller.into())).unwrap(), caller);
+    assert!(on_remote(Some("inside".into())).is_err());
+    assert!(on_remote(Some(String::new())).is_err());
+    assert!(from_caller(Some(String::new())).is_err());
+    assert!(start_folder(None, None, None).is_err());
 }
 
 pub(crate) fn not_listed(id: &str) -> ErrorBody {

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
-    AgentInfo, AgentState, AgentsChange, Message, ResumeArgs, StartArgs, StartResult, StopResult,
-    TERMINAL_WINDOW, ToolsState, WindowRef,
+    AgentInfo, AgentStartArgs, AgentState, AgentsChange, Message, ResumeArgs, StartResult,
+    StopResult, TERMINAL_WINDOW, ToolsState, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::{AgentRef, Caller, MessageRef};
@@ -26,6 +26,7 @@ use crate::messages::OwedResult;
 use crate::records::{self, Named, Reach};
 use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::AgentRecord;
+use crate::windows::Destination;
 use crate::{Daemon, HUMAN, Sender, WindowBinding, blocking, gate_for_test, log, pause_for_test};
 
 /// The exit wait once the keeper took `agent.stop`, its 3 seconds before SIGKILL included.
@@ -283,7 +284,7 @@ impl Daemon {
     /// now, starting nothing. A start that failed keeps no ID.
     pub(crate) async fn start(
         self: &Arc<Self>,
-        args: StartArgs,
+        args: AgentStartArgs,
         origin: StartOrigin,
     ) -> Result<StartResult, ErrorBody> {
         let Some(request_id) = args.request_id.clone() else {
@@ -377,24 +378,22 @@ impl Daemon {
     /// its worktree says that the worktree stays.
     async fn start_once(
         self: &Arc<Self>,
-        mut args: StartArgs,
+        mut args: AgentStartArgs,
         origin: StartOrigin,
     ) -> Result<StartResult, ErrorBody> {
-        if args.initial_windows.is_some() {
-            args = self.prepare_forwarded_start(args, origin.by_model).await?;
-        }
+        let folder = self.prepare_start(&mut args, origin.by_model).await?;
         gate_for_test("before-start-run");
         // One reading of the settings file gives the start its YOLO, names and entry (RULES-4.3).
         let settings = command_line::read_settings()?;
-        let configured = self.configure_start(&settings, &args, &origin)?;
+        let configured = self.configure_start(&settings, &args, &origin, &folder)?;
         let windows = self.windows_for_start(&mut args, &origin)?;
         let Some(worktree) = args.worktree.take() else {
             return self
-                .start_in(args, origin, &settings, configured, windows)
+                .start_in(args, origin, &settings, configured, windows, &folder)
                 .await;
         };
         self.windows
-            .check_destination(args.location_source_window.as_ref(), &args.cwd)?;
+            .check_destination(args.location_source_window.as_ref(), &folder)?;
         let branch = worktree.branch.clone();
         let made = self
             .create_worktree(facade_base::daemon::WorktreeCreateArgs {
@@ -402,12 +401,11 @@ impl Daemon {
                     || TERMINAL_WINDOW.to_owned(),
                     |window| window.window_id.clone(),
                 ),
-                cwd: args.cwd.clone(),
+                cwd: folder,
                 worktree,
             })
             .await?;
-        args.cwd = made.path.clone();
-        self.start_in(args, origin, &settings, configured, windows)
+        self.start_in(args, origin, &settings, configured, windows, &made.path)
             .await
             .map_err(|mut error| {
                 error.message.push_str(&format!(
@@ -425,15 +423,17 @@ impl Daemon {
     fn configure_start(
         &self,
         settings: &facade_base::settings::Settings,
-        args: &StartArgs,
+        args: &AgentStartArgs,
         origin: &StartOrigin,
+        folder: &str,
     ) -> Result<Configured, ErrorBody> {
-        let configured = command_line::configure(settings, args, origin.by_model)?;
+        let configured = command_line::configure(settings, args, folder, origin.by_model)?;
+        let program = &args.launch.program;
         if let Some(session) = args.session.as_deref() {
-            command_line::check_session(&configured, &args.command[0], session)?;
+            command_line::check_session(&configured, program, session)?;
         }
         if let Some(prompt) = args.prompt.as_deref() {
-            command_line::check_start_prompt(prompt, &configured, &args.command[0])?;
+            command_line::check_start_prompt(prompt, &configured, program)?;
             let widest = Message {
                 from_machine_id: (origin.caller.machine_id() != self.machine_id)
                     .then(|| origin.caller.machine_id().to_string()),
@@ -459,7 +459,7 @@ impl Daemon {
 
     fn windows_for_start(
         &self,
-        args: &mut StartArgs,
+        args: &mut AgentStartArgs,
         origin: &StartOrigin,
     ) -> Result<StartWindows, ErrorBody> {
         let Some(mut members) = args.initial_windows.take() else {
@@ -486,29 +486,41 @@ impl Daemon {
         Ok(StartWindows { members, colors })
     }
 
-    pub(crate) fn preflight_start(
+    pub(crate) async fn preflight_start(
         &self,
-        mut args: StartArgs,
+        mut args: AgentStartArgs,
         origin: &StartOrigin,
     ) -> Result<(), ErrorBody> {
+        let folder = self.prepare_start(&mut args, origin.by_model).await?;
         let settings = command_line::read_settings()?;
-        let mut configured = self.configure_start(&settings, &args, origin)?;
+        let mut configured = self.configure_start(&settings, &args, origin, &folder)?;
         self.windows_for_start(&mut args, origin)?;
-        let location = self
-            .windows
-            .check_destination(args.location_source_window.as_ref(), &args.cwd)?;
-        configured.find_program(&location.cwd)?;
+        self.start_destination(&args, &mut configured, &folder)?;
         Ok(())
     }
 
-    /// Starts the CLI `configured` in `args.cwd`, in the order a start keeps (docs/core/ARCHITECTURE.md).
+    fn start_destination(
+        &self,
+        args: &AgentStartArgs,
+        configured: &mut Configured,
+        folder: &str,
+    ) -> Result<Destination, ErrorBody> {
+        let destination = self
+            .windows
+            .check_destination(args.location_source_window.as_ref(), folder)?;
+        configured.find_program(&destination.cwd)?;
+        Ok(destination)
+    }
+
+    /// Starts the CLI in `folder`, in the order a start keeps (docs/core/ARCHITECTURE.md).
     async fn start_in(
         self: &Arc<Self>,
-        mut args: StartArgs,
+        args: AgentStartArgs,
         origin: StartOrigin,
         settings: &facade_base::settings::Settings,
         mut configured: Configured,
         windows: StartWindows,
+        folder: &str,
     ) -> Result<StartResult, ErrorBody> {
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(ErrorBody::new(
@@ -516,12 +528,9 @@ impl Daemon {
                 "Facade is exiting; start the agent again",
             ));
         };
-        let destination = self
-            .windows
-            .check_destination(args.location_source_window.as_ref(), &args.cwd)?;
-        args.cwd = destination.cwd;
+        let destination = self.start_destination(&args, &mut configured, folder)?;
+        let folder = destination.cwd;
         let location = destination.location_id;
-        configured.find_program(&args.cwd)?;
         let yolo = settings.yolo;
         let rule = configured.rule;
         let reservation = self.runs.reserve_start();
@@ -557,9 +566,9 @@ impl Daemon {
             rule,
             words: &configured.words,
             program: configured.program.as_deref(),
-            plain_program: &args.command[0],
+            plain_program: &args.launch.program,
             inherited: configured.env.clone(),
-            cwd: &args.cwd,
+            cwd: &folder,
             location_id: &location,
             window: place.as_ref().map(|(label, id)| (label.as_str(), *id)),
             creator: creator
@@ -605,7 +614,7 @@ impl Daemon {
             name: name.clone(),
             cli: configured.cli.clone(),
             location_id: location,
-            cwd: args.cwd.clone(),
+            cwd: folder,
             machine_id: self.machine_id.clone(),
             windows: windows.members,
             location_source_window: args.location_source_window,

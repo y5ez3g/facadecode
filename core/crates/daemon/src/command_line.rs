@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use facade_base::daemon::{CliInfo, Overrides, StartArgs, WindowInfo};
+use facade_base::daemon::{AgentStartArgs, CliInfo, Overrides, WindowInfo};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::programs::{on_path, program_of, runnable};
 use facade_base::settings::Settings;
@@ -57,13 +57,14 @@ pub(crate) struct Configured {
 /// refused in its tool's words.
 pub(crate) fn configure(
     settings: &Settings,
-    args: &StartArgs,
+    args: &AgentStartArgs,
+    folder: &str,
     by_model: bool,
 ) -> Result<Configured, ErrorBody> {
     let all = entries::read(settings);
-    match entries::find(&all, &args.command[0]) {
+    match entries::find(&all, &args.launch.program) {
         Some(entry) => configure_entry(entry, args, by_model),
-        None if by_model => Err(no_such_cli(&all, args)),
+        None if by_model => Err(no_such_cli(&all, args, folder)),
         None => configure_program(args, by_model),
     }
 }
@@ -72,7 +73,7 @@ pub(crate) fn configure(
 /// being turned off, then a model or effort its CLI takes none of.
 fn configure_entry(
     entry: &Entry,
-    args: &StartArgs,
+    args: &AgentStartArgs,
     by_model: bool,
 ) -> Result<Configured, ErrorBody> {
     let (model, effort) = (args.model.as_deref(), args.effort.as_deref());
@@ -80,7 +81,7 @@ fn configure_entry(
     if let Some(asked) = entry.refused_choice(model, effort) {
         return Err(refused_choice(entry.display_name(), asked, by_model));
     }
-    let own = &args.command[1..];
+    let own = &args.launch.args;
     Ok(Configured {
         cli: entry.name.clone(),
         rule: entry.kind.and_then(|kind| kind.rule()),
@@ -89,7 +90,7 @@ fn configure_entry(
         words: [
             entry.choices(model, effort, own),
             entry.args.clone(),
-            own.to_vec(),
+            own.clone(),
         ]
         .concat(),
         env: entry.environment(&args.env),
@@ -97,8 +98,8 @@ fn configure_entry(
 }
 
 /// A start of the program the first word names, by its path or name: it takes no model or effort.
-fn configure_program(args: &StartArgs, by_model: bool) -> Result<Configured, ErrorBody> {
-    let cli = program_name(&args.command[0]);
+fn configure_program(args: &AgentStartArgs, by_model: bool) -> Result<Configured, ErrorBody> {
+    let cli = program_name(&args.launch.program);
     let asked = [("model", &args.model), ("effort", &args.effort)]
         .into_iter()
         .find_map(|(asked, chosen)| chosen.as_ref().map(|_| asked));
@@ -110,13 +111,13 @@ fn configure_program(args: &StartArgs, by_model: bool) -> Result<Configured, Err
         rule: None,
         entry: None,
         program: None,
-        words: args.command[1..].to_vec(),
+        words: args.launch.args.clone(),
         env: args.env.clone(),
     })
 }
 
 /// An MCP tool's start names a CLI no entry has: say which ones it could name there.
-fn no_such_cli(all: &[Entry], args: &StartArgs) -> ErrorBody {
+fn no_such_cli(all: &[Entry], args: &AgentStartArgs, folder: &str) -> ErrorBody {
     let listed: Vec<&str> = all
         .iter()
         .filter(|entry| entry.listed(&args.env))
@@ -127,9 +128,8 @@ fn no_such_cli(all: &[Entry], args: &StartArgs) -> ErrorBody {
         false => listed.join(", "),
     };
     let message = format!(
-        "No CLI {} is configured at {}; the CLIs there are {listed}.",
-        quoted(&args.command[0]),
-        args.cwd
+        "No CLI {} is configured at {folder}; the CLIs there are {listed}.",
+        quoted(&args.launch.program),
     );
     ErrorBody::new(Reason::NotFound, message)
 }

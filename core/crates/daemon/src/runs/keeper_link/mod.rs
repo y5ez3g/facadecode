@@ -12,7 +12,7 @@ use anyhow::Context;
 use facade_base::daemon::KeeperInfo;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::keeper::{
-    AgentArgs, AgentStart, AgentStop, AgentSync, HeldAgent, StartArgs, SyncArgs,
+    AgentArgs, AgentStart, AgentStop, AgentSync, HeldAgent, KeeperStartArgs, StartArgs, SyncArgs,
 };
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::service::{self, Report, RestartBackoff, Service};
@@ -153,7 +153,7 @@ impl KeeperLink {
         mut reservation: StartReservation,
         id: &str,
         number: u64,
-        args: StartArgs,
+        args: KeeperStartArgs,
         exits: ExitSink,
         kind: RunKind,
     ) -> Result<StartedRun, ErrorBody> {
@@ -173,7 +173,7 @@ impl KeeperLink {
         self.runs.begin(id, number, Arc::clone(&exits));
         reservation.sent = true;
         self.connection.lock().unwrap().sent += 1;
-        let response = keeper.call::<AgentStart>(&args).await;
+        let response = keeper.call::<AgentStart>(&StartArgs::from(args)).await;
         let started = match response {
             Err(error) => {
                 if error.uncertain() {

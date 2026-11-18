@@ -7,8 +7,8 @@ use std::time::Instant;
 use facade_base::jsonrpc::{ErrorBody, Reason, Response, decode_arguments, parse_request};
 use facade_base::keeper::{
     AgentArgs, AgentChange, AgentStart, AgentStop, AgentSync, DaemonPing, HelloParams, HelloResult,
-    KEEPER_PROTOCOL_VERSION, MIN_KEEPER_PROTOCOL_VERSION, StartArgs, StartResult, SyncArgs,
-    methods, operation_names, shared_version,
+    KEEPER_PROTOCOL_VERSION, KeeperStartArgs, MIN_KEEPER_PROTOCOL_VERSION, StartArgs, StartResult,
+    SyncArgs, methods, operation_names, shared_version,
 };
 use facade_base::operations::{CallParams, Operation};
 use facade_base::process::ProcessIdentity;
@@ -29,7 +29,7 @@ const VERSIONS: [u32; 2] = [MIN_KEEPER_PROTOCOL_VERSION, KEEPER_PROTOCOL_VERSION
 /// A request the keeper understands, its arguments decoded.
 enum Request {
     Hello(HelloParams),
-    Start(StartArgs),
+    Start(KeeperStartArgs),
     Stop(AgentArgs),
     Sync(SyncArgs),
     Ping,
@@ -125,7 +125,7 @@ impl Keeper {
         }))
     }
 
-    fn start(&mut self, args: StartArgs) -> Result<Handled, ErrorBody> {
+    fn start(&mut self, args: KeeperStartArgs) -> Result<Handled, ErrorBody> {
         if self.clis.contains_key(&args.agent) {
             let message = format!("{} already has a CLI", args.agent);
             return Err(ErrorBody::invalid_argument(message));
@@ -216,7 +216,7 @@ fn decode(method: &str, params: Value, greeted: bool) -> Result<Request, ErrorBo
     }
     let CallParams { op, args } = decode_arguments(params)?;
     Ok(match op.as_str() {
-        AgentStart::NAME => Request::Start(decode_arguments(args)?),
+        AgentStart::NAME => Request::Start(decode_arguments::<StartArgs>(args)?.into()),
         AgentStop::NAME => Request::Stop(decode_arguments(args)?),
         AgentSync::NAME => Request::Sync(decode_arguments(args)?),
         DaemonPing::NAME => Request::Ping,

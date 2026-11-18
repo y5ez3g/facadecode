@@ -7,7 +7,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::time::{Duration, Instant};
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{HeldAgent, STOP_TIMEOUT, StartArgs};
+use facade_base::keeper::{HeldAgent, KeeperStartArgs, STOP_TIMEOUT};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::terminal::PtyMaster;
 use facade_base::unix_process::{self, Observed, ProcessObservation, WaitPacket};
@@ -42,7 +42,7 @@ impl Cli {
     /// Starts the CLI that `args` describes in a new console and returns it. Returns as soon as
     /// the program is running; it does not wait for the CLI.
     pub(super) fn spawn(
-        args: &StartArgs,
+        args: &KeeperStartArgs,
         conpty: &ConPty,
         port: &mut Port,
     ) -> Result<Cli, ErrorBody> {
@@ -62,7 +62,7 @@ impl Cli {
                 unsafe { TerminateProcess(started.process.as_raw_handle(), KILLED_CODE) };
                 return Err(ErrorBody::new(
                     Reason::Unavailable,
-                    format!("could not watch {} ({pid}): {err}", args.command[0]),
+                    format!("could not watch {} ({pid}): {err}", args.launch.program),
                 ));
             }
         };

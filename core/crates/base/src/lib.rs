@@ -22,6 +22,7 @@ pub mod log;
 pub mod paths;
 pub mod process;
 pub mod settings;
+pub mod start;
 pub mod time;
 
 pub use build::{

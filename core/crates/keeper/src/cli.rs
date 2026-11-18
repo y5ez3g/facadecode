@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{HeldAgent, STOP_TIMEOUT, StartArgs};
+use facade_base::keeper::{HeldAgent, KeeperStartArgs, STOP_TIMEOUT};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::unix_process::{self, Observed, ProcessObservation};
 use nix::sys::signal::Signal;
@@ -44,23 +44,21 @@ enum Tie {
 impl Cli {
     /// Forks the CLI that `args` describes onto a new PTY and returns it, plus a second master
     /// for the daemon. Returns as soon as the program is running; it does not wait for the CLI.
-    pub(super) fn spawn(args: &StartArgs) -> Result<(Cli, OwnedFd), ErrorBody> {
-        let (program, words) = match args.command.split_first() {
-            Some((program, words)) if !program.is_empty() => (program, words),
-            _ => {
-                return Err(ErrorBody::invalid_argument(
-                    "command must start with the CLI's program",
-                ));
-            }
-        };
+    pub(super) fn spawn(args: &KeeperStartArgs) -> Result<(Cli, OwnedFd), ErrorBody> {
+        let program = &args.launch.program;
+        if program.is_empty() {
+            return Err(ErrorBody::invalid_argument(
+                "command must start with the CLI's program",
+            ));
+        }
         let terminal = terminal::open(args.cols.max(2), args.rows.max(1))?;
         let for_daemon = duplicate(terminal.master.as_fd(), "could not copy the terminal")?;
         let mut command = Command::new(program);
         command
-            .args(words)
+            .args(&args.launch.args)
             .env_clear()
             .envs(&args.env)
-            .current_dir(&args.path);
+            .current_dir(&args.launch.folder);
         command.stdin(stdio(&terminal.slave)?);
         command.stdout(stdio(&terminal.slave)?);
         command.stderr(stdio(&terminal.slave)?);

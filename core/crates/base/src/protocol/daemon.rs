@@ -1119,6 +1119,69 @@ pub struct StartArgs {
     pub session: Option<String>,
 }
 
+/// A start or preflight after decoding the v2 request. The running machine supplies the
+/// folder when it is omitted.
+#[derive(Debug)]
+pub struct AgentStartArgs {
+    pub launch: crate::start::StartCommand<Option<String>>,
+    pub name: Option<String>,
+    pub window: Option<WindowRef>,
+    pub initial_windows: Option<Vec<WindowRef>>,
+    pub location_source_window: Option<WindowRef>,
+    pub env: BTreeMap<String, String>,
+    pub cols: u16,
+    pub rows: u16,
+    pub prompt: Option<String>,
+    pub call_id: Option<String>,
+    pub result_message_id: Option<String>,
+    pub result_message_machine_id: Option<String>,
+    pub request_id: Option<String>,
+    pub worktree: Option<Worktree>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub session: Option<String>,
+}
+
+impl StartArgs {
+    fn folder_is_omitted(&self, forwarded: bool) -> bool {
+        self.cwd_is_default && (forwarded || self.cwd.is_empty())
+    }
+
+    /// The machine protocol forwards the v2 argument object. The origin's default folder
+    /// still travels as an empty `cwd` with the legacy marker set.
+    pub fn for_forwarding(mut self) -> Self {
+        if self.folder_is_omitted(true) {
+            self.cwd.clear();
+        }
+        self
+    }
+
+    /// Decodes the legacy command and folder at the machine running the program. A v2 local
+    /// CLI supplies its own current folder even when the default marker is set.
+    pub fn into_start(self, forwarded: bool) -> AgentStartArgs {
+        let folder = (!self.folder_is_omitted(forwarded)).then_some(self.cwd);
+        AgentStartArgs {
+            launch: crate::start::StartCommand::from_words(self.command, folder),
+            name: self.name,
+            window: self.window,
+            initial_windows: self.initial_windows,
+            location_source_window: self.location_source_window,
+            env: self.env,
+            cols: self.cols,
+            rows: self.rows,
+            prompt: self.prompt,
+            call_id: self.call_id,
+            result_message_id: self.result_message_id,
+            result_message_machine_id: self.result_message_machine_id,
+            request_id: self.request_id,
+            worktree: self.worktree,
+            model: self.model,
+            effort: self.effort,
+            session: self.session,
+        }
+    }
+}
+
 /// The result of `agent.start`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StartResult {
@@ -2684,6 +2747,58 @@ pub fn topic_names() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn starts_and_preflights_keep_the_v2_folder_marker_and_command_vector() {
+        use crate::machine::AgentStartPreflight;
+
+        assert_eq!(
+            [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            [2, 2]
+        );
+        let local = json!({
+            "command": ["fake", "--flag", "", "two words"],
+            "cwd": "/caller/project",
+            "cwd_is_default": true,
+            "env": {},
+            "cols": 80,
+            "rows": 24,
+        });
+        let start: <AgentStart as Operation>::Args = serde_json::from_value(local.clone()).unwrap();
+        let decoded = start.clone().into_start(false);
+        assert_eq!(decoded.launch.folder.as_deref(), Some("/caller/project"));
+        assert_eq!(decoded.launch.program, "fake");
+        assert_eq!(decoded.launch.args, ["--flag", "", "two words"]);
+        assert_eq!(serde_json::to_value(&start).unwrap(), local);
+
+        let forwarded = start.for_forwarding();
+        let mut remote_default = local;
+        remote_default["cwd"] = json!("");
+        assert_eq!(serde_json::to_value(forwarded).unwrap(), remote_default);
+        let preflight: <AgentStartPreflight as Operation>::Args =
+            serde_json::from_value(remote_default.clone()).unwrap();
+        assert_eq!(preflight.clone().into_start(true).launch.folder, None);
+        assert_eq!(preflight.into_start(false).launch.folder, None);
+
+        let fields = remote_default.as_object_mut().unwrap();
+        fields.remove("cwd_is_default");
+        fields.insert("cwd".to_string(), json!("C:\\Work\\Repo"));
+        let explicit: StartArgs = serde_json::from_value(remote_default.clone()).unwrap();
+        assert_eq!(
+            explicit.clone().into_start(true).launch.folder.as_deref(),
+            Some("C:\\Work\\Repo")
+        );
+        assert_eq!(
+            serde_json::to_value(explicit.for_forwarding()).unwrap(),
+            remote_default
+        );
+        remote_default["cwd"] = json!("");
+        let explicit_empty: StartArgs = serde_json::from_value(remote_default).unwrap();
+        assert_eq!(
+            explicit_empty.into_start(true).launch.folder,
+            Some("".into())
+        );
+    }
 
     #[test]
     fn hook_sessions_keep_the_v2_parent_field() {

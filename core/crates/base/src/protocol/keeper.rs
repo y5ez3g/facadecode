@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize};
 
 use super::operations::{EmptyResult, NoArgs, Operation, OperationVisitor};
 use crate::process::ProcessExit;
+use crate::start::StartCommand;
 
 pub const KEEPER_PROTOCOL_VERSION: u32 = 1;
 pub const MIN_KEEPER_PROTOCOL_VERSION: u32 = 1;
@@ -138,6 +139,41 @@ pub struct StartArgs {
     pub cols: u16,
     /// The terminal's first height in rows. Below 1 is 1.
     pub rows: u16,
+}
+
+/// The resolved start the keeper executes. It travels in the v1 `StartArgs` object.
+pub struct KeeperStartArgs {
+    pub agent: String,
+    pub launch: StartCommand<String>,
+    pub env: BTreeMap<String, String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl From<StartArgs> for KeeperStartArgs {
+    fn from(args: StartArgs) -> Self {
+        Self {
+            agent: args.agent,
+            launch: StartCommand::from_words(args.command, args.path),
+            env: args.env,
+            cols: args.cols,
+            rows: args.rows,
+        }
+    }
+}
+
+impl From<KeeperStartArgs> for StartArgs {
+    fn from(args: KeeperStartArgs) -> Self {
+        let (command, path) = args.launch.into_words();
+        Self {
+            agent: args.agent,
+            command,
+            env: args.env,
+            path,
+            cols: args.cols,
+            rows: args.rows,
+        }
+    }
 }
 
 /// The result of `agent.start`. Its response carries the terminal.
@@ -305,20 +341,18 @@ mod tests {
                 ],
             })
         );
+        let start = json!({
+            "agent": "a1", "command": ["f", "", "a b"], "env": { "K": "V" }, "path": "/",
+            "cols": 80, "rows": 24,
+        });
+        let decoded =
+            KeeperStartArgs::from(serde_json::from_value::<StartArgs>(start.clone()).unwrap());
+        assert_eq!(decoded.launch.program, "f");
+        assert_eq!(decoded.launch.args, ["", "a b"]);
+        assert_eq!(decoded.launch.folder, "/");
         assert_eq!(
-            serde_json::to_value(StartArgs {
-                agent: "a1".into(),
-                command: vec!["f".into(), "a".into()],
-                env: BTreeMap::from([("K".into(), "V".into())]),
-                path: "/".into(),
-                cols: 80,
-                rows: 24,
-            })
-            .unwrap(),
-            json!({
-                "agent": "a1", "command": ["f", "a"], "env": { "K": "V" }, "path": "/",
-                "cols": 80, "rows": 24,
-            })
+            serde_json::to_value(StartArgs::from(decoded)).unwrap(),
+            start
         );
         assert_eq!(
             serde_json::to_value(StartResult {
