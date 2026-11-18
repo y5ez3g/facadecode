@@ -1,43 +1,9 @@
-//! A tool call's arguments, read against the tool's input schema before anything is done. One
-//! failure reports every problem of a call together: the arguments it needs and left out first, then
-//! each other problem in the order of the schema.
+//! A tool call's arguments, normalized against the input schema. Collects missing arguments and
+//! other problems for the caller to report.
 
 use serde_json::{Map, Number, Value, json};
 
-use super::envelope;
-
-/// The problems found in one call's arguments.
-#[derive(Debug, Default)]
-pub(super) struct Problems {
-    missing: Vec<String>,
-    others: Vec<String>,
-}
-
-impl Problems {
-    /// Notes a problem other than a missing argument.
-    pub(super) fn add(&mut self, problem: impl Into<String>) {
-        self.others.push(problem.into());
-    }
-
-    fn total(&self) -> usize {
-        self.missing.len() + self.others.len()
-    }
-
-    /// The `invalid_argument` failure of a call to `tool` that names every problem; none without
-    /// problems.
-    pub(super) fn into_failure(self, tool: &str) -> Option<Value> {
-        if self.total() == 0 {
-            return None;
-        }
-        let mut words = Vec::with_capacity(self.total() + 2);
-        if !self.missing.is_empty() {
-            words.push(format!("{tool} requires {}", self.missing.join(", ")));
-        }
-        words.extend(self.others);
-        words.push("nothing was done".to_string());
-        Some(envelope::failure("invalid_argument", words.join("; ")))
-    }
-}
+use super::Problems;
 
 /// The arguments `given` to `tool`, read as its input `schema` describes them: each argument left
 /// out takes its default, and absent arguments are none at all. Every problem goes to `problems`.

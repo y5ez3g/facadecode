@@ -19,16 +19,15 @@ mod message_tools;
 mod result_files;
 mod schema;
 mod terminal_tools;
-mod tool_calls;
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Instant;
 
 use facade_base::daemon_client::{DaemonClient, Identity};
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub(crate) use result_files::{clean_results, results_folder};
 
@@ -168,7 +167,7 @@ impl Relay {
     /// `serves`: none for a notification or a response. It waits on the daemon, so it runs in a
     /// blocking task.
     pub(crate) fn respond(&self, serves: &Serves, line: &[u8], arrived: Instant) -> Option<Value> {
-        lines::respond(self, serves, line, arrived)
+        lines::respond(self, serves, line, arrived, &DEFINITIONS, dispatch_tool)
     }
 
     /// Shows the daemon that `agent`'s tools are there, from now until the relay's connection ends,
@@ -216,6 +215,180 @@ impl Relay {
             .map(String::as_str)
             .filter(|value| !value.is_empty())
     }
+}
+
+/// The tools as `tools/list` describes them, in order, without a result schema.
+static DEFINITIONS: LazyLock<Vec<Value>> = LazyLock::new(|| {
+    serde_json::from_str(facade_base::tools::DEFINITIONS).expect("the tool definitions are JSON")
+});
+
+#[derive(Clone, Copy)]
+enum Tool {
+    StartAgent,
+    ListAgents,
+    StopAgent,
+    SendMessage,
+    ReadMessages,
+    ReadScreen,
+    TypeText,
+    PressKeys,
+}
+
+impl Tool {
+    fn named(name: &str) -> Option<Tool> {
+        Some(match name {
+            "start_agent" => Tool::StartAgent,
+            "list_agents" => Tool::ListAgents,
+            "stop_agent" => Tool::StopAgent,
+            "send_message" => Tool::SendMessage,
+            "read_messages" => Tool::ReadMessages,
+            "read_screen" => Tool::ReadScreen,
+            "type_text" => Tool::TypeText,
+            "press_keys" => Tool::PressKeys,
+            _ => return None,
+        })
+    }
+
+    /// The checks beyond the input schema, made before anything is done.
+    fn check(self, arguments: &Map<String, Value>, problems: &mut Problems) {
+        match self {
+            Tool::StartAgent => agent_tools::check_start(arguments, problems),
+            Tool::SendMessage => message_tools::check_send(arguments, problems),
+            Tool::ReadMessages => message_tools::check_read(arguments, problems),
+            Tool::TypeText => terminal_tools::check_text(arguments, problems),
+            Tool::PressKeys => terminal_tools::check_keys(arguments, problems),
+            Tool::ListAgents | Tool::StopAgent | Tool::ReadScreen => {}
+        }
+    }
+}
+
+/// A `tools/call` as its client made it.
+struct ToolCall {
+    /// Its JSON-RPC ID as a later result names it: the string itself, or the number written out.
+    id: String,
+    /// Its JSON-RPC ID as JSON text, as the client's cancellation names it.
+    key: String,
+    /// When its line arrived, before it waited for a thread: a send's 30 seconds count from then.
+    arrived: Instant,
+    /// The request ID it goes to the daemon with, where the model gives none: the relay's process
+    /// and the call's ID, the same at every daemon, so that a call the relay gives the next daemon
+    /// repeats what the first did.
+    request_id: String,
+}
+
+impl ToolCall {
+    fn of(relay: &Relay, id: &Value, arrived: Instant) -> ToolCall {
+        let key = id.to_string();
+        ToolCall {
+            id: id.as_str().map_or_else(|| key.clone(), str::to_string),
+            request_id: format!("facade-{}-{}-{key}", relay.pid, relay.birth),
+            key,
+            arrived,
+        }
+    }
+}
+
+/// The problems found in one call's arguments.
+#[derive(Debug, Default)]
+struct Problems {
+    missing: Vec<String>,
+    others: Vec<String>,
+}
+
+impl Problems {
+    /// Notes a problem other than a missing argument.
+    fn add(&mut self, problem: impl Into<String>) {
+        self.others.push(problem.into());
+    }
+
+    fn total(&self) -> usize {
+        self.missing.len() + self.others.len()
+    }
+
+    /// The `invalid_argument` failure of a call to `tool` that names every problem.
+    fn into_failure(self, tool: &str) -> Option<Value> {
+        if self.total() == 0 {
+            return None;
+        }
+        let mut words = Vec::with_capacity(self.total() + 2);
+        if !self.missing.is_empty() {
+            words.push(format!("{tool} requires {}", self.missing.join(", ")));
+        }
+        words.extend(self.others);
+        words.push("nothing was done".to_string());
+        Some(envelope::failure("invalid_argument", words.join("; ")))
+    }
+}
+
+/// Reads the arguments as the tool's schema describes them, then checks the tool's extra rules.
+fn validate_tool(name: &str, given: &Value) -> Result<(Tool, Map<String, Value>), Value> {
+    let found = Tool::named(name).zip(
+        DEFINITIONS
+            .iter()
+            .find(|definition| definition["name"] == name),
+    );
+    let Some((tool, definition)) = found else {
+        let names: Vec<&str> = DEFINITIONS
+            .iter()
+            .filter_map(|definition| definition["name"].as_str())
+            .collect();
+        let message = format!("no tool {name}; the tools are {}", names.join(", "));
+        return Err(envelope::failure("unsupported", message));
+    };
+    let mut problems = Problems::default();
+    let arguments = schema::read_arguments(name, &definition["inputSchema"], given, &mut problems);
+    tool.check(&arguments, &mut problems);
+    if let Some(failure) = problems.into_failure(name) {
+        return Err(failure);
+    }
+    Ok((tool, arguments))
+}
+
+/// Checks a tool call and runs it on a connection of its own. A cancelled send may return None.
+fn dispatch_tool(
+    relay: &Relay,
+    agent: &str,
+    name: &str,
+    given: &Value,
+    call: &ToolCall,
+) -> Option<Value> {
+    let (tool, arguments) = match validate_tool(name, given) {
+        Ok(checked) => checked,
+        Err(failure) => return Some(failure),
+    };
+    // A send connects within its own 30 seconds.
+    if let Tool::SendMessage = tool {
+        return message_tools::send(relay, agent, &arguments, call);
+    }
+    let mut client = match daemon_calls::open_as_agent(relay, agent) {
+        Ok(client) => client,
+        Err(failure) => return Some(failure),
+    };
+    let client = &mut client;
+    Some(match tool {
+        Tool::StartAgent => agent_tools::start(client, agent, &arguments, call),
+        Tool::ListAgents => agent_tools::list(client),
+        Tool::StopAgent => agent_tools::stop(client, &arguments),
+        Tool::ReadMessages => message_tools::read(client, &arguments),
+        Tool::ReadScreen => terminal_tools::read_screen(client, &arguments),
+        Tool::TypeText => terminal_tools::type_text(client, &arguments),
+        Tool::PressKeys => terminal_tools::press_keys(client, &arguments),
+        Tool::SendMessage => unreachable!("a send was made above"),
+    })
+}
+
+/// The string argument `key`, which the schema checked, or an empty one where it is optional and
+/// left out.
+fn text(arguments: &Map<String, Value>, key: &str) -> String {
+    optional(arguments, key).unwrap_or_default()
+}
+
+/// The string argument `key`, where it was given.
+fn optional(arguments: &Map<String, Value>, key: &str) -> Option<String> {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -287,5 +460,26 @@ mod tests {
         assert!(!crate::server::is_relay_hello(&ordinary));
         let hello: HelloParams = decode_arguments(ordinary).unwrap();
         assert_eq!(hello.kind, ClientKind::Mcp);
+    }
+
+    #[test]
+    fn the_tools_are_the_eight_in_their_order() {
+        let names: Vec<&str> = DEFINITIONS
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "start_agent",
+                "list_agents",
+                "stop_agent",
+                "send_message",
+                "read_messages",
+                "read_screen",
+                "type_text",
+                "press_keys"
+            ]
+        );
     }
 }

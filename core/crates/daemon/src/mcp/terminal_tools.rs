@@ -10,8 +10,7 @@ use serde_json::{Map, Value, json};
 use super::daemon_calls::{CONNECT_TIMEOUT, agent_failed};
 use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
-use super::schema::Problems;
-use super::tool_calls::text;
+use super::{Problems, text};
 
 /// The keys `press_keys` takes by name, in lower case, besides Ctrl+A to Ctrl+Z and any one
 /// printable character.

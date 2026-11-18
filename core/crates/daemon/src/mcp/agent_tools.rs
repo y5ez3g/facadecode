@@ -19,8 +19,7 @@ use serde_json::{Map, Value, json};
 use super::daemon_calls::{CONNECT_TIMEOUT, agent_failed, failed};
 use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
-use super::schema::Problems;
-use super::tool_calls::{ToolCall, optional, text};
+use super::{Problems, ToolCall, optional, text};
 
 /// Refuses a start's prompt as Facade refuses a message's text, and a model or an effort that is
 /// blank: a start leaves either out for its CLI's own.
