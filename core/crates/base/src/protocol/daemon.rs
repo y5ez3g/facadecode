@@ -2107,7 +2107,8 @@ pub enum AgentsChange {
         agent_id: String,
     },
     /// The state of this running machine's contribution to the view.
-    MachineState { machine: AgentMachineState },
+    #[serde(rename = "machine_state")]
+    SyncUpdated { machine: AgentMachineState },
     /// An unknown change kind. Skip it.
     #[serde(other)]
     #[schemars(skip)]
@@ -2140,7 +2141,7 @@ impl From<AgentsUpdate> for AgentsChange {
                 machine_id,
                 agent_id,
             },
-            AgentsUpdate::MachineState { machine } => Self::MachineState {
+            AgentsUpdate::MachineState { machine } => Self::SyncUpdated {
                 machine: machine.into(),
             },
         }
