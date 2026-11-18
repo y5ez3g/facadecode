@@ -30,7 +30,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::errors::{
     Change, Problem, about_agent, about_change, about_machine, about_send, bare_id,
 };
-use crate::{ExitText, Opening, Shown};
+use crate::{ExitText, Opening, Shown, single_line, table};
 
 /// How a command prints: for the reader, or as JSON.
 pub(crate) enum Format {
@@ -641,48 +641,6 @@ fn environment() -> BTreeMap<String, String> {
         );
     }
     variables
-}
-
-fn single_line(text: &str) -> String {
-    text.replace(
-        |ch: char| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'),
-        " ",
-    )
-}
-
-/// Align columns by the width of their headers and cells.
-pub(crate) fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
-    let rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| row.iter().map(|cell| single_line(cell)).collect())
-        .collect();
-    let mut widths: Vec<usize> = headers.iter().map(|header| header.width()).collect();
-    for row in &rows {
-        for (width, cell) in widths.iter_mut().zip(row) {
-            *width = (*width).max(cell.width());
-        }
-    }
-    let mut lines = Vec::with_capacity(rows.len() + 1);
-    lines.push(table_row(headers.iter().copied(), &widths));
-    for row in &rows {
-        lines.push(table_row(row.iter().map(String::as_str), &widths));
-    }
-    lines.join("\n")
-}
-
-fn table_row<'a>(cells: impl Iterator<Item = &'a str>, widths: &[usize]) -> String {
-    let mut line = String::new();
-    for (column, (cell, width)) in cells.zip(widths).enumerate() {
-        if column > 0 {
-            line.push_str("   ");
-        }
-        line.push_str(cell);
-        if column + 1 < widths.len() {
-            let _ = write!(line, "{:pad$}", "", pad = width - cell.width());
-        }
-    }
-    line.truncate(line.trim_end_matches(' ').len());
-    line
 }
 
 pub(crate) fn ago(at: SystemTime, now: SystemTime) -> String {

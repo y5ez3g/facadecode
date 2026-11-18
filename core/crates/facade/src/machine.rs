@@ -24,8 +24,8 @@ use facade_base::paths::ClientSocket;
 use facade_base::ssh::{self, SshMode};
 
 use crate::cli::{MachineAction, ServeArgs, SshTarget};
-use crate::commands::table;
 use crate::errors::{self, Problem, ServeFailure, about_connection, about_machine, repair_tip};
+use crate::table;
 
 impl ServeArgs {
     fn home(self) -> anyhow::Result<Option<PathBuf>> {

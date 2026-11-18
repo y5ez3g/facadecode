@@ -88,6 +88,7 @@ Shared with the children:
 - `ConnectFailure`: why one attempt failed. `Timeout` means another attempt may succeed, `Permanent` means it will not, and `Cancelled` means the caller gave up.
 - `Reconnect`: the type of the function attach reconnects with, `daemon_client::reconnect`.
 - `print_or_end!` and `println_or_end!`: every print to standard output. A reader that went away, as `head` once it has its lines, ends the command quietly with code 0; on macOS and Linux SIGPIPE ends it first, and Windows, without SIGPIPE, fails the write instead.
+- `table` aligns columns by display width for `commands` and `machine`. It uses `single_line` to keep each cell on one line. `commands` also uses `single_line` for other output.
 - `ExitText`: an agent's exit as a person reads it: `code 3`, the signal's name, or why neither is known. A code outside 0–255, as a Windows status, shows its 32 bits in hex: `code 0xC000013A`.
 - `Opening` and `Shown`: how an attachment began, and the agent `start` or `resume` began, for `attach`'s first line.
 - From `errors`: `Problem`, `about_agent`, `about_send` and `bare_id`.
@@ -128,7 +129,7 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
   - `stop` and `remove(&mut DaemonClient, agents, report) -> Result<i32>`.
   - `integration(&mut DaemonClient, IntegrationAction, Format)`, where `IntegrationAction` is `Add { cli }`, `Remove { cli }` or `List`.
   - `status(home, Option<&DaemonClient>, Format)` and `version(Format)`.
-  - Pure renderers that the tests call with a fixed current time: the table, relative times, the state, input-box, tools and part-state words, and each command's text.
+  - Pure renderers for relative times, state, input-box, tools and part-state words, and each command's text. Tests supply a fixed current time where needed.
   - Operations it calls: `agent.list`, `machine.list`, `agent.start`, `agent.resume`, `agent.inspect`, `agent.screen`, `agent.type`, `agent.send`, `agent.rename`, `agent.stop`, `agent.remove`, `integration.add`, `integration.remove` and `integration.list`. Topics it reads one snapshot of: `messages`.
 
 ### machine

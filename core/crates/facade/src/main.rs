@@ -26,12 +26,13 @@ mod machine;
 #[cfg(test)]
 mod tests;
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
 
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
 use facade_base::daemon_client::DaemonClient;
 use facade_base::process::{EndReason, ProcessExit};
+use unicode_width::UnicodeWidthStr;
 
 use cli::{Command, Integration, MachineAction, Target, Targets};
 use commands::{Format, IntegrationAction, Listing};
@@ -130,6 +131,48 @@ fn write_or_end(text: fmt::Arguments<'_>) {
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
         Err(error) => panic!("failed printing to stdout: {error}"),
     }
+}
+
+fn single_line(text: &str) -> String {
+    text.replace(
+        |ch: char| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'),
+        " ",
+    )
+}
+
+/// Align columns by the width of their headers and cells.
+pub(crate) fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| row.iter().map(|cell| single_line(cell)).collect())
+        .collect();
+    let mut widths: Vec<usize> = headers.iter().map(|header| header.width()).collect();
+    for row in &rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.width());
+        }
+    }
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    lines.push(table_row(headers.iter().copied(), &widths));
+    for row in &rows {
+        lines.push(table_row(row.iter().map(String::as_str), &widths));
+    }
+    lines.join("\n")
+}
+
+fn table_row<'a>(cells: impl Iterator<Item = &'a str>, widths: &[usize]) -> String {
+    let mut line = String::new();
+    for (column, (cell, width)) in cells.zip(widths).enumerate() {
+        if column > 0 {
+            line.push_str("   ");
+        }
+        line.push_str(cell);
+        if column + 1 < widths.len() {
+            let _ = write!(line, "{:pad$}", "", pad = width - cell.width());
+        }
+    }
+    line.truncate(line.trim_end_matches(' ').len());
+    line
 }
 
 /// Whether this program runs as a CLI's hook: `facade hook …`.

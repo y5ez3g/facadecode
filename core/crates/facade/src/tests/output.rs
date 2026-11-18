@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 use super::{agent, before, input, inspection, now};
 use crate::commands::{
     ago, input_words, inspect_text, integration_status, integration_text, integrations_text,
-    list_text, part_words, quiet_text, sent, state_words, status_text, table, tools_words,
+    list_text, part_words, quiet_text, sent, state_words, status_text, tools_words,
 };
+use crate::table;
 
 /// `text` with each line's trailing spaces removed: the last column's padding is no one's to read.
 fn trimmed(text: &str) -> String {
