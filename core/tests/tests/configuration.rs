@@ -268,7 +268,7 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
         "{oc}"
     );
     let bad = ada.call("start_agent", start("bad", json!({})));
-    assert_eq!(bad["reason"], "configuration_invalid", "{bad}");
+    assert_eq!(bad["reason"], "invalid_settings", "{bad}");
     assert!(
         bad["message"]
             .as_str()
@@ -550,7 +550,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     for (cli, problem) in said {
         let start = json!({ "name": "w", "cli": cli, "window": "terminal", "folder": folder });
         let mcp = ada.call("start_agent", start);
-        assert_eq!(mcp["reason"], "invalid_argument", "{mcp}");
+        assert_eq!(mcp["reason"], "not_found", "{mcp}");
         assert_eq!(mcp["message"], problem, "{mcp}");
         let refused = refused(&home, cli);
         assert!(
@@ -582,7 +582,7 @@ fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     );
     let said = "clis[\"off reads\"].env.A reads ${env:NOT_SET_FOR_THIS}, but NOT_SET_FOR_THIS is \
                 not in the environment it starts with; set it there, or write the value";
-    assert_eq!(refused["reason"], "configuration_invalid", "{refused}");
+    assert_eq!(refused["reason"], "invalid_settings", "{refused}");
     assert_eq!(refused["message"], said, "{refused}");
 }
 
@@ -604,7 +604,7 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
     );
     let message = refused["message"].as_str().unwrap();
     assert!(
-        refused["reason"] == "configuration_invalid"
+        refused["reason"] == "invalid_settings"
             && message.contains("facade.json:1:2: yolo must be true or false; received string")
             && message.matches("yolo must be").count() == 1,
         "{refused}"
@@ -896,7 +896,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
             .extend(more.as_object().unwrap().clone());
         boss.call("start_agent", call)
     };
-    for (cli, reason) in [("nope", "invalid_argument"), ("off", "unavailable")] {
+    for (cli, reason) in [("nope", "not_found"), ("off", "unavailable")] {
         let refused = start(cli, json!({}));
         assert_eq!(refused["reason"], reason, "{refused}");
     }
@@ -905,7 +905,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
         "failure"
     );
     settings(&home, &json!({ "yolo": "no" }));
-    assert_eq!(start("fake", json!({}))["reason"], "configuration_invalid");
+    assert_eq!(start("fake", json!({}))["reason"], "invalid_settings");
     assert_eq!(
         git(&repo, &["worktree", "list"]).lines().count(),
         1,
