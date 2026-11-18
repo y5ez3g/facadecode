@@ -24,7 +24,7 @@ fn start_child(boss: &mut McpTestClient, path: &str, prompt: &str) -> Value {
     let started = boss.call(
         "start_agent",
         json!({
-            "name": "child", "cli": "fake", "window": "terminal", "path": path, "prompt": prompt,
+            "name": "child", "cli": "fake", "window": "terminal", "folder": path, "prompt": prompt,
         }),
     );
     assert_eq!(started["status"], "success", "{started}");

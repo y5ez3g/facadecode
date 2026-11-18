@@ -1574,7 +1574,7 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
         .unwrap()
         .to_string();
     let start =
-        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "path": cwd });
+        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd });
     // A CLI calls its tools once it runs.
     assert!(wait_until(secs(10), || home
         .agent_from_list_json("boss")
@@ -1995,19 +1995,25 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "start_agent",
         "start_agent",
-        json!({ "name": "helper", "cli": "fake", "window": "terminal", "path": cwd }),
+        json!({ "name": "helper", "cli": "fake", "window": "terminal", "folder": cwd }),
     );
     golden.call(
         &mut ada,
-        "start_agent without a path",
+        "start_agent with the old path argument",
         "start_agent",
-        json!({ "name": "other", "cli": "fake", "window": "terminal" }),
+        json!({ "name": "other", "cli": "fake", "path": cwd }),
+    );
+    golden.call(
+        &mut ada,
+        "start_agent with a string worktree",
+        "start_agent",
+        json!({ "name": "other", "cli": "fake", "worktree": "review" }),
     );
     golden.call(
         &mut ada,
         "start_agent of a CLI that is not configured",
         "start_agent",
-        json!({ "name": "other", "cli": "nope", "window": "terminal", "path": cwd }),
+        json!({ "name": "other", "cli": "nope", "window": "terminal", "folder": cwd }),
     );
 
     golden.call(
@@ -2201,10 +2207,29 @@ fn each_tool_responds_as_recorded(through: Through) {
         "start_agent with a prompt",
         "start_agent",
         json!({
-            "name": "twin", "cli": "fake", "window": "terminal", "path": cwd,
+            "name": "twin", "cli": "fake", "window": "terminal", "folder": cwd,
             "prompt": "Read the README and summarize it.",
         }),
     );
+    let defaulted = golden.call(
+        &mut ada,
+        "start_agent without a folder",
+        "start_agent",
+        json!({ "name": "defaulted", "cli": "fake" }),
+    );
+    assert_eq!(defaulted["status"], "success", "{defaulted}");
+    assert_eq!(defaulted["data"]["folder"], cwd);
+    let subfolder = home.project.join("inside");
+    std::fs::create_dir(&subfolder).unwrap();
+    let relative = golden.call(
+        &mut ada,
+        "start_agent in a relative folder",
+        "start_agent",
+        json!({ "name": "relative", "cli": "fake", "folder": "inside" }),
+    );
+    assert_eq!(relative["status"], "success", "{relative}");
+    let subfolder = facade_base::files::real_path(&subfolder).unwrap();
+    assert_eq!(relative["data"]["folder"], json!(subfolder));
     golden.check("mcp-responses.json");
 }
 

@@ -137,7 +137,7 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     );
     let mut ada = McpTestClient::open(&home, "a1");
     let start =
-        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "path": cwd });
+        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd });
     let mcp = ada.call("start_agent", start("nope"));
     assert_eq!(mcp["reason"], "configuration_invalid", "{mcp}");
     assert!(
@@ -165,7 +165,7 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
     let child = |server: &mut McpTestClient, name: &str| {
         let started = server.call(
             "start_agent",
-            json!({ "name": name, "cli": "fake", "window": "terminal", "path": cwd }),
+            json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd }),
         );
         assert_eq!(started["status"], "success", "{started}");
         record(&home, name)
@@ -250,7 +250,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     let mut ada = McpTestClient::open(&home, "a1");
     let started = ada.call(
         "start_agent",
-        json!({ "name": "cy", "cli": "fake", "window": reference.window_id, "path": folder }),
+        json!({ "name": "cy", "cli": "fake", "window": reference.window_id, "folder": folder }),
     );
     assert_eq!(started["data"]["windows"], json!([reference]), "{started}");
     assert_eq!(record(&home, "cy")["root"], "a1");
@@ -298,7 +298,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     );
     let launched = ada.call(
         "start_agent",
-        json!({ "name": "eve", "cli": "fake", "window": reference.window_id, "path": folder }),
+        json!({ "name": "eve", "cli": "fake", "window": reference.window_id, "folder": folder }),
     );
     assert_eq!(launched["status"], "success", "{launched}");
     assert_eq!(

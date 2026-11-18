@@ -31,7 +31,7 @@ type_text and press_keys. Each answers with `status`: success, with `data` where
 
 ## Agents
 
-`start_agent({cli: \"codex\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`
+`start_agent({cli: \"codex\", folder: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`
 starts Codex in that folder with your window membership. Its `data.id`, such as \"#a7\", addresses it from then on.
 Its run takes YOLO from `facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person
 set it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows. Connected

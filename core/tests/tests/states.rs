@@ -830,7 +830,7 @@ fn an_agent_waiting_for_the_person_for_20_seconds_is_told_to_its_creator_once() 
     let mut server = McpTestClient::open(&home, &boss.id);
     let started = server.call(
         "start_agent",
-        json!({ "name": "child", "cli": "fake", "window": "terminal", "path": cwd }),
+        json!({ "name": "child", "cli": "fake", "window": "terminal", "folder": cwd }),
     );
     assert_eq!(started["status"], "success", "{started}");
     let child = home.agent_from_list_json("child").unwrap()["agent_id"]

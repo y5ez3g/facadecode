@@ -38,7 +38,7 @@
               "idempotentHint": false,
               "openWorldHint": false
             },
-            "description": "Start a CLI in your creation tree. Returns its id, address, name, path, machine_id and windows. A prompt can return result_message_id and result_message_machine_id.",
+            "description": "Start a CLI in your creation tree. Returns its id, address, name, folder, machine_id and windows. A prompt can return result_message_id and result_message_machine_id.",
             "inputSchema": {
               "type": "object",
               "properties": {
@@ -47,20 +47,20 @@
                   "minLength": 1,
                   "description": "A CLI entry from list_agents."
                 },
-                "path": {
+                "folder": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "The run's folder. For a local start, relative paths resolve from your run's working directory. For a remote start, use an absolute path on the running machine. With location_source_window, use one of that window's locations or a folder inside it."
+                  "description": "Local paths resolve from your run's folder. Use an absolute path remotely. Omit for your folder or the remote login folder. Use a location or subfolder of location_source_window if set."
                 },
                 "window": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "A member window ID such as win-2 on your machine, or win-2@gpu or win-2@id:3f9a2c1d on another machine. The window may be disconnected. Omit to inherit your windows."
+                  "description": "Member window ID, optionally qualified as win-2@gpu or win-2@id:3f9a2c1d. It may be disconnected. Omit to inherit your windows."
                 },
                 "location_source_window": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "Connected window ID on the running machine that supplies path and any worktree."
+                  "description": "Connected window ID on the running machine supplying the folder and any worktree."
                 },
                 "name": {
                   "type": "string",
@@ -81,9 +81,23 @@
                   "description": "Optional: the effort to run at, as model."
                 },
                 "worktree": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Optional: a branch name. The agent starts in that branch's worktree of path's repository, which Facade makes from the repository's current HEAD where there is none."
+                  "type": "object",
+                  "properties": {
+                    "branch": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "base_ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "default": "HEAD"
+                    }
+                  },
+                  "required": [
+                    "branch"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Create branch from base_ref in a new worktree. To start in an existing worktree, give its folder."
                 },
                 "machine": {
                   "type": "string",
@@ -92,8 +106,7 @@
                 }
               },
               "required": [
-                "cli",
-                "path"
+                "cli"
               ],
               "additionalProperties": false
             },
@@ -448,7 +461,7 @@
                 "window_id": "terminal"
               }
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           },
@@ -464,7 +477,7 @@
                 "window_id": "terminal"
               }
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           }
@@ -489,7 +502,7 @@
         "name": "helper",
         "cli": "fake",
         "window": "terminal",
-        "path": "<test>/project"
+        "folder": "<test>/project"
       }
     },
     "response": {
@@ -497,7 +510,7 @@
       "data": {
         "id": "#a3",
         "name": "helper",
-        "path": "<test>/project",
+        "folder": "<test>/project",
         "address": "#a3@golden-host",
         "machine_id": "<machine ID>",
         "windows": [
@@ -509,19 +522,34 @@
       }
     }
   },
-  "start_agent without a path": {
+  "start_agent with the old path argument": {
     "call": {
       "tool": "start_agent",
       "arguments": {
         "name": "other",
         "cli": "fake",
-        "window": "terminal"
+        "path": "<test>/project"
       }
     },
     "response": {
       "status": "failure",
       "reason": "invalid_argument",
-      "message": "start_agent requires path; nothing was done"
+      "message": "unknown argument 'path' for start_agent. Use 'folder'; nothing was done"
+    }
+  },
+  "start_agent with a string worktree": {
+    "call": {
+      "tool": "start_agent",
+      "arguments": {
+        "name": "other",
+        "cli": "fake",
+        "worktree": "review"
+      }
+    },
+    "response": {
+      "status": "failure",
+      "reason": "invalid_argument",
+      "message": "worktree must be an object. Use {\"branch\": \"topic\"}; nothing was done"
     }
   },
   "start_agent of a CLI that is not configured": {
@@ -531,7 +559,7 @@
         "name": "other",
         "cli": "nope",
         "window": "terminal",
-        "path": "<test>/project"
+        "folder": "<test>/project"
       }
     },
     "response": {
@@ -972,7 +1000,7 @@
         "name": "twin",
         "cli": "fake",
         "window": "terminal",
-        "path": "<test>/project",
+        "folder": "<test>/project",
         "prompt": "Read the README and summarize it."
       }
     },
@@ -981,7 +1009,7 @@
       "data": {
         "id": "#a4",
         "name": "twin",
-        "path": "<test>/project",
+        "folder": "<test>/project",
         "address": "#a4@golden-host",
         "machine_id": "<machine ID>",
         "windows": [
@@ -992,6 +1020,57 @@
         ],
         "result_message_id": "m4",
         "result_message_machine_id": "<machine ID>"
+      }
+    }
+  },
+  "start_agent without a folder": {
+    "call": {
+      "tool": "start_agent",
+      "arguments": {
+        "name": "defaulted",
+        "cli": "fake"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "id": "#a5",
+        "name": "defaulted",
+        "folder": "<test>/project",
+        "address": "#a5@golden-host",
+        "machine_id": "<machine ID>",
+        "windows": [
+          {
+            "machine_id": "<machine ID>",
+            "window_id": "terminal"
+          }
+        ]
+      }
+    }
+  },
+  "start_agent in a relative folder": {
+    "call": {
+      "tool": "start_agent",
+      "arguments": {
+        "name": "relative",
+        "cli": "fake",
+        "folder": "inside"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "id": "#a6",
+        "name": "relative",
+        "folder": "<test>/project/inside",
+        "address": "#a6@golden-host",
+        "machine_id": "<machine ID>",
+        "windows": [
+          {
+            "machine_id": "<machine ID>",
+            "window_id": "terminal"
+          }
+        ]
       }
     }
   }

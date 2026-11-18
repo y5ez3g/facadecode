@@ -71,6 +71,11 @@ fn read_fields(
     for (key, property) in properties {
         let path = owner.path(key);
         match given.get(key) {
+            Some(Value::String(_))
+                if matches!(owner, Owner::Arguments("start_agent")) && key == "worktree" =>
+            {
+                problems.add(r#"worktree must be an object. Use {"branch": "topic"}"#);
+            }
             Some(value) => {
                 if let Some(value) = read_value(property, value, &path, problems) {
                     read.insert(key.clone(), value);
@@ -253,10 +258,8 @@ mod tests {
         });
         let read = |given: Value| {
             let mut problems = Problems::default();
-            let arguments = read_arguments("start_agent", &schema, &given, &mut problems);
-            problems
-                .into_failure("start_agent")
-                .map_or(Ok(arguments), Err)
+            let arguments = read_arguments("example", &schema, &given, &mut problems);
+            problems.into_failure("example").map_or(Ok(arguments), Err)
         };
         let worktree = json!({ "branch": "review", "base_ref": "HEAD" });
         assert_eq!(
@@ -270,7 +273,7 @@ mod tests {
         let failure = read(json!({ "worktree": { "branch": "", "colour": "red" } })).unwrap_err();
         assert_eq!(
             failure["message"],
-            "start_agent requires worktree.base_ref; colour is not a field of worktree; \
+            "example requires worktree.base_ref; colour is not a field of worktree; \
              worktree.branch must not be empty; nothing was done"
         );
         assert_eq!(

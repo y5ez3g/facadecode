@@ -1,8 +1,6 @@
 //! The agent tools: `start_agent` starts a CLI in a folder, `list_agents` lists the
 //! windows and the agents, and `stop_agent` stops one.
 
-use std::path::Path;
-
 use facade_base::address::{exact_machine_selector, parse_machine_selector};
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, DEFAULT_TERMINAL_SIZE,
@@ -105,8 +103,8 @@ fn exact_address(agent: &AgentInfo) -> String {
     .exact_address()
 }
 
-/// Starts a CLI for `me` at its terminal size, resolving local relative paths from its working
-/// folder. The running daemon checks the folder. A prompt owes `me` a result that names this call.
+/// Starts a CLI for `me` at its terminal size. The running daemon resolves and checks the folder.
+/// A prompt owes `me` a result that names this call.
 pub(super) fn start(
     client: &mut DaemonClient,
     me: &str,
@@ -143,23 +141,21 @@ pub(super) fn start(
             machine_id: running_machine.clone(),
             window_id,
         });
-    let cwd = text(arguments, "path");
-    let cwd = if running_machine == client.hello_result.machine_id {
-        Path::new(&me.cwd).join(cwd).to_string_lossy().into_owned()
-    } else {
-        cwd
-    };
-    let worktree = optional(arguments, "worktree").map(|branch| Worktree {
-        branch,
-        base_ref: "HEAD".to_string(),
-    });
+    let folder = optional(arguments, "folder");
+    let worktree = arguments
+        .get("worktree")
+        .and_then(Value::as_object)
+        .map(|worktree| Worktree {
+            branch: text(worktree, "branch"),
+            base_ref: text(worktree, "base_ref"),
+        });
     // A guest has no terminal of Facade's to size the new one by.
     let (cols, rows) = DEFAULT_TERMINAL_SIZE;
     let start = StartArgs {
         command: vec![text(arguments, "cli")],
         name: optional(arguments, "name"),
-        cwd,
-        cwd_is_default: false,
+        cwd_is_default: folder.is_none(),
+        cwd: folder.unwrap_or_default(),
         machine: machine.map(|_| exact_machine_selector(&running_machine)),
         window,
         initial_windows: None,
@@ -181,7 +177,7 @@ pub(super) fn start(
         Ok((started, _)) => {
             let agent = started.agent;
             let mut data = json!({
-                "id": format!("#{}", agent.agent_id), "name": agent.name, "path": agent.cwd,
+                "id": format!("#{}", agent.agent_id), "name": agent.name, "folder": agent.cwd,
             });
             show_members(&mut data, &agent);
             if let (Some(id), Some(machine_id)) =
@@ -215,9 +211,13 @@ fn start_refused(error: &ErrorBody) -> Value {
         .kept
         .as_ref()
         .and_then(|kept| kept.path.as_deref());
-    if let Some(path) = kept_worktree {
+    if let Some(folder) = kept_worktree {
+        if let Some(kept) = refused["data"]["kept"].as_object_mut() {
+            kept.remove("path");
+            kept.insert("folder".to_string(), json!(folder));
+        }
         refused["message"] = json!(format!(
-            "{}; the worktree it made stays at {path}",
+            "{}; the worktree it made stays at {folder}",
             error.message
         ));
     }
@@ -268,7 +268,7 @@ fn agent_row(agent: &AgentInfo, local_machine: &str) -> Value {
         "id": format!("#{}", agent.agent_id), "name": agent.name, "cli": agent.cli,
     });
     show_members(&mut row, agent);
-    row["path"] = json!(agent.cwd);
+    row["folder"] = json!(agent.cwd);
     row["state"] = json!(state);
     if state == "waiting_for_you" {
         let kind = agent
@@ -412,4 +412,34 @@ pub(super) fn stop(client: &mut DaemonClient, arguments: &Map<String, Value>) ->
         "whether the agent ended is not known; check it with list_agents",
         Some(CONNECT_TIMEOUT),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use facade_base::daemon::Kept;
+
+    use super::*;
+
+    #[test]
+    fn a_start_failure_names_the_folder_of_its_kept_worktree() {
+        let mut error = ErrorBody::new(Reason::WorktreeFailed, "Git failed");
+        error.data.kept = Some(Kept {
+            branch: Some("review".into()),
+            path: Some("/work/review".into()),
+        });
+        let refused = start_refused(&error);
+        assert_eq!(refused["reason"], "worktree_failed");
+        assert_eq!(
+            refused["data"]["kept"],
+            json!({ "branch": "review", "folder": "/work/review" })
+        );
+        assert_eq!(
+            refused["message"],
+            "Git failed; the worktree it made stays at /work/review"
+        );
+        assert_eq!(
+            error.data.kept.unwrap().path.as_deref(),
+            Some("/work/review")
+        );
+    }
 }

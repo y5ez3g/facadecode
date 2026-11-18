@@ -641,6 +641,21 @@ fn starts_keep_members_and_location_sources_separate() {
     let home = TestHome::new("windowstart");
     let repo = base(&home).join("app");
     repository(&repo);
+    git(&repo, &["tag", "review-base"]);
+    std::fs::write(repo.join("head-only"), "the current commit").unwrap();
+    git(&repo, &["add", "head-only"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Facade",
+            "-c",
+            "user.email=facade@example.invalid",
+            "commit",
+            "-qm",
+            "after review-base",
+        ],
+    );
     std::fs::create_dir_all(base(&home).join("app.worktrees/review")).unwrap();
     let notes = base(&home).join("notes");
     std::fs::create_dir(&notes).unwrap();
@@ -697,23 +712,27 @@ fn starts_keep_members_and_location_sources_separate() {
     let mut mcp = McpTestClient::open(&home, &boss);
     let inherited = mcp.call(
         "start_agent",
-        json!({ "name": "helper", "cli": "fake", "path": folder }),
+        json!({ "name": "helper", "cli": "fake", "folder": folder }),
     );
     assert_eq!(inherited["status"], "success", "{inherited}");
     assert_eq!(inherited["data"]["windows"], memberships(&[&source, &away]));
     assert_eq!(inherited["data"]["machine_id"], source.machine_id);
-    let worktree = json!({ "name": "reviewer", "cli": "fake", "path": folder, "worktree": "review",
-        "window": away.window_id, "location_source_window": source.window_id });
+    let worktree = json!({
+        "name": "reviewer", "cli": "fake", "folder": folder,
+        "worktree": { "branch": "review", "base_ref": "review-base" },
+        "window": away.window_id, "location_source_window": source.window_id,
+    });
     let made = mcp.call("start_agent", worktree.clone());
     assert_eq!(made["status"], "success", "{made}");
     let path = real(&base(&home).join("app.worktrees/review-1"));
-    assert_eq!(made["data"]["path"], path, "{made}");
+    assert_eq!(made["data"]["folder"], path, "{made}");
+    assert!(!Path::new(&path).join("head-only").exists());
     assert_eq!(made["data"]["windows"], memberships(&[&away]));
     let reviewer = home.agent_from_list_json("reviewer").unwrap();
     assert_eq!(reviewer["location_source_window"], json!(source));
     assert_eq!(reviewer["windows"], memberships(&[&away]));
 
-    let again = mcp.call("start_agent", worktree);
+    let again = mcp.call("start_agent", worktree.clone());
     assert!(
         again["message"]
             .as_str()
@@ -788,6 +807,14 @@ fn starts_keep_members_and_location_sources_separate() {
         .unwrap();
     assert_eq!(empty["locations"], json!([]), "{empty}");
     assert!(empty["clis"].is_array(), "{empty}");
+
+    let mut from_head = worktree;
+    from_head["name"] = json!("head-reviewer");
+    from_head["worktree"] = json!({ "branch": "review-head" });
+    let made = mcp.call("start_agent", from_head);
+    assert_eq!(made["status"], "success", "{made}");
+    let folder = made["data"]["folder"].as_str().unwrap();
+    assert!(Path::new(folder).join("head-only").is_file(), "{made}");
 }
 
 /// Two creations of one branch sent together take turns: one makes the worktree, and the other is

@@ -7,7 +7,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Start a CLI in your creation tree. Returns its id, address, name, path, machine_id and windows. A prompt can return result_message_id and result_message_machine_id.",
+    "description": "Start a CLI in your creation tree. Returns its id, address, name, folder, machine_id and windows. A prompt can return result_message_id and result_message_machine_id.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -16,20 +16,20 @@
           "minLength": 1,
           "description": "A CLI entry from list_agents."
         },
-        "path": {
+        "folder": {
           "type": "string",
           "minLength": 1,
-          "description": "The run's folder. For a local start, relative paths resolve from your run's working directory. For a remote start, use an absolute path on the running machine. With location_source_window, use one of that window's locations or a folder inside it."
+          "description": "Local paths resolve from your run's folder. Use an absolute path remotely. Omit for your folder or the remote login folder. Use a location or subfolder of location_source_window if set."
         },
         "window": {
           "type": "string",
           "minLength": 1,
-          "description": "A member window ID such as win-2 on your machine, or win-2@gpu or win-2@id:3f9a2c1d on another machine. The window may be disconnected. Omit to inherit your windows."
+          "description": "Member window ID, optionally qualified as win-2@gpu or win-2@id:3f9a2c1d. It may be disconnected. Omit to inherit your windows."
         },
         "location_source_window": {
           "type": "string",
           "minLength": 1,
-          "description": "Connected window ID on the running machine that supplies path and any worktree."
+          "description": "Connected window ID on the running machine supplying the folder and any worktree."
         },
         "name": {
           "type": "string",
@@ -50,9 +50,23 @@
           "description": "Optional: the effort to run at, as model."
         },
         "worktree": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Optional: a branch name. The agent starts in that branch's worktree of path's repository, which Facade makes from the repository's current HEAD where there is none."
+          "type": "object",
+          "properties": {
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "base_ref": {
+              "type": "string",
+              "minLength": 1,
+              "default": "HEAD"
+            }
+          },
+          "required": [
+            "branch"
+          ],
+          "additionalProperties": false,
+          "description": "Create branch from base_ref in a new worktree. To start in an existing worktree, give its folder."
         },
         "machine": {
           "type": "string",
@@ -61,8 +75,7 @@
         }
       },
       "required": [
-        "cli",
-        "path"
+        "cli"
       ],
       "additionalProperties": false
     }

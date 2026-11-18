@@ -303,10 +303,17 @@ impl Problems {
 
     /// Names an extra argument and gives the replacement for a renamed one.
     fn add_unknown_argument(&mut self, tool: &str, key: &str) {
-        if tool == "read_screen" && key == "last" {
-            self.add("unknown argument 'last' for read_screen. Use 'lines'");
-        } else {
-            self.add(format!("{key} is not an argument of {tool}"));
+        match (tool, key) {
+            ("read_screen", "last") => {
+                self.add("unknown argument 'last' for read_screen. Use 'lines'")
+            }
+            ("start_agent", "path") => {
+                self.add("unknown argument 'path' for start_agent. Use 'folder'")
+            }
+            ("start_agent", "location_id") => self.add(
+                "unknown argument 'location_id' for start_agent. Use 'folder' from list_agents",
+            ),
+            _ => self.add(format!("{key} is not an argument of {tool}")),
         }
     }
 
@@ -490,6 +497,73 @@ mod tests {
                 "press_keys"
             ]
         );
+    }
+
+    #[test]
+    fn start_agent_checks_folder_and_worktree_before_dispatch() {
+        let (_, args) = validate_tool("start_agent", &json!({ "cli": "fake" })).unwrap();
+        assert!(!args.contains_key("folder"));
+        for (args, base) in [
+            (
+                json!({ "cli": "fake", "worktree": { "branch": "review" } }),
+                "HEAD",
+            ),
+            (
+                json!({ "cli": "fake", "worktree": { "branch": "review", "base_ref": "v1" } }),
+                "v1",
+            ),
+        ] {
+            let (_, args) = validate_tool("start_agent", &args).unwrap();
+            assert_eq!(
+                args["worktree"],
+                json!({ "branch": "review", "base_ref": base })
+            );
+        }
+        for (args, message) in [
+            (json!({}), "start_agent requires cli"),
+            (
+                json!({ "cli": "fake", "path": ".", "folder": "." }),
+                "unknown argument 'path' for start_agent. Use 'folder'",
+            ),
+            (
+                json!({ "cli": "fake", "location_id": "loc-7" }),
+                "unknown argument 'location_id' for start_agent. Use 'folder' from list_agents",
+            ),
+            (
+                json!({ "cli": "fake", "folder": "" }),
+                "folder must not be empty",
+            ),
+            (
+                json!({ "cli": "fake", "worktree": "review" }),
+                r#"worktree must be an object. Use {"branch": "topic"}"#,
+            ),
+            (
+                json!({ "cli": "fake", "worktree": r#"{"branch":"review"}"# }),
+                r#"worktree must be an object. Use {"branch": "topic"}"#,
+            ),
+            (
+                json!({ "cli": "fake", "worktree": {} }),
+                "start_agent requires worktree.branch",
+            ),
+            (
+                json!({ "cli": "fake", "worktree": { "branch": "" } }),
+                "worktree.branch must not be empty",
+            ),
+            (
+                json!({ "cli": "fake", "worktree": { "branch": "review", "base_ref": "" } }),
+                "worktree.base_ref must not be empty",
+            ),
+            (
+                json!({ "cli": "fake", "worktree": { "branch": "review", "path": "." } }),
+                "path is not a field of worktree",
+            ),
+        ] {
+            let Err(failure) = validate_tool("start_agent", &args) else {
+                panic!("accepted invalid start_agent arguments: {args}");
+            };
+            assert_eq!(failure["reason"], "invalid_argument", "{failure}");
+            assert_eq!(failure["message"], format!("{message}; nothing was done"));
+        }
     }
 
     #[test]

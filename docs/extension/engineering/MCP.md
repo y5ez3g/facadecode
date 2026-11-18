@@ -134,11 +134,20 @@ when a new choice is needed. Defaults and already specified values require no ex
 
 ### 2.2 start_agent arguments
 
-**Start an agent with its CLI and path. The old engine also requires its destination window.**
+**Start a configured CLI in its launch folder.**
 
-On Rust, `window` and `location_source_window` are optional local window IDs. They supply the selected member and
-the window providing the path independently (RULES-2.4, RULES-4.1). The result includes the machine ID and member
-window references. The table and examples below give the old-engine contract.
+On Rust, only `cli` is required. A local `folder` may be relative to the caller's working folder. A remote `folder`
+must be absolute on the running machine. When omitted, the daemon uses the caller's recorded folder for a local start
+or the running machine's login folder for a remote start. An explicitly empty folder is invalid.
+
+The optional `window` selects initial membership and can be qualified with a machine. The optional
+`location_source_window` selects the connected window on the running machine that supplies the folder and worktree
+independently (RULES-2.4, RULES-4.1). The `worktree` argument is an object with a nonempty `branch` and optional nonempty
+`base_ref`, which defaults to `HEAD` of the selected checkout. It creates a new worktree. To start in an existing
+worktree, give its `folder`. Rust rejects `path` and a string `worktree` with `invalid_argument` and gives the
+corresponding argument or object to use.
+
+The table and examples below give the old-engine contract.
 
 | Field | Type / meaning |
 | --- | --- |
@@ -174,8 +183,12 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-Success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's folder.
-It does not expose process/tools state, requested settings, prompt details, effects or call correlation IDs.
+On Rust, `data.folder` is the resulting launch directory, including the new worktree where one was made. The result
+also gives `id`, `name`, `address`, `machine_id` and member `windows`. With a prompt, it can give `result_message_id`
+and `result_message_machine_id`. A failure can give the worktree facts kept as `data.kept.branch` and `data.kept.folder`.
+
+An old-engine success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's
+folder. It does not expose process/tools state, requested settings, prompt details, effects or call correlation IDs.
 The golden start of helper answers:
 
 ```json
@@ -220,8 +233,8 @@ its absolute path as `folder`, and `kind` as `folder`, `main_checkout` or `workt
 `display_name`, `available` and `overrides` with `model` and `effort` booleans. It can also give `problem` and
 `not_installed: true`. A long result writes the complete list object to the file named by `data.file`, with the same rows.
 
-An agent row has its `machine_id` and a `windows` array of references containing `machine_id` and `window_id`.
-Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
+An agent row has its launch `folder`, `machine_id` and a `windows` array of references containing `machine_id`
+and `window_id`. Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
 Equal timestamps are ordered by machine ID, then by numeric agent ID.
 The rest of this rule describes the old-engine result and its connected-window scope.
 

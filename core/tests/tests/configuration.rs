@@ -246,7 +246,7 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
         "{bad_row}"
     );
     let start = |cli: &str, more: Value| {
-        let mut call = json!({ "name": "worker", "cli": cli, "window": "terminal", "path": cwd });
+        let mut call = json!({ "name": "worker", "cli": cli, "window": "terminal", "folder": cwd });
         call.as_object_mut()
             .unwrap()
             .extend(more.as_object().unwrap().clone());
@@ -548,7 +548,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         ),
     ];
     for (cli, problem) in said {
-        let start = json!({ "name": "w", "cli": cli, "window": "terminal", "path": folder });
+        let start = json!({ "name": "w", "cli": cli, "window": "terminal", "folder": folder });
         let mcp = ada.call("start_agent", start);
         assert_eq!(mcp["reason"], "invalid_argument", "{mcp}");
         assert_eq!(mcp["message"], problem, "{mcp}");
@@ -578,7 +578,7 @@ fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
     let refused = ada.call(
         "start_agent",
-        json!({ "name": "w", "cli": "off reads", "window": "terminal", "path": cwd }),
+        json!({ "name": "w", "cli": "off reads", "window": "terminal", "folder": cwd }),
     );
     let said = "clis[\"off reads\"].env.A reads ${env:NOT_SET_FOR_THIS}, but NOT_SET_FOR_THIS is \
                 not in the environment it starts with; set it there, or write the value";
@@ -600,7 +600,7 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
     let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
     let refused = ada.call(
         "start_agent",
-        json!({ "name": "w", "cli": "fake", "window": "terminal", "path": cwd }),
+        json!({ "name": "w", "cli": "fake", "window": "terminal", "folder": cwd }),
     );
     let message = refused["message"].as_str().unwrap();
     assert!(
@@ -622,7 +622,7 @@ fn start_agent_refuses_a_blank_model_or_effort() {
     let refused = ada.call(
         "start_agent",
         json!({
-            "name": "w", "cli": "fake", "window": "terminal", "path": cwd, "model": "  ",
+            "name": "w", "cli": "fake", "window": "terminal", "folder": cwd, "model": "  ",
             "effort": "\u{feff}",
         }),
     );
@@ -888,8 +888,8 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
         McpTestClient::open(&home, boss["result"]["agent"]["agent_id"].as_str().unwrap());
     let mut start = |cli: &str, more: Value| {
         let mut call = json!({
-            "name": "w", "cli": cli, "window": reference.window_id, "location_source_window": reference.window_id, "path": folder,
-            "worktree": format!("{cli}-branch"),
+            "name": "w", "cli": cli, "window": reference.window_id, "location_source_window": reference.window_id, "folder": folder,
+            "worktree": { "branch": format!("{cli}-branch") },
         });
         call.as_object_mut()
             .unwrap()
@@ -980,7 +980,7 @@ fn an_agent_starts_agents_with_its_own_environment() {
     for (name, cli) in [("kid", "fake"), ("dumper", "dump")] {
         let started = ada.call(
             "start_agent",
-            json!({ "name": name, "cli": cli, "window": "terminal", "path": cwd }),
+            json!({ "name": name, "cli": cli, "window": "terminal", "folder": cwd }),
         );
         assert_eq!(started["status"], "success", "{started}");
     }
