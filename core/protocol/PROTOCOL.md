@@ -813,12 +813,12 @@ applies, advise the user to ask the remote administrator to add the SSH account 
 in `logind.conf`. The exclusion takes precedence over `KillOnlyUsers` and `KillUserProcesses`.
 
 Each direction numbers its JSON-RPC requests independently. After `hello`, each daemon sends its
-first full `advertise`, sent as a request with an `id`. The receiver verifies the machine ID and
-`boot_id` against the introduction, checks for conflicts, and checks whether the peer may join.
-It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon registers and
-advertises the neighbour only after accepting the peer's first table and receiving success for its
-own first table. Later `advertise` updates are full-table notifications without an `id` and
-replace the neighbour's advertisement.
+first full `advertise` as a request with an `id`. The receiving daemon verifies the machine ID and
+`boot_id` against the introduction, checks for conflicts, and decides whether the sending machine
+may join. It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon
+registers and advertises the directly connected machine after accepting that machine's first table
+and receiving success for its own. Later `advertise` updates are full-table notifications without
+an `id` and replace the sending machine's previous table.
 
 The `route` of `forward` lists the remaining hops through the destination.
 The forwarding machine removes its own hop and preserves the original `Caller`. The destination
@@ -854,7 +854,7 @@ distinguish delivery, confirmed failure and an unknown outcome.
 | `cancel` | Cancels a call still under way on this connection, by that call's request ID (`CancelParams`), and answers `{}`. It withdraws only an `agent.send` whose message's paste has not begun, which then answers `cancelled` and is not kept; every other call goes on, and its own answer says what it did. Closing the connection withdraws nothing. |
 | `changed` | Reports a change for one watch (`ChangedParams`). |
 | `watch_ended` | Ends a forwarded watch (`WatchEndedParams`). |
-| `advertise` | Replaces a neighbour's machine table (`AdvertiseParams`). |
+| `advertise` | Replaces the directly connected machine's table (`AdvertiseParams`). |
 | `forward` | Forwards a request to its destination (`ForwardParams`). |
 | `connected` | Reports the foreground connection's successful handshake to the local CLI (`ConnectedParams`). |
 | `connect_failed` | Reports a foreground connection failure to the local CLI (`ConnectFailedParams`). |
@@ -925,7 +925,7 @@ The `data.reason` values of the daemon protocol.
 | `ended` | The agent ended: it takes no more input or messages. |
 | `partial_input` | A text or keys call stopped partway: the agent ended, or its terminal stopped taking input, after part of the call reached the terminal. The error's data says what went in. |
 | `unavailable` | The operation cannot complete: for example, a stop or a screen watch's snapshot timed out, or the keeper disconnected. |
-| `protocol_incompatible` | The peers share no protocol version, or a required client kind, operation, or field is unsupported. |
+| `protocol_incompatible` | The two sides share no protocol version, or a required client kind, operation, or field is unsupported. |
 | `machine_id_conflict` | Two running daemons introduced themselves with the same machine ID. |
 | `ssh_interaction_required` | A saved SSH connection needs a foreground login or verification. |
 | `capacity_exceeded` | A message exceeds the line limit, or input exceeds the per-call limit or available queue room. |
@@ -941,7 +941,7 @@ The `data.reason` values of the daemon protocol.
 
 ### AdvertiseParams
 
-The complete replacement of one neighbour's table. Every row has a route, build and boot ID.
+A complete replacement for a directly connected machine's table. Every row has a route, build and boot ID.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -1290,7 +1290,7 @@ The result of `hello`: daemon details and supported topics and operations.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `protocol` | `number` | yes | The highest protocol version shared by both peers. |
+| `protocol` | `number` | yes | The highest protocol version shared by the client and daemon. |
 | `build` | `string` | yes | The daemon's build. |
 | `machine_id` | `string` | yes | The daemon's Facade machine ID. |
 | `machine` | `MachineHello` | no | The answering daemon's introduction on a machine session. |

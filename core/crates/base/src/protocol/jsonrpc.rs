@@ -221,7 +221,7 @@ pub enum Reason {
     /// The operation cannot complete: for example, a stop or a screen watch's snapshot timed out,
     /// or the keeper disconnected.
     Unavailable,
-    /// The peers share no protocol version, or a required client kind, operation, or field is
+    /// The two sides share no protocol version, or a required client kind, operation, or field is
     /// unsupported.
     ProtocolIncompatible,
     /// Two running daemons introduced themselves with the same machine ID.

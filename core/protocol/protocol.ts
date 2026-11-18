@@ -8,7 +8,8 @@ export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","age
 export type Topic = typeof TOPICS[number];
 export type Operation = keyof Operations;
 
-/** The complete replacement of one neighbour's table. Every row has a route, build and boot ID. */
+/** A complete replacement for a directly connected machine's table. Every row has a route, build
+ * and boot ID. */
 export interface AdvertiseParams {
 	readonly machines: MachineInfo[];
 }

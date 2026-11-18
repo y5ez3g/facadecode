@@ -807,12 +807,12 @@ applies, advise the user to ask the remote administrator to add the SSH account 
 in `logind.conf`. The exclusion takes precedence over `KillOnlyUsers` and `KillUserProcesses`.
 
 Each direction numbers its JSON-RPC requests independently. After `hello`, each daemon sends its
-first full `advertise`, sent as a request with an `id`. The receiver verifies the machine ID and
-`boot_id` against the introduction, checks for conflicts, and checks whether the peer may join.
-It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon registers and
-advertises the neighbour only after accepting the peer's first table and receiving success for its
-own first table. Later `advertise` updates are full-table notifications without an `id` and
-replace the neighbour's advertisement.
+first full `advertise` as a request with an `id`. The receiving daemon verifies the machine ID and
+`boot_id` against the introduction, checks for conflicts, and decides whether the sending machine
+may join. It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon
+registers and advertises the directly connected machine after accepting that machine's first table
+and receiving success for its own. Later `advertise` updates are full-table notifications without
+an `id` and replace the sending machine's previous table.
 
 The `route` of `forward` lists the remaining hops through the destination.
 The forwarding machine removes its own hop and preserves the original `Caller`. The destination

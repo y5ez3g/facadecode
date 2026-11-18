@@ -44,7 +44,8 @@ impl ScreenSnapshot {
     }
 }
 
-/// The supported daemon protocol version. `hello` selects the highest version shared by both peers.
+/// The supported daemon protocol version. `hello` selects the highest version shared by the client
+/// and daemon.
 pub const DAEMON_PROTOCOL_VERSION: u32 = 2;
 pub const MIN_DAEMON_PROTOCOL_VERSION: u32 = 2;
 
@@ -172,7 +173,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         methods::ADVERTISE,
-        "Replaces a neighbour's machine table (`AdvertiseParams`).",
+        "Replaces the directly connected machine's table (`AdvertiseParams`).",
     ),
     (
         methods::FORWARD,
@@ -500,7 +501,7 @@ pub struct Worktree {
 /// The result of `hello`: daemon details and supported topics and operations.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct HelloResult {
-    /// The highest protocol version shared by both peers.
+    /// The highest protocol version shared by the client and daemon.
     pub protocol: u32,
     /// The daemon's build.
     pub build: String,

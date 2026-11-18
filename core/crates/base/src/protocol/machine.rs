@@ -148,7 +148,8 @@ pub struct MachineConnection {
     pub ssh_interaction: Option<SshInteraction>,
 }
 
-/// The complete replacement of one neighbour's table. Every row has a route, build and boot ID.
+/// A complete replacement for a directly connected machine's table. Every row has a route, build
+/// and boot ID.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct AdvertiseParams {
     pub machines: Vec<MachineInfo>,

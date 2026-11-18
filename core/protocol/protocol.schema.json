@@ -73,7 +73,7 @@
       "required": [
         "machines"
       ],
-      "description": "The complete replacement of one neighbour's table. Every row has a route, build and boot ID."
+      "description": "A complete replacement for a directly connected machine's table. Every row has a route, build\nand boot ID."
     },
     "AgentArgs": {
       "type": "object",
@@ -1617,7 +1617,7 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0,
-          "description": "The highest protocol version shared by both peers."
+          "description": "The highest protocol version shared by the client and daemon."
         },
         "build": {
           "type": "string",
@@ -2889,7 +2889,7 @@
         {
           "type": "string",
           "const": "protocol_incompatible",
-          "description": "The peers share no protocol version, or a required client kind, operation, or field is\nunsupported."
+          "description": "The two sides share no protocol version, or a required client kind, operation, or field is\nunsupported."
         },
         {
           "type": "string",

@@ -466,12 +466,12 @@ A window's locations, read from its folders through Git, and the worktrees made 
 
 The machine sessions, their routes and the SSH processes they use. `src/network/`.
 
-- **Owns:** connected neighbours, saved connections' running SSH processes and retry state, the
+- **Owns:** directly connected machines, saved connections' running SSH processes and retry state, the
   current machine table, and the calls and watches passing over each connection.
 - **Keeps:**
   - A session becomes usable once both ends accept the introduction and its first machine table.
-    Later tables replace what that neighbour offers. Routes with the same machine and boot IDs
-    may coexist. A machine ID with two live boot IDs is refused.
+    Later tables from a directly connected machine replace its previous table. Routes with the same
+    machine and boot IDs may coexist. A machine ID with two live boot IDs is refused.
   - The shortest route wins; equal lengths are ordered by next machine ID. Each call or watch
     uses its original route for its lifetime. A forwarding hop uses the outer route and deadline
     and passes the original caller and payload onward.
