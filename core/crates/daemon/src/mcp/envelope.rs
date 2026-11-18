@@ -3,6 +3,7 @@
 //! whose message says what is wrong, whether anything was done and what to do next. The model reads
 //! it as JSON text and gets the same object as the call's structured content.
 
+use facade_base::daemon::DAEMON_PROTOCOL_VERSION;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use serde_json::{Value, json};
 
@@ -33,7 +34,13 @@ pub(super) fn refusal(error: &ErrorBody) -> Value {
         Reason::Upgrading => "unavailable",
         other => other.as_str(),
     };
-    failure(reason, error.message.clone())
+    let mut refused = failure(reason, error.message.clone());
+    if DAEMON_PROTOCOL_VERSION > 1
+        && let Some(windows) = &error.data.windows
+    {
+        refused["data"] = json!({ "windows": windows });
+    }
+    refused
 }
 
 #[cfg(test)]

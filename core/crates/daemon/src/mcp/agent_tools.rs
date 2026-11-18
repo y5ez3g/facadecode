@@ -1,14 +1,15 @@
-//! The agent tools: `start_agent` starts a CLI in a folder of a window, `list_agents` lists the
+//! The agent tools: `start_agent` starts a CLI in a folder, `list_agents` lists the
 //! windows and the agents, and `stop_agent` stops one.
 
 use std::path::Path;
 
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, AgentsTopic,
-    DEFAULT_TERMINAL_SIZE, StartArgs, TERMINAL_WINDOW, WaitKind, WindowInfo, WindowsTopic,
-    Worktree, check_message_text,
+    DAEMON_PROTOCOL_VERSION, DEFAULT_TERMINAL_SIZE, StartArgs, TERMINAL_WINDOW, WaitKind,
+    WindowInfo, WindowRef, WindowsTopic, Worktree, check_message_text,
 };
 use facade_base::daemon_client::DaemonClient;
+use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::operations::NoArgs;
 use facade_base::process::ProcessState;
@@ -103,11 +104,96 @@ fn start_problem(window: &WindowInfo, cli: &str, path: &str, nothing: &str) -> O
     None
 }
 
-/// Starts a CLI in a folder of a window for `me`, the agent the server acts for, at `me`'s terminal
-/// size, first making a worktree there where `worktree` names a branch. The daemon gives the new
-/// agent `me`'s environment. Answers once the new agent's CLI runs; its prompt, where one was given,
-/// owes `me` a 🔔 result that names the call. The relay's request ID makes a start the relay gives
-/// a second daemon answer what the first did.
+/// Checks the window and CLI for protocol 1, where the window supplies both membership and location.
+fn check_start_v1(
+    client: &mut DaemonClient,
+    window_id: &str,
+    cli: &str,
+    path: &str,
+    nothing: &str,
+) -> Result<(), Value> {
+    let windows = client
+        .snapshot::<WindowsTopic>(NoArgs {})
+        .map_err(|err| failed(&err, nothing))?;
+    let Some(window) = windows.iter().find(|window| window.window_id == window_id) else {
+        let ids: Vec<&str> = windows
+            .iter()
+            .map(|window| window.window_id.as_str())
+            .collect();
+        let message = format!(
+            "no window {window_id}; {nothing}; the windows are {}",
+            ids.join(", ")
+        );
+        return Err(envelope::failure("invalid_argument", message));
+    };
+    match start_problem(window, cli, path, nothing) {
+        Some(problem) => Err(problem),
+        None => Ok(()),
+    }
+}
+
+/// Checks the actual folder and, where supplied, the connected editor window that supplies its
+/// location. The daemon checks the CLI in its actual working folder and inherited environment.
+fn check_start_destination(
+    client: &mut DaemonClient,
+    path: &Path,
+    source: Option<&WindowRef>,
+) -> Result<(), Value> {
+    if !path.is_absolute() {
+        let message = format!(
+            "{} must be an absolute folder path. Nothing was started.",
+            path.display()
+        );
+        return Err(envelope::failure("invalid_argument", message));
+    }
+    if !path.is_dir() {
+        let message = format!(
+            "The folder {} is unavailable. Nothing was started.",
+            path.display()
+        );
+        return Err(envelope::failure("unavailable", message));
+    }
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let windows = client
+        .snapshot::<WindowsTopic>(NoArgs {})
+        .map_err(|err| failed(&err, "nothing was started"))?;
+    let window = windows.iter().find(|window| {
+        window.machine_id == source.machine_id
+            && window.window_id == source.window_id
+            && window.window_id != TERMINAL_WINDOW
+            && window.connected
+    });
+    let Some(window) = window else {
+        let message = format!(
+            "Location source window {} is unavailable. Use a connected editor window or omit \
+             location_source_window. Nothing was started.",
+            source.window_id
+        );
+        return Err(envelope::failure("unavailable", message));
+    };
+    let resolved = real_path(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = folder_key(&resolved);
+    if !window
+        .locations
+        .iter()
+        .any(|location| Path::new(&key).starts_with(folder_key(Path::new(&location.path))))
+    {
+        let message = format!(
+            "{} is outside the locations of window {}. Use one of its folders from list_agents \
+             or omit location_source_window. Nothing was started.",
+            path.display(),
+            source.window_id
+        );
+        return Err(envelope::failure("invalid_argument", message));
+    }
+    Ok(())
+}
+
+/// Starts a CLI for `me` at its terminal size, resolving relative paths from its working folder.
+/// The daemon supplies the caller's environment and default members. A prompt owes `me` a result
+/// that names this call. If the start is repeated at another daemon, its request ID joins the first.
 pub(super) fn start(
     client: &mut DaemonClient,
     me: &str,
@@ -121,40 +207,20 @@ pub(super) fn start(
         Ok(inspected) => inspected.agent,
         Err(err) => return failed(&err, nothing),
     };
-    let windows = match client.snapshot::<WindowsTopic>(NoArgs {}) {
-        Ok(windows) => windows,
-        Err(err) => return failed(&err, nothing),
-    };
-    let (window_id, cli) = (text(arguments, "window"), text(arguments, "cli"));
-    let Some(window) = windows.iter().find(|window| window.window_id == window_id) else {
-        let ids: Vec<&str> = windows
-            .iter()
-            .map(|window| window.window_id.as_str())
-            .collect();
-        let message = format!(
-            "no window {window_id}; {nothing}; the windows are {}",
-            ids.join(", ")
-        );
-        return envelope::failure("invalid_argument", message);
-    };
-    let path = Path::new(&me.cwd)
-        .join(text(arguments, "path"))
-        .to_string_lossy()
-        .into_owned();
-    if let Some(problem) = start_problem(window, &cli, &path, nothing) {
-        return problem;
-    }
+    let cli = text(arguments, "cli");
+    let path = Path::new(&me.cwd).join(text(arguments, "path"));
+    let cwd = path.to_string_lossy().into_owned();
     let worktree = optional(arguments, "worktree").map(|branch| Worktree {
         branch,
         base_ref: "HEAD".to_string(),
     });
     // A guest has no terminal of Facade's to size the new one by.
     let (cols, rows) = DEFAULT_TERMINAL_SIZE;
-    let start = StartArgs {
+    let mut start = StartArgs {
         command: vec![cli],
         name: optional(arguments, "name"),
-        cwd: path,
-        window_id: Some(window_id),
+        cwd,
+        window_id: None,
         window: None,
         location_source_window: None,
         env: Default::default(),
@@ -168,13 +234,36 @@ pub(super) fn start(
         effort: optional(arguments, "effort"),
         session: None,
     };
+    if DAEMON_PROTOCOL_VERSION == 1 {
+        let window_id = text(arguments, "window");
+        if let Err(failure) =
+            check_start_v1(client, &window_id, &start.command[0], &start.cwd, nothing)
+        {
+            return failure;
+        }
+        start.window_id = Some(window_id);
+    } else {
+        let local_window = |window_id| WindowRef {
+            machine_id: client.hello_result.machine_id.clone(),
+            window_id,
+        };
+        start.window = optional(arguments, "window").map(local_window);
+        start.location_source_window =
+            optional(arguments, "location_source_window").map(local_window);
+        if let Err(failure) =
+            check_start_destination(client, &path, start.location_source_window.as_ref())
+        {
+            return failure;
+        }
+    }
     let err = match client.call_with_request_id::<AgentStart>(start, true) {
         Ok((started, _)) => {
             let agent = started.agent;
-            return envelope::success(json!({
+            let mut data = json!({
                 "id": format!("#{}", agent.agent_id), "name": agent.name, "path": agent.cwd,
-                "window": agent.window_id,
-            }));
+            });
+            show_members(&mut data, &agent);
+            return envelope::success(data);
         }
         Err(err) => err,
     };
@@ -226,14 +315,26 @@ fn state_word(agent: &AgentInfo) -> &'static str {
     }
 }
 
+/// Adds the window membership to an agent's list row or start result.
+fn show_members(row: &mut Value, agent: &AgentInfo) {
+    if DAEMON_PROTOCOL_VERSION == 1 {
+        row["window"] = json!(agent.window_id);
+    } else {
+        row["machine_id"] = json!(agent.machine_id);
+        row["windows"] = json!(agent.windows);
+    }
+}
+
 /// An agent as `list_agents` shows it: who and where it is, what it is doing, what it waits for
 /// while it waits for the person, and who started it.
 fn agent_row(agent: &AgentInfo) -> Value {
     let state = state_word(agent);
     let mut row = json!({
         "id": format!("#{}", agent.agent_id), "name": agent.name, "cli": agent.cli,
-        "window": agent.window_id, "path": agent.cwd, "state": state,
     });
+    show_members(&mut row, agent);
+    row["path"] = json!(agent.cwd);
+    row["state"] = json!(state);
     if state == "waiting_for_you" {
         let kind = agent
             .state_detail
@@ -254,10 +355,19 @@ fn agent_row(agent: &AgentInfo) -> Value {
     row
 }
 
-/// A window as `list_agents` shows it: the CLIs that can start there and, but for the terminal
-/// window, where any folder will do, the folders its agents can work in.
+/// A window as `list_agents` shows it, including folders and available CLIs while connected.
 fn window_row(window: &WindowInfo) -> Value {
-    let mut row = json!({ "id": window.window_id, "name": window.label });
+    let mut row = if DAEMON_PROTOCOL_VERSION == 1 {
+        json!({ "id": window.window_id, "name": window.label })
+    } else {
+        json!({
+            "id": window.window_id, "machine_id": window.machine_id,
+            "name": window.label, "connected": window.connected,
+        })
+    };
+    if !window.connected {
+        return row;
+    }
     if window.window_id != TERMINAL_WINDOW {
         row["folders"] = json!(folders_of(window));
     }
@@ -265,9 +375,8 @@ fn window_row(window: &WindowInfo) -> Value {
     row
 }
 
-/// The windows on this computer that are there, each with its folders and CLIs, and the agents in
-/// the caller's reach, ended ones included, oldest first. A list longer than a result carries goes
-/// to a JSON file.
+/// The windows on this computer and the agents in the caller's reach, ended ones included, oldest
+/// first. A list longer than a result carries goes to a JSON file.
 pub(super) fn list(client: &mut DaemonClient) -> Value {
     let nothing = "nothing was changed";
     let windows = match client.snapshot::<WindowsTopic>(NoArgs {}) {
@@ -286,7 +395,7 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
     });
     let windows: Vec<Value> = windows
         .iter()
-        .filter(|window| window.connected)
+        .filter(|window| DAEMON_PROTOCOL_VERSION > 1 || window.connected)
         .map(window_row)
         .collect();
     let agents: Vec<Value> = agents.iter().map(agent_row).collect();

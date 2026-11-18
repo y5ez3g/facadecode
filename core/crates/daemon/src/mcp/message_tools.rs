@@ -5,11 +5,13 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use facade_base::daemon::{
-    AgentSend, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE, Message, MessagesTopic,
-    MessagesWatchArgs, SendArgs, SendResult, check_message_text, display_name,
+    AgentSend, DAEMON_PROTOCOL_VERSION, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE,
+    Message, MessagesTopic, MessagesWatchArgs, SendArgs, SendResult, WindowDelivery, WindowRef,
+    WindowsTopic, check_message_text, display_name,
 };
 use facade_base::daemon_client::{Cut, DaemonClient, cancel_line, upgrading};
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::operations::NoArgs;
 use serde_json::{Map, Value, json};
 
 use super::Relay;
@@ -18,6 +20,7 @@ use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
 use super::schema::Problems;
 use super::tool_calls::{ToolCall, optional, text};
+use crate::HUMAN;
 
 /// The time a send answers within, from its line's arrival (RULES-1.2).
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -109,7 +112,7 @@ pub(super) fn send(
         }
     };
     match outcome {
-        Ok(sent) => Some(delivered(&sent)),
+        Ok(sent) => Some(delivered(&mut client, &sent, call.arrived)),
         Err(err) if relay.sends.cancelled(&call.key) && was_cancelled(&err) => None,
         Err(err) => Some(failed(
             &err,
@@ -132,11 +135,17 @@ fn withdraw(client: &mut DaemonClient, args: SendArgs) -> anyhow::Result<SendRes
     client.result::<AgentSend>(id)
 }
 
-/// The answer to a send whose delivery is settled: the message's ID and how it reached its
-/// recipient, or why it did not, and that it was withdrawn where its failure withdrew it.
-fn delivered(sent: &SendResult) -> Value {
+/// The result of a send, with the message ID and the delivery information the daemon kept.
+fn delivered(client: &mut DaemonClient, sent: &SendResult, arrived: Instant) -> Value {
     let message = &sent.message;
     let delivery = &message.delivery;
+    let id = format!("#{}", message.message_id);
+    if DAEMON_PROTOCOL_VERSION > 1 && message.to == HUMAN {
+        if let Some(windows) = &sent.windows {
+            return delivered_to_windows(client, id, windows, arrived);
+        }
+        return missing_window_receipt(&id, delivery.status, sent.repeated);
+    }
     let how = match (delivery.status, delivery.delivered_via) {
         (DeliveryStatus::Success, Some(DeliveredVia::Read)) => "read_by_recipient",
         (DeliveryStatus::Success, Some(DeliveredVia::Notified)) => "shown_to_person",
@@ -158,7 +167,60 @@ fn delivered(sent: &SendResult) -> Value {
             return envelope::failure(&reason, words);
         }
     };
-    envelope::success(json!({ "id": format!("#{}", message.message_id), "delivery": how }))
+    envelope::success(json!({ "id": id, "delivery": how }))
+}
+
+fn missing_window_receipt(id: &str, status: DeliveryStatus, repeated: bool) -> Value {
+    let (reason, detail) = if status == DeliveryStatus::Pending && repeated {
+        ("outcome_unknown", "Its window delivery outcome is unknown.")
+    } else {
+        (
+            Reason::Internal.as_str(),
+            "Its window delivery receipt is missing.",
+        )
+    };
+    let mut result = envelope::failure(reason, format!("Facade kept {id}. {detail}"));
+    result["data"] = json!({ "id": id });
+    result
+}
+
+/// Names the windows in the receipt using a snapshot from the daemon that answered the send.
+fn delivered_to_windows(
+    client: &mut DaemonClient,
+    id: String,
+    windows: &WindowDelivery,
+    arrived: Instant,
+) -> Value {
+    // Name lookup stays within the send's time limit. The receipt already has the window IDs.
+    let known = time_left(arrived)
+        .and_then(|wait| {
+            client.writer.set_read_timeout(Some(wait)).ok()?;
+            client.writer.set_write_timeout(Some(wait)).ok()?;
+            client.snapshot::<WindowsTopic>(NoArgs {}).ok()
+        })
+        .unwrap_or_default();
+    let named = |window: &WindowRef| {
+        let name = known
+            .iter()
+            .find(|listed| {
+                listed.machine_id == window.machine_id && listed.window_id == window.window_id
+            })
+            .map(|listed| listed.label.as_str())
+            .filter(|label| !label.is_empty())
+            .unwrap_or(&window.window_id);
+        json!({ "machine_id": window.machine_id, "window_id": window.window_id, "name": name })
+    };
+    let delivered: Vec<_> = windows.delivered.iter().map(named).collect();
+    let not_delivered: Vec<_> = windows
+        .not_delivered
+        .iter()
+        .map(|failure| json!({ "window": named(&failure.window), "reason": failure.reason }))
+        .collect();
+    envelope::success(json!({
+        "id": id,
+        "delivery": "delivered_to_windows",
+        "windows": { "delivered": delivered, "not_delivered": not_delivered },
+    }))
 }
 
 /// A message as `read_messages` returns it: its ID, its sender as Facade writes one (`@name #a3`,
@@ -226,4 +288,38 @@ pub(super) fn read(client: &mut DaemonClient, arguments: &Map<String, Value>) ->
     // Short enough, or their file could not be written: this read delivered them, so an answer too
     // long beats losing them.
     envelope::success(json!({ "messages": views }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_pending_repeat_reports_an_unknown_window_delivery_outcome() {
+        let unknown = missing_window_receipt("#m7", DeliveryStatus::Pending, true);
+        assert_eq!(
+            unknown,
+            json!({
+                "status": "failure",
+                "reason": "outcome_unknown",
+                "message": "Facade kept #m7. Its window delivery outcome is unknown.",
+                "data": { "id": "#m7" },
+            }),
+        );
+        for (status, repeated) in [
+            (DeliveryStatus::Success, false),
+            (DeliveryStatus::Success, true),
+            (DeliveryStatus::Pending, false),
+        ] {
+            assert_eq!(
+                missing_window_receipt("#m7", status, repeated),
+                json!({
+                    "status": "failure",
+                    "reason": "internal",
+                    "message": "Facade kept #m7. Its window delivery receipt is missing.",
+                    "data": { "id": "#m7" },
+                }),
+            );
+        }
+    }
 }
