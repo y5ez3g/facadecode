@@ -161,13 +161,14 @@ fn explicit(error: anyhow::Error) -> anyhow::Error {
     .into()
 }
 
-/// Facade did not start: why, the log that says more, and the words `facade daemon --detach` has
-/// always printed for it.
+/// Facade did not start: why, the log that says more, the words `facade daemon --detach` has
+/// always printed for it, and whether a daemon holds the lock and is still starting.
 #[derive(Debug)]
 struct Unstarted {
     why: String,
     log: PathBuf,
     hidden: String,
+    starting: bool,
 }
 
 impl std::fmt::Display for Unstarted {
@@ -369,6 +370,7 @@ impl StartedKeeper {
                 hidden: why.to_string(),
                 why: why.to_string(),
                 log: logs.join("keeper.log"),
+                starting: false,
             })),
             Some(Report::Silent) => Err(permanent(silent_keeper(logs))),
             Some(Report::Contention) => {
@@ -399,7 +401,12 @@ fn silent_keeper(logs: &Path) -> Unstarted {
         ),
     };
     let hidden = format!("{why}; see {}", seen.display());
-    Unstarted { why, log, hidden }
+    Unstarted {
+        why,
+        log,
+        hidden,
+        starting: false,
+    }
 }
 
 impl Drop for StartedKeeper {
@@ -457,21 +464,39 @@ fn reach(
             };
             let hidden = format!("{why}; see {}", logs.display());
             let log = logs.join("daemon.log");
+            let starting = daemon_runs;
             return Err(ConnectFailure::Timeout(
-                Unstarted { why, log, hidden }.into(),
+                Unstarted {
+                    why,
+                    log,
+                    hidden,
+                    starting,
+                }
+                .into(),
             ));
         }
         std::thread::sleep(RETRY_INTERVAL);
     }
 }
 
+/// Whether a daemon that holds the lock is still starting, as opposed to none having started.
+fn still_starting(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<Unstarted>())
+        .any(|unstarted| unstarted.starting)
+}
+
 /// `facade daemon --detach`: starts Facade in the background for an editor or another program, the
 /// way a command reaches it. A daemon still starting after 10 seconds counts as started, with its
-/// note on standard error; a failure to start is returned at once. The caller confirms with hello.
+/// note on standard error; one that did not start, or failed to, is returned. The caller confirms
+/// with hello.
 pub(super) fn detach() -> anyhow::Result<i32> {
     let identity = identity_for(terminal_agent(), true);
     match attempt_as(&identity, &|| false, &mut |_| true, Notes::Hidden) {
-        Err(ConnectFailure::Timeout(still)) => eprintln!("facade: {still:#}"),
+        Err(ConnectFailure::Timeout(still)) if still_starting(&still) => {
+            eprintln!("facade: {still:#}")
+        }
         Err(failure) => return Err(failure.into()),
         Ok(_) => {}
     }
