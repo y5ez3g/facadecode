@@ -63,8 +63,9 @@ Message headers continue to use IDs such as `#a3` and `#m42`.
   full redraw.
 - **Reconnect**: when the daemon goes away, an attachment reconnects by agent ID, and starts Facade if needed. Keys
   typed meanwhile wait, up to 1 MiB, and go after the redraw.
-- **Type from a script**: `facade type <agent> "<text>" [--enter]` pastes text; `facade type <agent> --key Esc --key
-  Enter` presses keys.
+- **Type from a script**: `facade type <agent> "<text>" [--enter]` pastes text. Pass `"" --enter` to press Enter by
+  itself. `facade type <agent> --key Esc --key Enter` presses keys in order. A call takes 1 to 100 keys, using
+  one `--key` or `-k` per key. Run `facade type --help` for the key names.
 - **Read**: `facade screen [-n <lines>] <agent>` prints the last lines of the screen and its scrollback.
 - **Colors**: an agent in an editor window replies to its CLI's color queries (OSC 10, 11 and 12) with the colors the
   window's terminals draw with, so a CLI that picks its colors by the background suits the editor's theme.

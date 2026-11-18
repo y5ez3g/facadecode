@@ -44,6 +44,61 @@ fn type_draft(home: &TestHome, agent: &str, draft: &str) {
     );
 }
 
+/// Both accepted argument shorthands use the public limit and reject invalid batches before typing.
+#[test]
+fn press_keys_checks_normalized_batches_before_typing() {
+    let home = TestHome::new("mcpkeys");
+    let pressed = home.project.join("pressed");
+    let agent = home.start_named_fake("ada", &[("FAKECLI_KEYS", pressed.to_str().unwrap())]);
+    assert!(wait_for_screen_text(&home, &agent.id, "❯"));
+    let mut client = McpTestClient::open(&home, &agent.id);
+
+    let mut keys = vec!["界"];
+    keys.extend(std::iter::repeat_n("A", 99));
+    let arguments = json!({ "agent": agent.id, "keys": json!(keys).to_string() });
+    let result = client.call("press_keys", arguments);
+    assert_eq!(result["status"], "success", "{result}");
+
+    let result = client.call("press_keys", json!({ "agent": agent.id, "keys": [] }));
+    assert_eq!(result["reason"], "invalid_argument", "{result}");
+
+    let too_many = json!(vec!["z"; 101]).to_string();
+    let result = client.call("press_keys", json!({ "agent": agent.id, "keys": too_many }));
+    assert_eq!(result["reason"], "invalid_argument", "{result}");
+    assert!(
+        result["message"].as_str().unwrap().contains("at most 100"),
+        "{result}"
+    );
+
+    let result = client.call(
+        "press_keys",
+        json!({ "agent": agent.id, "keys": ["z", "eScApE"] }),
+    );
+    assert_eq!(result["reason"], "invalid_argument", "{result}");
+    assert!(
+        result["message"].as_str().unwrap().contains(r#"Use "Esc""#),
+        "{result}"
+    );
+
+    let result = client.call("press_keys", json!({ "agent": agent.id, "keys": "eSc" }));
+    assert_eq!(result["status"], "success", "{result}");
+    let result = client.call(
+        "press_keys",
+        json!({ "agent": agent.id, "keys": ["ENTER"] }),
+    );
+    assert_eq!(result["status"], "success", "{result}");
+
+    let mut expected = Vec::from("界".as_bytes());
+    expected.extend_from_slice(&[b'A'; 99]);
+    expected.extend_from_slice(b"\x1b\r");
+    assert!(
+        wait_until(secs(10), || std::fs::read(&pressed)
+            .is_ok_and(|bytes| bytes == expected)),
+        "{:?}",
+        std::fs::read(&pressed)
+    );
+}
+
 /// Messages whose text adds up to more than 8,000 characters are returned without it; their text is
 /// in a file only this user can read, each message whole between lines naming it.
 #[test]
@@ -2045,9 +2100,30 @@ fn each_tool_responds_as_recorded(through: Through) {
     );
     golden.call(
         &mut ada,
+        "type_text with empty text and enter",
+        "type_text",
+        json!({ "agent": "@helper", "text": "", "enter": true }),
+    );
+    golden.call(
+        &mut ada,
+        "type_text with a control character",
+        "type_text",
+        json!({ "agent": "@helper", "text": "before\u{1b}after" }),
+    );
+    golden.call(
+        &mut ada,
         "press_keys",
         "press_keys",
         json!({ "agent": "@helper", "keys": ["h", "i", "Enter"] }),
+    );
+    golden.call(
+        &mut ada,
+        "press_keys with names from the v2 daemon",
+        "press_keys",
+        json!({
+            "agent": "@helper",
+            "keys": ["Escape", "Return", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"],
+        }),
     );
     golden.call(
         &mut ada,
@@ -2067,6 +2143,12 @@ fn each_tool_responds_as_recorded(through: Through) {
         "read_screen",
         "read_screen",
         json!({ "agent": "@helper" }),
+    );
+    golden.call(
+        &mut ada,
+        "press_keys of Esc",
+        "press_keys",
+        json!({ "agent": "@helper", "keys": ["Esc"] }),
     );
     golden.call(
         &mut ada,

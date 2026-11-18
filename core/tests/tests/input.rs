@@ -296,14 +296,15 @@ fn type_pastes_text_and_presses_keys() {
 
     let unknown = home.run_facade(&["type", "worker", "--key", "Esc", "--key", "F13"]);
     assert!(
-        !unknown.status.success()
-            && stderr(&unknown).contains("unknown keys: \"F13\"; keys are Enter"),
+        !unknown.status.success() && stderr(&unknown).contains("unknown key \"F13\""),
         "{}",
         stderr(&unknown)
     );
     let control = home.run_facade(&["type", "worker", "a\u{1b}b"]);
     assert!(
-        !control.status.success() && stderr(&control).contains("control character U+001B"),
+        control.status.code() == Some(2)
+            && stderr(&control).contains("control character U+001B")
+            && stderr(&control).contains("--key Esc"),
         "{}",
         stderr(&control)
     );
@@ -320,6 +321,80 @@ fn type_pastes_text_and_presses_keys() {
         );
     }
     assert_eq!(home.submitted_messages().len(), wanted.len());
+}
+
+/// The CLI validates a whole batch and the v2 endpoint can still type its legacy frames.
+#[test]
+fn public_keys_have_a_limit_and_v2_keeps_its_existing_keys() {
+    let home = TestHome::new("publickeys");
+    let pressed = home.project.join("pressed");
+    let agent = home.start_fake_with("worker", &[("FAKECLI_KEYS", pressed.to_str().unwrap())]);
+    assert!(wait_for_screen_text(&home, &agent.id, "❯"));
+
+    let mut hundred = vec!["type", &agent.id, "-k", "eSc", "--key", "界"];
+    hundred.extend(std::iter::repeat_n(["-k", "X"], 98).flatten());
+    home.run_facade_ok(&hundred);
+
+    let no_input = home.run_facade(&["type", &agent.id]);
+    assert_eq!(no_input.status.code(), Some(2), "{}", stderr(&no_input));
+    let mut too_many = vec!["type", &agent.id];
+    too_many.extend(std::iter::repeat_n(["-k", "z"], 101).flatten());
+    let refused = home.run_facade(&too_many);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("expected 1 to 100 keys, got 101"));
+    for (old, replacement) in [
+        ("Escape", "Esc"),
+        ("Return", "Enter"),
+        ("ArrowUp", "Up"),
+        ("ArrowDown", "Down"),
+        ("ArrowLeft", "Left"),
+        ("ArrowRight", "Right"),
+    ] {
+        let refused = home.run_facade(&["type", &agent.id, "-k", "z", "-k", old]);
+        let message = stderr(&refused);
+        assert_eq!(refused.status.code(), Some(2), "{message}");
+        assert!(
+            message.contains(&format!("unknown key {old:?}\n  tip: use {replacement:?}")),
+            "{message}"
+        );
+    }
+
+    let empty = home.run_facade(&["type", &agent.id, ""]);
+    assert!(!empty.status.success(), "{}", stderr(&empty));
+    home.run_facade_ok(&["type", &agent.id, "", "--enter"]);
+
+    let mut wire = connect(&home);
+    let empty = wire.call("agent.type", json!({ "agent": agent.id, "text": "" }));
+    assert_eq!(error_reason(&empty), "invalid_argument", "{empty}");
+    let mut legacy = vec![
+        "Escape",
+        "Return",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+    ];
+    legacy.extend(std::iter::repeat_n("v", 100));
+    let typed = wire.call("agent.type", json!({ "agent": agent.id, "keys": legacy }));
+    assert!(typed["result"].is_object(), "{typed}");
+    let enter = wire.call(
+        "agent.type",
+        json!({ "agent": agent.id, "text": "", "enter": true }),
+    );
+    assert!(enter["result"].is_object(), "{enter}");
+
+    let mut expected = Vec::from(b"\x1b");
+    expected.extend_from_slice("界".as_bytes());
+    expected.extend_from_slice(&[b'X'; 98]);
+    expected.extend_from_slice(b"\r\x1b\r\x1b[A\x1b[B\x1b[D\x1b[C");
+    expected.extend_from_slice(&[b'v'; 100]);
+    expected.push(b'\r');
+    assert!(
+        wait_until(secs(10), || std::fs::read(&pressed)
+            .is_ok_and(|bytes| bytes == expected)),
+        "{:?}",
+        std::fs::read(&pressed)
+    );
 }
 
 /// Keys go as the terminal sends them in the CLI's modes: cursor keys and Home change with

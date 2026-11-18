@@ -12,9 +12,10 @@ Arguments:
 
 Options:
       --enter      Press Enter after the text
-  -k, --key <KEY>  Press a key; repeat for more: Enter, Esc, Tab, Shift+Tab, Backspace, Delete, Up,
-                   Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z or one
-                   character
+  -k, --key <KEY>  Press a key. Repeat for 1 to 100 keys. Use Enter, Esc, Tab, Shift+Tab, Backspace,
+                   Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to
+                   Ctrl+Z or one non-control Unicode code point. Names and Ctrl combinations ignore
+                   ASCII case
   -h, --help       Print help
 
 Examples:

@@ -407,16 +407,17 @@ A string passed as `lines` gives this answer.
 
 **Write exactly the requested direct text/keys without draft protection or policy selection.**
 
-type_text: required `agent:string`, `text:string`; optional `enter:boolean=false`. Text is nonempty and at most 1 MiB.
-It may contain printable Unicode plus tab, line feed and carriage return, including multiline or whitespace text.
-Other C0/C1 control characters, including ESC, are rejected as `invalid_argument` before writing; use press_keys for
-control keys. An empty string is invalid even with enter:true; use press_keys to press Enter alone.
+In Rust MCP, `type_text` requires `agent:string` and nonempty `text:string` of at most 1 MiB.
+`enter:boolean` defaults to false.
+Text may contain printable Unicode, tabs, line feeds and carriage returns. Other C0/C1 controls cause
+`invalid_argument` before anything is typed. Use `press_keys` for Esc or to press Enter by itself.
 
-press_keys: required `agent:string`, `keys:string[]` (one key alone is taken too), with 1–100 recognized keys.
-Names are Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space
-and Ctrl+A through Ctrl+Z, in any letter case, and any one printable character exactly. Return, Esc and ArrowUp-style
-aliases are rejected as `invalid_argument`, as are other unsupported names, before writing. Use the terminal's actual
-encoding; delay only when its input protocol requires it.
+`press_keys` requires `agent:string` and `keys:string[]`. A JSON array written as a string or a single key string
+is also accepted. A call takes 1 to 100 keys after this conversion. Use Enter, Esc, Tab, Shift+Tab, Backspace,
+Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A through Ctrl+Z, or one non-control Unicode
+code point per key. Named keys and Ctrl combinations ignore ASCII case. Single code points are typed as given.
+On an invalid batch, the tool returns `invalid_argument` before typing and gives the current spelling for
+Escape, Return and ArrowUp-style aliases. Keys use the terminal's encoding and timing.
 
 Both operate on the addressed live terminal within normal tree reach and serialize with other automated input.
 They can act on drafts, menus or unknown layouts, and on a CLI without an input reader; no input-box evidence is

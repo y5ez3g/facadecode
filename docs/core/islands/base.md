@@ -54,6 +54,11 @@ to speak of, so every other crate can depend on it and it depends on none of the
 
 The public paths are `facade_base::<module>`. Grouped by who calls them:
 
+**The command line and Rust MCP**
+
+- `key_input` defines the public key names and batch limit. `key_problems` checks a batch and gives the current
+  spelling for a v2 alias.
+
 **Every program**
 - Build and version helpers include `build_id()`, `version()`, `VERSION`, `build_version(build)`,
   `version_of(build)` and `takes_over(newer, running)`. Call `take_test_build()` first in `main`.

@@ -3,6 +3,8 @@
 
 use clap::builder::PossibleValuesParser;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use facade_base::daemon::first_control;
+use facade_base::key_input::{MAX_KEYS, NAMED_KEYS, key_problems};
 
 use crate::errors::Problem;
 use crate::help;
@@ -163,8 +165,7 @@ pub(crate) enum Command {
             short = 'k',
             long = "key",
             value_name = "KEY",
-            help = "Press a key; repeat for more: Enter, Esc, Tab, Shift+Tab, Backspace, Delete, Up, Down, \
-                    Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z or one character"
+            help = key_help()
         )]
         keys: Vec<String>,
     },
@@ -347,6 +348,17 @@ const TYPE_ARGUMENTS: &str =
     "  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
   <TEXT>   Text to type; put '--' before text that starts with '-'";
 
+/// The key option's help, using the names and count the command checks.
+fn key_help() -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| {
+        format!(
+            "Press a key. Repeat for 1 to {MAX_KEYS} keys. Use {}, Ctrl+A to Ctrl+Z or one non-control Unicode code point. Names and Ctrl combinations ignore ASCII case",
+            NAMED_KEYS.join(", ")
+        )
+    })
+}
+
 /// The version of this build, which a test can have it play.
 fn version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -418,6 +430,15 @@ pub(crate) fn check_start(command_line: &[String]) -> Result<(), Problem> {
         }),
         _ => Ok(()),
     }
+}
+
+/// Checks a paste or key batch before reaching the daemon.
+pub(crate) fn check_type(text: Option<&str>, keys: &[String]) -> Result<(), Problem> {
+    let problem = match text {
+        Some(text) => first_control(text).map(|diagnostic| Problem::TypeControl { diagnostic }),
+        None => key_problems(keys).next().map(Problem::Keys),
+    };
+    problem.map_or(Ok(()), Err)
 }
 
 /// Writes `shell`'s completion script to stdout.

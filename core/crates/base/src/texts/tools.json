@@ -205,7 +205,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Type text into an agent's terminal exactly as given, then press Enter if asked. It does not protect drafts: it can edit a draft or answer a menu. Text may span lines, but takes no control characters other than tabs and line breaks: press Escape and other control keys with press_keys.",
+    "description": "Type text as given in the agent's terminal, with optional Enter. This can edit a draft or answer a menu. Text accepts tabs and line breaks. Use press_keys for Esc and other control keys.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -240,7 +240,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Press keys in an agent's terminal, in order. It does not protect drafts. The keys are Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z, and any one printable character; letter case does not matter.",
+    "description": "Press keys in order in an agent's terminal. This can edit drafts. Use Enter, Esc, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z or one non-control Unicode code point as given. Names and Ctrl combinations ignore ASCII case.",
     "inputSchema": {
       "type": "object",
       "properties": {

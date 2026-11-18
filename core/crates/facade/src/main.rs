@@ -319,7 +319,10 @@ fn run(command: Command) -> anyhow::Result<i32> {
             text,
             enter,
             keys,
-        } => commands::type_input(&mut connect_or_start()?, agent, text, enter, keys).map(done),
+        } => {
+            cli::check_type(text.as_deref(), &keys)?;
+            commands::type_input(&mut connect_or_start()?, agent, text, enter, keys).map(done)
+        }
         Command::Send { to, text, reply_to } => {
             commands::send(&mut connect_or_start()?, to, text, reply_to).map(done)
         }

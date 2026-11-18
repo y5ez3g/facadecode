@@ -78,6 +78,8 @@ What `run` does for each kind of command:
 - **stop, remove:** connect, then `commands::stop` or `remove` with every agent and `errors::report`, which they report each agent's failure through.
 - **messages:** `agent_of_terminal` finds the terminal's agent, or the command fails saying this is no agent's terminal. Then `run` connects as that agent and calls `commands::messages`.
 - **machine:** `machine::run` gets the ordinary connection function and the function that opens a socket for an SSH session. For `serve` the layer applies the home option before reaching the daemon.
+- **type:** `cli::check_type` validates a batch of 1 to 100 public keys or checks text for control characters before
+  connecting. The command and Rust MCP share the key names. Then connect and send the v2 `agent.type` frame.
 - **other commands:** connect, then the matching function in commands.
 - **hook:** `hooks::run(event, FACADE_AGENT, connect)`, where `connect` reaches a running daemon only, acting for `FACADE_AGENT`, and gives `None` after 2 seconds.
 - **keeper, daemon:** call the service; `daemon --detach` calls `daemon_client::detach`.

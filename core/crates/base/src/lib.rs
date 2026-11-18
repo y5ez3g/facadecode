@@ -17,6 +17,7 @@ mod platform;
 mod protocol;
 mod texts;
 
+pub mod key_input;
 pub mod log;
 pub mod paths;
 pub mod process;

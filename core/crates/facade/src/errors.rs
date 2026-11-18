@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use facade_base::address::short_machine_id;
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::key_input::{KeyProblem, MAX_KEYS};
 use facade_base::machine::ExecutionOutcome;
 
 /// The word that names the human as a recipient or an agent reference.
@@ -50,6 +51,10 @@ pub(crate) enum Problem {
     NotAgentTerminal,
     /// An option before `start`'s PROGRAM that Facade does not know.
     UnknownStartOption { option: String },
+    /// The key batch or a key in it did not match the public syntax.
+    Keys(KeyProblem),
+    /// Text contains a control character that needs a named key.
+    TypeControl { diagnostic: String },
     /// Facade could not be reached or started; `log` is the log that says why, where known.
     Unreachable { why: String, log: Option<PathBuf> },
     /// Facade's settings file cannot be used.
@@ -128,7 +133,9 @@ impl Problem {
     /// The exit code of a command that ends with this problem.
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
-            Problem::UnknownStartOption { .. } => 2,
+            Problem::UnknownStartOption { .. } | Problem::Keys(_) | Problem::TypeControl { .. } => {
+                2
+            }
             _ => 1,
         }
     }
@@ -190,6 +197,21 @@ impl Problem {
                     "put the program's options after its name: 'facade start claude --model opus'"
                         .into(),
                 ),
+            ),
+            Problem::Keys(problem) => (
+                problem.to_string(),
+                Some(match problem {
+                    KeyProblem::Count(_) => format!("use '--key' once per key, up to {MAX_KEYS}"),
+                    KeyProblem::Unknown {
+                        replacement: Some(name),
+                        ..
+                    } => format!("use {name:?}"),
+                    KeyProblem::Unknown { .. } => "run 'facade type --help' to see the keys".into(),
+                }),
+            ),
+            Problem::TypeControl { diagnostic } => (
+                diagnostic.clone(),
+                Some("press a control key with '--key', for example '--key Esc'".into()),
             ),
             Problem::Unreachable { why, log } => (
                 format!("could not connect to Facade: {why}"),
