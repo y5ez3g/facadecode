@@ -220,7 +220,8 @@ pub enum ClientKind {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct HelloParams {
     /// The oldest and newest daemon protocol versions the client supports.
-    pub protocol: [u32; 2],
+    #[serde(rename = "protocol")]
+    pub protocol_range: [u32; 2],
     /// The client's build.
     pub build: String,
     /// The client kind. Unsupported kinds are rejected at hello.
@@ -254,7 +255,7 @@ pub struct HelloParams {
 impl HelloParams {
     pub fn for_machine(machine: MachineHello) -> Self {
         Self {
-            protocol: machine.protocol,
+            protocol_range: machine.protocol_range,
             build: machine.build.clone(),
             kind: ClientKind::Machine,
             agent: None,
@@ -524,7 +525,8 @@ pub struct HelloResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     /// The number of agent records when `hello` runs. Watch `agents` to receive changes.
-    pub agents: usize,
+    #[serde(rename = "agents")]
+    pub agent_count: usize,
     /// The keeper holding the agents' terminals. Omitted while no keeper runs; the daemon starts
     /// one for the first agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -587,24 +589,29 @@ pub struct ClosingParams {
 /// Arguments for `daemon.upgrade`: the program of a newer build that takes over, as the command
 /// that asks runs it.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct UpgradeArgs {
+#[schemars(rename = "UpgradeArgs")]
+pub struct DaemonUpgradeArgs {
     /// The program, a `facade`, with its `facade-mcp` beside it.
     pub program: String,
     /// Its build, as its `hello` says it.
     pub build: String,
     /// The daemon protocol range accepted for this takeover, lowest and highest.
-    pub daemon_protocol: [u32; 2],
+    #[serde(rename = "daemon_protocol")]
+    pub daemon_protocol_range: [u32; 2],
     /// The keeper protocol versions it speaks, lowest and highest.
-    pub keeper_protocol: [u32; 2],
+    #[serde(rename = "keeper_protocol")]
+    pub keeper_protocol_range: [u32; 2],
 }
 
 /// The result of `daemon.upgrade`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct UpgradeResult {
+#[schemars(rename = "UpgradeResult")]
+pub struct DaemonUpgradeResult {
     /// The build that hands over.
     pub from: String,
     /// The agents that keep running through the takeover: those whose run runs.
-    pub agents: usize,
+    #[serde(rename = "agents")]
+    pub agent_count: usize,
 }
 
 /// Arguments for `daemon.log`.
@@ -1024,7 +1031,8 @@ pub struct Said {
 
 /// Arguments for `agent.start`, supplied by the client.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct StartArgs {
+#[schemars(rename = "StartArgs")]
+pub struct AgentStartWireArgs {
     /// The CLI followed by more of its arguments. The exact name of a CLI of Facade's settings
     /// file, `facade.json` in the Facade home - a built-in's, such as `claude`, or one its `clis`
     /// adds - starts that CLI as its entry says, its entry's `args` before these (CONFIGURATION-2,
@@ -1146,7 +1154,7 @@ pub struct AgentStartArgs {
     pub session: Option<String>,
 }
 
-impl StartArgs {
+impl AgentStartWireArgs {
     fn folder_is_omitted(&self, forwarded: bool) -> bool {
         self.cwd_is_default && (forwarded || self.cwd.is_empty())
     }
@@ -1188,7 +1196,8 @@ impl StartArgs {
 
 /// The result of `agent.start`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct StartResult {
+#[schemars(rename = "StartResult")]
+pub struct AgentStartResult {
     /// The agent's record.
     pub agent: AgentInfo,
     /// The prompt, kept and pending, where one was given.
@@ -1209,7 +1218,8 @@ pub struct StartResult {
 
 /// Arguments for `agent.resume`, supplied by the client.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ResumeArgs {
+#[schemars(rename = "ResumeArgs")]
+pub struct AgentResumeArgs {
     /// An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by
     /// its ID, such as `@Pixel #a3`.
     pub agent: String,
@@ -1225,7 +1235,8 @@ pub struct ResumeArgs {
 
 /// Arguments for an operation on one agent.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct AgentArgs {
+#[schemars(rename = "AgentArgs")]
+pub struct AgentSelectorArgs {
     /// An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by
     /// its ID, such as `@Pixel #a3`.
     pub agent: String,
@@ -1289,7 +1300,8 @@ pub fn display_name(name: &str) -> String {
 
 /// Arguments for `agent.type`: exactly one of `raw`, `text`, or `keys`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
-pub struct TypeArgs {
+#[schemars(rename = "TypeArgs")]
+pub struct AgentTypeArgs {
     /// An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by
     /// its ID, such as `@Pixel #a3`.
     pub agent: String,
@@ -1318,7 +1330,8 @@ pub struct TypeArgs {
 
 /// Arguments for `agent.rename`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct RenameArgs {
+#[schemars(rename = "RenameArgs")]
+pub struct AgentRenameArgs {
     /// An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by
     /// its ID, such as `@Pixel #a3`.
     pub agent: String,
@@ -1329,7 +1342,8 @@ pub struct RenameArgs {
 
 /// Arguments for `agent.send`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct SendArgs {
+#[schemars(rename = "SendArgs")]
+pub struct AgentSendArgs {
     /// The recipient: an agent ID (`a3`, `#a3`, or `3`), a unique name of a running agent with or
     /// without `@`, a name followed by its ID such as `@Pixel #a3`, or `#human` for the person.
     pub to: String,
@@ -1356,7 +1370,8 @@ pub struct SendArgs {
 /// The response to `agent.send`: the message as it stands, whether the call repeated an earlier
 /// one, and whether its failure withdrew it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SendResult {
+#[schemars(rename = "SendResult")]
+pub struct AgentSendResult {
     #[serde(flatten)]
     pub message: Message,
     /// The call repeated an earlier one by its request ID: the message is that call's. Omitted
@@ -1382,7 +1397,7 @@ pub struct SendOutcome {
     pub window_delivery: Option<Vec<WindowDeliveryOutcome>>,
 }
 
-impl From<SendOutcome> for SendResult {
+impl From<SendOutcome> for AgentSendResult {
     fn from(result: SendOutcome) -> Self {
         Self {
             message: result.message,
@@ -1393,8 +1408,8 @@ impl From<SendOutcome> for SendResult {
     }
 }
 
-impl From<SendResult> for SendOutcome {
-    fn from(result: SendResult) -> Self {
+impl From<AgentSendResult> for SendOutcome {
+    fn from(result: AgentSendResult) -> Self {
         Self {
             message: result.message,
             repeated: result.repeated,
@@ -1865,7 +1880,8 @@ impl DeliveredVia {
 
 /// Arguments for `agent.resize`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ResizeArgs {
+#[schemars(rename = "ResizeArgs")]
+pub struct AgentResizeArgs {
     /// An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by
     /// its ID, such as `@Pixel #a3`.
     pub agent: String,
@@ -1877,7 +1893,8 @@ pub struct ResizeArgs {
 
 /// Arguments for `agent.screen`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ScreenArgs {
+#[schemars(rename = "ScreenArgs")]
+pub struct AgentScreenArgs {
     /// An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by
     /// its ID, such as `@Pixel #a3`.
     pub agent: String,
@@ -2029,7 +2046,8 @@ pub struct InputInfo {
 
 /// The result of `agent.inspect`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct InspectResult {
+#[schemars(rename = "InspectResult")]
+pub struct AgentInspectResult {
     pub agent: AgentInfo,
     /// The CLI rule the agent was started by: its CLI's name, such as `claude`. Omitted for an
     /// agent started by a program path or a name without a rule.
@@ -2217,7 +2235,8 @@ pub struct IntegrationArgs {
 
 /// Arguments for `integration.list`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
-pub struct IntegrationsArgs {
+#[schemars(rename = "IntegrationsArgs")]
+pub struct IntegrationListArgs {
     /// The caller's environment, as for `integration.add`.
     pub env: BTreeMap<String, String>,
 }
@@ -2264,7 +2283,8 @@ pub struct IntegrationInfo {
 
 /// What `integration.list` answers: each CLI Facade can integrate.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct IntegrationsList {
+#[schemars(rename = "IntegrationsList")]
+pub struct IntegrationListResult {
     pub integrations: Vec<IntegrationInfo>,
 }
 
@@ -2454,8 +2474,8 @@ impl Operation for AgentStart {
                                before sending, then up to 10 more seconds for the reply. Either \
                                timeout returns `unavailable`. A timeout after sending leaves the \
                                outcome unknown.";
-    type Args = StartArgs;
-    type Result = StartResult;
+    type Args = AgentStartWireArgs;
+    type Result = AgentStartResult;
 }
 
 pub struct AgentStop;
@@ -2476,13 +2496,14 @@ impl Operation for AgentStop {
                                does not cancel the stop or extend its deadline. An agent whose CLI \
                                had ended before the stop returns its recorded exit with \
                                `already_ended`, without another signal.";
-    type Args = AgentArgs;
-    type Result = StopResult;
+    type Args = AgentSelectorArgs;
+    type Result = AgentStopResult;
 }
 
 /// The result of `agent.stop`: the CLI's recorded exit, and whether it had ended before this stop.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct StopResult {
+#[schemars(rename = "StopResult")]
+pub struct AgentStopResult {
     #[serde(flatten)]
     pub exit: ProcessExit,
     /// The CLI had ended before this stop, so the stop signaled nothing. Omitted when false.
@@ -2497,7 +2518,7 @@ impl Operation for AgentRemove {
                                `agent.stop`. Removing an ended agent sends no additional signal: \
                                processes left by a CLI that ended by itself can keep running if \
                                they ignore terminal hangup.";
-    type Args = AgentArgs;
+    type Args = AgentSelectorArgs;
     type Result = EmptyResult;
 }
 
@@ -2519,7 +2540,7 @@ impl Operation for AgentType {
                                that the CLI processed them. Daemon failure can lose input not \
                                yet written; a missing response leaves the outcome unknown. An \
                                ended agent returns `ended`.";
-    type Args = TypeArgs;
+    type Args = AgentTypeArgs;
     type Result = EmptyResult;
 }
 
@@ -2529,7 +2550,7 @@ impl Operation for AgentRename {
     const DOC: &'static str = "Renames an agent and returns its record; the `agents` topic sends \
                                it as `updated`. A blank name gets a default name chosen from the \
                                suggested names.";
-    type Args = RenameArgs;
+    type Args = AgentRenameArgs;
     type Result = AgentInfo;
 }
 
@@ -2571,8 +2592,8 @@ impl Operation for AgentSend {
                                keeps no ID. A `cancel` of the call withdraws the message while its \
                                paste has not begun: it answers `cancelled`, and nothing of it is \
                                typed or kept; one whose paste began goes on.";
-    type Args = SendArgs;
-    type Result = SendResult;
+    type Args = AgentSendArgs;
+    type Result = AgentSendResult;
 }
 
 pub struct AgentScreen;
@@ -2581,7 +2602,7 @@ impl Operation for AgentScreen {
     const DOC: &'static str = "Reads the last logical lines of the agent's screen and scrollback \
                                as they show, inverse and dim text marked, with whether older lines \
                                lie above them. An ended agent's screen is the one it left.";
-    type Args = ScreenArgs;
+    type Args = AgentScreenArgs;
     type Result = ScreenText;
 }
 
@@ -2596,7 +2617,7 @@ impl Operation for AgentResize {
                                Input sent afterward waits for the size: calls with IDs fail with \
                                `capacity_exceeded`, while notifications wait. An agent whose \
                                terminal closed accepts it without changing anything.";
-    type Args = ResizeArgs;
+    type Args = AgentResizeArgs;
     type Result = EmptyResult;
 }
 
@@ -2609,8 +2630,8 @@ impl Operation for AgentInspect {
                                without a rule, while a synchronized update is open, and after \
                                recovery or resume until the CLI writes again. A reading never \
                                means input may be typed.";
-    type Args = AgentArgs;
-    type Result = InspectResult;
+    type Args = AgentSelectorArgs;
+    type Result = AgentInspectResult;
 }
 
 pub struct AgentResume;
@@ -2629,7 +2650,7 @@ impl Operation for AgentResume {
                                sessions, one without a recorded session, or a CLI or folder that \
                                cannot be used. Waits for the keeper like `agent.start`. If the CLI \
                                cannot start, the agent stays ended with its earlier exit.";
-    type Args = ResumeArgs;
+    type Args = AgentResumeArgs;
     type Result = AgentInfo;
 }
 
@@ -2642,7 +2663,7 @@ impl Operation for AgentAdopt {
                                ended agents. An existing member is returned unchanged. Refuses \
                                a guest or a client without a bound editor window, and returns \
                                `not_found` for a missing record.";
-    type Args = AgentArgs;
+    type Args = AgentSelectorArgs;
     type Result = AgentInfo;
 }
 
@@ -2745,8 +2766,8 @@ impl Operation for IntegrationList {
     const DOC: &'static str = "Says, for each CLI Facade can integrate, whether its user \
                                configuration holds Facade's entries, file by file, and as they \
                                would be written now.";
-    type Args = IntegrationsArgs;
-    type Result = IntegrationsList;
+    type Args = IntegrationListArgs;
+    type Result = IntegrationListResult;
 }
 
 pub struct WindowUpdate;
@@ -2777,8 +2798,8 @@ impl Operation for DaemonUpgrade {
                                not come up. Nothing rolls back. Calls that arrive meanwhile answer \
                                `upgrading` and did nothing. A second request while a handover is \
                                under way answers when the first does.";
-    type Args = UpgradeArgs;
-    type Result = UpgradeResult;
+    type Args = DaemonUpgradeArgs;
+    type Result = DaemonUpgradeResult;
 }
 
 pub struct LogRead;
@@ -2993,7 +3014,7 @@ mod tests {
         let fields = remote_default.as_object_mut().unwrap();
         fields.remove("cwd_is_default");
         fields.insert("cwd".to_string(), json!("C:\\Work\\Repo"));
-        let explicit: StartArgs = serde_json::from_value(remote_default.clone()).unwrap();
+        let explicit: AgentStartWireArgs = serde_json::from_value(remote_default.clone()).unwrap();
         assert_eq!(
             explicit.clone().into_start(true).launch.folder.as_deref(),
             Some("C:\\Work\\Repo")
@@ -3003,7 +3024,7 @@ mod tests {
             remote_default
         );
         remote_default["cwd"] = json!("");
-        let explicit_empty: StartArgs = serde_json::from_value(remote_default).unwrap();
+        let explicit_empty: AgentStartWireArgs = serde_json::from_value(remote_default).unwrap();
         assert_eq!(
             explicit_empty.into_start(true).launch.folder,
             Some("".into())
@@ -3047,7 +3068,7 @@ mod tests {
             json!({ "protocol": [1, 9], "build": "9.0.0", "kind": "terminal", "telepathy": true }),
         )
         .unwrap();
-        assert_eq!(hello.protocol, [1, 9]);
+        assert_eq!(hello.protocol_range, [1, 9]);
     }
 
     /// Untrusted text shows as one line: invisible formatting removed, controls and runs of white
@@ -3420,7 +3441,7 @@ mod tests {
             .unwrap(),
             json!({ "kind": "output", "data": "aGk=" })
         );
-        let start = StartArgs {
+        let start = AgentStartWireArgs {
             machine: None,
             cwd_is_default: false,
             initial_windows: None,
@@ -3447,21 +3468,21 @@ mod tests {
             json!({ "command": ["claude"], "cwd": "/", "env": {}, "cols": 80, "rows": 24 })
         );
         assert_eq!(serde_json::to_value(EmptyResult {}).unwrap(), json!({}));
-        let keys = TypeArgs {
+        let keys = AgentTypeArgs {
             agent: "a1".into(),
             raw: Some("aGk=".into()),
-            ..TypeArgs::default()
+            ..AgentTypeArgs::default()
         };
         assert_eq!(
             serde_json::to_value(keys).unwrap(),
             json!({ "agent": "a1", "raw": "aGk=" }),
             "an attached terminal's keys carry only raw"
         );
-        let text = TypeArgs {
+        let text = AgentTypeArgs {
             agent: "a1".into(),
             text: Some("hi".into()),
             enter: true,
-            ..TypeArgs::default()
+            ..AgentTypeArgs::default()
         };
         assert_eq!(
             serde_json::to_value(text).unwrap(),

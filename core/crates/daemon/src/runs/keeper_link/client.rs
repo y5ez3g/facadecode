@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::jsonrpc::{ErrorBody, Reason, Request, ServerMessage, encode_line};
-use facade_base::keeper::{self, AgentChange, DaemonPing, HelloParams, HelloResult, methods};
+use facade_base::keeper::{
+    self, DaemonPing, KeeperAgentChange, KeeperHelloParams, KeeperHelloResult, methods,
+};
 use facade_base::operations::{CallParams, NoArgs, Operation};
 use facade_base::paths::ClientSocket;
 use facade_base::process::ProcessIdentity;
@@ -132,7 +134,7 @@ pub(super) struct KeeperClient {
     socket: Socket,
     outgoing: SyncSender<Outgoing>,
     sequence: AtomicU64,
-    pub hello: HelloResult,
+    pub hello: KeeperHelloResult,
     pub identity: ProcessIdentity,
 }
 
@@ -274,7 +276,7 @@ impl KeeperClient {
             .map_err(ConnectError::NotTheKeeper)?;
         let pid = identity.pid;
         let connection = Self::hello(socket, identity, events, wakeup).await?;
-        if keeper::shared_version(PROTOCOL, connection.hello.protocol).is_none() {
+        if keeper::shared_version(PROTOCOL, connection.hello.protocol_range).is_none() {
             return Err(ConnectError::Incompatible { pid });
         }
         if expected.is_some_and(|wanted| wanted != &connection.identity) {
@@ -287,7 +289,7 @@ impl KeeperClient {
             "info",
             &format!(
                 "connected to keeper {pid} (keeper protocol {:?}, build {})",
-                connection.hello.protocol, connection.hello.build
+                connection.hello.protocol_range, connection.hello.build
             ),
         );
         Ok(Arc::new(connection))
@@ -353,14 +355,20 @@ impl KeeperClient {
             outgoing,
             sequence: AtomicU64::new(1),
             identity,
-            hello: HelloResult {
-                protocol: [0, 0],
+            hello: KeeperHelloResult {
+                protocol_range: [0, 0],
                 build: String::new(),
-                agents: vec![],
+                held_agents: vec![],
             },
         };
         let value = match connection
-            .request(methods::HELLO, HelloParams { protocol: PROTOCOL }, None)
+            .request(
+                methods::HELLO,
+                KeeperHelloParams {
+                    protocol_range: PROTOCOL,
+                },
+                None,
+            )
             .await
         {
             Ok((value, _)) => value,
@@ -398,13 +406,13 @@ fn read(mut incoming: LineReceiver, io: &Transport) -> anyhow::Result<()> {
             Ok(ServerMessage::Response(response)) => response,
             Ok(ServerMessage::Notification(message)) => {
                 if message.method == methods::CHANGED {
-                    match serde_json::from_value::<AgentChange>(message.params) {
-                        Ok(AgentChange::Exit { agent, exit }) => io
+                    match serde_json::from_value::<KeeperAgentChange>(message.params) {
+                        Ok(KeeperAgentChange::Exit { agent, exit }) => io
                             .exits
                             .lock()
                             .unwrap()
                             .receive(RunEvent::Exited { id: agent, exit }),
-                        Ok(AgentChange::Unknown) => {}
+                        Ok(KeeperAgentChange::Unknown) => {}
                         Err(error) => facade_base::log::write(
                             "daemon",
                             "warn",

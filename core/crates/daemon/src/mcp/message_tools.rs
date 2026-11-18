@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use facade_base::address::{MachineSelector, parse_message_address};
 use facade_base::daemon::{
-    AgentSend, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE, Message, MessagesTopic,
-    MessagesWatchArgs, SendArgs, SendOutcome, SendResult, WindowDeliveryOutcome,
+    AgentSend, AgentSendArgs, AgentSendResult, DeliveredVia, DeliveryFailure, DeliveryStatus,
+    FACADE, Message, MessagesTopic, MessagesWatchArgs, SendOutcome, WindowDeliveryOutcome,
     check_message_text,
 };
 use facade_base::daemon_client::{Cut, DaemonClient, cancel_line, upgrading};
@@ -72,7 +72,7 @@ pub(super) fn send(
             .min(CONNECT_TIMEOUT);
         daemon_calls::open(relay, &daemon_calls::as_agent(agent), timeout)
     };
-    let send_args = |left: Option<Duration>| SendArgs {
+    let send_args = |left: Option<Duration>| AgentSendArgs {
         to: to.clone(),
         text: text(arguments, "text"),
         reply_to: optional(arguments, "reply_to"),
@@ -134,7 +134,7 @@ fn was_cancelled(err: &anyhow::Error) -> bool {
 /// Sends a message again by its request ID and cancels it at once on the same connection: the
 /// daemon withdraws the message it kept where its paste has not begun, and otherwise answers what
 /// became of it.
-fn withdraw(client: &mut DaemonClient, args: SendArgs) -> anyhow::Result<SendResult> {
+fn withdraw(client: &mut DaemonClient, args: AgentSendArgs) -> anyhow::Result<AgentSendResult> {
     let id = client.begin_call::<AgentSend>(args)?;
     client.writer.write_all(&cancel_line(id))?;
     client.result::<AgentSend>(id)

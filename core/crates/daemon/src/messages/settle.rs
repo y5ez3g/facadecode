@@ -4,7 +4,7 @@ use facade_base::daemon::{
     Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, PromptOutcome, StartOutcome,
     TextWritten, start_result_text,
 };
-use facade_base::machine::{AgentRef, DeliverStartResultArgs};
+use facade_base::machine::{AgentDeliverStartResultArgs, AgentRef};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -148,7 +148,7 @@ impl Deliveries {
                     agent_id: result.to.clone(),
                 };
                 let _ = self.results.send(PostedResult::Remote {
-                    args: DeliverStartResultArgs {
+                    args: AgentDeliverStartResultArgs {
                         recipient,
                         message: result,
                     },

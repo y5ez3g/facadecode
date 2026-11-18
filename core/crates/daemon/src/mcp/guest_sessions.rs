@@ -5,7 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use facade_base::daemon::{AgentArgs, AgentInspect, HookSession, HookSessionStart, is_session_id};
+use facade_base::daemon::{
+    AgentInspect, AgentSelectorArgs, HookSession, HookSessionStart, is_session_id,
+};
 use facade_base::jsonrpc::Reason;
 use facade_base::process::ProcessState;
 use serde_json::Value;
@@ -49,7 +51,10 @@ fn recorded_session(relay: &Relay, cli: &str, agent: &str) -> Option<Option<Stri
     )
     .ok()?;
     let agent = agent.to_string();
-    let info = client.call::<AgentInspect>(AgentArgs { agent }).ok()?.agent;
+    let info = client
+        .call::<AgentInspect>(AgentSelectorArgs { agent })
+        .ok()?
+        .agent;
     let a_run_of_cli = info.cli == cli && !info.guest && info.process == ProcessState::Running;
     a_run_of_cli.then_some(info.session)
 }

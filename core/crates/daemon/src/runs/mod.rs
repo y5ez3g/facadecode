@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use facade_base::daemon::KeeperInfo;
 use facade_base::jsonrpc::ErrorBody;
-use facade_base::keeper::{HeldAgent, KeeperStartArgs};
+use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs};
 use facade_base::process::ProcessExit;
 use facade_base::programs::Held;
 use facade_base::start::StartCommand;
@@ -154,7 +154,7 @@ pub(crate) enum FoundKeeper {
     /// A keeper accepted this daemon: its build and the runs it holds.
     Connected {
         build: String,
-        held: Vec<HeldAgent>,
+        held: Vec<KeeperHeldAgent>,
     },
 }
 
@@ -397,12 +397,12 @@ impl Runs {
     }
 
     /// The keeper protocol range of the keeper this daemon last said hello to.
-    pub(crate) fn keeper_protocol(&self) -> Option<[u32; 2]> {
-        self.link.keeper_protocol()
+    pub(crate) fn keeper_protocol_range(&self) -> Option<[u32; 2]> {
+        self.link.keeper_protocol_range()
     }
 
     /// Recovery: takes back from the startup keeper the terminal of a run it holds.
-    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &KeeperHeldAgent) -> Result<PtyMaster, ErrorBody> {
         self.link.take_back(held).await
     }
 
@@ -411,7 +411,7 @@ impl Runs {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_recovered(
         &self,
-        held: &HeldAgent,
+        held: &KeeperHeldAgent,
         master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
@@ -432,7 +432,7 @@ impl Runs {
     /// stopped where it has none.
     pub(crate) async fn take_keeper_only(
         &self,
-        held: HeldAgent,
+        held: KeeperHeldAgent,
         record: KeeperOnly,
     ) -> Result<(), ErrorBody> {
         self.link.take_keeper_only(held, record).await

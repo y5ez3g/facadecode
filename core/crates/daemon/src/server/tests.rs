@@ -35,7 +35,7 @@ impl Service for Hellos {
             window: None,
             pid: std::process::id(),
             agent: None,
-            agents: 0,
+            agent_count: 0,
             keeper: None,
             topics: Vec::new(),
             ops: Vec::new(),

@@ -208,7 +208,7 @@ struct ScreenWatch {
 /// Sizes the agent like the person's terminal, if that size is known.
 fn resize_agent(client: &mut DaemonClient, agent: &str) -> anyhow::Result<()> {
     if let Some((cols, rows)) = terminal_size() {
-        client.call::<daemon::AgentResize>(daemon::ResizeArgs {
+        client.call::<daemon::AgentResize>(daemon::AgentResizeArgs {
             agent: agent.into(),
             cols,
             rows,
@@ -468,14 +468,16 @@ impl Outgoing {
     /// The notification that sends this to the agent; none for a resize without a known size.
     fn line(self, agent: &str) -> Option<Vec<u8>> {
         match self {
-            Outgoing::Keys(keys) => Some(notification::<daemon::AgentType>(daemon::TypeArgs {
-                agent: agent.into(),
-                raw: Some(base64::encode(&keys)),
-                ..Default::default()
-            })),
+            Outgoing::Keys(keys) => {
+                Some(notification::<daemon::AgentType>(daemon::AgentTypeArgs {
+                    agent: agent.into(),
+                    raw: Some(base64::encode(&keys)),
+                    ..Default::default()
+                }))
+            }
             Outgoing::Resize => {
                 let (cols, rows) = terminal_size()?;
-                let args = daemon::ResizeArgs {
+                let args = daemon::AgentResizeArgs {
                     agent: agent.into(),
                     cols,
                     rows,

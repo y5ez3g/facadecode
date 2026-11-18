@@ -33,7 +33,7 @@ use std::time::SystemTime;
 use facade_base::daemon::{
     AgentInfo, AgentState, DeliveryFailure, Message, TextWritten, ToolsState,
 };
-use facade_base::keeper::HeldAgent;
+use facade_base::keeper::KeeperHeldAgent;
 use facade_base::process::{EndReason, ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
 use tokio::sync::{Semaphore, mpsc, watch};
@@ -116,12 +116,12 @@ impl Daemon {
     /// Fails where a terminal cannot be taken back from the keeper.
     pub(crate) async fn recover(
         self: &Arc<Self>,
-        held: Vec<HeldAgent>,
+        held: Vec<KeeperHeldAgent>,
         records: Vec<AgentRecord>,
         agent_ids: &HashSet<String>,
         progress: &RecoveryProgress,
     ) -> anyhow::Result<()> {
-        let mut held: HashMap<String, HeldAgent> =
+        let mut held: HashMap<String, KeeperHeldAgent> =
             held.into_iter().map(|run| (run.id.clone(), run)).collect();
         let slots = Arc::new(Semaphore::new(MAX_RECOVERIES_IN_FLIGHT));
         let mut recoveries = JoinSet::new();
@@ -212,7 +212,7 @@ impl Daemon {
     async fn recover_agent(
         self: Arc<Self>,
         mut record: AgentRecord,
-        run: Option<HeldAgent>,
+        run: Option<KeeperHeldAgent>,
         steps: Arc<AtomicU64>,
     ) -> anyhow::Result<Recovered> {
         let id = record.agent_id.clone();
@@ -308,7 +308,7 @@ impl Daemon {
     fn commit_uncommitted_resume(
         &self,
         record: &mut AgentRecord,
-        run: &HeldAgent,
+        run: &KeeperHeldAgent,
     ) -> anyhow::Result<()> {
         let id = &record.agent_id;
         blocking_in_place(|| self.store.record_restart(id, run.pid, record.yolo))?;
@@ -383,7 +383,7 @@ impl Daemon {
         &self,
         id: &str,
         info: &AgentInfo,
-        run: Option<&HeldAgent>,
+        run: Option<&KeeperHeldAgent>,
     ) -> anyhow::Result<StateStart> {
         let file = agent::state_file(&self.screens.folder(id));
         let mut kept = tokio::task::spawn_blocking({

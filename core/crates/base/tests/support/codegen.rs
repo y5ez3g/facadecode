@@ -674,9 +674,9 @@ fn keeper_reasons() -> Vec<(String, String)> {
 /// Generates the keeper protocol reference.
 pub fn generate_keeper_reference() -> (&'static str, String) {
     let mut types = SchemaRegistry::new();
-    let _ = types.add::<keeper::HelloParams>();
-    let _ = types.add::<keeper::HelloResult>();
-    let _ = types.add::<keeper::AgentChange>();
+    let _ = types.add::<keeper::KeeperHelloParams>();
+    let _ = types.add::<keeper::KeeperHelloResult>();
+    let _ = types.add::<keeper::KeeperAgentChange>();
     let mut ops = OperationDocs(&mut types, Vec::new());
     keeper::visit_operations(&mut ops);
     let ops = ops.1;

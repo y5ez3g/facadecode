@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use facade_base::daemon::{AgentArgs, AgentInspect, WindowsTopic};
+use facade_base::daemon::{AgentInspect, AgentSelectorArgs, WindowsTopic};
 use facade_base::instructions::{Run, for_agent, for_mcp_client, place_of};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::AgentRef;
@@ -48,7 +48,7 @@ fn read_for_agent(relay: &Relay, agent: &str) -> String {
             daemon_calls::open(relay, &daemon_calls::as_command(), PLACE_TIMEOUT).ok()?;
         let mut inspect = |agent: String| {
             client
-                .call::<AgentInspect>(AgentArgs { agent })
+                .call::<AgentInspect>(AgentSelectorArgs { agent })
                 .map(|inspected| inspected.agent)
         };
         let me = inspect(agent.to_string()).ok()?;
@@ -88,7 +88,9 @@ fn for_member(relay: &Relay, member: &str) -> String {
         .ok()
         .and_then(|mut client| {
             let agent = member.to_string();
-            client.call::<AgentInspect>(AgentArgs { agent }).ok()
+            client
+                .call::<AgentInspect>(AgentSelectorArgs { agent })
+                .ok()
         })
         .map(|inspected| inspected.agent.name);
     for_mcp_client(member, name.as_deref().unwrap_or(member), 0)

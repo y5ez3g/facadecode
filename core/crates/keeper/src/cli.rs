@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{HeldAgent, KeeperStartArgs, STOP_TIMEOUT};
+use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs, STOP_TIMEOUT};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::unix_process::{self, Observed, ProcessObservation};
 use nix::sys::signal::Signal;
@@ -135,8 +135,8 @@ impl Cli {
     }
 
     /// How the CLI appears in `hello`'s list.
-    pub(super) fn as_held(&self) -> HeldAgent {
-        HeldAgent {
+    pub(super) fn as_held(&self) -> KeeperHeldAgent {
+        KeeperHeldAgent {
             id: self.agent.clone(),
             pid: self.process.pid,
             birth: self.process.birth.clone(),

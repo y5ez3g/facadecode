@@ -211,7 +211,7 @@ pub(super) fn reports_timeout(error: &ErrorBody) -> bool {
 
 pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<(), ErrorBody> {
     let supported = [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION];
-    if remote.protocol == supported {
+    if remote.protocol_range == supported {
         return Ok(());
     }
     let mut error = ErrorBody::new(
@@ -222,7 +222,7 @@ pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<()
             supported,
             remote.name,
             remote.build,
-            remote.protocol,
+            remote.protocol_range,
             supported[1],
             remote.name,
         ),
@@ -231,7 +231,7 @@ pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<()
         local_build: local.build.clone(),
         local_protocol: supported,
         remote_build: remote.build.clone(),
-        remote_protocol: remote.protocol,
+        remote_protocol: remote.protocol_range,
     });
     Err(error)
 }
@@ -243,7 +243,7 @@ pub(super) async fn introduce(
 ) -> Result<MachineHello, ErrorBody> {
     in_time(async {
         let hello = HelloParams {
-            protocol: local.protocol,
+            protocol_range: local.protocol_range,
             build: local.build.clone(),
             kind: ClientKind::Machine,
             agent: None,

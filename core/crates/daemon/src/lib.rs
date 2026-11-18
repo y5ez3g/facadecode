@@ -270,8 +270,8 @@ impl LifecycleActivity for Daemon {
             .count()
     }
 
-    fn keeper_protocol(&self) -> Option<[u32; 2]> {
-        self.runs.keeper_protocol()
+    fn keeper_protocol_range(&self) -> Option<[u32; 2]> {
+        self.runs.keeper_protocol_range()
     }
 
     fn keeper_build(&self) -> Option<String> {
@@ -403,7 +403,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             boot_id: new_boot_id(),
             name: opened.machine_name,
             build: facade_base::build_id(),
-            protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            protocol_range: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
             ssh_cleans_processes: facade_base::system::ssh_cleans_processes(Duration::from_secs(1))
                 .await,
         },

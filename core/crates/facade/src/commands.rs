@@ -9,13 +9,13 @@ use facade_base::address::{
     display_machine_selector, exact_machine_selector, parse_machine_selector,
 };
 use facade_base::daemon::{
-    AgentArgs, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResume, AgentScreen,
-    AgentSend, AgentStart, AgentState, AgentStop, AgentType, DEFAULT_TERMINAL_SIZE, DeliveredVia,
-    DeliveryFailure, DeliveryStatus, HelloResult, HowEnded, InputInfo, InputState, InspectResult,
-    IntegrationAdd, IntegrationArgs, IntegrationInfo, IntegrationList, IntegrationRemove,
-    IntegrationsArgs, Message, MessagesTopic, MessagesWatchArgs, PartState, RenameArgs, ResumeArgs,
-    ScreenArgs, SendArgs, StartArgs, TextWritten, ToolsState, TypeArgs, WaitKind,
-    WindowDeliveryFailure, WindowRef, typed_text_with_machines,
+    AgentInfo, AgentInspect, AgentInspectResult, AgentRemove, AgentRename, AgentRenameArgs,
+    AgentResume, AgentResumeArgs, AgentScreen, AgentScreenArgs, AgentSelectorArgs, AgentSend,
+    AgentSendArgs, AgentStart, AgentStartWireArgs, AgentState, AgentStop, AgentType, AgentTypeArgs,
+    DEFAULT_TERMINAL_SIZE, DeliveredVia, DeliveryFailure, DeliveryStatus, HelloResult, HowEnded,
+    InputInfo, InputState, IntegrationAdd, IntegrationArgs, IntegrationInfo, IntegrationList,
+    IntegrationListArgs, IntegrationRemove, Message, MessagesTopic, MessagesWatchArgs, PartState,
+    TextWritten, ToolsState, WaitKind, WindowDeliveryFailure, WindowRef, typed_text_with_machines,
 };
 use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
@@ -96,7 +96,7 @@ pub(crate) fn start(
     } else {
         folder.unwrap_or_default()
     };
-    let args = StartArgs {
+    let args = AgentStartWireArgs {
         command,
         name,
         cwd,
@@ -139,7 +139,7 @@ pub(crate) fn resume(
     terminal: Option<(u16, u16)>,
 ) -> anyhow::Result<Option<Shown>> {
     let earlier = client
-        .call::<AgentInspect>(AgentArgs {
+        .call::<AgentInspect>(AgentSelectorArgs {
             agent: agent.clone(),
         })
         .map_err(|error| about_agent(&agent, error))?;
@@ -161,7 +161,7 @@ pub(crate) fn resume(
     }
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
     let resumed = client
-        .call::<AgentResume>(ResumeArgs {
+        .call::<AgentResume>(AgentResumeArgs {
             agent: exact,
             // The run on another machine takes that machine's login environment.
             env: if remote {
@@ -291,7 +291,7 @@ pub(crate) fn inspect(
     format: Format,
 ) -> anyhow::Result<()> {
     let inspected = client
-        .call::<AgentInspect>(AgentArgs {
+        .call::<AgentInspect>(AgentSelectorArgs {
             agent: agent.clone(),
         })
         .map_err(|error| about_agent(&agent, error))?;
@@ -325,7 +325,7 @@ fn name_agent_json_fields(agent: &mut Value) {
 /// Prints the requested number of screen and scrollback lines as plain text.
 pub(crate) fn screen(client: &mut DaemonClient, agent: String, lines: u16) -> anyhow::Result<()> {
     let screen = client
-        .call::<AgentScreen>(ScreenArgs {
+        .call::<AgentScreen>(AgentScreenArgs {
             agent: agent.clone(),
             lines: Some(lines),
         })
@@ -345,7 +345,7 @@ pub(crate) fn type_input(
     keys: Vec<String>,
 ) -> anyhow::Result<()> {
     client
-        .call::<AgentType>(TypeArgs {
+        .call::<AgentType>(AgentTypeArgs {
             agent: agent.clone(),
             raw: None,
             text,
@@ -362,7 +362,7 @@ pub(crate) fn send(
     text: String,
     reply_to: Option<String>,
 ) -> anyhow::Result<()> {
-    let args = SendArgs {
+    let args = AgentSendArgs {
         to: to.clone(),
         text,
         reply_to,
@@ -546,7 +546,7 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
 
 pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> anyhow::Result<()> {
     let renamed = client
-        .call::<AgentRename>(RenameArgs {
+        .call::<AgentRename>(AgentRenameArgs {
             agent: agent.clone(),
             name,
         })
@@ -582,7 +582,7 @@ pub(crate) fn remove(
 }
 
 /// Run one operation per argument. A service refusal leaves the connection usable.
-fn change_agents<O: Operation<Args = AgentArgs>>(
+fn change_agents<O: Operation<Args = AgentSelectorArgs>>(
     client: &mut DaemonClient,
     agents: Vec<String>,
     change: Change,
@@ -590,7 +590,7 @@ fn change_agents<O: Operation<Args = AgentArgs>>(
 ) -> i32 {
     let mut code = 0;
     for agent in agents {
-        match client.call::<O>(AgentArgs {
+        match client.call::<O>(AgentSelectorArgs {
             agent: agent.clone(),
         }) {
             Ok(_) => println_or_end!("{}", single_line(&agent)),
@@ -622,7 +622,7 @@ pub(crate) fn integration(
             client.call::<IntegrationRemove>(IntegrationArgs { cli, env })?
         }
         IntegrationAction::List => {
-            let list = client.call::<IntegrationList>(IntegrationsArgs { env })?;
+            let list = client.call::<IntegrationList>(IntegrationListArgs { env })?;
             match format {
                 Format::Text => {
                     println_or_end!(
@@ -672,7 +672,7 @@ pub(crate) fn status(
                     "version": version,
                     "daemon": { "pid": hello.pid, "build": hello.build },
                     "keeper": hello.keeper,
-                    "agents": hello.agents,
+                    "agents": hello.agent_count,
                 }),
                 None => json!({ "running": false, "home": home.to_string_lossy() }),
             };
@@ -828,7 +828,7 @@ pub(crate) fn quiet_text(agents: &[AgentInfo]) -> String {
     agents.iter().map(shown_id).collect::<Vec<_>>().join("\n")
 }
 
-pub(crate) fn inspect_text(inspected: &InspectResult, now: SystemTime) -> String {
+pub(crate) fn inspect_text(inspected: &AgentInspectResult, now: SystemTime) -> String {
     let agent = &inspected.agent;
     let mut lines = Vec::new();
     let mut field =
@@ -1028,7 +1028,7 @@ pub(crate) fn status_text(
         || "none".into(),
         |keeper| service(keeper.pid, &keeper.build),
     );
-    let agents = quantity(hello.agents as u64);
+    let agents = quantity(hello.agent_count as u64);
     format!(
         "Facade is running.\n  Home:      {home}\n  Version:   {version}\n  Daemon:    {daemon}\n  Keeper:    {keeper}\n  Agents:    {agents}"
     )

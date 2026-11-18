@@ -82,7 +82,7 @@ impl Daemon {
         let remote = hello.machine.ok_or_else(|| {
             ErrorBody::invalid_argument("a machine hello requires an introduction")
         })?;
-        if remote.build != hello.build || remote.protocol != hello.protocol {
+        if remote.build != hello.build || remote.protocol_range != hello.protocol_range {
             return Err(ErrorBody::invalid_argument(
                 "the machine introduction and hello give different versions",
             ));
@@ -91,14 +91,14 @@ impl Daemon {
         let local = self.network.local_hello();
         Ok((
             HelloResult {
-                protocol: local.protocol[1],
+                protocol: local.protocol_range[1],
                 build: local.build.clone(),
                 machine_id: local.machine_id.clone(),
                 machine: Some(local),
                 window: None,
                 pid: std::process::id(),
                 agent: None,
-                agents: self.agents().len(),
+                agent_count: self.agents().len(),
                 keeper: self.runs.keeper_info(),
                 topics: Vec::new(),
                 ops: Vec::new(),

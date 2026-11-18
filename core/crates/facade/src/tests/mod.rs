@@ -8,7 +8,7 @@ mod output;
 
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentInfo, InputInfo, InspectResult};
+use facade_base::daemon::{AgentInfo, AgentInspectResult, InputInfo};
 use serde_json::{Value, json};
 
 /// The one current time of a rendering: 2026-11-17 23:22:01 UTC.
@@ -67,7 +67,7 @@ fn inspection(
     rule: Option<&str>,
     input: InputInfo,
     tracking: bool,
-) -> InspectResult {
+) -> AgentInspectResult {
     serde_json::from_value(json!({
         "agent": agent,
         "rule": rule,

@@ -1,7 +1,9 @@
 //! The terminal tools: `read_screen`, `type_text` and `press_keys`. Text and keys go in without
 //! draft protection: they can edit a draft or answer a menu.
 
-use facade_base::daemon::{AgentScreen, AgentType, CUT_MARK, ScreenArgs, TypeArgs, first_control};
+use facade_base::daemon::{
+    AgentScreen, AgentScreenArgs, AgentType, AgentTypeArgs, CUT_MARK, first_control,
+};
 use facade_base::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::key_input::{KeyProblem, NAMED_KEYS, key_problems};
@@ -70,7 +72,7 @@ pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Val
         .and_then(Value::as_u64)
         .and_then(|lines| u16::try_from(lines).ok());
     let agent = text(arguments, "agent");
-    let screen = match client.call::<AgentScreen>(ScreenArgs {
+    let screen = match client.call::<AgentScreen>(AgentScreenArgs {
         agent: agent.clone(),
         lines,
     }) {
@@ -103,7 +105,7 @@ pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Val
 
 /// Types text, then Enter where asked, and answers once all of it reached the terminal.
 pub(super) fn type_text(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let input = TypeArgs {
+    let input = AgentTypeArgs {
         agent: text(arguments, "agent"),
         raw: None,
         text: Some(text(arguments, "text")),
@@ -115,7 +117,7 @@ pub(super) fn type_text(client: &mut DaemonClient, arguments: &Map<String, Value
 
 /// Presses keys in order and answers once all of them reached the terminal.
 pub(super) fn press_keys(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let input = TypeArgs {
+    let input = AgentTypeArgs {
         agent: text(arguments, "agent"),
         raw: None,
         text: None,
@@ -127,7 +129,7 @@ pub(super) fn press_keys(client: &mut DaemonClient, arguments: &Map<String, Valu
 
 /// Writes `input` into its agent's terminal. Input that did not all go in was cut off partway, or
 /// refused with nothing typed.
-fn type_into(client: &mut DaemonClient, input: TypeArgs) -> Value {
+fn type_into(client: &mut DaemonClient, input: AgentTypeArgs) -> Value {
     let agent = input.agent.clone();
     let err = match client.call::<AgentType>(input) {
         Ok(_) => return envelope::success(json!({})),

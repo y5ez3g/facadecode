@@ -6,9 +6,10 @@ use std::time::Instant;
 
 use facade_base::jsonrpc::{ErrorBody, Reason, Response, decode_arguments, parse_request};
 use facade_base::keeper::{
-    AgentArgs, AgentChange, AgentStart, AgentStop, AgentSync, DaemonPing, HelloParams, HelloResult,
-    KEEPER_PROTOCOL_VERSION, KeeperStartArgs, MIN_KEEPER_PROTOCOL_VERSION, StartArgs, StartResult,
-    SyncArgs, methods, operation_names, shared_version,
+    AgentStart, AgentStop, AgentSync, DaemonPing, KEEPER_PROTOCOL_VERSION, KeeperAgentArgs,
+    KeeperAgentChange, KeeperHelloParams, KeeperHelloResult, KeeperStartArgs, KeeperStartResult,
+    KeeperStartWireArgs, KeeperSyncArgs, MIN_KEEPER_PROTOCOL_VERSION, methods, operation_names,
+    shared_version,
 };
 use facade_base::operations::{CallParams, Operation};
 use facade_base::process::ProcessIdentity;
@@ -25,10 +26,10 @@ const VERSIONS: [u32; 2] = [MIN_KEEPER_PROTOCOL_VERSION, KEEPER_PROTOCOL_VERSION
 
 /// A request the keeper understands, its arguments decoded.
 enum Request {
-    Hello(HelloParams),
+    Hello(KeeperHelloParams),
     Start(KeeperStartArgs),
-    Stop(AgentArgs),
-    Sync(SyncArgs),
+    Stop(KeeperAgentArgs),
+    Sync(KeeperSyncArgs),
     Ping,
 }
 
@@ -37,7 +38,7 @@ enum Request {
 struct Handled {
     result: Value,
     master: Option<OwnedFd>,
-    then: Option<AgentChange>,
+    then: Option<KeeperAgentChange>,
 }
 
 impl Handled {
@@ -95,13 +96,13 @@ impl Keeper {
             }
         };
         // A notification gets no response, but a CLI end it found is still reported.
-        if let Some(AgentChange::Exit { agent, exit }) = then {
+        if let Some(KeeperAgentChange::Exit { agent, exit }) = then {
             self.report_exit(&agent, exit);
         }
     }
 
-    fn hello(&mut self, params: HelloParams) -> Result<Handled, ErrorBody> {
-        let theirs = params.protocol;
+    fn hello(&mut self, params: KeeperHelloParams) -> Result<Handled, ErrorBody> {
+        let theirs = params.protocol_range;
         if shared_version(VERSIONS, theirs).is_none() {
             return Err(ErrorBody::new(
                 Reason::IncompatibleProtocol,
@@ -114,10 +115,10 @@ impl Keeper {
         if let Some(link) = &mut self.link {
             link.mark_greeted();
         }
-        Ok(Handled::result(HelloResult {
-            protocol: VERSIONS,
+        Ok(Handled::result(KeeperHelloResult {
+            protocol_range: VERSIONS,
             build: facade_base::build_id(),
-            agents: self.clis.values().map(Cli::as_held).collect(),
+            held_agents: self.clis.values().map(Cli::as_held).collect(),
         }))
     }
 
@@ -130,10 +131,10 @@ impl Keeper {
         let ProcessIdentity { pid, birth } = cli.process().clone();
         log("info", &format!("started {}'s CLI ({pid})", args.agent));
         self.clis.insert(args.agent, cli);
-        Ok(Handled::result(StartResult { pid, birth }).with_master(for_daemon))
+        Ok(Handled::result(KeeperStartResult { pid, birth }).with_master(for_daemon))
     }
 
-    fn stop(&mut self, args: AgentArgs) -> Result<Handled, ErrorBody> {
+    fn stop(&mut self, args: KeeperAgentArgs) -> Result<Handled, ErrorBody> {
         let cli = self
             .clis
             .get_mut(&args.agent)
@@ -145,7 +146,7 @@ impl Keeper {
     /// Makes sure both sides hold the CLI's master: whichever side lacks it gets a copy.
     fn sync(
         &mut self,
-        args: SyncArgs,
+        args: KeeperSyncArgs,
         attached: Result<Option<OwnedFd>, usize>,
     ) -> Result<Handled, ErrorBody> {
         let given = attached.map_err(|count| {
@@ -186,7 +187,7 @@ impl Keeper {
             }
             None => {
                 let mut handled = Handled::nothing();
-                handled.then = Some(AgentChange::Exit {
+                handled.then = Some(KeeperAgentChange::Exit {
                     agent: args.agent,
                     exit: exit_unknown(),
                 });
@@ -216,7 +217,7 @@ fn decode(method: &str, params: Value, greeted: bool) -> Result<Request, ErrorBo
     }
     let CallParams { op, args } = decode_arguments(params)?;
     Ok(match op.as_str() {
-        AgentStart::NAME => Request::Start(decode_arguments::<StartArgs>(args)?.into()),
+        AgentStart::NAME => Request::Start(decode_arguments::<KeeperStartWireArgs>(args)?.into()),
         AgentStop::NAME => Request::Stop(decode_arguments(args)?),
         AgentSync::NAME => Request::Sync(decode_arguments(args)?),
         DaemonPing::NAME => Request::Ping,

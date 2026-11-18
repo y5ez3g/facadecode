@@ -10,13 +10,13 @@ use facade_base::address::{
     display_machine_selector, exact_machine_selector, parse_message_address,
 };
 use facade_base::daemon::{
-    Delivery, DeliveryFailure, DeliveryStatus, Message, MessagesChange, SendArgs, SendOutcome,
-    SendResult, TextWritten, WindowDelivery, WindowDeliveryOutcome, WindowRef,
+    AgentSendArgs, AgentSendResult, Delivery, DeliveryFailure, DeliveryStatus, Message,
+    MessagesChange, SendOutcome, TextWritten, WindowDelivery, WindowDeliveryOutcome, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure, decode_arguments};
 use facade_base::machine::{
-    AgentDeliverStartResult, Caller, DeliverArgs, DeliverStartResultArgs, ExecutionOutcome,
-    ForwardCall, MachineIdentity, MessageRef, WindowDeliver, WindowDeliverResult,
+    AgentDeliverStartResult, AgentDeliverStartResultArgs, Caller, ExecutionOutcome, ForwardCall,
+    MachineIdentity, MessageRef, WindowDeliver, WindowDeliverArgs, WindowDeliverResult,
 };
 use facade_base::operations::Operation;
 use facade_rules::Rule;
@@ -266,7 +266,7 @@ impl Daemon {
     pub(crate) async fn send(
         self: &Arc<Self>,
         caller: &Caller,
-        args: SendArgs,
+        args: AgentSendArgs,
         cancel: Cancel,
     ) -> Result<SendOutcome, SendFailure> {
         let due = Due::within(args.time_left_ms);
@@ -368,7 +368,7 @@ impl Daemon {
             .get("reply_to_machine_id")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let mut args: SendArgs = decode_arguments(forwarded.call.args)?;
+        let mut args: AgentSendArgs = decode_arguments(forwarded.call.args)?;
         let reply = args
             .reply_to
             .clone()
@@ -395,7 +395,7 @@ impl Daemon {
             from_window: forwarded.from_window,
             reply,
         };
-        Ok(value_of(SendResult::from(
+        Ok(value_of(AgentSendResult::from(
             self.send_to_agent(to, args, origin, Due::within(time_left), cancel)
                 .await?,
         )))
@@ -490,7 +490,7 @@ impl Daemon {
     async fn send_to_agent(
         self: &Arc<Self>,
         to: AgentHandle,
-        args: SendArgs,
+        args: AgentSendArgs,
         origin: SendOrigin<'_>,
         due: Due,
         mut cancel: Cancel,
@@ -776,7 +776,7 @@ impl Daemon {
         self: &Arc<Self>,
         caller: &Caller,
         from: &AgentHandle,
-        args: SendArgs,
+        args: AgentSendArgs,
         due: Due,
         cancel: Cancel,
     ) -> Result<SendOutcome, SendFailure> {
@@ -861,7 +861,7 @@ impl Daemon {
         for (machine_id, windows) in remote {
             let daemon = self.clone();
             let caller = caller.clone();
-            let payload = DeliverArgs {
+            let payload = WindowDeliverArgs {
                 message_ref: reference.clone(),
                 message: message.clone(),
                 windows: windows.clone(),
@@ -930,7 +930,7 @@ impl Daemon {
     pub(crate) fn deliver_forwarded_human(
         &self,
         caller: &Caller,
-        args: DeliverArgs,
+        args: WindowDeliverArgs,
     ) -> Result<WindowDeliverResult, ErrorBody> {
         let Caller::Agent { agent, .. } = caller else {
             return Err(ErrorBody::refused(
@@ -975,7 +975,7 @@ impl Daemon {
     pub(crate) async fn deliver_forwarded_result(
         self: &Arc<Self>,
         caller: &Caller,
-        mut args: DeliverStartResultArgs,
+        mut args: AgentDeliverStartResultArgs,
         remaining: Option<Duration>,
     ) -> Result<(), ErrorBody> {
         if !matches!(caller, Caller::Terminal { .. })

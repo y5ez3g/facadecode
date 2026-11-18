@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{
-    AgentInfo, AgentState, HookSession, IntegrationArgs, IntegrationInfo, IntegrationsArgs,
-    IntegrationsList, StateDetail, StateReason, ToolsState, is_session_id, location_id,
+    AgentInfo, AgentState, HookSession, IntegrationArgs, IntegrationInfo, IntegrationListArgs,
+    IntegrationListResult, StateDetail, StateReason, ToolsState, is_session_id, location_id,
 };
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::process::ProcessState;
@@ -339,8 +339,8 @@ impl Guests {
 
     pub(crate) async fn integration_list(
         &self,
-        args: IntegrationsArgs,
-    ) -> Result<IntegrationsList, ErrorBody> {
+        args: IntegrationListArgs,
+    ) -> Result<IntegrationListResult, ErrorBody> {
         self.integrations.list(args).await
     }
 

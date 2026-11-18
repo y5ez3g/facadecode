@@ -7,15 +7,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
-    AgentScreen, AgentSend, AgentStart, AgentStartArgs, AgentState, AgentStop, AgentType,
-    AgentsUpdate, ClientKind, DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLogArgs,
-    DaemonLogResult, DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle, HookPrompt,
-    HookSession, HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState,
-    InspectResult, IntegrationAdd, IntegrationList, IntegrationRemove, LogRead, MAX_SCREEN_LINES,
-    RenameArgs, ResizeArgs, ResumeArgs, ScreenArgs, ScreenBuffer, ScreenText, SendArgs, SendResult,
-    SessionStartResult, StartArgs, TypeArgs, WindowDelivery, WindowDescription, WindowUpdate,
-    WorktreeCreate, WorktreeCreateArgs,
+    self, AgentAdopt, AgentInspect, AgentInspectResult, AgentRemove, AgentRename, AgentRenameArgs,
+    AgentResize, AgentResizeArgs, AgentResume, AgentResumeArgs, AgentScreen, AgentScreenArgs,
+    AgentSelectorArgs, AgentSend, AgentSendArgs, AgentSendResult, AgentStart, AgentStartArgs,
+    AgentStartWireArgs, AgentState, AgentStop, AgentType, AgentTypeArgs, AgentsUpdate, ClientKind,
+    DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLogArgs, DaemonLogResult, DaemonUpgrade,
+    HandOver, HelloParams, HelloResult, HookIdle, HookPrompt, HookSession, HookSessionEnd,
+    HookSessionStart, HookTurnEnd, InputInfo, InputState, IntegrationAdd, IntegrationList,
+    IntegrationRemove, LogRead, MAX_SCREEN_LINES, ScreenBuffer, ScreenText, SessionStartResult,
+    WindowDelivery, WindowDescription, WindowUpdate, WorktreeCreate, WorktreeCreateArgs,
 };
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
@@ -154,13 +154,13 @@ impl server::Service for Daemon {
         }
         let result = HelloResult {
             machine: None,
-            protocol: hello.protocol[1].min(DAEMON_PROTOCOL_VERSION),
+            protocol: hello.protocol_range[1].min(DAEMON_PROTOCOL_VERSION),
             build: facade_base::build_id(),
             machine_id: self.machine_id.clone(),
             window: window.as_ref().map(|binding| binding.window.clone()),
             pid: std::process::id(),
             agent: agent.clone(),
-            agents: self.agents().len(),
+            agent_count: self.agents().len(),
             keeper: self.runs.keeper_info(),
             topics: crate::topics::topic_names(),
             ops: operation_names(),
@@ -263,12 +263,12 @@ impl Daemon {
         let acting = client.agent.as_deref();
         match operation {
             AgentStart::NAME | AgentCheckStart::NAME => {
-                let args: StartArgs = decode_arguments(args)?;
+                let args: AgentStartWireArgs = decode_arguments(args)?;
                 self.start_from_client(client, args, operation == AgentCheckStart::NAME, cancel)
                     .await
             }
             AgentAdopt::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let binding = client
                     .window
                     .as_ref()
@@ -282,38 +282,38 @@ impl Daemon {
                 ))
             }
             AgentResume::NAME => {
-                let args: ResumeArgs = decode_arguments(args)?;
+                let args: AgentResumeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let agent = self.terminal_agent(&args.agent, acting)?;
                 Ok(value_of(self.resume(&agent, args).await?))
             }
             AgentInspect::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let agent = self.reached_agent(&agent, acting)?;
                 Ok(value_of(self.inspect(&agent).await?))
             }
             AgentStop::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let agent = self.terminal_agent(&agent, acting)?;
                 Ok(value_of(self.stop(&agent).await?))
             }
             AgentRemove::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let agent = self.terminal_agent(&agent, acting)?;
                 self.remove(&agent).await?;
                 Ok(value_of(EmptyResult {}))
             }
             AgentScreen::NAME => {
-                let args: ScreenArgs = decode_arguments(args)?;
+                let args: AgentScreenArgs = decode_arguments(args)?;
                 Ok(value_of(self.read_screen(args, acting).await?))
             }
             AgentType::NAME => {
-                let args: TypeArgs = decode_arguments(args)?;
+                let args: AgentTypeArgs = decode_arguments(args)?;
                 self.type_into(args, acting, when_full, cancel).await?;
                 Ok(value_of(EmptyResult {}))
             }
             AgentResize::NAME => {
-                let args: ResizeArgs = decode_arguments(args)?;
+                let args: AgentResizeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let agent = self.terminal_agent(&args.agent, acting)?;
                 let info = agent.info();
@@ -336,13 +336,13 @@ impl Daemon {
                 Ok(value_of(EmptyResult {}))
             }
             AgentRename::NAME => {
-                let args: RenameArgs = decode_arguments(args)?;
+                let args: AgentRenameArgs = decode_arguments(args)?;
                 let agent = self.reached_agent(&args.agent, acting)?;
                 Ok(value_of(self.rename(&agent, &args.name).await?))
             }
             AgentSend::NAME => {
-                let args: SendArgs = decode_arguments(args)?;
-                Ok(value_of(SendResult::from(
+                let args: AgentSendArgs = decode_arguments(args)?;
+                Ok(value_of(AgentSendResult::from(
                     self.send(&self.local_caller(client)?, args, cancel).await?,
                 )))
             }
@@ -445,7 +445,7 @@ impl Daemon {
     async fn start_from_client(
         self: &Arc<Self>,
         client: &Client,
-        mut args: StartArgs,
+        mut args: AgentStartWireArgs,
         preflight: bool,
         mut cancel: Cancel,
     ) -> Result<Value, ErrorBody> {
@@ -543,7 +543,7 @@ impl Daemon {
         request_id: Option<String>,
         preflight: bool,
     ) -> Result<Value, ErrorBody> {
-        let mut args: StartArgs = decode_arguments(forwarded.call.args)?;
+        let mut args: AgentStartWireArgs = decode_arguments(forwarded.call.args)?;
         if args.initial_windows.as_ref().is_none_or(Vec::is_empty) {
             return Err(ErrorBody::invalid_argument(
                 "the forwarded start is missing its verified member windows",
@@ -688,42 +688,42 @@ impl Daemon {
                         "only an editor window can adopt an agent",
                     ));
                 };
-                let AgentArgs { agent: target } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
                 Ok(value_of(self.adopt(&agent(&target)?, window, None).await?))
             }
             AgentInspect::NAME => {
-                let AgentArgs { agent: target } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
                 Ok(value_of(self.inspect(&agent(&target)?).await?))
             }
             AgentResume::NAME => {
-                let mut args: ResumeArgs = decode_arguments(args)?;
+                let mut args: AgentResumeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let target = terminal(&args.agent)?;
                 args.env = self.login_environment().await?.0;
                 Ok(value_of(self.resume(&target, args).await?))
             }
             AgentStop::NAME => {
-                let AgentArgs { agent: target } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
                 Ok(value_of(self.stop(&terminal(&target)?).await?))
             }
             AgentRemove::NAME => {
-                let AgentArgs { agent: target } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
                 self.remove(&terminal(&target)?).await?;
                 Ok(value_of(EmptyResult {}))
             }
             AgentRename::NAME => {
-                let args: RenameArgs = decode_arguments(args)?;
+                let args: AgentRenameArgs = decode_arguments(args)?;
                 Ok(value_of(
                     self.rename(&agent(&args.agent)?, &args.name).await?,
                 ))
             }
             AgentScreen::NAME => {
-                let args: ScreenArgs = decode_arguments(args)?;
+                let args: AgentScreenArgs = decode_arguments(args)?;
                 let target = terminal(&args.agent)?;
                 Ok(value_of(self.read_screen_of(&target, args.lines).await?))
             }
             AgentType::NAME => {
-                let args: TypeArgs = decode_arguments(args)?;
+                let args: AgentTypeArgs = decode_arguments(args)?;
                 let target = terminal(&args.agent)?;
                 self.type_into_agent(
                     &target,
@@ -736,7 +736,7 @@ impl Daemon {
                 Ok(value_of(EmptyResult {}))
             }
             AgentResize::NAME => {
-                let args: ResizeArgs = decode_arguments(args)?;
+                let args: AgentResizeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let target = terminal(&args.agent)?;
                 let command = match &caller {
@@ -850,9 +850,9 @@ impl Daemon {
     }
 
     /// What `agent` shows: a guest's input cannot be read, as its terminal is its own.
-    async fn inspect(&self, agent: &AgentHandle) -> Result<InspectResult, ErrorBody> {
+    async fn inspect(&self, agent: &AgentHandle) -> Result<AgentInspectResult, ErrorBody> {
         if agent.is_guest() {
-            return Ok(InspectResult {
+            return Ok(AgentInspectResult {
                 agent: agent.info(),
                 rule: None,
                 input: InputInfo {
@@ -879,7 +879,7 @@ impl Daemon {
                 return Err(ErrorBody::new(Reason::Unavailable, message));
             }
         };
-        Ok(InspectResult {
+        Ok(AgentInspectResult {
             agent: inspection.agent,
             rule: agent.rule().map(str::to_string),
             input: inspection.input,
@@ -890,7 +890,7 @@ impl Daemon {
     /// The last `args.lines` lines of an agent's screen, as text.
     async fn read_screen(
         &self,
-        args: ScreenArgs,
+        args: AgentScreenArgs,
         acting: Option<&str>,
     ) -> Result<ScreenText, ErrorBody> {
         let agent = self.terminal_agent(&args.agent, acting)?;
@@ -942,7 +942,7 @@ impl Daemon {
     /// reached the terminal, or with what was typed before typing stopped.
     async fn type_into(
         &self,
-        args: TypeArgs,
+        args: AgentTypeArgs,
         acting: Option<&str>,
         when_full: WhenFull,
         cancel: Cancel,
@@ -955,13 +955,13 @@ impl Daemon {
     async fn type_into_agent(
         &self,
         agent: &AgentHandle,
-        args: TypeArgs,
+        args: AgentTypeArgs,
         sender: Sender,
         when_full: WhenFull,
         cancel: Cancel,
     ) -> Result<(), ErrorBody> {
         crate::gate_for_test("before-type-input");
-        let TypeArgs {
+        let AgentTypeArgs {
             agent: _,
             raw,
             text,

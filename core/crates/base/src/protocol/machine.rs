@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::address::{exact_machine_selector, format_reference, short_machine_id};
 use super::daemon::{
-    AgentInfo, CliInfo, LocationInfo, Message, StartArgs, TerminalColors, WindowDelivery,
+    AgentInfo, AgentStartWireArgs, CliInfo, LocationInfo, Message, TerminalColors, WindowDelivery,
     WindowDeliveryOutcome, WindowRef, methods,
 };
 use super::jsonrpc::{ErrorBody, Notification};
@@ -83,7 +83,8 @@ pub struct MachineHello {
     pub boot_id: String,
     pub name: String,
     pub build: String,
-    pub protocol: [u32; 2],
+    #[serde(rename = "protocol")]
+    pub protocol_range: [u32; 2],
     /// On Linux, whether the system clears this user's processes at the end of the SSH session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_cleans_processes: Option<bool>,
@@ -509,7 +510,8 @@ pub struct LocationListResult {
 
 /// A single message for the person, offered to its member windows on another machine.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct DeliverArgs {
+#[schemars(rename = "DeliverArgs")]
+pub struct WindowDeliverArgs {
     pub message_ref: MessageRef,
     pub message: Message,
     pub windows: Vec<WindowRef>,
@@ -517,7 +519,8 @@ pub struct DeliverArgs {
 
 /// A start's result message for its creator, with the number the creator's machine reserved.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct DeliverStartResultArgs {
+#[schemars(rename = "DeliverStartResultArgs")]
+pub struct AgentDeliverStartResultArgs {
     pub recipient: AgentRef,
     pub message: Message,
 }
@@ -640,7 +643,7 @@ impl Operation for AgentCheckStart {
     const NAME: &'static str = "agent.start_preflight";
     const DOC: &'static str =
         "Checks a start's program and location without starting an agent or making a worktree.";
-    type Args = StartArgs;
+    type Args = AgentStartWireArgs;
     type Result = EmptyResult;
 }
 
@@ -648,7 +651,7 @@ pub struct WindowDeliver;
 impl Operation for WindowDeliver {
     const NAME: &'static str = "window.deliver";
     const DOC: &'static str = "Offers a message to the listed local window subscriptions and returns their outcomes. Machine sessions only.";
-    type Args = DeliverArgs;
+    type Args = WindowDeliverArgs;
     type Result = WindowDelivery;
 }
 
@@ -668,7 +671,7 @@ impl Operation for AgentDeliverStartResult {
     const NAME: &'static str = "agent.deliver_start_result";
     const DOC: &'static str =
         "Delivers the result of a start at its reserved message number. Machine sessions only.";
-    type Args = DeliverStartResultArgs;
+    type Args = AgentDeliverStartResultArgs;
     type Result = EmptyResult;
 }
 

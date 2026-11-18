@@ -8,7 +8,7 @@ use facade_base::address::{
 };
 use facade_base::daemon::{
     AgentAdopt, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
-    AgentScreen, AgentSend, AgentStop, AgentType, SendArgs, SendResult, WatchParams,
+    AgentScreen, AgentSend, AgentSendArgs, AgentSendResult, AgentStop, AgentType, WatchParams,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
@@ -102,7 +102,7 @@ impl Daemon {
                     && matches!(error.data.reason, Reason::Ended | Reason::NotFound)
                     && args.get("request_id").is_some()
                 {
-                    let send: SendArgs = decode_arguments(args.clone())?;
+                    let send: AgentSendArgs = decode_arguments(args.clone())?;
                     if let Some(request_id) = send.request_id.as_deref()
                         && let Some(to) =
                             timeout_at(deadline, self.local_send_recipient(caller, &send.to))
@@ -118,7 +118,7 @@ impl Daemon {
                             )
                             .await?
                     {
-                        return Ok(Some(value_of(SendResult::from(answer))));
+                        return Ok(Some(value_of(AgentSendResult::from(answer))));
                     }
                 }
                 return Err(error);
@@ -161,12 +161,12 @@ impl Daemon {
         if time_left.is_some()
             && let Some(args) = forwarded.call.args.as_object_mut()
         {
-            // A malformed budget still gets the SendArgs diagnostic it would get at the receiver.
+            // A malformed budget still gets the AgentSendArgs diagnostic it would get at the receiver.
             if args
                 .get("time_left_ms")
                 .is_some_and(|value| !value.is_null() && !value.is_u64())
             {
-                let _: SendArgs = decode_arguments(Value::Object(args.clone()))?;
+                let _: AgentSendArgs = decode_arguments(Value::Object(args.clone()))?;
             }
             args.remove("time_left_ms");
         }

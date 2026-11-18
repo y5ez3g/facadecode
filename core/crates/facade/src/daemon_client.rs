@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use facade_base::daemon::{
-    ClientKind, DAEMON_PROTOCOL_VERSION, DaemonUpgrade, MIN_DAEMON_PROTOCOL_VERSION, UpgradeArgs,
-    UpgradeResult,
+    ClientKind, DAEMON_PROTOCOL_VERSION, DaemonUpgrade, DaemonUpgradeArgs, DaemonUpgradeResult,
+    MIN_DAEMON_PROTOCOL_VERSION,
 };
 use facade_base::daemon_client::{DaemonClient, Identity, takeover_timeout, transient_transport};
 use facade_base::keeper::{KEEPER_PROTOCOL_VERSION, MIN_KEEPER_PROTOCOL_VERSION};
@@ -232,19 +232,19 @@ fn ask_to_take_over(
     client: &mut DaemonClient,
     ours: &str,
     notes: Notes,
-) -> Result<Option<(Instant, UpgradeResult)>, ConnectFailure> {
+) -> Result<Option<(Instant, DaemonUpgradeResult)>, ConnectFailure> {
     let asked = Instant::now();
     let program = facade_base::this_program().map_err(permanent)?;
     let speaks = |variable, low, high| test_range(variable).unwrap_or([low, high]);
-    let upgrade = UpgradeArgs {
+    let upgrade = DaemonUpgradeArgs {
         program: program.display().to_string(),
         build: ours.to_string(),
-        daemon_protocol: speaks(
+        daemon_protocol_range: speaks(
             "FACADE_TEST_DAEMON_PROTOCOL",
             MIN_DAEMON_PROTOCOL_VERSION,
             DAEMON_PROTOCOL_VERSION,
         ),
-        keeper_protocol: speaks(
+        keeper_protocol_range: speaks(
             "FACADE_TEST_KEEPER_PROTOCOL",
             MIN_KEEPER_PROTOCOL_VERSION,
             KEEPER_PROTOCOL_VERSION,
@@ -268,7 +268,7 @@ fn ask_to_take_over(
 fn follow_takeover(
     connect: impl FnOnce(Duration) -> Result<DaemonClient, ConnectFailure>,
     ours: &str,
-    (asked, handed): (Instant, UpgradeResult),
+    (asked, handed): (Instant, DaemonUpgradeResult),
     notes: Notes,
 ) -> Result<DaemonClient, ConnectFailure> {
     let timeout = takeover_timeout();
@@ -279,7 +279,7 @@ fn follow_takeover(
                 errors::took_over(
                     ours,
                     &handed.from,
-                    &facade_base::daemon::agents_word(handed.agents),
+                    &facade_base::daemon::agents_word(handed.agent_count),
                     asked.elapsed(),
                     notes == Notes::Hidden,
                 )

@@ -173,7 +173,7 @@ impl DaemonClient {
         let mut reader = BufReader::new(writer.try_clone()?);
         let mut line = Vec::new();
         let params = HelloParams {
-            protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            protocol_range: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
             build: crate::build_id(),
             kind: identity.kind,
             agent: identity.agent.clone(),

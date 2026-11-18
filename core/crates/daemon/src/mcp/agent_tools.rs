@@ -3,9 +3,9 @@
 
 use facade_base::address::{exact_machine_selector, parse_machine_selector};
 use facade_base::daemon::{
-    AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, DEFAULT_TERMINAL_SIZE,
-    LocationInfo, LocationKind, StartArgs, WaitKind, WindowInfo, WindowRef, WindowsTopic, Worktree,
-    check_message_text,
+    AgentInfo, AgentInspect, AgentSelectorArgs, AgentStart, AgentStartWireArgs, AgentState,
+    AgentStop, DEFAULT_TERMINAL_SIZE, LocationInfo, LocationKind, WaitKind, WindowInfo, WindowRef,
+    WindowsTopic, Worktree, check_message_text,
 };
 use facade_base::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -139,7 +139,7 @@ pub(super) fn start(
     call: &ToolCall,
 ) -> Value {
     let nothing = "nothing was started";
-    let me = match client.call::<AgentInspect>(AgentArgs {
+    let me = match client.call::<AgentInspect>(AgentSelectorArgs {
         agent: me.to_string(),
     }) {
         Ok(inspected) => inspected.agent,
@@ -180,7 +180,7 @@ pub(super) fn start(
         });
     // A guest has no terminal of Facade's to size the new one by.
     let (cols, rows) = DEFAULT_TERMINAL_SIZE;
-    let start = StartArgs {
+    let start = AgentStartWireArgs {
         command: vec![text(arguments, "cli")],
         name: optional(arguments, "name"),
         cwd_is_default: folder.is_none(),
@@ -420,7 +420,7 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
 /// group still gets SIGKILL at its deadline, but its end is not confirmed.
 pub(super) fn stop(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
     let requested = text(arguments, "agent");
-    let agent = match client.call::<AgentInspect>(AgentArgs {
+    let agent = match client.call::<AgentInspect>(AgentSelectorArgs {
         agent: requested.clone(),
     }) {
         Ok(inspected) => inspected.agent,
@@ -438,7 +438,7 @@ pub(super) fn stop(client: &mut DaemonClient, arguments: &Map<String, Value>) ->
         return envelope::success(json!({}));
     }
     let id = exact_address(&agent);
-    let err = match client.call::<AgentStop>(AgentArgs { agent: id.clone() }) {
+    let err = match client.call::<AgentStop>(AgentSelectorArgs { agent: id.clone() }) {
         Ok(_) => return envelope::success(json!({})),
         Err(err) => err,
     };

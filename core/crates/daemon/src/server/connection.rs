@@ -308,7 +308,7 @@ impl<S: Service> Connection<S> {
             ));
         }
         let hello: HelloParams = decode_arguments(params)?;
-        let [oldest, newest] = hello.protocol;
+        let [oldest, newest] = hello.protocol_range;
         if newest.min(DAEMON_PROTOCOL_VERSION) < oldest.max(MIN_DAEMON_PROTOCOL_VERSION) {
             let local_build = facade_base::build_id();
             let message = format!(
@@ -321,7 +321,7 @@ impl<S: Service> Connection<S> {
                 local_build,
                 local_protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
                 remote_build: hello.build,
-                remote_protocol: hello.protocol,
+                remote_protocol: hello.protocol_range,
             });
             return Err(error);
         }

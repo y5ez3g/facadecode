@@ -32,7 +32,7 @@ use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{AgentInfo, Message, SendOutcome};
 use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine::{AgentRef, DeliverStartResultArgs, MessageRef};
+use facade_base::machine::{AgentDeliverStartResultArgs, AgentRef, MessageRef};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
 
@@ -125,7 +125,7 @@ pub(crate) enum PostedResult {
         settled: watch::Receiver<Option<Settled>>,
     },
     Remote {
-        args: DeliverStartResultArgs,
+        args: AgentDeliverStartResultArgs,
         deadline: Instant,
     },
 }

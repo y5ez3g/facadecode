@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
-    AgentInfo, AgentStartArgs, AgentState, AgentsUpdate, Message, ResumeArgs, StartResult,
-    StopResult, TERMINAL_WINDOW, ToolsState, WindowRef,
+    AgentInfo, AgentResumeArgs, AgentStartArgs, AgentStartResult, AgentState, AgentStopResult,
+    AgentsUpdate, Message, TERMINAL_WINDOW, ToolsState, WindowRef,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::{AgentRef, Caller, MessageRef};
@@ -74,7 +74,7 @@ impl StartOrigin {
     }
 }
 /// A start's answer, once it has one.
-pub(crate) type StartAnswer = Option<Result<StartResult, ErrorBody>>;
+pub(crate) type StartAnswer = Option<Result<AgentStartResult, ErrorBody>>;
 
 struct StartWindows {
     members: Vec<WindowRef>,
@@ -90,7 +90,7 @@ struct StartUnderWay {
 }
 
 impl StartUnderWay {
-    fn answer(&self, answer: Result<StartResult, ErrorBody>) {
+    fn answer(&self, answer: Result<AgentStartResult, ErrorBody>) {
         self.daemon.starting.lock().unwrap().remove(&self.key);
         self.answer.send_replace(Some(answer));
     }
@@ -286,7 +286,7 @@ impl Daemon {
         self: &Arc<Self>,
         args: AgentStartArgs,
         origin: StartOrigin,
-    ) -> Result<StartResult, ErrorBody> {
+    ) -> Result<AgentStartResult, ErrorBody> {
         let Some(request_id) = args.request_id.clone() else {
             return self.start_once(args, origin).await;
         };
@@ -340,7 +340,7 @@ impl Daemon {
                 ),
             );
         }
-        answer.map(|answer| StartResult {
+        answer.map(|answer| AgentStartResult {
             repeated: true,
             ..answer
         })
@@ -349,7 +349,7 @@ impl Daemon {
     /// The agent `creator` (none for the person) started with `request_id` within the hour, as a
     /// repeat answers it: as it stands now, with its prompt as it stands, and the result an
     /// agent's start is owed.
-    fn started_before(&self, key: &StartKey) -> Result<Option<StartResult>, ErrorBody> {
+    fn started_before(&self, key: &StartKey) -> Result<Option<AgentStartResult>, ErrorBody> {
         let since = an_hour_ago();
         let found = crate::blocking_in_place(|| self.store.find_start(key, &since))
             .map_err(ErrorBody::internal)?;
@@ -359,7 +359,7 @@ impl Daemon {
         let Some(agent) = self.get_agent(&kept.agent_id) else {
             return Ok(None);
         };
-        Ok(Some(StartResult {
+        Ok(Some(AgentStartResult {
             agent: agent.info(),
             prompt: kept
                 .prompt
@@ -380,7 +380,7 @@ impl Daemon {
         self: &Arc<Self>,
         mut args: AgentStartArgs,
         origin: StartOrigin,
-    ) -> Result<StartResult, ErrorBody> {
+    ) -> Result<AgentStartResult, ErrorBody> {
         let folder = self.prepare_start(&mut args, origin.by_model).await?;
         gate_for_test("before-start-run");
         // One reading of the settings file gives the start its YOLO, names and entry (RULES-4.3).
@@ -521,7 +521,7 @@ impl Daemon {
         mut configured: Configured,
         windows: StartWindows,
         folder: &str,
-    ) -> Result<StartResult, ErrorBody> {
+    ) -> Result<AgentStartResult, ErrorBody> {
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(ErrorBody::new(
                 Reason::Unavailable,
@@ -801,7 +801,7 @@ impl Daemon {
                 request_words(args.request_id.as_deref())
             ),
         );
-        Ok(StartResult {
+        Ok(AgentStartResult {
             agent: info,
             prompt,
             result_message_machine_id: result
@@ -850,7 +850,7 @@ impl Daemon {
     pub(crate) async fn stop(
         self: &Arc<Self>,
         agent: &AgentHandle,
-    ) -> Result<StopResult, ErrorBody> {
+    ) -> Result<AgentStopResult, ErrorBody> {
         let _changing = agent.lock_run_change().await;
         gate_for_test("before-stop-run");
         self.stop_run(agent).await
@@ -858,11 +858,11 @@ impl Daemon {
 
     /// Stops `agent`'s run while the caller holds its run change: only the keeper signals a CLI.
     /// Waits up to 10 seconds for its exit. A run that ended before is left as it was.
-    pub(crate) async fn stop_run(&self, agent: &AgentHandle) -> Result<StopResult, ErrorBody> {
+    pub(crate) async fn stop_run(&self, agent: &AgentHandle) -> Result<AgentStopResult, ErrorBody> {
         let id = agent.id().to_string();
         let mut exit = agent.exit();
         if let Some(exit) = exit.borrow().clone() {
-            return Ok(StopResult {
+            return Ok(AgentStopResult {
                 exit,
                 already_ended: true,
             });
@@ -881,7 +881,7 @@ impl Daemon {
         }
         let running = self.runs.stop(&id).await?;
         match tokio::time::timeout(STOP_TIMEOUT, exit.wait_for(Option::is_some)).await {
-            Ok(Ok(exit)) => Ok(StopResult {
+            Ok(Ok(exit)) => Ok(AgentStopResult {
                 exit: exit.clone().expect("a recorded exit"),
                 already_ended: !running,
             }),
@@ -1026,7 +1026,7 @@ impl Daemon {
     pub(crate) async fn resume(
         self: &Arc<Self>,
         agent: &AgentHandle,
-        args: ResumeArgs,
+        args: AgentResumeArgs,
     ) -> Result<AgentInfo, ErrorBody> {
         let id = agent.id().to_string();
         let unavailable = |message: String| ErrorBody::new(Reason::Unavailable, message);

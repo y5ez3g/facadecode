@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{
-    IntegrationArgs, IntegrationInfo, IntegrationPart, IntegrationsArgs, IntegrationsList,
+    IntegrationArgs, IntegrationInfo, IntegrationListArgs, IntegrationListResult, IntegrationPart,
     PartState,
 };
 use facade_base::jsonrpc::ErrorBody;
@@ -75,7 +75,10 @@ impl Integrations {
     }
 
     /// Each CLI Facade integrates, and whether its configuration holds Facade's entries.
-    pub(super) async fn list(&self, args: IntegrationsArgs) -> Result<IntegrationsList, ErrorBody> {
+    pub(super) async fn list(
+        &self,
+        args: IntegrationListArgs,
+    ) -> Result<IntegrationListResult, ErrorBody> {
         let work = self.work();
         off_thread(move || {
             let named = Named::of(&work.held, &args.env)?;
@@ -83,7 +86,7 @@ impl Integrations {
                 .iter()
                 .map(|cli| work.info(cli, &args.env, &named.programs()))
                 .collect::<Result<_, _>>()?;
-            Ok(IntegrationsList { integrations })
+            Ok(IntegrationListResult { integrations })
         })
         .await
     }

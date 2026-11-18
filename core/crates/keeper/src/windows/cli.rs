@@ -7,7 +7,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::time::{Duration, Instant};
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{HeldAgent, KeeperStartArgs, STOP_TIMEOUT};
+use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs, STOP_TIMEOUT};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::terminal::PtyMaster;
 use facade_base::unix_process::{self, Observed, ProcessObservation, WaitPacket};
@@ -122,8 +122,8 @@ impl Cli {
     }
 
     /// How the CLI appears in `hello`'s list.
-    pub(super) fn as_held(&self) -> HeldAgent {
-        HeldAgent {
+    pub(super) fn as_held(&self) -> KeeperHeldAgent {
+        KeeperHeldAgent {
             id: self.agent.clone(),
             pid: self.process.pid,
             birth: self.process.birth.clone(),
