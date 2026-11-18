@@ -733,8 +733,8 @@ export interface RunFacts {
 	 * while it runs and after a reattachment, whatever its CLI's settings say since (CLIS-2.4).
 	 */
 	readonly titleStore?: string;
-	/** The opening of a saved session. Resume reuses its agent number. Continue starts another agent (PANEL-1.4). */
-	readonly sessionOpening?: 'resumed' | 'continued';
+	/** A known opening. Resume reuses its agent number. Continue starts another agent from a saved session (PANEL-1.4). */
+	readonly sessionOpening?: 'started' | 'resumed' | 'continued';
 	/**
 	 * The last message sent to it (PANEL-1.4): what its CLI took from its input after the person's Enter, or a message Facade
 	 * delivered. Its card's second line says it from then on.
@@ -820,7 +820,7 @@ export interface WindowLifetimePort {
 }
 
 /** Request-bearing run metadata can remain without a visible pair until its request ID expires (MCP-1.1). */
-export type RetainedRun = RunFacts & { readonly requestOnly?: true };
+export type RetainedRun = Omit<RunFacts, 'sessionOpening'> & { readonly resumed?: true; readonly requestOnly?: true };
 
 /** Durable run metadata: failed launches retained red, or request-bearing records without a pair. */
 export interface RetainedStore {

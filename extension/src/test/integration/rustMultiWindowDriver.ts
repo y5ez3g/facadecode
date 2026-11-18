@@ -12,12 +12,12 @@ import * as vscode from 'vscode';
 import type { HelloResult, StartArgs, StartResult, WindowRef } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
 import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
-import { agentTab, aliasOf, facade, facadeAs, hasAgentTab, keepConversation, listed, newCard, pickCard, pin, running, state, stop } from './rustWindowDriver';
+import { agentTab, aliasOf, facade, facadeAs, hasAgentTab, keepConversation, listed, newCard, pickCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 
 type Action =
 	| { readonly kind: 'snapshot' | 'notifications' | 'filter' | 'show-agent-picker' }
-	| { readonly kind: 'start'; readonly screen: string; readonly secondGroup?: boolean }
-	| { readonly kind: 'adopt' | 'remote-card' | 'pin' | 'stop' | 'members' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
+	| { readonly kind: 'adopt' | 'resume' | 'remote-card' | 'pin' | 'stop' | 'members' | 'saved-pin'; readonly agent: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly agent: string; readonly text: string }
 	| { readonly kind: 'message'; readonly address: string }
@@ -46,7 +46,7 @@ export interface SavedPin {
 }
 
 export interface WindowView {
-	readonly cards: readonly { readonly id: string; readonly pinned: boolean; readonly column: number | null; readonly selected: boolean }[];
+	readonly cards: readonly { readonly id: string; readonly pinned: boolean; readonly column: number | null; readonly selected: boolean; readonly line: string }[];
 	readonly terminals: number;
 	readonly filter?: PanelState['filter'];
 }
@@ -67,7 +67,7 @@ async function view(): Promise<WindowView> {
 	const panel = await state();
 	return {
 		cards: panel.cards.map(card => ({
-			id: card.alias.slice(1), pinned: card.pinned === true, column: agentTab(card)?.group.viewColumn ?? null, selected: card.selected
+			id: card.alias.slice(1), pinned: card.pinned === true, column: agentTab(card)?.group.viewColumn ?? null, selected: card.selected, line: card.line
 		})),
 		terminals: vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length,
 		filter: panel.filter
@@ -115,9 +115,12 @@ async function perform(action: Action): Promise<unknown> {
 			if (action.secondGroup) { await openSecondGroup(); }
 			const card = await newCard();
 			const agent = await running(aliasOf(card).slice(1));
-			keepConversation(agent.cwd, agent.session, action.screen);
-			facade('type', agent.id, action.screen, '--enter');
-			await until(`#${agent.id}'s screen text`, () => facade('screen', agent.id, '--lines', '120').includes(action.screen) || undefined);
+			const screen = action.screen;
+			keepConversation(agent.cwd, agent.session, screen ?? 'A session opened in this window');
+			if (screen !== undefined) {
+				facade('type', agent.id, screen, '--enter');
+				await until(`#${agent.id}'s screen text`, () => facade('screen', agent.id, '--lines', '120').includes(screen) || undefined);
+			}
 			return agent;
 		}
 		case 'filter':
@@ -130,8 +133,9 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'saved-pin':
 			return savedPin(action.agent);
-		case 'adopt': {
-			const card = await pickCard('facade.goToAgent');
+		case 'adopt':
+		case 'resume': {
+			const card = await (action.kind === 'resume' ? resumeCard() : pickCard('facade.goToAgent'));
 			assert.strictEqual(aliasOf(card), `#${action.agent}`, 'the picker opens the requested agent by its original number');
 			await until(`#${action.agent}'s terminal tab`, () => hasAgentTab(card) || undefined);
 			return running(action.agent);

@@ -2493,7 +2493,7 @@ suite('A run\'s title: its conversation\'s, as its CLI keeps it (CLIS-2.4, PANEL
 		await settle();
 		assert.deepStrictEqual([accepted, before, store.reads.map(read => read.key.sessionId)], [
 			[['sess-1', '/work/app']],
-			[['Saved work', 'continued', 'Session continued'], true, ['Pinned work', 'continued', 'Session continued'], [undefined, undefined, 'New session started'], ['sess-1', 'sess-2']],
+			[['Saved work', 'continued', 'Session continued'], true, ['Pinned work', 'continued', 'Session continued'], [undefined, 'started', 'New session started'], ['sess-1', 'sess-2']],
 			['sess-1', 'sess-2', 'sess-3']
 		]);
 	});
@@ -2511,23 +2511,27 @@ suite('A run\'s title: its conversation\'s, as its CLI keeps it (CLIS-2.4, PANEL
 		const reload = setUp({ sessions: true, titles: later.port, after: timers().after });
 		reload.execution.liveRuns = [
 			{ run: id, claimedElsewhere: false, pid: 4242, startedAt: 1000, meta },
+			{ run: 'run-fresh', claimedElsewhere: false, pid: 4244, startedAt: 1000, meta: { ...meta, alias: '#a8', sessionId: undefined, resumed: undefined } },
 			{ run: 'run-ended', claimedElsewhere: false, pid: 4243, startedAt: 1000, meta: { ...meta, alias: '#a9', sessionId: 'sess-9' }, exited: { code: 0, interruptVerified: false } }
 		];
 		await reload.agents.restore();
 		await settle();
 		const facts = reload.agents.get(id)!;
 		const shown = [meta.title, meta.resumed, facts.title, facts.sessionOpening, statusOf(facts, WORDS).line, later.reads.map(read => read.key.sessionId)];
+		assert.strictEqual(statusOf(reload.agents.get('run-fresh')!, WORDS).line, 'New session started');
 		// A start that failed is kept red with what it was: that it resumed among it
 		const failing = setUp({ sessions: true });
 		failing.execution.spawnError = new Error('could not start');
 		const failed = failing.agents.resume(ENTRY, { reveal: true }) as RunId;
 		await failing.agents.started(failed);
 		const again = setUp({ sessions: true });
-		const { sessionOpening: _opening, ...legacy } = failing.retained.get(failed)!;
-		again.retained.set(failed, { ...legacy, ...{ resumed: true } });
+		const retained = failing.retained.get(failed)!;
+		assert.strictEqual(retained.resumed, true);
+		assert.ok(!Object.hasOwn(retained, 'sessionOpening'));
+		again.retained.set(failed, retained);
 		await again.agents.restore();
-		assert.deepStrictEqual([shown, failing.retained.get(failed)?.sessionOpening, again.agents.get(failed)?.sessionOpening], [
-			['Saved work', true, 'Saved work', 'continued', 'Session continued', ['sess-1']], 'continued', 'continued'
+		assert.deepStrictEqual([shown, again.agents.get(failed)?.sessionOpening], [
+			['Saved work', true, 'Saved work', 'continued', 'Session continued', ['sess-1']], 'continued'
 		]);
 	});
 

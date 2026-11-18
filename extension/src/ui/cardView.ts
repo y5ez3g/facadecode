@@ -127,7 +127,7 @@ export interface CardSaid {
 /**
  * What a card says of its run (RULES-3.2, PANEL-1.4): its dot by {@link dotOf}; its second line one of three kinds - the person's input
  * `🧑‍💻`, another agent's message `📨`, or Facade's own, unmarked: a Facade result, or a notable state while it lasts - its start, over
- * any message; what its CLI waits for; why its dot is red - then the last message again; before any, how its run began,
+ * any message; what its CLI waits for; why its dot is red - then the last message again; before any, its known opening,
  * `New session started`, `Agent resumed` or `Session continued`. Its state in words is the accessible label's, never the second line's, nor is a
  * title. Never a completion claim.
  */
@@ -169,8 +169,10 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	}
 	// The last message sent to it - the task it was started with being the first - else how its run began
 	const said = saidOf(facts);
+	if (said) { return { dot, stateText, line: said.line, said, ...unsaid }; }
+	if (!facts.sessionOpening) { return { dot, stateText, line: '', ...unsaid }; }
 	const opening = facts.sessionOpening === 'resumed' ? words.resumed : facts.sessionOpening === 'continued' ? words.continued : words.started;
-	return said ? { dot, stateText, line: said.line, said, ...unsaid } : { dot, stateText, ...noticeOf(opening), ...unsaid };
+	return { dot, stateText, ...noticeOf(opening), ...unsaid };
 }
 
 /** The mark of the person's own input on its card: someone at a computer, as `📨` marks another agent's message (PANEL-1.4). */

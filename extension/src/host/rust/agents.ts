@@ -302,7 +302,7 @@ export class RustAgents implements Agents, Disposable {
 		const settled = deferred<StartOutcome>();
 		const pending: Pending = { name, cli: options.cli, location: options.location, machine: remote?.machine, cwd, createdAt: Date.now(), worktree: !!options.worktree,
 			sessionId: options.session, settled: settled.promise };
-		const run: Run = { id, pending, ...recent ? { sessionOpening: 'continued' } : {}, facts: undefined! };
+		const run: Run = { id, pending, sessionOpening: recent ? 'continued' : 'started', facts: undefined! };
 		const args: StartArgs = remote ? { ...this.remoteArgs(remote.machine, remote.request), request_id: id } : {
 			command: [options.cli], cwd, window, location_source_window: window,
 			env: this.deps.environment(options.location), cols: COLS, rows: ROWS, request_id: id,
@@ -1398,7 +1398,8 @@ export class RustAgents implements Agents, Disposable {
 					...!this.deps.link.connected ? { disconnected: true } : {} } : {},
 				createdAt: pending.createdAt, lifecycle: failure ? 'ended' : 'starting', phase: pending.worktree ? 'creating_worktree' : 'launching_cli',
 				activity: 'unknown', reporting: false, root: run.id, origin: 'human', tools: 'not_injected',
-				...pending.sessionId ? { sessionId: pending.sessionId, sessionOpening: run.sessionOpening } : {},
+				...pending.sessionId ? { sessionId: pending.sessionId } : {},
+				sessionOpening: run.sessionOpening,
 				...failure ? { error: failure, end: { kind: 'failed' as const, at: failure.at } } : {},
 				...this.unconfirmedStarts.has(run.id) ? { endUnconfirmed: true as const } : {}
 			};

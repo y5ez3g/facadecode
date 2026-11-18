@@ -104,10 +104,12 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 	}
 }
 
-async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {
-	await until(`#${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}`, async () => {
+async function expectAgent(window: DrivenWindow, id: string, pinned: boolean, opening?: string): Promise<void> {
+	const shown = opening === undefined ? '' : ` with opening ${JSON.stringify(opening)}`;
+	await until(`#${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}${shown}`, async () => {
 		const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
-		return cards.length === 1 && cards[0].id === id && cards[0].pinned === pinned && cards[0].column !== null && terminals === 1 || undefined;
+		return cards.length === 1 && cards[0].id === id && cards[0].pinned === pinned && cards[0].column !== null
+			&& terminals === 1 && (opening === undefined || cards[0].line === opening) || undefined;
 	});
 }
 
@@ -189,7 +191,25 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 		return window;
 	};
 	const first = await start(folder, 'a');
+	const fresh = await first.act<RunningAgent>({ kind: 'start' });
+	await expectAgent(first, fresh.id, false, 'New session started');
+	await first.act({ kind: 'stop', agent: fresh.id });
+	await first.act({ kind: 'wait-for-exit', pid: fresh.pid });
+	const resumed = await first.act<RunningAgent>({ kind: 'resume', agent: fresh.id });
+	assertSameRun({ ...resumed, pid: fresh.pid }, fresh, 'Resume keeps the number, session and cwd');
+	assert.notStrictEqual(resumed.pid, fresh.pid);
+	await expectAgent(first, fresh.id, false, 'Agent resumed');
 	const other = await start(peer, 'b');
+	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: fresh.id }), resumed);
+	await expectAgent(other, fresh.id, false, '');
+	await first.act({ kind: 'stop', agent: fresh.id });
+	await other.act({ kind: 'wait-for-exit', pid: resumed.pid });
+	await until('both windows to close the stopped pair', async () => {
+		const views = await Promise.all([first, other].map(window => window.act<WindowView>({ kind: 'snapshot' })));
+		return views.every(view => view.cards.length === 0 && view.terminals === 0) || undefined;
+	});
+	console.log('  ✔ The starting window knows the new session and the same-number resume. A fresh window adopts it with no opening claim');
+
 	const screen = 'Shared agent screen';
 	const before = await first.act<RunningAgent>({ kind: 'start', screen });
 	const original = await firstMember(first, before.id);

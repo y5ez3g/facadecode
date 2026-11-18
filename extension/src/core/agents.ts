@@ -15,7 +15,7 @@ import {
 	ConversationEntry, ConversationKey, ConversationStore, ConversationTitlePort, Pin, PinStore, conversationId, LocationId,
 	ActivityReport, AgentCloseResult, Agents, AliasPort, canDismiss, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
 	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError, SaidSource, TabPlace,
-	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
+	RetainedRun, RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
 
 export interface AgentServiceDeps {
@@ -290,7 +290,7 @@ export class AgentService implements Agents, Disposable {
 	private rememberRequest(facts: RunFacts, required = false): boolean {
 		if (facts.requestId !== undefined && facts.createdAt > this.deps.clock.now() - REQUEST_MS) {
 			try {
-				this.deps.retained.put({ ...facts, requestOnly: true });
+				this.deps.retained.put({ ...retainedRun(facts), requestOnly: true });
 				return true;
 			} catch (err) {
 				if (required) {
@@ -873,7 +873,7 @@ export class AgentService implements Agents, Disposable {
 			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: resumed,
 			...plan.builtIn !== undefined ? { builtIn: plan.builtIn } : {},
 			...titleStore !== undefined ? { titleStore } : {},
-			...resuming ? { sessionOpening: 'continued' as const } : {},
+			sessionOpening: resuming ? 'continued' : 'started',
 			...(plan.version !== undefined ? { version: plan.version } : {}),
 			tools: plan.tools.state === 'injected' ? 'connecting' : plan.tools.state === 'unavailable' ? 'unavailable' : 'not_injected',
 			...(plan.tools.state === 'unavailable' && plan.tools.reason ? { toolsReason: plan.tools.reason } : {}),
@@ -979,7 +979,7 @@ export class AgentService implements Agents, Disposable {
 	/** Keeps a failed start's pair for a reload; one that cannot be written stays red in this window alone, said in the log. */
 	private retain(run: Run): void {
 		try {
-			this.deps.retained.put(run.facts);
+			this.deps.retained.put(retainedRun(run.facts));
 		} catch (err) {
 			this.deps.log.event(`Could not keep the failed start of ${run.facts.alias} for a reload: ${messageOf(err)}`);
 		}
@@ -1739,6 +1739,12 @@ function isRequestRun(value: unknown): value is RunFacts & { readonly requestOnl
 		typeof value.root === 'string' && !!value.root;
 }
 
+/** Keep the old engine's `resumed` field for any saved session started under a new agent number. */
+function retainedRun(facts: RunFacts): RetainedRun {
+	const { sessionOpening, ...record } = facts;
+	return sessionOpening === 'continued' ? { ...record, resumed: true } : record;
+}
+
 /** A retained record as this build keeps runs: one an earlier build wrote is a root of its own, without tools (ARCHITECTURE-4.2). */
 function retainedFacts(kept: RunFacts): RunFacts {
 	const record = kept as RunFacts & { readonly [key: string]: unknown };
@@ -1749,7 +1755,7 @@ function retainedFacts(kept: RunFacts): RunFacts {
 		...facts,
 		...title && record.titleSource === 'conversation' ? { title, titleSource: 'conversation' as const } : {},
 		...kept.resumable ? { pinnable: true } : {},
-		...legacyResumed === true || sessionOpening === 'continued' ? { sessionOpening: 'continued' as const } : {},
+		sessionOpening: legacyResumed === true || sessionOpening === 'continued' ? 'continued' : 'started',
 		root: typeof record.root === 'string' && record.root ? record.root : kept.id,
 		origin: record.origin === 'agent' ? 'agent' : 'human',
 		tools: record.tools === 'connecting' || record.tools === 'available' || record.tools === 'unavailable' ? record.tools : 'not_injected'
@@ -1812,7 +1818,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		// A title proven to be its conversation's; an earlier build's, which may be a CLI report's, is dropped and read again (CLIS-2.4)
 		...(typeof meta.title === 'string' && meta.title && meta.titleSource === 'conversation' ? { title: meta.title, titleSource: 'conversation' as const } : {}),
 		...(typeof meta.titleStore === 'string' && meta.titleStore ? { titleStore: meta.titleStore } : {}),
-		...(meta.resumed === true ? { sessionOpening: 'continued' as const } : {}),
+		sessionOpening: meta.resumed === true ? 'continued' : 'started',
 		...(typeof meta.said === 'string' && meta.said ? { said: meta.said } : {}),
 		...(isSaidSource(meta.saidSource) ? { saidSource: meta.saidSource } : {}),
 		...(isTabPlace(meta.tab) ? { tab: tabOf(meta.tab) } : {}),

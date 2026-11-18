@@ -163,9 +163,10 @@ shows the connection status until the running machine can be reached again.
    Facade could not confirm, `Stop unconfirmed · check process` (LIFECYCLE-3.5); the Facade tools it cannot use; its
    tools not connected past CLIS-2.3's bound, `Facade tools not connected yet`; or a start that did not become ready,
    with why its activity is unknown, such as `No initial state · check terminal`. Before any message, with no notable
-   state, it says `New session started` for a new session, `Agent resumed` when the same numbered agent returns,
-   or `Session continued` when a new agent starts a saved session. Pin restoration follows the same numbering
-   distinction (LIFECYCLE-3.3, 3.4).
+   state, it says the known opening: `New session started` for a new session, `Agent resumed` when the same numbered
+   agent returns, or `Session continued` when a new agent starts a saved session. Pin restoration follows the same
+   numbering distinction (LIFECYCLE-3.3, 3.4). A Rust window that reconnects to or adopts a running agent whose opening
+   it did not observe leaves this line blank until it has another item to show.
 
 What the second line says is the first of these that holds, in this order of precedence:
 
@@ -175,7 +176,7 @@ What the second line says is the first of these that holds, in this order of pre
    ready by it (RULES-3.2);
 4. its start's stage, while it starts (LIFECYCLE-1.5);
 5. the last item sent to it: the person's input, another agent's message or a Facade result;
-6. how its run began.
+6. the run's known opening.
 
 The last item sent comes back as soon as none of 1-4 holds any longer; the words of each are those above.
 
@@ -184,9 +185,10 @@ was sent to the agent, and by whom, shows at a glance; Facade's own words carry 
 `🧑‍💻` come from who sent the item as its record keeps it, never from a name, the destination or an emoji the text
 begins with. It says where that item came from, not what the agent works on now or
 whether it read it. The accessible label says `Last input: {0}` for the person's input. The card keeps the last item
-and its session opening across a reload. When tool injection fails, the second line says why, such as
-`Facade tools unavailable · move or rename {0}`. A run that loses its tool connection says `Facade tools disconnected`. The second line never says a
-title - its conversation's is the details' (1.5), and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
+across a reload. The old engine also restores the opening from its saved run metadata. When tool injection fails, the
+second line says why, such as `Facade tools unavailable · move or rename {0}`. A run that loses its tool connection
+says `Facade tools disconnected`. The second line never says a title - its conversation's is the details' (1.5),
+and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
 or, without a red dot, `State unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
 the dot's and the accessible label's, the label also saying why activity is unavailable. Idle alone proves neither an
 empty composer nor usable input; there is no separate first-message readiness claim. Never `Done, waiting for you`

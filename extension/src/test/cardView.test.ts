@@ -54,7 +54,7 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 		id: 'run-00000000000000000000000000000001', alias: '#a1', name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude',
 		location: 'loc-1', cwd: '/app', environment: 'local', yolo: true, createdAt: 1000,
 		lifecycle: 'running', phase: 'running', pid: 42, startedAt: 2000, activity: 'working', reporting: true,
-		root: 'run-00000000000000000000000000000001', origin: 'human', tools: 'not_injected', ...more
+		root: 'run-00000000000000000000000000000001', origin: 'human', tools: 'not_injected', sessionOpening: 'started', ...more
 	};
 }
 
@@ -131,8 +131,9 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			line({ title: 'Fixing the login bug', sessionOpening: 'resumed' }),
 			line({ sessionOpening: 'continued' }),
 			line({ sessionOpening: 'resumed', said: 'go on' }),
-			line({})
-		], ['New session started', '🧑‍💻 /clear', '📨 Implement the parser', '🧑‍💻 and the tests', 'Agent resumed', 'Session continued', '🧑‍💻 go on', 'New session started']);
+			line({ sessionOpening: undefined }),
+			line({ sessionOpening: undefined, said: 'go on' })
+		], ['New session started', '🧑‍💻 /clear', '📨 Implement the parser', '🧑‍💻 and the tests', 'Agent resumed', 'Session continued', '🧑‍💻 go on', '', '🧑‍💻 go on']);
 	});
 
 	test('PANEL-1.4: the second line is one of three kinds - the person\'s input after 🧑‍💻 and a space, another agent\'s message after 📨 and a space, Facade\'s own with no mark: a result without the 🔔 it is typed to its agent with, a notable state while it lasts and then the last message again, or how its run began - never a title, Working, Idle or State unavailable · check terminal', () => {
