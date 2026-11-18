@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::{AgentCommand, AgentHandle, WindowColors};
 use crate::guests::{GuestEvent, Guests, SessionMatch};
-use crate::windows::{LocationsRead, WindowConnection, WindowEvent};
+use crate::windows::{LocationsRead, WindowConnection};
 use crate::{Daemon, WindowBinding, blocking_in_place, command_line, gate_for_test, log};
 
 /// What a hook reports on: a guest; a part of a guest's session, such as a subagent's, which acts
@@ -347,25 +347,8 @@ impl Daemon {
 
     /// Restores the logical windows before accepting clients.
     pub(crate) fn restore_windows(&self) -> Result<(), ErrorBody> {
-        self.windows.restore()
-    }
-}
-
-/// Reclaims a workspace-less window after its last connection, if it has no members.
-pub(crate) async fn follow_windows(
-    daemon: Arc<Daemon>,
-    mut events: mpsc::UnboundedReceiver<WindowEvent>,
-) {
-    while let Some(WindowEvent::Left { binding, departure }) = events.recv().await {
-        if let Err(error) = daemon
-            .windows
-            .discard_empty(&binding, departure, |window| {
-                daemon.store.delete_empty_window(window)
-            })
-            .await
-        {
-            log("warn", &error.message);
-        }
+        self.windows
+            .restore(|window| self.store.delete_empty_window(window))
     }
 }
 

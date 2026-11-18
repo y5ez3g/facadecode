@@ -13,7 +13,7 @@ use facade_base::daemon::{
 };
 use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc};
+use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
 use crate::store::{WindowRow, WindowTable};
 use crate::{WindowBinding, blocking_in_place};
@@ -22,15 +22,6 @@ use locations::{Catalog, Creations};
 /// The most window changes queued for a watcher before it gets every window again.
 const MAX_QUEUED_CHANGES: usize = 256;
 const FIRST_GENERATION: u64 = 1;
-
-/// A change in window presence reported to the daemon.
-pub(crate) enum WindowEvent {
-    /// The window's last connection closed: its `departure`-th leaving.
-    Left {
-        binding: WindowBinding,
-        departure: u64,
-    },
-}
 
 /// A read of a window's locations: says which agent folders are gone.
 pub(crate) struct LocationsRead {
@@ -41,7 +32,6 @@ pub(crate) struct LocationsRead {
 }
 
 impl LocationsRead {
-    #[allow(dead_code, reason = "used when the daemon switches to protocol 2")]
     pub(crate) fn binding(&self) -> &WindowBinding {
         &self.binding
     }
@@ -83,7 +73,6 @@ struct Shared {
     /// A leaf lock, taken and released inside each method.
     state: Mutex<Registry>,
     changes: broadcast::Sender<WindowsChange>,
-    events: mpsc::UnboundedSender<WindowEvent>,
     table: WindowTable,
 }
 
@@ -102,8 +91,6 @@ struct Window {
     catalog: Catalog,
     /// When `catalog` was read.
     read_at: Option<String>,
-    /// How many times the window has left.
-    departures: u64,
 }
 
 impl Window {
@@ -116,7 +103,6 @@ impl Window {
             watchers: HashMap::new(),
             catalog: Catalog::default(),
             read_at: None,
-            departures: 0,
         }
     }
 
@@ -139,11 +125,6 @@ impl Window {
     fn is_current(&self, binding: &WindowBinding) -> bool {
         self.binding == *binding && self.connections > 0
     }
-
-    /// Whether the window is still away since its `departure`-th leaving.
-    fn away_since(&self, departure: u64) -> bool {
-        self.connections == 0 && self.departures == departure
-    }
 }
 
 impl Shared {
@@ -161,55 +142,37 @@ impl Shared {
         }
     }
 
-    fn publish(&self, change: WindowsChange) {
-        let _ = self.changes.send(change);
-    }
-
     fn updated(&self, window: &Window) {
-        self.publish(WindowsChange::Updated {
+        let _ = self.changes.send(WindowsChange::Updated {
             window: Box::new(window.info()),
         });
     }
 
-    /// One connection of this binding closed. The last one makes the window leave.
+    /// Marks the window disconnected when the last connection of this binding closes.
     fn disconnect(&self, binding: &WindowBinding) {
-        let departure = {
-            let mut state = self.state.lock().unwrap();
-            let Some(window) = state
-                .windows
-                .get_mut(&binding.window.window_id)
-                .filter(|window| window.is_current(binding))
-            else {
-                return;
-            };
-            window.connections -= 1;
-            if window.connections > 0 {
-                return;
-            }
-            window.watchers.clear();
-            window.departures += 1;
-            self.updated(window);
-            window.departures
+        let mut state = self.state.lock().unwrap();
+        let Some(window) = state
+            .windows
+            .get_mut(&binding.window.window_id)
+            .filter(|window| window.is_current(binding))
+        else {
+            return;
         };
-        let _ = self.events.send(WindowEvent::Left {
-            binding: binding.clone(),
-            departure,
-        });
+        window.connections -= 1;
+        if window.connections == 0 {
+            window.watchers.clear();
+            self.updated(window);
+        }
     }
 }
 
-fn warn(message: &str) {
-    facade_base::log::write("daemon", "warn", message);
-}
-
-/// One open connection of an editor window. Dropping the last one makes the window leave.
+/// One open connection of an editor window. Dropping the last one marks it disconnected.
 pub(crate) struct WindowConnection {
     shared: Arc<Shared>,
     binding: WindowBinding,
 }
 
 impl WindowConnection {
-    #[allow(dead_code, reason = "used when hello carries a window binding")]
     pub(crate) fn binding(&self) -> &WindowBinding {
         &self.binding
     }
@@ -245,26 +208,20 @@ impl Drop for PersonWatch {
 pub(crate) type PersonSink = Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>;
 
 /// A window's binding and viewers chosen before the message is stored.
-#[allow(dead_code, reason = "used when the daemon switches to protocol 2")]
 pub(crate) struct PersonTarget {
     binding: WindowBinding,
     viewers: Vec<u64>,
 }
 
 impl Windows {
-    /// No windows yet. Rows go to `table`. Departures go to `events`.
-    pub(crate) fn new(
-        machine_id: String,
-        table: WindowTable,
-        events: mpsc::UnboundedSender<WindowEvent>,
-    ) -> Windows {
+    /// No windows yet. Rows go to `table`.
+    pub(crate) fn new(machine_id: String, table: WindowTable) -> Windows {
         Windows {
             shared: Arc::new(Shared {
                 machine_id,
                 binding_gate: AsyncMutex::default(),
                 state: Mutex::default(),
                 changes: broadcast::channel(MAX_QUEUED_CHANGES).0,
-                events,
                 table,
             }),
             creations: Creations::default(),
@@ -291,23 +248,31 @@ impl Windows {
             None => Ok(()),
         }
     }
-}
 
-#[allow(dead_code, reason = "used when the daemon switches to protocol 2")]
-impl Windows {
-    /// Restores saved logical windows before clients connect.
-    pub(crate) fn restore(&self) -> Result<(), ErrorBody> {
+    /// Restores saved logical windows before clients connect. The store reclaims workspace-less
+    /// windows with no saved agent references.
+    pub(crate) fn restore(
+        &self,
+        delete_empty: impl Fn(&WindowRef) -> anyhow::Result<bool>,
+    ) -> Result<(), ErrorBody> {
         let rows = blocking_in_place(|| self.shared.table.logical_windows())
             .map_err(ErrorBody::internal)?;
-        let mut state = self.shared.state.lock().unwrap();
+        let mut state = Registry::default();
         for row in rows {
             let binding = self.shared.first_binding(&row.window_id);
             state.last_sequence = state.last_sequence.max(row.sequence);
+            if row.description.workspace.is_none()
+                && blocking_in_place(|| delete_empty(&binding.window))
+                    .map_err(ErrorBody::internal)?
+            {
+                continue;
+            }
             state.windows.insert(
                 row.window_id,
                 Window::new(binding, row.sequence, row.description),
             );
         }
+        *self.shared.state.lock().unwrap() = state;
         Ok(())
     }
 
@@ -448,34 +413,6 @@ impl Windows {
         )))
     }
 
-    /// Reclaims a workspace-less window only while it is still away and has no members.
-    pub(crate) async fn discard_empty(
-        &self,
-        binding: &WindowBinding,
-        departure: u64,
-        delete: impl FnOnce(&WindowRef) -> anyhow::Result<bool> + Send,
-    ) -> Result<(), ErrorBody> {
-        let _binding_gate = self.shared.binding_gate.lock().await;
-        let id = &binding.window.window_id;
-        let eligible = {
-            let state = self.shared.state.lock().unwrap();
-            state.windows.get(id).is_some_and(|window| {
-                window.binding == *binding
-                    && window.away_since(departure)
-                    && window.description.workspace.is_none()
-            })
-        };
-        if eligible && blocking_in_place(|| delete(&binding.window)).map_err(ErrorBody::internal)? {
-            let mut state = self.shared.state.lock().unwrap();
-            state.windows.remove(id);
-            self.shared.publish(WindowsChange::Removed {
-                machine_id: binding.window.machine_id.clone(),
-                window_id: id.clone(),
-            });
-        }
-        Ok(())
-    }
-
     /// Registers a messages subscription for the life of the guard.
     pub(crate) fn watch_person(
         &self,
@@ -549,7 +486,6 @@ impl Windows {
     }
 }
 
-#[allow(dead_code, reason = "used when the daemon switches to protocol 2")]
 fn stale_connection(binding: &WindowBinding) -> ErrorBody {
     ErrorBody::new(
         Reason::Unavailable,
@@ -560,207 +496,10 @@ fn stale_connection(binding: &WindowBinding) -> ErrorBody {
     )
 }
 
-#[allow(dead_code, reason = "used when the daemon switches to protocol 2")]
 fn delivery_failure(window: &WindowRef, reason: &str) -> WindowDeliveryFailure {
     WindowDeliveryFailure {
         window: window.clone(),
         reason: reason.to_string(),
-    }
-}
-
-fn unknown_window(id: &str) -> WindowDescription {
-    WindowDescription {
-        id: id.to_string(),
-        label: id.to_string(),
-        environment: "unknown".into(),
-        workspace: None,
-        folders: Vec::new(),
-        branch_prefix: None,
-        colors: None,
-        env: None,
-    }
-}
-
-// Protocol 1 still identifies a window by its instance ID.
-impl Windows {
-    /// Restores the editor windows in `running` with no connections. Uses the saved descriptions,
-    /// or each window's ID as its label if its description is missing. Other windows in `agents`
-    /// keep their rows outside the list for a later window of their workspace to take over.
-    /// Deletes rows for windows with no agents. Blocks on the table.
-    pub(crate) fn restore_v1(&self, running: &[String], agents: &[String]) {
-        let kept = blocking_in_place(|| self.shared.table.windows()).unwrap_or_else(|err| {
-            warn(&format!("{err:#}"));
-            Vec::new()
-        });
-        let mut kept: HashMap<String, WindowDescription> = kept
-            .into_iter()
-            .map(|description| (description.id.clone(), description))
-            .collect();
-        {
-            let mut state = self.shared.state.lock().unwrap();
-            for id in running.iter().filter(|id| id.as_str() != TERMINAL_WINDOW) {
-                state.windows.entry(id.clone()).or_insert_with(|| {
-                    let description = kept.remove(id).unwrap_or_else(|| unknown_window(id));
-                    Window::new(self.shared.first_binding(id), 0, description)
-                });
-            }
-        }
-        for id in kept.keys().filter(|id| !agents.contains(id)) {
-            if let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
-                warn(&format!("{err:#}"));
-            }
-        }
-    }
-
-    /// Takes `description` as its window's, counting one more connection where `connecting`, and
-    /// keeps it in the table. Answers the windows of the same workspace that it takes over: those
-    /// listed with no connection left, which are removed here, and those that left and are no
-    /// longer listed, whose rows the table kept. Their agents are the caller's to move before
-    /// [`Windows::taken_over`]. Blocks on the table.
-    pub(crate) fn describe(
-        &self,
-        description: &WindowDescription,
-        connecting: bool,
-    ) -> Vec<String> {
-        let id = &description.id;
-        let rows = match &description.workspace {
-            Some(_) => blocking_in_place(|| self.shared.table.windows()).unwrap_or_else(|err| {
-                warn(&format!("{err:#}"));
-                Vec::new()
-            }),
-            None => Vec::new(),
-        };
-        let taken = {
-            let mut state = self.shared.state.lock().unwrap();
-            let windows = &mut state.windows;
-            let mut taken: Vec<String> = Vec::new();
-            if let Some(workspace) = &description.workspace {
-                taken = windows
-                    .iter()
-                    .filter(|(other, window)| {
-                        *other != id
-                            && window.connections == 0
-                            && window.description.workspace.as_ref() == Some(workspace)
-                    })
-                    .map(|(other, _)| other.clone())
-                    .collect();
-                taken.extend(
-                    rows.iter()
-                        .filter(|row| {
-                            row.id != *id
-                                && row.workspace.as_ref() == Some(workspace)
-                                && !windows.contains_key(&row.id)
-                        })
-                        .map(|row| row.id.clone()),
-                );
-            }
-            for other in &taken {
-                windows.remove(other);
-            }
-            let window = windows.entry(id.clone()).or_insert_with(|| {
-                Window::new(self.shared.first_binding(id), 0, description.clone())
-            });
-            window.description = description.clone();
-            if connecting {
-                window.connections += 1;
-            }
-            taken
-        };
-        if let Err(err) = blocking_in_place(|| self.shared.table.save_window(description)) {
-            warn(&format!("{err:#}"));
-        }
-        taken
-    }
-
-    /// A guard for one connection of window `id`, which [`Windows::describe`] counted.
-    pub(crate) fn connection(&self, id: &str) -> WindowConnection {
-        WindowConnection {
-            shared: self.shared.clone(),
-            binding: self.shared.first_binding(id),
-        }
-    }
-
-    /// Says window `from` is gone, once its agents moved to the window that took them over.
-    pub(crate) fn taken_over(&self, from: &str) {
-        self.shared.publish(WindowsChange::Removed {
-            machine_id: String::new(),
-            window_id: from.to_string(),
-        });
-    }
-
-    pub(crate) async fn read_locations_v1(
-        &self,
-        id: &str,
-        folders_before: Option<Vec<String>>,
-    ) -> Option<LocationsRead> {
-        self.read_locations(&self.shared.first_binding(id), folders_before)
-            .await
-    }
-
-    /// Removes window `id` from the list, unless it connected again since its `departure`-th
-    /// leaving, and deletes its row, except where `has_agents`: agents' records are still under
-    /// its ID, and the row keeps its `workspace`, so that a later window of it can take them over.
-    /// Blocks on the table.
-    pub(crate) fn remove(&self, id: &str, departure: u64, has_agents: bool) {
-        {
-            let mut state = self.shared.state.lock().unwrap();
-            let windows = &mut state.windows;
-            if !windows
-                .get(id)
-                .is_some_and(|window| window.away_since(departure))
-            {
-                return;
-            }
-            windows.remove(id);
-        }
-        if !has_agents && let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
-            warn(&format!("{err:#}"));
-        }
-        self.shared.publish(WindowsChange::Removed {
-            machine_id: String::new(),
-            window_id: id.to_string(),
-        });
-    }
-
-    /// Counts a `messages` watch of window `id`'s `ide` client while the guard lives.
-    pub(crate) fn watch_person_v1(&self, id: &str, viewer: u64) -> PersonWatch {
-        if let Some(window) = self.shared.state.lock().unwrap().windows.get_mut(id) {
-            window.watchers.insert(viewer, Arc::new(|_| false));
-        }
-        PersonWatch {
-            shared: self.shared.clone(),
-            binding: self.shared.first_binding(id),
-            viewer,
-        }
-    }
-
-    /// Whether window `id`'s `ide` client watches its messages, so that the window can tell the
-    /// person.
-    pub(crate) fn tells_person(&self, id: &str) -> bool {
-        self.shared
-            .state
-            .lock()
-            .unwrap()
-            .windows
-            .get(id)
-            .is_some_and(|window| !window.watchers.is_empty())
-    }
-
-    pub(crate) fn check_destination_v1(
-        &self,
-        id: &str,
-        cwd: &str,
-    ) -> Result<Destination, ErrorBody> {
-        let window = (id != TERMINAL_WINDOW).then(|| self.shared.window_ref(id));
-        self.check_destination(window.as_ref(), cwd)
-    }
-
-    pub(crate) fn label_v1(&self, id: &str) -> String {
-        self.label(&self.shared.window_ref(id))
-    }
-
-    pub(crate) fn colors_v1(&self, id: &str) -> Option<TerminalColors> {
-        self.colors(&self.shared.window_ref(id))
     }
 }
 

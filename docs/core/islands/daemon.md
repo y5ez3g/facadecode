@@ -107,9 +107,10 @@ offers only its table's methods.
 **Startup** (`start_and_serve`) takes the home's daemon lock and exits if it cannot get it. It takes
 the clean-end note, holds this build's programs open, makes runs, finds the keeper, opens the store,
 makes the other parts and sweeps. It recovers agents, guests and pending messages, then restores
-disconnected windows. It releases plugins no run uses and serves the keeper link. It starts the
-tasks that follow runs, windows, guests, results and long waits, and starts the hourly sweep. It
-then binds the socket, reports the start and serves until idle.
+disconnected windows and reclaims those without a workspace or saved agent references. It releases
+plugins no run uses and serves the keeper link. It starts the tasks that follow runs, guests,
+results and long waits, and starts the hourly sweep. It then binds the socket, reports the start
+and serves until idle.
 
 **What each part gets and how it reports back**:
 
@@ -119,14 +120,14 @@ then binds the socket, reports the start and serves until idle.
 | messages | `MessageTable` | return values; a receiver of the results it wrote |
 | runs | the home, the held programs, a `RunEvent` sender; per run, an `ExitSink` | `RunEvent::Exited`, `RunEvent::Session` (acknowledged once committed) |
 | records | `NumberTable` | return values |
-| windows | `WindowTable`, a `WindowEvent` sender | `WindowEvent::Left` |
+| windows | the machine ID and `WindowTable` | return values and changes on the `windows` topic |
 | guests | `GuestTable`, `IntegrationTable`, the held programs, a `GuestEvent` sender | `GuestEvent::Ended`, `GuestEvent::TurnIdle` |
 | lifecycle | the `LifecycleActivity` implementation and the idle pause channels | work guards, draining refusals, `closing`, the clean-end fact |
 | server | the `Service` implementation, the idle exit's `closing` and `paused` | trait calls into this layer |
 | mcp | per relay: a `Connect` closure and a `JoinMember` closure | return values |
 
 **Tasks**: the server's accept loop and one task per connection and call; one actor per agent; the
-tasks that follow `RunEvent`s, `WindowEvent`s and `GuestEvent`s; the result deliveries; the long-wait
+tasks that follow `RunEvent`s and `GuestEvent`s; the result deliveries; the long-wait
 follower; the hourly sweep; the idle exit.
 
 **The hourly sweep**: guests not heard from for 30 days end; messages older than 30 days go; result
@@ -405,23 +406,24 @@ Logical editor windows and their connections, subscriptions and locations. `src/
   - A hello binds to the same known instance, otherwise to the first disconnected logical
     window of the same workspace by allocation order, otherwise to a new logical window. It
     saves the binding before returning its connection guard.
-  - A binding gate orders description writes and removals. Inside the gate, the leaf lock
-    protects the current generation and connections, and is released for a table write. A new
-    instance advances the generation. Late updates, disconnects, subscriptions and Git reads
-    are checked against their binding.
-  - Closing the last connection publishes the disconnected window and its departure number.
-    Reclaiming an empty workspace-less window checks that departure and asks the daemon to
-    delete its row only if the membership table is empty for that window.
+  - A binding gate orders description writes. Inside the gate, the leaf lock protects the
+    current generation and connections, and is released for a table write. A new instance
+    advances the generation. Late updates, disconnects, subscriptions and Git reads are checked
+    against their binding.
+  - Closing the last connection clears the window's subscriptions and publishes it as
+    disconnected. The saved logical ID and instance remain available to another hello.
+  - At startup, before accepting clients, recovery reclaims a window with no workspace if no
+    agent names it as a member window or a location source. The store checks the saved references,
+    including those of agents whose records recovery could not read.
   - A person message counts a window after a current subscription accepts the queued change.
     Delivery uses the generation and viewers observed before the message took a number.
 - **Never does:** stop or move agents; read the agent list; run Git (locations does that).
 - **Interface:**
-  - `Windows::new(machine_id, WindowTable, events)`, `restore()`,
+  - `Windows::new(machine_id, WindowTable)`, `restore(delete_empty)`,
     `bind(WindowDescription) -> (WindowConnection, Vec<String>)`, and
     `update(&WindowBinding, WindowDescription) -> Vec<String>`. The folder list is the previous
     description's. The guard's `binding()` identifies the logical window and generation.
-  - `WindowEvent::Left { binding, departure }`, `is_current(&WindowBinding)` and
-    `discard_empty(&WindowBinding, departure, delete)`.
+  - `is_current(&WindowBinding)` checks that the binding still has a connection.
   - `watch_person(&WindowBinding, viewer, sink) -> PersonWatch`,
     `person_target(&WindowRef) -> PersonTarget`, and `deliver_to_person(&PersonTarget, change)`.
   - `check_member(&WindowRef)`, `label(&WindowRef)`, `colors(&WindowRef)`, `folders(id)`,

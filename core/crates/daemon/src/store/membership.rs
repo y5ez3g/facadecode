@@ -82,7 +82,7 @@ impl MembershipTable {
 }
 
 impl Store {
-    /// Deletes a local window's row only while it has no members. The caller checks its binding.
+    /// Removes a local window during startup if no stored agent references it.
     pub(crate) fn delete_empty_window(&self, window: &WindowRef) -> anyhow::Result<bool> {
         let deleted = self.transaction(
             || format!("delete empty window {}", window.window_id),
@@ -90,6 +90,8 @@ impl Store {
                 transaction.execute(
                     "DELETE FROM windows WHERE window_id = ?1 AND NOT EXISTS (
                         SELECT 1 FROM agent_windows WHERE machine_id = ?2 AND window_id = ?1
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM agents WHERE location_machine_id = ?2 AND location_window_id = ?1
                     )",
                     params![window.window_id, window.machine_id],
                 )

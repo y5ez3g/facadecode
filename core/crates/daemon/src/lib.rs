@@ -362,7 +362,6 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         .collect();
     records.keep_unreadable(opened.agent_ids.difference(&readable).cloned().collect());
     let messages = Arc::new(Messages::new(store.message_table()));
-    let (window_events, window_events_rx) = mpsc::unbounded_channel();
     let (guest_events, guest_events_rx) = mpsc::unbounded_channel();
     let daemon = Arc::new(Daemon {
         agents: Mutex::default(),
@@ -370,11 +369,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         lifecycle: Lifecycle::new(),
         starting: Mutex::default(),
         screens: Screens::new(core.join("screens")),
-        windows: Windows::new(
-            opened.machine_id.clone(),
-            store.window_table(),
-            window_events,
-        ),
+        windows: Windows::new(opened.machine_id.clone(), store.window_table()),
         guests: Guests::new(
             store.guest_table(),
             store.integration_table(),
@@ -396,7 +391,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         .await?;
     daemon.restore_guests()?;
     daemon.take_up_messages()?;
-    // Restore disconnected windows from the recovered agent records before accepting clients.
+    // Restore logical windows and reclaim unreferenced ones before accepting clients.
     daemon
         .restore_windows()
         .map_err(|error| anyhow::anyhow!("could not restore windows: {}", error.message))?;
@@ -417,7 +412,6 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         tokio::spawn(delivery::deliver_results(daemon.clone(), results));
     }
     tokio::spawn(follow_runs(daemon.clone(), run_events_rx));
-    tokio::spawn(presence::follow_windows(daemon.clone(), window_events_rx));
     tokio::spawn(presence::follow_guests(daemon.clone(), guest_events_rx));
     tokio::spawn(sweep_every_hour(daemon.clone()));
     tokio::spawn(waits::follow_waits(daemon.clone()));
