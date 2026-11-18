@@ -23,7 +23,7 @@ use crate::{Daemon, blocking_in_place};
 /// The settings file, read for a start or a resume: its problems refuse either.
 pub(crate) fn read_settings() -> Result<Settings, ErrorBody> {
     blocking_in_place(facade_base::settings::read)
-        .map_err(|problems| ErrorBody::new(Reason::ConfigurationInvalid, problems))
+        .map_err(|problems| ErrorBody::new(Reason::InvalidSettings, problems))
 }
 
 /// The settings file's `names`, for an agent named outside a start: a guest, or an agent renamed
@@ -208,7 +208,7 @@ fn refused_choice(cli: &str, asked: &str, by_model: bool) -> ErrorBody {
 pub(crate) fn check_entry(entry: &Entry, env: &BTreeMap<String, String>) -> Result<(), ErrorBody> {
     let problems = entry.problems_with(env);
     if !problems.is_empty() {
-        let error = ErrorBody::new(Reason::ConfigurationInvalid, problems.join("; "));
+        let error = ErrorBody::new(Reason::InvalidSettings, problems.join("; "));
         return Err(by_entry(error, entry));
     }
     if entry.enabled {
@@ -549,7 +549,7 @@ fn cli_problem(
     let problems = entry.problems_with(env);
     if !problems.is_empty() {
         let message = problems.join("; ");
-        return Some(Err(ErrorBody::new(Reason::ConfigurationInvalid, message)));
+        return Some(Err(ErrorBody::new(Reason::InvalidSettings, message)));
     }
     let program = blocking_in_place(|| entry_program(entry, &entry.environment(env), folder));
     Some(program.map(|_| ()))

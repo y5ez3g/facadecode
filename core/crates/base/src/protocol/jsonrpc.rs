@@ -258,7 +258,8 @@ pub enum Reason {
     Unavailable,
     /// The two sides share no protocol version, or a required client kind, operation, or field is
     /// unsupported.
-    ProtocolIncompatible,
+    #[serde(rename = "protocol_incompatible")]
+    IncompatibleProtocol,
     /// Two running daemons introduced themselves with the same machine ID.
     MachineIdConflict,
     /// A saved SSH connection needs a foreground login or verification.
@@ -274,7 +275,12 @@ pub enum Reason {
     /// Facade's settings file, `facade.json` in the Facade home, cannot be read as it must, which
     /// stops every launch until it is fixed. The message says each problem, with the file's path
     /// and, where known, its line and column.
-    ConfigurationInvalid,
+    #[serde(rename = "configuration_invalid")]
+    InvalidSettings,
+    /// A tool server lacks a caller it can serve. The v2 spelling also covers invalid settings.
+    #[serde(rename = "configuration_invalid", skip_deserializing)]
+    #[schemars(skip)]
+    CallerUnavailable,
     /// The call was withdrawn by its `cancel` before it took effect: a message whose paste had not
     /// begun, which is not kept.
     Cancelled,
@@ -366,6 +372,23 @@ impl ErrorBody {
 }
 
 impl Reason {
+    /// Compatibility names still used by the v2 client projections.
+    #[allow(non_upper_case_globals)]
+    pub const ConfigurationInvalid: Self = Self::InvalidSettings;
+    #[allow(non_upper_case_globals)]
+    pub const ProtocolIncompatible: Self = Self::IncompatibleProtocol;
+
+    /// The reason for clients that project the canonical error.
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            Reason::InvalidSettings => "invalid_settings",
+            Reason::IncompatibleProtocol => "incompatible_protocol",
+            Reason::CallerUnavailable => "caller_unavailable",
+            reason => reason.as_str(),
+        }
+    }
+
+    /// The original protocol name used by the v2 daemon and v1 keeper.
     pub fn as_str(self) -> &'static str {
         match self {
             Reason::InvalidArgument => "invalid_argument",
@@ -374,13 +397,13 @@ impl Reason {
             Reason::Ended => "ended",
             Reason::PartialInput => "partial_input",
             Reason::Unavailable => "unavailable",
-            Reason::ProtocolIncompatible => "protocol_incompatible",
+            Reason::IncompatibleProtocol => "protocol_incompatible",
             Reason::MachineIdConflict => "machine_id_conflict",
             Reason::SshInteractionRequired => "ssh_interaction_required",
             Reason::CapacityExceeded => "capacity_exceeded",
             Reason::Internal => "internal",
             Reason::Refused => "refused",
-            Reason::ConfigurationInvalid => "configuration_invalid",
+            Reason::InvalidSettings | Reason::CallerUnavailable => "configuration_invalid",
             Reason::Cancelled => "cancelled",
             Reason::WorktreeFailed => "worktree_failed",
             Reason::Upgrading => "upgrading",
@@ -515,6 +538,76 @@ pub fn decode_arguments<T: DeserializeOwned>(params: Value) -> Result<T, ErrorBo
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn canonical_reasons_keep_v2_names_and_diagnostic_details() {
+        let mut settings = ErrorBody::new(Reason::InvalidSettings, "this entry is malformed");
+        settings.data.entry = Some("fake".into());
+        let old_settings = json!({
+            "code": -32000, "message": "this entry is malformed",
+            "data": { "reason": "configuration_invalid", "entry": "fake" },
+        });
+        assert_eq!(serde_json::to_value(&settings).unwrap(), old_settings);
+        let decoded: ErrorBody = serde_json::from_value(old_settings).unwrap();
+        assert_eq!(decoded, settings);
+        assert_eq!(decoded.data.reason.canonical_name(), "invalid_settings");
+        assert_eq!(
+            decoded.to_string(),
+            "this entry is malformed (configuration_invalid)"
+        );
+
+        let mut protocol = ErrorBody::new(Reason::IncompatibleProtocol, "different protocol");
+        protocol.data.protocol = Some(ProtocolMismatch {
+            local_build: "current".into(),
+            local_protocol: [2, 2],
+            remote_build: "old".into(),
+            remote_protocol: [1, 1],
+        });
+        let old_protocol = json!({
+            "code": -32000, "message": "different protocol",
+            "data": {
+                "reason": "protocol_incompatible",
+                "protocol": {
+                    "local_build": "current", "local_protocol": [2, 2],
+                    "remote_build": "old", "remote_protocol": [1, 1],
+                },
+            },
+        });
+        assert_eq!(serde_json::to_value(&protocol).unwrap(), old_protocol);
+        let decoded: ErrorBody = serde_json::from_value(old_protocol).unwrap();
+        assert_eq!(decoded, protocol);
+        assert_eq!(
+            decoded.data.reason.canonical_name(),
+            "incompatible_protocol"
+        );
+        assert_eq!(
+            decoded.to_string(),
+            "different protocol (protocol_incompatible)"
+        );
+    }
+
+    #[test]
+    fn a_callerless_tool_server_has_a_distinct_canonical_reason() {
+        let caller = Reason::CallerUnavailable;
+        assert_eq!(caller.canonical_name(), "caller_unavailable");
+        assert_eq!(caller.as_str(), "configuration_invalid");
+        let v2 = serde_json::to_value(caller).unwrap();
+        assert_eq!(v2, json!("configuration_invalid"));
+        // The old name describes invalid settings until the caller context is known.
+        assert_eq!(
+            serde_json::from_value::<Reason>(v2).unwrap(),
+            Reason::InvalidSettings
+        );
+        for (reason, name) in [
+            (Reason::Refused, "refused"),
+            (Reason::Upgrading, "upgrading"),
+            (Reason::NotFound, "not_found"),
+            (Reason::InvalidArgument, "invalid_argument"),
+        ] {
+            assert_eq!(reason.canonical_name(), name);
+            assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));
+        }
+    }
 
     #[test]
     fn server_messages_distinguish_notifications_and_responses() {

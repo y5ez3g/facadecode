@@ -99,7 +99,7 @@ fn an_answer_to_hello_this_build_cannot_read_is_another_protocol_s() {
         .unwrap_or_else(|| panic!("not a protocol's error: {err:#}"));
     assert_eq!(
         body.data.reason,
-        Reason::ProtocolIncompatible,
+        Reason::IncompatibleProtocol,
         "{}",
         body.message
     );

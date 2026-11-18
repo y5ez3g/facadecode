@@ -215,7 +215,7 @@ pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<()
         return Ok(());
     }
     let mut error = ErrorBody::new(
-        Reason::ProtocolIncompatible,
+        Reason::IncompatibleProtocol,
         format!(
             "Facade {} supports daemon protocol {:?}, but {} is running Facade {} with protocol {:?}. Install a build with protocol {} on {}.",
             local.build,
@@ -266,7 +266,7 @@ pub(super) async fn introduce(
             .map_err(|_| unexpected_output())?;
         let remote = hello.machine.ok_or_else(|| {
             ErrorBody::new(
-                Reason::ProtocolIncompatible,
+                Reason::IncompatibleProtocol,
                 "Expected a machine introduction.",
             )
         })?;

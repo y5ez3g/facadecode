@@ -477,7 +477,7 @@ fn another_protocol(result: &Value, problem: impl std::fmt::Display) -> ErrorBod
     let (build, protocol) = (said("build"), said("protocol"));
     let versions = format!("{MIN_DAEMON_PROTOCOL_VERSION}-{DAEMON_PROTOCOL_VERSION}");
     ErrorBody::new(
-        Reason::ProtocolIncompatible,
+        Reason::IncompatibleProtocol,
         format!(
             "the Facade daemon's answer to hello does not read as daemon protocol {versions} of \
              this client, {ours}: {problem}; the daemon says build {build} and protocol {protocol}; \

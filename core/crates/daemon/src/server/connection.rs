@@ -316,7 +316,7 @@ impl<S: Service> Connection<S> {
                  {MIN_DAEMON_PROTOCOL_VERSION}-{DAEMON_PROTOCOL_VERSION}; client supports \
                  {oldest}-{newest}; update Facade"
             );
-            let mut error = ErrorBody::new(Reason::ProtocolIncompatible, message);
+            let mut error = ErrorBody::new(Reason::IncompatibleProtocol, message);
             error.data.protocol = Some(ProtocolMismatch {
                 local_build,
                 local_protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
@@ -327,7 +327,7 @@ impl<S: Service> Connection<S> {
         }
         if hello.kind == ClientKind::Unknown {
             let message = "unsupported client kind; update Facade";
-            return Err(ErrorBody::new(Reason::ProtocolIncompatible, message));
+            return Err(ErrorBody::new(Reason::IncompatibleProtocol, message));
         }
         Ok(hello)
     }

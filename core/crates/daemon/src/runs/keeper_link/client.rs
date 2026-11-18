@@ -364,7 +364,7 @@ impl KeeperClient {
             .await
         {
             Ok((value, _)) => value,
-            Err(error) if error.body().data.reason == Reason::ProtocolIncompatible => {
+            Err(error) if error.body().data.reason == Reason::IncompatibleProtocol => {
                 facade_base::log::write(
                     "daemon",
                     "warn",

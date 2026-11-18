@@ -108,7 +108,7 @@ impl Keeper {
         let theirs = params.protocol;
         if shared_version(VERSIONS, theirs).is_none() {
             return Err(ErrorBody::new(
-                Reason::ProtocolIncompatible,
+                Reason::IncompatibleProtocol,
                 format!(
                     "the keeper speaks keeper protocol versions {}-{}; the daemon speaks {}-{}",
                     VERSIONS[0], VERSIONS[1], theirs[0], theirs[1]

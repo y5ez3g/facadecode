@@ -105,7 +105,7 @@ impl Lifecycle {
         let [low, high] = args.daemon_protocol;
         if !(low..=high).contains(&DAEMON_PROTOCOL_VERSION) {
             return Err(ErrorBody::new(
-                Reason::ProtocolIncompatible,
+                Reason::IncompatibleProtocol,
                 format!(
                     "{} speaks daemon protocol {low} to {high}, and this Facade, {ours}, speaks \
                      {DAEMON_PROTOCOL_VERSION}: stop the running Facade before switching builds",
@@ -121,7 +121,7 @@ impl Lifecycle {
         {
             let [low, high] = args.keeper_protocol;
             return Err(ErrorBody::new(
-                Reason::ProtocolIncompatible,
+                Reason::IncompatibleProtocol,
                 format!(
                     "{} speaks keeper protocol {low} to {high}, and the running keeper speaks {} \
                      to {}: this new build needs every agent closed first; close them and try \
