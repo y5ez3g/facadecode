@@ -11,12 +11,15 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 ## Keeps
 
-- Help, argument errors and `--version` need no daemon. `facade start` refuses words it cannot use before it reaches the daemon.
+- Help, argument errors, `--version`, `version` and `completion` need no daemon. `facade start` refuses an option it does not know before PROGRAM before it reaches the daemon, with exit code 2. `facade` alone prints the root help and exits 0.
+- `facade status` makes one connection attempt and never starts Facade or upgrades it.
 - Every other command that needs the daemon connects first. Where nothing responds, it starts a keeper, and the keeper starts the daemon. One attempt takes at most 10 seconds.
 - A command acts for the agent of its terminal: the agent that holds a CLI session its environment names, else `FACADE_AGENT`.
-- A build that reaches an older running Facade asks it to let this build take over, waits for a daemon of its own build, and says on one line how it went. A Facade that refuses, or serves on, is used as it is.
+- A build that reaches an older running Facade asks it to let this build take over, waits for a daemon of its own build, and says on one line how it went: a `note:` where it upgraded, a `warning:` where it goes on with the older build. A Facade that refuses, or serves on, is used as it is.
 - `facade hook …` only talks to a daemon that already runs, never starts Facade, and exits 0 whatever happens. That includes a hook line this build cannot parse.
 - A command whose output closes early, as `facade list | head` does, ends quietly: by SIGPIPE on macOS and Linux (`service::default_broken_pipe`), and on Windows through `print_or_end!`. The keeper and the daemon keep treating a closed peer as an error.
+- Data goes to standard output; everything for the reader alone goes to standard error. A failure the command knows the cause of prints the catalog's `error:` line and a `tip:` line with the next step; any other failure of the services prints the service's own words without the reason code. No command makes a call only to word an error.
+- Every word a person reads has one source: help in `cli.rs` and `help.rs`, errors in `errors.rs`, output in `commands`, the lines around an attachment in `attach`.
 
 ## Never does
 
@@ -26,7 +29,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 ## Interface
 
-**People and agents** use the commands: `start`, `stop`, `remove`, `list`, `attach`, `type`, `resume`, `inspect`, `send`, `messages`, `rename`, `screen`, `status` and `integration`. What each does is in [FEATURES.md](../FEATURES.md).
+**People and agents** use the commands, grouped in the root help as Agents (`start`, `list`, alias `ls`, `attach`, `stop`, `resume`, `remove`, alias `rm`, `rename`), Inspect and control (`inspect`, `screen`, `type`), Messages (`send`, `messages`) and Setup and info (`integration`, `status`, `version`, `completion`). Each command's help prints the same text for `-h`, `--help` and `facade help <command>`. IDs the command line writes itself are bare, as `a3`. What each does is in [FEATURES.md](../FEATURES.md).
 
 **CLIs** run `facade hook <event>` lines, which [rules](rules.md) writes into a run's settings and into an integration's entries. See [hooks](#hooks).
 
@@ -36,7 +39,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 **The daemon protocol** ([PROTOCOL.md](../../../core/protocol/PROTOCOL.md)): every command connects as a `terminal` client. It says `hello` with the agent it acts for and the CLI sessions its environment names. It calls `daemon.upgrade` to take over from an older build. The other operations are listed under each child island.
 
-**Exit codes:** 0 for success. 1 for a failure, with `facade: <error>` on standard error. 2 for a usage error, as clap reports it. A command that shows an agent exits with the agent's code, or 128 plus its signal, once the agent ends (see [attach](#attach)). A hook always exits 0.
+**Exit codes:** 0 for success, help included. 1 for a failure, with `error: …` on standard error, and for a command given several agents when any of them failed. 2 for a usage error. The hidden commands `hook`, `keeper` and `daemon` keep `facade: <error>`. A command that shows an agent exits with the agent's code, or 128 plus its signal, once the agent ends (see [attach](#attach)). A hook always exits 0.
 
 **Environment:**
 - `FACADE_HOME`: the home, read through [base](base.md).
@@ -49,16 +52,16 @@ The `facade` program: the terminal commands that people and agents run, the hook
 - [base](base.md): the daemon protocol's types, `DaemonClient` and the client's socket (`ClientSocket`); the person's console while attached (`console`); signal numbers (`unix_process::signal_number`); the service locks and starting services (`service`); installing the running build and pointing the launcher at it (`programs`); the home and socket paths; the log; build identity and `takes_over`.
 - [rules](rules.md): `SESSION_VARIABLES` and `session_variable`; the `hook` module; the session file, run folder, instructions and skill file names.
 - [keeper](keeper.md): `serve`. [daemon](daemon.md): `run`.
-- Third-party: anyhow, clap, crossterm, serde, serde_json, unicode-width.
+- Third-party: anyhow, clap (with `wrap_help`), clap_complete, crossterm, serde, serde_json, unicode-width.
 
 ## Inside
 
-The layer is `main.rs` and `daemon_client.rs`. `main.rs` parses the arguments and `run` hands each command to one child island. The children never call each other. They report back through return values.
+The layer is `main.rs`, `cli.rs`, `help.rs`, `errors.rs` and `daemon_client.rs`. `cli.rs` defines the commands and their arguments, builds the help from `help.rs` (the root page's groups, each page's description, alias and examples, with each example's words for the help tests) and writes completion scripts. `errors.rs` holds the error catalog: `Problem`, the classifiers `about_agent` and `about_send` that turn a service's refusal and the command's facts into a catalog row, and `report`, which prints any command's error. `main.rs` parses the arguments and `run` hands each command to one child island. The children never call each other. They report back through return values.
 
 ```mermaid
 flowchart LR
   run["main.rs run"] -->|"&mut DaemonClient"| commands
-  run -->|"client, agent ID, reconnect"| attach
+  run -->|"client, agent ID, opening, reconnect"| attach
   run -->|"event, agent, connect"| hooks
   run --> dc["daemon_client.rs"]
   commands -.->|"agent to show"| run
@@ -67,8 +70,10 @@ flowchart LR
 
 What `run` does for each kind of command:
 
-- **start, resume:** `commands::start_words` checks the words first (start only). If standard input and output are both terminals, `attach::terminal_size` gives the first frame's size. Then `run` connects and calls `commands::start` or `commands::resume`. If one returns an agent, `run` passes the same connection to `attach::attach`.
-- **attach:** connect, then `attach::attach(client, agent, &attempt)`.
+- **start, resume:** `cli::check_start` refuses an option before PROGRAM first (start only). If standard input and output are both terminals, `attach::terminal_size` gives the first frame's size. Then `run` connects and calls `commands::start` or `commands::resume`. If one returns an agent, `run` passes the same connection to `attach::attach`.
+- **attach:** without an interactive terminal it fails at once; else connect, then `attach::attach(client, agent, Opening::Attached, &attempt)`.
+- **status:** `daemon_client::probe` makes one attempt that neither starts nor upgrades Facade, then `commands::status` with the home and the reply, if any.
+- **stop, remove:** connect, then `commands::stop` or `remove` with every agent and `errors::report`, which they report each agent's failure through.
 - **messages:** `agent_of_terminal` finds the terminal's agent, or the command fails saying this is no agent's terminal. Then `run` connects as that agent and calls `commands::messages`.
 - **other commands:** connect, then the matching function in commands.
 - **hook:** `hooks::run(event, FACADE_AGENT, connect)`, where `connect` reaches a running daemon only, acting for `FACADE_AGENT`, and gives `None` after 2 seconds.
@@ -81,6 +86,8 @@ Shared with the children:
 - `Reconnect`: the type of the function attach reconnects with, `daemon_client::attempt`.
 - `print_or_end!` and `println_or_end!`: every print to standard output. A reader that went away, as `head` once it has its lines, ends the command quietly with code 0; on macOS and Linux SIGPIPE ends it first, and Windows, without SIGPIPE, fails the write instead.
 - `ExitText`: an agent's exit as a person reads it: `code 3`, the signal's name, or why neither is known. A code outside 0–255, as a Windows status, shows its 32 bits in hex: `code 0xC000013A`.
+- `Opening` and `Shown`: how an attachment began, and the agent `start` or `resume` began, for `attach`'s first line.
+- From `errors`: `Problem`, `about_agent`, `about_send` and `bare_id`.
 
 `daemon_client.rs` reaches the daemon:
 
@@ -93,22 +100,26 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 
 ### commands
 
-`src/commands.rs`: the terminal commands that ask the daemon something. Each one makes its protocol call on a connection the layer has already made, then prints the result for the person.
+`src/commands.rs`: the terminal commands that ask the daemon something. Each one makes its protocol call on a connection the layer has already made, then prints the result for the person. Every word it prints follows the command line's copy style: tables with uppercase headers and one row per agent, bare IDs such as `a3`, lowercase state words, relative times, and `-q` and `--json` where a command has them.
 
-- **Owns:** no lasting state. It owns the arguments each command sends and how it prints the result: aligned columns for `facade list`, one fact per line for `facade inspect`, or the protocol's JSON with `--json`. It also collects the environment that `agent.start`, `agent.resume` and the `integration.*` operations carry. Variables that are not UTF-8 are left out, and standard error names them.
+- **Owns:** no lasting state. It owns the arguments each command sends and how it prints the result: a table for `facade list` and `facade integration list`, IDs alone for `facade list -q`, aligned labels for `facade inspect` and `facade status`, or the protocol's JSON, pretty-printed, with `--json`. It also collects the environment that `agent.start`, `agent.resume` and the `integration.*` operations carry. Variables that are not UTF-8 are left out, and standard error names them.
 - **Keeps:**
   - It reaches the daemon only through the `DaemonClient` it is given.
-  - `facade start` takes its own options, `--name` and `--prompt`, only before the CLI's name. The CLI's name and every word after it belong to the CLI.
   - `agent.start` and `agent.send` carry a request ID. If a newer Facade cuts the call off when it takes over, the call is repeated, and the result says what was done.
-  - Without the person's terminal, `start` and `resume` print `#aN pid N` and return no agent. With it, they print on standard error how to detach and reconnect, and return the agent to show. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
-  - `resume` first warns when the earlier CLI may still be running, because its terminal closed while no Facade service held it.
-  - `send` fails, with exit code 1, when the message did not reach the recipient. A message that waits for a guest's next turn is not a failure.
+  - In the background (`-d`, or without the person's terminal), `start` and `resume` print the agent's bare ID and return no agent. Otherwise they return the agent to show and how it began, for attach's first line. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
+  - `resume` inspects the agent first: a guest, a running agent and a plain program fail with their catalog errors before `agent.resume`, and it warns when the earlier CLI may still be running because its terminal closed.
+  - `stop` and `remove` work through their agents in order, print each agent as given once it is done, report each one's failure through the reporter the layer gives them and go on; a failed connection ends the batch. They exit 1 if any failed.
+  - `status` reports on the reply the layer's probe got, or says Facade did not respond. It shows this command's version, and a service's build beside its PID where it differs.
+  - `send` fails, with exit code 1, when the message did not reach the recipient, or its delivery cannot be confirmed. A message that waits in a guest's inbox is not a failure.
+  - A service's refusal goes through `errors::about_agent` or `about_send`, so it prints as a catalog row where its facts identify one.
 - **Never does:** connect to or start the daemon; show an agent or change terminal modes; read hook input; work out which agent a terminal belongs to.
 - **Interface:** only `run` calls it. Every call blocks until the daemon responds.
-  - `start_words(Vec<String>) -> Result<StartWords>`, then `start(&mut DaemonClient, StartWords, Option<(u16, u16)>) -> Result<Option<String>>`. `resume(&mut DaemonClient, agent, Option<(u16, u16)>)` returns the same.
-  - `list` and `inspect` take a `Format` (`Text` or `Json`). `screen`, `type_input`, `send`, `messages`, `rename`, `stop` and `remove` take the command's words.
-  - `integration(&mut DaemonClient, IntegrationAction)`, where `IntegrationAction` is `Add { cli }`, `Remove { cli }` or `List`.
-  - `status(&DaemonClient)` prints the `hello` result: the build, the daemon's pid, the agent count and the keeper.
+  - `start(&mut DaemonClient, name, prompt, command, Option<(u16, u16)>) -> Result<Option<Shown>>`; `resume(&mut DaemonClient, agent, Option<(u16, u16)>)` returns the same.
+  - `list` takes a `Listing` (`Table`, `Quiet` or `Json`); `inspect`, `integration`, `status` and `version` take a `Format` (`Text` or `Json`). `screen`, `type_input`, `send`, `messages` and `rename` take the command's words.
+  - `stop` and `remove(&mut DaemonClient, agents, report) -> Result<i32>`.
+  - `integration(&mut DaemonClient, IntegrationAction, Format)`, where `IntegrationAction` is `Add { cli }`, `Remove { cli }` or `List`.
+  - `status(home, Option<&DaemonClient>, Format)` and `version(Format)`.
+  - Pure renderers that the tests call with a fixed current time: the table, relative times, the state, input-box, tools and part-state words, and each command's text.
   - Operations it calls: `agent.start`, `agent.resume`, `agent.inspect`, `agent.screen`, `agent.type`, `agent.send`, `agent.rename`, `agent.stop`, `agent.remove`, `integration.add`, `integration.remove` and `integration.list`. Topics it reads one snapshot of: `agents` and `messages`.
 
 ### attach
@@ -121,19 +132,21 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
   - The screen watch it opens on each connection.
   - Its threads. The caller's thread draws the screen and reconnects. One thread reads the person's keys and, on Windows, the console's size changes, through `facade_base::console::ConsoleReader`. One thread writes the queue as `agent.type` and `agent.resize` notifications, and never holds the queue's lock while it writes. One thread follows `facade_base::console::ConsoleSignals`: a size change (SIGWINCH) queues a resize; SIGTERM, SIGHUP, SIGINT and SIGQUIT restore the terminal and exit with 128 plus the signal's number. On Windows it has nothing to follow and ends at once.
 - **Keeps:**
-  - Every end restores the person's terminal exactly once, with the note after the restoration. The ends are a detach, the agent ending, its removal, a termination signal and an error. Once the terminal is restored, no more of the agent's output is written.
+  - Before the first redraw it writes one line to standard error: `Started a3 (Pixel).`, `Resumed a3 (Pixel).` or `Attached to a3.`, then `Press Ctrl-] to detach.`
+  - Every end restores the person's terminal exactly once, then writes the result to standard error: `Detached from a3. …`, `a3 exited with code 0.`, `a3 was ended by SIGKILL.`, `a3's terminal closed. …`, `error: a3 was removed`, `error: could not reconnect to Facade` with a tip, or `Attachment ended by SIGTERM.` The ends are a detach, the agent ending, its removal, a termination signal and an error. Once the terminal is restored, no more of the agent's output is written.
   - Ctrl-] detaches, in plain input, in the kitty encoding, and as a win32-input-mode key-down record of the character 0x1D (`CSI <vk>;<sc>;29;1;<cs>;<rc>_`). Keys before it in the same read are still sent, and it waits up to 1 second for them. Signals do not wait.
   - The agent's output goes to the person's console unchanged. On Windows the agent's console host turns win32-input-mode on and off; the person's console follows it, so keys arrive in either form, and go to the agent as they come. The restoration turns win32-input-mode off.
-  - While disconnected, at most 1 MiB of keys waits. Keys that do not fit are dropped, and the final note counts them with the keys still waiting.
+  - While disconnected, at most 1 MiB of keys waits. Keys that do not fit are dropped, and a last line, `warning: N bytes you typed were not sent`, counts them with the keys still waiting.
   - Keys handed to a connection are never sent again, even when the write fails.
   - On a takeover, the keys handed to the old connection are written before its response to `closing`.
   - It reconnects by the agent ID of the first snapshot, never by the name the person typed. Only the first watch includes scrollback.
-  - A connect timeout, or a failed resize or watch, is retried every 500 ms for as long as the attachment lasts. A permanent failure ends it ("could not reconnect to Facade; see <logs>"), and so does `not_found`, as a removed agent. Detaching cancels a reconnect in progress, `hello` included.
+  - A connect timeout, or a failed resize or watch, is retried every 500 ms for as long as the attachment lasts. While it reconnects, the bottom row reads `Reconnecting to Facade. Recent keys may be lost.` A permanent failure ends it, and so does `not_found`, as a removed agent. Detaching cancels a reconnect in progress, `hello` included.
   - The exit code is 0 after a detach, the agent's own code or 128 plus its signal after it ends, and 1 otherwise.
 - **Never does:** connect to the daemon on its own (it only uses the `reconnect` it is given); interpret the CLI's output beyond following the alternate screen.
 - **Interface:** only `run` calls it.
   - `terminal_size() -> Option<(u16, u16)>`: the person's terminal size, when both sides are nonzero.
-  - `attach(DaemonClient, agent: &str, reconnect: &Reconnect) -> Result<i32>`: blocks until the attachment ends and returns the command's exit code.
+  - `attach(DaemonClient, agent: &str, opening: Opening, reconnect: &Reconnect) -> Result<i32>`: blocks until the attachment ends and returns the command's exit code. A failure before the screen shows, such as a missing agent, goes through `errors::about_agent`.
+  - Pure renderers for the tests: `opening_line`, `result_line` and `unsent_line`.
   - Operations it calls: `agent.resize` before each watch of the `screen` topic; while attached, `agent.type` and `agent.resize` as notifications.
 
 ### hooks
