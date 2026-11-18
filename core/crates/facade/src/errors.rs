@@ -1,8 +1,12 @@
 //! What a failed command prints: the catalog of failures whose cause the command knows, and, for
 //! every other failure of Facade's services, the service's own words without its reason code.
+//! Also the words of the failures that make them up, of `machine serve`'s failures, and the line
+//! a command prints on taking over an older running Facade.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use facade_base::address::short_machine_id;
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -107,6 +111,10 @@ pub(crate) enum Problem {
         machine: String,
         destination: String,
     },
+    /// SSH exited cleanly before the machines connected; nothing says why, so no tip follows.
+    SshClosed { destination: String },
+    /// The daemon authorized a connection without naming its SSH destination.
+    NoSshDestination,
 }
 
 /// What `stop` or `remove` was asked to do to an agent on another machine.
@@ -302,6 +310,14 @@ impl Problem {
                 Some(format!(
                     "run 'facade machine connect {destination}' to connect again"
                 )),
+            ),
+            Problem::SshClosed { destination } => (
+                format!("SSH to {destination} closed before the machines connected"),
+                None,
+            ),
+            Problem::NoSshDestination => (
+                "the daemon did not supply the authorized SSH destination".into(),
+                None,
             ),
         }
     }
@@ -652,4 +668,142 @@ pub(crate) fn bare_id(given: &str) -> Option<String> {
     let digits = rest.strip_prefix('a').unwrap_or(rest);
     (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
         .then(|| format!("a{digits}"))
+}
+
+/// The context of a failure to start OpenSSH for `machine add` or `connect`.
+pub(crate) const NO_OPENSSH: &str = "could not start OpenSSH";
+
+/// Why SSH failed where it said nothing: its exit code, where it has one.
+pub(crate) fn ssh_exit(code: Option<i32>) -> String {
+    code.map_or_else(
+        || "SSH ended without an exit code".to_string(),
+        |code| format!("SSH exited with code {code}"),
+    )
+}
+
+/// Why `machine serve`, which SSH runs for another machine, stopped. Like the other hidden
+/// commands it prints after `facade: `; the connecting command passes it on to its reader.
+#[derive(Debug)]
+pub(crate) enum ServeFailure {
+    /// `--home` names no absolute path.
+    RelativeHome,
+    /// The first frame was not a machine hello.
+    NotMachineHello,
+    /// The daemon closed, or sent something other than a response, after the hello.
+    NoHelloAnswer,
+    /// The daemon's response does not answer the hello.
+    InvalidHelloAnswer,
+    /// The daemon accepted the hello without a machine session.
+    NoSession,
+    /// The daemon's socket refused the connection.
+    Socket { path: PathBuf, why: io::Error },
+}
+
+impl fmt::Display for ServeFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RelativeHome => f.write_str("the Facade home must be an absolute path"),
+            Self::NotMachineHello => {
+                f.write_str("machine serve requires a machine hello as its first frame")
+            }
+            Self::NoHelloAnswer => f.write_str("the daemon did not answer the machine hello"),
+            Self::InvalidHelloAnswer => {
+                f.write_str("the daemon returned an invalid machine hello response")
+            }
+            Self::NoSession => f.write_str("the daemon did not open a machine session"),
+            Self::Socket { path, why } => write!(f, "cannot connect to {}: {why}", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for ServeFailure {}
+
+/// The line `machine serve` prints where copying one way between SSH and the daemon failed.
+pub(crate) fn serve_copy_ended(to_daemon: bool, error: &io::Error) -> String {
+    let direction = if to_daemon {
+        "SSH input to daemon"
+    } else {
+        "daemon output to SSH"
+    };
+    format!(
+        "facade: machine serve {direction} ended with {:?} ({error})",
+        error.kind()
+    )
+}
+
+/// Why Facade could not be reached where the keeper exited before it reported: the last line of
+/// its log, where it logged one.
+pub(crate) fn keeper_exited(line: Option<&str>) -> String {
+    match line {
+        Some(line) => format!("the Facade keeper exited before it started, saying: {line}"),
+        None => "the Facade keeper exited before it started and logged nothing".to_string(),
+    }
+}
+
+/// Why Facade could not be reached in `seconds`: a daemon that runs but is not ready, or none.
+pub(crate) fn daemon_slow(daemon_runs: bool, seconds: u64) -> String {
+    if daemon_runs {
+        "Facade is still starting".to_string()
+    } else {
+        format!("the Facade daemon did not start within {seconds} seconds")
+    }
+}
+
+/// `why`, with the log that says more, as `facade daemon --detach` prints it.
+pub(crate) fn see_log(why: &str, log: &Path) -> String {
+    format!("{why}; see {}", log.display())
+}
+
+/// The context of a takeover after which this build's daemon did not answer in `seconds`.
+pub(crate) fn takeover_silent(ours: &str, seconds: u64) -> String {
+    format!("Facade {ours} did not answer within {seconds} seconds of taking over")
+}
+
+/// The line a command prints where the running Facade `theirs` refused to let this build take
+/// over. `hidden` is `facade daemon --detach`'s line for a program's log.
+pub(crate) fn takeover_refused(
+    ours: &str,
+    theirs: &str,
+    error: &anyhow::Error,
+    hidden: bool,
+) -> String {
+    if hidden {
+        return format!("facade: Facade {ours} could not take over from {theirs}: {error:#}");
+    }
+    format!(
+        "warning: could not upgrade running Facade {theirs}: {}; continuing with {theirs}",
+        cause(error)
+    )
+}
+
+/// The line a command prints where this build took over from `from`; `agents` says how many
+/// agents kept running.
+pub(crate) fn took_over(
+    ours: &str,
+    from: &str,
+    agents: &str,
+    took: Duration,
+    hidden: bool,
+) -> String {
+    if hidden {
+        return format!(
+            "facade: Facade {ours} took over from {from}; {agents} kept running ({:.1} s)",
+            took.as_secs_f64()
+        );
+    }
+    format!("note: upgraded running Facade {from} to {ours}; {agents} kept running")
+}
+
+/// The line a command prints where the running Facade `theirs` answered again after a takeover
+/// began: it runs on, and the logs say why.
+pub(crate) fn older_runs_on(ours: &str, theirs: &str, logs: &str, hidden: bool) -> String {
+    if hidden {
+        return format!(
+            "facade: Facade {ours} could not take over from {theirs}, which runs on; see {logs}"
+        );
+    }
+    format!(
+        "warning: could not upgrade running Facade {theirs}: check '{logs}' for details; \
+         continuing with {theirs}"
+    )
 }

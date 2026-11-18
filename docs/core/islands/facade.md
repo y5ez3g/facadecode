@@ -20,7 +20,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 - `facade hook …` only talks to a daemon that already runs, never starts Facade, and exits 0 whatever happens. That includes a hook line this build cannot parse.
 - A command whose output closes early, as `facade list | head` does, ends quietly: by SIGPIPE on macOS and Linux (`service::default_broken_pipe`), and on Windows through `print_or_end!`. The keeper and the daemon keep treating a closed peer as an error.
 - Data goes to standard output; everything for the reader alone goes to standard error. A failure the command knows the cause of prints the catalog's `error:` line and a `tip:` line with the next step; any other failure of the services prints the service's own words without the reason code. No command makes a call only to word an error.
-- Every word a person reads has one source: help in `cli.rs` and `help.rs`, errors in `errors.rs`, output in `commands`, the lines around an attachment in `attach`.
+- Every word a person reads has one source: help in `cli.rs` and `help.rs`, errors and the lines on taking over an older Facade in `errors.rs`, output in `commands` and `machine`, the lines around an attachment in `attach`.
 
 ## Never does
 

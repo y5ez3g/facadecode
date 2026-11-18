@@ -25,7 +25,7 @@ use facade_base::ssh::{self, SshMode};
 
 use crate::cli::{MachineAction, ServeArgs, SshTarget};
 use crate::commands::table;
-use crate::errors::{Problem, about_connection, about_machine, repair_tip};
+use crate::errors::{self, Problem, ServeFailure, about_connection, about_machine, repair_tip};
 
 impl ServeArgs {
     fn home(self) -> anyhow::Result<Option<PathBuf>> {
@@ -36,7 +36,7 @@ impl ServeArgs {
         if let Some(path) = &home {
             anyhow::ensure!(
                 path.is_absolute() && !path.as_os_str().as_encoded_bytes().contains(&0),
-                "the Facade home must be an absolute path"
+                ServeFailure::RelativeHome
             );
         }
         Ok(home)
@@ -102,14 +102,14 @@ pub(crate) fn run(
 
 /// Reads the exact first frame and checks that it selects the daemon's machine protocol.
 fn read_machine_hello(input: &mut impl BufRead) -> anyhow::Result<(u64, Vec<u8>)> {
-    const EXPECTED: &str = "machine serve requires a machine hello as its first frame";
+    const EXPECTED: ServeFailure = ServeFailure::NotMachineHello;
     let mut first = Vec::new();
     let request = match read_request(input, &mut first)? {
         RequestRead::Request(request) => request,
         RequestRead::Malformed(error) | RequestRead::LineTooLong(error) => {
             return Err(anyhow::Error::new(error).context(EXPECTED));
         }
-        RequestRead::Eof => anyhow::bail!("{EXPECTED}"),
+        RequestRead::Eof => anyhow::bail!(EXPECTED),
     };
     // The daemon dispatches a hello with a relay field to the MCP relay before it checks kind.
     anyhow::ensure!(
@@ -117,7 +117,7 @@ fn read_machine_hello(input: &mut impl BufRead) -> anyhow::Result<(u64, Vec<u8>)
             && request.jsonrpc == "2.0"
             && request.method == methods::HELLO
             && request.params.get("relay").is_none(),
-        "{EXPECTED}"
+        EXPECTED
     );
     let id = request.id.context(EXPECTED)?;
     let hello: HelloParams = decode_arguments(request.params).context(EXPECTED)?;
@@ -128,7 +128,7 @@ fn read_machine_hello(input: &mut impl BufRead) -> anyhow::Result<(u64, Vec<u8>)
             && hello.sessions.is_empty()
             && hello.window.is_none()
             && hello.numbers_given.is_none(),
-        "{EXPECTED}"
+        EXPECTED
     );
     Ok((id, first))
 }
@@ -144,19 +144,16 @@ fn serve_stdio(
     let Some(ServerMessage::Response(response)) =
         read_server_message(&mut from_daemon, &mut reply)?
     else {
-        anyhow::bail!("the daemon did not answer the machine hello");
+        anyhow::bail!(ServeFailure::NoHelloAnswer);
     };
     anyhow::ensure!(
         reply.ends_with(b"\n") && response.jsonrpc == "2.0" && response.id == Some(id),
-        "the daemon returned an invalid machine hello response"
+        ServeFailure::InvalidHelloAnswer
     );
     let accepted = response.error.is_none();
     if accepted {
         let hello: HelloResult = decode_arguments(response.result.unwrap_or_default())?;
-        anyhow::ensure!(
-            hello.machine.is_some(),
-            "the daemon did not open a machine session"
-        );
+        anyhow::ensure!(hello.machine.is_some(), ServeFailure::NoSession);
     }
     let mut stdout = io::stdout().lock();
     stdout.write_all(&reply)?;
@@ -166,21 +163,18 @@ fn serve_stdio(
     }
 
     let input_result = copy_to_daemon(socket.try_clone()?, move |to_daemon| {
-        copy_serve(input, to_daemon, "SSH input to daemon")
+        copy_serve(input, to_daemon, true)
     });
-    let result = copy_serve(from_daemon, stdout, "daemon output to SSH");
+    let result = copy_serve(from_daemon, stdout, false);
     let _ = socket.shutdown(Shutdown::Both);
     let input_failed = input_result.try_recv().is_ok_and(|result| result.is_err());
     Ok(i32::from(result.is_err() || input_failed))
 }
 
-fn copy_serve(source: impl BufRead, destination: impl Write, direction: &str) -> io::Result<()> {
+fn copy_serve(source: impl BufRead, destination: impl Write, to_daemon: bool) -> io::Result<()> {
     let result = copy_stream(source, destination);
     if let Err(error) = &result {
-        eprintln!(
-            "facade: machine serve {direction} ended with {:?} ({error})",
-            error.kind()
-        );
+        eprintln!("{}", errors::serve_copy_ended(to_daemon, error));
     }
     result
 }
@@ -244,7 +238,7 @@ fn foreground(
         .map_err(|error| about_connection(&given, error))?;
     let destination = authorized
         .ssh_destination
-        .context("the daemon did not supply the authorized SSH destination")?;
+        .ok_or(Problem::NoSshDestination)?;
     let control_dir = if save {
         ssh::ssh_control_dir(&facade_base::paths::facade_home()?)?
     } else {
@@ -260,8 +254,7 @@ fn foreground(
     let connection = to_daemon.try_clone()?;
     let mut command = Command::new("ssh");
     command.args(words).stderr(Stdio::piped());
-    let (mut child, mut to_ssh, from_ssh) =
-        spawn_ssh(command).context("could not start OpenSSH")?;
+    let (mut child, mut to_ssh, from_ssh) = spawn_ssh(command).context(errors::NO_OPENSSH)?;
     let ssh_said = pass_on_stderr(child.stderr.take());
     let input_result = copy_to_daemon(to_daemon, move |socket| {
         copy_stream(BufReader::new(from_ssh), socket)
@@ -321,15 +314,12 @@ fn foreground(
         .into()),
         ForegroundEnd::BeforeHandshake => match status.code() {
             Some(127 | 9009) => Err(Problem::NoFacade { destination }.into()),
-            Some(0) => anyhow::bail!("SSH to {destination} closed before the machines connected"),
+            Some(0) => Err(Problem::SshClosed { destination }.into()),
             code => {
                 let said = ssh_said.join().unwrap_or_default();
                 let why = match said.is_empty() {
                     false => said,
-                    true => code.map_or_else(
-                        || "SSH ended without an exit code".to_string(),
-                        |code| format!("SSH exited with code {code}"),
-                    ),
+                    true => errors::ssh_exit(code),
                 };
                 Err(Problem::SshFailed { destination, why }.into())
             }

@@ -14,7 +14,7 @@ use facade_base::keeper::{KEEPER_PROTOCOL_VERSION, MIN_KEEPER_PROTOCOL_VERSION};
 use facade_base::paths::ClientSocket;
 use facade_base::service::{self, Candidate, Report, Service};
 
-use crate::errors::Problem;
+use crate::errors::{self, Problem, ServeFailure};
 
 /// The wait for the initial connection, including time to start the daemon.
 const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -139,7 +139,7 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
     let error = anyhow::Error::from(failure);
     let (why, log) = match error.downcast_ref::<Unstarted>() {
         Some(unstarted) => (unstarted.why.clone(), Some(unstarted.log.clone())),
-        None => (crate::errors::cause(&error), None),
+        None => (errors::cause(&error), None),
     };
     Problem::Unreachable { why, log }.into()
 }
@@ -158,7 +158,7 @@ pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
 /// or no shared protocol version, as the catalog row.
 fn explicit(error: anyhow::Error) -> anyhow::Error {
     Problem::Unreachable {
-        why: crate::errors::cause(&error),
+        why: errors::cause(&error),
         log: None,
     }
     .into()
@@ -253,14 +253,9 @@ fn ask_to_take_over(
         Ok(handed) => Ok(Some((asked, handed))),
         Err(error) => {
             let theirs = &client.hello_result.build;
-            if notes == Notes::Hidden {
-                eprintln!("facade: Facade {ours} could not take over from {theirs}: {error:#}");
-                return Ok(None);
-            }
-            let why = crate::errors::cause(&error);
             eprintln!(
-                "warning: could not upgrade running Facade {theirs}: {why}; continuing with \
-                 {theirs}"
+                "{}",
+                errors::takeover_refused(ours, theirs, &error, notes == Notes::Hidden)
             );
             Ok(None)
         }
@@ -278,44 +273,34 @@ fn follow_takeover(
     let timeout = takeover_timeout();
     match connect(timeout) {
         Ok(client) if client.hello_result.build == ours => {
-            if notes == Notes::Hidden {
-                eprintln!(
-                    "facade: Facade {ours} took over from {}; {} kept running ({:.1} s)",
-                    handed.from,
-                    facade_base::daemon::agents_word(handed.agents),
-                    asked.elapsed().as_secs_f64()
-                );
-                return Ok(client);
-            }
             eprintln!(
-                "note: upgraded running Facade {} to {ours}; {} kept running",
-                handed.from,
-                facade_base::daemon::agents_word(handed.agents),
+                "{}",
+                errors::took_over(
+                    ours,
+                    &handed.from,
+                    &facade_base::daemon::agents_word(handed.agents),
+                    asked.elapsed(),
+                    notes == Notes::Hidden,
+                )
             );
             Ok(client)
         }
         Ok(client) => {
             let theirs = &client.hello_result.build;
             let logs = logs_folder().map(|logs| logs.display().to_string());
-            if notes == Notes::Hidden {
-                eprintln!(
-                    "facade: Facade {ours} could not take over from {theirs}, which runs on; see {}",
-                    logs.unwrap_or_default()
-                );
-                return Ok(client);
-            }
             eprintln!(
-                "warning: could not upgrade running Facade {theirs}: check '{}' for details; \
-                 continuing with {theirs}",
-                logs.unwrap_or_default()
+                "{}",
+                errors::older_runs_on(
+                    ours,
+                    theirs,
+                    &logs.unwrap_or_default(),
+                    notes == Notes::Hidden,
+                )
             );
             Ok(client)
         }
         Err(ConnectFailure::Timeout(error)) => {
-            let error = error.context(format!(
-                "Facade {ours} did not answer within {} seconds of taking over",
-                timeout.as_secs()
-            ));
+            let error = error.context(errors::takeover_silent(ours, timeout.as_secs()));
             Err(ConnectFailure::Timeout(error))
         }
         Err(failure) => Err(failure),
@@ -391,17 +376,9 @@ fn silent_keeper(logs: &Path) -> Unstarted {
         let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
         Some(line.trim().to_string())
     });
-    let (why, seen) = match last {
-        Some(line) => (
-            format!("the Facade keeper exited before it started, saying: {line}"),
-            log.clone(),
-        ),
-        None => (
-            "the Facade keeper exited before it started and logged nothing".to_string(),
-            logs.to_path_buf(),
-        ),
-    };
-    let hidden = format!("{why}; see {}", seen.display());
+    let why = errors::keeper_exited(last.as_deref());
+    let seen = if last.is_some() { log.as_path() } else { logs };
+    let hidden = errors::see_log(&why, seen);
     Unstarted { why, log, hidden }
 }
 
@@ -436,7 +413,11 @@ pub(super) fn machine_socket() -> anyhow::Result<ClientSocket> {
         |socket, _| match ClientSocket::connect(socket) {
             Ok(client) => Ok(Some(client)),
             Err(error) if transient_transport(&error) => Ok(None),
-            Err(error) => anyhow::bail!("cannot connect to {}: {error}", socket.display()),
+            Err(why) => Err(ServeFailure::Socket {
+                path: socket.to_path_buf(),
+                why,
+            }
+            .into()),
         },
     )?)
 }
@@ -471,15 +452,8 @@ fn reach_daemon<T>(
             keeper.start().map_err(permanent)?;
         }
         if Instant::now() >= deadline {
-            let why = if daemon_runs {
-                "Facade is still starting".to_string()
-            } else {
-                format!(
-                    "the Facade daemon did not start within {} seconds",
-                    timeout.as_secs()
-                )
-            };
-            let hidden = format!("{why}; see {}", logs.display());
+            let why = errors::daemon_slow(daemon_runs, timeout.as_secs());
+            let hidden = errors::see_log(&why, &logs);
             let log = logs.join("daemon.log");
             return Err(ConnectFailure::Timeout(
                 Unstarted { why, log, hidden }.into(),
