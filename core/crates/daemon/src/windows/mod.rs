@@ -249,24 +249,14 @@ impl Windows {
         }
     }
 
-    /// Restores saved logical windows before clients connect. The store reclaims workspace-less
-    /// windows with no saved agent references.
-    pub(crate) fn restore(
-        &self,
-        delete_empty: impl Fn(&WindowRef) -> anyhow::Result<bool>,
-    ) -> Result<(), ErrorBody> {
+    /// Restores every saved logical window before clients connect.
+    pub(crate) fn restore(&self) -> Result<(), ErrorBody> {
         let rows = blocking_in_place(|| self.shared.table.logical_windows())
             .map_err(ErrorBody::internal)?;
         let mut state = Registry::default();
         for row in rows {
             let binding = self.shared.first_binding(&row.window_id);
             state.last_sequence = state.last_sequence.max(row.sequence);
-            if row.description.workspace.is_none()
-                && blocking_in_place(|| delete_empty(&binding.window))
-                    .map_err(ErrorBody::internal)?
-            {
-                continue;
-            }
             state.windows.insert(
                 row.window_id,
                 Window::new(binding, row.sequence, row.description),
@@ -675,6 +665,20 @@ impl Windows {
             .description
             .colors
             .clone()
+    }
+
+    /// Reads colors for a current connection and distinguishes an unset palette from a stale binding.
+    pub(crate) fn colors_for_binding(
+        &self,
+        binding: &WindowBinding,
+    ) -> Result<Option<TerminalColors>, ErrorBody> {
+        let state = self.shared.state.lock().unwrap();
+        let window = state
+            .windows
+            .get(&binding.window.window_id)
+            .filter(|window| window.is_current(binding))
+            .ok_or_else(|| stale_connection(binding))?;
+        Ok(window.description.colors.clone())
     }
 
     /// The environment window `id` last described, kept only in memory.

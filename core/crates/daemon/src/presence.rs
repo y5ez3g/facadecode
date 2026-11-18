@@ -348,8 +348,7 @@ impl Daemon {
 
     /// Restores the logical windows before accepting clients.
     pub(crate) fn restore_windows(&self) -> Result<(), ErrorBody> {
-        self.windows
-            .restore(|window| self.store.delete_empty_window(window))
+        self.windows.restore()
     }
 }
 
