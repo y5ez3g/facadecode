@@ -11,10 +11,11 @@ import {
 	AGENTS_ROUTE_COMMAND, Allocation, Directory, isDirectoryAgent, isRouteRequest, PublishStatus, RouteResponse, ServedRoute, WINDOW_ALLOCATE_COMMAND,
 	WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND, WORKSPACE_REPUBLISH_COMMAND
 } from '../base/windowNetwork';
-import { facadeHome } from '../record/paths';
+import { facadeHome, facadeRoot } from '../record/paths';
 import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
 import { editorEnvironment } from './editorEnvironment';
 import { homeRecordOf, homeReloadText, rememberHome, UnusableHome, useFacadeHome, useRememberedHome } from './home';
+import { startRemoteSshMachine } from './remoteSsh';
 import { NotServed, WindowNetwork } from './windowNetwork';
 import { WindowTerminals } from './windowTerminals';
 
@@ -36,7 +37,9 @@ async function serveHere(request: ServedRoute): Promise<unknown> {
 	}
 }
 
-/** The local component has no exported API and no process ownership; its public command serves this window alone. */
+let remoteSsh: ReturnType<typeof startRemoteSshMachine> | undefined;
+
+/** The local component's commands and temporary machine link serve this window alone. */
 export function activate(context: vscode.ExtensionContext): void {
 	// The Facade home first, before the window registry reads it (ARCHITECTURE-3.1): this computer's. A local window's workspace
 	// extension shares this process, sets the same and says what is wrong with it; this component writes it down, now and as it changes.
@@ -132,4 +135,14 @@ export function activate(context: vscode.ExtensionContext): void {
 		const remote = vscode.env.remoteName === undefined ? undefined : vscode.workspace.workspaceFolders?.[0]?.uri.authority || vscode.workspace.workspaceFile?.authority;
 		return { version: 1, token, session: vscode.env.sessionId, ...(remote ? { remote } : {}), component: String(context.extension.packageJSON.version) };
 	}));
+	if (vscode.env.remoteName === 'ssh-remote') {
+		remoteSsh = startRemoteSshMachine(context, facadeRoot(), vscode.env.sessionId, token);
+		context.subscriptions.push(remoteSsh);
+	}
+}
+
+export function deactivate(): Promise<void> | undefined {
+	const closing = remoteSsh?.close();
+	remoteSsh = undefined;
+	return closing;
 }

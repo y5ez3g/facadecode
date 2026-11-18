@@ -55,7 +55,7 @@ import { namesOf, WAIT_SECONDS, yoloOf } from './settings';
 import { FacadeSettings } from './facadeSettings';
 import { homeReloadText, UnusableHome, unusableHomeText, useFacadeHome } from './home';
 import { migratedText, notMadeText } from './settingsNotice';
-import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
+import { serveRemoteSshMachine, showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch, watchSettingsFile } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
@@ -169,9 +169,11 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const automaticEngine = rustEngineSetting() === 'auto';
 	let switchable = automaticEngine && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
 	if (await chooseEngine(context, home) === 'rust') {
+		const root = facadeRoot();
+		let detachRust: (() => Promise<void>) | undefined;
 		try {
-			return await activateRust(context, {
-				root: facadeRoot(), home, identity,
+			detachRust = await activateRust(context, {
+				root, home, identity,
 				keep: log => {
 					const opened = openWorkspaceRecord(context, home, identity);
 					return {
@@ -190,6 +192,22 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			// A core that cannot run here - WSL 1, a container that forbids process descriptors - leaves this window on the old engine
 			void vscode.commands.executeCommand('setContext', 'facade.engine', 'old');
 			void vscode.window.showWarningMessage(vscode.l10n.t("Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.", messageOf(err), 'facade.rustEngine'));
+		}
+		if (detachRust) {
+			if (vscode.env.remoteName !== 'ssh-remote') {
+				return detachRust;
+			}
+			let bridge: vscode.Disposable;
+			try {
+				bridge = serveRemoteSshMachine(context, identity, root);
+			} catch (err) {
+				console.error(`Could not register the Facade Remote-SSH machine bridge: ${messageOf(err)}`);
+				return detachRust;
+			}
+			return async () => {
+				bridge.dispose();
+				await detachRust();
+			};
 		}
 	}
 	facadeInTerminals(context.environmentVariableCollection, undefined);
