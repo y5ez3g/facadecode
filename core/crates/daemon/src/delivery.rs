@@ -256,7 +256,7 @@ impl Daemon {
             from_window: from_info
                 .map(|info| info.window_id)
                 .filter(|window| *window != to_window)
-                .map(|window| self.windows.label(&window)),
+                .map(|window| self.windows.label_v1(&window)),
             ..pending_message(sender, to.id(), args.text, reply_to, deadline)
         };
         if !to.is_guest() {
@@ -509,7 +509,7 @@ impl Daemon {
                 format!(
                     "no editor shows #{}'s window, {}, now: the person cannot be told",
                     from.id(),
-                    self.windows.label(&info.window_id)
+                    self.windows.label_v1(&info.window_id)
                 ),
             ));
         }

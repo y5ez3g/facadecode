@@ -229,7 +229,7 @@ impl Daemon {
         }
         if let Some(read) = self
             .windows
-            .read_locations(&description.id, Some(before))
+            .read_locations_v1(&description.id, Some(before))
             .await
         {
             self.stop_gone(&description.id, &read);
@@ -240,7 +240,7 @@ impl Daemon {
     /// The colors window `id`'s terminals draw with, which its agents reply to color queries with.
     pub(crate) fn window_colors(&self, id: &str) -> facade_screen::TerminalColors {
         self.windows
-            .colors(id)
+            .colors_v1(id)
             .and_then(|colors| terminal_colors(&colors).ok())
             .unwrap_or_default()
     }
@@ -335,7 +335,7 @@ impl Daemon {
             .map(|info| info.window_id.clone())
             .collect();
         let agents: Vec<String> = infos.into_iter().map(|info| info.window_id).collect();
-        self.windows.restore(&running, &agents);
+        self.windows.restore_v1(&running, &agents);
     }
 }
 
@@ -344,14 +344,11 @@ pub(crate) async fn follow_windows(
     daemon: Arc<Daemon>,
     mut events: mpsc::UnboundedReceiver<WindowEvent>,
 ) {
-    while let Some(WindowEvent::Left {
-        window_id,
-        departure,
-    }) = events.recv().await
-    {
-        if daemon.running_in(&window_id).is_empty() {
-            let has_agents = daemon.window_holds_agents(&window_id);
-            daemon.windows.remove(&window_id, departure, has_agents);
+    while let Some(WindowEvent::Left { binding, departure }) = events.recv().await {
+        let window_id = &binding.window.window_id;
+        if daemon.running_in(window_id).is_empty() {
+            let has_agents = daemon.window_holds_agents(window_id);
+            daemon.windows.remove(window_id, departure, has_agents);
         }
     }
 }

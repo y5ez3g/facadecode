@@ -360,7 +360,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         lifecycle: Lifecycle::new(),
         starting: Mutex::default(),
         screens: Screens::new(core.join("screens")),
-        windows: Windows::new(store.window_table(), window_events),
+        windows: Windows::new(String::new(), store.window_table(), window_events),
         guests: Guests::new(
             store.guest_table(),
             store.integration_table(),

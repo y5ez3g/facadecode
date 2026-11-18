@@ -220,7 +220,7 @@ impl Daemon {
         // Subscribed before the window counts as one that can tell the person.
         let mut following = self.messages.subscribe();
         if let Some(window) = window.as_deref() {
-            let person = self.windows.watch_person(window);
+            let person = self.windows.watch_person_v1(window, viewer);
             self.watch_ends
                 .lock()
                 .unwrap()

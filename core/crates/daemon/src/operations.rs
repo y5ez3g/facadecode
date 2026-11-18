@@ -358,7 +358,7 @@ impl Daemon {
             .window_id
             .take()
             .unwrap_or_else(|| TERMINAL_WINDOW.to_string());
-        let destination = self.windows.check_destination(&window, &args.cwd)?;
+        let destination = self.windows.check_destination_v1(&window, &args.cwd)?;
         args.cwd = destination.cwd;
         let location = destination.location_id;
         configured.find_program(&args.cwd)?;
@@ -381,7 +381,7 @@ impl Daemon {
             return Err(error);
         }
         let creator_name = sender.from_name.as_deref();
-        let label = self.windows.label(&window);
+        let label = self.windows.label_v1(&window);
         let request = RunRequest {
             id: &id,
             rule,
@@ -834,7 +834,7 @@ impl Daemon {
             .window_id
             .clone()
             .unwrap_or_else(|| TERMINAL_WINDOW.to_string());
-        self.windows.check_destination(&window, &info.cwd)?;
+        self.windows.check_destination_v1(&window, &info.cwd)?;
         // A resume is a new launch: YOLO and the entry come from the settings file as it is now,
         // the entry of the same kind as the agent ran (RULES-4.2, CONFIGURATION-3.4).
         let settings = command_line::read_settings()?;
@@ -845,7 +845,7 @@ impl Daemon {
             .as_deref()
             .and_then(|creator| self.get_agent(creator))
             .map(|creator| creator.info().name);
-        let label = self.windows.label(&window);
+        let label = self.windows.label_v1(&window);
         let request = RunRequest {
             id: &id,
             rule: Some(rule),
