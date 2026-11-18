@@ -35,6 +35,15 @@ export interface TerminalNotificationArgs {
 	readonly 'agent.resize': ResizeArgs;
 }
 
+export interface WatchListener<S, C> {
+	snapshot(snapshot: S): void;
+	change(change: C): void;
+	/** This watch is installed again on the next local connection. */
+	disconnected?(): void;
+	/** Core refused or ended the watch. Its next snapshot needs a new watch. */
+	ended?(error: DaemonError): void;
+}
+
 /** This window's connection to core, kept across core's restarts and handovers to a newer build. */
 export interface DaemonLink {
 	/** Runs `op` for the current window binding. A call refused as `upgrading` can retry for that binding on the next connection. */
@@ -42,7 +51,7 @@ export interface DaemonLink {
 	/** Sends `op` without a response: what the person types, and a terminal's size. Dropped while disconnected. */
 	notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]): void;
 	/** Follows `topic`: its snapshot, then its changes; a snapshot again after each reconnection, before its changes. */
-	watch<S, C>(topic: Topic, args: object, on: { snapshot(snapshot: S): void; change(change: C): void }): Disposable;
+	watch<S, C>(topic: Topic, args: object, on: WatchListener<S, C>): Disposable;
 	/** Describes the window again (`window.update`); the next `hello` describes it so too. */
 	update(window: WindowDescription): Promise<void>;
 	/** The machine of the last verified binding. */
@@ -63,7 +72,9 @@ export interface RustTerminals extends Pick<ExecutionPort, 'openPair' | 'note' |
 	| 'tabLabel' | 'pinTab' | 'spin' | 'hideTab' | 'openPinned' | 'pinnedOpened' | 'onDidActivate' | 'onDidClosePair' | 'onDidRenameTab'
 	| 'onDidPinTab' | 'onDidPlaceTab'> {
 	/** The run's terminal shows core's agent `agent` from now on. */
-	bind(run: RunId, agent: string): void;
+	bind(run: RunId, agent: string, remote?: { readonly reachable: boolean }): void;
+	/** A remote tab pauses input until a fresh snapshot from the running machine arrives. */
+	setReachable(run: RunId, reachable: boolean): void;
 	/** The run's agent ended: its terminal says so in `text`. */
 	exited(run: RunId, text: string): void;
 	/** The system's reduced-motion preference, as the panel's page says it (LIFECYCLE-2.2). */

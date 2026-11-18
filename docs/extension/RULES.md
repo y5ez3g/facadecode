@@ -233,7 +233,8 @@ no agent workflow or general-purpose scheduler is added.
 **A window's connected scope and its execution environment have separate identities.**
 
 On the Rust engine, the core that serves a Facade home gives it one machine ID. A window's local machine is the core it
-connects to, including from a remote execution environment. On the old engine, the window components route between
+connects to, including from a remote execution environment. Connected Rust machines can reach each other's agents under
+4.3. On the old engine, the window components route between
 one user's windows on one client computer, including their local and remote execution environments.
 Each workspace runtime owns paths, CLI accounts, Git and process execution in its environment. Interpret a path in its
 owning environment. An open window with no folder can be discovered with an empty location catalog. Distinguish a known
@@ -255,6 +256,7 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | Conversation key | Execution environment, CLI and exact vendor session ID |
 | Pin | Saved intent to restore an exact conversation. A Rust Pin identifies the original agent on its machine (4.2). |
 | Agent ID | One agent from start until removal, unique on its Rust machine or across its old-engine client network and never reassigned there |
+| Agent reference | The Rust running machine ID and agent ID identify one record across the network |
 | Agent alias `#aN` | The agent's short reference, numbered by its Rust machine or the old-engine client network |
 | Run | One start or Resume of the agent's CLI, until that CLI ends |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
@@ -272,7 +274,7 @@ issuance or anti-impersonation system is required.
 **Use an exact ID, or a name that identifies one eligible agent; an ambiguous name requires an ID.**
 
 Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. Rust
-resolves against the machine's records, counting each agent once across its member windows. On the old engine an exact
+uses the full running-machine reference for a record and counts it once across its member windows. On the old engine an exact
 ID of an agent in the caller's window needs no other window, and a name resolves among agents of every window. While
 an old-engine window cannot be listed, only the exact ID of a listed agent can resolve. Once resolved, the operation
 stays with that target through rename. An optional display name accompanying an ID is descriptive. Return the error
@@ -438,7 +440,8 @@ hidden any other way preserve Pin. Unpin alone does not stop. Manual Resume does
 unpinned conversation. If the exact conversation already runs in Facade, a second agent does not launch it.
 Facade does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
 
-On the Rust engine, each workspace's Pin stores the original machine ID and agent number. A session-only Pin remains
+On the Rust engine, each workspace's Pin stores the original machine ID and agent number. A window can pin agents
+running on its own Facade machine. A session-only Pin remains
 available to the old engine or can be replaced by pinning the original agent explicitly. With `facade.rustEngine` set
 to `auto`, a window using the old engine skips Pins identified by machine ID and agent number. Explicit `off` uses the
 old-engine Pin rules.
@@ -470,7 +473,7 @@ background, and their tabs then open in front by LIFECYCLE-3.5's tab procedure.
 
 The tree includes ancestors, descendants, siblings and other branches under the same root. Unrelated roots are outside
 normal non-YOLO reach. The caller's own run YOLO decides reach. Membership controls presentation. In the Rust engine the
-person can reach agents on the current machine, including when their window is disconnected.
+person can reach agents on connected Facade machines, including when an agent's window is disconnected.
 
 Every launch reads `yolo` from the destination execution environment's current Facade settings file (default true)
 when accepted and keeps that value for the run. This includes human starts, agent-created children, Resume and Pin

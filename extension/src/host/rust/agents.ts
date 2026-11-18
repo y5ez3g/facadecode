@@ -10,7 +10,7 @@ import { messageOf } from '../../base/errors';
 import { folderKeyOf } from '../../base/files';
 import { displayLine } from '../../base/text';
 import type {
-	AgentInfo, AgentsChange, AgentsSnapshot, CliInfo, Message, MessagesChange, MessagesSnapshot, ResumeArgs, StartArgs, StartResult, StopResult, WindowInfo, WindowRef
+	AgentInfo, AgentListResult, AgentMachineState, AgentRef, AgentsChange, AgentsSnapshot, CliInfo, Message, MessagesChange, MessagesSnapshot, ResumeArgs, StartArgs, StartResult, StopResult, WindowInfo, WindowRef
 } from '../../base/coreProtocol';
 import { FacadeError, invalid } from '../../core/errors';
 import { isWithin } from '../../core/locations/catalog';
@@ -25,15 +25,19 @@ import type {
 } from '../../core/ports';
 import type { ConversationFile } from '../../record/conversations';
 import type { WindowContact } from '../contact';
+import type { RemoteLaunchRequest } from '../../ui/pickers/machineLaunch';
+import { agentAddress, machineSelector, messageAddress } from './references';
 import { DaemonError, type DaemonLink, type RustTerminals } from './types';
 
 export interface RustAgentsDeps {
 	readonly link: DaemonLink;
 	readonly terminals: RustTerminals;
 	readonly locations: LocationPort;
-	readonly clis: () => readonly CliInfo[];
+	readonly clis: (machine?: string) => readonly CliInfo[];
 	readonly windows: () => readonly WindowInfo[];
 	readonly onDidChangeWindows: Event<void>;
+	readonly machineName: (machine: string) => string;
+	readonly onDidChangeMachines: Event<void>;
 	readonly environment: (location?: Location) => Record<string, string>;
 	readonly pins: RustPinStore;
 	readonly conversations: ConversationFile;
@@ -64,7 +68,7 @@ export interface DismissedAgents {
 	/** Submits to workspace storage. A refused sidecar write throws synchronously. */
 	set(agent: string, dismissed: boolean): void;
 	/** Reconciles a complete snapshot. A refused sidecar write throws synchronously. */
-	retain(agents: ReadonlySet<string>): void;
+	retain(keep: (agent: string) => boolean): void;
 }
 
 type EndResult = CleanupResult | 'already_ended' | 'not_started';
@@ -73,7 +77,8 @@ type EndResult = CleanupResult | 'already_ended' | 'not_started';
 interface Pending {
 	readonly name: string;
 	readonly cli: string;
-	readonly location: Location;
+	readonly location?: Location;
+	readonly machine?: string;
 	readonly cwd: string;
 	readonly createdAt: number;
 	readonly worktree: boolean;
@@ -93,6 +98,7 @@ interface StopAttempt {
 
 interface UnconfirmedStart {
 	readonly cwd: string;
+	readonly machine?: string;
 	readonly conversation?: ConversationKey;
 	readonly error: unknown;
 }
@@ -154,8 +160,9 @@ export class RustAgents implements Agents, Disposable {
 	private readonly resuming = new Map<string, ResumeAttempt>();
 	private readonly unconfirmedResumes = new Map<string, { readonly before: AgentInfo; readonly error: unknown }>();
 	private readonly stopping = new Map<string, StopAttempt>();
-	/** All records on the bound machine, including ended records and agents without a card here. */
+	/** The local records and subscribed remote records, keyed by their exact machine-qualified address. */
 	private readonly all = new Map<string, AgentInfo>();
+	private readonly candidates = new Map<string, AgentInfo>();
 	private readonly removedAgents = new Set<string>();
 	/** A close suppresses the card for that process. A later resume of the same agent may open it again. */
 	private readonly closed = new Map<string, AgentInfo>();
@@ -179,12 +186,15 @@ export class RustAgents implements Agents, Disposable {
 		this.subscriptions.push(
 			link.onDidBind(window => this.bound(window)),
 			deps.onDidChangeWindows(() => this.windowsChanged()),
+			deps.onDidChangeMachines(() => this.machinesChanged()),
 			link.watch<AgentsSnapshot, AgentsChange>('agents', {}, {
-				snapshot: view => this.snapshot(view.agents),
+				disconnected: () => this.watchDisconnected(),
+				snapshot: view => this.snapshot(view),
 				change: change => {
 					if (!this.complete) { return; }
 					if (change.kind === 'updated') { this.updated(change.agent); }
-					else if (change.kind === 'removed') { this.removed(change.agent_id); }
+					else if (change.kind === 'removed') { this.removed(change); }
+					else if (change.kind === 'machine_state') { this.machineState(change.machine); }
 				}
 			}),
 			// The person's inbox: what this window's agents send #human (0.1, COLLABORATION-2.3)
@@ -250,6 +260,23 @@ export class RustAgents implements Agents, Disposable {
 			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {} }).id;
 	}
 
+	preflightRemote(machine: string, request: RemoteLaunchRequest): Promise<void> {
+		return this.deps.link.call('agent.start_preflight', this.remoteArgs(machine, request)).then(() => undefined);
+	}
+
+	launchRemote(machine: string, request: RemoteLaunchRequest): RunId {
+		return this.start({ name: request.name, cli: request.cli, reveal: true, remote: { machine, request } }).id;
+	}
+
+	private remoteArgs(machine: string, request: RemoteLaunchRequest): StartArgs {
+		return {
+			command: [request.cli], machine: machineSelector(machine), window: this.window,
+			cwd: request.location?.cwd ?? '', ...request.location ? {} : { cwd_is_default: true },
+			...request.location?.source ? { location_source_window: request.location.source } : {},
+			...request.name ? { name: request.name } : {}, cols: COLS, rows: ROWS
+		};
+	}
+
 	async started(id: RunId): Promise<StartOutcome> {
 		const pending = this.runs.get(id)?.pending;
 		return pending ? pending.settled : { state: this.runs.has(id) ? 'running' : 'closed' };
@@ -259,20 +286,22 @@ export class RustAgents implements Agents, Disposable {
 	 * New Agent opens its pair at acceptance (LIFECYCLE-1.5). Resume from vendor history waits for the actual start.
 	 */
 	private start(options: {
-		readonly name: string; readonly cli: string; readonly location: Location; readonly reveal: boolean; readonly cwd?: string;
+		readonly name: string; readonly cli: string; readonly location?: Location; readonly reveal: boolean; readonly cwd?: string;
+		readonly remote?: { readonly machine: string; readonly request: RemoteLaunchRequest };
 		readonly worktree?: StartArgs['worktree']; readonly model?: string; readonly effort?: string; readonly session?: string;
 	}): { readonly id: RunId; readonly result: Promise<RunId> } {
 		const id = this.deps.newRunId();
 		const window = this.window;
-		const cwd = options.cwd ?? options.location.path;
+		const remote = options.remote;
+		const cwd = remote?.request.location?.cwd ?? options.cwd ?? options.location?.path ?? '';
 		const recent = options.session !== undefined;
 		// A blank name is filled in at once, as the old engine fills it, and core starts the agent under it (LIFECYCLE-2.1)
-		const name = options.name || suggestName(this.list().map(run => run.name), this.deps.names?.()) || '';
+		const name = remote ? options.name : options.name || suggestName(this.list().map(run => run.name), this.deps.names?.()) || '';
 		const settled = deferred<StartOutcome>();
-		const pending: Pending = { name, cli: options.cli, location: options.location, cwd, createdAt: Date.now(), worktree: !!options.worktree,
+		const pending: Pending = { name, cli: options.cli, location: options.location, machine: remote?.machine, cwd, createdAt: Date.now(), worktree: !!options.worktree,
 			sessionId: options.session, settled: settled.promise };
 		const run: Run = { id, pending, resumed: recent, facts: undefined! };
-		const args: StartArgs = {
+		const args: StartArgs = remote ? { ...this.remoteArgs(remote.machine, remote.request), request_id: id } : {
 			command: [options.cli], cwd, window, location_source_window: window,
 			env: this.deps.environment(options.location), cols: COLS, rows: ROWS, request_id: id,
 			...name ? { name } : {},
@@ -286,7 +315,8 @@ export class RustAgents implements Agents, Disposable {
 		this.deps.log.event(`Asked core to start ${options.cli} in ${args.cwd} [${id}]`);
 		const result = this.deps.link.call<StartResult>('agent.start', args).then(async ({ agent: reported }) => {
 			await this.waitForSnapshot(window);
-			const agent = reported.agent_id;
+			const agent = agentAddress(reported);
+			if (reported.machine_id !== (remote?.machine ?? window.machine_id)) { throw agentMissing(agent); }
 			if (this.removedAgents.has(agent)) {
 				run.closeAfterLaunch?.resolve('already_ended');
 				this.drop(run, 'close');
@@ -295,8 +325,17 @@ export class RustAgents implements Agents, Disposable {
 			const info = this.all.get(agent) ?? reported;
 			if (!this.isMember(info)) { throw agentMissing(agent); }
 			if (run.closeAfterLaunch) {
-				this.closed.set(agent, info);
-				this.updated(info);
+				if (remote) {
+					this.updated(info, false);
+					run.agent = agent;
+					run.pending = undefined;
+					this.byAgent.set(agent, id);
+					this.bindTerminal(run, info);
+					this.project(info);
+				} else {
+					this.closed.set(agent, info);
+					this.updated(info);
+				}
 				run.closeAfterLaunch.resolve(this.stop(info));
 				return id;
 			}
@@ -307,12 +346,12 @@ export class RustAgents implements Agents, Disposable {
 				if (!this.cleanExit(info)) { this.addRun(run); }
 			} else {
 				this.byAgent.set(agent, id);
-				this.deps.terminals.bind(id, agent);
+				this.bindTerminal(run, info);
 				if (run.tab) { this.keepPlace(agent, run.tab); }
 				this.project(info);
 			}
-			this.deps.history.remember(options.location.id, options.cli);
-			this.deps.log.event(`Started #${agent} (${options.cli}) [${id}]`);
+			if (options.location) { this.deps.history.remember(options.location.id, options.cli); }
+			this.deps.log.event(`Started ${this.agentLabel(info)} (${options.cli}) [${id}]`);
 			if (recent && options.reveal && this.runs.has(id)) {
 				await this.deps.terminals.reveal(id, { preserveFocus: false });
 			}
@@ -323,10 +362,11 @@ export class RustAgents implements Agents, Disposable {
 				if (!refused) {
 					const kept = err instanceof DaemonError ? err.data.kept?.path : undefined;
 					const conversation = options.session === undefined ? undefined
-						: { environment: options.location.environment, cli: options.cli, sessionId: options.session };
-					this.unconfirmedStarts.set(id, { cwd: kept ?? cwd, conversation, error: err });
+						: { environment: options.location?.environment ?? this.environmentOf(), cli: options.cli, sessionId: options.session };
+					this.unconfirmedStarts.set(id, { cwd: kept ?? cwd, machine: remote?.machine, conversation, error: err });
 				}
-				if (!run.closeAfterLaunch && !recent) { this.fail(run, err, labelOf({ name, alias: options.cli })); }
+				if (run.closeAfterLaunch && remote && refused) { this.drop(run, 'close'); }
+				else if ((!run.closeAfterLaunch || remote) && !recent) { this.fail(run, err, labelOf({ name, alias: options.cli })); }
 			}
 			if (refused) { run.closeAfterLaunch?.resolve('not_started'); }
 			throw err;
@@ -380,28 +420,30 @@ export class RustAgents implements Agents, Disposable {
 
 	private closeStart(run: Run): Promise<EndResult> {
 		run.closeAfterLaunch ??= deferred<EndResult>();
-		this.drop(run, 'close');
+		if (run.pending?.machine === undefined) { this.drop(run, 'close'); }
 		return run.closeAfterLaunch.promise;
 	}
 
 	private async closeRecord(info: AgentInfo, forWorktreeDeletion = false): Promise<EndResult> {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		const resuming = this.resuming.get(agent);
 		const uncertain = this.unconfirmedResumes.get(agent);
 		// The exit before Resume does not establish the outcome of the new attempt.
 		if (uncertain && !resuming && !(this.hasSnapshot() && isNewProcess(uncertain.before, info))) {
 			throw uncertain.error;
 		}
-		if (forWorktreeDeletion) {
-			this.deps.pins.removeAgentPins(this.window.machine_id, agent);
+		if (forWorktreeDeletion && this.local(info)) {
+			this.deps.pins.removeAgentPins(info.machine_id, info.agent_id);
 		}
 		const run = this.runOf(agent);
 		if (run && !run.failure && !resuming && this.hasSnapshot() && info.process === 'ended' && !this.cleanExit(info)) {
 			// Keep the card if the workspace refuses to save its dismissal (LIFECYCLE-3.4).
 			this.deps.dismissed?.set(agent, true);
 		}
-		if (this.isMember(info)) { this.closed.set(agent, info); }
-		if (run) { this.drop(run, 'close'); }
+		if (this.local(info) || info.process === 'ended' && !info.unreachable && !resuming) {
+			if (this.isMember(info)) { this.closed.set(agent, info); }
+			if (run) { this.drop(run, 'close'); }
+		}
 		if (resuming) {
 			const window = this.window;
 			resuming.closing ??= resuming.result.then(resumed => {
@@ -409,12 +451,12 @@ export class RustAgents implements Agents, Disposable {
 				return this.removedAgents.has(agent) ? 'already_ended' : this.stop(resumed);
 			}, (err: unknown) => {
 				if (this.owns(window) && this.removedAgents.has(agent)) { return 'already_ended'; }
-				if (resumeRefused(agent, err)) { return 'not_started'; }
+				if (resumeRefused(info.agent_id, err)) { return 'not_started'; }
 				throw err;
 			});
 			return resuming.closing;
 		}
-		if (this.hasSnapshot() && info.process === 'ended') {
+		if (this.hasSnapshot() && info.process === 'ended' && !info.unreachable) {
 			this.remember(info);
 			return 'already_ended';
 		}
@@ -436,11 +478,11 @@ export class RustAgents implements Agents, Disposable {
 				id: run.id, result: this.closeStart(run)
 			}));
 			for (const info of records) {
-				const agent = info.agent_id;
+				const agent = agentAddress(info);
 				const before = checked.get(agent);
 				if (before && !this.resuming.has(agent) && !isNewProcess(before, info)) { continue; }
 				checked.set(agent, info);
-				pending.push({ id: `#${agent}`, result: this.closeRecord(info, true) });
+				pending.push({ id: this.agentLabel(info), result: this.closeRecord(info, true) });
 			}
 			for (const [id, start] of uncertain) {
 				this.deps.log.event(`Could not close ${id} to delete its worktree: ${messageOf(start.error)}`);
@@ -466,14 +508,14 @@ export class RustAgents implements Agents, Disposable {
 		const inside = (cwd: string) => isWithin(folderKeyOf(cwd), key);
 		const records = this.hasSnapshot() ? [...this.all.values()].filter(info => info.location_source_window
 			&& sameWindow(info.location_source_window, this.window) && inside(info.cwd)) : [];
-		const starts = [...this.starting.values()].filter(run => run.pending && inside(run.pending.cwd));
-		const uncertain = [...this.unconfirmedStarts].filter(([, start]) => inside(start.cwd));
+		const starts = [...this.starting.values()].filter(run => run.pending && run.pending.machine === undefined && inside(run.pending.cwd));
+		const uncertain = [...this.unconfirmedStarts].filter(([, start]) => start.machine === undefined && inside(start.cwd));
 		return { records, starts, uncertain };
 	}
 
 	/** Keeps the agent's saved conversation and name for Recent (LIFECYCLE-3.2). */
 	private remember(info: AgentInfo): void {
-		if (!info.session) { return; }
+		if (!info.session || !this.local(info)) { return; }
 		const location = this.deps.locations.resolve(info.location_id);
 		try {
 			this.deps.conversations.put({ environment: this.environmentOf(info.location_id), cli: info.cli, sessionId: info.session },
@@ -484,17 +526,25 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private stop(info: AgentInfo): Promise<EndResult> {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		const stopping = this.stopping.get(agent);
 		if (stopping && !isNewProcess(stopping.info, info)) { return stopping.result; }
 		this.remember(info);
+		const window = this.window;
+		const local = this.local(info);
 		const result = this.deps.link.call<StopResult>('agent.stop', { agent }).then((stopped): EndResult => {
-			this.deps.log.event(`Ended #${agent}: ${stopped.already_ended ? 'already ended' : 'stopped'}`);
+			this.deps.log.event(`Ended ${this.agentLabel(info)}: ${stopped.already_ended ? 'already ended' : 'stopped'}`);
+			const current = this.all.get(agent);
+			if (!local && this.owns(window) && current && !isNewProcess(info, current)) {
+				this.closed.set(agent, current);
+				const run = this.runOf(agent);
+				if (run) { this.drop(run, 'close'); }
+			}
 			return stopped.already_ended ? 'already_exited' : 'terminated';
 		}, (err: unknown): EndResult => {
 			if (this.stopping.get(agent)?.result === result) { this.stopping.delete(agent); }
-			this.deps.log.event(`Could not stop #${agent} in core: ${messageOf(err)}`);
-			if (stopRefused(err)) { return 'failed'; }
+			this.deps.log.event(`Could not stop ${this.agentLabel(info)} in core: ${messageOf(err)}`);
+			if (local && stopRefused(err)) { return 'failed'; }
 			throw err;
 		});
 		this.stopping.set(agent, { info, result });
@@ -512,7 +562,7 @@ export class RustAgents implements Agents, Disposable {
 		const window = this.window;
 		const before = this.all.get(run.agent);
 		void this.deps.link.call<AgentInfo>('agent.rename', { agent: run.agent, name }).then(info => {
-			if (this.owns(window) && this.complete && this.all.get(info.agent_id) === before) { this.updated(info); }
+			if (this.owns(window) && this.complete && this.all.get(agentAddress(info)) === before) { this.updated(info); }
 		}, (err: unknown) => {
 			const reason = err instanceof DaemonError ? this.deps.describe(err) : messageOf(err);
 			this.deps.human.error(vscode.l10n.t("Could not rename {0}: {1}", labelOf(run.facts), reason), { show: id });
@@ -524,14 +574,38 @@ export class RustAgents implements Agents, Disposable {
 
 	otherAgents(): readonly OtherAgent[] {
 		if (!this.hasSnapshot()) { return []; }
+		return [...this.all.values()].filter(info => this.isOtherAgent(info)).map(info => this.otherAgent(info));
+	}
+
+	async queryOtherAgents(): Promise<readonly OtherAgent[]> {
+		if (!this.deps.link.connected) { return []; }
+		const window = this.window;
+		const generation = this.generation;
+		const result = await this.deps.link.call<AgentListResult>('agent.list', {});
+		if (!this.owns(window) || this.generation !== generation) { throw bindingChanged(); }
+		this.candidates.clear();
+		const others: OtherAgent[] = [];
+		for (const info of result.agents) {
+			const key = agentAddress(info);
+			if (!this.all.has(key) && !this.removedAgents.has(key) && this.isOtherAgent(info)) {
+				this.candidates.set(key, info);
+				others.push(this.otherAgent(info));
+			}
+		}
+		return others;
+	}
+
+	private otherAgent(info: AgentInfo): OtherAgent {
 		const windows = this.deps.windows();
-		return [...this.all.values()].filter(info => this.isOtherAgent(info)).map(info => ({
-			facts: this.factsOf({ id: info.agent_id, facts: undefined! }, info),
+		return {
+			facts: this.factsOf({ id: agentAddress(info), facts: undefined! }, info),
 			windows: (info.windows ?? []).map(ref => {
 				const row = windows.find(window => window.machine_id === ref.machine_id && window.window_id === ref.window_id);
-				return { label: row?.label || ref.window_id, connected: row?.connected ?? false };
+				if (row) { return { label: row.label || ref.window_id, connected: row.connected }; }
+				return ref.machine_id === this.window.machine_id ? { label: ref.window_id, connected: false }
+					: { label: ref.window_id };
 			})
-		}));
+		};
 	}
 
 	async adoptAgent(agent: string): Promise<RunId> {
@@ -548,7 +622,7 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private adoptRecord(info: AgentInfo): Promise<AgentInfo> {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		const adopting = this.adopting.get(agent);
 		if (adopting) { return adopting; }
 		if (this.isMember(info)) { return Promise.resolve(info); }
@@ -563,18 +637,18 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private async adoptReply(info: AgentInfo, window: WindowRef): Promise<AgentInfo> {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		let response: AgentInfo;
 		try {
 			response = await this.deps.link.call<AgentInfo>('agent.adopt', { agent });
 		} catch (err) {
 			// Adoption's not_found refers to the record itself, unlike a failure to resume its CLI.
-			if (this.owns(window) && err instanceof DaemonError && err.reason === 'not_found') { this.removed(agent); }
+			if (this.owns(window) && this.local(info) && err instanceof DaemonError && err.reason === 'not_found') { this.removed(info); }
 			throw err;
 		}
 		await this.waitForSnapshot(window);
 		const current = this.requireAgent(agent);
-		if (response.agent_id !== agent || !this.isMember(response)) { throw agentMissing(agent); }
+		if (agentAddress(response) !== agent || !this.isMember(response)) { throw agentMissing(agent); }
 		const adopted = current === info ? mergeWindows(response, current) : mergeWindows(current, response);
 		this.updated(adopted, false);
 		return adopted;
@@ -587,7 +661,7 @@ export class RustAgents implements Agents, Disposable {
 			if (!this.isMember(info) || info.process !== 'ended' || !info.session) { continue; }
 			const title = this.titleOf(info);
 			retained.push({
-				agent: info.agent_id,
+				agent: agentAddress(info),
 				name: keptName({ name: info.name, alias: `#${info.agent_id}` }),
 				entry: { key: this.conversationKey(info, info.session), cwd: info.cwd, title, activityAt: Date.parse(info.exit?.at ?? info.created_at) }
 			});
@@ -598,13 +672,13 @@ export class RustAgents implements Agents, Disposable {
 	async resume(entry: ConversationEntry, options: { readonly reveal: boolean }): Promise<ResumeResult> {
 		await this.waitForSnapshot(this.window);
 		const retained = [...this.all.values()].find(info => this.isMember(info) && this.matchesConversation(info, entry.key)
-			&& (info.process === 'ended' || this.resuming.has(info.agent_id)));
-		if (retained && this.resuming.has(retained.agent_id)) { return this.resumeRetained(retained.agent_id, options); }
+			&& (info.process === 'ended' || this.resuming.has(agentAddress(info))));
+		if (retained && this.resuming.has(agentAddress(retained))) { return this.resumeRetained(agentAddress(retained), options); }
 		const running = this.holding(entry.key);
 		if (running) {
 			return { running };
 		}
-		if (retained) { return this.resumeRetained(retained.agent_id, options); }
+		if (retained) { return this.resumeRetained(agentAddress(retained), options); }
 		const uncertain = this.uncertainConversation(entry.key);
 		if (uncertain) { throw uncertain.error; }
 		if (entry.unavailable) {
@@ -631,7 +705,7 @@ export class RustAgents implements Agents, Disposable {
 			if (info.session) {
 				const key = this.conversationKey(info, info.session);
 				if (this.holding(key, agent)) {
-					throw invalid('unavailable', vscode.l10n.t("{0} is already running in another window.", info.name || `#${agent}`));
+					throw invalid('unavailable', vscode.l10n.t("{0} is already running in another window.", info.name || this.agentLabel(info)));
 				}
 				const uncertain = this.uncertainConversation(key, agent);
 				if (uncertain) { throw uncertain.error; }
@@ -641,7 +715,7 @@ export class RustAgents implements Agents, Disposable {
 		if (attempt) {
 			const resumed = await attempt.result;
 			if (!this.owns(window)) { throw bindingChanged(); }
-			this.deps.history.remember(resumed.location_id, resumed.cli);
+			if (this.local(resumed)) { this.deps.history.remember(resumed.location_id, resumed.cli); }
 		}
 		const current = this.requireAgent(agent);
 		const run = this.project(current, undefined, true);
@@ -651,12 +725,14 @@ export class RustAgents implements Agents, Disposable {
 
 	/** Share one local attempt. Core serializes requests from separate windows under the same agent number. */
 	private requestResume(info: AgentInfo): ResumeAttempt {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		const ongoing = this.resuming.get(agent);
 		if (ongoing) { return ongoing; }
 		const window = this.window;
-		const location = this.locationFor(info.location_id, info.cwd);
-		const args: ResumeArgs = { agent, env: this.deps.environment(location), cols: COLS, rows: ROWS };
+		const args: ResumeArgs = {
+			agent, cols: COLS, rows: ROWS,
+			...this.local(info) ? { env: this.deps.environment(this.locationFor(info.location_id, info.cwd)) } : {}
+		};
 		const result = this.resumeReply(info, args, window).then(resumed => {
 			if (!this.owns(window)) { throw bindingChanged(); }
 			this.resuming.delete(agent);
@@ -664,7 +740,7 @@ export class RustAgents implements Agents, Disposable {
 			// A report can overtake the reply, including a quick exit of the newly installed process.
 			const confirmed = isNewProcess(info, current) ? mergeWindows(current, resumed) : mergeWindows(resumed, current);
 			this.unconfirmedResumes.delete(agent);
-			if (attempt.closing) {
+			if (attempt.closing && this.local(info)) {
 				this.closed.set(agent, confirmed);
 			} else {
 				this.closed.delete(agent);
@@ -687,20 +763,20 @@ export class RustAgents implements Agents, Disposable {
 
 	/** A refusal can cross a report that the same record is already running in this window. */
 	private async resumeReply(info: AgentInfo, args: ResumeArgs, window: WindowRef): Promise<AgentInfo> {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		let resumed: AgentInfo;
 		try {
 			resumed = await this.deps.link.call<AgentInfo>('agent.resume', args);
 		} catch (err) {
 			const current = this.owns(window) ? this.all.get(agent) : undefined;
 			if (current && this.hasSnapshot() && this.isMember(current) && current.process === 'running') { return current; }
-			if (current && !resumeRefused(agent, err) && !(this.hasSnapshot() && isNewProcess(info, current))) {
+			if (current && !resumeRefused(info.agent_id, err) && !(this.hasSnapshot() && isNewProcess(info, current))) {
 				this.unconfirmedResumes.set(agent, { before: info, error: err });
 			}
 			throw err;
 		}
 		await this.waitForSnapshot(window);
-		if (resumed.agent_id !== agent || !this.isMember(resumed)) { throw agentMissing(agent); }
+		if (agentAddress(resumed) !== agent || !this.isMember(resumed)) { throw agentMissing(agent); }
 		return resumed;
 	}
 
@@ -713,12 +789,12 @@ export class RustAgents implements Agents, Disposable {
 		}
 		for (const run of this.starting.values()) {
 			const pending = run.pending;
-			if (pending?.sessionId === key.sessionId && pending.cli === key.cli && pending.location.environment === key.environment) {
+			if (pending?.sessionId === key.sessionId && pending.cli === key.cli && pending.location?.environment === key.environment) {
 				return run.id;
 			}
 		}
 		for (const info of this.all.values()) {
-			if (info.agent_id !== except && (info.process === 'running' || this.resuming.has(info.agent_id)) && this.matchesConversation(info, key)) {
+			if (agentAddress(info) !== except && (info.process === 'running' || this.resuming.has(agentAddress(info))) && this.matchesConversation(info, key)) {
 				return 'elsewhere';
 			}
 		}
@@ -749,14 +825,14 @@ export class RustAgents implements Agents, Disposable {
 		if (!run) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
-		const agent = run.agent;
+		const info = run.agent ? this.all.get(run.agent) : undefined;
 		const { environment, cli, sessionId } = run.facts;
-		if (!agent || !run.facts.pinnable || !sessionId) {
+		if (!info || !this.local(info) || !run.facts.pinnable || !sessionId) {
 			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI has not named its conversation, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
 		}
 		this.deps.pins.pinAgent({
 			id: `pin-${randomBytes(16).toString('hex')}`, conversation: { environment, cli, sessionId },
-			location: run.facts.location, cwd: run.facts.cwd, name: keptName(run.facts), machine_id: this.window.machine_id, agent
+			location: run.facts.location, cwd: run.facts.cwd, name: keptName(run.facts), machine_id: info.machine_id, agent: info.agent_id
 		});
 		this.refresh(run, 'lifecycle');
 		this.deps.terminals.pinTab?.(id, true);
@@ -813,22 +889,21 @@ export class RustAgents implements Agents, Disposable {
 
 	/** Verify the membership before using the retained number to reopen a pinned conversation (LIFECYCLE-3.4). */
 	private async restorePin(pin: RustPin, window: WindowRef, generation: number): Promise<Run | undefined> {
-		const agent = pin.agent;
+		const agent = agentAddress({ machine_id: pin.machine_id, agent_id: pin.agent });
 		const before = this.all.get(agent);
 		if (!before) { return undefined; }
 		try {
 			await this.adoptRecord(before);
 		} catch (err) {
-			this.deps.log.event(`Could not adopt #${agent} for its Pin: ${messageOf(err)}`);
+			this.deps.log.event(`Could not adopt ${agent} for its Pin: ${messageOf(err)}`);
 			return undefined;
 		}
 		if (this.generation !== generation || !this.hasSnapshot()) { return undefined; }
 		const info = this.all.get(agent);
-		const attemptKey = `${window.machine_id}:${agent}`;
-		if (!info || !this.pinOf(agent) || !this.isMember(info) || this.checkedPins.has(attemptKey)) {
+		if (!info || !this.pinOf(info) || !this.isMember(info) || this.checkedPins.has(agent)) {
 			return undefined;
 		}
-		this.checkedPins.add(attemptKey);
+		this.checkedPins.add(agent);
 		if (before.process === 'running' || info.process === 'running' || this.closed.has(agent)
 			|| (!this.cleanExit(info) && !this.deps.dismissed?.has(agent))) {
 			return undefined;
@@ -841,7 +916,7 @@ export class RustAgents implements Agents, Disposable {
 			await this.requestResume(info).result;
 		} catch (err) {
 			const current = this.owns(window) ? this.all.get(agent) : undefined;
-			if (!current || !this.pinOf(agent) || !this.isMember(current) || this.closed.has(agent)) { return undefined; }
+			if (!current || !this.pinOf(current) || !this.isMember(current) || this.closed.has(agent)) { return undefined; }
 			if (this.hasSnapshot() && current.process === 'running') {
 				this.project(current, undefined, true);
 				return undefined;
@@ -859,7 +934,7 @@ export class RustAgents implements Agents, Disposable {
 		let opened = false;
 		for (const pin of this.pins()) {
 			if (!this.hasSnapshot() || generation !== this.generation) { return; }
-			const run = this.runOf(pin.agent);
+			const run = this.runOf(agentAddress({ machine_id: pin.machine_id, agent_id: pin.agent }));
 			if (!run || this.openedPins.has(pin.id) || run.facts.pin !== pin.id || run.failure || run.facts.lifecycle === 'starting') { continue; }
 			this.openedPins.add(pin.id);
 			await this.deps.terminals.openPinned?.(run.id).catch(err => this.deps.log.event(`Could not open ${run.id}'s pinned tab: ${messageOf(err)}`));
@@ -901,8 +976,8 @@ export class RustAgents implements Agents, Disposable {
 		return pin.machine_id === this.window.machine_id && typeof pin.agent === 'string' && /^a[1-9]\d*$/.test(pin.agent);
 	}
 
-	private pinOf(agent: string): RustPin | undefined {
-		return this.deps.pins.list().find((pin): pin is RustPin => pin.agent === agent && this.isPinHere(pin));
+	private pinOf(info: AgentRef): RustPin | undefined {
+		return this.local(info) ? this.pins().find(pin => pin.agent === info.agent_id) : undefined;
 	}
 
 	// -----------------------------------------------------------------------------------------------------------------------------
@@ -910,13 +985,12 @@ export class RustAgents implements Agents, Disposable {
 
 	private bound(window: WindowRef): void {
 		this.generation++;
-		this.complete = false;
-		this.snapshotReady.resolve();
-		this.snapshotReady = deferred<void>();
+		this.resetSnapshot();
 		this.stopping.clear();
 		if (!sameWindow(this.window, window)) {
 			this.window = window;
 			this.all.clear();
+			this.candidates.clear();
 			this.removedAgents.clear();
 			this.closed.clear();
 			this.starting.clear();
@@ -930,6 +1004,21 @@ export class RustAgents implements Agents, Disposable {
 			for (const run of this.runs.values()) { this.drop(run, 'transfer'); }
 		}
 		this.emitOtherAgents();
+	}
+
+	private resetSnapshot(): void {
+		this.complete = false;
+		this.snapshotReady.resolve();
+		this.snapshotReady = deferred<void>();
+	}
+
+	private watchDisconnected(): void {
+		if (this.disposed) { return; }
+		if (this.complete) { this.resetSnapshot(); }
+		for (const [agent, info] of this.all) {
+			if (!this.local(info) && !info.unreachable) { this.all.set(agent, { ...info, unreachable: true }); }
+		}
+		this.machinesChanged();
 	}
 
 	private owns(window: WindowRef): boolean {
@@ -946,24 +1035,35 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private requireAgent(agent: string): AgentInfo {
-		const info = this.all.get(agent);
+		const info = this.all.get(agent) ?? this.candidates.get(agent);
 		if (!info) { throw agentMissing(agent); }
 		return info;
 	}
 
 	private isMember(info: AgentInfo): boolean {
-		return info.machine_id === this.window.machine_id && !!info.windows?.some(window => sameWindow(window, this.window));
+		return info.windows.some(window => sameWindow(window, this.window));
 	}
 
 	private isOtherAgent(info: AgentInfo): boolean {
-		return info.machine_id === this.window.machine_id && !info.guest && info.process === 'running' && !this.isMember(info);
+		return !info.unreachable && !info.guest && info.process === 'running' && !this.isMember(info);
+	}
+
+	private local(info: AgentRef): boolean {
+		return info.machine_id === this.window.machine_id;
+	}
+
+	private machinesChanged(): void {
+		for (const run of this.runs.values()) {
+			if (run.facts.remoteMachine !== undefined) { this.refresh(run); }
+		}
+		this.emitOtherAgents();
 	}
 
 	private windowsChanged(): void {
 		if (this.hasSnapshot()) {
 			for (const run of this.runs.values()) {
 				const info = run.agent ? this.all.get(run.agent) : undefined;
-				if (info && !this.resuming.has(info.agent_id) && run.facts.environment !== this.environmentOf(info.location_id)) {
+				if (info && this.local(info) && !this.resuming.has(agentAddress(info)) && run.facts.environment !== this.environmentOf(info.location_id)) {
 					this.refresh(run, 'reported');
 				}
 			}
@@ -971,25 +1071,33 @@ export class RustAgents implements Agents, Disposable {
 		this.emitOtherAgents();
 	}
 
-	private snapshot(agents: readonly AgentInfo[]): void {
+	private snapshot(view: AgentsSnapshot): void {
 		if (this.disposed || !this.deps.link.connected) { return; }
 		const before = new Map(this.all);
 		this.all.clear();
-		for (const info of agents) {
-			if (info.machine_id === this.window.machine_id) { this.all.set(info.agent_id, info); }
+		const complete = new Set([this.window.machine_id]);
+		for (const info of view.agents) {
+			if (this.local(info)) { this.all.set(agentAddress(info), info); }
+		}
+		for (const machine of view.machines) {
+			if (machine.state === 'synced' && machine.agents && machine.machine_id !== this.window.machine_id) {
+				complete.add(machine.machine_id);
+				for (const info of machine.agents) {
+					if (info.machine_id === machine.machine_id) { this.all.set(agentAddress(info), info); }
+				}
+			}
 		}
 		this.complete = true;
-		for (const id of before.keys()) {
-			if (!this.all.has(id)) { this.removed(id, false); }
+		for (const [id, info] of before) {
+			if (!this.all.has(id)) {
+				if (complete.has(info.machine_id)) { this.removed(info, false); }
+				else { this.all.set(id, { ...info, unreachable: true }); }
+			}
 		}
 		this.verifyPins();
-		try {
-			this.deps.dismissed?.retain(new Set(this.all.keys()));
-		} catch (err) {
-			this.deps.log.event(`Could not reconcile dismissed agent cards: ${messageOf(err)}`);
-		}
+		this.keepDismissals(complete);
 		for (const info of this.all.values()) {
-			this.reconcile(info, before.get(info.agent_id), true, false);
+			this.reconcile(info, before.get(agentAddress(info)), true, false);
 		}
 		this.snapshotReady.resolve();
 		this.emitOtherAgents();
@@ -998,9 +1106,34 @@ export class RustAgents implements Agents, Disposable {
 		}
 	}
 
+	private machineState(machine: AgentMachineState): void {
+		if (machine.machine_id === this.window.machine_id) { return; }
+		const records = [...this.all.values()].filter(info => info.machine_id === machine.machine_id);
+		if (machine.state !== 'synced' || !machine.agents) {
+			for (const info of records) { this.updated({ ...info, unreachable: true }); }
+			return;
+		}
+		const agents = machine.agents.filter(info => info.machine_id === machine.machine_id);
+		const present = new Set(agents.map(agentAddress));
+		for (const info of records) {
+			if (!present.has(agentAddress(info))) { this.removed(info); }
+		}
+		for (const info of agents) { this.updated(info); }
+		this.keepDismissals(new Set([machine.machine_id]));
+	}
+
+	private keepDismissals(complete: ReadonlySet<string>): void {
+		const selectors = new Set([...complete].map(machineSelector));
+		try {
+			this.deps.dismissed?.retain(agent => this.all.has(agent) || !selectors.has(agent.slice(agent.indexOf('@') + 1)));
+		} catch (err) {
+			this.deps.log.event(`Could not reconcile dismissed agent cards: ${messageOf(err)}`);
+		}
+	}
+
 	private updated(info: AgentInfo, project = true, resumed = false): void {
-		const agent = info.agent_id;
-		if (this.disposed || info.machine_id !== this.window.machine_id || this.removedAgents.has(agent)) { return; }
+		const agent = agentAddress(info);
+		if (this.disposed || this.removedAgents.has(agent)) { return; }
 		const before = this.all.get(agent);
 		this.all.set(agent, info);
 		this.reconcile(info, before, project, resumed);
@@ -1008,7 +1141,7 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private reconcile(info: AgentInfo, before: AgentInfo | undefined, project: boolean, resumed: boolean): void {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		const stopping = this.stopping.get(agent);
 		if (stopping && (info.process === 'ended' || isNewProcess(stopping.info, info))) { this.stopping.delete(agent); }
 		const closed = this.closed.get(agent);
@@ -1032,7 +1165,7 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private project(info: AgentInfo, before?: AgentInfo, force = false, resumed = false): Run | undefined {
-		const agent = info.agent_id;
+		const agent = agentAddress(info);
 		const run = this.runOf(agent);
 		if (!this.isMember(info)) {
 			if (run) { this.drop(run, 'transfer'); }
@@ -1067,7 +1200,7 @@ export class RustAgents implements Agents, Disposable {
 	private projectAll(): void {
 		if (!this.complete || this.disposed) { return; }
 		for (const info of this.all.values()) {
-			if (!this.byAgent.has(info.agent_id) && !this.cleanExit(info)) { this.project(info); }
+			if (!this.byAgent.has(agentAddress(info)) && !this.cleanExit(info)) { this.project(info); }
 		}
 	}
 
@@ -1079,7 +1212,7 @@ export class RustAgents implements Agents, Disposable {
 	/** A complete snapshot of the bound machine proves which pinned records still exist. */
 	private verifyPins(): void {
 		for (const pin of this.pins()) {
-			if (!this.all.has(pin.agent)) {
+			if (!this.all.has(agentAddress({ machine_id: pin.machine_id, agent_id: pin.agent }))) {
 				this.clearPin(pin);
 			}
 		}
@@ -1087,7 +1220,7 @@ export class RustAgents implements Agents, Disposable {
 
 	/** Updates the conversation details of this exact Pin (LIFECYCLE-3.4). */
 	private keepPin(info: AgentInfo): void {
-		const pin = this.pinOf(info.agent_id);
+		const pin = this.pinOf(info);
 		if (!pin) { return; }
 		const name = keptName({ name: info.name, alias: `#${info.agent_id}` });
 		const sessionId = info.session ?? pin.conversation.sessionId;
@@ -1099,9 +1232,11 @@ export class RustAgents implements Agents, Disposable {
 		}
 	}
 
-	private removed(agent: string, reported = true): void {
+	private removed(ref: AgentRef, reported = true): void {
 		if (this.disposed) { return; }
+		const agent = agentAddress(ref);
 		this.all.delete(agent);
+		this.candidates.delete(agent);
 		this.removedAgents.add(agent);
 		this.closed.delete(agent);
 		this.stopping.delete(agent);
@@ -1110,9 +1245,8 @@ export class RustAgents implements Agents, Disposable {
 		const run = this.runOf(agent);
 		if (run) { this.drop(run, 'close'); }
 		if (reported) {
-			for (const pin of this.pins()) {
-				if (pin.agent === agent) { this.clearPin(pin); }
-			}
+			const pin = this.pinOf(ref);
+			if (pin) { this.clearPin(pin); }
 			this.clearDismissal(agent);
 			this.emitOtherAgents();
 		}
@@ -1132,7 +1266,7 @@ export class RustAgents implements Agents, Disposable {
 		try {
 			this.deps.dismissed.set(agent, false);
 		} catch (err) {
-			this.deps.log.event(`Could not clear #${agent}'s dismissed card: ${messageOf(err)}`);
+			this.deps.log.event(`Could not clear ${agent}'s dismissed card: ${messageOf(err)}`);
 		}
 	}
 
@@ -1140,7 +1274,7 @@ export class RustAgents implements Agents, Disposable {
 		try {
 			this.deps.places?.set(agent, place);
 		} catch (err) {
-			this.deps.log.event(`Could not keep #${agent}'s tab position: ${messageOf(err)}`);
+			this.deps.log.event(`Could not keep ${agent}'s tab position: ${messageOf(err)}`);
 		}
 	}
 
@@ -1159,8 +1293,13 @@ export class RustAgents implements Agents, Disposable {
 	private openPair(run: Run, reveal: boolean, hidden: boolean): void {
 		const { terminals } = this.deps;
 		terminals.openPair(pairOf(run.facts), { reveal, hidden });
-		if (run.agent) { terminals.bind(run.id, run.agent); }
+		const info = run.agent && this.all.get(run.agent);
+		if (info) { this.bindTerminal(run, info); }
 		if (run.facts.lifecycle === 'ended' && !run.failure) { terminals.exited(run.id, this.endText(run.facts)); }
+	}
+
+	private bindTerminal(run: Run, info: AgentInfo): void {
+		this.deps.terminals.bind(run.id, agentAddress(info), this.local(info) ? undefined : { reachable: !info.unreachable });
 	}
 
 	/** Its card and tab go together (UX-2.2). */
@@ -1186,11 +1325,15 @@ export class RustAgents implements Agents, Disposable {
 		} else if (before.name !== after.name) {
 			this.deps.terminals.rename(run.id, after.name);
 		}
+		if (after.remoteMachine !== undefined) {
+			this.deps.terminals.setReachable(run.id, !after.disconnected);
+		}
 		if (!restarted && before.lifecycle !== 'ended' && after.lifecycle === 'ended' && !run.failure) {
 			this.deps.terminals.exited(run.id, this.endText(after));
 		}
 		this.emit({ run: run.id, kind: kind ?? (before.name !== after.name ? 'renamed'
-			: before.lifecycle !== after.lifecycle || before.error !== after.error || before.pin !== after.pin ? 'lifecycle' : 'reported') });
+			: before.lifecycle !== after.lifecycle || before.error !== after.error || before.pin !== after.pin
+				|| before.disconnected !== after.disconnected ? 'lifecycle' : 'reported') });
 	}
 
 	/**
@@ -1209,28 +1352,39 @@ export class RustAgents implements Agents, Disposable {
 
 	/** `RunFacts` from core's record, or from a start not answered yet. */
 	private factsOf(run: Run, info = run.agent ? this.all.get(run.agent) : undefined): RunFacts {
-		const pin = info && this.isMember(info) ? this.pinOf(info.agent_id)?.id : undefined;
+		const pin = info && this.isMember(info) ? this.pinOf(info)?.id : undefined;
 		const failure = run.failure;
 		if (!info) {
 			const pending = run.pending!;
 			return {
-				id: run.id, alias: '', name: pending.name, cli: pending.cli, displayName: this.displayName(pending.cli), command: pending.cli,
-				location: pending.location.id, cwd: pending.cwd, environment: pending.location.environment, yolo: false,
+				id: run.id, alias: '', name: pending.name, cli: pending.cli, displayName: this.displayName(pending.cli, pending.machine), command: pending.cli,
+				location: pending.location?.id ?? pending.cwd, cwd: pending.cwd,
+				environment: pending.machine ? `machine:${pending.machine}` : pending.location?.environment ?? this.environmentOf(), yolo: false,
+				...pending.machine ? { remoteMachine: this.deps.machineName(pending.machine),
+					...!this.deps.link.connected ? { disconnected: true } : {} } : {},
 				createdAt: pending.createdAt, lifecycle: failure ? 'ended' : 'starting', phase: pending.worktree ? 'creating_worktree' : 'launching_cli',
 				activity: 'unknown', reporting: false, root: run.id, origin: 'human', tools: 'not_injected',
 				...pending.sessionId ? { sessionId: pending.sessionId, resumed: true as const } : {},
 				...failure ? { error: failure, end: { kind: 'failed' as const, at: failure.at } } : {}
 			};
 		}
+		const local = this.local(info);
+		const root = agentAddress({ agent_id: info.root, machine_id: info.root_machine_id ?? info.machine_id });
 		const facts: Mutable<RunFacts> = {
-			id: run.id, alias: `#${info.agent_id}`, name: info.name, cli: info.cli, displayName: this.displayName(info.cli), command: info.cli,
-			location: info.location_id, cwd: info.cwd, environment: this.environmentOf(info.location_id), yolo: info.yolo,
+			id: run.id, alias: this.agentLabel(info), address: info.address ?? agentAddress(info), name: info.name, cli: info.cli,
+			displayName: this.displayName(info.cli, local ? undefined : info.machine_id), command: info.cli,
+			location: info.location_id, cwd: info.cwd, environment: this.agentEnvironment(info), yolo: info.yolo,
+			...local ? {} : { remoteMachine: this.deps.machineName(info.machine_id) },
+			...info.unreachable ? { disconnected: true } : {},
 			createdAt: Date.parse(info.created_at), lifecycle: 'running', phase: 'running', activity: 'unknown', reporting: false,
-			root: this.byAgent.get(info.root) ?? info.root, origin: info.creator ? 'agent' : 'human', tools: info.tools_state
+			root: this.byAgent.get(root) ?? root, origin: info.creator ? 'agent' : 'human', tools: info.tools_state
 		};
 		if (info.pid !== undefined) { facts.pid = info.pid; }
-		if (info.creator) { facts.creator = this.byAgent.get(info.creator) ?? info.creator; }
-		if (info.session) { facts.sessionId = info.session; facts.resumable = true; facts.pinnable = true; }
+		if (info.creator) {
+			const creator = agentAddress({ agent_id: info.creator, machine_id: info.creator_machine_id ?? info.machine_id });
+			facts.creator = this.byAgent.get(creator) ?? creator;
+		}
+		if (info.session) { facts.sessionId = info.session; facts.resumable = true; facts.pinnable = local; }
 		if (info.tools_reason) { facts.toolsReason = info.tools_reason; }
 		if (info.tools_reason === 'disconnected') { facts.toolsProblem = 'disconnected'; }
 		if (info.said) {
@@ -1276,8 +1430,16 @@ export class RustAgents implements Agents, Disposable {
 		return facts;
 	}
 
-	private displayName(cli: string): string {
-		return this.deps.clis().find(each => each.cli === cli)?.display_name ?? cli;
+	private displayName(cli: string, machine?: string): string {
+		return this.deps.clis(machine).find(each => each.cli === cli)?.display_name ?? cli;
+	}
+
+	private agentLabel(info: AgentInfo): string {
+		return info.label ?? (this.local(info) ? `#${info.agent_id}` : agentAddress(info));
+	}
+
+	private agentEnvironment(info: AgentInfo): string {
+		return this.local(info) ? this.environmentOf(info.location_id) : `machine:${info.machine_id}`;
 	}
 
 	/** A location's environment: `local` or the window's remote authority, the same for every location of the window. */
@@ -1288,11 +1450,11 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private conversationKey(info: AgentInfo, sessionId: string): ConversationKey {
-		return { environment: this.environmentOf(info.location_id), cli: info.cli, sessionId };
+		return { environment: this.agentEnvironment(info), cli: info.cli, sessionId };
 	}
 
 	private matchesConversation(info: AgentInfo, key: ConversationKey): boolean {
-		return info.session === key.sessionId && info.cli === key.cli && this.environmentOf(info.location_id) === key.environment;
+		return info.session === key.sessionId && info.cli === key.cli && this.agentEnvironment(info) === key.environment;
 	}
 
 	private locationFor(id: LocationId | undefined, cwd: string): Location | undefined {
@@ -1304,14 +1466,15 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	private titleOf(info: AgentInfo): string | undefined {
-		const read = this.titles.get(info.agent_id);
+		const read = this.titles.get(agentAddress(info));
 		return read?.session === info.session && read?.cwd === info.cwd ? read?.title : undefined;
 	}
 
 	/** Reads the CLI's own history for Go to Agent and the panel (CLIS-2.4, LIFECYCLE-2.3). */
 	private async readTitle(info: AgentInfo): Promise<void> {
-		const { agent_id: agent, cli, cwd, session } = info;
-		if (!session) { return; }
+		const agent = agentAddress(info);
+		const { cli, cwd, session } = info;
+		if (!session || !this.local(info)) { return; }
 		const window = this.window;
 		const key = this.conversationKey(info, session);
 		try {
@@ -1323,7 +1486,7 @@ export class RustAgents implements Agents, Disposable {
 			if (run && !this.resuming.has(agent)) { this.refresh(run, 'reported'); }
 			if (this.isOtherAgent(current)) { this.emitOtherAgents(); }
 		} catch (err) {
-			this.deps.log.event(`Could not read the title of #${agent}'s conversation: ${messageOf(err)}`);
+			this.deps.log.event(`Could not read the title of ${this.agentLabel(info)}'s conversation: ${messageOf(err)}`);
 		}
 	}
 
@@ -1332,22 +1495,28 @@ export class RustAgents implements Agents, Disposable {
 
 	/** A snapshot supplies the saved message. A first live change can also notify this window (COLLABORATION-2.3). */
 	private message(message: Message, live: boolean): void {
-		if (this.disposed || message.to !== 'human') { return; }
-		const record = this.recordOf(message);
+		if (this.disposed || message.to !== 'human' || !message.message_ref) { return; }
+		const record = this.recordOf(message, message.message_ref);
 		const seen = this.told.has(record.id);
-		this.told.set(message.message_id, record);
+		this.told.set(record.id, record);
 		if (live && !seen) { this.deps.contact.contact(record, id => this.told.get(id)); }
 	}
 
-	private recordOf(message: Message): MessageRecord {
+	private recordOf(message: Message, ref: NonNullable<Message['message_ref']>): MessageRecord {
+		const sender = { agent_id: message.from, machine_id: message.from_machine_id ?? ref.machine_id };
+		const address = agentAddress(sender);
+		const info = this.all.get(address);
 		const from = message.from === 'facade' ? { run: 'facade' as const }
-			: { run: this.byAgent.get(message.from) ?? message.from, alias: `#${message.from}`, ...message.from_name ? { name: message.from_name } : {} };
+			: { run: this.byAgent.get(address) ?? address, alias: info ? this.agentLabel(info) : this.local(sender) ? `#${message.from}` : address,
+				...message.from_name ? { name: message.from_name } : {} };
 		const environment = this.environmentOf();
 		const delivery = message.delivery;
+		const id = messageAddress(ref);
 		return {
-			id: message.message_id, alias: `#${message.message_id}`, kind: message.from === 'facade' ? 'result' : 'message', from, to: { run: '@human' },
+			id, alias: ref.machine_id === this.window.machine_id ? `#${ref.message_id}` : id,
+			kind: message.from === 'facade' ? 'result' : 'message', from, to: { run: '@human' },
 			window: this.window.window_id, environment, at: Date.parse(message.at) || Date.now(), text: message.text, length: [...message.text].length,
-			...message.reply_to ? { replyTo: message.reply_to } : {},
+			...message.reply_to ? { replyTo: messageAddress({ message_id: message.reply_to, machine_id: message.reply_to_machine_id ?? ref.machine_id }) } : {},
 			delivery: {
 				status: delivery.status, ...delivery.reason ? { reason: delivery.reason } : {}, attempts: 1, via: 'notification',
 				effects: { outcome: delivery.status === 'success' ? 'confirmed' : 'none', text_written: delivery.text_written },
@@ -1424,6 +1593,7 @@ function deferred<T>(): PromiseWithResolvers<T> {
 
 /** A refusal known to have left the CLI unstarted. A missing answer carries its original reason. */
 function launchRefused(err: unknown): boolean {
+	if (err instanceof DaemonError && err.data.unavailable) { return err.data.unavailable.execution === 'not_executed'; }
 	return err instanceof DaemonError && err.reason !== 'internal' && !(
 		err.message.includes('the call may or may not have run') || err.message.includes('the outcome is unknown')
 		|| err.message.startsWith('could not keep ') || err.message.includes(': its actor stopped')

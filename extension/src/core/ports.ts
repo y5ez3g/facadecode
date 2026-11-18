@@ -891,7 +891,7 @@ export type ResumeResult = RunId | { readonly running: RunId | 'elsewhere' };
 /** An agent a Rust window can adopt via Go to Agent (LIFECYCLE-2.3). */
 export interface OtherAgent {
 	readonly facts: RunFacts;
-	readonly windows: readonly { readonly label: string; readonly connected: boolean }[];
+	readonly windows: readonly { readonly label: string; readonly connected?: boolean }[];
 }
 
 export interface Agents {

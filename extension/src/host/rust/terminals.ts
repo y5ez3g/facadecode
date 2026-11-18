@@ -11,6 +11,7 @@ import type { Disposable, Event, PairFacts, RunId, TabPlace } from '../../core/p
 import type { RunBinding } from '../execution/agentPty';
 import { AgentTerminals, type AgentTerminal } from '../execution/agentTerminals';
 import type { RunScreen } from '../execution/hiddenAnswers';
+import { agentAddress } from './references';
 import { encodeTerminalInput, type DaemonLink, type RustTerminals } from './types';
 
 /** What `AgentTerminals` is made with: the layer gives `media`, `icon`, `log` and `colours` alone; the callbacks are this class's own. */
@@ -18,6 +19,13 @@ type TerminalOptions = ConstructorParameters<typeof AgentTerminals>[0];
 
 /** How long a pinned tab's terminal is waited for as it opens in its turn: one that does not open in time keeps its agent (LIFECYCLE-3.5). */
 const OPEN_WAIT_MS = 10_000;
+const SCREEN_RETRY_MS = 250;
+
+/** Each subscription holds its own generation for the full agent address. */
+interface ScreenWatch {
+	readonly agent: string;
+	handle?: Disposable;
+}
 
 /** One agent tab: its terminal, and the screen watch it holds while the tab is open. */
 interface Pair {
@@ -26,8 +34,11 @@ interface Pair {
 	readonly facts: PairFacts;
 	/** The core agent whose screen it shows, once bound. */
 	agent?: string;
+	/** A remote tab suspends input and redraws from a snapshot after a connection is restored. */
+	remote?: { reachable: boolean; ready: boolean; noted: boolean };
 	/** The watch of that agent's screen: kept only while the tab is open. */
-	watch?: Disposable;
+	watch?: ScreenWatch;
+	retry?: ReturnType<typeof setTimeout>;
 	/** The pending answer to the terminal's request for the screen, until the watch's snapshot comes. */
 	pending?: { resolve(screen: RunScreen): void; reject(err: Error): void };
 	/** Decodes the bytes of the watch's output, which may cut a character in two. */
@@ -95,14 +106,27 @@ export class DaemonTerminals implements RustTerminals, vscode.Disposable {
 		this.pairs.get(run)?.terminal.pty.note(text);
 	}
 
-	bind(run: RunId, agent: string): void {
+	bind(run: RunId, agent: string, remote?: { readonly reachable: boolean }): void {
 		const pair = this.pairs.get(run);
 		if (!pair) {
 			return;
 		}
 		pair.agent = agent;
+		pair.remote = remote && { reachable: remote.reachable, ready: false, noted: false };
 		this.unwatch(pair);
 		pair.terminal.pty.bind(this.binding(pair, agent));
+	}
+
+	setReachable(run: RunId, reachable: boolean): void {
+		const pair = this.pairs.get(run);
+		if (!pair?.remote || !pair.agent) { return; }
+		pair.remote.reachable = reachable;
+		if (!reachable) {
+			this.stopWatching(pair);
+			this.suspend(pair);
+		} else if (!pair.watch && !pair.retry && pair.terminal.pty.isOpen) {
+			this.watchScreen(pair, pair.agent);
+		}
 	}
 
 	exited(run: RunId, text: string): void {
@@ -200,19 +224,59 @@ export class DaemonTerminals implements RustTerminals, vscode.Disposable {
 			snapshot: () => new Promise<RunScreen>((resolve, reject) => {
 				this.unwatch(pair);
 				pair.pending = { resolve, reject };
-				const args: ScreenWatchArgs = { agent, keep_scrollback: true };
-				pair.watch = this.link.watch<ScreenSnapshot, ScreenChange>('screen', args, {
-					snapshot: snapshot => this.snapshot(pair, snapshot),
-					change: change => this.change(pair, change)
-				});
+				if (pair.remote && !pair.remote.reachable) { this.suspend(pair); }
+				else { this.watchScreen(pair, agent); }
 			}),
-			input: data => this.link.notify('agent.type', { agent, raw: encodeTerminalInput(data) }),
-			resize: (cols, rows) => this.link.notify('agent.resize', { agent, cols, rows })
+			input: data => { if (!pair.remote || pair.remote.ready) { this.link.notify('agent.type', { agent, raw: encodeTerminalInput(data) }); } },
+			resize: (cols, rows) => { if (!pair.remote || pair.remote.ready) { this.link.notify('agent.resize', { agent, cols, rows }); } }
 		};
+	}
+
+	private watchScreen(pair: Pair, agent: string): void {
+		const args: ScreenWatchArgs = { agent, keep_scrollback: true };
+		const watch: ScreenWatch = { agent };
+		pair.watch = watch;
+		const current = () => pair.watch === watch && pair.agent === watch.agent;
+		const handle = this.link.watch<ScreenSnapshot, ScreenChange>('screen', args, {
+			snapshot: snapshot => { if (current()) { this.snapshot(pair, snapshot); } },
+			change: change => { if (current()) { this.change(pair, change); } },
+			...pair.remote ? {
+				disconnected: () => { if (current()) { this.suspend(pair); } },
+				ended: error => {
+					if (!current()) { return; }
+					this.stopWatching(pair);
+					this.suspend(pair);
+					if (error.reason === 'unavailable') { this.retryScreen(pair, agent); }
+				}
+			} : {}
+		});
+		if (current()) { watch.handle = handle; } else { handle.dispose(); }
+	}
+
+	private retryScreen(pair: Pair, agent: string): void {
+		const retry = setTimeout(() => {
+			if (pair.retry !== retry) { return; }
+			pair.retry = undefined;
+			if (pair.agent === agent && pair.remote?.reachable && this.link.connected && pair.terminal.pty.isOpen) {
+				this.watchScreen(pair, agent);
+			}
+		}, SCREEN_RETRY_MS);
+		pair.retry = retry;
+		retry.unref();
+	}
+
+	private suspend(pair: Pair): void {
+		if (!pair.remote) { return; }
+		pair.remote.ready = false;
+		if (!pair.remote.noted && pair.terminal.pty.isOpen) {
+			pair.remote.noted = true;
+			pair.terminal.pty.note(vscode.l10n.t('Connection lost · reconnecting'));
+		}
 	}
 
 	/** The watch's snapshot: the screen the terminal asked for, or, after a reconnection, a screen that replaces what it shows. */
 	private snapshot(pair: Pair, snapshot: ScreenSnapshot): void {
+		if (pair.remote && (!pair.remote.reachable || pair.agent !== agentAddress(snapshot))) { return; }
 		pair.decoder = new StringDecoder('utf8');
 		const screen = textOf(snapshot.redraw, pair.decoder);
 		const seq = ++pair.seq;
@@ -223,9 +287,18 @@ export class DaemonTerminals implements RustTerminals, vscode.Disposable {
 		} else {
 			pair.terminal.pty.output(seq, `\x1bc${screen}`);
 		}
+		if (pair.remote && pair.agent) {
+			pair.remote.ready = true;
+			pair.remote.noted = false;
+			const dimensions = pair.terminal.pty.dimensions;
+			if (dimensions && (dimensions.columns !== snapshot.cols || dimensions.rows !== snapshot.rows)) {
+				this.link.notify('agent.resize', { agent: pair.agent, cols: dimensions.columns, rows: dimensions.rows });
+			}
+		}
 	}
 
 	private change(pair: Pair, change: ScreenChange): void {
+		if (pair.remote && !pair.remote.ready) { return; }
 		if (change.kind === 'output') {
 			pair.terminal.pty.output(++pair.seq, textOf(change.data, pair.decoder));
 		} else if (change.kind === 'redraw') {
@@ -236,9 +309,17 @@ export class DaemonTerminals implements RustTerminals, vscode.Disposable {
 		// `exit` and `removed` are the agents' to tell (`exited`, `removePair`)
 	}
 
-	private unwatch(pair: Pair): void {
-		pair.watch?.dispose();
+	private stopWatching(pair: Pair): void {
+		const watch = pair.watch;
 		pair.watch = undefined;
+		clearTimeout(pair.retry);
+		pair.retry = undefined;
+		watch?.handle?.dispose();
+	}
+
+	private unwatch(pair: Pair): void {
+		this.stopWatching(pair);
+		if (pair.remote) { pair.remote.ready = false; pair.remote.noted = false; }
 		const pending = pair.pending;
 		pair.pending = undefined;
 		pending?.reject(new Error('The screen was not watched to its end.'));

@@ -36,7 +36,7 @@ export function referencedRun<T extends Pick<RunFacts, 'id' | 'alias' | 'address
 	const text = search.trim();
 	const id = /^(?:run-[0-9a-f]{32}|a\d+)$/.exec(text)?.[0];
 	if (id) {
-		return runs.find(run => run.id === id);
+		return runs.find(run => run.id === id || (run.address !== undefined && run.alias === `#${id}`));
 	}
 	const address = /(?:^|\s)(#a\d+(?:@[a-z0-9][a-z0-9:-]*)?)$/i.exec(text)?.[1]?.toLowerCase();
 	return address ? runs.find(run => run.alias === address || run.address === address) : undefined;
@@ -126,7 +126,7 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 				if (!named && !item.alwaysShow && !matchesText(query, item.label) && !matchesText(query, item.description ?? '')) {
 					continue;
 				}
-				const labels = windows.map(({ label, connected }) => plainText(connected ? label : `${label} (${disconnected})`).replace(/\r?\n/g, ' '));
+				const labels = windows.map(({ label, connected }) => plainText(connected === false ? `${label} (${disconnected})` : label).replace(/\r?\n/g, ' '));
 				items.push({ ...item, description: [item.description, labels.join(', ')].filter(Boolean).join(' · '), alwaysShow: !!query, other: facts });
 			}
 		}

@@ -22,6 +22,7 @@ import { environmentFloor } from '../../record/windowRegistry';
 import { COMMANDS } from '../../ui/catalog';
 import { registerUi } from '../../ui/commands/index';
 import { registerWorktreeCommands } from '../../ui/commands/worktree';
+import type { MachineLaunch } from '../../ui/pickers/machineLaunch';
 import { HostClis } from '../clis';
 import { WindowContact } from '../contact';
 import { WindowColours } from '../execution/terminalColours';
@@ -38,6 +39,7 @@ import { RustAgents } from './agents';
 import { connectDaemon } from './connection';
 import { WorkspaceDismissedAgents } from './dismissedAgents';
 import { facadeInTerminals, startEnvironment } from './environment';
+import { RustMachines } from './machines';
 import { RustClis, RustLocations, RustWorktrees } from './ports';
 import { DaemonTerminals } from './terminals';
 import { DaemonError, FACADE_PROGRAM, type DaemonLink } from './types';
@@ -138,6 +140,7 @@ function describeDaemonError(err: DaemonError): string {
 		ended: vscode.l10n.t('The agent has ended'),
 		capacity_exceeded: vscode.l10n.t('Too much input at once'),
 		upgrading: vscode.l10n.t('Facade is updating; try again in a moment'),
+		ssh_interaction_required: vscode.l10n.t('SSH interaction required'),
 		refused: vscode.l10n.t('Facade does not allow this'),
 		internal: vscode.l10n.t('Something went wrong in Facade')
 	};
@@ -275,6 +278,7 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	const hostClis = new HostClis({ settings, log: line => log.event(line), home, version: String(context.extension.packageJSON.version) });
 	const locations = new RustLocations(windowInfo, windowChanged.event, foldersOf, identity.remote, () => link.update(description()));
 	const clis = new RustClis(windowInfo, () => hostClis.icons());
+	const machines = new RustMachines(link, () => hostClis.icons());
 	const worktrees = new RustWorktrees(link, locations, update);
 	const terminals = new DaemonTerminals(link, { media: vscode.Uri.joinPath(context.extensionUri, 'media'), icon: cli => hostClis.icons()(cli), log: line => log.event(line), colours, terminalOwner: { ...terminalOwner, remote: identity.remote !== undefined } });
 	const conversations = new ConversationFile(home);
@@ -304,7 +308,9 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		link,
 		terminals,
 		locations,
-		clis: (): readonly CliInfo[] => windowInfo()?.clis ?? [],
+		clis: (machine): readonly CliInfo[] => machine === undefined ? windowInfo()?.clis ?? [] : machines.clis(machine),
+		machineName: machine => machines.name(machine),
+		onDidChangeMachines: machines.onDidChange,
 		windows: () => [...windowInfos.values()],
 		onDidChangeWindows: windowChanged.event,
 		environment: location => startEnvironment(location, root),
@@ -339,9 +345,16 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	};
 	restorePins();
 	const settingsChanged = new vscode.EventEmitter<void>();
+	const network: MachineLaunch = {
+		machines: () => machines.choices(),
+		catalog: machine => machines.catalog(machine),
+		preflight: (machine, request) => agents.preflightRemote(machine, request),
+		launch: (machine, request) => agents.launchRemote(machine, request)
+	};
 	const disposables: vscode.Disposable[] = [
 		output,
 		colours,
+		machines,
 		binding,
 		windowChanged,
 		windowRebound,
@@ -376,7 +389,9 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 				window: () => link.window,
 				ready: () => agents.ready,
 				onDidChangeWindow: windowRebound.event,
+				network,
 				otherAgents: () => agents.otherAgents(),
+				queryOtherAgents: () => agents.queryOtherAgents(),
 				onDidChangeOtherAgents: agents.onDidChangeOtherAgents,
 				adoptAgent: agent => agents.adoptAgent(agent),
 				closeOtherAgent: agent => agents.closeOtherAgent(agent),

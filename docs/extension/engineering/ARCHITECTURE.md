@@ -181,8 +181,14 @@ old-engine agent's request to a Rust window finds it unavailable.
 
 End Agent calls `agent.stop` for a running agent. End Agent and normal exit record the conversation in `conversations/`
 for Resume and leave the agent's record in core (RULES-4.1). Go to Agent uses `agent.adopt` to add the editor's
-logical window to an existing agent. The `agents` snapshot identifies members and verifies Pins by machine ID and
-number. Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN`
+logical window to an existing agent. `agent.list` queries the network for Go to Agent. The `machines` topic gives New
+Agent its targets. `cli.list` and `location.list` read the chosen machine and `agent.start_preflight` checks the
+request before `agent.start`. The `agents` view keys each record by running machine and agent ID. A remote machine's
+synced snapshot replaces that machine's records. A pending, unreachable or missing snapshot keeps its known cards
+and pauses their terminal input. Losing the local core connection marks every remote card disconnected until its
+running machine syncs again. A temporarily ended screen watch retries while its agent remains reachable and its tab
+is open. The replacement watch draws a fresh screen before accepting input. Complete
+local snapshots verify Pins by machine ID and number. Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN`
 (RULES-4.2). The shared workspace file and logical-window presentation keys follow 3.1. A Rust window's terminals
 get `<home>/core/bin` before `PATH` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`
 (CLIS-1.2), so `facade` there reaches the window's agents; an old-engine window's get neither.

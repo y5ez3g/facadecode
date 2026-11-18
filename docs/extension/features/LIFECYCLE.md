@@ -288,7 +288,8 @@ immediately, with cleanup in the background where a process exists. Resume Agent
 its retained number after End Agent or normal exit, including when its card is gone. MCP keeps `stop_agent` under MCP-3.2.
 
 On the Rust engine, End Agent calls `agent.stop` for a running agent, including one whose number arrives after the card
-is closed. A successful stop closes the pairs in its connected member windows under RULES-4.1. For an ended agent,
+is closed. An agent on another Facade machine keeps its pair until core confirms the stop or reports its exit.
+A successful stop closes the pairs in its connected member windows under RULES-4.1. For an ended agent,
 End Agent dismisses the card. The workspace remembers that
 dismissal for an actual abnormal exit recorded by core. A card for a failed restoration call is dismissed for the current
 activation. A running agent whose stop failed can reattach at the next opening or reload. On the old engine, End Agent
@@ -297,7 +298,8 @@ not confirmed is recorded, so that a reload ends that run rather than showing it
 
 Return actual cleanup status to the initiator without recreating a closed card or claiming an unreachable process is dead:
 a known failure to end the process is reported as `{0}'s card and terminal were closed, but its process could not be
-terminated.` On the Rust engine, an unconfirmed result is reported with its reason through `Could not end {0}: {1}`.
+terminated.` On the Rust engine, a remote stop refusal or an unconfirmed result is reported with its reason through
+`Could not end {0}: {1}`.
 A close while the process is being started answers how that start's cleanup ended. Worktree, files, conversation history
 and the agents it started stay. Unsolicited exits follow RULES-3.3.
 

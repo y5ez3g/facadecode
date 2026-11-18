@@ -13,6 +13,7 @@ import { PanelView } from '../panel';
 import { pickFilter } from '../pickers/filter';
 import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
+import type { MachineLaunch } from '../pickers/machineLaunch';
 import { resumeAgent } from '../pickers/resume';
 import { messageOf } from '../../base/errors';
 import { newAgent } from '../pickers/newAgent';
@@ -27,7 +28,9 @@ interface RustUi {
 	readonly window: () => WindowRef;
 	readonly ready: () => Promise<unknown>;
 	readonly onDidChangeWindow: vscode.Event<Promise<unknown>>;
+	readonly network: MachineLaunch;
 	otherAgents(): readonly OtherAgent[];
+	queryOtherAgents(): Promise<readonly OtherAgent[]>;
 	readonly onDidChangeOtherAgents: Event<void>;
 	adoptAgent(agent: string): Promise<RunId>;
 	closeOtherAgent(agent: string): ReturnType<Agents['close']>;
@@ -193,10 +196,18 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history,
 				select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media,
 				...deps.names ? { names: deps.names } : {}, ...deps.remote ? { remote: deps.remote } : {},
-				...rust ? { worktreeAgents: {
-					count: path => rust.worktreeAgents(path),
-					close: async path => rust.window() === window && rust.closeWorktreeAgents(path)
-				} } : {}
+				...rust ? {
+					worktreeAgents: {
+						count: path => rust.worktreeAgents(path),
+						close: async path => rust.window() === window && rust.closeWorktreeAgents(path)
+					},
+					network: {
+						machines: () => rust.window() === window ? rust.network.machines() : undefined,
+						catalog: async machine => { checkWindow(window); return rust.network.catalog(machine); },
+						preflight: async (machine, request) => { checkWindow(window); return rust.network.preflight(machine, request); },
+						launch: (machine, request) => { checkWindow(window); return rust.network.launch(machine, request); }
+					}
+				} : {}
 			}, startAt);
 		},
 		goToAgent: () => {
@@ -206,6 +217,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				copyReference: run => agent.copyReference(run), close: run => agent.close(run), ...deps.icons ? { icons: deps.icons } : {},
 				...rust ? { others: {
 					list: () => rust.window() === window ? rust.otherAgents() : [],
+					query: async () => { checkWindow(window); return rust.queryOtherAgents(); },
 					onDidChange: rust.onDidChangeOtherAgents,
 					open: async id => {
 						try { checkWindow(window); await agent.reveal(await rust.adoptAgent(id)); }

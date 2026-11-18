@@ -16,10 +16,10 @@ import { timeout } from '../../base/async';
 import { connectWithin, type Reached } from '../../base/connect';
 import { messageOf } from '../../base/errors';
 import { lineReader } from '../../base/lines';
-import type { ChangedParams, EmptyResult, ErrorBody, HelloParams, HelloResult, NumbersGiven, Operation, ScreenChange, Topic, UpgradeArgs, WatchResult, WindowDescription, WindowRef } from '../../base/coreProtocol';
+import type { ChangedParams, EmptyResult, ErrorBody, HelloParams, HelloResult, NumbersGiven, Operation, ScreenChange, Topic, UpgradeArgs, WatchEndedParams, WatchResult, WindowDescription, WindowRef } from '../../base/coreProtocol';
 import type { Disposable, Event } from '../../core/ports';
 import { DaemonError } from './types';
-import type { DaemonLink, TerminalNotificationArgs } from './types';
+import type { DaemonLink, TerminalNotificationArgs, WatchListener } from './types';
 
 /** Ordinary connections require the protocol with logical window bindings. */
 const DAEMON_PROTOCOL = 2;
@@ -185,6 +185,7 @@ class Connection {
 
 	constructor(private readonly socket: net.Socket, private readonly on: {
 		changed(params: ChangedParams): void;
+		watchEnded(params: WatchEndedParams): void;
 		closing(): void;
 		closed(): void;
 		log(line: string): void;
@@ -260,6 +261,8 @@ class Connection {
 		}
 		if (message.method === 'changed') {
 			this.on.changed(message.params as ChangedParams);
+		} else if (message.method === 'watch_ended') {
+			this.on.watchEnded(message.params as WatchEndedParams);
 		} else if (message.method === 'closing') {
 			this.on.closing();
 		} else if (message.method === undefined && typeof message.id === 'number') {
@@ -276,7 +279,7 @@ class Connection {
 interface Watching {
 	readonly topic: Topic;
 	readonly args: object;
-	readonly on: { snapshot(snapshot: never): void; change(change: never): void };
+	readonly on: WatchListener<never, never>;
 	/** The number core gave it on the current connection. */
 	number?: number;
 	disposed: boolean;
@@ -393,7 +396,7 @@ class Link implements DaemonLink {
 		this.connection?.notify('call', { op, args });
 	}
 
-	watch<S, C>(topic: Topic, args: object, on: { snapshot(snapshot: S): void; change(change: C): void }): Disposable {
+	watch<S, C>(topic: Topic, args: object, on: WatchListener<S, C>): Disposable {
 		const watching: Watching = { topic, args, on: on as Watching['on'], disposed: false };
 		this.watching.add(watching);
 		if (this.connection && !this.publishingBinding) {
@@ -488,6 +491,7 @@ class Link implements DaemonLink {
 		}
 		const connection = new Connection(reached.socket, {
 			changed: params => this.changed(connection, params),
+			watchEnded: params => this.watchEnded(connection, params),
 			closing: () => this.closing(connection),
 			closed: () => this.closed(connection),
 			log: line => this.options.log(line),
@@ -561,7 +565,9 @@ class Link implements DaemonLink {
 		}
 		this.options.log(`Facade core refused to watch ${watching.topic}: ${err.message}`);
 		this.watching.delete(watching);
-		if (watching.topic === 'screen' && err.reason === 'not_found') {
+		if (watching.on.ended) {
+			this.tell(() => watching.on.ended?.(err));
+		} else if (watching.topic === 'screen' && err.reason === 'not_found') {
 			// The agent went while the window was disconnected: its screen's last change
 			const gone: ScreenChange = { kind: 'removed' };
 			this.tell(() => watching.on.change(gone as never));
@@ -575,6 +581,16 @@ class Link implements DaemonLink {
 				this.tell(() => watching.on.change(params.change as never));
 			}
 		}
+	}
+
+	private watchEnded(connection: Connection, params: WatchEndedParams): void {
+		if (connection !== this.connection || !connection.active) { return; }
+		const watching = this.byNumber.get(params.watch);
+		if (!watching || watching.disposed) { return; }
+		this.byNumber.delete(params.watch);
+		this.watching.delete(watching);
+		watching.number = undefined;
+		this.tell(() => watching.on.ended?.(errorOf(params.error)));
 	}
 
 	/** A newer Facade takes over: answers, sends nothing more, and connects again once the new daemon answers. */
@@ -601,6 +617,7 @@ class Link implements DaemonLink {
 		this.byNumber.clear();
 		for (const watching of this.watching) {
 			watching.number = undefined;
+			this.tell(() => watching.on.disconnected?.());
 		}
 		void this.reconnect();
 	}

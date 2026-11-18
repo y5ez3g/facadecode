@@ -121,10 +121,12 @@ Use a native information notification that names the source agent with its short
 line, with Open Message, which opens the complete saved message (3.2), and Show Agent, which opens the agent's terminal
 (UX-1.2). Existing terminal visibility does not suppress an explicit call. Distinct calls remain distinct records.
 
-On Rust, one message ID identifies the send in the sender's running machine. Use the member windows present at send
-time. Only a connected window with a current message subscription can receive it. Success means at least one
+On Rust, the sender's running machine assigns one message ID. The storage machine ID and message ID together identify
+the notice and its reply reference. Use the member windows present at send time across the connected machines.
+Only a connected window with a current message subscription can receive it. Success means at least one
 subscription accepted the notification. The response gives the windows that accepted it and the reasons for each
-missed window. Zero accepted subscriptions return an error to the sending agent and leave no notification record.
+missed window. Zero accepted subscriptions return an error to the sender. Forwarded delivery without a reply keeps
+the assigned message ID and reports that the outcome is unknown.
 A repeated request ID returns the same settled outcome, waits for it while in flight, or returns an unknown outcome
 if core stopped before settling it. A repeated ID never sends another notification.
 

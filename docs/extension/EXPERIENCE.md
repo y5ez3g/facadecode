@@ -95,7 +95,7 @@ anything, whether its run began or resumed a conversation - unless Facade says, 
 dot is red or what the CLI waits for (PANEL-1.4); absence of reliable status is never claimed as idle. A turn ending
 removes the dot without a notification or a claim that the task is complete. A busy agent's tab turns a spinner before
 its name (LIFECYCLE-2.2). Clicking a card opens that same terminal. On Rust, Go to Agent can open another running
-agent from the same machine in this window. The agent remains in its existing windows (LIFECYCLE-2.3).
+agent on a reachable Facade machine in this window. The agent remains in its existing windows (LIFECYCLE-2.3).
 
 ### 2.2 Only errors and explicit calls to the person notify
 
@@ -111,7 +111,8 @@ independently in multiple connected Rust member windows under COLLABORATION-2.3.
 **A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until End Agent.**
 
 Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. End Agent
-removes its card and terminal immediately and cleans up the process in the background. A successful Rust stop
+removes a local card and terminal immediately and cleans up the process in the background. A card for a process
+on another Facade machine stays until its stop is confirmed (LIFECYCLE-3.1). A successful Rust stop
 closes the other connected members' cards and tabs too (RULES-4.1). Closing one tab only hides that window's view
 (LIFECYCLE-2.2). Worktrees and the agents it started stay.
 
