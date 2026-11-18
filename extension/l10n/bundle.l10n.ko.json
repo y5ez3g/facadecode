@@ -203,6 +203,8 @@
 	"This machine": "이 컴퓨터",
 	"Running on {0}": "{0}에서 실행 중",
 	"SSH interaction required": "SSH 연결에 상호 작용 필요",
+	"Facade Code couldn’t find the Facade core on this computer. Install Facade Code locally to connect this Remote-SSH window to your Facade network.": "이 컴퓨터에서 Facade 코어를 찾을 수 없습니다. 이 Remote-SSH 창을 Facade 네트워크에 연결하려면 Facade Code를 로컬에 설치하세요.",
+	"Connected to {0}. Agents with YOLO enabled on any machine that can reach it, directly or through other machines, can control its agents.": "{0}에 연결되었습니다. 이 컴퓨터에 직접 또는 다른 컴퓨터를 거쳐 연결할 수 있는 모든 컴퓨터에서 YOLO가 활성화된 에이전트는 이 컴퓨터의 에이전트를 제어할 수 있습니다.",
 	"Window disconnected": "창 연결 끊김",
 	"Select a folder": "폴더 선택",
 	"Select a working location": "작업 위치 선택",

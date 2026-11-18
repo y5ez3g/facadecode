@@ -9,10 +9,14 @@
   stopping. Reopening the workspace restores eligible Pins by machine and agent number. For session-only Pins from
   the old engine, pin the agent again to enable automatic restoration.
 - **Open the same Rust agent in more than one window.** Go to Agent can open a running agent from another window on the
-  same Facade machine. Both windows show the same process. End Agent closes its card and tab in every connected member
+  network. Both windows show the same process. End Agent closes its card and tab in every connected member
   window. Resume Agent can bring back its original number from any member window.
 - **Rust agents can contact you in every connected member window.** A send to `#human` reports which window subscriptions
   received it. Each window shows and dismisses its notification independently.
+- **Start agents on connected Facade machines.** New Agent offers a machine choice, then shows the chosen machine's CLIs
+  and working locations. A remote icon on each remote agent's card shows where it runs. In a terminal, use `facade start --on`.
+- **Remote-SSH windows join the Facade network automatically.** With Facade core available locally, the window connects
+  its remote workspace to it for as long as the window is open.
 
 ## 0.1.6
 

@@ -203,6 +203,8 @@
 	"This machine": "Cette machine",
 	"Running on {0}": "En cours d’exécution sur {0}",
 	"SSH interaction required": "SSH nécessite une interaction",
+	"Facade Code couldn’t find the Facade core on this computer. Install Facade Code locally to connect this Remote-SSH window to your Facade network.": "Facade Code n’a pas trouvé le cœur de Facade sur cet ordinateur. Installez Facade Code localement pour connecter cette fenêtre Remote-SSH à votre réseau Facade.",
+	"Connected to {0}. Agents with YOLO enabled on any machine that can reach it, directly or through other machines, can control its agents.": "Connecté à {0}. Les agents dont le mode YOLO est activé peuvent contrôler les agents de cette machine depuis toute machine qui peut l’atteindre, même en passant par d’autres machines.",
 	"Window disconnected": "Fenêtre déconnectée",
 	"Select a folder": "Sélectionnez un dossier",
 	"Select a working location": "Sélectionnez un emplacement de travail",

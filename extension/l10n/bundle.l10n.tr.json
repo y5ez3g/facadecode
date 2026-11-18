@@ -203,6 +203,8 @@
 	"This machine": "Bu makine",
 	"Running on {0}": "{0} üzerinde çalışıyor",
 	"SSH interaction required": "SSH için kullanıcı etkileşimi gerekiyor",
+	"Facade Code couldn’t find the Facade core on this computer. Install Facade Code locally to connect this Remote-SSH window to your Facade network.": "Bu bilgisayarda Facade çekirdeği bulunamadı. Bu Remote-SSH penceresini Facade ağınıza bağlamak için Facade Code'u yerel olarak yükleyin.",
+	"Connected to {0}. Agents with YOLO enabled on any machine that can reach it, directly or through other machines, can control its agents.": "{0} makinesine bağlandı. Bu makineye doğrudan veya başka makineler üzerinden erişebilen tüm makinelerde YOLO etkin olan ajanlar, bu makinenin ajanlarını kontrol edebilir.",
 	"Window disconnected": "Pencere bağlı değil",
 	"Select a folder": "Bir klasör seçin",
 	"Select a working location": "Bir çalışma konumu seçin",

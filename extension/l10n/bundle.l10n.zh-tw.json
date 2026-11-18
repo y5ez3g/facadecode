@@ -203,6 +203,8 @@
 	"This machine": "本機",
 	"Running on {0}": "在 {0} 上執行",
 	"SSH interaction required": "SSH 需要互動",
+	"Facade Code couldn’t find the Facade core on this computer. Install Facade Code locally to connect this Remote-SSH window to your Facade network.": "Facade Code 在這部電腦上找不到 Facade 核心。請在本機安裝 Facade Code，將此 Remote-SSH 視窗連線到您的 Facade 網路。",
+	"Connected to {0}. Agents with YOLO enabled on any machine that can reach it, directly or through other machines, can control its agents.": "已連線至 {0}。任何能直接或透過其他電腦連線到這部遠端電腦的電腦上，啟用 YOLO 的 Agent 都能控制遠端電腦上的 Agent。",
 	"Window disconnected": "視窗未連線",
 	"Select a folder": "選取資料夾",
 	"Select a working location": "選取工作位置",

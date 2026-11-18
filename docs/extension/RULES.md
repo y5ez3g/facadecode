@@ -234,7 +234,8 @@ no agent workflow or general-purpose scheduler is added.
 
 On the Rust engine, the core that serves a Facade home gives it one machine ID. A window's local machine is the core it
 connects to, including from a remote execution environment. Connected Rust machines can reach each other's agents under
-4.3. On the old engine, the window components route between
+4.3. A Rust Remote-SSH window automatically connects its remote Facade home to the local core while that window is open
+(ARCHITECTURE-1.4). On the old engine, the window components route between
 one user's windows on one client computer, including their local and remote execution environments.
 Each workspace runtime owns paths, CLI accounts, Git and process execution in its environment. Interpret a path in its
 owning environment. An open window with no folder can be discovered with an empty location catalog. Distinguish a known

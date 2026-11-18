@@ -97,14 +97,16 @@ removes the dot without a notification or a claim that the task is complete. A b
 its name (LIFECYCLE-2.2). Clicking a card opens that same terminal. On Rust, Go to Agent can open another running
 agent on a reachable Facade machine in this window. The agent remains in its existing windows (LIFECYCLE-2.3).
 
-### 2.2 Only errors and explicit calls to the person notify
+### 2.2 Notifications go to the window that needs them
 
-**Only relevant human-operation errors and explicit calls to the person produce human notifications.**
+**Human-operation errors, explicit calls to the person and Remote-SSH connection notices use native notifications.**
 
 Agent-operation errors return to the calling agent. Agent-to-agent delivery, replies and system-result handoff never
 automatically fall back to a person; if no agent can receive an error, the report ends. Native runtime failures follow
 RULES-1.8. No startup, idle, turn-end, permission or login news is announced. Explicit calls to the person can show
 independently in multiple connected Rust member windows under COLLABORATION-2.3.
+A Rust Remote-SSH window reports once if its local Facade core is missing. When that core first connects to a Facade
+machine through the window, the window explains which agents can control agents on the remote machine.
 
 ### 2.3 A turn ends, a process exits, or the person ends an agent
 

@@ -193,6 +193,12 @@ local snapshots verify Pins by machine ID and number. Pin restoration and manual
 get `<home>/core/bin` before `PATH` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`
 (CLIS-1.2), so `facade` there reaches the window's agents; an old-engine window's get neither.
 
+For a Rust Remote-SSH window the remote workspace host registers the logical window and supplies its packaged
+`facade machine serve --home-hex`, using its resolved Facade home. The local window component opens a `terminal`
+connection to local core and starts one temporary `machine.connect` with bridge transport. VS Code commands carry
+bounded byte chunks, EOF and stderr across the existing Remote-SSH connection. Closing or reloading a window closes
+its own bridge. The local component uses core's first-connection flag for the notice in EXPERIENCE-2.2.
+
 ## 2 Ownership and recovery
 
 ### 2.1 Routes without shared-remote-home assumptions
