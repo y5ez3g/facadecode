@@ -322,7 +322,8 @@ pub(crate) const PAGES: &[Page] = &[
         path: "machine add",
         description: "Connect to a machine over SSH and keep the connection. Facade reconnects on its own, even \
              after either machine restarts. The first connection runs here, so SSH can ask for a password or a \
-             host key. Run this again to repair a connection that needs an SSH login.",
+             host key. Set up SSH keys so Facade can reconnect in the background. \
+             Run this again to repair a connection that needs an SSH login.",
         alias: None,
         examples: &[
             direct(

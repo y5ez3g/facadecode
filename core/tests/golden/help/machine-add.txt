@@ -4,7 +4,8 @@ Usage: facade machine add [OPTIONS] <DESTINATION>
 
 Connect to a machine over SSH and keep the connection. Facade reconnects on its own, even after
 either machine restarts. The first connection runs here, so SSH can ask for a password or a host
-key. Run this again to repair a connection that needs an SSH login.
+key. Set up SSH keys so Facade can reconnect in the background. Run this again to repair a
+connection that needs an SSH login.
 
 Arguments:
   <DESTINATION>  SSH host from your SSH config, or user@host
