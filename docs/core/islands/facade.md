@@ -144,7 +144,8 @@ first-connection trust notice and Linux's SSH logout information.
   separate ordinary call to `machine.add` waits for the daemon to verify its saved session to the same machine ID.
   The foreground relay flushes buffered bytes between the daemon and SSH's pipes as soon as it reads them.
 - `machine list` prints a table, one row per machine with this one first: name, copyable `id:` selector, version, route
-  and the SSH connection saved here. `--json` prints the protocol's list. A saved connection that needs an SSH login
+  and the SSH connection saved here. The VERSION column shows the version without its build suffix. `--json` prints the
+  protocol's list with full builds. A saved connection that needs an SSH login
   adds a `warning:` with the command that repairs it, quoted for the shell, or its words one per line where a word
   needs escaping quoting cannot give. `machine remove` removes a saved connection and adds a `note:` where the
   machine still has a route through another machine. `machine rename` prints the machine's ID and new name.

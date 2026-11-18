@@ -55,10 +55,11 @@ to speak of, so every other crate can depend on it and it depends on none of the
 The public paths are `facade_base::<module>`. Grouped by who calls them:
 
 **Every program**
-- `build_id()`, `version()`, `VERSION`, `version_of(build)`, `takes_over(newer, running)`;
-  `take_test_build()` first in `main`, and `this_program()`, for tests that make a program play
-  another build: through a script, or without one through a file beside the program, its name and
-  `TEST_BUILD_SUFFIX`, which `install` and `point_launchers_at` carry with it.
+- Build and version helpers include `build_id()`, `version()`, `VERSION`, `build_version(build)`,
+  `version_of(build)` and `takes_over(newer, running)`. Call `take_test_build()` first in `main`.
+  Tests can make a program play another build through a script or a file beside the program.
+  `this_program()` locates the program. `install` and `point_launchers_at` carry the file named with
+  `TEST_BUILD_SUFFIX` beside it.
 - `paths::{facade_home, core_dir, home_key, daemon_socket, keeper_socket, daemon_socket_for,
   keeper_socket_for}`, `socket_dir` on Unix; `paths::ClientSocket`, a blocking client's end
   (Unix's `UnixStream`; on Windows a named pipe's, which checks the server's user), and

@@ -505,7 +505,11 @@ fn print_table(machines: &[MachineInfo], local_machine_id: &str) {
             vec![
                 machine.name.clone(),
                 machine_id_selector(&machine.machine_id, &identities),
-                machine.build.clone().unwrap_or_default(),
+                machine
+                    .build
+                    .as_deref()
+                    .map_or("", facade_base::build_version)
+                    .to_owned(),
                 route,
                 saved,
             ]

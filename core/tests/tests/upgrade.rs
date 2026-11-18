@@ -1181,6 +1181,33 @@ fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     );
 }
 
+/// The machine table and JSON show the version and build of a daemon that has a build suffix.
+#[test]
+fn machine_list_shows_the_version_and_json_keeps_the_build() {
+    let home = TestHome::new("machineversion");
+    let version = pre_release();
+    let build = format!("{version}+4f2a");
+    let program = program_of_build(&home, &build);
+    let output = home
+        .command(&program)
+        .args(["machine", "list"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let table = stdout(&output);
+    let shown = table
+        .lines()
+        .nth(1)
+        .and_then(|row| row.split_whitespace().nth(2));
+    assert_eq!(shown, Some(version.as_str()), "{table}");
+
+    let json = home.run_facade_ok(&["machine", "list", "--json"]);
+    let listed: facade_base::machine::MachineListResult =
+        facade_scenarios::serde_json::from_str(&json).unwrap();
+    assert_eq!(listed.machines[0].build.as_deref(), Some(build.as_str()));
+}
+
 /// The daemon itself refuses a takeover by a build of its own version and by an older one, and says
 /// why; the running Facade stays as it was.
 #[test]
