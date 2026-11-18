@@ -662,6 +662,25 @@ impl MessageTable {
         self.select_messages(&filter, Some(limit), params![owner, after as i64])
     }
 
+    /// The newest `last` messages of `owner`'s inbox, by number: of every message where `all`,
+    /// else of those not yet delivered.
+    pub(crate) fn inbox_last(
+        &self,
+        owner: &str,
+        all: bool,
+        last: usize,
+    ) -> anyhow::Result<Vec<Message>> {
+        let undelivered = match all {
+            true => String::new(),
+            false => format!(" AND {UNDELIVERED}"),
+        };
+        let filter = format!(
+            "number IN (SELECT number FROM messages WHERE \"to\" = ?1{undelivered} \
+             ORDER BY number DESC LIMIT {last})"
+        );
+        self.select_messages(&filter, None, [owner])
+    }
+
     /// Every kept message of `owner`'s inbox, by number.
     pub(crate) fn inbox(&self, owner: &str) -> anyhow::Result<Vec<Message>> {
         self.select_messages("\"to\" = ?1", None, [owner])

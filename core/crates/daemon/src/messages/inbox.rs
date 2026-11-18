@@ -60,6 +60,19 @@ impl Messages {
                 })
             })
             .transpose()?;
+        if let Some(last) = args.last {
+            if args.ids.is_some() || after.is_some() || args.limit.is_some() {
+                return Err(ErrorBody::invalid_argument(
+                    "last selects messages itself; leave out ids, cursor and limit",
+                ));
+            }
+            if !(1..=MAX_MESSAGES_LIMIT).contains(&last) {
+                return Err(ErrorBody::invalid_argument(format!(
+                    "last must be between 1 and {MAX_MESSAGES_LIMIT}"
+                )));
+            }
+            return self.last(inbox, args.all, usize::from(last));
+        }
         match &args.ids {
             Some(ids) => self.by_ids(inbox, ids, args),
             None => self.page(inbox, after.unwrap_or(0), args.all, limit),
@@ -140,6 +153,31 @@ impl Messages {
             messages,
             not_found: Vec::new(),
             next_cursor,
+        })
+    }
+
+    /// The newest `last` messages of `inbox`, oldest first: of every message where `all`, else of
+    /// those not yet delivered to a recipient.
+    fn last(
+        &self,
+        inbox: Inbox<'_>,
+        all: bool,
+        last: usize,
+    ) -> Result<MessagesSnapshot, ErrorBody> {
+        let table = &self.deliveries.table;
+        let messages = blocking_in_place(|| match inbox {
+            Inbox::Recipient(owner) => table.inbox_last(owner, all, last),
+            Inbox::Window(window) => {
+                let mut messages = table.human_inbox(window)?;
+                messages.drain(..messages.len().saturating_sub(last));
+                Ok(messages)
+            }
+        })
+        .map_err(ErrorBody::internal)?;
+        Ok(MessagesSnapshot {
+            messages,
+            not_found: Vec::new(),
+            next_cursor: None,
         })
     }
 

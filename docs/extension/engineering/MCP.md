@@ -332,10 +332,11 @@ A send to a guest answers:
 **Read only the calling agent's incoming messages, never its sent messages or another inbox; reading delivers.**
 
 Arguments: `after?:string` naming a message ID, or `last?:integer` (1–100). Giving both is `invalid_argument`.
-With neither, return messages not yet delivered. after returns every retained message after that ID; last returns
-the newest messages up to that count. There are no ids, all, cursor or limit arguments. Selection stays inside the
-caller's inbox, including with YOLO. Every returned message is delivered, including unread messages selected by
-after or last. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
+With neither, return messages not yet delivered. after returns the retained messages after that ID; last returns
+the newest messages up to that count. One read returns at most 100 messages; where more follow, `data.next_cursor` is
+the after that reads them. There are no ids, all, cursor or limit arguments. Selection stays inside the caller's inbox,
+including with YOLO. Every returned message is delivered, including unread messages selected by after or last, and
+no other message is. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
 
 Return `data.messages`, oldest first. Each record has `id`, `from`, `at` and the complete body as `text`, plus
 `reply_to` when given. from is the sender's `@name #aN`, its ID alone when unnamed, `#human` for the person, or

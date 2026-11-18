@@ -287,6 +287,7 @@ export interface MessagesWatchArgs {
 	readonly all?: boolean;
 	readonly cursor?: string;
 	readonly limit?: number;
+	readonly last?: number;
 }
 
 /** Empty arguments: `{}`. May be omitted for topics that take no arguments. */

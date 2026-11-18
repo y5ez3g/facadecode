@@ -190,7 +190,7 @@
               "idempotentHint": false,
               "openWorldHint": false
             },
-            "description": "Read your own inbox; this does not wait. Given neither after nor last, it returns the messages not yet delivered to you, and reading delivers them. after gives every message after the one it names; last gives the newest ones. New messages arrive by themselves, even after your turn ends: do not poll. Messages from facade are its 🔔 results. A list too long to return here comes as a file.",
+            "description": "Read your own inbox; this does not wait. Given neither after nor last, it returns the messages not yet delivered to you, and reading delivers them. after gives the messages after the one it names; last gives the newest ones. One read returns at most 100: next_cursor, where given, is the after that reads the next ones. New messages arrive by themselves, even after your turn ends: do not poll. Messages from facade are its 🔔 results. A list too long to return here comes as a file.",
             "inputSchema": {
               "type": "object",
               "properties": {
