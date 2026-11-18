@@ -786,7 +786,7 @@ impl Daemon {
         };
         // The environment a session-start hook gives is its CLI's own, not a subagent's: an agent
         // it starts runs with it.
-        if session.parent.is_none() {
+        if session.part_of_session.is_none() {
             self.guests
                 .keep_environment(guest.id(), session.env.as_ref());
         }

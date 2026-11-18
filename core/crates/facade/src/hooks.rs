@@ -315,7 +315,7 @@ fn report_guest(
 fn guest_session(cli: &str, input: &Value) -> Option<HookSession> {
     let hook::NamedSession {
         session,
-        parent,
+        parent: part_of_session,
         cwd,
     } = hook::session_of(cli, input)?;
     let cwd = cwd.or_else(|| Some(std::env::current_dir().ok()?.display().to_string()));
@@ -329,7 +329,7 @@ fn guest_session(cli: &str, input: &Value) -> Option<HookSession> {
         session,
         cwd,
         pid,
-        parent,
+        part_of_session,
         env: Some(environment().0),
         status_file: None,
     })

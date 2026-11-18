@@ -141,7 +141,7 @@ fn join(
             session: session.to_string(),
             cwd: relay.hello.cwd.clone(),
             pid,
-            parent: None,
+            part_of_session: None,
             env,
             status_file: None,
         })

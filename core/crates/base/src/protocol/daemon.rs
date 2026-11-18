@@ -2063,8 +2063,8 @@ pub struct HookSession {
     /// The session this one is part of, as a subagent's session is the session that started it. A
     /// part acts for the guest of the session it is part of, and its own turns leave that guest's
     /// state alone. Omitted for a session of its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    #[serde(default, rename = "parent", skip_serializing_if = "Option::is_none")]
+    pub part_of_session: Option<String>,
     /// The environment the CLI gives the hook, or the server of this session alone, which joins it
     /// as it starts: an agent the guest starts runs with it. A server many sessions share gives
     /// none. Kept with the guest, in memory alone; a later one replaces it.
@@ -2683,6 +2683,19 @@ pub fn topic_names() -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn hook_sessions_keep_the_v2_parent_field() {
+        let nested = json!({ "cli": "opencode", "session": "child", "parent": "outer" });
+        let hook: HookSession = serde_json::from_value(nested.clone()).unwrap();
+        assert_eq!(hook.part_of_session.as_deref(), Some("outer"));
+        assert_eq!(serde_json::to_value(&hook).unwrap(), nested);
+
+        let whole = json!({ "cli": "opencode", "session": "outer" });
+        let hook: HookSession = serde_json::from_value(whole.clone()).unwrap();
+        assert_eq!(hook.part_of_session, None);
+        assert_eq!(serde_json::to_value(&hook).unwrap(), whole);
+    }
 
     #[test]
     fn values_this_build_does_not_know_read_as_unknown() {
