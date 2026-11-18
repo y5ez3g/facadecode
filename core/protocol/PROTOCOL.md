@@ -905,7 +905,7 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `machine.list` | `NoArgs` | `MachineListResult` | Lists reachable machines and saved connections, with routes and connection states. |
 | `machine.remove` | `MachineRemoveArgs` | `MachineRemoveResult` | Removes the local saved connection and reports remaining reachability. |
 | `machine.rename` | `MachineRenameArgs` | `MachineRenameResult` | Changes the name on the selected machine. |
-| `agent.list` | `MachineQueryArgs` | `AgentListResult` | Lists reachable agents from the selected machine or all known query destinations. Answers once they reply or after three seconds. |
+| `agent.list` | `MachineQueryArgs` | `AgentListResult` | Lists reachable agents from the selected machine or all known query destinations. Answers once they reply or after three seconds. The client receives agents oldest first, using the creation time recorded by each agent's own machine. Equal timestamps are ordered by machine ID, then by numeric agent ID. |
 | `cli.list` | `MachineQueryArgs` | `CliListResult` | Lists the CLIs of the selected machine's login environment. |
 | `location.list` | `MachineQueryArgs` | `LocationListResult` | Lists locations the selected machine's windows supply. |
 | `agent.start_preflight` | `StartArgs` | `EmptyResult` | Checks a start's program and location without starting an agent or making a worktree. |

@@ -8,7 +8,8 @@ use std::process::{Child, Stdio};
 
 use facade_base::address::exact_machine_selector;
 use facade_base::machine::{
-    AgentRef, ConnectionKind, ConnectionState, MachineInfo, MachineListResult, MessageRef,
+    AgentListResult, AgentRef, ConnectionKind, ConnectionState, MachineInfo, MachineListResult,
+    MessageRef,
 };
 use facade_base::ssh::{SshMode, decode_home_hex, machine_ssh_args};
 use facade_scenarios::serde_json::{self, json};
@@ -208,6 +209,68 @@ fn watch_window(client: &mut DaemonTestClient, topic: &str) -> u64 {
     response["result"]["watch"]
         .as_u64()
         .unwrap_or_else(|| panic!("{response}"))
+}
+
+/// Both interfaces list agents in creation order, across machines and past single-digit IDs.
+#[test]
+fn agent_lists_are_oldest_first_across_machines() {
+    let first = TestHome::new("list-first");
+    let second = TestHome::new("list-second");
+    install_machine_ssh(
+        &[("first", &first), ("second", &second)],
+        &test_binaries().facade,
+    );
+    name_machine(&first, "first");
+    let second_id = name_machine(&second, "second");
+
+    let caller = first.start_named_fake("caller", &[]);
+    first.start_named_fake("local-2", &[]);
+    second.start_named_fake("remote", &[]);
+    for number in 3..=10 {
+        first.start_named_fake(&format!("local-{number}"), &[]);
+    }
+    let _link = MachineLink::open(&first, "second", &second);
+    wait_for_route(&first, &second_id, &[&second_id]);
+
+    let expected = [
+        "a1",
+        "a2",
+        "a1@second",
+        "a3",
+        "a4",
+        "a5",
+        "a6",
+        "a7",
+        "a8",
+        "a9",
+        "a10",
+    ];
+    let quiet = first.run_facade_ok(&["list", "-q"]);
+    assert_eq!(quiet.lines().collect::<Vec<_>>(), expected);
+    let table = first.list_table();
+    let table_ids: Vec<_> = table.rows.iter().map(|row| table.cell(row, "ID")).collect();
+    assert_eq!(table_ids, expected);
+    let listed: AgentListResult =
+        serde_json::from_str(&first.run_facade_ok(&["list", "--json"])).unwrap();
+    let labels: Vec<_> = listed
+        .agents
+        .iter()
+        .map(|agent| agent.label.as_deref().unwrap().trim_start_matches('#'))
+        .collect();
+    assert_eq!(labels, expected);
+
+    let mut mcp = McpTestClient::open(&first, &caller.id);
+    let response = mcp.call("list_agents", json!({}));
+    let rows = response["data"]["agents"]
+        .as_array()
+        .expect("listed agents");
+    let addresses: Vec<_> = listed
+        .agents
+        .iter()
+        .map(|agent| agent.address.as_deref())
+        .collect();
+    let mcp_addresses: Vec<_> = rows.iter().map(|row| row["address"].as_str()).collect();
+    assert_eq!(mcp_addresses, addresses);
 }
 
 /// A temporary link is symmetric. The agent stays on its running machine through a disconnected

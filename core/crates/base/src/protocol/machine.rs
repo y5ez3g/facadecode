@@ -484,7 +484,9 @@ impl Operation for MachineRename {
 pub struct AgentList;
 impl Operation for AgentList {
     const NAME: &'static str = "agent.list";
-    const DOC: &'static str = "Lists reachable agents from the selected machine or all known query destinations. Answers once they reply or after three seconds.";
+    const DOC: &'static str = "Lists reachable agents from the selected machine or all known query destinations. \
+        Answers once they reply or after three seconds. The client receives agents oldest first, using the creation time \
+        recorded by each agent's own machine. Equal timestamps are ordered by machine ID, then by numeric agent ID.";
     type Args = MachineQueryArgs;
     type Result = AgentListResult;
 }

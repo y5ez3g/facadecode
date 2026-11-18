@@ -725,11 +725,20 @@ impl Daemon {
             list.agents.append(&mut answered.agents);
             list.machines.append(&mut answered.machines);
         }
+        // Group copies of the same agent before sorting by the timestamps of the retained rows.
         list.agents.sort_by(|left: &AgentInfo, right| {
             (&left.machine_id, &left.agent_id).cmp(&(&right.machine_id, &right.agent_id))
         });
         list.agents.dedup_by(|left, right| {
             left.machine_id == right.machine_id && left.agent_id == right.agent_id
+        });
+        list.agents.sort_by(|left, right| {
+            (&left.created_at, &left.machine_id)
+                .cmp(&(&right.created_at, &right.machine_id))
+                .then_with(|| {
+                    records::agent_number(&left.agent_id)
+                        .cmp(&records::agent_number(&right.agent_id))
+                })
         });
         list.machines
             .sort_by(|left, right| left.machine_id.cmp(&right.machine_id));

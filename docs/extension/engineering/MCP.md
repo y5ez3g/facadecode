@@ -216,6 +216,8 @@ or automatic creator progress report.
 
 On Rust, window rows include `machine_id` and `connected`. Disconnected windows remain listed with no folders or
 CLIs. An agent row has its `machine_id` and a `windows` array of references containing `machine_id` and `window_id`.
+Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
+Equal timestamps are ordered by machine ID, then by numeric agent ID.
 The rest of this rule describes the old-engine result and its connected-window scope.
 
 No arguments. There are no filters, details mode or pagination. Ended agents are included, oldest first.
