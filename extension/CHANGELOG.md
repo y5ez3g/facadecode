@@ -17,7 +17,8 @@
 - **Rust agents can contact you in every connected member window.** A send to `#human` reports which window subscriptions
   received it. Each window shows and dismisses its notification independently.
 - **Start agents on connected Facade machines.** New Agent offers a machine choice, then shows the chosen machine's CLIs
-  and working locations. A remote icon on each remote agent's card shows where it runs. In a terminal, use `facade start --on`.
+  and working locations. A remote icon on each remote agent's card shows where it runs. In a terminal, use
+  `facade start --machine <MACHINE> <PROGRAM>`.
 - **Remote-SSH windows join the Facade network automatically.** With Facade core available locally, the window connects
   its remote workspace to it for as long as the window is open.
 

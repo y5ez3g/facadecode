@@ -65,13 +65,13 @@ pub(crate) enum Command {
             help = "Start in the background and print the agent's ID"
         )]
         detach: bool,
-        #[arg(long = "on", value_name = "MACHINE", help = "Start on another machine")]
+        #[arg(long, value_name = "MACHINE", help = "Start on another machine")]
         machine: Option<String>,
         #[arg(
             long,
             value_name = "PATH",
             requires = "machine",
-            help = "Folder on that machine; needs '--on' [default: that user's home folder]"
+            help = "Folder on that machine. Needs '--machine' [default: that user's home folder]"
         )]
         cwd: Option<String>,
         // PROGRAM and its arguments: one trailing list, so that every word after PROGRAM is the

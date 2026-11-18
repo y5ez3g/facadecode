@@ -133,7 +133,7 @@ fn a_prompt_that_starts_with_a_dash_is_one_value() {
     }
 }
 
-/// Every word after PROGRAM is the program's, `--help`, `--name` and `--` among them.
+/// Every word after PROGRAM is the program's, `--help`, `--name`, `--machine` and `--` among them.
 #[test]
 fn every_word_after_the_program_is_the_program_s() {
     let home = TestHome::new("programwords");
@@ -152,6 +152,8 @@ fn every_word_after_the_program_is_the_program_s() {
             "--help",
             "--name",
             "x",
+            "--machine",
+            "gpu",
             "--",
             "-d",
             "y",
@@ -161,7 +163,7 @@ fn every_word_after_the_program_is_the_program_s() {
     assert!(
         wait_until(secs(10), || home
             .screen("echoer")
-            .contains("given:--help --name x -- -d y")),
+            .contains("given:--help --name x --machine gpu -- -d y")),
         "{}",
         home.screen("echoer")
     );
@@ -184,15 +186,20 @@ fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
     assert!(!reached(&home), "the usage error reached Facade");
 }
 
-/// `--cwd` names a folder on another machine, so it needs `--on`: a usage error before Facade is
-/// reached.
+/// `--cwd` requires `--machine`. Both that check and the old option fail before reaching Facade.
 #[test]
-fn start_cwd_without_on_exits_2_without_reaching_facade() {
+fn start_cwd_without_machine_exits_2_without_reaching_facade() {
     let home = TestHome::new("startcwd");
     let (out, err, code) = said(&facade(&home, &["start", "--cwd", "/work", "fake"]));
     assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
+    assert!(
+        err.starts_with("error: ") && err.contains("--machine"),
+        "{err}"
+    );
+    let (out, err, code) = said(&facade(&home, &["start", "--on", "gpu", "fake"]));
+    assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
     assert!(err.starts_with("error: ") && err.contains("--on"), "{err}");
-    assert!(!reached(&home), "the usage error reached Facade");
+    assert!(!reached(&home), "a usage error reached Facade");
 }
 
 /// `machine list` on a lone machine prints its table row and says how to connect another; a

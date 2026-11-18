@@ -291,7 +291,14 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     let project = facade_base::files::real_path(&second.project).unwrap();
     let project = project.to_str().unwrap();
     let started = first.run_facade_ok(&[
-        "start", "--on", "second", "--cwd", project, "--name", "worker", "fake",
+        "start",
+        "--machine",
+        "second",
+        "--cwd",
+        project,
+        "--name",
+        "worker",
+        "fake",
     ]);
     let worker = second
         .agent_from_list_json("worker")

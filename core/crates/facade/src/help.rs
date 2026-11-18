@@ -111,8 +111,8 @@ pub(crate) const PAGES: &[Page] = &[
             ),
             direct(
                 "Start Codex on gpu in /work/app",
-                "facade start --on gpu --cwd /work/app codex",
-                &["start", "--on", "gpu", "--cwd", "/work/app", "codex"],
+                "facade start --machine gpu --cwd /work/app codex",
+                &["start", "--machine", "gpu", "--cwd", "/work/app", "codex"],
             ),
         ],
     },

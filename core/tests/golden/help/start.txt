@@ -10,13 +10,14 @@ Arguments:
   [ARGS]...  Arguments for the program; put Facade's options before PROGRAM
 
 Options:
-      --name <NAME>    Name the agent [default: chosen by Facade]
-      --prompt <TEXT>  Give the agent its first prompt when its CLI is ready; use a CLI that
-                       supports Facade messages, such as claude or codex
-  -d, --detach         Start in the background and print the agent's ID
-      --on <MACHINE>   Start on another machine
-      --cwd <PATH>     Folder on that machine; needs '--on' [default: that user's home folder]
-  -h, --help           Print help
+      --name <NAME>        Name the agent [default: chosen by Facade]
+      --prompt <TEXT>      Give the agent its first prompt when its CLI is ready; use a CLI that
+                           supports Facade messages, such as claude or codex
+  -d, --detach             Start in the background and print the agent's ID
+      --machine <MACHINE>  Start on another machine
+      --cwd <PATH>         Folder on that machine. Needs '--machine' [default: that user's home
+                           folder]
+  -h, --help               Print help
 
 Examples:
   # Start Claude Code and work with it here
@@ -29,4 +30,4 @@ Examples:
   facade start -d --prompt "Fix the failing test in parser.rs" claude
 
   # Start Codex on gpu in /work/app
-  facade start --on gpu --cwd /work/app codex
+  facade start --machine gpu --cwd /work/app codex
