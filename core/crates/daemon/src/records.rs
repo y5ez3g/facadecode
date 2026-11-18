@@ -98,12 +98,10 @@ impl Records {
         self.numbers.raise_above(given)
     }
 
-    /// Picks a default name for `id`, avoiding names of listed agents with any of these member
-    /// windows and all reserved names. The caller holds the agents lock.
-    #[allow(
-        dead_code,
-        reason = "used by starts and renames with window memberships"
-    )]
+    /// Picks a default name for `id` and holds it until `release_name`. Reserved names and names
+    /// of listed agents with a common member window are taken, ignoring case and surrounding
+    /// spaces. Uses the agent's ID, such as `#a7`, when no default name is free.
+    /// The caller holds the agents lock.
     pub(crate) fn reserve_name(
         &self,
         windows: &[WindowRef],
@@ -111,24 +109,11 @@ impl Records {
         id: &str,
         names: Option<&[String]>,
     ) -> String {
-        let taken = listed
+        let mut taken: Vec<String> = listed
             .iter()
             .filter(|info| info.windows.iter().any(|window| windows.contains(window)))
             .map(|info| info.name.clone())
             .collect();
-        self.reserve_name_taken(taken, id, names)
-    }
-
-    /// Picks one of `names` (the settings file's, else the default names) that is neither taken
-    /// nor reserved, ignoring case and surrounding spaces. Where none is free, uses the ID, such
-    /// as `#a7`. Holds the name until `release_name`.
-    /// Locks the reserved names; the caller holds the agents lock, which comes first.
-    pub(crate) fn reserve_name_taken(
-        &self,
-        mut taken: Vec<String>,
-        id: &str,
-        names: Option<&[String]>,
-    ) -> String {
         let mut reserved = self.reserved.lock().unwrap();
         taken.extend(reserved.iter().cloned());
         let name = free_name(&taken, names).unwrap_or_else(|| format!("#{id}"));
@@ -143,7 +128,6 @@ impl Records {
 
     /// Adds a member and returns the committed, sorted memberships, or None if the record is gone.
     /// Blocks.
-    #[allow(dead_code, reason = "used by window adoption")]
     pub(crate) fn add_window(
         &self,
         agent_id: &str,

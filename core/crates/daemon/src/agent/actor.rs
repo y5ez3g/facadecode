@@ -502,7 +502,6 @@ impl Actor {
                 colors,
                 allow_initial,
             } => self.change_window_colors(colors, allow_initial),
-            AgentCommand::SetColors(colors) => self.screen_mut().set_colors(colors),
             AgentCommand::AddViewer {
                 viewer,
                 tx,

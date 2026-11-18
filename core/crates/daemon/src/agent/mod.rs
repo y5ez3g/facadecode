@@ -132,20 +132,16 @@ pub(crate) enum AgentCommand {
     },
     Resize(u16, u16),
     /// Takes colors from the verified member editor window requesting this size.
-    #[allow(dead_code, reason = "used by member-window resize")]
     ResizeFromWindow {
         cols: u16,
         rows: u16,
         colors: WindowColors,
     },
     /// Updates colors from the current source, or supplies an initial source if allowed.
-    #[allow(dead_code, reason = "used by member-window theme changes")]
     WindowColorsChanged {
         colors: WindowColors,
         allow_initial: bool,
     },
-    /// The colors its screen replies to color queries with, from the next output on.
-    SetColors(TerminalColors),
     /// Adds a viewer: its snapshot goes through `reply` before any change.
     AddViewer {
         viewer: u64,
@@ -231,7 +227,6 @@ pub(crate) enum AgentCommand {
         reply: oneshot::Sender<AgentInfo>,
     },
     /// Applies the committed membership list, publishes a change, and replies with the record.
-    #[allow(dead_code, reason = "used by window adoption")]
     UpdateWindows {
         windows: Vec<WindowRef>,
         reply: oneshot::Sender<AgentInfo>,
@@ -407,14 +402,12 @@ impl AgentHandle {
     }
 
     /// The installed run number and record as they stand under the same lock.
-    #[allow(dead_code, reason = "used by resume with window memberships")]
     pub(crate) fn installed_record(&self) -> (u64, AgentInfo) {
         let record = self.shared.record.lock().unwrap();
         (record.installed_run, record.info.clone())
     }
 
     /// The member window supplying the screen's terminal colors, if any.
-    #[allow(dead_code, reason = "used by member-window theme changes")]
     pub(crate) fn color_source(&self) -> Option<WindowRef> {
         self.shared.record.lock().unwrap().color_source.clone()
     }
@@ -459,11 +452,6 @@ impl AgentHandle {
         self.run_change.clone().lock_owned().await
     }
 
-    /// The run change lock if it is free now: a resume does not wait for a stop or a removal.
-    pub(crate) fn try_lock_run_change(&self) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-        self.run_change.clone().try_lock_owned().ok()
-    }
-
     /// Whether no actor takes commands any more.
     pub(crate) fn is_closed(&self) -> bool {
         self.commands.is_closed()
@@ -486,25 +474,7 @@ impl AgentHandle {
         self.commands.send(command).await.is_ok()
     }
 
-    /// Moves the agent from window `from` to window `to`: the new record where it moved.
-    pub(crate) fn move_window(&self, from: &str, to: &str) -> Option<AgentInfo> {
-        let mut record = self.shared.record.lock().unwrap();
-        let info = &mut record.info;
-        (info.window_id == from).then(|| {
-            info.window_id = to.to_string();
-            info.clone()
-        })
-    }
-
-    /// Records the window and YOLO of a resumed run, once committed.
-    pub(crate) fn set_window_and_yolo(&self, window: &str, yolo: bool) {
-        let mut record = self.shared.record.lock().unwrap();
-        let info = &mut record.info;
-        (info.window_id, info.yolo) = (window.to_string(), yolo);
-    }
-
     /// Records the committed YOLO setting for a resumed run.
-    #[allow(dead_code, reason = "used by resume with window memberships")]
     pub(crate) fn set_yolo(&self, yolo: bool) {
         self.shared.record.lock().unwrap().info.yolo = yolo;
     }
