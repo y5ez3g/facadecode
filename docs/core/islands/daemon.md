@@ -2,8 +2,8 @@
 
 The daemon manages the agents of one Facade home and serves its clients: the editor, the `facade`
 commands, the hooks and the relays of the CLIs' MCP servers. It is the crate `facade-daemon`
-(`core/crates/daemon/`); `facade daemon` runs it through its one public function, `run`. Its eight
-child islands each own one kind of data; this layer owns what joins them.
+(`core/crates/daemon/`). `facade daemon` runs it through its one public function, `run`. Its nine
+child islands each own one kind of data. This layer joins them.
 
 ## Owns
 
@@ -12,13 +12,8 @@ child islands each own one kind of data; this layer owns what joins them.
   only; every write across tables is a transaction here.
 - The `agents` topic's changes, which every listed agent's record goes out on.
 - The starts under way with a request ID, so that a repeated start waits for the first one's response.
-- A newer build's takeover: whether it is under way, the drain, and `closing`.
-- The clean-end note in `core/`, which a daemon that ended cleanly as a newer build took over leaves for the next one.
-- `core/logs/daemon.log`, the daemon's log: one line for each operation and lifecycle fact. The keeper
-  points the daemon's standard error at it. It keeps 30 days, with no size cap.
 - What each open watch lets go of when it ends: a screen viewer, or a window's watch that lets Facade
   tell the person.
-- The work under way that keeps the daemon from exiting.
 
 ## Keeps
 
@@ -97,11 +92,8 @@ The layer's files:
 | `relays.rs` | Relay hellos, the in-process connection the MCP tools use, MCP members. |
 | `service.rs` | The server's `Service` trait for the daemon: hello, calls, watches, relays. |
 | `recovery.rs` | Recovery at startup: agents, their runs and screens, messages left pending. |
-| `lifecycle.rs` | The work under way and the idle exit. |
-| `takeover.rs` | A newer build taking over: checks, install, drain, `closing`, exit. |
 | `command_line.rs` | Which CLI a start or resume runs, from the settings file and rules. |
 | `waits.rs` | A started agent's long waits, sent to its creator. |
-| `log_file.rs` | The daemon's log: the 30-day prune and its last lines. |
 
 **Values the parts share**: `HUMAN` (the person's ID), `Sender` (who said something: an agent and
 its name then, or the person), `Cancel` (a call's cancellation), `ToolsGiven` (how a run's CLI got
@@ -128,6 +120,7 @@ then binds the socket, reports the start and serves until idle.
 | records | `NumberTable` | return values |
 | windows | `WindowTable`, a `WindowEvent` sender | `WindowEvent::Left` |
 | guests | `GuestTable`, `IntegrationTable`, the held programs, a `GuestEvent` sender | `GuestEvent::Ended`, `GuestEvent::TurnIdle` |
+| lifecycle | the `LifecycleActivity` implementation and the idle pause channels | work guards, draining refusals, `closing`, the clean-end fact |
 | server | the `Service` implementation, the idle exit's `closing` and `paused` | trait calls into this layer |
 | mcp | per relay: a `Connect` closure and a `JoinMember` closure | return values |
 
@@ -455,6 +448,23 @@ The agents the daemon lists but did not start, and the integrations through whic
   - Ending: `end(cli, session) -> Option<id>` lets go of a session and its parts; the daemon then unlists the guest and deletes it with its inbox. `GuestEvent::Ended { cli, session }` asks for that when a watched process ended; `GuestEvent::TurnIdle { id }` says the CLI's status file shows the turn ended without a hook.
   - Start and cleanup: `restore(kept_since) -> Restored { listed, ended }` (guests last heard from before the machine started or before `kept_since` end); `unheard(before) -> Vec<(cli, session)>`; `any_guest()`; `whole_sessions(&[session])`.
   - Integration: `integration_add`, `integration_remove` (`IntegrationArgs -> IntegrationInfo`), `integration_list` (`IntegrationsArgs -> IntegrationsList`), `bring_integrations_up_to_date()`.
+
+### lifecycle
+
+`lifecycle/` owns work counts and guards, idle exit, a newer build's takeover, the `core/clean-end`
+note and `core/logs/daemon.log`. The keeper points the daemon's standard error at the log.
+`log_file.rs` prunes lines after 30 days and returns up to 200 lines to the person's clients.
+
+- `begin(Work)` counts the work until its guard drops. The idle decision uses the same lock to
+  exclude new work. After five idle seconds it asks the server to pause acceptance, then waits for
+  the server, screen writers and exit commits before removing the socket and exiting.
+- `take_over(UpgradeArgs, activity)` checks and installs the new build before marking the daemon
+  as draining. It settles pastes and work, asks the actors to go quiet, records a clean end when
+  they all do, and sends `closing`. After connections drain it settles work and asks the actors
+  to go quiet again before exiting. The keeper holds the terminals throughout.
+- The parent implements `LifecycleActivity` to report activity, screen writes and keeper details,
+  and to send paste and quiet commands to actors. The parent takes the clean-end note at startup
+  and uses that fact to select how it recovers screens.
 
 ### server
 

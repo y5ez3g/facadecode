@@ -2,7 +2,7 @@
 //! starts the keeper for its first run. Each service keeps a copy of every terminal, so either can
 //! replace the other after it ends. The daemon recovers readable agent records, exits, checkpoints
 //! and screen logs before it accepts clients (`recovery.rs`), and exits after five idle seconds
-//! (`lifecycle.rs`).
+//! (`lifecycle/`).
 //!
 //! Its parts each own their data and are joined here, never to each other:
 //!
@@ -12,14 +12,16 @@
 //! - `records`: agent numbers, names and reach;
 //! - `windows`: editor windows and their locations;
 //! - `guests`: sessions people start that join, MCP members, and integrations;
+//! - `lifecycle`: work under way, idle exit, takeover and the daemon log;
 //! - `server`: client connections; `mcp`: Facade's MCP tools behind each relay.
 //!
 //! This level keeps the list of agents, the store and every write across its tables, and the
 //! order in which the parts are called (`operations.rs`, `delivery.rs`, `presence.rs`,
-//! `topics.rs`, `relays.rs`, `service.rs`, `recovery.rs`, `takeover.rs`).
+//! `topics.rs`, `relays.rs`, `service.rs`, `recovery.rs`).
 
 mod agent;
 mod guests;
+mod lifecycle;
 mod mcp;
 mod messages;
 mod records;
@@ -29,15 +31,12 @@ mod windows;
 
 mod command_line;
 mod delivery;
-mod lifecycle;
-mod log_file;
 mod operations;
 mod presence;
 mod recovery;
 mod relays;
 mod service;
 mod store;
-mod takeover;
 #[cfg(test)]
 mod testing;
 mod topics;
@@ -45,20 +44,19 @@ mod waits;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentsChange, UpgradeResult};
+use facade_base::daemon::AgentsChange;
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
-use agent::{AgentHandle, Screens};
+use agent::{AgentCommand, AgentHandle, Screens};
 use guests::Guests;
-use lifecycle::{IdleDelayLog, Lifecycle};
+use lifecycle::{Lifecycle, LifecycleActivity};
 use messages::Messages;
 use operations::{StartAnswer, StartKey};
 use records::Records;
@@ -184,17 +182,9 @@ pub(crate) struct Daemon {
     /// Changes for clients following the `agents` topic.
     changes: broadcast::Sender<AgentsChange>,
     lifecycle: Arc<Lifecycle>,
-    /// Says once per episode why the daemon cannot exit yet.
-    idle_delay: IdleDelayLog,
     /// The starts under way with a request ID: a second call with the same ID waits for the
     /// first one's answer.
     starting: Mutex<HashMap<StartKey, watch::Receiver<StartAnswer>>>,
-    /// A newer build's takeover once it is under way, which a second request answers with.
-    takeover: tokio::sync::Mutex<Option<UpgradeResult>>,
-    /// A takeover drains: new calls answer `upgrading`.
-    draining: AtomicBool,
-    /// The build taking over, once every connection is to be told `closing`.
-    closing_to: watch::Sender<Option<String>>,
     screens: Screens,
     messages: Arc<Messages>,
     runs: Runs,
@@ -205,6 +195,65 @@ pub(crate) struct Daemon {
     results: PathBuf,
     /// What each open watch lets go of when it ends, by its viewer number.
     watch_ends: Mutex<HashMap<u64, topics::WatchEnd>>,
+}
+
+impl LifecycleActivity for Daemon {
+    fn holds_agents(&self) -> bool {
+        self.agents
+            .lock()
+            .unwrap()
+            .values()
+            .any(|agent| agent.is_guest() || agent.exit().borrow().is_none())
+    }
+
+    fn runs_busy(&self) -> Option<String> {
+        self.runs.busy()
+    }
+
+    fn guest_listed(&self) -> bool {
+        self.guests.any_guest()
+    }
+
+    fn screen_writes(&self) -> usize {
+        agent::screen_writes()
+    }
+
+    fn running_count(&self) -> usize {
+        self.agents()
+            .iter()
+            .filter(|agent| agent.exit().borrow().is_none())
+            .count()
+    }
+
+    fn keeper_protocol(&self) -> Option<[u32; 2]> {
+        self.runs.keeper_protocol()
+    }
+
+    fn keeper_build(&self) -> Option<String> {
+        self.runs.keeper_info().map(|keeper| keeper.build)
+    }
+
+    async fn settle_pastes(&self) -> Vec<oneshot::Receiver<()>> {
+        let mut pastes = Vec::new();
+        for agent in self.agents() {
+            let (reply, settled) = oneshot::channel();
+            if agent.send(AgentCommand::SettlePaste { reply }).await {
+                pastes.push(settled);
+            }
+        }
+        pastes
+    }
+
+    async fn quiet_agents(&self, deadline: tokio::time::Instant) -> bool {
+        let mut all_quiet = true;
+        for agent in self.agents() {
+            let (reply, quiet) = oneshot::channel();
+            let quieted = agent.send(AgentCommand::Quiesce { reply }).await
+                && matches!(tokio::time::timeout_at(deadline, quiet).await, Ok(Ok(())));
+            all_quiet &= quieted || agent.exit().borrow().is_some();
+        }
+        all_quiet
+    }
 }
 
 /// Runs the daemon: `facade daemon`. The keeper starts it in the background; it can also run in
@@ -263,7 +312,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             return Ok(());
         }
     }
-    takeover::take_clean_end(&core);
+    lifecycle::take_clean_end(&core);
     let program = facade_base::programs::install_running()?;
     let held = Arc::new(Held::open(&program, &facade_base::build_id())?);
     let (run_events, run_events_rx) = mpsc::unbounded_channel::<RunEvent>();
@@ -302,11 +351,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         agents: Mutex::default(),
         changes: broadcast::channel(MAX_QUEUED_AGENT_CHANGES).0,
         lifecycle: Lifecycle::new(),
-        idle_delay: IdleDelayLog::new(),
         starting: Mutex::default(),
-        takeover: tokio::sync::Mutex::default(),
-        draining: AtomicBool::new(false),
-        closing_to: watch::channel(None).0,
         screens: Screens::new(core.join("screens")),
         windows: Windows::new(store.window_table(), window_events),
         guests: Guests::new(
@@ -359,11 +404,12 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     }
     let (closing, closed) = watch::channel(false);
     let (paused, observed_paused) = watch::channel(false);
-    tokio::spawn(lifecycle::exit_when_idle(
-        daemon.clone(),
-        closing,
-        observed_paused,
-    ));
+    tokio::spawn(
+        daemon
+            .lifecycle
+            .clone()
+            .exit_when_idle(daemon.clone(), closing, observed_paused),
+    );
     server::serve(listener, daemon, closed, paused).await
 }
 
@@ -424,7 +470,7 @@ impl Daemon {
             Err(err) => log("warn", &format!("{err:#}")),
         }
         mcp::clean_results(&self.results, now, &|number| self.messages.keeps(number));
-        if let Err(err) = log_file::prune(now) {
+        if let Err(err) = lifecycle::prune(now) {
             log(
                 "warn",
                 &format!("could not prune the daemon's log: {err:#}"),

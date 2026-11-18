@@ -337,7 +337,7 @@ impl Daemon {
             return Ok((ScreenStart::Released, cols, rows));
         }
         // After a clean handover the log is whole, and output goes on in it.
-        let handed_over_cleanly = crate::takeover::handed_over_cleanly();
+        let handed_over_cleanly = crate::lifecycle::handed_over_cleanly();
         let (agent_id, steps) = (id.to_owned(), steps.clone());
         let recovered = tokio::task::spawn_blocking(move || {
             let step = || {

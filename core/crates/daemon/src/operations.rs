@@ -729,7 +729,7 @@ impl Daemon {
                 match blocking(move || store.record_exit(&saved, &exited)).await {
                     Ok(()) => break,
                     Err(error) => {
-                        daemon.idle_delay.delayed(&format!(
+                        daemon.lifecycle.delay_exit(&format!(
                             "could not save the exit of {id}: {}",
                             error.message
                         ));
@@ -738,7 +738,7 @@ impl Daemon {
                     }
                 }
             }
-            daemon.idle_delay.cleared();
+            daemon.lifecycle.clear_exit_delay();
             let mut settled = agent.settled();
             let _ = settled.wait_for(|settled| *settled).await;
             daemon.runs.release(&id);

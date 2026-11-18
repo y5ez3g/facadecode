@@ -3,7 +3,6 @@
 //! windows. Topics are in `topics.rs`, relays in `relays.rs`.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use facade_base::daemon::{
@@ -183,13 +182,11 @@ impl server::Service for Daemon {
     }
 
     fn closing(&self) -> watch::Receiver<Option<String>> {
-        self.closing_to.subscribe()
+        self.lifecycle.closing()
     }
 
     fn draining(&self) -> Option<ErrorBody> {
-        self.draining
-            .load(Ordering::SeqCst)
-            .then(crate::takeover::upgrading)
+        self.lifecycle.draining()
     }
 
     fn work(&self) -> Option<WorkGuard> {
@@ -347,14 +344,18 @@ impl Daemon {
                 let args: WorktreeCreateArgs = decode_arguments(args)?;
                 Ok(value_of(self.create_worktree(args).await?))
             }
-            DaemonUpgrade::NAME => Ok(value_of(self.take_over(decode_arguments(args)?).await?)),
+            DaemonUpgrade::NAME => Ok(value_of(
+                self.lifecycle
+                    .take_over(decode_arguments(args)?, self.clone())
+                    .await?,
+            )),
             DaemonLog::NAME => {
                 if client.agent.is_some() {
                     return Err(ErrorBody::refused("daemon.log is for the person's clients"));
                 }
                 let args: DaemonLogArgs = decode_or_default(args)?;
-                let lines = args.lines.unwrap_or(crate::log_file::MAX_LOG_LINES);
-                let lines = crate::blocking_in_place(|| crate::log_file::last_lines(lines))?;
+                let lines = args.lines.unwrap_or(crate::lifecycle::MAX_LOG_LINES);
+                let lines = crate::blocking_in_place(|| crate::lifecycle::last_lines(lines))?;
                 Ok(value_of(DaemonLogResult { lines }))
             }
             other => Err(ErrorBody::invalid_argument(format!(
