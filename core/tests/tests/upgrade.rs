@@ -1203,9 +1203,9 @@ fn machine_list_shows_the_version_and_json_keeps_the_build() {
     assert_eq!(shown, Some(version.as_str()), "{table}");
 
     let json = home.run_facade_ok(&["machine", "list", "--json"]);
-    let listed: facade_base::machine::MachineListResult =
+    let listed: facade_scenarios::serde_json::Value =
         facade_scenarios::serde_json::from_str(&json).unwrap();
-    assert_eq!(listed.machines[0].build.as_deref(), Some(build.as_str()));
+    assert_eq!(listed["machines"][0]["build"], build);
 }
 
 /// The daemon itself refuses a takeover by a build of its own version and by an older one, and says

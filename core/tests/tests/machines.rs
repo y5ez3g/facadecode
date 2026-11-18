@@ -129,9 +129,20 @@ fn ssh_arguments_for_add_connect_and_saved_sessions() {
 }
 
 fn table(home: &TestHome) -> Vec<MachineInfo> {
-    serde_json::from_str::<MachineListResult>(&home.run_facade_ok(&["machine", "list", "--json"]))
+    let reply = connect(home).call("machine.list", json!({}));
+    serde_json::from_value::<MachineListResult>(reply["result"].clone())
         .unwrap()
         .machines
+}
+
+fn machine_json(home: &TestHome, id: &str) -> Option<Value> {
+    let listed: Value =
+        serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"])).unwrap();
+    listed["machines"]
+        .as_array()?
+        .iter()
+        .find(|row| row["machine_id"] == id)
+        .cloned()
 }
 
 fn row(home: &TestHome, machine: &str) -> Option<MachineInfo> {
@@ -628,6 +639,15 @@ fn three_machines_switch_routes_and_resolve_names_only_when_all_answer() {
                     && connection.state == ConnectionState::Connected
             })
     );
+    let connected = machine_json(&first, &third_id).unwrap();
+    assert!(connected.get("unreachable").is_none(), "{connected}");
+    assert!(
+        connected["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["kind"] == "saved" && link["state"] == "connected")
+    );
     first.run_facade_ok(&["machine", "rename", "third", "lookout-host"]);
     assert!(wait_until(secs(10), || row(&middle, &third_id)
         .is_some_and(|machine| machine.name == "lookout-host")));
@@ -679,6 +699,54 @@ fn three_machines_switch_routes_and_resolve_names_only_when_all_answer() {
                 .iter()
                 .any(|connection| connection.state == ConnectionState::Disconnected)
     )));
+    let disconnected = machine_json(&first, &third_id).unwrap();
+    assert_eq!(disconnected["unreachable"], true);
+    assert!(disconnected.get("route").is_none(), "{disconnected}");
+    assert!(
+        disconnected["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["kind"] == "saved" && link["state"] == "disconnected")
+    );
+    let listed: Value = serde_json::from_str(&first.run_facade_ok(&["list", "--json"])).unwrap();
+    let offline = listed["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|machine| machine["machine_id"] == third_id)
+        .unwrap();
+    assert_eq!(offline["state"], "unreachable");
+    assert_eq!(offline["unreachable"], true);
+    assert!(offline.get("responded_at").is_none(), "{offline}");
+
+    std::fs::write(third.folder().join("ssh-needs-login"), []).unwrap();
+    assert!(
+        wait_until(secs(15), || row(&first, &third_id).is_some_and(|machine| {
+            machine.connections.iter().any(|link| {
+                link.kind == ConnectionKind::Saved
+                    && link.state == ConnectionState::SshInteractionRequired
+            })
+        })),
+        "{}",
+        first.daemon_log()
+    );
+    let recorded = row(&first, &third_id).unwrap();
+    let details = recorded
+        .connections
+        .iter()
+        .find_map(|link| link.ssh_interaction.as_ref())
+        .unwrap();
+    let needs_login = machine_json(&first, &third_id).unwrap();
+    assert_eq!(needs_login["unreachable"], true);
+    assert!(
+        needs_login["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["state"] == "ssh_interaction_required"
+                && link["ssh_interaction"] == json!(details))
+    );
     let refused = connect(&first).call("agent.screen", json!({ "agent": "other" }));
     assert_eq!(error_reason(&refused), "unavailable", "{refused}");
     assert_eq!(

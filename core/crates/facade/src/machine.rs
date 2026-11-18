@@ -16,12 +16,13 @@ use facade_base::jsonrpc::{
 use facade_base::machine::{
     ConnectFailedParams, ConnectedParams, ConnectionKind, ConnectionState, MachineAdd,
     MachineAddArgs, MachineConnect, MachineConnectArgs, MachineConnection, MachineHello,
-    MachineIdentity, MachineInfo, MachineList, MachineRemove, MachineRemoveArgs, MachineRename,
-    MachineRenameArgs, MachineTransport,
+    MachineIdentity, MachineInfo, MachineList, MachineListResult, MachineRemove, MachineRemoveArgs,
+    MachineRename, MachineRenameArgs, MachineTransport,
 };
 use facade_base::operations::NoArgs;
 use facade_base::paths::ClientSocket;
 use facade_base::ssh::{self, SshMode};
+use serde_json::Value;
 
 use crate::cli::{MachineAction, ServeArgs, SshTarget};
 use crate::errors::{self, Problem, ServeFailure, about_connection, about_machine, repair_tip};
@@ -58,7 +59,8 @@ pub(crate) fn run(
             let mut daemon = connect()?;
             let listed = daemon.call::<MachineList>(NoArgs {})?;
             if json {
-                println_or_end!("{}", serde_json::to_string_pretty(&listed)?);
+                let json = machine_list_json(&listed)?;
+                println_or_end!("{}", serde_json::to_string_pretty(&json)?);
             } else {
                 print_table(&listed.machines, &daemon.hello_result.machine_id);
             }
@@ -98,6 +100,28 @@ pub(crate) fn run(
         }
     }
     Ok(0)
+}
+
+/// Gives the CLI the machine's reachability and the public state of each direct connection.
+pub(crate) fn machine_list_json(listed: &MachineListResult) -> serde_json::Result<Value> {
+    let mut json = serde_json::to_value(listed)?;
+    let rows = json["machines"]
+        .as_array_mut()
+        .expect("machine list is an array");
+    for (machine, row) in listed.machines.iter().zip(rows) {
+        if machine.is_unreachable() {
+            row["unreachable"] = Value::Bool(true);
+        }
+        let links = row["connections"]
+            .as_array_mut()
+            .expect("connections are an array");
+        for (connection, link) in machine.connections.iter().zip(links) {
+            if connection.state == ConnectionState::Disconnected {
+                link["state"] = Value::String("disconnected".into());
+            }
+        }
+    }
+    Ok(json)
 }
 
 /// Reads the exact first frame and checks that it selects the daemon's machine protocol.

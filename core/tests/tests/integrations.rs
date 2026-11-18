@@ -187,14 +187,14 @@ fn part<'a>(said: &'a str, label: &str) -> Option<&'a str> {
     })
 }
 
-/// The STATUS and ADDED that `facade integration list` shows for `cli`.
+/// The STATE and ADDED that `facade integration list` shows for `cli`.
 fn listed_as(listed: &str, cli: &str) -> (String, String) {
     let table = Table::parse(listed);
     let row = table
         .row("CLI", cli)
         .unwrap_or_else(|| panic!("{cli} is not listed: {listed}"));
     (
-        table.cell(row, "STATUS").to_string(),
+        table.cell(row, "STATE").to_string(),
         table.cell(row, "ADDED").to_string(),
     )
 }
@@ -564,7 +564,7 @@ fn codex_opencode_and_pi_entries_are_written_and_taken_out() {
     let listed = person.facade_ok(&test, &["integration", "list"]);
     assert!(
         Table::parse(&listed)
-            .column("STATUS")
+            .column("STATE")
             .iter()
             .all(|status| *status == "not added"),
         "{listed}"

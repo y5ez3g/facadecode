@@ -132,7 +132,7 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 - **Never does:** connect to or start the daemon; show an agent or change terminal modes; read hook input; work out which agent a terminal belongs to.
 - **Interface:** only `run` calls it. Every call blocks until the daemon responds.
   - `start(&mut DaemonClient, name, prompt, (machine, cwd), command, Option<(u16, u16)>) -> Result<Option<Shown>>`; `resume(&mut DaemonClient, agent, Option<(u16, u16)>)` returns the same.
-  - `list` takes a `Listing` (`Table`, `Quiet` or `Json`); `inspect`, `integration`, `status` and `version` take a `Format` (`Text` or `Json`). The JSON of `list` holds the agents and each machine's answer; both carry the protocol's `AgentInfo` with its running machine, window memberships and optional location source. `screen`, `type_input`, `send`, `messages` and `rename` take the command's words.
+  - `list` takes a `Listing` (`Table`, `Quiet` or `Json`). Its JSON holds agent records and settled `MachineStateRow` values with `short_id`. `inspect`, `integration`, `status` and `version` take a `Format` (`Text` or `Json`). `screen`, `type_input`, `send`, `messages` and `rename` take the command's words.
   - `stop` and `remove(&mut DaemonClient, agents, report) -> Result<i32>`.
   - `integration(&mut DaemonClient, IntegrationAction, Format)`, where `IntegrationAction` is `Add { cli }`, `Remove { cli }` or `List`.
   - `status(home, Option<&DaemonClient>, Format)` and `version(Format)`.
@@ -150,8 +150,9 @@ first-connection trust notice and Linux's SSH logout information.
   separate ordinary call to `machine.add` waits for the daemon to verify its saved session to the same machine ID.
   The foreground relay flushes buffered bytes between the daemon and SSH's pipes as soon as it reads them.
 - `machine list` prints a table, one row per machine with this one first: name, copyable `id:` selector, version, route
-  and the SSH connection saved here. The VERSION column shows the version without its build suffix. `--json` prints the
-  protocol's list with full builds. A saved connection that needs an SSH login
+  and the SSH connection saved here. The VERSION column shows the version without its build suffix. `--json` prints
+  full builds, marks machines with no route as `unreachable` and describes direct connections by their public state.
+  A saved connection that needs an SSH login
   adds a `warning:` with the command that repairs it, quoted for the shell, or its words one per line where a word
   needs escaping quoting cannot give. `machine remove` removes a saved connection and adds a `note:` where the
   machine still has a route through another machine. `machine rename` prints the machine's ID and new name.

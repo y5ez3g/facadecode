@@ -20,7 +20,18 @@ pub fn install_machine_ssh(machines: &[(&str, &TestHome)], facade: &Path) {
         let target = shell_literal(&format!("{destination}:{encoded_home}"));
         let offline = home.folder().join("ssh-offline");
         let offline = shell_literal(offline.to_str().expect("the test home must be UTF-8"));
-        writeln!(targets, "  {target}) [ ! -e {offline} ] || exit 255 ;;").unwrap();
+        let login = home.folder().join("ssh-needs-login");
+        let login = shell_literal(login.to_str().expect("the test home must be UTF-8"));
+        writeln!(
+            targets,
+            "  {target})
+    if [ -e {login} ]; then
+      printf '%s\\n' 'Permission denied (publickey).' >&2
+      exit 255
+    fi
+    [ ! -e {offline} ] || exit 255 ;;"
+        )
+        .unwrap();
     }
     let facade = shell_literal(
         facade

@@ -180,7 +180,8 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
 - `facade machine list` shows a table of the machines this one connects to and those it saved but cannot connect to
   now. Copy a machine's `id:` selector from the ID column. It gives the shortest unique prefix of at least eight
   hexadecimal digits. The table also shows the name, version, route and SSH connection saved here. `--json` gives
-  the full build and every connection with its state. `facade machine remove <machine>` removes a saved connection only.
+  the full build and includes `unreachable: true` when the machine has no route. A direct connection's state is
+  `connected`, `disconnected` or `ssh_interaction_required`. `facade machine remove <machine>` removes a saved connection only.
 - Calls go through other machines when no direct connection exists, by the route that passes the fewest machines.
   When a connection ends, only the routes through it go, and a machine is unreachable only when no route is left.
 - An agent's address names its machine: `#a17@gpu`, or `#a17@id:3f9a2c1d` when names repeat; a message's is `#m42@gpu`.
@@ -189,7 +190,8 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
   which machines did not answer, or lists every match. `@Pixel@gpu` asks gpu only; when an agent here is literally named
   `Pixel@gpu`, that meaning counts too, and finding both is an error that lists them.
 - `facade list` and `list_agents` ask every machine at once and answer when all have, or after 3 seconds, saying of
-  each machine whether it answered, is unreachable, timed out or failed.
+  each machine whether it answered, is unreachable, timed out or failed. In `facade list --json`, a machine's
+  `state` gives that outcome and `responded_at` gives the local receive time when it received a reply.
 - `facade start --folder <FOLDER>` takes an absolute path or a path relative to the current folder on this machine.
   Omit it to use the current folder, including when `--machine` selects this machine explicitly. With another machine,
   give an absolute path there or omit `--folder` to use that user's login home. Remote starts from the command line

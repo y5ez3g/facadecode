@@ -36,7 +36,7 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { MachineListResult, WindowInfo } from '../../base/coreProtocol';
+import type { MachineConnection, MachineInfo, WindowInfo } from '../../base/coreProtocol';
 import { EDITOR_FLAGS, endCore, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, until } from './editors';
 import type { ListedAgent } from './rustWindowDriver';
 import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
@@ -44,6 +44,13 @@ import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rust
 
 const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network'] as const;
 type Scenario = typeof SCENARIOS[number];
+
+type ListedMachine = Pick<MachineInfo, 'machine_id' | 'route'> & {
+	readonly connections: readonly {
+		readonly kind: MachineConnection['kind'];
+		readonly state: 'connected' | 'disconnected' | 'ssh_interaction_required';
+	}[];
+};
 
 /** A computer the run reaches over SSH, or a container it starts, as the editor and the run address it. */
 interface Host {
@@ -470,7 +477,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 					encoding: 'utf8', timeout: 20_000, cwd: local.app,
 					env: { ...process.env, ...environment(), ...(agent ? { FACADE_AGENT: agent } : {}) }
 				});
-				const localMachines = () => (JSON.parse(call(['machine', 'list', '--json'])) as MachineListResult).machines;
+				const localMachines = () => (JSON.parse(call(['machine', 'list', '--json'])) as { readonly machines: ListedMachine[] }).machines;
 				const myId = localMachines().find(row => row.route?.length === 0)!.machine_id;
 				call(['machine', 'rename', 'id:' + myId.replace(/-/g, ''), 'network-local']);
 				const first = await open(`${root}/app`, 'a');

@@ -20,7 +20,8 @@ use facade_base::daemon::{
 use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::{
-    AgentList, MachineIdentity, MachineList, MachineQueryArgs, MachineQueryStatus,
+    AgentList, AgentListResult, MachineIdentity, MachineList, MachineQueryArgs, MachineQueryStatus,
+    MachineResponseState, MachineStateRow,
 };
 use facade_base::operations::{NoArgs, Operation};
 use facade_base::process::{EndReason, ProcessState};
@@ -232,13 +233,7 @@ fn exact_id(agent: &AgentInfo, here: &str) -> String {
 pub(crate) fn list(client: &mut DaemonClient, listing: Listing) -> anyhow::Result<()> {
     let listed = client.call::<AgentList>(MachineQueryArgs { machine: None })?;
     if let Listing::Json = listing {
-        let mut json = serde_json::to_value(listed)?;
-        for agent in json["agents"]
-            .as_array_mut()
-            .expect("agent list is an array")
-        {
-            name_agent_json_fields(agent);
-        }
+        let json = agent_list_json(listed)?;
         println_or_end!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
@@ -269,6 +264,37 @@ pub(crate) fn list(client: &mut DaemonClient, listing: Listing) -> anyhow::Resul
         Listing::Json => {}
     }
     Ok(())
+}
+
+/// Projects the agent records and the machine rows of a completed v2 list.
+pub(crate) fn agent_list_json(listed: AgentListResult) -> serde_json::Result<Value> {
+    let mut agents = serde_json::to_value(listed.agents)?;
+    for agent in agents.as_array_mut().expect("agent list is an array") {
+        name_agent_json_fields(agent);
+    }
+    let machines = listed
+        .machines
+        .into_iter()
+        .map(|machine| {
+            let state = match machine.status {
+                MachineQueryStatus::Answered => MachineResponseState::Responded,
+                MachineQueryStatus::Unavailable => MachineResponseState::Unreachable,
+                MachineQueryStatus::TimedOut => MachineResponseState::TimedOut,
+                MachineQueryStatus::Error => MachineResponseState::Failed,
+            };
+            let mut row = serde_json::to_value(MachineStateRow {
+                machine_id: machine.machine_id,
+                name: machine.name,
+                build: machine.build,
+                state,
+                unreachable: state == MachineResponseState::Unreachable,
+                responded_at: machine.answered_at,
+            })?;
+            row["short_id"] = Value::String(machine.short_id);
+            Ok(row)
+        })
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    Ok(json!({ "agents": agents, "machines": machines }))
 }
 
 pub(crate) fn inspect(
@@ -989,7 +1015,7 @@ pub(crate) fn integrations_text(list: &[IntegrationInfo], now: SystemTime) -> St
             ]
         })
         .collect();
-    table(&["CLI", "STATUS", "ADDED"], &rows)
+    table(&["CLI", "STATE", "ADDED"], &rows)
 }
 
 pub(crate) fn status_text(

@@ -7,7 +7,6 @@ use std::process::{Output, Stdio};
 
 use facade_base::address::exact_machine_selector;
 use facade_base::files::real_path;
-use facade_base::machine::MachineListResult;
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
@@ -93,7 +92,10 @@ fn rm_takes_the_ids_that_ls_q_prints() {
     assert_eq!((said_on_stderr.as_str(), code), ("", Some(0)));
     let listed: Value = facade_scenarios::serde_json::from_str(&json).unwrap();
     assert_eq!(listed["agents"], json!([]), "{json}");
-    assert_eq!(listed["machines"][0]["status"], "answered", "{json}");
+    assert_eq!(listed["machines"][0]["state"], "responded", "{json}");
+    assert!(listed["machines"][0]["responded_at"].is_string(), "{json}");
+    assert!(listed["machines"][0].get("status").is_none(), "{json}");
+    assert!(listed["machines"][0].get("answered_at").is_none(), "{json}");
     let both = home.run_facade(&["list", "-q", "--json"]);
     assert_eq!(both.status.code(), Some(2), "{}", stderr(&both));
 }
@@ -244,10 +246,12 @@ fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
 #[test]
 fn start_folder_uses_the_invoking_shell_for_local_paths() {
     let home = TestHome::new("startfolder");
-    let listed: MachineListResult =
+    let listed: Value =
         serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"])).unwrap();
-    let local = &listed.machines[0];
-    let selector = exact_machine_selector(&local.machine_id);
+    let local = &listed["machines"][0];
+    let machine_id = local["machine_id"].as_str().unwrap();
+    let name = local["name"].as_str().unwrap();
+    let selector = exact_machine_selector(machine_id);
     let shell_folder = home.project.join("shell");
     let app_folder = shell_folder.join("my app");
     std::fs::create_dir_all(&app_folder).unwrap();
@@ -255,7 +259,7 @@ fn start_folder_uses_the_invoking_shell_for_local_paths() {
         (&[], &shell_folder),
         (&["--folder", "my app"], &app_folder),
         (&["--folder", app_folder.to_str().unwrap()], &app_folder),
-        (&["--machine", &local.name], &shell_folder),
+        (&["--machine", name], &shell_folder),
         (&["--machine", &selector, "--folder", "my app"], &app_folder),
     ];
     for (options, folder) in cases {
@@ -276,7 +280,7 @@ fn start_folder_uses_the_invoking_shell_for_local_paths() {
         );
         let id = stdout(&started);
         let record = home.agent_record(id.trim()).unwrap();
-        assert_eq!(record["machine_id"], local.machine_id, "{record}");
+        assert_eq!(record["machine_id"], machine_id, "{record}");
         assert_eq!(record["cwd"], real_path(folder).unwrap().to_str().unwrap());
     }
 }
