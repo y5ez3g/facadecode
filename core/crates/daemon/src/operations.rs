@@ -178,7 +178,7 @@ impl Daemon {
             .filter(|info| info.window_id == window)
             .map(|info| info.name)
             .collect();
-        self.records.reserve_name(taken, id, names)
+        self.records.reserve_name_taken(taken, id, names)
     }
 
     /// Starts a CLI as [`facade_base::daemon::AgentStart`] says. A start with its creator's own

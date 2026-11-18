@@ -344,7 +344,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     };
     progress.advance();
     let store = opened.store.clone();
-    let records = Records::new(store.number_table());
+    let records = Records::new(store.number_table(), store.membership_table());
     let readable: std::collections::HashSet<String> = opened
         .records
         .iter()

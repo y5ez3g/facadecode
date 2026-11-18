@@ -996,6 +996,11 @@ async fn input_and_exits_meant_for_an_ended_run_never_reach_the_run_that_resumes
         2,
         "input admitted from now on is for the new run"
     );
+    let (run, installed) = harness.handle.installed_record();
+    assert_eq!(
+        (run, installed.process, installed.exit),
+        (FIRST_RUN, ProcessState::Ended, Some(exit_with(1)))
+    );
     assert!(
         matches!(
             harness.type_for(2, b"early").await,
@@ -1006,9 +1011,10 @@ async fn input_and_exits_meant_for_an_ended_run_never_reach_the_run_that_resumes
     let (master, mut cli) = raw_terminal(80, 24);
     let installed = harness.install(2, master).await;
     assert_eq!(
-        (installed.pid, installed.process, installed.exit),
+        (installed.pid, installed.process, installed.exit.as_ref()),
         (Some(4242), ProcessState::Running, None)
     );
+    assert_eq!(harness.handle.installed_record(), (2, installed));
     assert!(
         matches!(
             harness.type_for(FIRST_RUN, b"OLD").await,
@@ -1072,6 +1078,11 @@ async fn a_run_that_ends_before_its_terminal_is_installed_ends_the_agent_once_it
     )
     .await;
     assert!(ended.is_ok(), "the new run's exit is recorded");
+    let (run, record) = harness.handle.installed_record();
+    assert_eq!(
+        (run, record.process, record.exit),
+        (2, ProcessState::Ended, Some(exit_with(9)))
+    );
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }
@@ -2545,13 +2556,13 @@ async fn an_ended_run_is_in_its_record_before_its_waiting_prompt_learns_it_ended
     );
     tokio::time::sleep(Duration::from_millis(300)).await;
     // Exercise record-before-notification ordering by holding the shared leaf lock.
-    let (info, (locked, holding), (release, released)) = (
+    let (shared, (locked, holding), (release, released)) = (
         harness.handle.shared.clone(),
         std::sync::mpsc::channel(),
         std::sync::mpsc::channel::<()>(),
     );
     let reader = std::thread::spawn(move || {
-        let _held = info.info.lock().unwrap();
+        let _held = shared.record.lock().unwrap();
         locked.send(()).unwrap();
         let _ = released.recv();
     });
@@ -2628,13 +2639,13 @@ async fn an_ended_run_is_in_its_record_before_a_message_being_typed_learns_it_en
     harness.round_trip().await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     // Exercise record-before-notification ordering by holding the shared leaf lock.
-    let (info, (locked, holding), (release, released)) = (
+    let (shared, (locked, holding), (release, released)) = (
         harness.handle.shared.clone(),
         std::sync::mpsc::channel(),
         std::sync::mpsc::channel::<()>(),
     );
     let reader = std::thread::spawn(move || {
-        let _held = info.info.lock().unwrap();
+        let _held = shared.record.lock().unwrap();
         locked.send(()).unwrap();
         let _ = released.recv();
     });

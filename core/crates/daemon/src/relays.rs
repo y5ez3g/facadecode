@@ -141,7 +141,8 @@ impl Daemon {
                 .filter(|info| info.window_id == TERMINAL_WINDOW)
                 .map(|info| info.name)
                 .collect();
-            self.records.reserve_name(taken, &id, names.as_deref())
+            self.records
+                .reserve_name_taken(taken, &id, names.as_deref())
         };
         let cli = client
             .filter(|name| is_session_id(name))

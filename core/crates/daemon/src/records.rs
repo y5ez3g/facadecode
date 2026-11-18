@@ -1,5 +1,5 @@
-//! Agent records: the #aN numbers, the default names, and what a reference names within a client's
-//! reach (RULES-2.3, RULES-4.3).
+//! Agent records: the #aN numbers, default names, window memberships, and what a reference names
+//! within a client's reach (RULES-2.3, RULES-4.3).
 //!
 //! Reach decides which agents a client can find, list, read, type into, stop and send to. The
 //! person, through an editor window or a `facade` command acting for no agent, reaches every agent,
@@ -10,12 +10,12 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use facade_base::daemon::{AgentInfo, display_name};
+use facade_base::daemon::{AgentInfo, WindowRef, display_name};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::process::ProcessState;
 
 use crate::HUMAN;
-use crate::store::NumberTable;
+use crate::store::{MembershipTable, NumberTable};
 
 /// The agents a client reaches.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,16 +64,18 @@ pub(crate) enum Named {
 /// starts not listed yet, and agents whose records this version cannot read.
 pub(crate) struct Records {
     numbers: NumberTable,
+    members: MembershipTable,
     /// Names picked by `reserve_name` and not yet released.
     reserved: Mutex<HashSet<String>>,
     unreadable: Mutex<HashSet<String>>,
 }
 
 impl Records {
-    /// Records that hand out numbers from `numbers`, with nothing reserved or unreadable yet.
-    pub(crate) fn new(numbers: NumberTable) -> Records {
+    /// Records with their number and membership tables, with nothing reserved or unreadable yet.
+    pub(crate) fn new(numbers: NumberTable, members: MembershipTable) -> Records {
         Records {
             numbers,
+            members,
             reserved: Mutex::default(),
             unreadable: Mutex::default(),
         }
@@ -96,12 +98,32 @@ impl Records {
         self.numbers.raise_above(given)
     }
 
-    /// Picks a name for agent `id`, started without one (LIFECYCLE-2.1), and holds it until
-    /// `release_name`: at random, one of `names` (the settings file's, else the default names) that
-    /// is not in `taken`, the names of the agents in its window, and that no other start holds;
-    /// ignoring case and surrounding spaces. Where none is free, the agent's ID, such as `#a7`.
-    /// Locks the reserved names; the caller holds the agents lock, which comes first.
+    /// Picks a default name for `id`, avoiding names of listed agents with any of these member
+    /// windows and all reserved names. The caller holds the agents lock.
+    #[allow(
+        dead_code,
+        reason = "used by starts and renames with window memberships"
+    )]
     pub(crate) fn reserve_name(
+        &self,
+        windows: &[WindowRef],
+        listed: &[AgentInfo],
+        id: &str,
+        names: Option<&[String]>,
+    ) -> String {
+        let taken = listed
+            .iter()
+            .filter(|info| info.windows.iter().any(|window| windows.contains(window)))
+            .map(|info| info.name.clone())
+            .collect();
+        self.reserve_name_taken(taken, id, names)
+    }
+
+    /// Picks one of `names` (the settings file's, else the default names) that is neither taken
+    /// nor reserved, ignoring case and surrounding spaces. Where none is free, uses the ID, such
+    /// as `#a7`. Holds the name until `release_name`.
+    /// Locks the reserved names; the caller holds the agents lock, which comes first.
+    pub(crate) fn reserve_name_taken(
         &self,
         mut taken: Vec<String>,
         id: &str,
@@ -117,6 +139,19 @@ impl Records {
     /// Lets other starts pick `name` again: its agent is listed, or its start failed.
     pub(crate) fn release_name(&self, name: &str) {
         self.reserved.lock().unwrap().remove(name);
+    }
+
+    /// Adds a member and returns the committed, sorted memberships, or None if the record is gone.
+    /// Blocks.
+    #[allow(dead_code, reason = "used by window adoption")]
+    pub(crate) fn add_window(
+        &self,
+        agent_id: &str,
+        window: &WindowRef,
+    ) -> Result<Option<Vec<WindowRef>>, ErrorBody> {
+        self.members
+            .add(agent_id, window)
+            .map_err(|err| ErrorBody::new(Reason::Internal, format!("{err:#}")))
     }
 
     /// Remembers agents whose records this version cannot read, so their runs are left alone.
