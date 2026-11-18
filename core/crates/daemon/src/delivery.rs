@@ -289,7 +289,7 @@ impl Daemon {
         let from_window = from_info
             .as_ref()
             .and_then(|info| match info.windows.as_slice() {
-                [window] if !to_windows.contains(window) => Some(self.windows.label(window)),
+                [window] if !to_windows.contains(window) => Some(self.windows.name(window)),
                 _ => None,
             });
         let sender = sender_from(caller, from_info.map(|info| info.name));

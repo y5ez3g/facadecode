@@ -9,7 +9,7 @@ use facade_base::daemon::{
     self, AgentInfo, AgentsChange, AgentsSnapshot, AgentsTopic, AgentsUpdate, AgentsWatchArgs,
     LocationInfo, LocationKind, Message, MessagesChange, MessagesTopic, MessagesWatchArgs,
     ScreenChange, ScreenSnapshot, ScreenTopic, ScreenWatchArgs, TERMINAL_WINDOW,
-    TERMINAL_WINDOW_LABEL, WatchParams, WindowInfo, WindowRef, WindowsChange, WindowsTopic,
+    TERMINAL_WINDOW_NAME, WatchParams, WindowInfo, WindowRef, WindowsChange, WindowsTopic,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{Caller, MachinesChange, MachinesTopic};
@@ -624,7 +624,7 @@ impl Daemon {
         (!locations.is_empty()).then(|| WindowInfo {
             machine_id: terminal.machine_id,
             window_id: terminal.window_id,
-            label: TERMINAL_WINDOW_LABEL.into(),
+            name: TERMINAL_WINDOW_NAME.into(),
             environment: "local".into(),
             connected: true,
             folders: Vec::new(),

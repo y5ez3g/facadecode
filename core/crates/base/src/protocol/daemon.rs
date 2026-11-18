@@ -69,7 +69,7 @@ pub const MAX_MESSAGE_IDS: usize = 100;
 /// editor window.
 pub const TERMINAL_WINDOW: &str = "terminal";
 /// The terminal window's name.
-pub const TERMINAL_WINDOW_LABEL: &str = "Terminal";
+pub const TERMINAL_WINDOW_NAME: &str = "Terminal";
 
 /// How Antigravity marks a long argument it cut to its last 8,000 characters before passing it on.
 pub const CUT_MARK: &str = "[Earlier output truncated]";
@@ -281,9 +281,11 @@ pub struct NumbersGiven {
 pub struct WindowDescription {
     /// The editor window instance's ID. It survives reloads and changes when the window reopens.
     /// The daemon returns the logical window in `HelloResult.window`.
-    pub id: String,
+    #[serde(rename = "id")]
+    pub instance_id: String,
     /// The window's name.
-    pub label: String,
+    #[serde(rename = "label")]
+    pub name: String,
     /// `local`, or the remote authority, such as `ssh-remote+devbox`, of a window whose user
     /// interface is on another computer.
     pub environment: String,
@@ -386,7 +388,8 @@ pub struct WindowInfo {
     /// The logical window's ID, or `terminal`.
     pub window_id: String,
     /// The window's name.
-    pub label: String,
+    #[serde(rename = "label")]
+    pub name: String,
     /// `local`, or the remote authority of an editor window whose user interface is on another
     /// computer.
     pub environment: String,

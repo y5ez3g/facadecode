@@ -346,7 +346,7 @@ fn window_row(window: &WindowInfo, addresses: &Addresses<'_>) -> Value {
     let mut row = json!({
         "id": window.window_id, "address": addresses.qualified(&window.window_id, &window.machine_id),
         "machine_id": window.machine_id,
-        "name": window.label, "connected": window.connected,
+        "name": window.name, "connected": window.connected,
     });
     if window.connected {
         row["locations"] = json!(

@@ -46,13 +46,13 @@ impl WindowTable {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
                         row.window_id,
-                        window.label,
+                        window.name,
                         window.environment,
                         window.workspace,
                         folders,
                         window.branch_prefix,
                         sequence,
-                        window.id,
+                        window.instance_id,
                     ],
                 )
             },
@@ -90,8 +90,8 @@ impl WindowTable {
                 |(
                     window_id,
                     sequence,
-                    id,
-                    label,
+                    instance_id,
+                    name,
                     environment,
                     workspace,
                     folders,
@@ -101,8 +101,8 @@ impl WindowTable {
                         window_id,
                         sequence: u64::try_from(sequence)?,
                         description: WindowDescription {
-                            id,
-                            label,
+                            instance_id,
+                            name,
                             environment,
                             workspace,
                             folders: serde_json::from_str(&folders)?,
@@ -129,10 +129,10 @@ impl WindowTable {
 mod tests {
     use super::*;
 
-    fn window(id: &str, workspace: &str) -> WindowDescription {
+    fn window(instance_id: &str, workspace: &str) -> WindowDescription {
         WindowDescription {
-            id: id.into(),
-            label: format!("{id} (Workspace)"),
+            instance_id: instance_id.into(),
+            name: format!("{instance_id} (Workspace)"),
             environment: "ssh-remote+devbox".into(),
             workspace: Some(workspace.into()),
             folders: vec!["/work/app".into(), "/work/lib".into()],
@@ -155,8 +155,8 @@ mod tests {
         let windows = store.window_table();
         windows.save_logical_window(&kept).unwrap();
         kept.description = WindowDescription {
-            id: "later-instance".into(),
-            label: "renamed".into(),
+            instance_id: "later-instance".into(),
+            name: "renamed".into(),
             folders: vec!["/work/app".into()],
             env: Some(std::collections::BTreeMap::from([(
                 "PATH".into(),

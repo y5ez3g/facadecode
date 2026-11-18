@@ -275,7 +275,7 @@ impl Daemon {
         let [window] = windows else {
             return None;
         };
-        Some((self.windows.label(window), window.window_id.as_str()))
+        Some((self.windows.name(window), window.window_id.as_str()))
     }
 
     /// Starts a CLI as [`facade_base::daemon::AgentStart`] says. A start with its creator's own

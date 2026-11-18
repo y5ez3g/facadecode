@@ -245,7 +245,7 @@ impl Daemon {
         let from_window = origin
             .as_ref()
             .and_then(|agent| match agent.windows.as_slice() {
-                [window] => Some(self.windows.label(window)),
+                [window] => Some(self.windows.name(window)),
                 _ => None,
             });
         let window_colors = if matches!(
