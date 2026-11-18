@@ -5,8 +5,8 @@
 // What the parts of the Rust engine share: a window on it is an `ide` client of Facade core, and reaches core only through the
 // daemon protocol (ARCHITECTURE-1.1).
 
-import type { Disposable, ExecutionPort, RunId } from '../../core/ports';
-import type { ErrorData, Operation, Reason, ResizeArgs, Topic, TypeArgs, WindowDescription } from '../../base/coreProtocol';
+import type { Disposable, Event, ExecutionPort, RunId } from '../../core/ports';
+import type { ErrorData, Operation, Reason, ResizeArgs, Topic, TypeArgs, WindowDescription, WindowRef } from '../../base/coreProtocol';
 
 /** The engine a window runs its agents on, chosen once as it opens or reloads: core, or the extension's own. */
 export type Engine = 'rust' | 'old';
@@ -37,7 +37,7 @@ export interface TerminalNotificationArgs {
 
 /** This window's connection to core, kept across core's restarts and handovers to a newer build. */
 export interface DaemonLink {
-	/** Runs `op`; rejects with a {@link DaemonError}. A call refused as `upgrading` is sent again once the new daemon responds. */
+	/** Runs `op` for the current window binding. A call refused as `upgrading` can retry for that binding on the next connection. */
 	call<R>(op: Operation, args: object): Promise<R>;
 	/** Sends `op` without a response: what the person types, and a terminal's size. Dropped while disconnected. */
 	notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]): void;
@@ -45,7 +45,15 @@ export interface DaemonLink {
 	watch<S, C>(topic: Topic, args: object, on: { snapshot(snapshot: S): void; change(change: C): void }): Disposable;
 	/** Describes the window again (`window.update`); the next `hello` describes it so too. */
 	update(window: WindowDescription): Promise<void>;
-	/** This window's ID, which stays the same across its reloads. */
+	/** The machine of the last verified binding. */
+	readonly machineId: string;
+	/** The last verified logical window binding. */
+	readonly window: WindowRef;
+	/** Fires for each new connection, after updating the binding and before installing watches. */
+	readonly onDidBind: Event<WindowRef>;
+	/** Whether the link currently has a usable, bound connection. */
+	readonly connected: boolean;
+	/** The logical window ID during the protocol transition. */
 	readonly windowId: string;
 	dispose(): void;
 }
