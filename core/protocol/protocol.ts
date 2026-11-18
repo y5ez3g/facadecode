@@ -19,7 +19,7 @@ export interface AgentArgs {
 	readonly agent: string;
 }
 
-/** An agent record. Field names match MCP `list_agents`. */
+/** An agent record. */
 export interface AgentInfo {
 	readonly agent_id: string;
 	readonly address?: string;

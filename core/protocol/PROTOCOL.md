@@ -957,7 +957,7 @@ Arguments for an operation on one agent.
 
 ### AgentInfo
 
-An agent record. Field names match MCP `list_agents`.
+An agent record.
 
 | Field | Type | Required | Description |
 |---|---|---|---|

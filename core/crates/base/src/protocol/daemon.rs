@@ -644,7 +644,7 @@ pub struct WatchEndedParams {
     pub error: ErrorBody,
 }
 
-/// An agent record. Field names match MCP `list_agents`.
+/// An agent record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentInfo {
     /// The stable ID: `a` followed by a number, unique within the Facade home while its counter
