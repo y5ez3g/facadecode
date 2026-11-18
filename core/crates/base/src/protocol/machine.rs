@@ -9,9 +9,9 @@ use serde_json::Value;
 use super::address::{exact_machine_selector, format_reference, short_machine_id};
 use super::daemon::{
     AgentInfo, CliInfo, LocationInfo, Message, StartArgs, TerminalColors, WindowDelivery,
-    WindowDeliveryOutcome, WindowRef,
+    WindowDeliveryOutcome, WindowRef, methods,
 };
-use super::jsonrpc::ErrorBody;
+use super::jsonrpc::{ErrorBody, Notification};
 use super::operations::{
     CallParams, EmptyResult, NoArgs, Operation, OperationVisitor, Topic, TopicVisitor,
 };
@@ -270,6 +270,30 @@ pub struct ConnectedParams {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ConnectFailedParams {
     pub error: ErrorBody,
+}
+
+/// The outcome returned to the local client that opened a machine session.
+pub enum ConnectionOutcome {
+    Connected(ConnectedParams),
+    Failed(ConnectFailedParams),
+}
+
+impl ConnectionOutcome {
+    pub fn into_notification(self) -> Notification {
+        match self {
+            Self::Connected(params) => Notification::new(methods::CONNECTED, params),
+            Self::Failed(params) => Notification::new(methods::CONNECT_FAILED, params),
+        }
+    }
+
+    pub fn from_notification(notification: Notification) -> serde_json::Result<Option<Self>> {
+        let outcome = match notification.method.as_str() {
+            methods::CONNECTED => Self::Connected(serde_json::from_value(notification.params)?),
+            methods::CONNECT_FAILED => Self::Failed(serde_json::from_value(notification.params)?),
+            _ => return Ok(None),
+        };
+        Ok(Some(outcome))
+    }
 }
 
 /// Save the identity verified in the foreground session.

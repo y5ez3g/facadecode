@@ -14,11 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{WatchParams, methods};
-use facade_base::jsonrpc::{ErrorBody, Notification, Reason, decode_arguments};
+use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
     AdvertiseParams, Caller, ConnectFailedParams, ConnectedParams, ConnectionKind,
-    ExecutionOutcome, ForwardParams, MachineHello, MachineInfo, MachineResponseState,
-    MachineTransport,
+    ConnectionOutcome, ExecutionOutcome, ForwardParams, MachineHello, MachineInfo,
+    MachineResponseState, MachineTransport,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -219,27 +219,20 @@ impl Network {
         let (registered, output, machine, first_connection) = match prepared {
             Ok(session) => session,
             Err(error) => {
-                let notification = Notification::new(
-                    methods::CONNECT_FAILED,
-                    ConnectFailedParams {
-                        error: error.clone(),
-                    },
-                );
+                let notification = ConnectionOutcome::Failed(ConnectFailedParams {
+                    error: error.clone(),
+                })
+                .into_notification();
                 let _ = wire::send(&mut write, &notification).await;
                 return Err(error);
             }
         };
-        wire::send(
-            &mut write,
-            &Notification::new(
-                methods::CONNECTED,
-                ConnectedParams {
-                    machine,
-                    first_connection,
-                },
-            ),
-        )
-        .await?;
+        let notification = ConnectionOutcome::Connected(ConnectedParams {
+            machine,
+            first_connection,
+        })
+        .into_notification();
+        wire::send(&mut write, &notification).await?;
         registered.run(read, write, output).await
     }
 

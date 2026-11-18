@@ -14,7 +14,7 @@ use facade_base::jsonrpc::{
     RequestRead, ServerMessage, decode_arguments, read_request, read_server_message,
 };
 use facade_base::machine::{
-    ConnectFailedParams, ConnectedParams, ConnectionKind, ConnectionState, MachineAdd,
+    ConnectedParams, ConnectionKind, ConnectionOutcome, ConnectionState, MachineAdd,
     MachineAddArgs, MachineConnect, MachineConnectArgs, MachineConnection, MachineHello,
     MachineIdentity, MachineInfo, MachineList, MachineListResult, MachineRemove, MachineRemoveArgs,
     MachineRename, MachineRenameArgs, MachineTransport,
@@ -396,17 +396,13 @@ fn forward_hello(
 ) -> anyhow::Result<Option<ConnectedParams>> {
     let mut line = Vec::new();
     while let Some(frame) = read_server_message(from_daemon, &mut line)? {
-        if let ServerMessage::Notification(notification) = frame {
-            match notification.method.as_str() {
-                methods::CONNECTED => {
-                    return Ok(Some(serde_json::from_value(notification.params)?));
-                }
-                methods::CONNECT_FAILED => {
-                    let failed: ConnectFailedParams = serde_json::from_value(notification.params)?;
-                    return Err(failed.error.into());
-                }
-                _ => {}
-            }
+        if let ServerMessage::Notification(notification) = frame
+            && let Some(outcome) = ConnectionOutcome::from_notification(notification)?
+        {
+            return match outcome {
+                ConnectionOutcome::Connected(connected) => Ok(Some(connected)),
+                ConnectionOutcome::Failed(failed) => Err(failed.error.into()),
+            };
         }
         if let Err(error) = to_ssh.write_all(&line) {
             if transient_transport(&error) {
