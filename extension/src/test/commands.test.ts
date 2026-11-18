@@ -9,7 +9,7 @@ import { TestEmitter, withModules } from './withModules';
 const LOCATION: Location = { id: 'loc-main', path: '/shop', uri: 'file:///shop', environment: 'local', label: 'main', folders: [{ index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' }], kind: 'checkout', opened: true, git: 'ok', branch: 'main' };
 const RUN = `run-${'3'.padStart(32, '0')}`;
 
-/** The editor's Quick Pick as Resume Agent drives it: what it shows, and whether it is up. */
+/** The editor's Quick Pick as Continue Session drives it: what it shows, and whether it is up. */
 class FakePick {
 	title = '';
 	placeholder = '';
@@ -308,10 +308,10 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([await run('facade.revealAgent', { run_id: RUN }), await run('facade.revealAgent', { run_id: `run-${'8'.padStart(32, '0')}` }), did], [true, false, [`reveal ${RUN}`]]);
 	});
 
-	test('UX-1.1, LIFECYCLE-3.2: Resume Agent shows its picker at once, busy, while the window\'s locations are read again; the histories open after, never before', async () => {
+	test('UX-1.1, LIFECYCLE-3.2: Continue Session shows its picker at once, busy, while the window\'s locations are read again; the histories open after, never before', async () => {
 		let finish!: () => void;
 		refreshing = new Promise<void>(resolve => { finish = resolve; });
-		const done = run('facade.history') as Promise<void>;
+		const done = run('facade.continueSession') as Promise<void>;
 		await settle();
 		const reading = [pickers.length, pickers[0]?.shown, pickers[0]?.busy, opened];
 		finish();
@@ -323,9 +323,9 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([reading, read, errors], [[1, true, true, 0], [1, false, 'No saved conversations in this window\'s folders'], []]);
 	});
 
-	test('CONFIGURATION-4.1: Resume Agent says a settings file wrong as a whole, as the CLIs read it, and opens no history', async () => {
+	test('CONFIGURATION-4.1: Continue Session says a settings file wrong as a whole, as the CLIs read it, and opens no history', async () => {
 		fileProblems = [{ setting: '~/.facade/facade.json', problem: '~/.facade/facade.json:1:1: Expected a JSON object' }];
-		const done = run('facade.history') as Promise<void>;
+		const done = run('facade.continueSession') as Promise<void>;
 		await settle();
 		await settle();
 		const shown = [(pickers[0].items as { readonly label: string; readonly detail?: string }[]).map(item => [item.label, item.detail]), opened];

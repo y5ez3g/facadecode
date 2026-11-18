@@ -1120,7 +1120,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		});
 	});
 
-	suite('Resume Agent', () => {
+	suite('Continue Session', () => {
 		const NOW = Date.UTC(2026, 9, 28, 12);
 		const entry = (n: number, more: Partial<ConversationEntry> = {}): ConversationEntry => ({
 			key: { environment: 'local', cli: n % 2 ? 'claude' : 'codex', sessionId: `s${n}` }, title: `Conversation ${n}`,
@@ -1136,14 +1136,15 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		let nameReads: string[];
 		const open = (batches: readonly ConversationEntry[][], result: string | { running: string } | Error = 'run-new', locations: readonly Location[] = [MAIN, LOGIN], running: readonly string[] = [],
 			problems: CliChoices['problems'] = []) => {
-			const { resumeAgent } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
+			const { pickSession } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
 			reads = 0;
-			return resumeAgent({
+			return pickSession({
+				kind: 'continue',
 				conversations: { open: scope => { scopes.push(scope); return { next: async () => { const entries = batches[reads] ?? []; reads++; return { entries, done: reads >= batches.length }; }, dispose: () => { disposed = true; } }; } },
 				savedName: key => { nameReads.push(key.sessionId); return savedNames.get(key.sessionId); },
 				locations: { snapshot: () => ({ locations, folders: [SHOP], pending: false }) },
 				running: key => running.includes(key.sessionId),
-				resume: chosen => { resumedCwds.push(chosen.cwd); assert.strictEqual(chosen.cwdChoices, undefined); did.push(`resume ${chosen.key.sessionId}`); if (result instanceof Error) { throw result; } return result as never; },
+				continueSession: chosen => { resumedCwds.push(chosen.cwd); assert.strictEqual(chosen.cwdChoices, undefined); did.push(`resume ${chosen.key.sessionId}`); if (result instanceof Error) { throw result; } return result as never; },
 				reveal: async run => void did.push(`reveal ${run}`),
 				select: run => void did.push(`select ${run}`),
 				notifyError: text => errors.push(text),
@@ -1201,7 +1202,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([scopes, first, early, scrolled, searched, reads, disposed], [
 				[{ environment: 'local', directories: [MAIN.path, LOGIN.path] }],
-				['Resume Agent', 100, 1, [['Conversation 0', 'just now \u00b7 login-fix/api', undefined], ['Conversation 1', '1 min ago \u00b7 main', undefined]]],
+				['Continue Session', 100, 1, [['Conversation 0', 'just now \u00b7 login-fix/api', undefined], ['Conversation 1', '1 min ago \u00b7 main', undefined]]],
 				1,
 				[200, 2],
 				[250, 3, false],
@@ -1299,7 +1300,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		test('a native workspace set asks for its working location; Cancel launches nothing, and selection supplies the exact chosen cwd', async () => {
 			const batch = [[entry(1, { cwdChoices: [MAIN.path, LOGIN.path] })]];
 			let done = open(batch); await settle(); ui.current!.accept('Conversation 1'); await settle();
-			assert.strictEqual(ui.current!.placeholder, 'Select a working location');
+			assert.deepStrictEqual([ui.current!.title, ui.current!.placeholder], ['Continue Session', 'Select a working location']);
 			ui.current!.hide(); await done; assert.deepStrictEqual(did, []);
 			done = open(batch); await settle(); ui.current!.accept('Conversation 1'); await settle();
 			ui.current!.accept('login-fix'); await done;
@@ -1329,13 +1330,13 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('a Resume refused as another window owns the workspace says so in the person\'s words, with what to do (UX-2.4, LIFECYCLE-3.2)', async () => {
+		test('a continuation refused as another window owns the workspace says so in the person\'s words, with what to do (UX-2.4, LIFECYCLE-3.2)', async () => {
 			const { FacadeError, OWNERSHIP_LOST } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
 			const done = open([[entry(1)]], new FacadeError('INVALID', 'ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST));
 			await settle();
 			ui.current!.accept('Conversation 1');
 			await done;
-			assert.deepStrictEqual(errors, ['Could not resume Conversation 1: This workspace is owned by another window. Reload this window to take ownership.']);
+			assert.deepStrictEqual(errors, ['Could not continue Conversation 1: This workspace is owned by another window. Reload this window to take ownership.']);
 		});
 
 		test('a conversation whose working location is not in this window is refused in the person\'s words, by its path (UX-2.4, LIFECYCLE-3.2)', async () => {
@@ -1345,7 +1346,34 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await settle();
 			ui.current!.accept('Conversation 1');
 			await done;
-			assert.deepStrictEqual([did, errors], [['resume s1'], ['Could not resume Conversation 1: The working location /far/away is not available in this window.']]);
+			assert.deepStrictEqual([did, errors], [['resume s1'], ['Could not continue Conversation 1: The working location /far/away is not available in this window.']]);
+		});
+	});
+
+	suite('Resume Agent', () => {
+		test('LIFECYCLE-3.2: identities stay distinct when two ended agents share a session', async () => {
+			const { pickSession } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
+			const entry = { key: { environment: 'local', cli: 'claude', sessionId: 'shared' }, cwd: MAIN.path, title: 'Saved title' };
+			const picked: string[] = [];
+			const done = pickSession({
+				kind: 'resume',
+				retained: () => [
+					{ agent: 'a1@id:machine', alias: '#a1', name: 'Ada', entry },
+					{ agent: 'a2@id:machine', alias: '#a2', name: 'Ada', entry }
+				],
+				resume: async agent => { picked.push(agent); return agent; },
+				locations: { snapshot: () => ({ locations: [], folders: [], pending: false }) },
+				running: () => false, reveal: async () => undefined, select: () => undefined,
+				notifyError: assert.fail, media: { path: '/extension/media' } as never, language: 'en'
+			});
+			await settle();
+			const picker = ui.current!;
+			assert.strictEqual(picker.title, 'Resume Agent');
+			assert.deepStrictEqual(picker.items.map(item => item.description?.split(' · ').at(-1)), ['#a1', '#a2']);
+			picker.activate(1);
+			picker.accept();
+			await done;
+			assert.deepStrictEqual(picked, ['a2@id:machine']);
 		});
 	});
 

@@ -180,10 +180,11 @@ are validated against current state, without falling back to the selection.
 | ID after `facade.` | Title | Availability / other surface | Owner |
 | --- | --- | --- | --- |
 | `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
-| `history` | Resume Agent... | Always; panel/empty state | LIFECYCLE-3.2 |
+| `resumeAgent` | Resume Agent... | Rust engine; panel title and palette | LIFECYCLE-3.2 |
+| `continueSession` | Continue Session... | Both engines; palette and empty panel. Old engine panel title | LIFECYCLE-3.2 |
 | `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too; the card's Pin button | LIFECYCLE-3.4 |
 | `unpinAgent` | Unpin Agent | Pinned record; the card's Pin button | LIFECYCLE-3.4 |
-| `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
+| `goToAgent` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `stopAgent` | Stop Agent | Starting or running agent; card and Go to Agent | LIFECYCLE-3.1 |
 | `dismissAgent` | Dismiss Agent | Ended pair in this window; card and Go to Agent | LIFECYCLE-3.1 |

@@ -58,7 +58,7 @@ that is the remote editor settings JSON at `facade.home`.
 | Open Settings (`facade.openSettings`) | The panel's `…` menu and Command Palette |
 | Open Settings gear | Each Unavailable row in New Agent |
 | Open Settings item | New Agent when configuration fails or no usable CLI is available |
-| File-problem row, choosing Open Settings | Resume Agent when the file is wrong as a whole |
+| File-problem row, choosing Open Settings | Resume Agent or Continue Session when the file is wrong as a whole |
 | Edit in facade.json | Facade: Home's description and notifications about file errors |
 
 The Settings page has one section, **Facade Code**, with **Facade: Home** (`facade.home`, machine scope), whose box
@@ -175,7 +175,7 @@ name without regard to case: the six IDs above, Claude Code, Codex, Antigravity,
 `claude` itself changes the built-in; `Claude`, `CLAUDE` and `Claude Code` cannot name a new entry.
 The editor schema enforces the same name rules as the reader (1.2).
 
-New Agent, Resume Agent, `list_agents`, `start_agent.cli` and launch inspection use this ID. It is separate from an
+New Agent, Resume Agent, Continue Session, `list_agents`, `start_agent.cli` and launch inspection use this ID. It is separate from an
 agent's display name. Built-ins appear in CLIS-1.1 order, then added entries in file order; New Agent can put the
 last successful choice first under LIFECYCLE-1.1.
 
@@ -266,7 +266,7 @@ The built-in values are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`. T
 
 | Surface | How it draws the icon |
 | --- | --- |
-| New Agent, Resume Agent, Go to Agent | A built-in logo image or `media/agents/robot-<color>.svg` |
+| New Agent, Resume Agent, Continue Session, Go to Agent | A built-in logo image or `media/agents/robot-<color>.svg` |
 | Terminal tab | A contributed `facade-cli-<id>` glyph in the theme's text color, or `facade-robot-<color>` from `media/robots.woff` |
 | Panel card | A built-in's maker avatar or `robot-<color>-face.svg` with `robot-eyes.svg` over it (PANEL-1.3) |
 
@@ -401,7 +401,7 @@ unaffected by these errors.
 
 New Agent, Resume, Pin restoration and `start_agent` use the same validation and reason. Configuration errors come
 before the disabled check. New Agent lists invalid entries under Unavailable, even when `enabled` is false, and
-offers Open Settings. With a file-level problem, Resume Agent reads no conversations: it shows one row per problem,
+offers Open Settings. With a file-level problem, Resume Agent and Continue Session each show one row per problem,
 labeled by the file, with the reason as detail, a gear icon and an Open Settings gear button as in New Agent.
 Choosing the row or its button runs Open Settings. It does not show
 "No saved conversations in this window's folders" for a bad file. An entry's own error leaves its conversations out

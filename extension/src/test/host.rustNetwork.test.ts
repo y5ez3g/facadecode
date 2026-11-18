@@ -3,13 +3,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { AgentInfo, AgentListResult, AgentsChange, AgentsSnapshot, Message, MessagesChange, MessagesSnapshot, Operation, ScreenChange, ScreenSnapshot, Topic, WindowRef } from '../base/coreProtocol';
 import type { MessageRecord } from '../core/messagePorts';
-import type { RunChange } from '../core/ports';
+import type { Location, RunChange } from '../core/ports';
 import type { RunBinding } from '../host/execution/agentPty';
 import type { RustAgentsDeps } from '../host/rust/agents';
 import { agentAddress, messageAddress } from '../host/rust/references';
 import { DaemonError, type DaemonLink, type WatchListener } from '../host/rust/types';
+import { settingsOf, sourceOf } from './settingsFixtures';
+import { tempDir } from './util';
 import { withModules } from './withModules';
 
 const local = '00000000-0000-4000-8000-000000000001';
@@ -28,7 +32,7 @@ function record(machine_id: string, extra: Partial<AgentInfo> = {}): AgentInfo {
 	};
 }
 
-function harness() {
+function harness(location?: Location, resumeProblem: RustAgentsDeps['resumeProblem'] = () => undefined) {
 	const calls: { op: Operation; args: object }[] = [];
 	const notifications: MessageRecord[] = [];
 	const watches = new Map<Topic, WatchListener<never, never>>();
@@ -57,11 +61,14 @@ function harness() {
 			setReachable: (run: string, reachable: boolean) => disconnected.set(run, !reachable),
 			tabOpen: () => false, reveal: async () => true
 		},
-		locations: { resolve: () => undefined, snapshot: () => ({ folders: [], locations: [] }) },
+		locations: { resolve: (id: string) => id === location?.id ? location : undefined,
+			snapshot: () => ({ folders: [], locations: location ? [location] : [] }) },
+		conversations: { get: () => undefined, put: ignore },
+		resumeProblem,
 		clis: empty, windows: empty, onDidChangeWindows: () => none, onDidChangeMachines: () => none,
 		machineName: (machine: string) => machine === gpu ? 'gpu' : 'server',
 		environment: () => ({ LOCAL: 'editor' }), pins: { list: empty }, titles: { title: async () => undefined },
-		history: { remember: () => assert.fail('remote paths must stay outside local launch history') },
+		history: { remember: () => { assert.ok(location, 'remote paths stay outside local launch history'); } },
 		dismissed: { has: (agent: string) => dismissed.has(agent), set: (agent: string, dismiss: boolean) => dismiss ? dismissed.add(agent) : dismissed.delete(agent), retain: () => undefined },
 		contact: { contact: (notice: MessageRecord) => notifications.push(notice) }, human: { error: ignore },
 		log: { event: ignore }, describe: (err: Error) => err.message, newRunId: () => 'start-fixture'
@@ -221,6 +228,54 @@ suite('Rust machine network windows (RULES-2.2, PANEL-1.3, LIFECYCLE-2.3)', () =
 		assert.strictEqual(await view.agents.resumeRetained(run, { reveal: false }), run);
 		assert.strictEqual(view.agents.get(run)?.pid, 43);
 		assert.deepStrictEqual([...view.dismissed], []);
+	});
+
+	test('refuses a stale history row after a type change and continues under a new ID when the type matches', async () => {
+		const temp = tempDir('fd-continue-type-');
+		try {
+			const first = path.join(temp.dir, 'fake-first.exe');
+			const second = path.join(temp.dir, 'fake-second.exe');
+			for (const file of [first, second]) { fs.writeFileSync(file, '', { mode: 0o755 }); }
+			const location: Location = { id: 'folder', label: 'work', path: temp.dir, uri: 'file:///work', environment: 'local',
+				kind: 'folder', folders: [], opened: true, git: 'none' };
+			const { HostClis } = withModules({ vscode: {} })<typeof import('../host/clis')>(require.resolve('../host/clis'));
+			let work = { type: 'claude', program: first, args: [] as string[] };
+			const clis = new HostClis({
+				settings: sourceOf(() => settingsOf({ clis: { work } })),
+				destination: () => ({ host: {}, platform: process.platform }), home: temp.dir
+			});
+			const view = harness(location, (cli, folder, builtIn) => clis.resumeProblem(cli, folder, builtIn));
+			const original = record(local, { cwd: temp.dir, cli: 'work', process: 'ended', state: 'ended', exit: { code: 2, at } });
+			view.listing.snapshot({ agents: [original], machines: [] });
+			const [retained] = view.agents.retainedConversations();
+			const saved = { ...retained.entry, builtIn: 'claude' };
+			assert.strictEqual(clis.resumeProblem(saved.key.cli, location, saved.builtIn), undefined);
+
+			work = { ...work, type: 'codex' };
+			await assert.rejects(view.agents.resume(saved, { reveal: false }), /clis\.work runs Codex now/);
+			assert.strictEqual(view.calls.length, 0, 'a stale selection sends no start');
+
+			work = { type: 'claude', program: second, args: ['--verbose'] };
+			const start = Promise.withResolvers<{ agent: AgentInfo }>();
+			view.answer(() => start.promise);
+			const pending = view.agents.resume(saved, { reveal: false });
+			assert.deepStrictEqual(await view.agents.resume(saved, { reveal: false }), { running: 'start-fixture' });
+			await assert.rejects(view.agents.resumeRetained(retained.agent, { reveal: false }), /already running/);
+			assert.deepStrictEqual(view.calls.map(call => call.op), ['agent.start']);
+
+			const agent = record(local, { agent_id: 'a8', cli: 'work', cwd: temp.dir, pid: 43 });
+			start.resolve({ agent });
+			const run = await pending;
+			assert.ok(typeof run === 'string', 'the first continuation starts a new run');
+			assert.strictEqual(view.agents.get(run)?.address, agentAddress(agent));
+			assert.strictEqual(view.agents.get(run)?.sessionId, original.session);
+			assert.strictEqual(view.agents.get(run)?.cwd, original.cwd);
+			assert.deepStrictEqual(await view.agents.resume(saved, { reveal: false }), { running: run });
+			assert.deepStrictEqual(view.agents.retainedConversations().map(each => each.agent), [retained.agent]);
+			assert.deepStrictEqual(view.calls.map(call => call.op), ['agent.start']);
+		} finally {
+			temp.remove();
+		}
 	});
 
 	test('retries remote screens after a refusal or late watch end and ignores the old generation', async () => {

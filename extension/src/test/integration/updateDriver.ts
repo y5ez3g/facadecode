@@ -85,7 +85,7 @@ export async function activate(): Promise<void> {
 		write({ phase: 'updated', version: version(), tabs: tabs(), terminals: vscode.window.terminals.map(terminal => terminal.name) });
 		await until('the opening', async () => fs.existsSync(`${OUT}.open`) ? true : undefined, 300_000);
 		// Go to Agent's only agent
-		await pick('its tab opened', 'facade.showActiveAgents', () => tabs().flat().length ? true : undefined);
+		await pick('its tab opened', 'facade.goToAgent', () => tabs().flat().length ? true : undefined);
 		write({ phase: 'opened', tabs: tabs() });
 	} catch (err) {
 		write({ phase: 'error', message: err instanceof Error ? err.stack ?? err.message : String(err) });

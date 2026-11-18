@@ -68,7 +68,7 @@ export async function pickCard(command: string): Promise<Card> {
 }
 
 export const newCard = () => pickCard('facade.newAgent');
-export const resumeCard = () => pickCard('facade.history');
+export const resumeCard = () => pickCard('facade.resumeAgent');
 
 export function aliasOf(card: Card): string {
 	assert.match(card.alias, /^#a\d+$/u, 'the card shows its agent number');

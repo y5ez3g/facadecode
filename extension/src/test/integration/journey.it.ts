@@ -350,14 +350,14 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 	});
 
-	test('Resume uses the saved cwd and exact ID; Pin and Unpin synchronize with the native tab', async function () {
+	test('Continue Session uses the saved cwd and exact session ID; Pin and Unpin synchronize with the native tab', async function () {
 		if (CUSTOM) { this.skip(); }
 		const cwd = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'nested');
 		fs.mkdirSync(cwd, { recursive: true });
 		const fixture = resumeFixture(cwd);
 		const before = new Set((await state()).cards.map(each => each.runId));
 		const started = async () => (await state()).cards.filter(each => !before.has(each.runId));
-		const history = vscode.commands.executeCommand('facade.history');
+		const history = vscode.commands.executeCommand('facade.continueSession');
 		void history.then(undefined, () => undefined);
 		try {
 			await until('the Resume fixture ' + fixture.title + ' to be selected', async () => {

@@ -135,10 +135,10 @@ across closure and reconnect. System results that cannot return simply end.
 
 ### 2.5 Resume and Pin
 
-**Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
+**Resume Agent restores the same numbered Rust agent. Continue Session starts a new agent with the chosen saved session.**
 
-Resume lists relevant vendor histories with the original CLI and location. On Rust, any member can use Resume to
-continue a saved agent with its original number (LIFECYCLE-3.2). Pin and the native terminal tab's Pin are the
+Continue Session lists relevant CLI histories with the original CLI and location. On Rust, any member window can
+use Resume Agent to restore that numbered agent (LIFECYCLE-3.2). Pin and the native terminal tab's Pin are the
 same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
 Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
 card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a

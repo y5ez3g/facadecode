@@ -34,6 +34,8 @@ export interface RustAgentsDeps {
 	readonly terminals: RustTerminals;
 	readonly locations: LocationPort;
 	readonly clis: (machine?: string) => readonly CliInfo[];
+	/** The chosen history entry must still run its original CLI from this location. */
+	readonly resumeProblem: (cli: string, location: Location, builtIn?: string) => string | undefined;
 	readonly windows: () => readonly WindowInfo[];
 	readonly onDidChangeWindows: Event<void>;
 	readonly machineName: (machine: string) => string;
@@ -281,7 +283,7 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	/**
-	 * New Agent opens its pair at acceptance (LIFECYCLE-1.5). Resume from vendor history waits for the actual start.
+	 * New Agent opens its pair at acceptance (LIFECYCLE-1.5). Continue Session waits for the actual start.
 	 */
 	private start(options: {
 		readonly name: string; readonly cli: string; readonly location?: Location; readonly reveal: boolean; readonly cwd?: string;
@@ -681,10 +683,11 @@ export class RustAgents implements Agents, Disposable {
 		if (!this.hasSnapshot()) { return []; }
 		const retained: RetainedConversation[] = [];
 		for (const info of this.all.values()) {
-			if (!this.isMember(info) || info.process !== 'ended' || !info.session) { continue; }
+			if (!this.isMember(info) || !this.confirmedEnd(info) || !info.session) { continue; }
 			const title = this.titleOf(info);
 			retained.push({
 				agent: agentAddress(info),
+				alias: this.agentLabel(info),
 				name: keptName({ name: info.name, alias: `#${info.agent_id}` }),
 				entry: { key: this.conversationKey(info, info.session), cwd: info.cwd, title, activityAt: Date.parse(info.exit?.at ?? info.created_at) }
 			});
@@ -694,28 +697,27 @@ export class RustAgents implements Agents, Disposable {
 
 	async resume(entry: ConversationEntry, options: { readonly reveal: boolean }): Promise<ResumeResult> {
 		await this.waitForSnapshot(this.window);
-		const retained = [...this.all.values()].find(info => this.isMember(info) && this.matchesConversation(info, entry.key)
-			&& (info.process === 'ended' || this.resuming.has(agentAddress(info))));
-		if (retained && this.resuming.has(agentAddress(retained))) { return this.resumeRetained(agentAddress(retained), options); }
 		const running = this.holding(entry.key);
 		if (running) {
 			return { running };
 		}
-		if (retained) { return this.resumeRetained(agentAddress(retained), options); }
 		const uncertain = this.uncertainConversation(entry.key);
 		if (uncertain) { throw uncertain.error; }
 		if (entry.unavailable) {
 			throw new FacadeError('INVALID', 'unsupported', entry.unavailable);
 		}
+		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact conversation ID is required.'); }
 		const meta = this.deps.conversations.get(entry.key);
 		if (entry.cwdChoices?.length && !meta?.cwd) {
 			throw invalid('invalid_argument', 'Choose a working location before resuming this conversation.');
 		}
 		const cwd = meta?.cwd ?? entry.cwd;
 		const location = this.locationFor(meta?.location, cwd);
-		if (!location) {
+		if (!location || location.environment !== entry.key.environment) {
 			throw new FacadeError('INVALID', 'not_found', vscode.l10n.t("The working location {0} is not available in this window.", cwd));
 		}
+		const problem = this.deps.resumeProblem(entry.key.cli, location, entry.builtIn);
+		if (problem !== undefined) { throw new FacadeError('INVALID', 'unsupported', problem); }
 		return this.start({ name: meta?.name.trim() ?? '', cli: entry.key.cli, location, cwd, reveal: options.reveal, session: entry.key.sessionId }).result;
 	}
 

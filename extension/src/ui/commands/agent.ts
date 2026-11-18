@@ -156,7 +156,7 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 		return run === undefined ? undefined : does(run);
 	});
 	return [
-		vscode.commands.registerCommand(COMMANDS.showActiveAgents, () => flows.goToAgent()),
+		vscode.commands.registerCommand(COMMANDS.goToAgent, () => flows.goToAgent()),
 		on(COMMANDS.pinAgent, true, run => actions.pin(run, true)),
 		on(COMMANDS.unpinAgent, true, run => actions.pin(run, false)),
 		on(COMMANDS.renameAgent, true, run => actions.rename(run)),

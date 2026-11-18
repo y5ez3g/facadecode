@@ -308,21 +308,22 @@ stay. Unsolicited exits follow RULES-3.3.
 Closing an agent's terminal tab hides it (2.2) and keeps its card. Its own exit, location removal and window
 closure follow RULES-3.3, 2.4 and 4.1. Messages use an agent's `#aN` when it has no name.
 
-### 3.2 Resume picker
+### 3.2 Choosing an agent or session
 
-**Resume searches the window's CLI histories and, on the Rust engine, eligible records of its member agents.**
+**Resume Agent selects an ended Rust member record. Continue Session selects a session from CLI history.**
 
-Open from panel, empty state or Command Palette; the picker shows at once, busy while the window's locations and running
-conversations are read. The CLI history covers the window's folders, subfolders and associated worktrees. Rust also lists
-ended core records with a saved session for which this window is a member, including after a stop. When both sources
-give the same environment, CLI and session ID, use the core record and its original numbered agent. With neither a
-folder nor a Rust member conversation, its one item `Open Folder...`, detail `Open a folder to resume its
-conversations.`, runs the editor's Open Folder as PANEL-1.2's does. With a folder open, check facade.json before
-reading histories. A file-level problem shows one row per problem: the file as label, its reason as detail and a
+Resume Agent opens from the Rust panel title or the Command Palette. It lists confirmed ended records with a saved session,
+including stopped or dismissed agents, by recent activity. Each row identifies its exact numbered agent. A session held by
+another running agent is unavailable. With no eligible records the picker says `No agents to resume in this window`.
+
+Continue Session opens from the Command Palette or the empty panel on both engines. It also opens from the old engine's
+panel title. It reads CLI history from the window's folders, subfolders and associated worktrees. With no folder, its
+`Open Folder...` row runs the editor's Open Folder as PANEL-1.2 describes. Both pickers show at once, busy while they
+prepare their sources. Check facade.json before reading the sources. A file-level problem shows one row per problem: the file as label, its reason as detail and a
 gear icon and an Open Settings gear button, as in New Agent. Choosing the row or its button runs Open Settings.
 No conversations are read, and the picker does not claim there are no saved conversations. An entry's own error omits that entry's conversations (CONFIGURATION-4.1).
 
-Read only list metadata, recent activity first, paginated in batches of 100: the next batch is read when the person comes within 10 rows of the end, and on to the last
+Continue Session reads only list metadata, most recent first, paginated in batches of 100: the next batch is read when the person comes within 10 rows of the end, and on to the last
 while a search is typed. A batch that has taken 1,000 conversation records ends early and the next goes on, so no scan
 limit makes older matching history unreachable. Reuse already read metadata during the picker session rather than
 rescanning every log on each page or keystroke. Reading the histories keeps the window's agents responsive: the stores
@@ -352,14 +353,14 @@ conversation already runs in Facade, do not start it again; reveal it only when 
 scope. External activity is not a gate: call vendor resume and return its result. No external-writer scan, lease or
 concurrency guarantee is required.
 
-### 3.3 Resume execution
+### 3.3 Restoring agents and continuing sessions
 
-**Resume starts an exact saved conversation in its original CLI and location using current CLI startup settings.**
+**Resume Agent restores the chosen number. Continue Session starts an exact saved session under a new number.**
 
 Restore RULES-4.2's conversation context and CONFIGURATION-3.4's original entry name and type. Use current entry
 settings and RULES-4.3's current destination YOLO; model and effort follow CONFIGURATION-3.3. A removed, disabled or
 changed-type entry refuses restoration with the reason, without selecting a built-in instead.
-Manual Resume keeps a nonempty saved Facade name. A missing or empty saved name uses New Agent's suggestions (2.1),
+Continue Session keeps a nonempty saved Facade name. A missing or empty saved name uses New Agent's suggestions (2.1),
 or the new agent's ID when no name is free. Save the chosen name with the conversation, except when it equals the
 agent's ID. Never derive it from the conversation title or CLI ID. Existing saved names, including long ones, remain
 unchanged. An ordinary reload preserves the running agent's name. Automatic Pin restoration keeps a recorded
@@ -369,9 +370,10 @@ set under 3.2, the person's explicit location choice supplies the missing cwd. O
 agent's original cwd with the restoring window's execution environment and current startup settings, even when that
 window does not list the location. Resume waits for core to confirm success before opening the card and terminal.
 Concurrent resumes of the same retained number share a process under RULES-4.2. If a Resume call errors and core
-already reports the same member running, the window reattaches to it. Other manual failures say
-`Could not resume {0}: {1}` with the conversation's title. On the old engine a refused Resume uses that notification,
-and an accepted one creates its pair immediately and retains actual launch failure. Do not acquire an external
+already reports the same member running, the window reattaches to it. A manual failure says
+`Could not resume {0}: {1}` with the saved title. Continue Session uses the session ID and starts a new agent even if
+an ended record has the same session. Its failure says `Could not continue {0}: {1}`. On the old engine an accepted
+continuation creates its pair immediately and retains actual launch failure. On Rust the pair opens after core confirms startup. Do not acquire an external
 conversation-writer lease or replay the original creation prompt.
 On process start, register the successful cwd under WORKTREES-1.2 and update human launch history under 1.2.
 

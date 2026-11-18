@@ -13,7 +13,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
 import { until } from './editors';
-import { aliasOf, hasAgentTab, keepConversation, listed, newCard, resumeCard, state } from './rustWindowDriver';
+import { aliasOf, hasAgentTab, keepConversation, listed, newCard, pickCard, resumeCard, state } from './rustWindowDriver';
 import type { ListedAgent } from './rustWindowDriver';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -84,7 +84,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		}
 	});
 
-	test('Stop and Dismiss close the appropriate pair and Resume restores the original number (LIFECYCLE-3.1, 3.3)', async function () {
+	test('Resume Agent keeps the original number and Pin while Continue Session starts a new number (LIFECYCLE-3.1, 3.3)', async function () {
 		this.timeout(120_000);
 		const first = await newCard();
 		const alias = aliasOf(first);
@@ -96,6 +96,9 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		const screens = path.join(HOME, 'core', 'screens');
 		await until('its screen log in core', () => fs.existsSync(path.join(screens, id)) ? true : undefined);
 		await until('its terminal tab to open', () => hasAgentTab(first) || undefined);
+		await until('its session to become pinnable', async () => (await state()).cards.find(card => card.runId === first.runId)?.menu.pin || undefined);
+		await vscode.commands.executeCommand('facade.pinAgent', { run_id: first.runId });
+		await until('its Pin to save', async () => (await state()).cards.find(card => card.runId === first.runId)?.pinned || undefined);
 
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: first.runId });
 		await until('its card and terminal tab to close', async () => !(await state()).cards.some(card => card.alias === alias) && !hasAgentTab(first) || undefined);
@@ -111,6 +114,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		const second = await resumeCard();
 		try {
 			assert.strictEqual(aliasOf(second), alias, 'Resume Agent shows the original number');
+			assert.strictEqual(second.pinned, true, 'Resume Agent preserves the original Pin');
 			const resumed = await until('the CLI to resume its original session', async () => {
 				const launch = await launchOf(alias);
 				return launch.args[launch.args.indexOf('--resume') + 1] === session ? launch : undefined;
@@ -133,6 +137,19 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			await until('Dismiss Agent to close the ended pair', async () => !(await state()).cards.some(card => card.alias === alias) && !hasAgentTab(second) || undefined);
 			const kept = listed().find(each => each.agent_id === id);
 			assert.deepStrictEqual([kept?.process, kept?.session], ['ended', session]);
+
+			const continued = await pickCard('facade.continueSession');
+			try {
+				const copy = aliasOf(continued);
+				assert.notStrictEqual(copy, alias, 'the history entry starts a new numbered agent');
+				assert.ok(!continued.pinned, 'the Pin stays with the original agent');
+				const saved = await until('the new agent to hold the saved session', () =>
+					listed().find(each => each.agent_id === copy.slice(1) && each.session === session));
+				assert.strictEqual(fs.realpathSync(saved.folder), fs.realpathSync(launch.cwd));
+				assert.deepStrictEqual(listed().filter(each => each.session === session && each.process === 'running').map(each => each.agent_id), [copy.slice(1)]);
+			} finally {
+				await vscode.commands.executeCommand('facade.stopAgent', { run_id: continued.runId });
+			}
 		} finally {
 			const card = (await state()).cards.find(each => each.alias === alias);
 			if (card) {

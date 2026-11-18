@@ -44,8 +44,8 @@ The **Facade Code** panel in the Activity Bar shows all agents in your window. E
 
 - **Start and configure.** Click **New Agent...** to choose a CLI. In the picker, select **Change Name...** to name your session or **Change Working Location...** to pick a folder or create a Git worktree.
 - **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it. In the card's gear menu, **Stop Agent** stops the process and **Dismiss Agent** closes an ended card.
-- **Custom keyboard shortcuts.** Replace any binding to `facade.closeAgent` in `keybindings.json` with `facade.stopAgent` for stopping or `facade.dismissAgent` for dismissing an ended card.
-- **Pin and resume.** Use **Pin Agent** to keep essential agents at the top of the panel and restore them when the workspace opens again. Use **Resume Agent...** in the panel header to search history and restore past conversations in their original folders.
+- **Custom keyboard shortcuts.** Replace any binding to `facade.closeAgent` in `keybindings.json` with `facade.stopAgent` for stopping or `facade.dismissAgent` for dismissing an ended card. Replace `facade.history` with `facade.resumeAgent` for the original Rust agent or `facade.continueSession` for CLI history. Replace `facade.showActiveAgents` with `facade.goToAgent`.
+- **Pin and resume.** Use **Pin Agent** to keep essential agents at the top of the panel and restore them when the workspace opens again. Use **Resume Agent...** to restore a Rust agent by its original number. Use **Continue Session...** to start a new agent with a saved session in its original folder.
 
 For details on agent cards, resuming sessions, pinning, git worktrees, and window reloads, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#one-panel-for-every-agent).
 

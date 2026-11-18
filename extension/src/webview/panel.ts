@@ -384,7 +384,7 @@ function emptyParts(): readonly EmptyPart[] {
 			return [{ kind: 'text', text: strings.noFolder }, { kind: 'button', text: strings.openFolder, run: () => act('openFolder') }];
 		case 'noAgents':
 			return [{ kind: 'text', text: strings.noAgents }, { kind: 'button', text: strings.newAgent, run: () => act('new') },
-				...(strings.resumeAgent ? [{ kind: 'button', text: strings.resumeAgent, run: () => act('resume'), secondary: true } as const] : [])];
+				...(strings.continueSession ? [{ kind: 'button', text: strings.continueSession, run: () => act('continueSession'), secondary: true } as const] : [])];
 		case 'noMatch':
 			return [
 				// A function, not the label itself: a folder or branch name may hold `$&` or `$'`, which a replacement string would expand

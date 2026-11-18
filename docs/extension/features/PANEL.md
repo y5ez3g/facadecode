@@ -21,8 +21,8 @@ can show its own card and terminal for the same running agent. Go to Agent can s
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
-card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), Resume Agent
-(`history`), New Agent, so New Agent is rightmost. New Agent's icon is Facade's own copy of the `new-session` codicon,
+card loading. Filter by Working Location (`filter`, filled when active) comes first. Resume Agent (`resumeAgent`)
+on Rust or Continue Session (`continueSession`) on the old engine comes next, followed by New Agent. New Agent's icon is Facade's own copy of the `new-session` codicon,
 shipped with the extension and shown in every editor: VS Code has that codicon only from 1.111, later than the
 supported minimum. The view's native `Views and More Actions...` (`…`) menu holds Add Folder to Workspace... (the
 editor's command), then New Worktree... when a workspace folder is open, followed by Open Settings in a separate
@@ -38,7 +38,7 @@ not change the underlying card count.
 **The empty state explains the current condition and offers the next relevant action.**
 
 No folder: `Open a folder to start agents.` with Open Folder. No agents:
-`Start an agent in this workspace.` with New Agent (primary) and Resume Agent (secondary). No matching cards with a filter:
+`Start an agent in this workspace.` with New Agent (primary) and Continue Session (secondary). No matching cards with a filter:
 `No agents found in "{location}".`, then `{n} other agents are in this workspace.` (`1 other agent is in this
 workspace.`; omitted when no other card exists), Clear Filter (primary) and New Agent (secondary), which starts at the
 filtered location (LIFECYCLE-1.2). Empty-state buttons have no ellipsis, as VS Code's
@@ -164,7 +164,7 @@ shows the connection status until the running machine can be reached again.
    tools not connected past CLIS-2.3's bound, `Collaboration not connected yet`; or a start that did not become ready,
    with why its activity is unknown, such as `No initial status · check terminal`. Before any message, with no notable
    state, it says how the run began: `New conversation started` for a new conversation, `Conversation resumed` for one
-   it resumed - by Resume Agent, or a restored Pin resuming its conversation, never a Pin that begins a new one
+   it resumed through Resume Agent, Continue Session or an exact-session Pin
    (LIFECYCLE-3.4).
 
 What the second line says is the first of these that holds, in this order of precedence:

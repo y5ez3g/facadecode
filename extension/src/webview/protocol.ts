@@ -118,7 +118,7 @@ export interface PanelState {
 }
 
 /** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons; PANEL-1.3's Pin). */
-export type Act = 'open' | 'new' | 'resume' | 'clearFilter' | 'openFolder' | 'rename' | 'pin' | 'unpin';
+export type Act = 'open' | 'new' | 'continueSession' | 'clearFilter' | 'openFolder' | 'rename' | 'pin' | 'unpin';
 
 /** The host's answer to one action of the page that asked: `gone` (its card's run is gone) or `failed`. */
 export interface Outcome {
@@ -165,7 +165,7 @@ export interface AgoWords {
 export interface Strings {
 	readonly agents: string;
 	readonly newAgent: string;
-	readonly resumeAgent?: string;
+	readonly continueSession?: string;
 	readonly clearFilter: string;
 	/** The empty panel's words (PANEL-1.2): why it is empty. */
 	readonly noAgents: string;

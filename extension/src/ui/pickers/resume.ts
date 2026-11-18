@@ -14,10 +14,7 @@ import { ago, cliDisplayName, cliIcon, openSettingsLabel, plainText, reasonOf, r
 import { BACK, Flow } from './stepping';
 import { matchesCliSearch } from './search';
 
-export interface ResumeDeps {
-	readonly conversations: ConversationDiscoveryPort;
-	/** Existing Facade name only; browsing a history never assigns one (LIFECYCLE-2.3). */
-	readonly savedName: (key: ConversationKey) => string | undefined;
+interface PickerDeps {
 	readonly locations: Pick<LocationPort, 'snapshot'>;
 	/**
 	 * What is read before the conversations are: this window's agents, its locations and the conversations other windows hold. The
@@ -26,12 +23,6 @@ export interface ResumeDeps {
 	readonly prepared?: Promise<unknown>;
 	/** Whether a run holds the conversation now, here or in another window: one already running is not offered again (LIFECYCLE-3.2). */
 	readonly running: (key: ConversationKey) => boolean;
-	/** `agents.resume(entry, { reveal: true })`: a new run, or the run already holding that conversation (LIFECYCLE-3.2, 3.3). */
-	readonly resume: (entry: ConversationEntry) => ResumeResult | Promise<ResumeResult>;
-	readonly retained?: {
-		list(): readonly RetainedConversation[];
-		resume(agent: string): Promise<RunId>;
-	};
 	/** Shows a run's own terminal and selects its card. */
 	readonly reveal: (run: RunId) => Promise<unknown>;
 	readonly select: (run: RunId) => void;
@@ -45,6 +36,16 @@ export interface ResumeDeps {
 	readonly now?: () => number;
 }
 
+type SessionDeps = PickerDeps & ({
+	readonly kind: 'resume';
+	readonly retained: () => readonly RetainedConversation[];
+	readonly resume: (agent: string) => Promise<RunId>;
+} | {
+	readonly kind: 'continue';
+	readonly conversations: ConversationDiscoveryPort;
+	readonly savedName: (key: ConversationKey) => string | undefined;
+	readonly continueSession: (entry: ConversationEntry) => ResumeResult | Promise<ResumeResult>;
+});
 
 /** How far down the list the person may come before the next batch is read: a page of the picker. */
 const READ_AHEAD = 10;
@@ -69,16 +70,19 @@ function placeOf(cwd: string, reals: readonly { readonly location: Location; rea
 	return rest ? `${locationLabel(inside.location, catalog)}/${rest}` : locationLabel(inside.location, catalog);
 }
 
-type Item = vscode.QuickPickItem & { readonly entry?: ConversationEntry; readonly openFolder?: true; readonly settings?: true };
+interface Choice {
+	readonly entry: ConversationEntry;
+	readonly name?: string;
+	readonly retained?: RetainedConversation;
+}
 
-/**
- * Resume Agent (LIFECYCLE-3.2) combines this window's retained agents with saved conversations from its folders, most recent first.
- * The picker reads CLI histories a page at a time while scrolling and reads through to the end while searching. Choosing a
- * conversation closes the picker and resumes it. A conversation already running here is shown, and one running elsewhere is reported.
- */
-export function resumeAgent(deps: ResumeDeps): Promise<void> {
+type Item = vscode.QuickPickItem & { readonly choice?: Choice; readonly openFolder?: true; readonly settings?: true };
+
+/** Picks an exact retained agent or a CLI history entry, according to the command (LIFECYCLE-3.2). */
+export function pickSession(deps: SessionDeps): Promise<void> {
 	const picker = vscode.window.createQuickPick<Item>();
-	picker.title = vscode.l10n.t("Resume Agent");
+	const title = deps.kind === 'resume' ? vscode.l10n.t("Resume Agent") : vscode.l10n.t("Continue Session");
+	picker.title = title;
 	picker.placeholder = vscode.l10n.t("Search by title, name, CLI, or location");
 	picker.matchOnDescription = true;
 	picker.matchOnDetail = true;
@@ -89,10 +93,10 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	let pager: ConversationPager | undefined;
 	let catalog: Catalog = { locations: [], folders: [], pending: false };
 	let reals: readonly { readonly location: Location; readonly real: string }[] = [];
-	const entries: ConversationEntry[] = [];
-	const metadata = new Map<string, { readonly name: string | undefined; readonly agent?: string }>();
-	const retained = deps.retained;
-	const recentFirst = (a: ConversationEntry, b: ConversationEntry): number => (b.activityAt ?? Number.NEGATIVE_INFINITY) - (a.activityAt ?? Number.NEGATIVE_INFINITY);
+	const choices: Choice[] = [];
+	const seenSessions = new Set<string>();
+	const recentFirst = (a: Choice, b: Choice): number =>
+		(b.entry.activityAt ?? Number.NEGATIVE_INFINITY) - (a.entry.activityAt ?? Number.NEGATIVE_INFINITY);
 	let done = false;
 	let open = true;
 	let reading: Promise<void> | undefined;
@@ -100,12 +104,13 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	const placeIn = (cwd: string) => places.get(cwd) ?? places.set(cwd, placeOf(cwd, reals, catalog)).get(cwd)!;
 	const icon = deps.icons?.() ?? ((cli: string) => cli);
 	// One line (LIFECYCLE-2.3): title first, then when, where and its saved name. Equal name/title fields remain independent.
-	const itemOf = (entry: ConversationEntry): Item => {
+	const itemOf = (choice: Choice): Item => {
+		const { entry, name, retained } = choice;
 		const item: Item = {
 			label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled conversation")),
-			description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).filter(Boolean).join(', '), metadata.get(conversationId(entry.key))?.name].filter(Boolean).map(text => plainText(text!)).join(' · '),
+			description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).filter(Boolean).join(', '), name, retained?.alias].filter(Boolean).map(text => plainText(text!)).join(' · '),
 			iconPath: cliIcon(deps.media, icon(entry.key.cli)),
-			entry
+			choice
 		};
 		// The window's one place to work, left unsaid, still matches a search (LIFECYCLE-3.2)
 		const one = onePlaceOf(catalog);
@@ -113,21 +118,22 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 		return { ...item, alwaysShow: matchesCliSearch(picker.value, entry.key.cli, cliDisplayName(entry.key.cli), item, unsaid) };
 	};
 	const show = () => {
-		const active = picker.activeItems[0]?.entry;
-		picker.items = entries.map(itemOf);
-		const again = active && picker.items.find(item => item.entry === active);
+		const active = picker.activeItems[0]?.choice;
+		picker.items = choices.map(itemOf);
+		const again = active && picker.items.find(item => item.choice === active);
 		if (again) {
 			picker.activeItems = [again];
 		}
-		if (done && !entries.length) {
-			picker.placeholder = vscode.l10n.t("No saved conversations in this window's folders");
+		if (done && !choices.length) {
+			picker.placeholder = deps.kind === 'resume' ? vscode.l10n.t("No agents to resume in this window")
+				: vscode.l10n.t("No saved conversations in this window's folders");
 		}
 	};
 	/** Reads the next batch, once at a time; deduplicated by environment, CLI and session ID, most recent first. */
-	const readNext = (): Promise<void> => !pager ? Promise.resolve() : reading ??= (async (histories: ConversationPager) => {
+	const readNext = (): Promise<void> => deps.kind !== 'continue' || !pager ? Promise.resolve() : reading ??= (async (histories: ConversationPager) => {
 		picker.busy = true;
 		try {
-			const before = entries.length;
+			const before = choices.length;
 			do {
 				const batch = await histories.next();
 				if (!open) {
@@ -136,14 +142,14 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 				for (const entry of batch.entries) {
 					const id = conversationId(entry.key);
 					// One that cannot be resumed now - its folder gone, its CLI off or not installed (LIFECYCLE-3.2) - or already runs is not offered (LIFECYCLE-3.2)
-					if (!metadata.has(id) && entry.unavailable === undefined && !deps.running(entry.key)) {
-						metadata.set(id, { name: deps.savedName(entry.key)?.trim() });
-						entries.push(entry);
+					if (!seenSessions.has(id) && entry.unavailable === undefined && !deps.running(entry.key)) {
+						seenSessions.add(id);
+						choices.push({ entry, name: deps.savedName(entry.key)?.trim() });
 					}
 				}
-				entries.sort(recentFirst);
+				choices.sort(recentFirst);
 				done = batch.done;
-			} while (open && !done && entries.length === before);
+			} while (open && !done && choices.length === before);
 		} catch (err) {
 			done = true;
 			if (open) {
@@ -163,31 +169,17 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 			await readNext();
 		}
 	};
-	/** Read retained agents before opening the window's CLI histories (LIFECYCLE-3.2). */
+	/** Reads just the source selected by the command. */
 	const begin = async () => {
-		let retainedEntries: readonly RetainedConversation[];
-		try {
-			await deps.prepared;
-			if (!open) {
-				return;
-			}
-			retainedEntries = retained?.list().filter(({ entry }) => !deps.running(entry.key)) ?? [];
-		} catch (err) {
-			if (open) {
-				picker.hide();
-				deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {});
-			}
-			return;
-		}
+		await deps.prepared;
+		if (!open) { return; }
 		catalog = deps.locations.snapshot();
 		const [location] = catalog.locations;
-		if (!location && !retainedEntries.length) {
-			picker.items = [{ label: vscode.l10n.t("Open Folder..."), detail: vscode.l10n.t("Open a folder to resume its conversations."), iconPath: new vscode.ThemeIcon('folder-opened'), openFolder: true }];
+		if (deps.kind === 'continue' && !location) {
+			picker.items = [{ label: vscode.l10n.t("Open Folder..."), detail: vscode.l10n.t("Open a folder to continue a saved session."), iconPath: new vscode.ThemeIcon('folder-opened'), openFolder: true }];
 			picker.busy = false;
 			return;
 		}
-		// The settings file wrong as a whole stops every resume: it is said by the file, as New Agent says it, with the way to it - not
-		// conversations none of which could be chosen (CONFIGURATION-4.1)
 		const problems = deps.settingsProblems?.() ?? [];
 		if (problems.length) {
 			const settingsButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: openSettingsLabel() };
@@ -195,28 +187,22 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 			picker.busy = false;
 			return;
 		}
-		// Where a conversation was is the main checkout, worktree or folder it was in: no folder inside one names it (WORKTREES-1.2)
 		reals = catalog.locations.filter(location => !location.within).map(location => ({ location, real: realFolderOf(location.path) }));
-		for (const { agent, entry, name } of retainedEntries) {
-			const id = conversationId(entry.key);
-			if (!metadata.has(id)) {
-				metadata.set(id, { name: name.trim(), agent });
-				entries.push(entry);
+		if (deps.kind === 'resume') {
+			for (const retained of deps.retained()) {
+				if (!deps.running(retained.entry.key)) {
+					choices.push({ entry: retained.entry, name: retained.name.trim(), retained });
+				}
 			}
-		}
-		if (entries.length) {
-			entries.sort(recentFirst);
-			show();
-		}
-		if (!location) {
+			choices.sort(recentFirst);
 			done = true;
 			picker.busy = false;
-			return;
+			show();
+		} else {
+			pager = deps.conversations.open({ environment: location.environment, directories: [...new Set(catalog.locations.map(location => location.path))] });
+			await readNext();
+			await readAll();
 		}
-		pager = deps.conversations.open({ environment: location.environment, directories: [...new Set(catalog.locations.map(location => location.path))] });
-		// A search typed meanwhile goes on past the first batch
-		await readNext();
-		await readAll();
 	};
 	/** The same page as Open Settings everywhere (UX-1.3). */
 	const openSettings = () => {
@@ -231,7 +217,7 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 					openSettings();
 				}
 			}),
-			picker.onDidChangeValue(() => { if (pager || entries.length) { show(); } void readAll(); }),
+			picker.onDidChangeValue(() => { if (pager || choices.length) { show(); } void readAll(); }),
 			picker.onDidChangeActive(([active]) => {
 				if (!done && active && picker.items.indexOf(active) >= picker.items.length - READ_AHEAD) {
 					void readNext();
@@ -248,34 +234,38 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 					openSettings();
 					return;
 				}
-				let entry = active?.entry;
-				if (!entry) {
-					return;
-				}
+				const choice = active?.choice;
+				if (!choice || accepting) { return; }
 				accepting = true;
 				picker.hide();
-				const title = entry.title?.trim() || vscode.l10n.t("Untitled conversation");
-				const agent = metadata.get(conversationId(entry.key))?.agent;
+				const name = choice.entry.title?.trim() || choice.name || choice.retained?.alias || vscode.l10n.t("Untitled conversation");
 				let result: ResumeResult;
 				try {
-					if (agent === undefined && entry.cwdChoices?.length) {
-						const flow = new Flow();
-						const chosen = await flow.pick({ title: vscode.l10n.t("Resume Agent"), placeholder: vscode.l10n.t("Select a working location"),
-							items: entry.cwdChoices.map(cwd => ({ label: placeIn(cwd), description: cwd, cwd })), matchOnDescription: true });
-						flow.close();
-						if (!chosen || chosen === BACK) { resolve(); return; }
-						entry = { ...entry, cwd: chosen.item.cwd, cwdChoices: undefined };
+					if (deps.kind === 'resume') {
+						if (!choice.retained) { resolve(); return; }
+						result = await deps.resume(choice.retained.agent);
+					} else {
+						let entry = choice.entry;
+						if (entry.cwdChoices?.length) {
+							const flow = new Flow();
+							const chosen = await flow.pick({ title, placeholder: vscode.l10n.t("Select a working location"),
+								items: entry.cwdChoices.map(cwd => ({ label: placeIn(cwd), description: cwd, cwd })), matchOnDescription: true });
+							flow.close();
+							if (!chosen || chosen === BACK) { resolve(); return; }
+							entry = { ...entry, cwd: chosen.item.cwd, cwdChoices: undefined };
+						}
+						result = await deps.continueSession(entry);
 					}
-					result = retained && agent !== undefined ? await retained.resume(agent) : await deps.resume(entry);
 				} catch (err) {
-					deps.notifyError(vscode.l10n.t("Could not resume {0}: {1}", title, reasonOf(err)), {});
+					deps.notifyError(deps.kind === 'resume' ? vscode.l10n.t("Could not resume {0}: {1}", name, reasonOf(err))
+						: vscode.l10n.t("Could not continue {0}: {1}", name, reasonOf(err)), {});
 					resolve();
 					return;
 				}
 				if (typeof result === 'string') {
 					deps.select(result);
 				} else if (result.running === 'elsewhere') {
-					deps.notifyError(vscode.l10n.t("{0} is already running in another window.", title), {});
+					deps.notifyError(vscode.l10n.t("{0} is already running in another window.", name), {});
 				} else {
 					void deps.reveal(result.running);
 				}
@@ -290,6 +280,11 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 			})
 		];
 		picker.show();
-		void begin();
+		void begin().catch(err => {
+			if (open) {
+				picker.hide();
+				deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {});
+			}
+		});
 	});
 }

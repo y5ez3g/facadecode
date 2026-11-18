@@ -319,6 +319,7 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		terminals,
 		locations,
 		clis: (machine): readonly CliInfo[] => machine === undefined ? windowInfo()?.clis ?? [] : machines.clis(machine),
+		resumeProblem: (cli, location, builtIn) => hostClis.resumeProblem(cli, location, builtIn),
 		machineName: machine => machines.name(machine),
 		onDidChangeMachines: machines.onDidChange,
 		windows: () => [...windowInfos.values()],

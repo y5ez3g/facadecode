@@ -136,7 +136,7 @@ export async function activate(): Promise<void> {
 		const wanted = new Set(two.agents.map(agent => agent.session));
 		for (let attempt = 0; attempt < 6 && resumed.length < wanted.size; attempt++) {
 			const before = new Set((await state()).cards.map(card => card.runId));
-			void vscode.commands.executeCommand('facade.history');
+			void vscode.commands.executeCommand('facade.continueSession');
 			await pause(1_500);
 			for (let skip = 0; skip < attempt % 2; skip++) {
 				await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');

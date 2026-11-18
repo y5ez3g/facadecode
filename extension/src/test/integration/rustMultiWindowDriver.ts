@@ -131,13 +131,13 @@ async function perform(action: Action): Promise<unknown> {
 		case 'saved-pin':
 			return savedPin(action.agent);
 		case 'adopt': {
-			const card = await pickCard('facade.showActiveAgents');
+			const card = await pickCard('facade.goToAgent');
 			assert.strictEqual(aliasOf(card), `#${action.agent}`, 'the picker opens the requested agent by its original number');
 			await until(`#${action.agent}'s terminal tab`, () => hasAgentTab(card) || undefined);
 			return running(action.agent);
 		}
 		case 'show-agent-picker':
-			void vscode.commands.executeCommand('facade.showActiveAgents');
+			void vscode.commands.executeCommand('facade.goToAgent');
 			return true;
 		case 'remote-card': {
 			const card = await until(action.agent + "'s card", async () => (await state()).cards.find(card => card.alias === action.agent));

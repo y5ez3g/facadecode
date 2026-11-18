@@ -518,11 +518,12 @@ export interface ConversationEntry {
 /** A retained core agent offered by the Rust Resume picker under its original number (LIFECYCLE-3.2). */
 export interface RetainedConversation {
 	readonly agent: string;
+	readonly alias: string;
 	readonly name: string;
 	readonly entry: ConversationEntry;
 }
 
-/** A Resume picker session: batches of 100, recent first, with metadata read once and reused (LIFECYCLE-3.2). */
+/** A Continue Session history, read in batches of 100 with metadata reused (LIFECYCLE-3.2). */
 export interface ConversationPager extends Disposable {
 	/** The next batch, or `done` once every relevant store is exhausted; never silently stops at a scan limit. */
 	next(): Promise<{ readonly entries: readonly ConversationEntry[]; readonly done: boolean }>;
@@ -907,6 +908,7 @@ export type AgentCloseResult = CleanupResult | 'already_ended' | 'not_started';
 export interface Agents {
 	/** Whether this window still owns its workspace's agents: once another window took them over, none is this window's (RULES-4.1). */
 	owned?(): boolean;
+	/** Continues a history entry under a new number, or finds the run already holding the session (LIFECYCLE-3.3). */
 	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): ResumeResult | Promise<ResumeResult>;
 	holding(key: ConversationKey): RunId | 'elsewhere' | undefined;
 	refreshConversations(): Promise<void>;

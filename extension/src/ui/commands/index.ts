@@ -4,7 +4,7 @@
 
 import * as vscode from 'vscode';
 import type { WindowRef } from '../../base/coreProtocol';
-import type { Agents, ConversationDiscoveryPort, ConversationKey, CliCatalogPort, Event, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, OtherAgent, RetainedConversation, RunId, WorktreePort } from '../../core/ports';
+import type { Agents, ConversationDiscoveryPort, ConversationEntry, ConversationKey, CliCatalogPort, Event, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, OtherAgent, RetainedConversation, RunId, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
@@ -14,7 +14,7 @@ import { pickFilter } from '../pickers/filter';
 import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
 import type { MachineLaunch } from '../pickers/machineLaunch';
-import { resumeAgent } from '../pickers/resume';
+import { pickSession } from '../pickers/resume';
 import { messageOf } from '../../base/errors';
 import { newAgent } from '../pickers/newAgent';
 import { PanelPrefs } from '../order';
@@ -165,31 +165,35 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			throw new Error(vscode.l10n.t('Facade cannot do this right now'));
 		}
 	};
+	const sessions = async (kind: 'resume' | 'continue') => {
+		const window = rust?.window();
+		const source = kind === 'resume' ? rust && {
+			kind: 'resume' as const,
+			retained: () => { checkWindow(window); return rust.retainedConversations(); },
+			resume: (id: string) => { checkWindow(window); return rust.resumeRetained(id, { reveal: true }); }
+		} : deps.conversations && {
+			kind: 'continue' as const,
+			conversations: deps.conversations,
+			savedName: deps.savedName,
+			continueSession: (entry: ConversationEntry) => { checkWindow(window); return deps.agents.resume(entry, { reveal: true }); }
+		};
+		if (!source) { return; }
+		// Both pickers show while the window prepares the selected source (UX-1.1).
+		const prepared = (async () => {
+			await (rust ? rust.ready() : deps.ready);
+			await deps.locations.refresh().catch(err => deps.log.event(`Using known working locations: ${messageOf(err)}`));
+			if (source.kind === 'continue') { await deps.agents.refreshConversations(); }
+			checkWindow(window);
+		})();
+		prepared.catch(() => undefined);
+		try {
+			await pickSession({ ...source, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
+				reveal: run => agent.reveal(run), select: run => model.select(run),
+				notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
+				...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
+		} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
+	};
 	const flows = {
-		resume: async () => {
-			if (!deps.conversations) { return; }
-			const window = rust?.window();
-			// The picker shows at once, busy while this window's agents, its locations and the conversations other windows hold are read (UX-1.1)
-			const prepared = (async () => {
-				await (rust ? rust.ready() : deps.ready);
-				await deps.locations.refresh().catch(err => deps.log.event(`Resume uses the known working locations: ${messageOf(err)}`));
-				await deps.agents.refreshConversations();
-				checkWindow(window);
-			})();
-			// Said by the picker, which takes it: never a rejection no one hears where the picker could not be made
-			prepared.catch(() => undefined);
-			try {
-				await resumeAgent({ conversations: deps.conversations, savedName: deps.savedName, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
-					resume: entry => { checkWindow(window); return deps.agents.resume(entry, { reveal: true }); },
-					reveal: run => agent.reveal(run), select: run => model.select(run),
-					notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
-					...rust ? { retained: {
-						list: () => { checkWindow(window); return rust.retainedConversations(); },
-						resume: id => { checkWindow(window); return rust.resumeRetained(id, { reveal: true }); }
-					} } : {},
-					...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
-			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
-		},
 		newAgent: (startAt?: LocationId) => {
 			const window = rust?.window();
 			return newAgent({
@@ -237,8 +241,8 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		switch (what) {
 			case 'open':
 				return target === undefined || !deps.agents.get(target) ? 'gone' : await agent.reveal(target) ? undefined : 'failed';
-			case 'resume':
-				await flows.resume();
+			case 'continueSession':
+				await sessions('continue');
 				return undefined;
 			case 'new':
 				// From the filtered empty panel, at the filtered location; from the other empty panel, where New Agent would (PANEL-1.2, LIFECYCLE-1.2)
@@ -276,7 +280,8 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		view,
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
 		deps.execution.onDidActivate(run => model.activated(run)),
-		vscode.commands.registerCommand(COMMANDS.history, () => flows.resume()),
+		...rust ? [vscode.commands.registerCommand(COMMANDS.resumeAgent, () => sessions('resume'))] : [],
+		vscode.commands.registerCommand(COMMANDS.continueSession, () => sessions('continue')),
 		vscode.commands.registerCommand(COMMANDS.newAgent, () => flows.newAgent()),
 		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, deps.locations, deps.log)),
 		// The same, its title button filled while a filter is on (UX-3.2)
