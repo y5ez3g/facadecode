@@ -667,7 +667,12 @@ The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry core's re
 programs, `bin/facade.exe` and `bin/facade-mcp.exe`, built for `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`
 respectively, and ConPTY for the same architecture, `bin/conpty/conpty.dll` and `bin/conpty/OpenConsole.exe`. Packaging
 refuses a package where any of these four is missing or a binary is of another target; executable-mode and static-musl
-checks apply only to Unix. Third-party notices name core's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
+checks apply only to Unix. A release signs the Windows packages' programs with the publisher's certificate, the IDE's
+(Azure Artifact Signing, IDENTITY I6), each signature timestamped: packaging with `--sign` signs every program and library
+in `bin/` that has no trusted signature - ConPTY's come signed by Microsoft - and packages none that still has none.
+Unsigned, the 0.1.6 `facade.exe` was quarantined by Microsoft Defender as `Trojan:Win32/Bearfoos.A!ml`, which ended the
+running core and every agent with it, and Smart App Control refuses an unsigned program outright. Pull request checks
+package them unsigned. Third-party notices name core's ConPTY, Microsoft.Windows.Console.ConPTY 1.25.260303002, as
 they name node-pty's. Release candidates target darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64 and
 win32-arm64, together with the window component. Publication requires each platform's build and verification evidence
 from the release run. The version advances when preparing a release; already published versions retain their original

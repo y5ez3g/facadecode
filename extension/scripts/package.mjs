@@ -7,12 +7,14 @@
 // or which carries a binary not of its target, is removed and refused.
 //
 // Core's programs go in every package (scripts/core.mjs); nothing is packaged where core's version is not the
-// extension's, or the extension's copy of the protocol is not core's.
+// extension's, or the extension's copy of the protocol is not core's. `--sign`, which the release run gives a Windows
+// package, signs its programs (scripts/sign.mjs) and packages none that still has no trusted signature.
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { BIN, buildCore, checkSources, coreTriple, programProblems, zipModes } from './core.mjs';
 import { filesOfZip, nativeProblems, packageTarget } from './native.mjs';
+import { createSigner, signFolder } from './sign.mjs';
 
 const root = path.join(import.meta.dirname, '..');
 const vsce = path.join(root, 'node_modules', '@vscode', 'vsce', 'vsce');
@@ -21,10 +23,17 @@ const asked = process.argv.includes('--target') ? process.argv[process.argv.inde
 // Before anything is built: another target than this host's cannot be verified here
 const target = packageTarget(asked);
 checkSources();
+if (process.argv.includes('--sign') && !target.startsWith('win32-')) {
+	throw new Error(`Only Windows packages are signed, not ${target}'s.`);
+}
+const signer = process.argv.includes('--sign') ? createSigner() : undefined;
 
 execFileSync(process.execPath, [path.join(root, 'scripts', 'build.mjs'), '--production'], { stdio: 'inherit' });
 if (coreTriple()) {
 	buildCore();
+	if (signer) {
+		signFolder(signer, BIN);
+	}
 	fs.cpSync(BIN, path.join(root, 'build', 'extension', 'bin'), { recursive: true });
 }
 fs.rmSync(out, { recursive: true, force: true });
