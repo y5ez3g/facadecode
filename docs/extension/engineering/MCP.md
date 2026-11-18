@@ -364,8 +364,9 @@ The golden inbox read of a message held back by a draft answers:
 }
 ```
 
-Above 8,000 combined body code points, return only `data.file`, a string path to the complete JSON array of selected
-records. If writing that file fails, return the messages inline so the read does not lose the messages it delivered.
+Above 8,000 combined body code points, return the whole page of records as a JSON array in the file named by
+`data.file`, a string path. When another page follows, the result also includes `data.next_cursor`. If writing that
+file fails, return the page inline as `data.messages` so the read does not lose the messages it delivered.
 An uncertain return may repeat the same record without another terminal paste. An empty result has an empty messages
 array and no notice. This is an immediate snapshot, not a wait or evidence about pending work. New messages arrive
 through normal delivery without polling; MCP members read them themselves (6.1).
