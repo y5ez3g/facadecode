@@ -142,8 +142,8 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
     assert!(matches!(*settled.borrow(), Some(Settled::Cancelled)));
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, from, to })
-            if message_id == "m1" && from == "a1" && to == "a2"
+        Ok(Change::Removed { message_id, to })
+            if message_id == "m1" && to == "a2"
     ));
     assert!(
         post.message("m1").is_none() && !post.withdraw(1),
@@ -458,8 +458,8 @@ fn a_removed_inbox_takes_its_messages_and_tells_their_sends() {
     assert!(post.message("m1").is_none() && post.message("m2").is_some());
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, from, to })
-            if message_id == "m1" && from == "a1" && to == "a2"
+        Ok(Change::Removed { message_id, to })
+            if message_id == "m1" && to == "a2"
     ));
     assert!(
         changes.try_recv().is_err(),
@@ -499,8 +499,8 @@ fn messages_older_than_30_days_are_deleted_and_numbers_go_on() {
     );
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, from, to })
-            if message_id == "m1" && from == "a1" && to == "a2"
+        Ok(Change::Removed { message_id, to })
+            if message_id == "m1" && to == "a2"
     ));
     assert!(
         changes.try_recv().is_err(),

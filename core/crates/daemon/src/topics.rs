@@ -497,7 +497,6 @@ fn resync_messages(known: &HashSet<String>, inbox: Vec<Message>, owner: &str) ->
         .filter(|id| !kept.contains(id.as_str()))
         .map(|id| Change::Removed {
             message_id: id.clone(),
-            from: String::new(),
             to: owner.to_string(),
         });
     let mut changes: Vec<Change> = gone.collect();

@@ -113,7 +113,7 @@ impl Deliveries {
                 ended
                     .settled
                     .send_replace(Some(Settled::Withdrawn(Box::new(message.clone()))));
-                self.removed(message.message_id, message.from, message.to);
+                self.removed(message.message_id, message.to);
             } else {
                 ended
                     .settled

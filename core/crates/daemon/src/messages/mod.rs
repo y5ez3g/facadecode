@@ -74,11 +74,7 @@ pub(crate) enum Settled {
 #[derive(Clone, Debug)]
 pub(crate) enum Change {
     Updated(Box<Message>),
-    Removed {
-        message_id: String,
-        from: String,
-        to: String,
-    },
+    Removed { message_id: String, to: String },
 }
 
 impl Change {
@@ -87,14 +83,6 @@ impl Change {
         match self {
             Change::Updated(message) => &message.to,
             Change::Removed { to, .. } => to,
-        }
-    }
-
-    /// Who sent the message.
-    pub(crate) fn from(&self) -> &str {
-        match self {
-            Change::Updated(message) => &message.from,
-            Change::Removed { from, .. } => from,
         }
     }
 }
@@ -203,12 +191,8 @@ impl Deliveries {
             .send(Change::Updated(Box::new(message.clone())));
     }
 
-    fn removed(&self, message_id: String, from: String, to: String) {
-        let _ = self.changes.send(Change::Removed {
-            message_id,
-            from,
-            to,
-        });
+    fn removed(&self, message_id: String, to: String) {
+        let _ = self.changes.send(Change::Removed { message_id, to });
     }
 
     /// Opens the delivery of `message`. Returns the receiver its settlement reaches.
@@ -327,23 +311,6 @@ impl Messages {
         self.deliveries.changes.subscribe()
     }
 
-    /// Keeps a message to the person, delivered as it is kept: the `messages` watchers tell the
-    /// person. Returns it numbered, and whether it is the one its sender kept with `request_id`
-    /// within the hour, which nobody is told of again.
-    pub(crate) fn notify(
-        &self,
-        message: Message,
-        request_id: Option<&str>,
-    ) -> Result<(Message, bool), ErrorBody> {
-        match self.deliveries.keep(&message, request_id)? {
-            Kept::New(message) => {
-                self.deliveries.updated(&message);
-                Ok((message, false))
-            }
-            Kept::Earlier(kept) => Ok((kept.message, true)),
-        }
-    }
-
     /// Keeps a new pending message and opens its delivery. Where its sender kept one with
     /// `request_id` within the hour, keeps nothing and returns that one instead.
     pub(crate) fn post(
@@ -397,13 +364,8 @@ impl Messages {
             return false;
         };
         gone.settled.send_replace(Some(Settled::Cancelled));
-        let Message {
-            message_id,
-            from,
-            to,
-            ..
-        } = gone.message;
-        deliveries.removed(message_id, from, to);
+        let Message { message_id, to, .. } = gone.message;
+        deliveries.removed(message_id, to);
         true
     }
 

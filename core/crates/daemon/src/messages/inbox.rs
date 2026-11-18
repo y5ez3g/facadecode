@@ -174,8 +174,9 @@ impl Messages {
         let mut open = self.deliveries.lock();
         open.agents
             .retain(|_, delivery| delivery.message.to != owner);
-        for Gone { number, from, to } in gone {
-            self.deliveries.removed(format!("m{number}"), from, to);
+        for message in gone {
+            self.deliveries
+                .removed(format!("m{}", message.number), message.to);
         }
     }
 
@@ -187,8 +188,9 @@ impl Messages {
         let _open = self.deliveries.lock();
         let gone = blocking_in_place(|| self.deliveries.table.expire_messages(&before))?;
         let count = gone.len();
-        for Gone { number, from, to } in gone {
-            self.deliveries.removed(format!("m{number}"), from, to);
+        for message in gone {
+            self.deliveries
+                .removed(format!("m{}", message.number), message.to);
         }
         Ok(count)
     }
