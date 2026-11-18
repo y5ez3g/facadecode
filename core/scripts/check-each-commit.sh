@@ -10,6 +10,9 @@ head=${2:-HEAD}
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel) || exit 2
 commits=$(git -C "$repo" rev-list --reverse "$base..$head") || exit 2
 w=$(mktemp -d "${TMPDIR:-/tmp}/facade-each-commit.XXXXXX") || exit 2
+# git sparse-checkout sets extensions.worktreeConfig in the repository's own config, which other programs may refuse;
+# the end puts it back as it was.
+worktree_config=$(git -C "$repo" config --local --get extensions.worktreeConfig)
 git -C "$repo" worktree add -q --detach --no-checkout "$w" "$head" || exit 2
 git -C "$w" sparse-checkout set core extension/src/base || exit 2
 export CARGO_INCREMENTAL=0
@@ -39,4 +42,9 @@ for c in $commits; do
 	git -C "$w" checkout -q -- core/Cargo.lock 2>/dev/null
 done
 git -C "$repo" worktree remove --force "$w"
+if [ -n "$worktree_config" ]; then
+	git -C "$repo" config --local extensions.worktreeConfig "$worktree_config"
+else
+	git -C "$repo" config --local --unset extensions.worktreeConfig
+fi
 exit $failed
