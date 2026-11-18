@@ -158,6 +158,18 @@ impl Daemon {
                 "the call was cancelled before forwarding",
             ));
         }
+        if time_left.is_some()
+            && let Some(args) = forwarded.call.args.as_object_mut()
+        {
+            // A malformed budget still gets the SendArgs diagnostic it would get at the receiver.
+            if args
+                .get("time_left_ms")
+                .is_some_and(|value| !value.is_null() && !value.is_u64())
+            {
+                let _: SendArgs = decode_arguments(Value::Object(args.clone()))?;
+            }
+            args.remove("time_left_ms");
+        }
         let result = self.network.call(
             &target.machine_id,
             caller.clone(),

@@ -349,6 +349,21 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     );
     assert!(wait_for_screen_text(&second, id, "❯"));
 
+    let invalid_budget = acting_for(&first, &sender.id).call(
+        "agent.send",
+        json!({ "to": target, "text": "bad budget", "time_left_ms": "1000" }),
+    );
+    assert_eq!(
+        error_reason(&invalid_budget),
+        "invalid_argument",
+        "{invalid_budget}"
+    );
+    assert!(
+        invalid_budget["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected u64")
+    );
     let sent = acting_for(&first, &sender.id).call(
         "agent.send",
         json!({ "to": target, "text": "request across machines" }),
