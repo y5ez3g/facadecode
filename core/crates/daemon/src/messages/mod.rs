@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentInfo, Message, SendResult};
+use facade_base::daemon::{AgentInfo, Message, SendOutcome};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::{AgentRef, DeliverStartResultArgs, MessageRef};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -40,7 +40,7 @@ use crate::store::{Kept, KeptMessage, MessageTable, RequestId};
 use crate::{HUMAN, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
-pub(crate) use human::human_result;
+pub(crate) use human::{human_result, no_window_delivery};
 pub(crate) use outcome::{Due, Outcome, delivery_limit};
 pub(crate) use restart::{Recipient, TakeUp, decide};
 
@@ -105,8 +105,8 @@ pub(crate) enum PostedHuman {
 pub(crate) enum Earlier {
     Delivering(Message, watch::Receiver<Option<Settled>>),
     Settled(Message),
-    HumanReady(SendResult),
-    HumanInFlight(watch::Receiver<Option<Result<SendResult, ErrorBody>>>),
+    HumanReady(SendOutcome),
+    HumanInFlight(watch::Receiver<Option<HumanSend>>),
 }
 
 /// The result a start's prompt owes the agent or guest that sent it.
@@ -181,11 +181,12 @@ struct Deliveries {
 }
 
 type OpenMap = HashMap<u64, Open>;
+type HumanSend = Result<SendOutcome, facade_base::jsonrpc::SendFailure>;
 
 #[derive(Default)]
 struct OpenDeliveries {
     agents: OpenMap,
-    human: HashMap<u64, watch::Sender<Option<Result<SendResult, ErrorBody>>>>,
+    human: HashMap<u64, watch::Sender<Option<HumanSend>>>,
 }
 
 impl Deliveries {
@@ -276,18 +277,18 @@ impl Deliveries {
     fn earlier(&self, open: &OpenDeliveries, kept: KeptMessage) -> Earlier {
         let KeptMessage {
             mut message,
-            human_windows,
+            window_delivery,
             ..
         } = kept;
         self.identify(&mut message);
         if message.to == HUMAN {
             return match open.human.get(&number(&message)) {
                 Some(settled) => Earlier::HumanInFlight(settled.subscribe()),
-                None => Earlier::HumanReady(SendResult {
+                None => Earlier::HumanReady(SendOutcome {
                     message,
                     repeated: true,
                     withdrawn: false,
-                    windows: human_windows,
+                    window_delivery,
                 }),
             };
         }

@@ -8,7 +8,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::daemon::{Kept, TextWritten, WindowDelivery, WindowDeliveryFailure};
+use super::daemon::{
+    Kept, TextWritten, WindowDelivery, WindowDeliveryFailure, WindowDeliveryOutcome,
+};
 use super::machine::{
     MachineIdConflict, MessageRef, ProtocolMismatch, SshInteraction, Unavailable,
 };
@@ -155,6 +157,39 @@ pub struct ErrorBody {
     pub message: String,
     /// Structured error details.
     pub data: Box<ErrorData>,
+}
+
+/// A send error with its window receipt before encoding it for a client.
+#[derive(Clone, Debug)]
+pub struct SendFailure {
+    pub error: ErrorBody,
+    pub window_delivery: Option<Vec<WindowDeliveryOutcome>>,
+}
+
+impl From<ErrorBody> for SendFailure {
+    fn from(error: ErrorBody) -> Self {
+        Self {
+            error,
+            window_delivery: None,
+        }
+    }
+}
+
+impl From<SendFailure> for ErrorBody {
+    fn from(failure: SendFailure) -> Self {
+        let mut error = failure.error;
+        if let Some(outcomes) = failure.window_delivery {
+            let receipt = WindowDelivery::from_outcomes(outcomes);
+            if error.data.unavailable.as_ref().is_some_and(|unavailable| {
+                unavailable.execution == crate::machine::ExecutionOutcome::OutcomeUnknown
+            }) {
+                error.data.window_delivery = Some(receipt);
+            } else {
+                error.data.windows = Some(receipt.not_delivered);
+            }
+        }
+        error
+    }
 }
 
 /// Error details for clients to inspect.

@@ -13,9 +13,9 @@ use facade_base::daemon::{
     DaemonLogArgs, DaemonLogResult, DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle,
     HookPrompt, HookSession, HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState,
     InspectResult, IntegrationAdd, IntegrationList, IntegrationRemove, MAX_SCREEN_LINES,
-    RenameArgs, ResizeArgs, ResumeArgs, ScreenArgs, ScreenBuffer, ScreenText, SendArgs,
-    SessionStartResult, StartArgs, TypeArgs, WindowDescription, WindowUpdate, WorktreeCreate,
-    WorktreeCreateArgs,
+    RenameArgs, ResizeArgs, ResumeArgs, ScreenArgs, ScreenBuffer, ScreenText, SendArgs, SendResult,
+    SessionStartResult, StartArgs, TypeArgs, WindowDelivery, WindowDescription, WindowUpdate,
+    WorktreeCreate, WorktreeCreateArgs,
 };
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
@@ -342,9 +342,9 @@ impl Daemon {
             }
             AgentSend::NAME => {
                 let args: SendArgs = decode_arguments(args)?;
-                Ok(value_of(
+                Ok(value_of(SendResult::from(
                     self.send(&self.local_caller(client)?, args, cancel).await?,
-                ))
+                )))
             }
             HookSessionStart::NAME => {
                 let session: HookSession = decode_arguments(args)?;
@@ -669,9 +669,9 @@ impl Daemon {
             crate::delivery::VERIFY_HUMAN_REPLY => {
                 self.verify_human_reply_at_store(&caller, decode_arguments(args)?)
             }
-            WindowDeliver::NAME => Ok(value_of(
+            WindowDeliver::NAME => Ok(value_of(WindowDelivery::from(
                 self.deliver_forwarded_human(&caller, decode_arguments(args)?)?,
-            )),
+            ))),
             AgentDeliverStartResult::NAME => {
                 self.deliver_forwarded_result(&caller, decode_arguments(args)?, remaining)
                     .await?;

@@ -1369,6 +1369,49 @@ pub struct SendResult {
     pub windows: Option<WindowDelivery>,
 }
 
+/// The result of a send before encoding it for a client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SendOutcome {
+    pub message: Message,
+    pub repeated: bool,
+    pub withdrawn: bool,
+    pub window_delivery: Option<Vec<WindowDeliveryOutcome>>,
+}
+
+impl From<SendOutcome> for SendResult {
+    fn from(result: SendOutcome) -> Self {
+        Self {
+            message: result.message,
+            repeated: result.repeated,
+            withdrawn: result.withdrawn,
+            windows: result.window_delivery.map(WindowDelivery::from_outcomes),
+        }
+    }
+}
+
+/// One member window's outcome for a message to the person.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum WindowDeliveryOutcome {
+    Delivered { window: WindowRef },
+    NotDelivered { window: WindowRef, reason: String },
+    OutcomeUnknown { window: WindowRef },
+}
+
+impl WindowDeliveryOutcome {
+    pub fn window(&self) -> &WindowRef {
+        match self {
+            Self::Delivered { window }
+            | Self::NotDelivered { window, .. }
+            | Self::OutcomeUnknown { window } => window,
+        }
+    }
+
+    pub fn is_delivered(&self) -> bool {
+        matches!(self, Self::Delivered { .. })
+    }
+}
+
 /// The member windows' outcomes for one message to the person.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WindowDelivery {
@@ -1378,6 +1421,50 @@ pub struct WindowDelivery {
     pub not_delivered: Vec<WindowDeliveryFailure>,
     /// The notification was sent, and its receipt was lost before delivery could be confirmed.
     pub outcome_unknown: Vec<WindowRef>,
+}
+
+impl WindowDelivery {
+    /// Encodes the original v2 and SQLite grouping.
+    pub fn from_outcomes(outcomes: impl IntoIterator<Item = WindowDeliveryOutcome>) -> Self {
+        let mut delivery = Self {
+            delivered: Vec::new(),
+            not_delivered: Vec::new(),
+            outcome_unknown: Vec::new(),
+        };
+        for outcome in outcomes {
+            match outcome {
+                WindowDeliveryOutcome::Delivered { window } => delivery.delivered.push(window),
+                WindowDeliveryOutcome::NotDelivered { window, reason } => {
+                    delivery
+                        .not_delivered
+                        .push(WindowDeliveryFailure { window, reason });
+                }
+                WindowDeliveryOutcome::OutcomeUnknown { window } => {
+                    delivery.outcome_unknown.push(window)
+                }
+            }
+        }
+        delivery
+    }
+
+    /// Reads the v2 and SQLite grouping into individual outcomes.
+    pub fn into_outcomes(self) -> Vec<WindowDeliveryOutcome> {
+        self.delivered
+            .into_iter()
+            .map(|window| WindowDeliveryOutcome::Delivered { window })
+            .chain(self.not_delivered.into_iter().map(
+                |WindowDeliveryFailure { window, reason }| WindowDeliveryOutcome::NotDelivered {
+                    window,
+                    reason,
+                },
+            ))
+            .chain(
+                self.outcome_unknown
+                    .into_iter()
+                    .map(|window| WindowDeliveryOutcome::OutcomeUnknown { window }),
+            )
+            .collect()
+    }
 }
 
 /// Why a member window did not take a notification.
@@ -1479,7 +1566,9 @@ pub fn start_result_text(outcome: &StartOutcome) -> String {
     let untouched =
         delivery.text_written == TextWritten::None && delivery.enter_written == Some(false);
     match delivery.status {
-        DeliveryStatus::Success if delivery.delivered_via == Some(DeliveredVia::Read) => {
+        DeliveryStatus::Success
+            if delivery.delivered_via == Some(DeliveredVia::ReadByRecipient) =>
+        {
             lines.push(format!(
                 "Your initial message {id} has been passed on through read_messages."
             ));
@@ -1739,15 +1828,24 @@ pub enum TextWritten {
 #[serde(rename_all = "snake_case")]
 pub enum DeliveredVia {
     /// Typed into the recipient's terminal and submitted.
-    Terminal,
+    #[serde(rename = "terminal")]
+    TypedIntoInput,
     /// Returned by a snapshot of the recipient's `messages` topic.
-    Read,
+    #[serde(rename = "read")]
+    ReadByRecipient,
     /// A message to the person: delivered to one or more member windows' subscriptions.
-    Notified,
+    #[serde(rename = "notified")]
+    DeliveredToWindows,
     /// A way this build does not recognize.
     #[serde(other)]
     #[schemars(skip)]
     Unknown,
+}
+
+impl DeliveredVia {
+    /// The spelling still used by the v2 CLI and MCP projections.
+    #[allow(non_upper_case_globals)]
+    pub const Read: Self = Self::ReadByRecipient;
 }
 
 /// Arguments for `agent.resize`.
@@ -2808,6 +2906,43 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn window_delivery_rows_keep_the_original_v2_grouping_and_methods() {
+        let one = json!({ "machine_id": "here", "window_id": "one" });
+        let two = json!({ "machine_id": "here", "window_id": "two" });
+        let three = json!({ "machine_id": "there", "window_id": "three" });
+        let v2 = json!({
+            "delivered": [one],
+            "not_delivered": [{ "window": two, "reason": "not_watching" }],
+            "outcome_unknown": [three],
+        });
+        let legacy: WindowDelivery = serde_json::from_value(v2.clone()).unwrap();
+        let outcomes = legacy.into_outcomes();
+        assert_eq!(
+            serde_json::to_value(&outcomes).unwrap(),
+            json!([
+                { "window": one, "state": "delivered" },
+                { "window": two, "state": "not_delivered", "reason": "not_watching" },
+                { "window": three, "state": "outcome_unknown" },
+            ])
+        );
+        assert_eq!(
+            serde_json::to_value(WindowDelivery::from_outcomes(outcomes)).unwrap(),
+            v2
+        );
+        for (via, name) in [
+            (DeliveredVia::TypedIntoInput, "terminal"),
+            (DeliveredVia::ReadByRecipient, "read"),
+            (DeliveredVia::DeliveredToWindows, "notified"),
+        ] {
+            assert_eq!(serde_json::to_value(via).unwrap(), json!(name));
+            assert_eq!(
+                serde_json::from_value::<DeliveredVia>(json!(name)).unwrap(),
+                via
+            );
+        }
+    }
+
+    #[test]
     fn starts_and_preflights_keep_the_v2_folder_marker_and_command_vector() {
         use crate::machine::AgentStartPreflight;
 
@@ -3052,7 +3187,7 @@ mod tests {
             None,
             TextWritten::Full,
             Some(true),
-            Some(DeliveredVia::Terminal),
+            Some(DeliveredVia::TypedIntoInput),
         );
         assert_eq!(
             words(&agent, typed.clone()),
@@ -3063,7 +3198,7 @@ mod tests {
             None,
             TextWritten::None,
             Some(false),
-            Some(DeliveredVia::Read),
+            Some(DeliveredVia::ReadByRecipient),
         );
         assert_eq!(
             words(&agent, read),
@@ -3075,7 +3210,7 @@ mod tests {
             None,
             TextWritten::Unknown,
             None,
-            Some(DeliveredVia::Read),
+            Some(DeliveredVia::ReadByRecipient),
         );
         assert_eq!(
             words(&agent, read_while_typed),

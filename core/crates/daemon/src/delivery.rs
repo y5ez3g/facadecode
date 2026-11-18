@@ -10,13 +10,13 @@ use facade_base::address::{
     display_machine_selector, exact_machine_selector, parse_message_address,
 };
 use facade_base::daemon::{
-    Delivery, DeliveryFailure, DeliveryStatus, Message, MessagesChange, SendArgs, SendResult,
-    TextWritten, WindowDelivery, WindowDeliveryFailure, WindowRef,
+    Delivery, DeliveryFailure, DeliveryStatus, Message, MessagesChange, SendArgs, SendOutcome,
+    SendResult, TextWritten, WindowDelivery, WindowDeliveryOutcome, WindowRef,
 };
-use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
+use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure, decode_arguments};
 use facade_base::machine::{
     AgentDeliverStartResult, Caller, DeliverArgs, DeliverStartResultArgs, ExecutionOutcome,
-    ForwardCall, MachineIdentity, MessageRef, WindowDeliver,
+    ForwardCall, MachineIdentity, MessageRef, WindowDeliver, WindowDeliverResult,
 };
 use facade_base::operations::Operation;
 use facade_rules::Rule;
@@ -268,7 +268,7 @@ impl Daemon {
         caller: &Caller,
         args: SendArgs,
         cancel: Cancel,
-    ) -> Result<SendResult, ErrorBody> {
+    ) -> Result<SendOutcome, SendFailure> {
         let due = Due::within(args.time_left_ms);
         let from = self.sending_agent(caller)?;
         let reach = Reach::from(caller);
@@ -276,7 +276,8 @@ impl Daemon {
             let Some(from) = from.as_ref() else {
                 return Err(ErrorBody::invalid_argument(
                     "a message to the person must come from an agent",
-                ));
+                )
+                .into());
             };
             return self.tell_person(caller, from, args, due, cancel).await;
         };
@@ -324,7 +325,7 @@ impl Daemon {
         request_id: &str,
         reply_to: Option<&str>,
         cancel: Cancel,
-    ) -> Result<Option<SendResult>, ErrorBody> {
+    ) -> Result<Option<SendOutcome>, ErrorBody> {
         if to.exit().borrow().is_none() {
             return Ok(None);
         }
@@ -347,6 +348,7 @@ impl Daemon {
                 self.repeat_send(earlier, request_id, cancel)
                     .await
                     .map(Some)
+                    .map_err(Into::into)
             }
             None => Ok(None),
         }
@@ -393,10 +395,10 @@ impl Daemon {
             from_window: forwarded.from_window,
             reply,
         };
-        Ok(value_of(
+        Ok(value_of(SendResult::from(
             self.send_to_agent(to, args, origin, Due::within(time_left), cancel)
                 .await?,
-        ))
+        )))
     }
 
     pub(crate) async fn verify_forwarded_reply(
@@ -492,7 +494,7 @@ impl Daemon {
         origin: SendOrigin<'_>,
         due: Due,
         mut cancel: Cancel,
-    ) -> Result<SendResult, ErrorBody> {
+    ) -> Result<SendOutcome, SendFailure> {
         let inbox = origin.sender.from.clone();
         let machine = origin.caller.machine_id();
         let window = match origin.caller {
@@ -513,7 +515,8 @@ impl Daemon {
             return Err(ErrorBody::new(
                 Reason::Ended,
                 format!("#{} ended; it takes no messages", to.id()),
-            ));
+            )
+            .into());
         }
         let deadline = (!to.is_guest()).then(|| due.at.clone());
         let message = Message {
@@ -565,11 +568,11 @@ impl Daemon {
             ),
         );
         if to.is_guest() {
-            return Ok(SendResult {
+            return Ok(SendOutcome {
                 message,
                 repeated: false,
                 withdrawn: false,
-                windows: None,
+                window_delivery: None,
             });
         }
         let number = messages::number(&message);
@@ -606,11 +609,11 @@ impl Daemon {
         gate_for_test("before-send-answer");
         let answer = settled.borrow().clone();
         let (message, withdrawn) = settled_answer(answer, to.id(), &message.message_id)?;
-        Ok(SendResult {
+        Ok(SendOutcome {
             message,
             repeated: false,
             withdrawn,
-            windows: None,
+            window_delivery: None,
         })
     }
 
@@ -622,7 +625,7 @@ impl Daemon {
         earlier: Earlier,
         request_id: &str,
         mut cancel: Cancel,
-    ) -> Result<SendResult, ErrorBody> {
+    ) -> Result<SendOutcome, SendFailure> {
         let (message, settled) = match earlier {
             Earlier::HumanReady(result) => {
                 log_repeat(&result.message, request_id);
@@ -677,11 +680,11 @@ impl Daemon {
             }
             _ => (message, false),
         };
-        Ok(SendResult {
+        Ok(SendOutcome {
             message,
             repeated: true,
             withdrawn,
-            windows: None,
+            window_delivery: None,
         })
     }
 
@@ -776,7 +779,7 @@ impl Daemon {
         args: SendArgs,
         due: Due,
         cancel: Cancel,
-    ) -> Result<SendResult, ErrorBody> {
+    ) -> Result<SendOutcome, SendFailure> {
         let request = args.request_id.as_deref();
         if let Some(request) = request {
             check_request_id(request)?;
@@ -795,12 +798,12 @@ impl Daemon {
         let mut local = Vec::new();
         let mut remote: std::collections::BTreeMap<String, Vec<WindowRef>> =
             std::collections::BTreeMap::new();
-        let mut outcomes = empty_window_delivery();
+        let mut outcomes = Vec::new();
         for window in info.windows {
             if window.machine_id == self.machine_id {
                 match self.windows.person_target(&window) {
                     Ok(target) => local.push((window, target)),
-                    Err(failure) => outcomes.not_delivered.push(failure),
+                    Err(failure) => outcomes.push(failure),
                 }
             } else {
                 remote
@@ -817,12 +820,7 @@ impl Daemon {
             {
                 return self.repeat_send(earlier, request, cancel).await;
             }
-            let mut error = ErrorBody::new(
-                Reason::Unavailable,
-                "no member window could tell the person",
-            );
-            error.data.windows = Some(outcomes.not_delivered);
-            return Err(error);
+            return Err(messages::no_window_delivery(outcomes));
         }
         let sender = Sender {
             from: from.id().to_owned(),
@@ -851,8 +849,8 @@ impl Daemon {
         });
         for (window, target) in local {
             match self.windows.deliver_to_person(&target, &change) {
-                Ok(()) => outcomes.delivered.push(window),
-                Err(failure) => outcomes.not_delivered.push(failure),
+                Ok(()) => outcomes.push(WindowDeliveryOutcome::Delivered { window }),
+                Err(failure) => outcomes.push(failure),
             }
         }
         let reference = MessageRef {
@@ -889,35 +887,33 @@ impl Daemon {
             let (windows, result) = offer.map_err(ErrorBody::internal)?;
             match result {
                 Ok(value) => match decode_arguments::<WindowDelivery>(value) {
-                    Ok(mut receipt) => {
-                        outcomes.delivered.append(&mut receipt.delivered);
-                        outcomes.not_delivered.append(&mut receipt.not_delivered);
-                        outcomes
-                            .outcome_unknown
-                            .append(&mut receipt.outcome_unknown);
-                    }
-                    Err(_) => outcomes.outcome_unknown.extend(windows),
+                    Ok(receipt) => outcomes.extend(receipt.into_outcomes()),
+                    Err(_) => outcomes.extend(
+                        windows
+                            .into_iter()
+                            .map(|window| WindowDeliveryOutcome::OutcomeUnknown { window }),
+                    ),
                 },
                 Err(error)
                     if error.data.unavailable.as_ref().is_some_and(|unavailable| {
                         unavailable.execution == ExecutionOutcome::OutcomeUnknown
                     }) =>
                 {
-                    outcomes.outcome_unknown.extend(windows);
+                    outcomes.extend(
+                        windows
+                            .into_iter()
+                            .map(|window| WindowDeliveryOutcome::OutcomeUnknown { window }),
+                    );
                 }
-                Err(_) => outcomes
-                    .not_delivered
-                    .extend(windows.into_iter().map(|window| WindowDeliveryFailure {
+                Err(_) => outcomes.extend(windows.into_iter().map(|window| {
+                    WindowDeliveryOutcome::NotDelivered {
                         window,
                         reason: "machine_unavailable".to_string(),
-                    })),
+                    }
+                })),
             }
         }
-        outcomes.delivered.sort();
-        outcomes
-            .not_delivered
-            .sort_by(|a, b| a.window.cmp(&b.window));
-        outcomes.outcome_unknown.sort();
+        outcomes.sort();
         let result = self.messages.finish_human(&message, outcomes)?;
         log(
             "info",
@@ -935,7 +931,7 @@ impl Daemon {
         &self,
         caller: &Caller,
         args: DeliverArgs,
-    ) -> Result<WindowDelivery, ErrorBody> {
+    ) -> Result<WindowDeliverResult, ErrorBody> {
         let Caller::Agent { agent, .. } = caller else {
             return Err(ErrorBody::refused(
                 "a message to the person must come from an agent",
@@ -960,18 +956,20 @@ impl Daemon {
                 ..args.message
             }),
         });
-        let mut outcomes = empty_window_delivery();
+        let mut outcomes = Vec::new();
         for window in args.windows {
             match self
                 .windows
                 .person_target(&window)
                 .and_then(|target| self.windows.deliver_to_person(&target, &change))
             {
-                Ok(()) => outcomes.delivered.push(window),
-                Err(failure) => outcomes.not_delivered.push(failure),
+                Ok(()) => outcomes.push(WindowDeliveryOutcome::Delivered { window }),
+                Err(failure) => outcomes.push(failure),
             }
         }
-        Ok(outcomes)
+        Ok(WindowDeliverResult {
+            window_delivery: outcomes,
+        })
     }
 
     pub(crate) async fn deliver_forwarded_result(
@@ -1128,14 +1126,6 @@ pub(crate) async fn deliver_results(
                 }
             }
         });
-    }
-}
-
-fn empty_window_delivery() -> WindowDelivery {
-    WindowDelivery {
-        delivered: Vec::new(),
-        not_delivered: Vec::new(),
-        outcome_unknown: Vec::new(),
     }
 }
 

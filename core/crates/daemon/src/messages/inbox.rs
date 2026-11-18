@@ -65,9 +65,11 @@ impl Messages {
         Ok(kept
             .filter(|kept| {
                 window.is_none_or(|window| {
-                    kept.human_windows
-                        .as_ref()
-                        .is_some_and(|receipt| receipt.delivered.contains(window))
+                    kept.window_delivery.as_ref().is_some_and(|outcomes| {
+                        outcomes
+                            .iter()
+                            .any(|outcome| outcome.is_delivered() && outcome.window() == window)
+                    })
                 })
             })
             .map(|kept| kept.message))

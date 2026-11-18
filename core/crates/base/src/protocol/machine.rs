@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::address::{exact_machine_selector, format_reference, short_machine_id};
 use super::daemon::{
-    AgentInfo, CliInfo, LocationInfo, Message, StartArgs, TerminalColors, WindowDelivery, WindowRef,
+    AgentInfo, CliInfo, LocationInfo, Message, StartArgs, TerminalColors, WindowDelivery,
+    WindowDeliveryOutcome, WindowRef,
 };
 use super::jsonrpc::ErrorBody;
 use super::operations::{
@@ -605,6 +606,17 @@ impl Operation for WindowDeliver {
     const DOC: &'static str = "Offers a message to the listed local window subscriptions and returns their outcomes. Machine sessions only.";
     type Args = DeliverArgs;
     type Result = WindowDelivery;
+}
+
+/// The destination's window outcomes before encoding a machine response.
+pub struct WindowDeliverResult {
+    pub window_delivery: Vec<WindowDeliveryOutcome>,
+}
+
+impl From<WindowDeliverResult> for WindowDelivery {
+    fn from(result: WindowDeliverResult) -> Self {
+        Self::from_outcomes(result.window_delivery)
+    }
 }
 
 pub struct AgentDeliverStartResult;

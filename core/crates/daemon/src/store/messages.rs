@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use facade_base::daemon::{Delivery, Message, WindowDelivery, WindowRef};
+use facade_base::daemon::{Delivery, Message, WindowDelivery, WindowDeliveryOutcome, WindowRef};
 use facade_base::machine::{AgentRef, MessageRef};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
@@ -111,7 +111,7 @@ pub(crate) struct KeptMessage {
     pub(crate) paste: Option<u64>,
     pub(crate) result_owed: Option<MessageRef>,
     /// The window subscriptions that took or refused a message to the person.
-    pub(crate) human_windows: Option<WindowDelivery>,
+    pub(crate) window_delivery: Option<Vec<WindowDeliveryOutcome>>,
 }
 
 /// A message deleted from the store: its number and recipient.
@@ -160,16 +160,18 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
     // Facts this build cannot read leave a result its words.
     let result: Option<String> = row.get("result")?;
     let human_column = row.as_ref().column_index("human_windows")?;
-    let human_windows = row
+    let window_delivery = row
         .get::<_, Option<String>>(human_column)?
         .map(|windows| {
-            serde_json::from_str(&windows).map_err(|err| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    human_column,
-                    rusqlite::types::Type::Text,
-                    err.into(),
-                )
-            })
+            serde_json::from_str::<WindowDelivery>(&windows)
+                .map(WindowDelivery::into_outcomes)
+                .map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        human_column,
+                        rusqlite::types::Type::Text,
+                        err.into(),
+                    )
+                })
         })
         .transpose()?;
     let delivery = Delivery {
@@ -205,7 +207,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
                 machine_id,
                 message_id: format!("m{number}"),
             }),
-        human_windows,
+        window_delivery,
     })
 }
 
@@ -575,10 +577,14 @@ impl MessageTable {
     pub(crate) fn settle_human(
         &self,
         number: u64,
-        windows: &WindowDelivery,
+        outcomes: &[WindowDeliveryOutcome],
     ) -> anyhow::Result<Message> {
-        let delivered_at = (!windows.delivered.is_empty()).then(facade_base::time::iso_now);
-        let windows = serde_json::to_string(windows)?;
+        let delivered_at = outcomes
+            .iter()
+            .any(WindowDeliveryOutcome::is_delivered)
+            .then(facade_base::time::iso_now);
+        let windows =
+            serde_json::to_string(&WindowDelivery::from_outcomes(outcomes.iter().cloned()))?;
         self.0.transaction(
             || format!("save the window delivery of #m{number}"),
             |transaction| {
@@ -631,9 +637,11 @@ impl MessageTable {
         Ok(kept
             .into_iter()
             .filter(|kept| {
-                kept.human_windows
-                    .as_ref()
-                    .is_some_and(|windows| windows.delivered.contains(window))
+                kept.window_delivery.as_ref().is_some_and(|outcomes| {
+                    outcomes
+                        .iter()
+                        .any(|outcome| outcome.is_delivered() && outcome.window() == window)
+                })
             })
             .map(|kept| kept.message)
             .collect())
@@ -875,9 +883,7 @@ impl MessageTable {
 mod tests {
     use std::path::PathBuf;
 
-    use facade_base::daemon::{
-        DeliveredVia, DeliveryFailure, DeliveryStatus, TextWritten, WindowDeliveryFailure,
-    };
+    use facade_base::daemon::{DeliveredVia, DeliveryFailure, DeliveryStatus, TextWritten};
 
     use super::*;
     use crate::messages::tests::message;
@@ -949,7 +955,7 @@ mod tests {
             text_written: TextWritten::None,
             enter_written: Some(false),
             deadline: None,
-            delivered_via: Some(DeliveredVia::Read),
+            delivered_via: Some(DeliveredVia::ReadByRecipient),
             delivered_at: Some(at.into()),
         }
     }
@@ -965,14 +971,15 @@ mod tests {
             machine_id: "elsewhere".into(),
             ..window.clone()
         };
-        let receipt = WindowDelivery {
-            outcome_unknown: Vec::new(),
-            delivered: vec![window.clone()],
-            not_delivered: vec![WindowDeliveryFailure {
+        let receipt = vec![
+            WindowDeliveryOutcome::Delivered {
+                window: window.clone(),
+            },
+            WindowDeliveryOutcome::NotDelivered {
                 window: other.clone(),
                 reason: "window_disconnected".into(),
-            }],
-        };
+            },
+        ];
         let request = RequestId {
             id: "to-person",
             since: "2026-11-09T00:00:00.000Z",
@@ -984,15 +991,50 @@ mod tests {
         store.insert_message(&pending, None).unwrap();
         let settled = store.message_table().settle_human(1, &receipt).unwrap();
         assert_eq!(settled.delivery.status, DeliveryStatus::Success);
+        assert_eq!(
+            settled.delivery.delivered_via,
+            Some(DeliveredVia::DeliveredToWindows)
+        );
+        let (via, saved): (String, String) = store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT delivered_via, human_windows FROM messages WHERE number = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(via, "notified");
+        const GROUPED: &str = concat!(
+            r#"{"delivered":[{"machine_id":"here","window_id":"win-1"}],"not_delivered":"#,
+            r#"[{"window":{"machine_id":"elsewhere","window_id":"win-1"},"reason":"window_disconnected"}],"outcome_unknown":[]}"#,
+        );
+        assert_eq!(saved, GROUPED);
+        // A row written by a build using the grouped receipt is read after reopening too.
+        store.connection.lock().unwrap().execute(
+            "UPDATE messages SET status = 'success', delivered_via = 'notified', human_windows = ?1 WHERE number = 2",
+            [GROUPED],
+        ).unwrap();
         drop(store);
 
         let store = core.open();
         let kept = store.find_request("a1", HUMAN, request).unwrap().unwrap();
         assert_eq!(kept.message, settled);
-        assert_eq!(kept.human_windows, Some(receipt));
+        assert_eq!(kept.window_delivery.as_ref(), Some(&receipt));
+        let old = store
+            .message_table()
+            .inbox_message(HUMAN, 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(old.window_delivery, Some(receipt));
+        assert_eq!(
+            old.message.delivery.delivered_via,
+            Some(DeliveredVia::DeliveredToWindows)
+        );
         assert_eq!(
             store.message_table().human_inbox(&window).unwrap(),
-            [settled]
+            [settled, old.message]
         );
         assert!(
             store
@@ -1193,13 +1235,13 @@ mod tests {
                     message: kept[0].clone(),
                     paste: Some(1),
                     result_owed: None,
-                    human_windows: None,
+                    window_delivery: None,
                 },
                 KeptMessage {
                     message: kept[2].clone(),
                     paste: None,
                     result_owed: None,
-                    human_windows: None,
+                    window_delivery: None,
                 }
             ]
         );
@@ -1355,7 +1397,7 @@ mod tests {
                 message: kept.clone(),
                 paste: None,
                 result_owed: Some(reference.clone()),
-                human_windows: None,
+                window_delivery: None,
             }]
         );
         assert!(

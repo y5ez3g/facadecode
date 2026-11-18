@@ -1,7 +1,7 @@
 //! Keeping and settling a message to the person under one number.
 
-use facade_base::daemon::{Message, SendResult, WindowDelivery};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::daemon::{Message, SendOutcome, WindowDeliveryOutcome};
+use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure};
 use facade_base::machine::{ExecutionOutcome, Unavailable};
 use tokio::sync::watch;
 
@@ -10,11 +10,11 @@ use crate::blocking_in_place;
 use crate::store::Kept;
 
 /// Answers from the saved receipts, including when a delivery may have reached a window.
-pub(crate) fn human_result(send: SendResult) -> Result<SendResult, ErrorBody> {
+pub(crate) fn human_result(send: SendOutcome) -> Result<SendOutcome, SendFailure> {
     if send
-        .windows
+        .window_delivery
         .as_ref()
-        .is_some_and(|windows| !windows.delivered.is_empty())
+        .is_some_and(|outcomes| outcomes.iter().any(WindowDeliveryOutcome::is_delivered))
     {
         return Ok(send);
     }
@@ -30,8 +30,20 @@ pub(crate) fn human_result(send: SendResult) -> Result<SendResult, ErrorBody> {
         unanswered: Vec::new(),
     });
     error.data.message_ref = send.message.message_ref;
-    error.data.window_delivery = send.windows;
-    Err(error)
+    Err(SendFailure {
+        error,
+        window_delivery: send.window_delivery,
+    })
+}
+
+pub(crate) fn no_window_delivery(outcomes: Vec<WindowDeliveryOutcome>) -> SendFailure {
+    SendFailure {
+        error: ErrorBody::new(
+            Reason::Unavailable,
+            "no member window could tell the person",
+        ),
+        window_delivery: Some(outcomes),
+    }
 }
 
 impl Messages {
@@ -58,15 +70,15 @@ impl Messages {
     pub(crate) fn finish_human(
         &self,
         message: &Message,
-        windows: WindowDelivery,
-    ) -> Result<SendResult, ErrorBody> {
+        outcomes: Vec<WindowDeliveryOutcome>,
+    ) -> Result<SendOutcome, SendFailure> {
         let number = number(message);
         let mut open = self.deliveries.lock();
         let result = self
-            .save_human_receipt(number, windows)
+            .save_human_receipt(number, outcomes)
             .and_then(human_result);
         if let Some(settled) = open.human.remove(&number) {
-            let repeated = result.clone().map(|send| SendResult {
+            let repeated = result.clone().map(|send| SendOutcome {
                 repeated: true,
                 ..send
             });
@@ -78,26 +90,24 @@ impl Messages {
     fn save_human_receipt(
         &self,
         number: u64,
-        windows: WindowDelivery,
-    ) -> Result<SendResult, ErrorBody> {
+        outcomes: Vec<WindowDeliveryOutcome>,
+    ) -> Result<SendOutcome, SendFailure> {
         let table = &self.deliveries.table;
-        if windows.delivered.is_empty() && windows.outcome_unknown.is_empty() {
+        if outcomes
+            .iter()
+            .all(|outcome| matches!(outcome, WindowDeliveryOutcome::NotDelivered { .. }))
+        {
             blocking_in_place(|| table.delete_message(number)).map_err(ErrorBody::internal)?;
-            let mut error = ErrorBody::new(
-                Reason::Unavailable,
-                "no member window could tell the person",
-            );
-            error.data.windows = Some(windows.not_delivered);
-            return Err(error);
+            return Err(no_window_delivery(outcomes));
         }
-        let mut message = blocking_in_place(|| table.settle_human(number, &windows))
+        let mut message = blocking_in_place(|| table.settle_human(number, &outcomes))
             .map_err(ErrorBody::internal)?;
         self.deliveries.identify(&mut message);
-        Ok(SendResult {
+        Ok(SendOutcome {
             message,
             repeated: false,
             withdrawn: false,
-            windows: Some(windows),
+            window_delivery: Some(outcomes),
         })
     }
 }

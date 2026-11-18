@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{
-    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, TerminalColors, WindowDeliveryFailure,
+    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, TerminalColors, WindowDeliveryOutcome,
     WindowDescription, WindowInfo, WindowRef, WindowsChange, WorktreeCreateArgs, location_id,
 };
 use facade_base::files::{folder_key, real_path};
@@ -428,7 +428,7 @@ impl Windows {
     pub(crate) fn person_target(
         &self,
         window: &WindowRef,
-    ) -> Result<PersonTarget, WindowDeliveryFailure> {
+    ) -> Result<PersonTarget, WindowDeliveryOutcome> {
         if window.machine_id == self.shared.machine_id && window.window_id == TERMINAL_WINDOW {
             return Err(delivery_failure(window, "not_watching"));
         }
@@ -452,7 +452,7 @@ impl Windows {
         &self,
         target: &PersonTarget,
         change: &serde_json::Value,
-    ) -> Result<(), WindowDeliveryFailure> {
+    ) -> Result<(), WindowDeliveryOutcome> {
         let state = self.shared.state.lock().unwrap();
         let window_ref = &target.binding.window;
         let window = state
@@ -486,8 +486,8 @@ fn stale_connection(binding: &WindowBinding) -> ErrorBody {
     )
 }
 
-fn delivery_failure(window: &WindowRef, reason: &str) -> WindowDeliveryFailure {
-    WindowDeliveryFailure {
+fn delivery_failure(window: &WindowRef, reason: &str) -> WindowDeliveryOutcome {
+    WindowDeliveryOutcome::NotDelivered {
         window: window.clone(),
         reason: reason.to_string(),
     }

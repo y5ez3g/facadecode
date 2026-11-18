@@ -64,7 +64,7 @@ impl Outcome {
                 None,
                 TextWritten::Full,
                 Some(true),
-                Some(DeliveredVia::Terminal),
+                Some(DeliveredVia::TypedIntoInput),
                 Some(at.to_string()),
             ),
             Outcome::Failed {
@@ -106,7 +106,7 @@ pub(super) fn read_delivery(before: &Delivery, typing: bool, at: &str) -> Delive
         text_written,
         enter_written,
         deadline: None,
-        delivered_via: Some(DeliveredVia::Read),
+        delivered_via: Some(DeliveredVia::ReadByRecipient),
         delivered_at: Some(at.to_string()),
     }
 }

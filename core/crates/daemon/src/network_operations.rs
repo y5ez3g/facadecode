@@ -8,7 +8,7 @@ use facade_base::address::{
 };
 use facade_base::daemon::{
     AgentAdopt, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
-    AgentScreen, AgentSend, AgentStop, AgentType, SendArgs, WatchParams,
+    AgentScreen, AgentSend, AgentStop, AgentType, SendArgs, SendResult, WatchParams,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
@@ -118,7 +118,7 @@ impl Daemon {
                             )
                             .await?
                     {
-                        return Ok(Some(value_of(answer)));
+                        return Ok(Some(value_of(SendResult::from(answer))));
                     }
                 }
                 return Err(error);

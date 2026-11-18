@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use facade_base::daemon::{
     AgentInfo, DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, MAX_MESSAGES_LIMIT,
-    Message, MessagesSnapshot, MessagesWatchArgs, TextWritten,
+    Message, MessagesSnapshot, MessagesWatchArgs, TextWritten, WindowDeliveryOutcome, WindowRef,
 };
 use facade_base::jsonrpc::Reason;
 use tokio::sync::watch;
@@ -100,6 +100,73 @@ fn ids(snapshot: &MessagesSnapshot) -> Vec<&str> {
         .iter()
         .map(|message| message.message_id.as_str())
         .collect()
+}
+
+#[test]
+fn an_unknown_window_delivery_is_replayed_in_flight_and_after_reopening() {
+    use facade_base::machine::ExecutionOutcome;
+
+    let folder = TestFolder::new("human-replay");
+    let (post, store) = messages_on_disk(&folder);
+    let mut pending = message(0, HUMAN);
+    pending.at = facade_base::time::iso_now();
+    pending.delivery.deadline = None;
+    let request = Some("human-replay");
+    let PostedHuman::New(first) = post.begin_human(pending.clone(), request).unwrap() else {
+        panic!("the first request keeps a message");
+    };
+    let PostedHuman::Earlier(Earlier::HumanInFlight(joined)) =
+        post.begin_human(pending.clone(), request).unwrap()
+    else {
+        panic!("a repeat joins the original request");
+    };
+    let outcomes = vec![
+        WindowDeliveryOutcome::NotDelivered {
+            window: WindowRef {
+                machine_id: "here".into(),
+                window_id: "one".into(),
+            },
+            reason: "not_watching".into(),
+        },
+        WindowDeliveryOutcome::OutcomeUnknown {
+            window: WindowRef {
+                machine_id: "there".into(),
+                window_id: "two".into(),
+            },
+        },
+    ];
+    let failure = post.finish_human(&first, outcomes.clone()).unwrap_err();
+    assert_eq!(failure.window_delivery.as_ref(), Some(&outcomes));
+    let joining = joined.borrow().clone().unwrap().unwrap_err();
+    assert_eq!(joining.window_delivery, failure.window_delivery);
+    let v2 = ErrorBody::from(failure);
+    assert_eq!(ErrorBody::from(joining), v2);
+    assert_eq!(v2.data.message_ref, first.message_ref);
+    assert_eq!(
+        v2.data.unavailable.as_ref().unwrap().execution,
+        ExecutionOutcome::OutcomeUnknown
+    );
+    assert!(v2.data.windows.is_none());
+    let receipt = v2.data.window_delivery.as_ref().unwrap();
+    assert_eq!(receipt.not_delivered.len(), 1);
+    assert_eq!(receipt.outcome_unknown.len(), 1);
+    drop(post);
+    drop(store);
+
+    let (reopened, _store) = messages_on_disk(&folder);
+    let PostedHuman::Earlier(Earlier::HumanReady(prior)) =
+        reopened.begin_human(pending.clone(), request).unwrap()
+    else {
+        panic!("the stored request keeps its original receipt");
+    };
+    assert!(prior.repeated);
+    assert_eq!(prior.message.delivery.status, DeliveryStatus::Pending);
+    assert_eq!(prior.window_delivery.as_ref(), Some(&outcomes));
+    assert_eq!(ErrorBody::from(human_result(prior).unwrap_err()), v2);
+    let PostedHuman::New(next) = reopened.begin_human(pending, None).unwrap() else {
+        panic!("an unrelated request keeps a new message");
+    };
+    assert_eq!(next.message_id, "m2");
 }
 
 /// A message with a request ID is posted once for the caller and recipient. It can be found
@@ -257,11 +324,11 @@ fn reading_delivers_what_it_returns_and_only_from_the_reader_s_inbox() {
     assert!(
         next.messages
             .iter()
-            .all(|message| message.delivery.delivered_via == Some(DeliveredVia::Read))
+            .all(|message| message.delivery.delivered_via == Some(DeliveredVia::ReadByRecipient))
     );
     assert_eq!(
         kept(&settled[4]).delivery.delivered_via,
-        Some(DeliveredVia::Read),
+        Some(DeliveredVia::ReadByRecipient),
         "the sender learns the message was read"
     );
     assert!(
@@ -280,7 +347,7 @@ fn reading_delivers_what_it_returns_and_only_from_the_reader_s_inbox() {
     assert_eq!(ids(&all), ["m1", "m2", "m3", "m5"]);
     assert_eq!(
         all.messages[1].delivery.delivered_via,
-        Some(DeliveredVia::Terminal),
+        Some(DeliveredVia::TypedIntoInput),
         "delivered messages keep how"
     );
     let by_id = post
@@ -310,7 +377,7 @@ fn reading_delivers_what_it_returns_and_only_from_the_reader_s_inbox() {
     post.settle(&[5], Outcome::Typed);
     assert_eq!(
         post.message("m5").unwrap().delivery.delivered_via,
-        Some(DeliveredVia::Read),
+        Some(DeliveredVia::ReadByRecipient),
         "the first settlement stays"
     );
     let inbox: Vec<String> = post
@@ -360,7 +427,7 @@ fn a_read_during_typing_delivers_the_message_with_its_effects_unknown() {
     typist.settle(&[1], Outcome::Typed);
     assert_eq!(
         post.message("m1").unwrap().delivery.delivered_via,
-        Some(DeliveredVia::Read)
+        Some(DeliveredVia::ReadByRecipient)
     );
 }
 
@@ -466,10 +533,16 @@ fn every_change_is_in_the_store_when_its_call_returns() {
             kept(1).delivery.delivered_via,
             kept(2).delivery.delivered_via
         ),
-        (Some(DeliveredVia::Terminal), Some(DeliveredVia::Terminal))
+        (
+            Some(DeliveredVia::TypedIntoInput),
+            Some(DeliveredVia::TypedIntoInput)
+        )
     );
     post.read("a2", &MessagesWatchArgs::default()).unwrap();
-    assert_eq!(kept(3).delivery.delivered_via, Some(DeliveredVia::Read));
+    assert_eq!(
+        kept(3).delivery.delivered_via,
+        Some(DeliveredVia::ReadByRecipient)
+    );
 }
 
 /// A paste whose beginning cannot be recorded is not typed; its messages stay to be typed, and
@@ -747,7 +820,7 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
     );
     assert_eq!(
         result.result.unwrap().prompt.delivery.delivered_via,
-        Some(DeliveredVia::Terminal)
+        Some(DeliveredVia::TypedIntoInput)
     );
     assert_eq!(result.delivery.status, DeliveryStatus::Pending);
     assert!(
@@ -841,7 +914,7 @@ fn a_take_hands_over_every_page_of_what_was_not_delivered() {
     assert!(post.take("a2").unwrap().is_empty(), "taking delivered them");
     assert_eq!(
         post.message("m1").unwrap().delivery.delivered_via,
-        Some(DeliveredVia::Read)
+        Some(DeliveredVia::ReadByRecipient)
     );
 }
 
