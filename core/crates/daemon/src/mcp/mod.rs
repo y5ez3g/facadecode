@@ -69,7 +69,7 @@ pub(crate) enum Serves {
 /// A relay's hello. Its fields are the relay contract's.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Hello {
+struct RelayHelloParams {
     /// The relay contract version the relay speaks.
     relay: u32,
     /// The words after its program, such as `--guest codex`.
@@ -84,7 +84,7 @@ struct Hello {
 
 /// One relay connection, shared by the blocking tasks that answer its lines.
 pub(crate) struct Relay {
-    hello: Hello,
+    hello: RelayHelloParams,
     /// The relay's process and when it started: together they name its calls at every daemon.
     pid: u32,
     birth: String,
@@ -108,7 +108,7 @@ impl Relay {
         connect: Connect,
         join: JoinMember,
     ) -> Result<Relay, ErrorBody> {
-        let hello: Hello = decode_arguments(params)?;
+        let hello: RelayHelloParams = decode_arguments(params)?;
         if hello.relay != RELAY_CONTRACT {
             let message = format!(
                 "this Facade speaks relay contract {RELAY_CONTRACT}, not {}; restart the CLI",
@@ -222,7 +222,7 @@ impl Relay {
 impl Relay {
     /// A relay with `args` and `env` whose tools reach no daemon, as unit tests have none.
     pub(crate) fn for_test(args: &[&str], env: &[(&str, &str)]) -> Relay {
-        let hello = Hello {
+        let hello = RelayHelloParams {
             relay: RELAY_CONTRACT,
             args: args.iter().map(|arg| arg.to_string()).collect(),
             env: env
@@ -242,5 +242,50 @@ impl Relay {
             sends: in_flight::Sends::default(),
             presence: Mutex::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use facade_base::daemon::{ClientKind, HelloParams, methods};
+    use facade_base::jsonrpc::Request;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn relay_v1_frames_are_separate_from_the_mcp_client_identity() {
+        let mut frames = include_str!("../../../relay/tests/fixtures/relay-hello.jsonl").lines();
+        for (cwd, reconnect) in [(Some("/work folder"), false), (None, true)] {
+            let request: Request = serde_json::from_str(frames.next().unwrap()).unwrap();
+            assert_eq!(request.id, Some(1));
+            assert_eq!(request.method, methods::HELLO);
+            assert!(crate::server::is_relay_hello(&request.params));
+
+            let hello: RelayHelloParams = decode_arguments(request.params.clone()).unwrap();
+            assert_eq!(hello.relay, RELAY_CONTRACT);
+            assert_eq!(hello.args, ["--guest", "codex"]);
+            assert_eq!(
+                hello.env.get("FACADE_TEST_VALUE").map(String::as_str),
+                Some("line\n\"quoted\" ☃")
+            );
+            assert_eq!(hello.cwd.as_deref(), cwd);
+            assert_eq!(hello.reconnect, reconnect);
+
+            let mut with_kind = request.params;
+            with_kind["kind"] = json!("mcp");
+            assert!(
+                decode_arguments::<RelayHelloParams>(with_kind)
+                    .is_err_and(|error| error.data.reason == Reason::InvalidArgument)
+            );
+        }
+        assert!(frames.next().is_none());
+
+        let ordinary = json!({
+            "protocol": [2, 2], "build": "test", "kind": "mcp", "agent": "a1",
+        });
+        assert!(!crate::server::is_relay_hello(&ordinary));
+        let hello: HelloParams = decode_arguments(ordinary).unwrap();
+        assert_eq!(hello.kind, ClientKind::Mcp);
     }
 }

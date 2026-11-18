@@ -84,7 +84,7 @@ own environment, as PROTOCOL.md tells a client to. On Windows the program is `fa
 | `main.rs` | Works out the socket, builds the hello from the process, runs the loop; documents the exit codes. |
 | `socket.rs` | `daemon_socket`: the daemon socket of the Facade home. |
 | `relay.rs` | The loop: `Relay`, its `Daemon` state, the pending and held lines, reconnection. |
-| `daemon.rs` | `DaemonLink::open` (connect, check the peer's user, hello), the response to `closing`, `Hello`, `start_facade`. |
+| `daemon.rs` | `DaemonLink::open` (connect, check the peer's user, hello), the response to `closing`, `RelayHelloParams`, `start_facade`. |
 | `jsonrpc.rs` | `read`: sorts a line into `Request`, `Notification`, `Response` or `Other`; `string`: a JSON string for the hello. |
 | `lines.rs` | `Lines`: cuts a stream into lines, newline included. |
 | `windows.rs` | The completion port, standard-input thread, overlapped daemon pipe, user check and process creation flag. The only module that allows unsafe code. |

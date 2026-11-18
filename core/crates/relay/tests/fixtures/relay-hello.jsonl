@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"relay":1,"args":["--guest","codex"],"env":{"FACADE_TEST_VALUE":"line\u000a\"quoted\" ☃"},"cwd":"/work folder","reconnect":false}}
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"relay":1,"args":["--guest","codex"],"env":{"FACADE_TEST_VALUE":"line\u000a\"quoted\" ☃"},"cwd":null,"reconnect":true}}

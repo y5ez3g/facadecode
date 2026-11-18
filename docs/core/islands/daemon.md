@@ -595,7 +595,7 @@ The MCP server behind each relay connection: it responds to the MCP client's JSO
   - A screen's result file is deleted after 30 days; a messages' file once its first message is no longer kept; an agents' file stays.
 - **Never does:** holds `Daemon` or calls a sibling; changes the tool definitions (`facade_base::tools::DEFINITIONS`); reads a member's inbox to count its messages, since reading delivers them.
 - **Interface** (called by the daemon's relay code and the hourly sweep):
-  - `Relay::of(params, pid, birth, connect: Connect, join: JoinMember) -> Result<Relay, ErrorBody>`: checks the hello and its contract version.
+  - `Relay::of(params, pid, birth, connect: Connect, join: JoinMember) -> Result<Relay, ErrorBody>` decodes `RelayHelloParams` and checks its contract version.
   - `Relay::serves() -> Serves` (blocking); `serve_member(id)` after a restart finds the relay's member again; `reconnect() -> bool`; `notice(line) -> bool` as a line is read (notes or cancels a send); `respond(&Serves, line, arrived) -> Option<Value>` (blocking); `hold_presence(agent)`.
   - `enum Serves { Agent(id), Guest(cli), Member(id), Nobody, Aside }`.
   - `type Connect = Box<dyn Fn(&Identity) -> anyhow::Result<Option<DaemonClient>>>`: None while the daemon is taking over.

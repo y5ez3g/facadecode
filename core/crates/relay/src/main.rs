@@ -24,7 +24,7 @@ mod windows;
 
 use std::process::ExitCode;
 
-use crate::daemon::Hello;
+use crate::daemon::RelayHelloParams;
 
 fn main() -> ExitCode {
     let socket = match socket::daemon_socket() {
@@ -37,7 +37,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let hello = Hello {
+    let hello = RelayHelloParams {
         args: std::env::args_os()
             .skip(1)
             .map(|word| word.to_string_lossy().into_owned())

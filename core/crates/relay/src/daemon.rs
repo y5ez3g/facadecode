@@ -21,7 +21,7 @@ const RELAY_CONTRACT: u32 = 1;
 const CLOSING_RESPONSE: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"closing\",\"params\":{}}\n";
 
 /// What the hello tells the daemon about the relay's process, which the CLI started.
-pub(crate) struct Hello {
+pub(crate) struct RelayHelloParams {
     /// Its words after its program.
     pub(crate) args: Vec<String>,
     /// Its environment's UTF-8 variables. They may hold keys, so only the relay's own user's
@@ -33,7 +33,7 @@ pub(crate) struct Hello {
     pub(crate) reconnect: bool,
 }
 
-impl Hello {
+impl RelayHelloParams {
     /// The hello as a line.
     fn to_line(&self) -> Vec<u8> {
         let args: Vec<String> = self.args.iter().map(|arg| jsonrpc::string(arg)).collect();
@@ -70,7 +70,7 @@ impl DaemonLink {
     /// listens, the error's kind is `NotFound` or `ConnectionRefused`.
     pub(crate) fn open(
         socket: &Path,
-        hello: &Hello,
+        hello: &RelayHelloParams,
         #[cfg(windows)] events: &mut Events,
     ) -> io::Result<DaemonLink> {
         let at = socket.display();
@@ -165,5 +165,26 @@ fn peer_user(stream: &UnixStream) -> nix::Result<Uid> {
     #[cfg(not(target_os = "linux"))]
     {
         nix::unistd::getpeereid(stream).map(|(user, _group)| user)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RelayHelloParams;
+
+    #[test]
+    fn a_relay_sends_the_v1_hello_and_reconnect_frames() {
+        let mut hello = RelayHelloParams {
+            args: vec!["--guest".into(), "codex".into()],
+            env: vec![("FACADE_TEST_VALUE".into(), "line\n\"quoted\" ☃".into())],
+            cwd: Some("/work folder".into()),
+            reconnect: false,
+        };
+        let mut frames = hello.to_line();
+        hello.cwd = None;
+        hello.reconnect = true;
+        frames.extend(hello.to_line());
+        let expected = include_str!("../tests/fixtures/relay-hello.jsonl").replace("\r\n", "\n");
+        assert_eq!(frames.as_slice(), expected.as_bytes());
     }
 }
