@@ -125,9 +125,10 @@ core
 │   │   ├── keeper_link   the keeper connection and the runs it holds
 │   │   └── preparation   run folders, environment, plugins, session following
 │   ├── records     agent numbers, names and reach
-│   ├── windows     editor windows and their connections
+│   ├── windows     logical editor windows, their bindings and connections
 │   │   └── locations   a window's folders and worktrees
 │   ├── guests      guests, MCP members and integrations
+│   ├── lifecycle   the daemon's own life: idle exit, a newer build's takeover, its log
 │   ├── server      client connections
 │   └── mcp         Facade's MCP tools behind each relay
 └── facade     the facade program
@@ -144,7 +145,7 @@ on no other Facade crate. Inside base, texts may use protocol, and protocol and 
 - **Siblings never call each other.** Their parent joins them, and is the one place their orders are written.
 - **A child never calls its parent.** What it needs, it gets when it is made: a narrow handle, the sender of a channel,
   or a closure. Nothing finds its parent through a global value, and no child holds the whole daemon.
-- **A child reports up** with return values, with events on a channel its parent gave it (`RunEvent`, `WindowEvent`,
+- **A child reports up** with return values, with events on a channel its parent gave it (`RunEvent`,
   `GuestEvent`), through a trait its parent implements (the server's `Service`), or through a closure its parent gave
   it (the MCP server's `Connect` and `JoinMember`).
 - **Every piece of data has one owner.** Fields are private. The daemon's layer creates every table; each part gets a
@@ -165,22 +166,28 @@ on no other Facade crate. Inside base, texts may use protocol, and protocol and 
   - Every client, the editor included, gets what it shows through the daemon protocol, and reads no file of core's.
   - The Linux code stays, in the three places that branch by operating system.
 
-## The daemon's six orders
+## The daemon's eight orders
 
-Six of the daemon's jobs cross several of its islands. Its layer calls the islands in a fixed order, so that a crash at
+Eight of the daemon's jobs cross several of its islands. Its layer calls the islands in a fixed order, so that a crash at
 any step leaves nothing that the next daemon cannot recover or explain.
 
-1. **Start**: records gives the agent its number first. Then runs starts the CLI. Then the record, with the start's
-   first prompt, is kept in one transaction. Only then are the agent's actor and the prompt's delivery made, and the
+1. **Start**: records gives the agent its number first. Then runs starts the CLI. Then the record, with its first window
+   memberships, its location source and the start's first prompt, is kept in one transaction. Only then are the agent's actor and the prompt's delivery made, and the
    agent listed.
 2. **Paste**: messages keeps the beginning of a paste on disk before the typist may type it. The terminal reports what
    it wrote, and messages keeps the outcome before the send's response.
 3. **Session**: a session a run reported is kept on disk first, and then the agent gets it.
 4. **Output and resize**: every change to a screen goes into its screen log first, and into the terminal engine after.
-5. **Removal and a window's takeover**: one transaction first, an agent's record with its inbox, or a window's agents
-   moving to the window that took them over. Then the layer changes what is live: the actor, the run and the folders,
-   or the list.
+5. **Removal**: under the agent's run change, a running CLI is stopped and its exit confirmed first. Then one
+   transaction deletes the record with its inbox and its window memberships. Then the agent leaves the list and its
+   removal goes out, and only then do the actor, the run, the screen and the folders go.
 6. **A guest joins and ends**: to join, records gives the number, the record is kept, the guest is listed, and only
    then does guests register its session, so a hook that comes right after finds it listed. To end, its record says it
    ended, then the record and its inbox go in one transaction, and clients watching the inbox learn of each message that
    went.
+7. **A window adopts an agent**: the membership is kept first, then the agent's record goes out on the `agents` topic.
+8. **A message to the person**: a repeated request ID gets the earlier send's result. Otherwise the layer picks the
+   current `messages` watch of each connected window the sending agent is in; with none, the send fails as
+   `unavailable` and nothing is kept. Then messages numbers the message and keeps it pending, the layer puts it into
+   each picked watch, a watch that takes it counting as delivered, and messages keeps which windows took it before the
+   send responds. When no picked watch takes it, the message is withdrawn.
