@@ -782,6 +782,7 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 |---|---|---|---|
 | `agent.start` | `StartArgs` | `StartResult` | Starts an agent by running the CLI in a terminal of the requested size. A CLI rule's name starts that CLI as its rule says. A `prompt` is refused before anything starts where a message could not carry it. It is kept with the agent's record and answered pending, then delivered as the agent's first message once the CLI's tools connected or will not. A prompt from an agent owes it one result, under `result_message_id`, once the prompt is settled. A program or folder that cannot be used returns `unavailable`. With `worktree`, the start makes that worktree from `cwd` first, as `worktree.create` does, and starts in it: Git's failure answers `worktree_failed` with what it made in `data.kept`, and a start that fails after making the worktree keeps it, its error's `kept` naming it. A `request_id` of the creator's own is looked for before anything else: a start with the same ID under way answers once it does, and an agent the same creator started with it within the hour is answered as it stands now, `repeated`, with its prompt as it stands, starting nothing and making no worktree. A start that failed keeps no ID. Waits up to 10 seconds for a ready keeper before sending, then up to 10 more seconds for the reply. Either timeout returns `unavailable`. A timeout after sending leaves the outcome unknown. |
 | `agent.resume` | `ResumeArgs` | `AgentInfo` | Starts an ended agent's CLI again in its terminal, continuing its recorded session in its folder, in the window `window_id` names, the terminal window where it names none. The agent keeps its ID, name, record, and screen; the screen gets a fresh terminal's modes. Uses the caller's environment and terminal size, and the CLI's current rule. Refuses a window as `agent.start` does, before anything starts. Returns `unavailable` for a running agent, one already resuming, an agent without a CLI rule that resumes sessions, one without a recorded session, or a CLI or folder that cannot be used. Waits for the keeper like `agent.start`. If the CLI cannot start, the agent stays ended with its earlier exit. |
+| `agent.adopt` | `AgentArgs` | `AgentInfo` | In daemon protocol 2, adds a bound `ide` client's logical window to the agent's members and returns the record. Works for running and ended agents. An existing member is returned unchanged. Refuses a guest or a client without a bound editor window, and returns `not_found` for a missing record. |
 | `agent.stop` | `AgentArgs` | `StopResult` | Stops a running agent's process group with SIGHUP and sends SIGKILL to anything left at the deadline. The daemon sets the deadline 3 seconds after accepting the stop, keeping an earlier pending deadline. Queueing can shorten the gap after SIGHUP. Signals are sent only if Facade can check that the group still belongs to the CLI. Waits up to 10 seconds for a ready keeper, up to 10 more seconds for its reply, then up to 10 more seconds for the CLI's exit. When no keeper runs, only the exit wait applies. Any timeout returns `unavailable`: the stop goes on. An agent with no terminal to stop returns `not_found`, and one whose actor stopped `internal`, both before anything is sent. Returns the recorded exit; its record stays listed. A timeout or service replacement does not cancel the stop or extend its deadline. An agent whose CLI had ended before the stop returns its recorded exit with `already_ended`, without another signal. |
 | `agent.remove` | `AgentArgs` | `EmptyResult` | Removes the agent record. Stops a running agent first with `agent.stop`. Removing an ended agent sends no additional signal: processes left by a CLI that ended by itself can keep running if they ignore terminal hangup. |
 | `agent.inspect` | `AgentArgs` | `InspectResult` | Reads the agent's record, its CLI rule, its message input as the screen shows it now, and whether its session is tracked. Sends no keys and starts nothing. Input reads `unknown` for an ended agent, without a rule, while a synchronized update is open, and after recovery or resume until the CLI writes again. A reading never means input may be typed. |
@@ -845,15 +846,20 @@ An agent record. Field names match MCP `list_agents`.
 | `name` | `string` | yes | The display name. Names are nonempty but may repeat. |
 | `cli` | `string` | yes | The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a program started by its path or name. |
 | `cwd` | `string` | yes | The CLI's working folder at startup. |
+| `machine_id` | `string` | no | The ID of the Facade machine that runs the agent. |
+| `windows` | `WindowRef[]` | no | The agent's member windows, unique and sorted by machine ID and window ID. |
 | `window_id` | `string` | yes | The window the agent is in: the editor window it was started in, or `terminal` for an agent started from a terminal. |
 | `location_id` | `string` | yes | The ID of its location, as its window lists it: the location `cwd` is, or the innermost one `cwd` is inside. |
+| `location_source_window` | `WindowRef` | no | The window that provided the agent's running location, where a window supplied it. |
 | `pid` | `number` | no | The CLI's process ID. Omitted for a guest, whose process Facade does not know. |
 | `process` | `ProcessState` | yes | Whether the CLI is running or ended. |
 | `cols` | `number` | no | Terminal width in columns. Omitted for a guest, which has no terminal of Facade's. |
 | `rows` | `number` | no | Terminal height in rows. Omitted for a guest. |
 | `created_at` | `string` | yes | The start time in UTC ISO 8601 format with milliseconds. |
 | `creator` | `string` | no | The agent whose client started it. Omitted where the person started it, and for a guest. |
+| `creator_machine_id` | `string` | no | The creator's machine ID. Omitted when it is the record's own machine. |
 | `root` | `string` | yes | The first agent of its creation tree: itself where it has no creator, or else its creator's root. It stays when agents of the tree end or go. |
+| `root_machine_id` | `string` | no | The root agent's machine ID. Omitted when it is the record's own machine. |
 | `yolo` | `boolean` | yes | Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a guest as it joins. |
 | `exit` | `ProcessExit` | no | The recorded exit. Omitted while the agent is running. |
 | `session` | `string` | no | The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues. Omitted until one is reported. |
@@ -880,7 +886,7 @@ A change to the `agents` topic. Skip unknown change kinds.
 
 Parameters for `call`.
 
-`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs }`
+`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.adopt'; readonly args: AgentArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs }`
 
 ### ChangedParams
 
@@ -992,6 +998,7 @@ Error details for clients to inspect.
 | `keys_sent` | `number` | no | With `partial_input` for keys: how many keys reached the agent's terminal whole. |
 | `kept` | `Kept` | no | With `worktree.create`, or `agent.start` with a `worktree`, that failed after Git made part or all of the worktree: what it made, which stays. |
 | `entry` | `string` | no | With a refused start or resume that an entry of the settings file caused - its program not found, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot take - the entry's name, such as `claude`. A client offers to open the settings file. |
+| `windows` | `WindowDeliveryFailure[]` | no | With `unavailable` when no member window took a message to `#human`: each window and why it could not take the message. |
 
 ### HandOver
 
@@ -1023,6 +1030,8 @@ The result of `hello`: daemon details and supported topics and operations.
 |---|---|---|---|
 | `protocol` | `number` | yes | The highest protocol version shared by both peers. |
 | `build` | `string` | yes | The daemon's build. |
+| `machine_id` | `string` | no | The daemon's Facade machine ID. |
+| `window` | `WindowRef` | no | For an `ide` client, the logical window bound to this connection. |
 | `pid` | `number` | yes | The daemon's process ID. |
 | `agent` | `string` | no | The agent this client acts for, as `agent` and `sessions` decided. Omitted where it acts for none. |
 | `agents` | `number` | yes | The number of agent records when `hello` runs. Watch `agents` to receive changes. |
@@ -1444,6 +1453,7 @@ The response to `agent.send`: the message as it stands, whether the call repeate
 | `delivery` | `Delivery` | yes |  |
 | `repeated` | `boolean` | no | The call repeated an earlier one by its request ID: the message is that call's. Omitted otherwise. |
 | `withdrawn` | `boolean` | no | Its delivery failed with nothing of it typed, and it was taken out of its recipient's inbox, so it can be sent again. Omitted otherwise. |
+| `windows` | `WindowDelivery` | no | Which windows' subscriptions took the message for `#human`. Omitted for messages to agents and for a `pending` result whose daemon ended before saving the window outcomes. |
 
 ### ServerMessage
 
@@ -1470,6 +1480,8 @@ Arguments for `agent.start`, supplied by the client.
 | `name` | `string` | no | The display name, trimmed. A missing, empty, or blank name gets a name from the settings file's `names`, else from the built-in names: one no agent of the window has, ignoring case and surrounding spaces, or, where every one is taken or the list is empty, the agent's ID, such as `#a7` (LIFECYCLE-2.1). Given names may repeat. |
 | `cwd` | `string` | yes | The CLI's working folder, an absolute path. In an editor window it must be one of the window's locations, which `worktree.create` adds to, or a folder inside one. |
 | `window_id` | `string` | no | The window the agent goes in: an editor window that is there now, by its ID, or `terminal`, where any folder will do. Omitted, `terminal`. |
+| `window` | `WindowRef` | no | The one initial member window, when supplied. Omitted to use the caller's default. |
+| `location_source_window` | `WindowRef` | no | The connected local window that supplies the running location for `cwd`, if selected. |
 | `env` | `{ readonly [key: string]: string }` | no | The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`, and `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor, and CLI session variables, but keeps `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`, which tell the CLI which terminal app displays it; then it sets `TERM`, `COLORTERM`, and `PWD`. Supply the user's remaining environment explicitly. `facade start` does this, omitting non-UTF-8 variables and naming them on stderr. A start from an `mcp` client takes its agent's environment instead, as that agent's CLI started with it, less what that CLI's rule added: a CLI chooses what it gives its MCP server, while a `facade` command sends its shell's. Where that environment cannot be read, as when the CLI is not running or the system hides it, the start fails with `unavailable` and starts nothing. A start that an agent asks for, from its tools or its terminal, inherits that environment as it is, including what the agent's own entry `env` set or removed, as a shell started from another inherits its variables; the started CLI's own entry applies on top (CONFIGURATION-2.1, 3.2). |
 | `cols` | `number` | yes | The initial terminal width in columns, at least 2. |
 | `rows` | `number` | yes | The initial terminal height in rows, at least 1. |
@@ -1619,6 +1631,24 @@ The result of `watch`, sent before any changes for that watch.
 | `watch` | `number` | yes | The watch number used by `changed` notifications and `unwatch`. |
 | `snapshot` | `AgentInfo[] \| ScreenSnapshot \| MessagesSnapshot \| WindowInfo[]` | yes | The topic snapshot. Later changes arrive as ordered `changed` notifications. |
 
+### WindowDelivery
+
+The member windows' outcomes for one message to the person.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `delivered` | `WindowRef[]` | yes | Windows whose `messages` subscriptions took the notification. |
+| `not_delivered` | `WindowDeliveryFailure[]` | yes | Windows whose subscriptions did not take the notification. |
+
+### WindowDeliveryFailure
+
+Why a member window did not take a notification.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `window` | `WindowRef` | yes |  |
+| `reason` | `string` | yes | `window_disconnected` if the window has no connection, or `not_watching` if no current subscription took the notification. |
+
 ### WindowDescription
 
 An editor window as it describes itself, in `hello` and again with `window.update` whenever any of it changes.
@@ -1640,6 +1670,7 @@ A window: an editor window, or the terminal window, `terminal`, which holds the 
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `machine_id` | `string` | no | The ID of the Facade machine that owns the window. |
 | `window_id` | `string` | yes | The window's ID: an editor window's own, or `terminal`. |
 | `label` | `string` | yes | The window's name. |
 | `environment` | `string` | yes | `local`, or the remote authority of an editor window whose user interface is on another computer. |
@@ -1651,11 +1682,20 @@ A window: an editor window, or the terminal window, `terminal`, which holds the 
 | `clis` | `CliInfo[]` | no | The CLIs a start can run in this window, each found on a `PATH` or not: for a client that acts for an agent, that agent's; for an `ide` client, the one in the window's own `env`. None for a window with no folder, and none where Facade's settings file cannot be read as a whole. Omitted for a client that acts for no agent, and for an `ide` client where the window gave no `env`. |
 | `settings_problem` | `string` | no | For a client that acts for an agent, or an `ide` client where the window gave `env`, what is wrong with Facade's settings file where it cannot be read as a whole, which then lists no CLI and stops every start, as one text. Omitted where the file reads. |
 
+### WindowRef
+
+A logical window on a Facade machine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes | The Facade machine's ID, a lowercase UUID version 4. |
+| `window_id` | `string` | yes | The logical window's ID, or `terminal` for that machine's terminal window. |
+
 ### WindowsChange
 
 A change to the windows.
 
-`{ readonly kind: 'updated'; readonly window: WindowInfo } \| { readonly kind: 'removed'; readonly window_id: string }`
+`{ readonly kind: 'updated'; readonly window: WindowInfo } \| { readonly kind: 'removed'; readonly machine_id?: string; readonly window_id: string }`
 
 ### Worktree
 

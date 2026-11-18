@@ -368,7 +368,7 @@ pub fn typescript_file(
         json!(daemon::operation_names())
     ));
     out.push_str(
-        "export type Topic = typeof TOPICS[number];\nexport type Operation = typeof OPS[number];\n",
+        "export type Topic = typeof TOPICS[number];\nexport type Operation = keyof Operations;\n",
     );
     for (name, schema) in definitions {
         match schema.get("description").and_then(Value::as_str) {

@@ -155,6 +155,8 @@ pub(super) fn start(
         name: optional(arguments, "name"),
         cwd: path,
         window_id: Some(window_id),
+        window: None,
+        location_source_window: None,
         env: Default::default(),
         cols: me.cols.unwrap_or(cols),
         rows: me.rows.unwrap_or(rows),

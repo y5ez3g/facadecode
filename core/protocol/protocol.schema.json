@@ -76,6 +76,17 @@
           "type": "string",
           "description": "The CLI's working folder at startup."
         },
+        "machine_id": {
+          "type": "string",
+          "description": "The ID of the Facade machine that runs the agent."
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowRef"
+          },
+          "description": "The agent's member windows, unique and sorted by machine ID and window ID."
+        },
         "window_id": {
           "type": "string",
           "description": "The window the agent is in: the editor window it was started in, or `terminal` for an agent\nstarted from a terminal."
@@ -83,6 +94,10 @@
         "location_id": {
           "type": "string",
           "description": "The ID of its location, as its window lists it: the location `cwd` is, or the innermost one\n`cwd` is inside."
+        },
+        "location_source_window": {
+          "description": "The window that provided the agent's running location, where a window supplied it.",
+          "$ref": "#/$defs/WindowRef"
         },
         "pid": {
           "type": "integer",
@@ -116,9 +131,17 @@
           "type": "string",
           "description": "The agent whose client started it. Omitted where the person started it, and for a guest."
         },
+        "creator_machine_id": {
+          "type": "string",
+          "description": "The creator's machine ID. Omitted when it is the record's own machine."
+        },
         "root": {
           "type": "string",
           "description": "The first agent of its creation tree: itself where it has no creator, or else its creator's\nroot. It stays when agents of the tree end or go."
+        },
+        "root_machine_id": {
+          "type": "string",
+          "description": "The root agent's machine ID. Omitted when it is the record's own machine."
         },
         "yolo": {
           "type": "boolean",
@@ -282,6 +305,21 @@
             },
             "args": {
               "$ref": "#/$defs/ResumeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.adopt"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentArgs"
             }
           },
           "required": [
@@ -893,6 +931,13 @@
         "entry": {
           "type": "string",
           "description": "With a refused start or resume that an entry of the settings file caused - its program not\nfound, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot\ntake - the entry's name, such as `claude`. A client offers to open the settings file."
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowDeliveryFailure"
+          },
+          "description": "With `unavailable` when no member window took a message to `#human`: each window and why\nit could not take the message."
         }
       },
       "required": [
@@ -977,6 +1022,14 @@
         "build": {
           "type": "string",
           "description": "The daemon's build."
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "The daemon's Facade machine ID."
+        },
+        "window": {
+          "description": "For an `ide` client, the logical window bound to this connection.",
+          "$ref": "#/$defs/WindowRef"
         },
         "pid": {
           "type": "integer",
@@ -2253,6 +2306,10 @@
         "withdrawn": {
           "type": "boolean",
           "description": "Its delivery failed with nothing of it typed, and it was taken out of its recipient's inbox,\nso it can be sent again. Omitted otherwise."
+        },
+        "windows": {
+          "description": "Which windows' subscriptions took the message for `#human`. Omitted for messages to\nagents and for a `pending` result whose daemon ended before saving the window outcomes.",
+          "$ref": "#/$defs/WindowDelivery"
         }
       },
       "required": [
@@ -2311,6 +2368,14 @@
         "window_id": {
           "type": "string",
           "description": "The window the agent goes in: an editor window that is there now, by its ID, or `terminal`,\nwhere any folder will do. Omitted, `terminal`."
+        },
+        "window": {
+          "description": "The one initial member window, when supplied. Omitted to use the caller's default.",
+          "$ref": "#/$defs/WindowRef"
+        },
+        "location_source_window": {
+          "description": "The connected local window that supplies the running location for `cwd`, if selected.",
+          "$ref": "#/$defs/WindowRef"
         },
         "env": {
           "type": "object",
@@ -2831,6 +2896,47 @@
       ],
       "description": "The result of `watch`, sent before any changes for that watch."
     },
+    "WindowDelivery": {
+      "type": "object",
+      "properties": {
+        "delivered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowRef"
+          },
+          "description": "Windows whose `messages` subscriptions took the notification."
+        },
+        "not_delivered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowDeliveryFailure"
+          },
+          "description": "Windows whose subscriptions did not take the notification."
+        }
+      },
+      "required": [
+        "delivered",
+        "not_delivered"
+      ],
+      "description": "The member windows' outcomes for one message to the person."
+    },
+    "WindowDeliveryFailure": {
+      "type": "object",
+      "properties": {
+        "window": {
+          "$ref": "#/$defs/WindowRef"
+        },
+        "reason": {
+          "type": "string",
+          "description": "`window_disconnected` if the window has no connection, or `not_watching` if no current\nsubscription took the notification."
+        }
+      },
+      "required": [
+        "window",
+        "reason"
+      ],
+      "description": "Why a member window did not take a notification."
+    },
     "WindowDescription": {
       "type": "object",
       "properties": {
@@ -2884,6 +2990,10 @@
     "WindowInfo": {
       "type": "object",
       "properties": {
+        "machine_id": {
+          "type": "string",
+          "description": "The ID of the Facade machine that owns the window."
+        },
         "window_id": {
           "type": "string",
           "description": "The window's ID: an editor window's own, or `terminal`."
@@ -2947,6 +3057,24 @@
       ],
       "description": "A window: an editor window, or the terminal window, `terminal`, which holds the agents started\nfrom a terminal."
     },
+    "WindowRef": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string",
+          "description": "The Facade machine's ID, a lowercase UUID version 4."
+        },
+        "window_id": {
+          "type": "string",
+          "description": "The logical window's ID, or `terminal` for that machine's terminal window."
+        }
+      },
+      "required": [
+        "machine_id",
+        "window_id"
+      ],
+      "description": "A logical window on a Facade machine."
+    },
     "WindowsChange": {
       "oneOf": [
         {
@@ -2972,6 +3100,9 @@
             "kind": {
               "type": "string",
               "const": "removed"
+            },
+            "machine_id": {
+              "type": "string"
             },
             "window_id": {
               "type": "string"

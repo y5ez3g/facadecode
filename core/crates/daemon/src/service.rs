@@ -118,6 +118,8 @@ impl server::Service for Daemon {
         let result = HelloResult {
             protocol: hello.protocol[1].min(DAEMON_PROTOCOL_VERSION),
             build: facade_base::build_id(),
+            machine_id: String::new(),
+            window: None,
             pid: std::process::id(),
             agent: agent.clone(),
             agents: self.agents().len(),

@@ -293,6 +293,7 @@ impl Daemon {
                 message,
                 repeated: false,
                 withdrawn: false,
+                windows: None,
             });
         }
         let number = messages::number(&message);
@@ -333,6 +334,7 @@ impl Daemon {
             message,
             repeated: false,
             withdrawn,
+            windows: None,
         })
     }
 
@@ -392,6 +394,7 @@ impl Daemon {
             message,
             repeated: true,
             withdrawn,
+            windows: None,
         })
     }
 
@@ -563,6 +566,7 @@ impl Daemon {
             message,
             repeated,
             withdrawn: false,
+            windows: None,
         })
     }
 

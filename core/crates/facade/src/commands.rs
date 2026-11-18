@@ -78,6 +78,8 @@ pub(crate) fn start(
         name: words.name,
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
         window_id: None,
+        window: None,
+        location_source_window: None,
         env: environment(),
         cols,
         rows,

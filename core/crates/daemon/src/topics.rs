@@ -319,6 +319,7 @@ impl Daemon {
                             vec![match now {
                                 Some(window) => WindowsChange::Updated { window: Box::new(window) },
                                 None => WindowsChange::Removed {
+                                    machine_id: String::new(),
                                     window_id: TERMINAL_WINDOW.into(),
                                 },
                             }]
@@ -334,7 +335,7 @@ impl Daemon {
                                 .await;
                             known.insert(window.window_id.clone());
                         }
-                        WindowsChange::Removed { window_id } => {
+                        WindowsChange::Removed { window_id, .. } => {
                             known.remove(window_id);
                         }
                         WindowsChange::Unknown => {}
@@ -412,6 +413,7 @@ impl Daemon {
             });
         }
         (!locations.is_empty()).then(|| WindowInfo {
+            machine_id: String::new(),
             window_id: TERMINAL_WINDOW.into(),
             label: TERMINAL_WINDOW_LABEL.into(),
             environment: "local".into(),
@@ -470,6 +472,7 @@ fn resync_windows(known: &HashSet<String>, now: Vec<WindowInfo>) -> Vec<WindowsC
         .iter()
         .filter(|id| !now.iter().any(|info| &info.window_id == *id))
         .map(|id| WindowsChange::Removed {
+            machine_id: String::new(),
             window_id: id.clone(),
         });
     let mut changes: Vec<WindowsChange> = gone.collect();

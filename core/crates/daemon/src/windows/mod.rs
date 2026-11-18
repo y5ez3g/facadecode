@@ -106,6 +106,7 @@ impl Window {
 
     fn info(&self) -> WindowInfo {
         WindowInfo {
+            machine_id: String::new(),
             window_id: self.description.id.clone(),
             label: self.description.label.clone(),
             environment: self.description.environment.clone(),
@@ -331,6 +332,7 @@ impl Windows {
     /// Says window `from` is gone, once its agents moved to the window that took them over.
     pub(crate) fn taken_over(&self, from: &str) {
         self.shared.publish(WindowsChange::Removed {
+            machine_id: String::new(),
             window_id: from.to_string(),
         });
     }
@@ -382,6 +384,7 @@ impl Windows {
             warn(&format!("{err:#}"));
         }
         self.shared.publish(WindowsChange::Removed {
+            machine_id: String::new(),
             window_id: id.to_string(),
         });
     }

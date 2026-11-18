@@ -28,6 +28,8 @@ impl Service for Hellos {
         let result = HelloResult {
             protocol: 1,
             build: "test".into(),
+            machine_id: String::new(),
+            window: None,
             pid: std::process::id(),
             agent: None,
             agents: 0,

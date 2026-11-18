@@ -300,10 +300,24 @@ pub enum LocationKind {
     Unknown,
 }
 
+/// A logical window on a Facade machine.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub struct WindowRef {
+    /// The Facade machine's ID, a lowercase UUID version 4.
+    pub machine_id: String,
+    /// The logical window's ID, or `terminal` for that machine's terminal window.
+    pub window_id: String,
+}
+
 /// A window: an editor window, or the terminal window, `terminal`, which holds the agents started
 /// from a terminal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WindowInfo {
+    /// The ID of the Facade machine that owns the window.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub machine_id: String,
     /// The window's ID: an editor window's own, or `terminal`.
     pub window_id: String,
     /// The window's name.
@@ -380,7 +394,11 @@ pub enum WindowsChange {
     Updated { window: Box<WindowInfo> },
     /// The window is gone: its last connection closed and it holds no agents, or a window of its
     /// workspace took its agents.
-    Removed { window_id: String },
+    Removed {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        machine_id: String,
+        window_id: String,
+    },
     /// A change this build does not recognize. Skip it.
     #[serde(other)]
     #[schemars(skip)]
@@ -425,6 +443,12 @@ pub struct HelloResult {
     pub protocol: u32,
     /// The daemon's build.
     pub build: String,
+    /// The daemon's Facade machine ID.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub machine_id: String,
+    /// For an `ide` client, the logical window bound to this connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowRef>,
     /// The daemon's process ID.
     pub pid: u32,
     /// The agent this client acts for, as `agent` and `sessions` decided. Omitted where it acts for
@@ -563,12 +587,21 @@ pub struct AgentInfo {
     pub cli: String,
     /// The CLI's working folder at startup.
     pub cwd: String,
+    /// The ID of the Facade machine that runs the agent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub machine_id: String,
+    /// The agent's member windows, unique and sorted by machine ID and window ID.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<WindowRef>,
     /// The window the agent is in: the editor window it was started in, or `terminal` for an agent
     /// started from a terminal.
     pub window_id: String,
     /// The ID of its location, as its window lists it: the location `cwd` is, or the innermost one
     /// `cwd` is inside.
     pub location_id: String,
+    /// The window that provided the agent's running location, where a window supplied it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_source_window: Option<WindowRef>,
     /// The CLI's process ID. Omitted for a guest, whose process Facade does not know.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
@@ -585,9 +618,15 @@ pub struct AgentInfo {
     /// The agent whose client started it. Omitted where the person started it, and for a guest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creator: Option<String>,
+    /// The creator's machine ID. Omitted when it is the record's own machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_machine_id: Option<String>,
     /// The first agent of its creation tree: itself where it has no creator, or else its creator's
     /// root. It stays when agents of the tree end or go.
     pub root: String,
+    /// The root agent's machine ID. Omitted when it is the record's own machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_machine_id: Option<String>,
     /// Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With
     /// YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation
     /// tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a
@@ -931,6 +970,12 @@ pub struct StartArgs {
     /// where any folder will do. Omitted, `terminal`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_id: Option<String>,
+    /// The one initial member window, when supplied. Omitted to use the caller's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowRef>,
+    /// The connected local window that supplies the running location for `cwd`, if selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_source_window: Option<WindowRef>,
     /// The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`,
     /// and `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor,
     /// and CLI session variables, but keeps `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`, which tell
@@ -1169,6 +1214,28 @@ pub struct SendResult {
     /// so it can be sent again. Omitted otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub withdrawn: bool,
+    /// Which windows' subscriptions took the message for `#human`. Omitted for messages to
+    /// agents and for a `pending` result whose daemon ended before saving the window outcomes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<WindowDelivery>,
+}
+
+/// The member windows' outcomes for one message to the person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WindowDelivery {
+    /// Windows whose `messages` subscriptions took the notification.
+    pub delivered: Vec<WindowRef>,
+    /// Windows whose subscriptions did not take the notification.
+    pub not_delivered: Vec<WindowDeliveryFailure>,
+}
+
+/// Why a member window did not take a notification.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WindowDeliveryFailure {
+    pub window: WindowRef,
+    /// `window_disconnected` if the window has no connection, or `not_watching` if no current
+    /// subscription took the notification.
+    pub reason: String,
 }
 
 /// The sender of Facade's own results.
@@ -2158,6 +2225,19 @@ impl Operation for AgentResume {
     type Result = AgentInfo;
 }
 
+/// Adds the caller's editor window to an agent's members.
+pub struct AgentAdopt;
+impl Operation for AgentAdopt {
+    const NAME: &'static str = "agent.adopt";
+    const DOC: &'static str = "In daemon protocol 2, adds a bound `ide` client's logical window \
+                               to the agent's members and returns the record. Works for running and \
+                               ended agents. An existing member is returned unchanged. Refuses \
+                               a guest or a client without a bound editor window, and returns \
+                               `not_found` for a missing record.";
+    type Args = AgentArgs;
+    type Result = AgentInfo;
+}
+
 pub struct HookSessionStart;
 impl Operation for HookSessionStart {
     const NAME: &'static str = "hook.session-start";
@@ -2329,6 +2409,7 @@ impl Operation for WorktreeCreate {
 pub fn visit_operations(visitor: &mut impl OperationVisitor) {
     visitor.operation::<AgentStart>();
     visitor.operation::<AgentResume>();
+    visitor.operation::<AgentAdopt>();
     visitor.operation::<AgentStop>();
     visitor.operation::<AgentRemove>();
     visitor.operation::<AgentInspect>();
@@ -2421,7 +2502,12 @@ pub fn visit_topics(visitor: &mut impl TopicVisitor) {
 }
 
 pub fn operation_names() -> Vec<String> {
-    super::operations::collect_names(visit_operations)
+    let mut names = super::operations::collect_names(visit_operations);
+    // Protocol 1 advertises the operations that its daemon can serve.
+    if DAEMON_PROTOCOL_VERSION == 1 {
+        names.retain(|name| name != AgentAdopt::NAME);
+    }
+    names
 }
 
 pub fn topic_names() -> Vec<String> {
@@ -2804,6 +2890,8 @@ mod tests {
             name: None,
             cwd: "/".into(),
             window_id: None,
+            window: None,
+            location_source_window: None,
             env: BTreeMap::new(),
             cols: 80,
             rows: 24,

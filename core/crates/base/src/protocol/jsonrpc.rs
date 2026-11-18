@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::daemon::{Kept, TextWritten};
+use super::daemon::{Kept, TextWritten, WindowDeliveryFailure};
 
 pub use crate::line::MAX_LINE_BYTES;
 
@@ -143,7 +143,7 @@ pub struct ErrorBody {
     /// A plain-language explanation of the error.
     pub message: String,
     /// Structured error details.
-    pub data: ErrorData,
+    pub data: Box<ErrorData>,
 }
 
 /// Error details for clients to inspect.
@@ -169,6 +169,10 @@ pub struct ErrorData {
     /// take - the entry's name, such as `claude`. A client offers to open the settings file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
+    /// With `unavailable` when no member window took a message to `#human`: each window and why
+    /// it could not take the message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<Vec<WindowDeliveryFailure>>,
 }
 
 /// Error reasons shared by both protocols.
@@ -224,14 +228,15 @@ pub enum Reason {
 impl ErrorBody {
     /// Creates an operation error with the JSON-RPC code for its reason.
     pub fn new(reason: Reason, message: impl Into<String>) -> Self {
-        let data = ErrorData {
+        let data = Box::new(ErrorData {
             reason,
             text_written: None,
             enter_written: None,
             keys_sent: None,
             kept: None,
             entry: None,
-        };
+            windows: None,
+        });
         let code = if reason == Reason::InvalidArgument {
             INVALID_PARAMS
         } else {
