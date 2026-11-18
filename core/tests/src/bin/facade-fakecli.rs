@@ -16,14 +16,18 @@
 //! Sessions: `--resume <id>` selects session `<id>`, as `FAKECLI_SESSION=<id>` does for a new
 //! start. `FAKECLI_SESSION_HOOK` is the shell command of its session-start hook, which it runs with
 //! the selected session at start and for each message `/session <id>` (`/session none` selects
-//! none), waiting for each hook to end before going on, as a CLI runs its hooks. The screen shows
-//! `session <id>` for each. `FAKECLI_FIRST_HOOK_DELAY_MS` delays the first hook's command by that
-//! many milliseconds. With `FAKECLI_TRANSCRIPTS`, a folder, the hook names `<folder>/<id>.jsonl` as
+//! none), waiting for each hook to end before going on, as a CLI runs its hooks. On Windows it runs
+//! the hook as Muse Code does (`stand_in_shell`). The screen shows `session <id>` for each.
+//! `FAKECLI_FIRST_HOOK_DELAY_MS` delays the first hook's command by that many milliseconds. With `FAKECLI_TRANSCRIPTS`, a folder, the hook names `<folder>/<id>.jsonl` as
 //! the file the session is saved in, which it writes once the session takes its first message, as a
 //! CLI saves a session.
 //! On Windows, a copy named `codex.exe` reads its SessionStart hooks from `-c hooks=...`, checks
 //! their layer keys and trusted hashes, and runs trusted hooks through PowerShell, as Codex does
-//! with its default session shell.
+//! with its default session shell. A copy named `muse.exe` reads its SessionStart hooks from
+//! Muse Code's `-c hooks=...` and runs them with the session in `MUSE_SESSION_ID`, and one named
+//! `agy.exe` runs the title command of its `--settings` with the conversation, as Antigravity's
+//! status line does; both run each command as Muse Code 1.4.14 and Antigravity 1.5.10 do, as one
+//! argument of `cmd.exe /C` quoted the standard way (`stand_in_shell`).
 //!
 //! Status: `FAKECLI_STATUS=1` makes it report what it is doing over OSC 7501, as a CLI does. It
 //! first asks whether its terminal takes reports and shows `status reports taken` once answered,
@@ -82,7 +86,7 @@ enum InputSegment {
 struct SessionHook {
     commands: Vec<String>,
     #[cfg(windows)]
-    codex: bool,
+    stand_in: StandIn,
     /// The delay before the first hook's command, which then becomes zero.
     first_delay: Duration,
     /// The folder the sessions are saved in, where the hook names their files.
@@ -100,6 +104,13 @@ impl SessionHook {
         let mut input = serde_json::json!({
             "hook_event_name": "SessionStart", "session_id": id, "source": source,
         });
+        // Antigravity's title command is given the conversation shown, empty before there is one.
+        #[cfg(windows)]
+        if self.stand_in == StandIn::Agy {
+            input = serde_json::json!({
+                "product": "antigravity", "conversation_id": id.unwrap_or(""), "agent_state": "idle",
+            });
+        }
         if let Some(transcript) = id.and_then(|id| self.transcript(id)) {
             input["transcript_path"] = serde_json::json!(transcript);
         }
@@ -118,12 +129,20 @@ impl SessionHook {
             #[cfg(unix)]
             let mut shell = shell_command(&command);
             #[cfg(windows)]
-            let mut shell = if self.codex {
-                let mut shell = std::process::Command::new(facade_scenarios::powershell());
-                shell.args(["-NoProfile", "-Command", command]);
-                shell
-            } else {
-                shell_command(command)
+            let mut shell = match self.stand_in {
+                StandIn::Codex => {
+                    let mut shell = std::process::Command::new(facade_scenarios::powershell());
+                    shell.args(["-NoProfile", "-Command", command]);
+                    shell
+                }
+                StandIn::Muse => {
+                    let mut shell = stand_in_shell(command);
+                    if let Some(id) = id {
+                        shell.env("MUSE_SESSION_ID", id);
+                    }
+                    shell
+                }
+                StandIn::Agy | StandIn::None => stand_in_shell(command),
             };
             let child = shell
                 .stdin(std::process::Stdio::piped())
@@ -694,7 +713,8 @@ fn encode_log_entry(at: u128, text: &str) -> String {
     serde_json::json!({ "at": at as u64, "text": text }).to_string()
 }
 
-/// Runs `command` with the shell a CLI runs its hooks with: `/bin/sh`, or on Windows cmd.exe.
+/// Runs `command` with the shell a CLI runs its hooks with: `/bin/sh`, or on Windows cmd.exe,
+/// given the command as written, as Antigravity 1.5.10 runs the hooks of a `hooks.json`.
 fn shell_command(command: &str) -> std::process::Command {
     #[cfg(unix)]
     {
@@ -712,6 +732,86 @@ fn shell_command(command: &str) -> std::process::Command {
             .raw_arg(format!("\"{command}\""));
         shell
     }
+}
+
+/// The CLI a copy of the test CLI stands for on Windows, by its name.
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StandIn {
+    None,
+    Codex,
+    Muse,
+    Agy,
+}
+
+#[cfg(windows)]
+impl StandIn {
+    fn of(program: &std::path::Path) -> StandIn {
+        let name = program
+            .file_stem()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase());
+        match name.as_deref() {
+            Some("codex") => StandIn::Codex,
+            Some("muse") => StandIn::Muse,
+            Some("agy") => StandIn::Agy,
+            _ => StandIn::None,
+        }
+    }
+
+    /// The session-start commands the CLI it stands for finds in `arguments`.
+    fn session_hooks(self, arguments: &[String]) -> Option<Vec<String>> {
+        match self {
+            StandIn::Codex => codex_session_hooks(arguments),
+            StandIn::Muse => muse_session_hooks(arguments),
+            StandIn::Agy => agy_title_command(arguments),
+            StandIn::None => None,
+        }
+    }
+}
+
+/// Runs `command` as Muse Code 1.4.14 runs a hook and Antigravity 1.5.10 its title command on
+/// Windows: `%COMSPEC% /C` with the command as one argument, quoted the standard way, so that each
+/// `"` in it reaches cmd.exe as `\"`.
+#[cfg(windows)]
+fn stand_in_shell(command: &str) -> std::process::Command {
+    let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+    let mut shell = std::process::Command::new(shell);
+    shell.args(["/C", command]);
+    shell
+}
+
+/// The SessionStart commands of Muse Code's `-c hooks=<JSON>`, each group's in order.
+#[cfg(windows)]
+fn muse_session_hooks(arguments: &[String]) -> Option<Vec<String>> {
+    let hooks = arguments.windows(2).find_map(|pair| {
+        (pair[0] == "-c")
+            .then(|| pair[1].strip_prefix("hooks="))
+            .flatten()
+    })?;
+    let hooks: serde_json::Value = serde_json::from_str(hooks).ok()?;
+    let commands = hooks["SessionStart"]
+        .as_array()?
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+        .filter(|hook| hook["type"] == "command")
+        .filter_map(|hook| hook["command"].as_str().map(str::to_string))
+        .collect();
+    Some(commands)
+}
+
+/// The title command of Antigravity's `--settings <file>`, where it is on.
+#[cfg(windows)]
+fn agy_title_command(arguments: &[String]) -> Option<Vec<String>> {
+    let file = arguments
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--settings").then(|| &pair[1]))?;
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    let title = &settings["title"];
+    if title["type"] != "command" || title["enabled"] == false {
+        return None;
+    }
+    Some(vec![title["command"].as_str()?.to_string()])
 }
 
 /// The trusted SessionStart commands in the hooks override Facade gives its Codex stand-in.
@@ -924,18 +1024,16 @@ fn run() -> anyhow::Result<()> {
         .map(|word| word.to_string_lossy().into_owned())
         .collect();
     #[cfg(windows)]
-    let codex = std::env::current_exe()?
-        .file_stem()
-        .is_some_and(|name| name.eq_ignore_ascii_case("codex"));
+    let stand_in = StandIn::of(&std::env::current_exe()?);
     let commands = std::env::var("FAKECLI_SESSION_HOOK")
         .ok()
         .map(|command| vec![command]);
     #[cfg(windows)]
-    let commands = commands.or_else(|| codex.then(|| codex_session_hooks(&arguments)).flatten());
+    let commands = commands.or_else(|| stand_in.session_hooks(&arguments));
     let hook = commands.map(|commands| SessionHook {
         commands,
         #[cfg(windows)]
-        codex,
+        stand_in,
         first_delay: Duration::from_millis(
             std::env::var("FAKECLI_FIRST_HOOK_DELAY_MS")
                 .ok()
@@ -1012,7 +1110,7 @@ fn run() -> anyhow::Result<()> {
         .cloned();
     #[cfg(windows)]
     let resumed = resumed.or_else(|| {
-        codex
+        (stand_in == StandIn::Codex)
             .then(|| {
                 arguments
                     .windows(2)

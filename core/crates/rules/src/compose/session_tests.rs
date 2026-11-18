@@ -14,9 +14,6 @@ const OPENCODE_CLI_CONFIG: &str = "OPENCODE_CLI_CONFIG_CONTENT";
 
 const HOOK: &str = "'/opt/facade' hook session-start '/home/.facade/core/runs/a3/1f/session'";
 
-/// [`HOOK`] as cmd.exe runs it, for Windows CLIs other than Claude Code and Codex.
-const CMD_HOOK: &str = r#"@"/opt/facade" hook session-start /home/.facade/core/runs/a3/1f/session"#;
-
 /// `unix` on Unix, `windows` on Windows.
 fn by_system(unix: &str, windows: &str) -> String {
     match SYSTEM {
@@ -28,12 +25,12 @@ fn by_system(unix: &str, windows: &str) -> String {
 
 /// The session-start hook of `cli`'s runs in these tests, for the shell `cli` runs it with.
 fn hook(cli: &str) -> String {
-    match cli {
-        "claude" => HOOK.to_string(),
-        "codex" if SYSTEM == System::Windows => crate::formats::encoded_powershell(
+    if SYSTEM == System::Windows && cli != "claude" {
+        crate::formats::encoded_powershell(
             "& '/opt/facade' 'hook' 'session-start' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
-        ),
-        _ => by_system(HOOK, CMD_HOOK),
+        )
+    } else {
+        HOOK.to_string()
     }
 }
 
@@ -132,7 +129,9 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
     );
     let title = by_system(
         "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/session'",
-        r#"@"/opt/facade" hook title /home/.facade/core/runs/a3/1f/session"#,
+        &crate::formats::encoded_powershell(
+            "& '/opt/facade' 'hook' 'title' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
+        ),
     );
     let settings = json!({ "title": { "type": "command", "enabled": true, "command": title } });
     assert_eq!(self::settings(&agy), settings);
@@ -867,7 +866,7 @@ fn a_hook_command_s_text_stays_one_word_and_one_toml_string() {
         file: Path::new("/s"),
         cwd: Path::new("/"),
     };
-    // A path on Windows holds no quote, and cmd.exe takes no such word: this is the POSIX shell's.
+    // This path exercises quoting for POSIX hooks.
     if SYSTEM == System::Windows {
         return;
     }

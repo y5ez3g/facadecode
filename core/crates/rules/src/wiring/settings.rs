@@ -11,7 +11,8 @@ use super::config_files::{agy_settings_file, muse_settings_file};
 use super::integration::is_facade_group;
 use super::{MergedSettings, Wiring};
 use crate::args::{ArgsGrammar, Found};
-use crate::formats::{Shell, merge_settings, parse_jsonc};
+use crate::formats::{HookArg, facade_hook, merge_settings, parse_jsonc};
+use facade_base::system::{SYSTEM, System};
 
 /// The values of the options `found` gives, all of them, or None where one has no value.
 pub(super) fn values(found: &[Found]) -> Option<Vec<&str>> {
@@ -107,7 +108,7 @@ pub(super) fn agy_settings(
         };
         overlay.insert(key.clone(), merged);
     }
-    if let Some(hook) = wiring.title.as_deref() {
+    if let Some((program, session_file)) = &wiring.title {
         let mut title = saved_object("title");
         if let Some(Value::Object(given)) = overlay.remove("title") {
             title.extend(given);
@@ -117,12 +118,17 @@ pub(super) fn agy_settings(
             .get("command")
             .and_then(Value::as_str)
             .filter(|_| enabled);
-        let command = match theirs {
-            // A title command its shell cannot carry is left to Antigravity, as settings that
-            // cannot be read are: Facade adds nothing, and the run reports no session this way.
-            Some(theirs) => format!("{hook} {}", Shell::of("agy").word(theirs)?),
-            None => hook.to_string(),
-        };
+        // A title command cmd.exe cannot carry stays with Antigravity. As with settings Facade
+        // cannot read, Facade adds nothing to the run's settings and gets no session this way.
+        if SYSTEM == System::Windows
+            && theirs.is_some_and(|command| command.contains(['"', '\r', '\n']))
+        {
+            return None;
+        }
+        let session_file = session_file.to_string_lossy();
+        let mut args = vec![HookArg::Literal(&session_file)];
+        args.extend(theirs.map(HookArg::Literal));
+        let command = facade_hook("agy", program, "title", &args, []);
         title.insert("type".into(), json!("command"));
         title.insert("enabled".into(), json!(true));
         title.insert("command".into(), json!(command));

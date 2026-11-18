@@ -724,11 +724,15 @@ fn a_muse_code_run_gets_its_server_by_c_unless_its_project_names_one() {
         "{server}"
     );
     let hook = given(&ada, "hooks").unwrap();
+    // On Windows the command is encoded PowerShell, its script `& '…' 'hook' 'instructions' 'muse'`.
+    let command = hook["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    #[cfg(windows)]
+    let command = powershell_script(command).unwrap_or_default();
     assert!(
-        hook["SessionStart"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .ends_with("hook instructions muse"),
+        command.ends_with("hook instructions muse")
+            || command.ends_with("'hook' 'instructions' 'muse'; exit $LASTEXITCODE"),
         "{hook}"
     );
     assert_eq!(
@@ -747,11 +751,13 @@ fn a_muse_code_run_gets_its_server_by_c_unless_its_project_names_one() {
         ["SessionStart"],
         "{hooks}"
     );
+    let command = hooks["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    #[cfg(windows)]
+    let command = powershell_script(command).unwrap_or_default();
     assert!(
-        hooks["SessionStart"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains(" hook session-start "),
+        command.contains(" hook session-start ") || command.contains(" 'hook' 'session-start' "),
         "{hooks}"
     );
     let row = home.agent_from_list_json("bob").unwrap();

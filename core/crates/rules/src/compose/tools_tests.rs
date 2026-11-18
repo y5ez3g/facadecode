@@ -6,6 +6,8 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::formats::{encoded_powershell, encoded_powershell_words, shell_words};
+use facade_base::system::{SYSTEM, System};
 
 /// The session-start hook of the runs of these tests.
 const HOOK: &str = "'/opt/facade' hook session-start '/home/.facade/core/runs/a3/1f/session'";
@@ -15,26 +17,21 @@ const TITLE: &str = "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/ses
 
 /// `unix` on Unix, `windows` on Windows.
 fn by_system(unix: &str, windows: &str) -> String {
-    match facade_base::system::SYSTEM {
-        facade_base::system::System::Unix => unix,
-        facade_base::system::System::Windows => windows,
+    match SYSTEM {
+        System::Unix => unix,
+        System::Windows => windows,
     }
     .to_string()
 }
 
 /// [`HOOK`] for the shell `cli` runs it with.
 fn hook_of(cli: &str) -> String {
-    match cli {
-        "claude" => HOOK.to_string(),
-        "codex" if facade_base::system::SYSTEM == facade_base::system::System::Windows => {
-            crate::formats::encoded_powershell(
-                "& '/opt/facade' 'hook' 'session-start' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
-            )
-        }
-        _ => by_system(
-            HOOK,
-            r#"@"/opt/facade" hook session-start /home/.facade/core/runs/a3/1f/session"#,
-        ),
+    if SYSTEM == System::Windows && cli != "claude" {
+        encoded_powershell(
+            "& '/opt/facade' 'hook' 'session-start' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
+        )
+    } else {
+        HOOK.to_string()
     }
 }
 
@@ -42,7 +39,9 @@ fn hook_of(cli: &str) -> String {
 fn title_hook() -> String {
     by_system(
         TITLE,
-        r#"@"/opt/facade" hook title /home/.facade/core/runs/a3/1f/session"#,
+        &encoded_powershell(
+            "& '/opt/facade' 'hook' 'title' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
+        ),
     )
 }
 
@@ -466,8 +465,8 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
         let command = table["hooks"]["SessionStart"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
-        crate::formats::encoded_powershell_words(command)
-            .or_else(|| crate::formats::Shell::words(command))
+        encoded_powershell_words(command)
+            .or_else(|| shell_words(command))
             .unwrap()
     };
     let codex = launch("codex", &["fix it"], &[]);
@@ -658,11 +657,13 @@ fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_
     // Muse Code passes its hooks none of the run's variables: the instructions hook names them.
     let ours = hook(&by_system(
         "FACADE_AGENT='a3' FACADE_HOME='/home/.facade' '/opt/facade' hook instructions muse",
-        r#"set "FACADE_AGENT=a3" && set "FACADE_HOME=/home/.facade" && @"/opt/facade" hook instructions muse"#,
+        &encoded_powershell(
+            "$env:FACADE_AGENT='a3'; $env:FACADE_HOME='/home/.facade'; & '/opt/facade' 'hook' 'instructions' 'muse'; exit $LASTEXITCODE",
+        ),
     ));
     let approves = hook(&by_system(
         "'/opt/facade' hook approve muse",
-        r#"@"/opt/facade" hook approve muse"#,
+        &encoded_powershell("& '/opt/facade' 'hook' 'approve' 'muse'; exit $LASTEXITCODE"),
     ));
     let session =
         json!({ "hooks": [{ "type": "command", "command": hook_of("muse"), "timeout": 5 }] });
@@ -803,18 +804,10 @@ fn muse_code_s_run_is_served_by_facade_s_guest_entry_where_the_settings_hold_it(
         run.command
     );
     let hooks = config(&run, "hooks");
-    let commands: Vec<&str> = hooks
-        .as_object()
-        .unwrap()
-        .values()
-        .flat_map(|groups| groups.as_array().unwrap())
-        .map(|group| group["hooks"][0]["command"].as_str().unwrap())
-        .collect();
-    assert!(
-        commands
-            .iter()
-            .all(|command| !command.contains("--cli muse")),
-        "{commands:?}"
+    assert_eq!(
+        hooks["SessionStart"].as_array().unwrap().len(),
+        2,
+        "the run's instructions and session report: {hooks}"
     );
     assert_eq!(
         hooks["PermissionRequest"].as_array().unwrap().len(),
@@ -856,21 +849,28 @@ fn muse_code_is_not_given_the_tools_beside_a_facade_server_of_its_own_or_a_proje
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(repository.join(".git")).unwrap();
     let environment = [("HOME", home.to_str().unwrap())];
-    let refused = |expected: &str| match launch_in(&cwd, "muse", &[], &environment) {
-        CommandLine {
-            tools: Tools::NotGiven(why),
-            command,
-            ..
-        } => {
-            assert!(why.contains(expected), "{why}");
-            let tools = |word: &String| {
-                word.contains("mcpServers")
-                    || word.contains("hook instructions")
-                    || word.contains("hook approve")
-            };
-            assert!(!command.iter().any(tools), "{command:?}");
+    let refused = |expected: &str| {
+        let launch = launch_in(&cwd, "muse", &[], &environment);
+        match &launch.tools {
+            Tools::NotGiven(why) => {
+                assert!(why.contains(expected), "{why}");
+                assert!(
+                    !launch
+                        .command
+                        .iter()
+                        .any(|word| word.contains("mcpServers"))
+                );
+                assert_eq!(
+                    config(&launch, "hooks"),
+                    json!({
+                        "SessionStart": [{ "hooks": [{
+                            "type": "command", "command": hook_of("muse"), "timeout": 5
+                        }] }]
+                    })
+                );
+            }
+            other => panic!("given the tools beside {expected}: {other:?}"),
         }
-        other => panic!("given the tools beside {expected}: {other:?}"),
     };
     let server = r#"{ "mcpServers": { "facade": { "command": "facade-mcp" } } }"#;
     write(
@@ -1372,10 +1372,11 @@ fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_p
         file.clone(),
         r#"{ "title": { "type": "command", "command": "echo mine", "refresh": 5 } }"#,
     );
-    let theirs = format!(
-        "{} {}",
-        title_hook(),
-        by_system("'echo mine'", "\"echo mine\"")
+    let theirs = by_system(
+        &format!("{TITLE} 'echo mine'"),
+        &encoded_powershell(
+            "& '/opt/facade' 'hook' 'title' '/home/.facade/core/runs/a3/1f/session' 'echo mine'; exit $LASTEXITCODE",
+        ),
     );
     assert_eq!(
         title(&launch("agy", &[], &environment)),
@@ -1388,10 +1389,11 @@ fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_p
     );
     assert_eq!(
         title(&passed)["command"],
-        format!(
-            "{} {}",
-            title_hook(),
-            by_system("'echo passed'", "\"echo passed\"")
+        by_system(
+            &format!("{TITLE} 'echo passed'"),
+            &encoded_powershell(
+                "& '/opt/facade' 'hook' 'title' '/home/.facade/core/runs/a3/1f/session' 'echo passed'; exit $LASTEXITCODE",
+            ),
         ),
         "theirs for the session goes first"
     );

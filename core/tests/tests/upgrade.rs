@@ -1778,28 +1778,43 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         let id = run(&name)["agent_id"].as_str().unwrap().to_string();
         // The variables its CLI gives it: Antigravity's hooks get the run's agent, and Muse Code's
         // run its own session's.
-        // Each CLI runs its hooks with its own shell: Codex's Windows session uses PowerShell.
+        // Each CLI runs its hooks with its own shell. On Windows Codex's session uses PowerShell;
+        // Antigravity gives its plugin's hooks to cmd.exe as written; Muse Code's hooks and
+        // Antigravity's title command go to `%COMSPEC% /C` as one argument, quoted the standard way.
         #[cfg(windows)]
-        let codex_shell = (cli == "codex").then(|| {
-            let mut shell = home.command(powershell());
-            shell.args(["-NoProfile", "-Command", &hook]);
+        let mut command = {
+            let script = powershell_script(&hook).unwrap_or_default();
+            let title = hook.contains(" hook title ") || script.contains("'hook' 'title' ");
+            let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+            let powershell = powershell();
+            let (program, words, raw): (&std::ffi::OsStr, Vec<&str>, Option<String>) =
+                match cli.as_str() {
+                    "claude" => (SH.as_str().as_ref(), vec!["-c", &hook], None),
+                    "codex" => (
+                        powershell.as_os_str(),
+                        vec!["-NoProfile", "-Command", &hook],
+                        None,
+                    ),
+                    "agy" if !title => (
+                        &comspec,
+                        vec!["/d", "/s", "/c"],
+                        Some(format!("\"{hook}\"")),
+                    ),
+                    _ => (&comspec, vec!["/C", &hook], None),
+                };
+            let mut shell = home.command(program);
+            shell.args(words);
+            if let Some(raw) = raw {
+                std::os::windows::process::CommandExt::raw_arg(&mut shell, raw);
+            }
             shell
-        });
-        let command = if cfg!(windows) && cli != "claude" {
-            let mut cmd = home.command("cmd.exe");
-            cmd.args(["/d", "/s", "/c"]);
-            #[cfg(windows)]
-            std::os::windows::process::CommandExt::raw_arg(&mut cmd, format!("\"{hook}\""));
-            cmd
-        } else {
+        };
+        #[cfg(unix)]
+        let mut command = {
             let mut sh = home.command(SH.as_str());
             sh.args(["-c", &hook]);
             sh
         };
-        #[cfg(windows)]
-        let mut command = codex_shell.unwrap_or(command);
-        #[cfg(unix)]
-        let mut command = command;
         command
             .env("FACADE_AGENT", &id)
             .env("MUSE_SESSION_ID", SESSION);

@@ -13,8 +13,8 @@ use super::servers::{
     Entry, SERVER, claude_entry, codex_entry, is_muse_guest_entry, opencode_allow, opencode_entry,
     pi_entry,
 };
-use super::{INSTRUCTIONS_FILE, OPENCODE_CONFIG, SKILL_FILE, Server, Wiring};
-use crate::formats::{Shell, parse_jsonc};
+use super::{INSTRUCTIONS_FILE, OPENCODE_CONFIG, SKILL_FILE, Server, SessionSkill, Wiring};
+use crate::formats::{HookArg, facade_hook, parse_jsonc};
 use facade_base::system::env_var;
 
 /// The variable that gives the test CLI the server, which it runs itself.
@@ -90,7 +90,7 @@ pub(super) fn codex(server: &Server) -> Result<Wiring, String> {
             .flat_map(|value| ["-c".to_string(), value])
             .collect(),
         files: vec![skill_file()],
-        session_skill: true,
+        session_skill: SessionSkill::Include,
         ..Wiring::default()
     })
 }
@@ -178,11 +178,6 @@ export default function (pi) {{
     }
 }
 
-/// `facade hook <hook> <cli>`, `facade` this program.
-pub(super) fn facade_hook(facade: &str, hook: &str, cli: &str) -> String {
-    format!("{} hook {hook} {cli}", Shell::of(cli).program(facade))
-}
-
 /// Muse Code: `-c mcpServers.facade=<entry>` for the run alone, and two hooks: `SessionStart`,
 /// which gives the model the instructions, as Muse Code shows it no server's instructions, and
 /// `PermissionRequest`, which approves Facade's own tools, as Muse Code has no rule for one
@@ -214,15 +209,30 @@ pub(super) fn muse(
             json!({ "command": server.program, "args": [], "env": references, "mode": "optional" });
         args = vec!["-c".into(), format!("mcpServers.{SERVER}={entry}")];
     }
-    let instructions = facade_hook(server.facade, "instructions", "muse");
-    let instructions = Shell::of("muse").with_variables(server.env, &instructions);
+    let variables = server
+        .env
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()));
+    let instructions = facade_hook(
+        "muse",
+        server.facade,
+        "instructions",
+        &[HookArg::Word("muse")],
+        variables,
+    );
     Ok(Wiring {
         args,
         hooks: vec![
             ("SessionStart".into(), instructions),
             (
                 "PermissionRequest".into(),
-                facade_hook(server.facade, "approve", "muse"),
+                facade_hook(
+                    "muse",
+                    server.facade,
+                    "approve",
+                    &[HookArg::Word("muse")],
+                    [],
+                ),
             ),
         ],
         files: vec![

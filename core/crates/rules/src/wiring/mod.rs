@@ -21,7 +21,7 @@ mod session_report;
 mod settings;
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -70,6 +70,14 @@ pub enum Tools {
     NotGiven(String),
 }
 
+/// Whether the session-start hook also gives the model Facade's skill.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SessionSkill {
+    #[default]
+    Omit,
+    Include,
+}
+
 /// What giving a run's CLI the tools adds to its command line.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Wiring {
@@ -88,12 +96,11 @@ pub(crate) struct Wiring {
     /// The files of the plugin the CLI reads in [`PLUGIN_FOLDER`] of the folder it starts in,
     /// shared by the runs there: each name and its text. Antigravity's.
     pub(crate) plugin: Vec<(String, String)>,
-    /// The title command Antigravity's `--settings` names to report the run's session, before the
-    /// person's own title command.
-    pub(crate) title: Option<String>,
+    /// The Facade program and session file for Antigravity's title command.
+    pub(crate) title: Option<(String, PathBuf)>,
     /// The session-start hook that reports the run's session also gives the model the skill, as
     /// Codex has no place of the run's own for one.
-    pub(crate) session_skill: bool,
+    session_skill: SessionSkill,
 }
 
 /// The arguments that carry the run's additions to the CLI's settings, merged with the person's
@@ -136,10 +143,11 @@ pub(crate) fn wire(
 /// [`merged_settings`] then says whether those settings could be merged.
 pub(crate) fn report_session(cli: &str, wiring: &mut Wiring, session: &SessionReport) -> bool {
     match cli {
-        "muse" => wiring
-            .hooks
-            .push(("SessionStart".into(), session.hook("muse"))),
-        "agy" => wiring.title = Some(session.title()),
+        "muse" => wiring.hooks.push((
+            "SessionStart".into(),
+            session.hook("muse", SessionSkill::Omit),
+        )),
+        "agy" => wiring.title = Some((session.facade.into(), session.file.into())),
         _ => return false,
     }
     true

@@ -6,10 +6,8 @@
 use std::collections::BTreeMap;
 
 use facade_base::daemon::is_session_id;
-use facade_base::system::env_var;
+use facade_base::system::{SYSTEM, System, env_var};
 use serde_json::{Value, json};
-
-use crate::formats::Shell;
 
 /// The variable Claude Code sets, not empty, for a background job of a session. The job runs its
 /// session's hooks, but its turns are not the session's: a hook that sees it does nothing.
@@ -179,7 +177,16 @@ pub fn is_run_own_session(env: &BTreeMap<String, String>, session: &str) -> bool
 /// The program and arguments that run the person's own title command `command`, with the shell
 /// of the CLI that runs title commands, Antigravity: `/bin/sh -c` on Unix, cmd.exe on Windows.
 pub fn title_command(command: &str) -> Vec<String> {
-    Shell::of("agy").command(command)
+    let shell: &[&str] = match SYSTEM {
+        System::Unix => &["/bin/sh", "-c"],
+        System::Windows => &["cmd.exe", "/d", "/s", "/c"],
+    };
+    shell
+        .iter()
+        .copied()
+        .chain([command])
+        .map(String::from)
+        .collect()
 }
 
 /// The JSON of a session-start hook that gives the model `context`.

@@ -26,7 +26,7 @@ files in `core/rules/`. It is a library; it starts no program.
   function that takes `cli`.
 - Facade only recognizes and changes entries it wrote itself, in any CLI's files.
 - No `cfg` by system. What differs by system is data, chosen by `facade_base::system::SYSTEM` at
-  run time: each CLI's hook shell, `${folder_toml}`, console typing and the wrappers. On Unix,
+  run time: each CLI's hook form, `${folder_toml}`, console typing and the wrappers. On Unix,
   every command line, hook command, file and path is as it was before Windows.
 - Every read of a variable of a CLI's environment goes through `facade_base::system::env_var`
   (names without case on Windows), and the home folder the CLIs use is
@@ -96,16 +96,14 @@ command line together. The children never use each other. They may use the layer
   options and settings keys (Codex's config keys) Facade sets itself in an entry's `args`; `found`, `overrides`,
   `holds` and `end_of_options` serve command_line and wiring.
 - `formats.rs`: the CLIs' own text formats in one place: JSON with comments, shell words, TOML
-  strings and inline values, and merging Facade's settings into the person's. `Shell` is the shell
-  a CLI runs Facade's hook commands with: POSIX on Unix, and for Claude Code on Windows, whose
-  Git Bash takes `'C:\…'` words as they are; cmd.exe for the other Windows CLIs except Codex. A cmd.exe
-  command is `[set "NAME=value" && ]…@"<program>" <word> …`: it never starts with a quote, which
-  `cmd /c` without `/s` would take away with the last one. A text cmd.exe cannot carry in quotes,
-  one with `"` or a line break, never goes into one.
-  Codex's Windows hooks use encoded UTF-16LE PowerShell scripts, carried unchanged through its
-  session shell (normally PowerShell) or cmd.exe fallback. The scripts quote each argument as a
-  PowerShell literal, preserve the exit code, and put `--skill` inside the encoded session hook.
-  Integration recognizes these encoded hooks as well as the earlier shell forms for updates and removal.
+  strings and inline values, and merging Facade's settings into the person's. Facade writes POSIX
+  hook commands on Unix and for Claude Code on Windows, whose Git Bash takes `'C:\…'` words as
+  they are. On Windows, Antigravity passes its hooks from `hooks.json` verbatim to cmd.exe. Facade
+  writes them as `[set "NAME=value" && ]…@"<program>" <word> …`.
+  On Windows, Muse Code's hooks, Codex's hooks, the test CLI's session hook and Antigravity's title
+  command use encoded UTF-16LE PowerShell scripts. The outer command has no quotes and passes
+  through the CLI's shell intact. The scripts quote each argument as a literal and preserve
+  Facade's exit code. Codex's session hook carries `--skill` inside the script where it needs it.
 - `compose.rs`: `start_command_line` and `resume_command_line`. In order:
   1. wiring gives the tools (`wire`), and YOLO's run settings are merged into the wiring's;
   2. wiring has the CLI report its session, through its settings (`report_session`) or a hook,
@@ -296,10 +294,17 @@ the entries `facade integration add` writes into a CLI's user settings, and the 
   - Codex's session-start hook is trusted under its synthetic session-flags layer: `/<session-flags>/config.toml`
     on Unix and `C:\<session-flags>\config.toml` on Windows, with a literal `C:` regardless of the run's drive.
     Persistent integration hooks in `hooks.json` keep Codex's one-time review; Facade writes no trust keys for them.
-  - Each hook command is written for its CLI's shell (`Shell::of`, or encoded PowerShell for Codex on Windows).
-    Recognition accepts these forms with either `facade` or `facade.exe` as the program. Where Antigravity's own
-    title command cannot go through cmd.exe, it stays as it is and Facade adds no title hook. On Windows Claude Code keys a project in
-    `.claude.json` by its folder with forward slashes, and conflicts look it up so too.
+  - Each hook command is written in a form its CLI hands intact to the program that runs it
+    (`formats::facade_hook`). Facade recognizes the hook forms `facade integration` writes or wrote:
+    encoded PowerShell for Codex and Muse Code, and POSIX and cmd.exe for every CLI, with either
+    `facade` or `facade.exe` as the program.
+  - On Windows, the person's own Antigravity title command, when enabled, goes into Facade's
+    encoded title command as one literal argument. A command with a double quote, CR or LF
+    stays as it is. As with settings Facade cannot read, Facade adds nothing to the run's settings
+    and the run reports no session that way. `facade hook title` runs a merged title command with
+    Antigravity's title input through `/bin/sh -c` on Unix and `cmd.exe /d /s /c` on Windows.
+  - On Windows Claude Code keys a project in `.claude.json` by its folder with forward slashes,
+    and conflicts use the same spelling.
   - No entry names the daemon's socket. The server finds it from its Facade home; `FACADE_HOME` is written where the
     home is not the default.
 - **Never does:** write an entry Facade did not write, or run a CLI (`claude mcp add` is run by the daemon; this only

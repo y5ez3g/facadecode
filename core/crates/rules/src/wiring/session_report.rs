@@ -15,14 +15,12 @@ use sha2::{Digest, Sha256};
 
 use facade_base::system::{SYSTEM, System, env_var};
 
-use super::Wiring;
 use super::config_files::config_home;
 use super::settings::{spans, values, without};
+use super::{SessionSkill, Wiring};
 use crate::Rule;
 use crate::args::ArgsGrammar;
-use crate::formats::{
-    Shell, encoded_powershell, inline_toml, merge_settings, parse_jsonc, powershell_word,
-};
+use crate::formats::{HookArg, facade_hook, inline_toml, merge_settings, parse_jsonc};
 
 /// Where a run's CLI reports the session it selects: the run's session file, which `facade`, this
 /// program, writes for the CLI's hooks, and which a plugin or extension of the run's writes itself.
@@ -38,24 +36,16 @@ pub struct SessionReport<'a> {
 }
 
 impl SessionReport<'_> {
-    /// `facade hook <command> <session file>`, each word quoted for the shell `cli` runs its hooks
-    /// with. A path on Windows holds no `"`, so cmd.exe carries the file as it is.
-    fn facade_hook(&self, cli: &str, command: &str) -> String {
-        let shell = Shell::of(cli);
+    /// The command of a CLI's session-start hook. `SessionSkill::Include` adds `--skill` so
+    /// the hook also gives the model Facade's skill.
+    pub(super) fn hook(&self, cli: &str, skill: SessionSkill) -> String {
         let file = self.file.to_string_lossy();
-        let file = shell.word(&file).unwrap_or_else(|| format!("\"{file}\""));
-        format!("{} hook {command} {file}", shell.program(self.facade))
-    }
-
-    /// The shell command of a CLI's session-start hook.
-    pub(super) fn hook(&self, cli: &str) -> String {
-        self.facade_hook(cli, "session-start")
-    }
-
-    /// The shell command of Antigravity's title command, which writes the session from the title's
-    /// input. The person's own title command follows it as one more word, where they have one.
-    pub(super) fn title(&self) -> String {
-        self.facade_hook("agy", "title")
+        let args = [HookArg::Literal(&file), HookArg::Word("--skill")];
+        let args = match skill {
+            SessionSkill::Omit => &args[..1],
+            SessionSkill::Include => &args[..],
+        };
+        facade_hook(cli, self.facade, "session-start", args, [])
     }
 
     /// The run's folder, which the session file is in.
@@ -106,32 +96,15 @@ pub(crate) fn install_hook(
         "claude" => claude_settings(
             &rule.arguments,
             words,
-            &session.hook("claude"),
+            &session.hook("claude", SessionSkill::Omit),
             wiring.settings.as_ref(),
         ),
-        "codex" => {
-            // Codex uses the session's shell, normally PowerShell on Windows. Encoding also
-            // carries the hook unchanged through its cmd.exe fallback.
-            let hook = match SYSTEM {
-                System::Windows => {
-                    let skill = if wiring.session_skill {
-                        " '--skill'"
-                    } else {
-                        ""
-                    };
-                    encoded_powershell(&format!(
-                        "& {} 'hook' 'session-start' {}{skill}; exit $LASTEXITCODE",
-                        powershell_word(session.facade),
-                        powershell_word(&session.file.to_string_lossy()),
-                    ))
-                }
-                System::Unix if wiring.session_skill => {
-                    format!("{} --skill", session.hook("codex"))
-                }
-                System::Unix => session.hook("codex"),
-            };
-            codex_hooks(&rule.arguments, words, &hook, SYSTEM)
-        }
+        "codex" => codex_hooks(
+            &rule.arguments,
+            words,
+            &session.hook("codex", wiring.session_skill),
+            SYSTEM,
+        ),
         "opencode" => opencode_plugin(words, session, environment),
         "pi" => {
             let file = session.folder().join(PI_EXTENSION);
@@ -144,7 +117,7 @@ pub(crate) fn install_hook(
         }
         "fake" => adding(
             Vec::new(),
-            vec![(FAKE_HOOK.into(), session.hook("fake"))],
+            vec![(FAKE_HOOK.into(), session.hook("fake", SessionSkill::Omit))],
             Vec::new(),
         ),
         _ => None,
