@@ -1876,7 +1876,7 @@
       "properties": {
         "cli": {
           "type": "string",
-          "description": "The CLI, by its rule's name: `claude`, `codex`, `opencode` or `pi`."
+          "description": "The CLI's rule name from `facade_rules::integration::CLIS`, shown by\n`facade integration add --help`."
         },
         "env": {
           "type": "object",

@@ -1970,7 +1970,8 @@ pub enum MessagesChange {
 /// Arguments for `integration.add` and `integration.remove`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct IntegrationArgs {
-    /// The CLI, by its rule's name: `claude`, `codex`, `opencode` or `pi`.
+    /// The CLI's rule name from `facade_rules::integration::CLIS`, shown by
+    /// `facade integration add --help`.
     pub cli: String,
     /// The caller's environment, as `agent.start` takes it. It says where the CLI keeps its user
     /// configuration (`HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`), and `PATH`
