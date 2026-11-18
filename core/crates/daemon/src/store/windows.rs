@@ -8,7 +8,7 @@ use std::sync::Arc;
 use facade_base::daemon::WindowDescription;
 use rusqlite::{Connection, params};
 
-use super::{Store, log};
+use super::{Store, WindowRow, log};
 
 /// Creates the table where it is missing.
 pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
@@ -19,7 +19,9 @@ pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
 			environment TEXT NOT NULL,
 			workspace TEXT,
 			folders TEXT NOT NULL,
-			branch_prefix TEXT
+			branch_prefix TEXT,
+			sequence INTEGER,
+			instance TEXT
 		);",
     )
 }
@@ -35,21 +37,38 @@ impl WindowTable {
 
     /// Writes `window`'s description in place of the one before.
     pub(crate) fn save_window(&self, window: &WindowDescription) -> anyhow::Result<()> {
+        self.write_description(&window.id, window, None)
+    }
+
+    /// Writes the logical window and its binding. Environment variables and colors live in memory.
+    pub(crate) fn save_logical_window(&self, row: &WindowRow) -> anyhow::Result<()> {
+        self.write_description(&row.window_id, &row.description, Some(row.sequence))
+    }
+
+    fn write_description(
+        &self,
+        window_id: &str,
+        window: &WindowDescription,
+        sequence: Option<u64>,
+    ) -> anyhow::Result<()> {
         let folders = serde_json::to_string(&window.folders)?;
+        let sequence = sequence.map(i64::try_from).transpose()?;
         self.0.with(
-            || format!("save window {}", window.id),
+            || format!("save window {window_id}"),
             |connection| {
                 connection.execute(
                     "INSERT OR REPLACE INTO windows \
-                     (window_id, label, environment, workspace, folders, branch_prefix) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                     (window_id, label, environment, workspace, folders, branch_prefix, sequence, instance) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
-                        window.id,
+                        window_id,
                         window.label,
                         window.environment,
                         window.workspace,
                         folders,
                         window.branch_prefix,
+                        sequence,
+                        sequence.map(|_| &window.id),
                     ],
                 )
             },
@@ -69,21 +88,36 @@ impl WindowTable {
     /// The windows as they last described themselves. A row this build cannot read is logged,
     /// skipped and left as it is.
     pub(crate) fn windows(&self) -> anyhow::Result<Vec<WindowDescription>> {
+        Ok(self
+            .logical_windows()?
+            .into_iter()
+            .map(|mut row| {
+                row.description.id = row.window_id;
+                row.description
+            })
+            .collect())
+    }
+
+    /// Saved logical windows, in allocation order, with the last instance of each binding.
+    pub(crate) fn logical_windows(&self) -> anyhow::Result<Vec<WindowRow>> {
         let rows = self.0.with(
             || "read the windows".to_string(),
             |connection| {
                 let mut statement = connection.prepare(
-                    "SELECT window_id, label, environment, workspace, folders, branch_prefix \
-                     FROM windows",
+                    "SELECT window_id, coalesce(sequence, rowid) AS allocation, \
+                     coalesce(instance, window_id), label, environment, workspace, folders, branch_prefix \
+                     FROM windows ORDER BY allocation, window_id",
                 )?;
                 let rows = statement.query_map([], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 })?;
                 Ok(rows.collect::<Vec<_>>())
@@ -92,16 +126,29 @@ impl WindowTable {
         let mut windows = Vec::new();
         for row in rows {
             let read = row.map_err(anyhow::Error::from).and_then(
-                |(id, label, environment, workspace, folders, branch_prefix)| {
-                    Ok(WindowDescription {
-                        id,
-                        label,
-                        environment,
-                        workspace,
-                        folders: serde_json::from_str(&folders)?,
-                        branch_prefix,
-                        colors: None,
-                        env: None,
+                |(
+                    window_id,
+                    sequence,
+                    id,
+                    label,
+                    environment,
+                    workspace,
+                    folders,
+                    branch_prefix,
+                )| {
+                    Ok(WindowRow {
+                        window_id,
+                        sequence: u64::try_from(sequence)?,
+                        description: WindowDescription {
+                            id,
+                            label,
+                            environment,
+                            workspace,
+                            folders: serde_json::from_str(&folders)?,
+                            branch_prefix,
+                            colors: None,
+                            env: None,
+                        },
                     })
                 },
             );

@@ -432,6 +432,7 @@ impl Daemon {
             message,
             paste,
             result_owed,
+            ..
         }: KeptMessage,
         now: SystemTime,
         started: Instant,

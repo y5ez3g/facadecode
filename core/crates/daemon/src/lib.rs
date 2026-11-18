@@ -47,7 +47,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::AgentsChange;
+use facade_base::daemon::{AgentsChange, WindowRef};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
@@ -75,6 +75,13 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// The person, as a message's sender or recipient names it.
 pub(crate) const HUMAN: &str = "human";
+
+/// A window and the daemon-local generation of its current instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WindowBinding {
+    pub(crate) window: WindowRef,
+    pub(crate) generation: u64,
+}
 
 /// Who said something to an agent: an agent, by ID and its name then, or the person.
 #[derive(Clone, Debug, PartialEq, Eq)]

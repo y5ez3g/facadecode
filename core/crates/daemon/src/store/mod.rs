@@ -23,18 +23,20 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use facade_base::daemon::{Message, TERMINAL_WINDOW};
+use facade_base::daemon::{Message, TERMINAL_WINDOW, WindowDescription};
 use facade_base::files;
 use facade_base::process::{EndReason, ProcessExit};
 use rusqlite::{Connection, Row, params};
 
 mod guests;
 mod integrations;
+mod membership;
 mod messages;
 mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use integrations::{IntegrationFile, IntegrationTable};
+pub(crate) use membership::MembershipTable;
 pub(crate) use messages::{Gone, Kept, KeptMessage, MessageTable, RequestId, Settlement};
 pub(crate) use windows::WindowTable;
 
@@ -72,6 +74,13 @@ const AGENT_COLUMNS: [(&str, &str); 10] = [
 
 fn log(level: &str, message: &str) {
     facade_base::log::write("daemon", level, message);
+}
+
+/// A logical editor window, in allocation order, and the instance last bound to it.
+pub(crate) struct WindowRow {
+    pub(crate) window_id: String,
+    pub(crate) sequence: u64,
+    pub(crate) description: WindowDescription,
 }
 
 /// An agent's lasting record. Its checkpoint and screen log keep its title and terminal size.
@@ -393,6 +402,10 @@ impl Store {
         WindowTable::new(self.clone())
     }
 
+    pub(crate) fn membership_table(self: &Arc<Self>) -> MembershipTable {
+        MembershipTable::new(self.clone())
+    }
+
     pub(crate) fn integration_table(self: &Arc<Self>) -> IntegrationTable {
         IntegrationTable::new(self.clone())
     }
@@ -510,7 +523,10 @@ fn grow(connection: &mut Connection) -> rusqlite::Result<()> {
     integrations::add_table(connection)?;
     messages::add_table(connection)?;
     windows::add_table(connection)?;
-    guests::add_table(connection)
+    guests::add_table(connection)?;
+    let transaction = connection.transaction()?;
+    membership::add_table(&transaction)?;
+    transaction.commit()
 }
 
 /// The names of `table`'s columns.
