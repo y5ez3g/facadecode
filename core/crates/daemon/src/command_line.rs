@@ -152,7 +152,7 @@ impl Configured {
             return Ok(());
         };
         blocking_in_place(|| entry_program(entry, &self.env, cwd))?;
-        let command = entry.command.as_deref();
+        let command = entry.program.as_deref();
         self.program = command.map(|command| program_of(command, &self.env, cwd));
         Ok(())
     }
@@ -226,7 +226,7 @@ pub(crate) fn check_entry(entry: &Entry, env: &BTreeMap<String, String>) -> Resu
 }
 
 /// The program `entry` runs in `folder` with the environment `env` it starts with (CLIS-1.2,
-/// CONFIGURATION-2.2): its `command`, else its type's program on the `PATH`. Else why none can
+/// CONFIGURATION-2.2): its `program`, else its type's program on the `PATH`. Else why none can
 /// run there: `not_found`, in its setting's words, as `list_agents`, a start and a resume all say
 /// it (CONFIGURATION-4.1), or `unavailable` for a folder that is not there.
 pub(crate) fn entry_program(
@@ -239,8 +239,9 @@ pub(crate) fn entry_program(
         let message = format!("the folder {folder} is not available");
         return Err(ErrorBody::new(Reason::Unavailable, message));
     }
-    let (path, setting) = (env_var(env, "PATH"), &entry.setting);
-    let found = match entry.command.as_deref() {
+    let path = env_var(env, "PATH");
+    let setting = entry.program_setting();
+    let found = match entry.program.as_deref() {
         // A path: `~`, relative or absolute, with either separator where the system has two.
         Some(command)
             if command.contains('/')
@@ -251,7 +252,7 @@ pub(crate) fn entry_program(
             match runnable(&file) {
                 true => Ok(file),
                 false => Err(format!(
-                    "{setting}.command is {}, and {} is not a program that can be run",
+                    "{setting} is {}, and {} is not a program that can be run",
                     quoted(command),
                     file.display()
                 )),
@@ -259,7 +260,7 @@ pub(crate) fn entry_program(
         }
         Some(command) => on_path(command, path, at).ok_or_else(|| {
             format!(
-                "{setting}.command is {}, which was not found on the PATH of a terminal in \
+                "{setting} is {}, which was not found on the PATH of a terminal in \
                  {folder}",
                 quoted(command)
             )
@@ -270,7 +271,7 @@ pub(crate) fn entry_program(
             on_path(program, path, at).ok_or_else(|| {
                 format!(
                     "{program} was not found on the PATH of a terminal in {folder}, and \
-                     {setting}.command does not name its location"
+                     {setting} does not name its location"
                 )
             })
         }
@@ -325,7 +326,7 @@ pub(crate) fn resume_entry(
     }
     let words = [entry.choices(None, None, &[]), entry.args.clone()].concat();
     let program = entry
-        .command
+        .program
         .as_deref()
         .map(|command| program_of(command, &env, cwd));
     Ok(Resumed {
@@ -500,7 +501,7 @@ fn clis_from(environment: &Result<BTreeMap<String, String>, ErrorBody>, folder: 
             let checked = cli_problem(entry, environment, folder)?;
             // A built-in CLI whose own program is not found where it would start.
             let not_installed = entry.built_in
-                && entry.command.is_none()
+                && entry.program.is_none()
                 && checked
                     .as_ref()
                     .is_err_and(|error| error.data.reason == Reason::NotFound);

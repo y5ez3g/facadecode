@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The CLIs of the settings file (CONFIGURATION-2.1, 2.2): `clis` maps a name to an entry of `type`, `command`, `args`, `env`, `model`,
+// The CLIs of the settings file (CONFIGURATION-2.1, 2.2): `clis` maps a name to an entry of `type`, `program`, `args`, `env`, `model`,
 // `effort`, `enabled` and `icon`. A built-in's name configures that built-in; any other name adds a CLI, of a built-in's type or `custom`.
 // Each entry is read on its own and stands alone - an added `codex` takes nothing from the `codex` entry - so that a mistake in one
 // leaves it alone unavailable, said by its setting path and never its value, and every other entry usable.
@@ -15,7 +15,7 @@ import type { EnvironmentMap } from './environment';
 import type { ClisMember } from './settingsFile';
 
 /** An entry's fields (CONFIGURATION-2.2). */
-const ENTRY_FIELDS: readonly string[] = ['type', 'icon', 'command', 'args', 'env', 'model', 'effort', 'enabled'];
+const ENTRY_FIELDS: readonly string[] = ['type', 'icon', 'program', 'args', 'env', 'model', 'effort', 'enabled'];
 
 /** The type of a program, which Facade starts in a terminal and gives nothing of its own (CONFIGURATION-2.3). */
 export const PROGRAM_TYPE = 'custom';
@@ -24,7 +24,7 @@ export const PROGRAM_TYPE = 'custom';
 export interface BuiltInFacts {
 	readonly id: string;
 	readonly displayName: string;
-	/** Its program's name, run from the PATH where its entry gives no `command`. */
+	/** Its program's name, run from the PATH where its entry gives no `program`. */
 	readonly command: string;
 	readonly takes: { readonly model: boolean; readonly effort: boolean };
 	readonly grammar?: ArgsGrammar;
@@ -40,8 +40,10 @@ export interface EntrySettings {
 	readonly builtIn: boolean;
 	/** Its type: a built-in's ID, or `custom`; none where its own is missing or unknown, which is a problem of its own. */
 	readonly type?: string;
-	/** Its program as written; empty for its type's command on PATH. */
-	readonly command: string;
+	/** Its program as written in `program` or legacy `command`; empty for its type's command on PATH. */
+	readonly program: string;
+	/** The path of the program field in the file, or where to set it when absent. */
+	readonly programSetting: string;
 	readonly args: readonly string[];
 	readonly env: EnvironmentMap;
 	readonly model?: string;
@@ -122,11 +124,11 @@ export function readEntry(name: string, value: unknown, builtIns: readonly Built
 		problems.push(named);
 	}
 	if (!isJsonObject(value)) {
-		problems.push(problem(`${setting} must be an object of type, icon, command, args, env, model, effort and enabled; received ${jsonType(value)}`, 'entry_type_object', setting, jsonType(value)));
-		return { name, setting, builtIn: !!builtIn, ...builtIn ? { type: builtIn.id } : {}, command: '', args: [], env: {}, enabled: true, icon: builtIn ? builtIn.id : PROGRAM_ICON, problems };
+		problems.push(problem(`${setting} must be an object of type, icon, program, args, env, model, effort and enabled; received ${jsonType(value)}`, 'entry_type_object', setting, jsonType(value)));
+		return { name, setting, builtIn: !!builtIn, ...builtIn ? { type: builtIn.id } : {}, program: '', programSetting: `${setting}.program`, args: [], env: {}, enabled: true, icon: builtIn ? builtIn.id : PROGRAM_ICON, problems };
 	}
 	for (const field of Object.keys(value)) {
-		if (!ENTRY_FIELDS.includes(field)) {
+		if (field !== 'command' && !ENTRY_FIELDS.includes(field)) {
 			problems.push(problem(`${setting}.${field} is not a field of an entry, which takes ${ENTRY_FIELDS.join(', ')}`, 'entry_field', setting, field, ENTRY_FIELDS.join(', ')));
 		}
 	}
@@ -146,9 +148,15 @@ export function readEntry(name: string, value: unknown, builtIns: readonly Built
 	} else {
 		type = declared;
 	}
-	const command = textOf(value, 'command', setting, problems);
-	if (type === PROGRAM_TYPE && value.command === undefined) {
-		problems.push(problem(`${setting}.command is missing; set it to the program to run`, 'entry_command_missing', `${setting}.command`));
+	const programField = value.program === undefined && value.command !== undefined ? 'command' : 'program';
+	const programSetting = `${setting}.${programField}`;
+	let program: string | undefined;
+	if (value.program !== undefined && value.command !== undefined) {
+		problems.push(problem(`${programSetting} conflicts with command. Keep program.`, 'entry_program_conflict', programSetting));
+	} else if (value[programField] !== undefined) {
+		program = textOf(value, programField, setting, problems);
+	} else if (type === PROGRAM_TYPE) {
+		problems.push(problem(`${programSetting} is missing; set it to the program to run`, 'entry_command_missing', programSetting));
 	}
 	const args = argumentsOf(value.args, `${setting}.args`, problems);
 	const facts = builtIns.find(each => each.id === type);
@@ -185,7 +193,7 @@ export function readEntry(name: string, value: unknown, builtIns: readonly Built
 		problems.push(problem(`${setting}.icon must be one of ${icons.join(', ')}; received ${jsonType(icon)}`, 'entry_icon', `${setting}.icon`, icons.join(', '), jsonType(icon)));
 	}
 	return {
-		name, setting, builtIn: !!builtIn, ...type !== undefined ? { type } : {}, command: command ?? '', args, env, ...choices,
+		name, setting, builtIn: !!builtIn, ...type !== undefined ? { type } : {}, program: program ?? '', programSetting, args, env, ...choices,
 		enabled: typeof enabled === 'boolean' ? enabled : true, icon: shown ?? (type !== undefined && type !== PROGRAM_TYPE ? type : PROGRAM_ICON), problems
 	};
 }

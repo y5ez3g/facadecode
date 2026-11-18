@@ -173,12 +173,13 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
   - To daemon (`command_line.rs`), the `entries` module, used to read `facade.json`'s CLIs:
     `entries::read(&Settings) -> Vec<Entry>` (built-ins first in rule order, then added CLIs in
     file order) and `entries::find(&[Entry], name)`. Daemon also uses the `Entry` fields
-    `kind`, `command` and `args`, and these methods:
+    `kind`, `program` and `args`, and these methods:
     - `display_name()`;
     - `takes("model" | "effort")`;
     - `refused_choice(model, effort)`;
     - `choices(model, effort, words)`;
     - `environment(env)`, which fills each `${env:NAME}` from the start's environment;
+    - `program_setting()` names the key read or the preferred key for an unset program;
     - `problems_with(env)`;
     - `listed(env)`.
 

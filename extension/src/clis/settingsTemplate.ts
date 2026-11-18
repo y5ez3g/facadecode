@@ -38,7 +38,7 @@ const TEMPLATE = `// Facade settings. A saved change applies to agents started a
 	//     facade-teal, facade-sky, facade-blue, facade-violet, facade-pink, facade-aurora,
 	//     facade-sunset, facade-ocean, facade-orchid, facade-pearl, or facade-graphite.
 	//   Default: its type's own icon, or facade-pearl for custom.
-	// - command: program to run; custom requires it. Default: the CLI's own on PATH, like claude.
+	// - program: executable to run; custom requires it. Default: the CLI's own on PATH, like claude.
 	// - args: command-line options for the CLI, added after Facade's own. Default: none.
 	// - env: environment variables for the CLI; one set to null is removed. Default: none.
 	// - model: default model for CLIs that take one. A custom entry or OpenCode cannot set it.
@@ -373,7 +373,7 @@ const TEMPLATE = `// Facade settings. A saved change applies to agents started a
 		// 	"icon": "facade-pink", // or values on line {{iconLine}}
 		// 	// Required. A program name looked up on PATH, or a full path. It must be a single
 		// 	// program, not a shell command line: pipes and && are not allowed:
-		// 	"command": "aider",
+		// 	"program": "aider",
 		// 	// Passed to the program exactly as written, without Facade interpreting them.
 		// 	// For example, --model sonnet is Aider's own option, not Facade's "model" field:
 		// 	"args": ["--model", "sonnet"],
@@ -411,7 +411,7 @@ function valueText(value: unknown, indent: string, room = 90): string {
 
 /**
  * A built-in's entry as the file shows it (CONFIGURATION-1.3): all eight fields, one a line, in their order. The fields whose default
- * Facade knows are written out; `command`, `model` and `effort`, whose default is the CLI's own, are commented out with a value they
+ * Facade knows are written out; `program`, `model` and `effort`, whose default is the CLI's own, are commented out with a value they
  * take, so that removing the `//` sets them. What `given` - the editor's old settings - sets is written out over either, as it was. A
  * CLI that takes no model or effort has a line saying where they are set instead.
  */
@@ -424,7 +424,7 @@ function builtInText(facts: BuiltInFacts, given: { readonly [field: string]: unk
 	const lines = [
 		field('type', kept('type', facts.id)),
 		`${field('icon', kept('icon', facts.id))} // or values on line ${iconLine}`,
-		sample('command', `/path/to/${facts.command}`),
+		sample('program', `/path/to/${facts.command}`),
 		field('args', kept('args', [])),
 		field('env', kept('env', {})),
 		...facts.takes.model || facts.takes.effort
@@ -432,7 +432,7 @@ function builtInText(facts: BuiltInFacts, given: { readonly [field: string]: unk
 			: [`// Model and effort are set in ${facts.displayName}'s own configuration, not in this file.`, ...(['model', 'effort'] as const).filter(name => given[name] !== undefined).map(name => field(name, given[name]))],
 		field('enabled', kept('enabled', true)),
 		// Anything else the old settings gave, as it was: the file's rules say what is wrong with it (CONFIGURATION-6.2)
-		...Object.keys(given).filter(name => !['type', 'command', 'args', 'env', 'model', 'effort', 'enabled', 'icon'].includes(name)).map(name => field(name, given[name]))
+		...Object.keys(given).filter(name => !['type', 'program', 'args', 'env', 'model', 'effort', 'enabled', 'icon'].includes(name)).map(name => field(name, given[name]))
 	];
 	return `{\n${lines.map(line => `${indent}${line}`).join('\n')}\n\t\t}`;
 }

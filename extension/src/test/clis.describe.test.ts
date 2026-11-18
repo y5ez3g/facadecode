@@ -69,7 +69,7 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 			program: codex.program, cwd: codex.cwd, sources: codex.environment.sources, variables: codex.environment.variables, args: codex.args,
 			yolo: codex.yolo, sandbox: codex.sandbox, approvals: codex.approvals, problems: codex.problems
 		}, {
-			program: { file: path.join(temp.dir, 'bin', 'codex'), configured: '', throughCmd: false },
+			program: { file: path.join(temp.dir, 'bin', 'codex'), throughCmd: false },
 			cwd,
 			sources: ['host', 'terminal', 'launch', 'run'],
 			variables: [

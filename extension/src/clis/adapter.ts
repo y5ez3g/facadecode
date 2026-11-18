@@ -252,7 +252,7 @@ export interface CliAdapter {
 	readonly displayName: string;
 	/** Its entry in the settings file, as a problem names it: `clis.codex`, or `clis["Codex · work"]` (CONFIGURATION-4.1). */
 	readonly setting: string;
-	/** The command PATH is searched for where its entry sets no `command`; a program's `command`. */
+	/** The command PATH is searched for where its entry sets no `program`; a custom entry's program. */
 	readonly command: string;
 	readonly groups: Groups;
 	/**

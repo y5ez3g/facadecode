@@ -24,7 +24,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 	const file = TEST_SETTINGS_FILE;
 	const codex = (more: Partial<LaunchDescription> = {}): LaunchDescription => ({
 		cli: 'codex', displayName: 'Codex', setting: 'clis.codex', enabled: true, problems: [],
-		program: { file: '/bin/codex', configured: '', throughCmd: false }, cwd: '/repo',
+		program: { file: '/bin/codex', throughCmd: false }, cwd: '/repo',
 		environment: { sources: ['host', 'launch', 'run'], variables: [{ source: 'launch', name: 'CODEX_HOME', value: '/home/ada/.codex-qwen' }, { source: 'run', name: 'ELECTRON_RUN_AS_NODE', value: null }] },
 		args: ['--sandbox', 'workspace-write', '-c', 'a b'], yolo: false,
 		sandbox: { state: 'on', by: ['--sandbox', 'workspace-write'] }, approvals: { state: 'native' }, trust: { kind: 'arguments', args: ['-c', 'a b'] },
@@ -130,8 +130,8 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			problems: [{ text: 'clis.codex.args[0] is --yolo, which Facade sets or decides itself; remove it', said: { kind: 'args_reserved', values: ['clis.codex.args', '0', '--yolo'] } }],
 			program: { unresolved: true }, args: undefined, trust: undefined
 		}));
-		const missing = sections(codex({ program: { missing: 'codex was not found', said: { kind: 'not_on_path', values: ['codex', '/repo', 'clis.codex'] } }, args: undefined, trust: undefined }));
-		const unsafe = sections(codex({ planProblem: { text: 'refused', said: { kind: 'cmd_unsafe_setting', values: ['codex.cmd', 'clis.codex.args', '1', '"!"', 'clis.codex'] } }, args: undefined, trust: undefined }));
+		const missing = sections(codex({ program: { missing: 'codex was not found', said: { kind: 'not_on_path', values: ['codex', '/repo', 'clis.codex.program'] } }, args: undefined, trust: undefined }));
+		const unsafe = sections(codex({ planProblem: { text: 'refused', said: { kind: 'cmd_unsafe_setting', values: ['codex.cmd', 'clis.codex.args', '1', '"!"', 'clis.codex.program'] } }, args: undefined, trust: undefined }));
 		assert.deepStrictEqual([off[1], off.find(line => line.startsWith('  Arguments')), wrong.slice(1, 5), missing.slice(1, 3), unsafe[1]], [
 			'  Status: off; clis.codex.enabled is false, so New Agent does not offer it',
 			'  Arguments: none; CLI cannot start with current configuration',
@@ -142,10 +142,10 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 				'  Executable: unresolved until configuration errors are fixed'
 			],
 			[
-				'  Status: cannot start: codex was not found on PATH in /repo, and clis.codex.command does not name its location',
-				'  Executable: not found: codex was not found on PATH in /repo, and clis.codex.command does not name its location'
+				'  Status: cannot start: codex was not found on PATH in /repo, and clis.codex.program does not name its location',
+				'  Executable: not found: codex was not found on PATH in /repo, and clis.codex.program does not name its location'
 			],
-			'  Status: cannot start: codex.cmd runs via cmd.exe, which cannot safely accept clis.codex.args[1] containing "!"; set clis.codex.command to the CLI executable or Node entry point'
+			'  Status: cannot start: codex.cmd runs via cmd.exe, which cannot safely accept clis.codex.args[1] containing "!"; set clis.codex.program to the CLI executable or Node entry point'
 		]);
 		assert.strictEqual(launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: true, launches: [], entries: [], problems: [], file, now }).split('\n')[1], 'Working location: /repo (SSH: build)');
 	});
@@ -153,7 +153,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 	test('a program\'s section says its command came from its entry, its YOLO is not applied and its sandbox, approvals and trust are its own (CONFIGURATION-2.3)', () => {
 		const program = codex({
 			cli: 'my cli', displayName: 'my cli', setting: 'clis["my cli"]',
-			program: { file: '/bin/my-cli', configured: 'my-cli', throughCmd: false },
+			program: { file: '/bin/my-cli', configured: { value: 'my-cli', setting: 'clis["my cli"].command' }, throughCmd: false },
 			args: ['--fast'], yolo: undefined, sandbox: { state: 'unknown' }, approvals: { state: 'unknown' }, trust: { kind: 'unknown' }
 		});
 		const text = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: true, launches: [program], entries: [], problems: [], file, now }).split('\n');

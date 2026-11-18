@@ -84,11 +84,11 @@ Saved changes apply to agents started afterwards; running agents keep their sett
   "yolo": false,
   "clis": {
     // A built-in, changed by its name
-    "codex": { "command": "/opt/homebrew/bin/codex", "model": "my-model" },
+    "codex": { "program": "/opt/homebrew/bin/codex", "model": "my-model" },
     "pi": { "enabled": false },
     // CLIs of your own, by names of your own
     "Codex · work": { "type": "codex", "args": ["--profile", "work"] },
-    "aider": { "type": "custom", "command": "aider", "args": ["--model", "sonnet"] }
+    "aider": { "type": "custom", "program": "aider", "args": ["--model", "sonnet"] }
   }
 }
 ```
@@ -99,7 +99,7 @@ Saved changes apply to agents started afterwards; running agents keep their sett
 | `names` | 140 built-in names | Names suggested at random, excluding names already used in this window. Blank names are filled the same way; an empty or exhausted list uses the agent ID. |
 | `clis.<name>.type` | The built-in's own | `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` for a built-in CLI under settings of its own, or `custom` for any other program. Required for a name of your own. |
 | `clis.<name>.icon` | The type's icon; `facade-pearl` for `custom` | A built-in logo (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`) or one of the 16 `facade-` robots listed in the file. |
-| `clis.<name>.command` | The CLI's command on PATH | The program to start: a name found on the terminal's PATH, or a path. Required for `custom`. |
+| `clis.<name>.program` | The CLI's command on PATH | The program to start: a name found on the terminal's PATH, or a path. Required for `custom`. |
 | `clis.<name>.args` | `[]` | Arguments added to the command line, exactly as written. Facade refuses the options it sets itself, such as approvals, the model and the conversation. |
 | `clis.<name>.env` | `{}` | Environment variables: a string sets one, `null` removes one, and `${env:NAME}` reads one from the editor's environment. |
 | `clis.<name>.model`, `clis.<name>.effort` | The CLI's own | The model and reasoning effort new agents start with, for the CLIs that take them; a start that chooses its own wins. |

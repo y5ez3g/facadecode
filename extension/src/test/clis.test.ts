@@ -72,10 +72,10 @@ suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
 			const cwd = path.join(temp.dir, 'work');
 			const relative = program(cwd, `scripts/agent${ext}`);
 			const env = { PATH: `"${bin}"`, HOME: home, USERPROFILE: home };
-			const found = (configured: string) => resolveExecutable(configured, 'claude', 'clis.claude', env, cwd, platform);
+			const found = (configured: string) => resolveExecutable(configured, 'claude', 'clis.claude.program', env, cwd, platform);
 			assert.deepStrictEqual([found(''), found('claude-beta'), found('~/tools/agent'), found('./scripts/agent'), found(onPath)].map(each => each.executable), [onPath, other, inHome, relative, onPath]);
-			assert.match(found('missing-cli').problem!, /^clis\.claude\.command is "missing-cli", which was not found on the PATH/);
-			assert.match(resolveExecutable('', 'claude', 'clis.claude', { PATH: path.join(temp.dir, 'none') }, cwd, platform).problem!, /^claude was not found on the PATH of a terminal in .*, and clis\.claude\.command does not name its location$/);
+			assert.match(found('missing-cli').problem!, /^clis\.claude\.program is "missing-cli", which was not found on the PATH/);
+			assert.match(resolveExecutable('', 'claude', 'clis.claude.program', { PATH: path.join(temp.dir, 'none') }, cwd, platform).problem!, /^claude was not found on the PATH of a terminal in .*, and clis\.claude\.program does not name its location$/);
 			// A folder of its name, or a file that cannot be run, is no program
 			fs.mkdirSync(path.join(bin, 'claude-dir'));
 			const plain = path.join(bin, 'claude-plain');
@@ -93,10 +93,10 @@ suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
 			const local = program(path.join(cwd, 'node_modules', '.bin'), 'claude');
 			const env = { PATH: 'node_modules/.bin' };
 			assert.strictEqual(which('claude', env, 'darwin', cwd), local);
-			assert.strictEqual(resolveExecutable('', 'claude', 'clis.claude', env, cwd, 'darwin').executable, local);
+			assert.strictEqual(resolveExecutable('', 'claude', 'clis.claude.program', env, cwd, 'darwin').executable, local);
 			assert.ok(path.isAbsolute(local));
 			// Another launch folder has no such program, whatever this process's own folder holds
-			assert.match(resolveExecutable('', 'claude', 'clis.claude', env, temp.dir, 'darwin').problem!, /^claude was not found on the PATH/);
+			assert.match(resolveExecutable('', 'claude', 'clis.claude.program', env, temp.dir, 'darwin').problem!, /^claude was not found on the PATH/);
 		} finally {
 			temp.remove();
 		}
@@ -124,11 +124,11 @@ suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
 			fs.writeFileSync(path.join(second, 'claude.exe'), '');
 			// PATHEXT may list a script Windows runs by its file association, which a launch cannot: the next folder's program is found
 			assert.strictEqual(which('claude', { Path: `${first};${second}`, PATHEXT: '.VBS;.EXE' }, 'win32'), path.join(second, 'claude.exe'));
-			const configured = resolveExecutable(path.join(first, 'claude.ps1'), 'claude', 'clis.claude', { PATHEXT: '.EXE' }, temp.dir, 'win32');
-			assert.deepStrictEqual(configured.problem !== undefined && configured.said, { kind: 'not_runnable', values: ['clis.claude', JSON.stringify(path.join(first, 'claude.ps1')), path.join(first, 'claude.ps1')] });
+			const configured = resolveExecutable(path.join(first, 'claude.ps1'), 'claude', 'clis.claude.program', { PATHEXT: '.EXE' }, temp.dir, 'win32');
+			assert.deepStrictEqual(configured.problem !== undefined && configured.said, { kind: 'not_runnable', values: ['clis.claude.program', JSON.stringify(path.join(first, 'claude.ps1')), path.join(first, 'claude.ps1')] });
 			for (const runnable of ['x.exe', 'x.com', 'x.cmd', 'x.bat', 'cli.js', 'cli.cjs', 'cli.mjs']) {
 				fs.writeFileSync(path.join(second, runnable), '');
-				assert.strictEqual(resolveExecutable(path.join(second, runnable), 'claude', 'clis.claude', {}, temp.dir, 'win32').executable, path.join(second, runnable), runnable);
+				assert.strictEqual(resolveExecutable(path.join(second, runnable), 'claude', 'clis.claude.program', {}, temp.dir, 'win32').executable, path.join(second, runnable), runnable);
 			}
 		} finally {
 			temp.remove();
@@ -550,7 +550,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		assert.deepStrictEqual([through.executable, through.args.slice(0, 2)], [path.join(bin, 'claude.cmd'), ['--settings', path.join(runDir, 'claude-settings.json')]]);
 		const result = failure(() => plan({ cli: 'claude', yolo: false, runDir: path.join(temp.dir, 'R&D', 'run-1') }, {}, windows));
 		assert.deepStrictEqual(result[0], 'unsupported');
-		assert.match(String(result[1]), /runs through cmd\.exe, which cannot be given the argument .* safely; set clis\.claude\.command to the CLI's own program or Node entry point$/);
+		assert.match(String(result[1]), /runs through cmd\.exe, which cannot be given the argument .* safely; set clis\.claude\.program to the CLI's own program or Node entry point$/);
 		fs.writeFileSync(path.join(bin, 'claude.cmd'), '@ECHO off\r\nSET "_prog=%dp0%\\node.exe"\r\n"%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n');
 		fs.writeFileSync(path.join(bin, 'node.exe'), '');
 		const script = path.join(bin, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
@@ -571,7 +571,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		} catch (err) {
 			said = err instanceof CliPlanError ? [err.reason, err.message.includes('Hunter2'), err.said] : err;
 		}
-		assert.deepStrictEqual(said, ['unsupported', false, { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'clis.pi.args', '1', '"!"', 'clis.pi'] }]);
+		assert.deepStrictEqual(said, ['unsupported', false, { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'clis.pi.args', '1', '"!"', 'clis.pi.program'] }]);
 	});
 
 	test('a refused configured argument is named with its own character; where the adapter\'s own arguments cannot pass either, those are named, as taking the configured one out would not help (CLIS-1.2)', () => {
@@ -588,14 +588,14 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		};
 		fs.writeFileSync(path.join(bin, 'pi.cmd'), '@echo off\r\nsomething.exe %*\r\n');
 		// Another argument before it holds a quote: the character named is the configured one's own
-		assert.deepStrictEqual(said('pi', ['--append-system-prompt', 'say "hi"', '--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'clis.pi.args', '1', '"\\""', 'clis.pi'] });
-		assert.deepStrictEqual(said('pi', ['--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'clis.pi.args', '1', '"&"', 'clis.pi'] });
+		assert.deepStrictEqual(said('pi', ['--append-system-prompt', 'say "hi"', '--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'clis.pi.args', '1', '"\\""', 'clis.pi.program'] });
+		assert.deepStrictEqual(said('pi', ['--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'clis.pi.args', '1', '"&"', 'clis.pi.program'] });
 		// Claude Code's run settings file is the adapter's own argument: where its path cannot pass, it is named, not the configured one
 		fs.writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\r\nsomething.exe %*\r\n');
 		const configured = said('claude', ['--append-system-prompt', 'a&b']) as { kind: string; values: string[] };
 		const own = said('claude', ['--append-system-prompt', 'a&b'], path.join(temp.dir, 'R&D', 'run-1')) as { kind: string; values: string[] };
 		assert.deepStrictEqual([configured, own.kind, own.values[1]], [
-			{ kind: 'cmd_unsafe_setting', values: [path.join(bin, 'claude.cmd'), 'clis.claude.args', '1', '"&"', 'clis.claude'] }, 'cmd_unsafe', shown(path.join(temp.dir, 'R&D', 'run-1', 'claude-settings.json'))
+			{ kind: 'cmd_unsafe_setting', values: [path.join(bin, 'claude.cmd'), 'clis.claude.args', '1', '"&"', 'clis.claude.program'] }, 'cmd_unsafe', shown(path.join(temp.dir, 'R&D', 'run-1', 'claude-settings.json'))
 		]);
 	});
 
@@ -607,11 +607,11 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 			fs.writeFileSync(muse, '@echo off\r\nsetlocal\r\n"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0.muse-launcher.ps1" %*\r\nexit /b %ERRORLEVEL%\r\n');
 			const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.EXE;.CMD', USERPROFILE: temp.dir }, platform: 'win32' };
 			const result = failure(() => plan({ cli: 'muse' }, {}, windows));
-			assert.deepStrictEqual(result, ['unsupported', `${muse} runs through cmd.exe, which cannot be given its path safely; set clis.muse.command to the CLI's own program or Node entry point`], folder);
+			assert.deepStrictEqual(result, ['unsupported', `${muse} runs through cmd.exe, which cannot be given its path safely; set clis.muse.program to the CLI's own program or Node entry point`], folder);
 			try {
 				plan({ cli: 'muse' }, {}, windows);
 			} catch (err) {
-				assert.deepStrictEqual((err as CliPlanError).said, { kind: 'cmd_unsafe_path', values: [muse, 'clis.muse'] });
+				assert.deepStrictEqual((err as CliPlanError).said, { kind: 'cmd_unsafe_path', values: [muse, 'clis.muse.program'] });
 			}
 		}
 		// A path with spaces alone is quoted whole, and goes through
@@ -634,8 +634,8 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 			} catch (err) {
 				assert.ok(err instanceof CliPlanError, String(err));
 				assert.deepStrictEqual([err.reason, err.message, err.said], ['unsupported',
-					`${muse} runs through cmd.exe, which cannot run in the UNC folder ${folder}; set clis.muse.command to the CLI's own program or Node entry point`,
-					{ kind: 'cmd_unc_folder', values: [muse, folder, 'clis.muse'] }]);
+					`${muse} runs through cmd.exe, which cannot run in the UNC folder ${folder}; set clis.muse.program to the CLI's own program or Node entry point`,
+					{ kind: 'cmd_unc_folder', values: [muse, folder, 'clis.muse.program'] }]);
 			}
 		}
 		fs.writeFileSync(path.join(bin, 'muse.exe'), '');

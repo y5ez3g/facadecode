@@ -128,7 +128,7 @@ fn a_custom_cli_runs_its_program_as_it_is() {
     let file = args_file(&home, "tool");
     let program = test_binaries().fakecli.to_string_lossy().into_owned();
     let entry = json!({
-        "type": "custom", "command": program, "args": ["--resume-like", ""],
+        "type": "custom", "program": program, "args": ["--resume-like", ""],
         "env": { "FAKECLI_ARGS": file },
     });
     settings(&home, &json!({ "clis": { "tool": entry } }));
@@ -473,12 +473,15 @@ fn an_entry_s_args_are_merged_as_their_cli_reads_them() {
 }
 
 /// The MCP and CLI starts both diagnose an entry's executable by its setting (CONFIGURATION-2.2,
-/// 4.1): a built-in missing from `PATH`, a name missing from `PATH`, and a path to no program.
+/// 4.1): the default is missing from PATH, or the current or legacy field names a program that
+/// cannot be found or run.
 #[test]
 fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     let home = TestHome::new("configprogram");
     let clis = json!({
-        "oc": { "type": "opencode" }, "named": { "type": "fake", "command": "no-such-cli" },
+        "oc": { "type": "opencode" },
+        "named": { "type": "fake", "command": "no-such-cli" },
+        "canonical": { "type": "fake", "program": "no-such-cli" },
         "gone": { "type": "fake", "command": "/nope/facade-fakecli" },
     });
     settings(&home, &json!({ "clis": clis }));
@@ -500,7 +503,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         (
             "oc",
             format!(
-                "opencode was not found on the PATH of a terminal in {folder}, and clis.oc.command \
+                "opencode was not found on the PATH of a terminal in {folder}, and clis.oc.program \
                  does not name its location"
             ),
         ),
@@ -508,6 +511,13 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
             "named",
             format!(
                 "clis.named.command is \"no-such-cli\", which was not found on the PATH of a \
+                 terminal in {folder}"
+            ),
+        ),
+        (
+            "canonical",
+            format!(
+                "clis.canonical.program is \"no-such-cli\", which was not found on the PATH of a \
                  terminal in {folder}"
             ),
         ),

@@ -83,7 +83,7 @@ with `TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `CLAUDE_CODE_IDE_SKIP_AUTO_IN
 `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` too, so a Claude Code that `facade start` runs there shows no welcome; a Claude Code
 run directly there then does not install its VS Code extension, and one installed by hand works as before.
 
-An omitted `command` uses the type's command on PATH; `custom` requires one (CONFIGURATION-2.2). A simple name is
+An omitted `program` uses the type's command on PATH; `custom` requires one (CONFIGURATION-2.2). A simple name is
 searched on that PATH; a relative path is from launch cwd; leading `~` uses that environment's home; an absolute path
 is exact. Empty or whitespace-only is invalid. There is no silent fallback to another CLI.
 Require executable file on POSIX, file plus PATHEXT resolution on Windows. Preserve quoted PATH entries. A Windows
@@ -94,7 +94,7 @@ one and it is there - and Muse Code's installer launcher runs its active native 
 beside npm's shim, else a Node program (`.exe` or `.com`) on the launch's PATH, never a version manager's `.cmd` or
 `.bat`. Any other `.cmd` or `.bat` runs through cmd.exe, which Facade gives no text it would read as its own: a launch
 through cmd.exe is refused before execution where an argument or the program's own path holds `"`, `%`, `^`, `&`, `|`,
-`<`, `>`, `!` or a line break, saying to set the entry's `command` to its own program or Node entry point; a configured
+`<`, `>`, `!` or a line break, saying to set the entry's `program` to its own program or Node entry point; a configured
 argument is named by its place in its setting and that character, never quoted. Where only the Facade tools' arguments
 cannot pass, the CLI starts without the tools, which are unavailable with why (2.2). A launch never builds an unescaped
 shell string. cmd.exe starts in no UNC folder - a network share's, a WSL distribution's `\\wsl$` one - but in the Windows
@@ -494,7 +494,7 @@ records its session as its run's.
 
 ### 3.1 Launch arguments and environment
 
-**Entries use `command`, `args` and `env`; each adapter rejects options that replace Facade's launch choices.**
+**Entries use `program`, `args` and `env`; each adapter rejects options that replace Facade's launch choices.**
 
 CONFIGURATION-2.2 owns field shapes and defaults, CONFIGURATION-3.1 literal arguments, and 1.2 environment handling.
 Arrays are used whole, in order. There is no public argument-group engine, placeholder template, trust-file merger
@@ -607,7 +607,7 @@ ARCHITECTURE-5's separate concern.
 
 **An entry's type selects the adapter, while its name and settings stay its own.**
 
-CONFIGURATION-2 defines entry identity and capabilities. Resolve a built-in type using this entry's `command`, `args`
+CONFIGURATION-2 defines entry identity and capabilities. Resolve a built-in type using this entry's `program`, `args`
 and `env`, without inheriting another entry. Use that type's readers, native history, trust and supported options.
 Its name remains the API ID, and its icon follows CONFIGURATION-2.4. Record name and type with conversation metadata
 so restoration can validate the original entry (CONFIGURATION-3.4); a missing or changed entry never falls back to a

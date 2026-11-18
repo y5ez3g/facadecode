@@ -45,7 +45,7 @@ export interface CatalogEntry {
 	readonly adapter: CliAdapter;
 	/** Whether new starts are offered it: its `enabled` (CONFIGURATION-2.2). */
 	readonly enabled: boolean;
-	/** Its `command` as written; empty for its type's command on PATH. */
+	/** Its program as written in the settings; empty for its type's command on PATH. */
 	readonly path: string;
 	/** Its `args`, literal (CLIS-3.1). */
 	readonly extra: readonly string[];
@@ -77,7 +77,7 @@ function catalogEntryOf(entry: EntrySettings): CatalogEntry {
 	return {
 		adapter,
 		enabled: entry.enabled,
-		path: entry.command,
+		path: entry.program,
 		extra: entry.args,
 		extraSetting: `${entry.setting}.args`,
 		environment: entry.env,

@@ -133,7 +133,7 @@ function launchSection(launch: LaunchDescription): string[] {
 	if ('file' in launch.program) {
 		add(launch.program.configured
 			// {0} is the program; {1} its entry, such as clis.codex; {2} the command configured there
-			? vscode.l10n.t("Executable: {0} (from {1}.command {2})", launch.program.file, launch.setting, JSON.stringify(launch.program.configured))
+			? vscode.l10n.t("Executable: {0} (from {1} {2})", launch.program.file, launch.program.configured.setting, JSON.stringify(launch.program.configured.value))
 			: vscode.l10n.t("Executable: {0} (found on PATH)", launch.program.file));
 		if (launch.program.script !== undefined) {
 			add(vscode.l10n.t("Node script: {0}", launch.program.script));

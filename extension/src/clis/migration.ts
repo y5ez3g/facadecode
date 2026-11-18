@@ -61,10 +61,10 @@ function problem(text: string, kind: string, ...values: string[]): CliProblem {
 }
 
 /**
- * An earlier path as the entry's command (CONFIGURATION-6.1): trimmed, as earlier builds read it, so that it names the same program;
+ * An earlier path as the entry's program (CONFIGURATION-6.1): trimmed, as earlier builds read it, so that it names the same program;
  * any other value as it is, whitespace alone too, which was an error then and is one still.
  */
-function commandOf(path: unknown): unknown {
+function programOf(path: unknown): unknown {
 	return typeof path === 'string' && path.trim() ? path.trim() : path;
 }
 
@@ -93,10 +93,10 @@ export function migrationOf(read: LegacyReader): Migration {
 		if (enabled !== undefined) {
 			entry.enabled = enabled;
 		}
-		const command = read(`${prefix}.path`);
-		// An empty path was the CLI on PATH, which a missing command is now
-		if (command !== undefined && command !== '') {
-			entry.command = commandOf(command);
+		const program = read(`${prefix}.path`);
+		// An empty path was the CLI on PATH, which a missing program is now
+		if (program !== undefined && program !== '') {
+			entry.program = programOf(program);
 		}
 		const launch = read(`${prefix}.launch`);
 		if (launch !== undefined) {
@@ -152,7 +152,7 @@ export function migrationOf(read: LegacyReader): Migration {
 					problems.push(problem(`${old}.${field} has no place in facade.json; fix it or remove it, or write facade.json yourself`, 'migration_shape', `${old}.${field}`));
 				}
 				if (value.path !== undefined) {
-					entry.command = commandOf(value.path);
+					entry.program = programOf(value.path);
 				}
 				const launch = value.launch;
 				if (launch !== undefined) {

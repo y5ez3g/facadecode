@@ -343,7 +343,7 @@ suite('CLIs: added CLIs and programs, their discovery and their launch (CONFIGUR
 		const windows: DestinationEnvironment = { host: { Path: winbin, PATHEXT: '.CMD', USERPROFILE: temp.dir }, platform: 'win32' };
 		const catalog = catalogFrom({ clis: { tool: { type: 'custom', command: 'my-cli', args: ['--fast', 'p&ss'] } } });
 		const refused = failure(() => planLaunch(catalog, start({ cli: 'tool' }), windows));
-		assert.deepStrictEqual(refused, ['unsupported', 'cmd_unsafe_setting', path.join(winbin, 'my-cli.cmd'), 'clis.tool.args', '1', '"&"', 'clis.tool']);
+		assert.deepStrictEqual(refused, ['unsupported', 'cmd_unsafe_setting', path.join(winbin, 'my-cli.cmd'), 'clis.tool.args', '1', '"&"', 'clis.tool.command']);
 	});
 
 	test('a CLI the file has not is not started, saying where CLIs are added', () => {
@@ -359,7 +359,7 @@ suite('CLIs: added CLIs and programs, their discovery and their launch (CONFIGUR
 		const catalog = catalogFrom({ clis: { tool: { type: 'custom', command: 'my-cli', args: ['--fast'], env: { MY_MODE: 'quick', GONE: null } } } });
 		const program = describeLaunches(catalog, destination, cwd, true).find(each => each.cli === 'tool')!;
 		assert.deepStrictEqual([program.program, program.args, program.yolo, program.sandbox, program.approvals, program.trust, program.setting], [
-			{ file: path.join(bin, 'my-cli'), configured: 'my-cli', throughCmd: false }, ['--fast'], undefined, { state: 'unknown' }, { state: 'unknown' }, { kind: 'unknown' }, 'clis.tool'
+			{ file: path.join(bin, 'my-cli'), configured: { value: 'my-cli', setting: 'clis.tool.command' }, throughCmd: false }, ['--fast'], undefined, { state: 'unknown' }, { state: 'unknown' }, { kind: 'unknown' }, 'clis.tool'
 		]);
 		assert.deepStrictEqual(program.environment.variables.filter(each => each.source === 'launch'), [{ source: 'launch', name: 'MY_MODE', value: '<redacted>' }, { source: 'launch', name: 'GONE', value: null }]);
 	});
