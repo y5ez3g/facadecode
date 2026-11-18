@@ -196,9 +196,9 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
   here and every saved one, and only a single match among machines that all answered is used; otherwise the call says
   which machines did not answer, or lists every match. `@Pixel@gpu` asks gpu only; when an agent here is literally named
   `Pixel@gpu`, that meaning counts too, and finding both is an error that lists them.
-- `facade list` and `list_agents` ask every machine at once and answer when all have, or after 3 seconds, saying of
-  each machine whether it answered, is unreachable, timed out or failed. In `facade list --json`, a machine's
-  `state` gives that outcome and `responded_at` gives the local receive time when it received a reply.
+- `facade list` and Rust `list_agents` query every machine at once and finish when the queries settle or reach their
+  three-second deadline. Their machine rows in `facade list --json` and Rust MCP use `state` for the outcome. A
+  received reply gives the origin's receive time as `responded_at`. An unreachable machine gives `unreachable: true`.
 - `facade start --folder <FOLDER>` takes an absolute path or a path relative to the current folder on this machine.
   Omit it to use the current folder, including when `--machine` selects this machine explicitly. With another machine,
   give an absolute path there or omit `--folder` to use that user's login home. Remote starts from the command line

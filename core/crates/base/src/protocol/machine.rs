@@ -411,6 +411,26 @@ pub struct MachineQueryResult {
     pub answered_at: Option<String>,
 }
 
+impl From<MachineQueryResult> for MachineStateRow {
+    /// Reads a completed v2 query. An unavailable machine is unreachable at settlement.
+    fn from(machine: MachineQueryResult) -> Self {
+        let state = match machine.status {
+            MachineQueryStatus::Answered => MachineResponseState::Responded,
+            MachineQueryStatus::Unavailable => MachineResponseState::Unreachable,
+            MachineQueryStatus::TimedOut => MachineResponseState::TimedOut,
+            MachineQueryStatus::Error => MachineResponseState::Failed,
+        };
+        Self {
+            machine_id: machine.machine_id,
+            name: machine.name,
+            build: machine.build,
+            state,
+            unreachable: state == MachineResponseState::Unreachable,
+            responded_at: machine.answered_at,
+        }
+    }
+}
+
 impl From<MachineStateRow> for MachineQueryResult {
     fn from(row: MachineStateRow) -> Self {
         let status = match row.state {

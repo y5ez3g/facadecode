@@ -21,7 +21,7 @@ use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::{
     AgentList, AgentListResult, MachineIdentity, MachineList, MachineQueryArgs, MachineQueryStatus,
-    MachineResponseState, MachineStateRow,
+    MachineStateRow,
 };
 use facade_base::operations::{NoArgs, Operation};
 use facade_base::process::{EndReason, ProcessState};
@@ -275,22 +275,10 @@ pub(crate) fn agent_list_json(listed: AgentListResult) -> serde_json::Result<Val
     let machines = listed
         .machines
         .into_iter()
-        .map(|machine| {
-            let state = match machine.status {
-                MachineQueryStatus::Answered => MachineResponseState::Responded,
-                MachineQueryStatus::Unavailable => MachineResponseState::Unreachable,
-                MachineQueryStatus::TimedOut => MachineResponseState::TimedOut,
-                MachineQueryStatus::Error => MachineResponseState::Failed,
-            };
-            let mut row = serde_json::to_value(MachineStateRow {
-                machine_id: machine.machine_id,
-                name: machine.name,
-                build: machine.build,
-                state,
-                unreachable: state == MachineResponseState::Unreachable,
-                responded_at: machine.answered_at,
-            })?;
-            row["short_id"] = Value::String(machine.short_id);
+        .map(|mut machine| {
+            let short_id = std::mem::take(&mut machine.short_id);
+            let mut row = serde_json::to_value(MachineStateRow::from(machine))?;
+            row["short_id"] = Value::String(short_id);
             Ok(row)
         })
         .collect::<serde_json::Result<Vec<_>>>()?;

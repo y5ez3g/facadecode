@@ -11,6 +11,7 @@ use facade_base::machine::{
     AgentRef, ConnectionKind, ConnectionState, MachineInfo, MachineListResult, MessageRef,
 };
 use facade_base::ssh::{SshMode, decode_home_hex, machine_ssh_args};
+use facade_base::time::iso_now;
 use facade_scenarios::serde_json::{self, Value, json};
 use facade_scenarios::*;
 
@@ -269,7 +270,23 @@ fn agent_lists_are_oldest_first_across_machines() {
     assert_eq!(labels, expected);
 
     let mut mcp = McpTestClient::open(&first, &caller.id);
+    let before = iso_now();
     let response = mcp.call("list_agents", json!({}));
+    let after = iso_now();
+    let machines = response["data"]["machines"].as_array().unwrap();
+    assert_eq!(machines.len(), 2, "{response}");
+    for machine in machines {
+        assert_eq!(machine["state"], "responded", "{machine}");
+        let at = machine["responded_at"].as_str().unwrap();
+        assert!(
+            (before.as_str()..=after.as_str()).contains(&at),
+            "{machine}"
+        );
+        assert!(machine.get("short_id").is_none(), "{machine}");
+        assert!(machine.get("status").is_none(), "{machine}");
+        assert!(machine.get("answered_at").is_none(), "{machine}");
+        assert!(machine.get("unreachable").is_none(), "{machine}");
+    }
     let rows = response["data"]["agents"]
         .as_array()
         .expect("listed agents");
@@ -837,6 +854,23 @@ fn three_machines_switch_routes_and_resolve_names_only_when_all_answer() {
     assert_eq!(offline["state"], "unreachable");
     assert_eq!(offline["unreachable"], true);
     assert!(offline.get("responded_at").is_none(), "{offline}");
+    let mut mcp = McpTestClient::open(&first, &nearby.id);
+    let listed = mcp.call("list_agents", json!({}));
+    let mcp_offline = listed["data"]["machines"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{listed}"))
+        .iter()
+        .find(|machine| machine["machine_id"] == third_id)
+        .unwrap();
+    let mut expected = offline.clone();
+    assert!(
+        expected
+            .as_object_mut()
+            .unwrap()
+            .remove("short_id")
+            .is_some()
+    );
+    assert_eq!(mcp_offline, &expected, "{listed}");
 
     std::fs::write(third.folder().join("ssh-needs-login"), []).unwrap();
     assert!(

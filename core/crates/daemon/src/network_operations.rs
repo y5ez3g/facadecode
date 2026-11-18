@@ -869,3 +869,45 @@ fn check_person(caller: &Caller) -> Result<(), ErrorBody> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::UNIX_EPOCH;
+
+    use facade_base::machine::MachineQueryResult;
+    use facade_base::time::iso_time;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn agent_list_replies_use_the_origin_receive_time() {
+        let received_at = UNIX_EPOCH + Duration::from_secs(1_795_000_000);
+        let peer = json!({
+            "agents": [],
+            "machines": [{
+                "machine_id": "peer", "short_id": "peer", "name": "gpu",
+                "build": "0.1.6+test", "status": "answered",
+                "answered_at": "2000-01-01T00:00:00.000Z",
+            }],
+        });
+        for (reply, state) in [
+            (peer, MachineResponseState::Responded),
+            (json!({}), MachineResponseState::Failed),
+        ] {
+            let mut row = MachineStateRow {
+                machine_id: "peer".into(),
+                name: "gpu".into(),
+                build: Some("0.1.6+test".into()),
+                state: MachineResponseState::Waiting,
+                unreachable: false,
+                responded_at: None,
+            };
+            assert!(observe_agent_reply(&mut row, reply, received_at).is_empty());
+            let wire = MachineQueryResult::from(row);
+            let canonical = MachineStateRow::from(wire);
+            assert_eq!(canonical.state, state);
+            assert_eq!(canonical.responded_at, Some(iso_time(received_at)));
+        }
+    }
+}

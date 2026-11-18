@@ -851,6 +851,21 @@ fn starts_keep_members_and_location_sources_separate() {
         .as_str()
         .unwrap_or_else(|| panic!("{long}"));
     let data: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    let inline_machine = &list["data"]["machines"][0];
+    let saved_machine = &data["machines"][0];
+    for row in [inline_machine, saved_machine] {
+        assert_eq!(row["state"], "responded", "{row}");
+        assert!(
+            row["responded_at"]
+                .as_str()
+                .and_then(facade_base::time::parse_iso_time)
+                .is_some(),
+            "{row}"
+        );
+    }
+    let mut expected = list["data"]["machines"].clone();
+    expected[0]["responded_at"] = saved_machine["responded_at"].clone();
+    assert_eq!(data["machines"], expected);
     let saved = data["windows"].as_array().unwrap();
     for row in windows {
         assert!(

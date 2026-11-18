@@ -9,7 +9,9 @@ use facade_base::daemon::{
 };
 use facade_base::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{AgentList, AgentRef, MachineIdentity, MachineList, MachineQueryArgs};
+use facade_base::machine::{
+    AgentList, AgentRef, MachineIdentity, MachineList, MachineQueryArgs, MachineStateRow,
+};
 use facade_base::operations::NoArgs;
 use facade_base::process::ProcessState;
 use serde_json::{Map, Value, json};
@@ -371,7 +373,7 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
         Ok(listed) => listed,
         Err(err) => return failed(&err, nothing),
     };
-    let machines: Vec<_> = listed
+    let identities: Vec<_> = listed
         .machines
         .iter()
         .map(|machine| MachineIdentity {
@@ -381,7 +383,7 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
         .collect();
     let addresses = Addresses {
         here: &client.hello_result.machine_id,
-        machines: &machines,
+        machines: &identities,
     };
     let windows: Vec<Value> = windows
         .iter()
@@ -392,7 +394,12 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
         .iter()
         .map(|agent| agent_row(agent, &addresses))
         .collect();
-    let data = json!({ "windows": windows, "agents": agents, "machines": listed.machines });
+    let machines: Vec<_> = listed
+        .machines
+        .into_iter()
+        .map(MachineStateRow::from)
+        .collect();
+    let data = json!({ "windows": windows, "agents": agents, "machines": machines });
     let written = data.to_string();
     if written.chars().count() <= MAX_INLINE_CHARS {
         return envelope::success(data);

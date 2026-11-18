@@ -248,6 +248,10 @@ machine is unreachable, the row also gives `unreachable: true`. Bare role refere
 Copy an object's machine-qualified `address` into a tool argument. A machine name is used when unique among the selectable machines.
 Otherwise, the selector uses an unambiguous `id:` prefix, with the full ID available when the machine set is unavailable.
 
+Machine rows in `data.machines` give `machine_id`, `name`, `build` when known, and `state` as `responded`, `failed`,
+`timed_out` or `unreachable`. For `responded` and `failed`, a received reply gives the origin's receive time as
+`responded_at`. An unreachable machine also gives `unreachable: true`. The file form carries the same machine rows.
+
 Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
 Equal timestamps are ordered by machine ID, then by numeric agent ID.
 The rest of this rule describes the old-engine result and its connected-window scope.

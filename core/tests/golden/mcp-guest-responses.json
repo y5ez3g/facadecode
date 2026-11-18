@@ -166,11 +166,10 @@
         "machines": [
           {
             "machine_id": "<machine ID>",
-            "short_id": "<short machine ID>",
             "name": "golden-host",
             "build": "<version>",
-            "status": "answered",
-            "answered_at": "<time>"
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -351,11 +350,10 @@
         "machines": [
           {
             "machine_id": "<machine ID>",
-            "short_id": "<short machine ID>",
             "name": "golden-host",
             "build": "<version>",
-            "status": "answered",
-            "answered_at": "<time>"
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -549,11 +547,10 @@
         "machines": [
           {
             "machine_id": "<machine ID>",
-            "short_id": "<short machine ID>",
             "name": "golden-host",
             "build": "<version>",
-            "status": "answered",
-            "answered_at": "<time>"
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -765,11 +762,10 @@
         "machines": [
           {
             "machine_id": "<machine ID>",
-            "short_id": "<short machine ID>",
             "name": "golden-host",
             "build": "<version>",
-            "status": "answered",
-            "answered_at": "<time>"
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -990,11 +986,10 @@
         "machines": [
           {
             "machine_id": "<machine ID>",
-            "short_id": "<short machine ID>",
             "name": "golden-host",
             "build": "<version>",
-            "status": "answered",
-            "answered_at": "<time>"
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -1232,11 +1227,10 @@
         "machines": [
           {
             "machine_id": "<machine ID>",
-            "short_id": "<short machine ID>",
             "name": "golden-host",
             "build": "<version>",
-            "status": "answered",
-            "answered_at": "<time>"
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }

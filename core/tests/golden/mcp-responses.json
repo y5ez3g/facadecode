@@ -121,7 +121,7 @@
               "readOnlyHint": true,
               "openWorldHint": false
             },
-            "description": "List reachable agents. Connected windows give locations and clis. Windows and agents give id and address. Agents give machine_id and windows. Machines give machine_id, short_id, name, build, status and answered_at. Long lists use data.file.",
+            "description": "List agents, windows and machines. Connected windows give locations and clis. Agents and windows give id and address. Machines give machine_id, name, build, state, optional responded_at and unreachable. Long lists use data.file.",
             "inputSchema": {
               "type": "object",
               "properties": {},
@@ -480,11 +480,10 @@
         "machines": [
           {
             "machine_id": "<machine ID>",
-            "short_id": "<short machine ID>",
             "name": "golden-host",
             "build": "<version>",
-            "status": "answered",
-            "answered_at": "<time>"
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
