@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    self, AgentInfo, AgentsChange, AgentsTopic, LocationInfo, LocationKind, Message,
-    MessagesChange, MessagesTopic, MessagesWatchArgs, ScreenChange, ScreenSnapshot, ScreenTopic,
-    ScreenWatchArgs, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowInfo, WindowRef, WindowsChange,
-    WindowsTopic,
+    self, AgentInfo, AgentsChange, AgentsSnapshot, AgentsTopic, LocationInfo, LocationKind,
+    Message, MessagesChange, MessagesTopic, MessagesWatchArgs, ScreenChange, ScreenSnapshot,
+    ScreenTopic, ScreenWatchArgs, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowInfo, WindowRef,
+    WindowsChange, WindowsTopic,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::operations::{NoArgs, Topic};
@@ -110,6 +110,7 @@ impl Daemon {
         };
         let snapshot = ScreenSnapshot {
             agent_id: agent.id().to_string(),
+            machine_id: self.machine_id.clone(),
             cols: drawn.cols,
             rows: drawn.rows,
             redraw: facade_base::base64::encode(&drawn.redraw),
@@ -175,7 +176,7 @@ impl Daemon {
                     Err(RecvError::Lagged(_)) => {
                         let now = daemon.agent_infos();
                         let now = now.into_iter().filter(|info| reach.reaches(info)).collect();
-                        resync_agents(&known, now)
+                        resync_agents(&known, now, &daemon.machine_id)
                     }
                     Err(RecvError::Closed) => return,
                 };
@@ -185,12 +186,14 @@ impl Daemon {
                         AgentsChange::Updated { agent } => {
                             known.insert(agent.agent_id.clone());
                         }
-                        AgentsChange::Removed { agent_id }
+                        AgentsChange::Removed { agent_id, .. }
                             if !known.remove(agent_id) && reach != Reach::All =>
                         {
                             continue;
                         }
-                        AgentsChange::Removed { .. } | AgentsChange::Unknown => {}
+                        AgentsChange::Removed { .. }
+                        | AgentsChange::MachineState { .. }
+                        | AgentsChange::Unknown => {}
                     }
                     if !send(&changes, &change).await {
                         return;
@@ -199,7 +202,10 @@ impl Daemon {
             }
         });
         Watch {
-            snapshot: value_of(&snapshot),
+            snapshot: value_of(AgentsSnapshot {
+                agents: snapshot,
+                machines: Vec::new(),
+            }),
             changes: sent,
         }
     }
@@ -448,12 +454,17 @@ fn screen_change(out: ViewerChange) -> ScreenChange {
 }
 
 /// What brings a client that knew the agents `known` to the agents `now`.
-fn resync_agents(known: &HashSet<String>, now: Vec<AgentInfo>) -> Vec<AgentsChange> {
+fn resync_agents(
+    known: &HashSet<String>,
+    now: Vec<AgentInfo>,
+    machine_id: &str,
+) -> Vec<AgentsChange> {
     let gone = known
         .iter()
         .filter(|id| !now.iter().any(|info| &info.agent_id == *id))
         .map(|id| AgentsChange::Removed {
             agent_id: id.clone(),
+            machine_id: machine_id.to_string(),
         });
     let mut changes: Vec<AgentsChange> = gone.collect();
     changes.extend(now.into_iter().map(|info| AgentsChange::Updated {

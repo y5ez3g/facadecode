@@ -385,11 +385,14 @@ mod tests {
     fn message(number: usize, text: &str) -> Message {
         Message {
             message_id: format!("m{number}"),
+            message_ref: None,
             from: "human".into(),
+            from_machine_id: None,
             from_name: None,
             to: "a7".into(),
             text: text.to_string(),
             reply_to: None,
+            reply_to_machine_id: None,
             from_window: None,
             call_id: None,
             result: None,

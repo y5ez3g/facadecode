@@ -72,6 +72,7 @@ pub(super) fn send(
         daemon_calls::open(relay, &daemon_calls::as_agent(agent), timeout)
     };
     let send_args = |left: Option<Duration>| SendArgs {
+        reply_to_machine_id: None,
         to: text(arguments, "to"),
         text: text(arguments, "text"),
         reply_to: optional(arguments, "reply_to"),

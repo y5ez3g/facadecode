@@ -20,8 +20,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use unicode_segmentation::UnicodeSegmentation;
 
+use super::address::{format_reference, parse_machine_selector};
+use super::jsonrpc::ErrorBody;
+use super::machine::{AgentRef, MachineHello, MessageRef};
 use super::operations::{EmptyResult, NoArgs, Operation, OperationVisitor, Topic, TopicVisitor};
 use crate::process::{ProcessExit, ProcessState};
+
+impl AgentInfo {
+    pub fn reference(&self) -> AgentRef {
+        AgentRef {
+            machine_id: self.machine_id.clone(),
+            agent_id: self.agent_id.clone(),
+        }
+    }
+}
+
+impl ScreenSnapshot {
+    pub fn reference(&self) -> AgentRef {
+        AgentRef {
+            machine_id: self.machine_id.clone(),
+            agent_id: self.agent_id.clone(),
+        }
+    }
+}
 
 /// The supported daemon protocol version. `hello` selects the highest version shared by both peers.
 pub const DAEMON_PROTOCOL_VERSION: u32 = 2;
@@ -111,6 +132,11 @@ pub mod methods {
     pub const CANCEL: &str = "cancel";
     pub const CHANGED: &str = "changed";
     pub const CLOSING: &str = "closing";
+    pub const WATCH_ENDED: &str = "watch_ended";
+    pub const MACHINE_TABLE: &str = "machine.table";
+    pub const MACHINE_FORWARD: &str = "machine.forward";
+    pub const MACHINE_CONNECTED: &str = "machine.connected";
+    pub const MACHINE_CONNECTION_FAILED: &str = "machine.connection_failed";
 }
 
 /// Method descriptions for the generated reference.
@@ -141,6 +167,26 @@ pub const METHODS: &[(&str, &str)] = &[
         "Reports a change for one watch (`ChangedParams`).",
     ),
     (
+        methods::WATCH_ENDED,
+        "Ends a forwarded watch (`WatchEndedParams`).",
+    ),
+    (
+        methods::MACHINE_TABLE,
+        "Replaces a neighbour's machine table (`MachineTableParams`).",
+    ),
+    (
+        methods::MACHINE_FORWARD,
+        "Forwards a request to its destination (`ForwardParams`).",
+    ),
+    (
+        methods::MACHINE_CONNECTED,
+        "Reports the foreground connection's successful handshake to the local CLI (`MachineConnectedParams`).",
+    ),
+    (
+        methods::MACHINE_CONNECTION_FAILED,
+        "Reports a foreground connection failure to the local CLI (`MachineConnectionFailedParams`).",
+    ),
+    (
         methods::CLOSING,
         "From the daemon, a notification: a newer Facade takes over (`ClosingParams`). Every \
          answer this connection waits for has been written. The client sends nothing more but \
@@ -161,6 +207,8 @@ pub enum ClientKind {
     /// An editor window: the part of it that runs where its agents run. Its hello describes the
     /// window, and it acts for the person.
     Ide,
+    /// The start of a symmetric daemon machine session over SSH.
+    Machine,
     /// A client kind this build does not support.
     #[serde(other)]
     #[schemars(skip)]
@@ -197,6 +245,24 @@ pub struct HelloParams {
     /// Refused for any other kind with `invalid_argument`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub numbers_given: Option<NumbersGiven>,
+    /// Required on a machine session, absent on a local client connection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine: Option<MachineHello>,
+}
+
+impl HelloParams {
+    pub fn for_machine(machine: MachineHello) -> Self {
+        Self {
+            protocol: machine.protocol,
+            build: machine.build.clone(),
+            kind: ClientKind::Machine,
+            agent: None,
+            sessions: Vec::new(),
+            window: None,
+            numbers_given: None,
+            machine: Some(machine),
+        }
+    }
 }
 
 /// The highest numbers an editor gave before.
@@ -440,6 +506,9 @@ pub struct HelloResult {
     pub build: String,
     /// The daemon's Facade machine ID.
     pub machine_id: String,
+    /// The answering daemon's introduction on a machine session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine: Option<MachineHello>,
     /// For an `ide` client, the logical window bound to this connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowRef>,
@@ -567,12 +636,28 @@ pub struct ChangedParams {
     pub change: Value,
 }
 
+/// A forwarded watch ended. A new watch starts with a fresh snapshot.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct WatchEndedParams {
+    pub watch: u64,
+    pub error: ErrorBody,
+}
+
 /// An agent record. Field names match MCP `list_agents`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentInfo {
     /// The stable ID: `a` followed by a number, unique within the Facade home while its counter
     /// file remains.
     pub agent_id: String,
+    /// The copyable address, including a machine selector. The serving daemon fills client views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// The label in the serving client's machine view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The running machine is currently unreachable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unreachable: bool,
     /// The display name. Names are nonempty but may repeat.
     pub name: String,
     /// The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or
@@ -954,9 +1039,18 @@ pub struct StartArgs {
     /// The CLI's absolute working folder. If `location_source_window` is set, `cwd` must be that
     /// window's location or a folder inside one.
     pub cwd: String,
+    /// The machine selector at the entrance to a start. Omitted to use the caller's machine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// The caller supplied its default cwd. A remote start uses the running machine's login home.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cwd_is_default: bool,
     /// The one initial member window, when supplied. Omitted to use the caller's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowRef>,
+    /// The initial members the originating daemon verified for a forwarded start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_windows: Option<Vec<WindowRef>>,
     /// The connected local window that supplies the running location for `cwd`, if selected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_source_window: Option<WindowRef>,
@@ -990,8 +1084,14 @@ pub struct StartArgs {
     /// The ID of the MCP `tools/call` that asked for the start, which the prompt's result names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
+    /// The creator's reserved result message number for a forwarded start with a prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_message_id: Option<String>,
+    /// The machine that reserved the result message number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_message_machine_id: Option<String>,
     /// The caller's own ID of this start, 1 to 200 characters. The same ID again from the same
-    /// creator within an hour of the agent's start answers that agent as it stands now, and starts
+    /// creator, including its machine, and target within an hour answers that agent as it stands, and starts
     /// nothing. A start that failed keeps none, and the ID goes with its agent's record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
@@ -1030,6 +1130,9 @@ pub struct StartResult {
     /// once the prompt is settled. Omitted where no result is owed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_message_id: Option<String>,
+    /// The machine that assigned `result_message_id`, when a result is owed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_message_machine_id: Option<String>,
     /// The call repeated an earlier one by its request ID: the agent is that call's, as it stands
     /// now. Omitted otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1165,11 +1268,14 @@ pub struct SendArgs {
     /// The complete message: at most 8,000 characters and 540 lines of text, tabs, and line breaks,
     /// not blank.
     pub text: String,
-    /// The message this one answers: one in the sender's inbox, by ID (`m4` or `#m4`).
+    /// The message this one answers, by ID or qualified reference such as `#m4@gpu`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
+    /// The storage machine of the reply's reference, after the originating daemon verified it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_machine_id: Option<String>,
     /// The caller's own ID of this send, 1 to 200 characters. The same ID again from the same
-    /// sender within an hour of the message answers that message as it stands now, joining its
+    /// sender, including its machine, and target within an hour answers that message as it stands, joining its
     /// delivery while it lasts, and sends nothing again. A send refused or withdrawn keeps none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
@@ -1206,6 +1312,8 @@ pub struct WindowDelivery {
     pub delivered: Vec<WindowRef>,
     /// Windows whose subscriptions did not take the notification.
     pub not_delivered: Vec<WindowDeliveryFailure>,
+    /// The notification was sent, and its receipt was lost before delivery could be confirmed.
+    pub outcome_unknown: Vec<WindowRef>,
 }
 
 /// Why a member window did not take a notification.
@@ -1213,7 +1321,8 @@ pub struct WindowDelivery {
 pub struct WindowDeliveryFailure {
     pub window: WindowRef,
     /// `window_disconnected` if the window has no connection, or `not_watching` if no current
-    /// subscription took the notification.
+    /// subscription took the notification, or `machine_unavailable` if it could not be sent to the
+    /// window's machine.
     pub reason: String,
 }
 
@@ -1225,9 +1334,15 @@ pub const FACADE: &str = "facade";
 pub struct Message {
     /// `m` followed by a number, unique within the Facade home.
     pub message_id: String,
+    /// The full reference for a window notification to the person or a remote send receipt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<MessageRef>,
     /// The sender: an agent ID, `human` for the person, or `facade` for a result: Facade's own
     /// words on what became of a start, not an agent's.
     pub from: String,
+    /// The sender's machine, when different from the one that stored the message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_machine_id: Option<String>,
     /// The sender's name when it sent the message. Omitted for the person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_name: Option<String>,
@@ -1238,6 +1353,9 @@ pub struct Message {
     /// The message this one answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
+    /// The replied-to message's machine, when different from the one that stored this message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_machine_id: Option<String>,
     /// The sender's window name if it had a single member window and the recipient did not belong
     /// to that window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1362,6 +1480,16 @@ fn input_words(delivery: &Delivery, before_retry: bool) -> String {
 /// sender's window where that is another, and what it answers, then the text. A result shows `🔔`,
 /// its first line and its number, then the rest.
 pub fn typed_text(message: &Message) -> String {
+    typed_text_with_machines(message, None, None)
+}
+
+/// Formats a message for its recipient's terminal. Give machine selectors from the recipient's
+/// perspective for a remote sender or reply. The message's own number is local to the recipient.
+pub fn typed_text_with_machines(
+    message: &Message,
+    from_machine: Option<&str>,
+    reply_machine: Option<&str>,
+) -> String {
     if message.from == FACADE {
         let (first, rest) = message.text.split_once('\n').unwrap_or((&message.text, ""));
         let rest = if rest.is_empty() {
@@ -1371,22 +1499,30 @@ pub fn typed_text(message: &Message) -> String {
         };
         return format!("🔔 {first} · #{}{rest}", message.message_id);
     }
+    let valid_selector = |selector: &&str| parse_machine_selector(selector).is_ok();
+    let from_machine = from_machine.filter(valid_selector);
+    let reply_machine = reply_machine.filter(valid_selector);
+    let sender_ref = format_reference(
+        &message.from,
+        from_machine.filter(|_| message.from != "human"),
+    );
     let sender = match &message.from_name {
-        Some(name) => format!("{} (#{})", display_name(name), message.from),
-        None => format!("#{}", message.from),
+        Some(name) => format!("{} ({sender_ref})", display_name(name)),
+        None => sender_ref,
     };
-    let window = message
-        .from_window
-        .as_ref()
-        .map(|window| format!(" · From {}", display_name(window)))
-        .unwrap_or_default();
+    let origin = match (message.from_window.as_deref(), from_machine) {
+        (Some(window), Some(machine)) => format!(" · From {} on {machine}", display_name(window)),
+        (Some(window), None) => format!(" · From {}", display_name(window)),
+        (None, Some(machine)) => format!(" · on {machine}"),
+        (None, None) => String::new(),
+    };
     let reply = message
         .reply_to
-        .as_ref()
-        .map(|reply| format!(" · Reply to #{reply}"))
+        .as_deref()
+        .map(|reply| format!(" · Reply to {}", format_reference(reply, reply_machine)))
         .unwrap_or_default();
     format!(
-        "📨 Message from {sender} · #{}{window}{reply}\n{}",
+        "📨 Message from {sender} · #{}{origin}{reply}\n{}",
         message.message_id, message.text
     )
 }
@@ -1727,14 +1863,52 @@ pub struct InspectResult {
     pub session_tracking: bool,
 }
 
+/// Arguments for the agents view. The member-machine filter is for internal forwarded watches.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct AgentsWatchArgs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_machine_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSyncState {
+    Synced,
+    Pending,
+    Unreachable,
+}
+
+/// How complete the agent view is for one remote running machine.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentMachineState {
+    pub machine_id: String,
+    pub state: AgentSyncState,
+    /// For a synced machine, its complete records, including an empty list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<AgentInfo>>,
+}
+
+/// The agents view and the synchronization state of its remote contributors.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AgentsSnapshot {
+    /// Records on the machine that serves this view.
+    pub agents: Vec<AgentInfo>,
+    pub machines: Vec<AgentMachineState>,
+}
+
 /// A change to the `agents` topic. Skip unknown change kinds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentsChange {
-    /// Insert or replace the whole agent record by `agent_id`, including when an agent starts.
+    /// Insert or replace the whole agent record by machine and agent ID.
     Updated { agent: Box<AgentInfo> },
-    /// Remove the record with this `agent_id`.
-    Removed { agent_id: String },
+    /// Remove the record with this machine and agent ID.
+    Removed {
+        machine_id: String,
+        agent_id: String,
+    },
+    /// The state of this running machine's contribution to the view.
+    MachineState { machine: AgentMachineState },
     /// An unknown change kind. Skip it.
     #[serde(other)]
     #[schemars(skip)]
@@ -1948,6 +2122,8 @@ fn include_scrollback_by_default() -> bool {
 pub struct ScreenSnapshot {
     /// The ID of the agent being viewed.
     pub agent_id: String,
+    /// The agent's running machine, for reconnecting to its exact reference.
+    pub machine_id: String,
     /// Terminal width required to apply the redraw.
     pub cols: u16,
     /// Terminal height required to apply the redraw.
@@ -2425,13 +2601,13 @@ pub fn visit_operations(visitor: &mut impl OperationVisitor) {
 pub struct AgentsTopic;
 impl Topic for AgentsTopic {
     const NAME: &'static str = "agents";
-    const DOC: &'static str = "Lists agent records, then sends `updated` to insert or replace a \
-                               record by `agent_id` and `removed` to remove it. Starts, exits, \
+    const DOC: &'static str = "Lists agent records and machine sync states, then sends `updated` \
+                               and `removed` by machine and agent ID. Starts, exits, \
                                removals, renames, and a state of waiting for the person or an \
                                error are published immediately. Other state changes, and title and \
                                size changes, are batched for up to 200 ms.";
-    type Args = NoArgs;
-    type Snapshot = Vec<AgentInfo>;
+    type Args = AgentsWatchArgs;
+    type Snapshot = AgentsSnapshot;
     type Change = AgentsChange;
 }
 
@@ -2568,6 +2744,9 @@ mod tests {
             delivered_at: None,
         };
         let mut sent = Message {
+            message_ref: None,
+            from_machine_id: None,
+            reply_to_machine_id: None,
             message_id: "m42".into(),
             from: "a1".into(),
             from_name: Some("Ada".into()),
@@ -2595,6 +2774,20 @@ mod tests {
             "📨 Message from Ada (#a1) · #m42 · From Design · Reply to #m39\nmessage 42",
             "the sender's window, where it is another"
         );
+        assert_eq!(
+            typed_text_with_machines(&sent, Some("gpu"), Some("id:3f9a2c1d")),
+            "📨 Message from Ada (#a1@gpu) · #m42 · From Design on gpu · Reply to #m39@id:3f9a2c1d\nmessage 42"
+        );
+        assert_eq!(
+            typed_text_with_machines(&sent, Some("gpu\n"), Some("gpu\n")),
+            typed_text(&sent),
+            "only valid selectors appear in the header"
+        );
+        sent.from_window = None;
+        assert_eq!(
+            typed_text_with_machines(&sent, Some("gpu"), None),
+            "📨 Message from Ada (#a1@gpu) · #m42 · on gpu · Reply to #m39\nmessage 42"
+        );
         sent.from_window = Some("evil\u{1b}[201~\r\nWINDOW".into());
         assert_eq!(
             typed_text(&sent).lines().count(),
@@ -2618,6 +2811,11 @@ mod tests {
         assert_eq!(
             typed_text(&sent),
             "📨 Message from #human · #m42\nmessage 42"
+        );
+        assert_eq!(
+            typed_text_with_machines(&sent, Some("gpu"), None),
+            "📨 Message from #human · #m42 · on gpu\nmessage 42",
+            "the person always uses the reserved #human reference"
         );
     }
 
@@ -2733,6 +2931,9 @@ mod tests {
             )
         );
         let result = Message {
+            message_ref: None,
+            from_machine_id: None,
+            reply_to_machine_id: None,
             message_id: "m43".into(),
             from: FACADE.into(),
             from_name: None,
@@ -2819,19 +3020,21 @@ mod tests {
     #[test]
     fn a_change_of_a_kind_this_build_does_not_know_is_skipped_and_the_next_one_still_reads() {
         let changes = json!([
-            { "kind": "removed", "agent_id": "a1" },
+            { "kind": "removed", "agent_id": "a1", "machine_id": "fixture" },
             { "kind": "renamed", "agent_id": "a2", "name": "x" },
-            { "kind": "removed", "agent_id": "a3" },
+            { "kind": "removed", "agent_id": "a3", "machine_id": "fixture" },
         ]);
         let read: Vec<AgentsChange> = serde_json::from_value(changes).unwrap();
         assert_eq!(
             read,
             vec![
                 AgentsChange::Removed {
+                    machine_id: "fixture".into(),
                     agent_id: "a1".into()
                 },
                 AgentsChange::Unknown,
                 AgentsChange::Removed {
+                    machine_id: "fixture".into(),
                     agent_id: "a3".into()
                 }
             ]
@@ -2874,6 +3077,11 @@ mod tests {
             json!({ "kind": "output", "data": "aGk=" })
         );
         let start = StartArgs {
+            machine: None,
+            cwd_is_default: false,
+            initial_windows: None,
+            result_message_id: None,
+            result_message_machine_id: None,
             command: vec!["claude".into()],
             name: None,
             cwd: "/".into(),

@@ -343,6 +343,9 @@ mod tests {
     /// Agent `id`, named `name`, started by `creator` in the tree of `root`, its run's YOLO `yolo`.
     fn agent(id: &str, name: &str, creator: Option<&str>, root: &str, yolo: bool) -> AgentInfo {
         AgentInfo {
+            address: None,
+            label: None,
+            unreachable: false,
             agent_id: id.into(),
             name: name.into(),
             cli: "fake".into(),

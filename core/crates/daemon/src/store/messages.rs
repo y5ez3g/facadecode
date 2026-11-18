@@ -174,6 +174,9 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
     };
     Ok(KeptMessage {
         message: Message {
+            message_ref: None,
+            from_machine_id: None,
+            reply_to_machine_id: None,
             message_id: format!("m{number}"),
             from: row.get("from")?,
             from_name: row.get("from_name")?,
@@ -796,6 +799,7 @@ mod tests {
             ..window.clone()
         };
         let receipt = WindowDelivery {
+            outcome_unknown: Vec::new(),
             delivered: vec![window.clone()],
             not_delivered: vec![WindowDeliveryFailure {
                 window: other.clone(),

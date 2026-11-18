@@ -186,6 +186,9 @@ fn result_message(
         },
     };
     Message {
+        message_ref: None,
+        from_machine_id: None,
+        reply_to_machine_id: None,
         message_id: format!("m{}", owed.number),
         from: FACADE.to_string(),
         from_name: None,

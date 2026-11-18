@@ -5,8 +5,8 @@ use std::path::Path;
 
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentStart, AgentState, AgentStop, AgentsTopic,
-    DEFAULT_TERMINAL_SIZE, StartArgs, TERMINAL_WINDOW, WaitKind, WindowInfo, WindowRef,
-    WindowsTopic, Worktree, check_message_text,
+    AgentsWatchArgs, DEFAULT_TERMINAL_SIZE, StartArgs, TERMINAL_WINDOW, WaitKind, WindowInfo,
+    WindowRef, WindowsTopic, Worktree, check_message_text,
 };
 use facade_base::daemon_client::DaemonClient;
 use facade_base::files::{folder_key, real_path};
@@ -131,6 +131,13 @@ pub(super) fn start(
     call: &ToolCall,
 ) -> Value {
     let nothing = "nothing was started";
+    let machine = optional(arguments, "machine");
+    if let Err(error) = crate::service::check_local_start_machine(
+        machine.as_deref(),
+        &client.hello_result.machine_id,
+    ) {
+        return start_refused(&error);
+    }
     let me = match client.call::<AgentInspect>(AgentArgs {
         agent: me.to_string(),
     }) {
@@ -154,6 +161,11 @@ pub(super) fn start(
     // A guest has no terminal of Facade's to size the new one by.
     let (cols, rows) = DEFAULT_TERMINAL_SIZE;
     let start = StartArgs {
+        machine,
+        cwd_is_default: false,
+        initial_windows: None,
+        result_message_id: None,
+        result_message_machine_id: None,
         command: vec![text(arguments, "cli")],
         name: optional(arguments, "name"),
         cwd: path.to_string_lossy().into_owned(),
@@ -194,6 +206,9 @@ pub(super) fn start(
 /// not find is the caller's argument.
 fn start_refused(error: &ErrorBody) -> Value {
     let mut refused = envelope::refusal(error);
+    if let Some(unavailable) = &error.data.unavailable {
+        refused["data"]["execution"] = json!(unavailable.execution);
+    }
     let kept_worktree = error
         .data
         .kept
@@ -289,8 +304,8 @@ pub(super) fn list(client: &mut DaemonClient) -> Value {
         Ok(windows) => windows,
         Err(err) => return failed(&err, nothing),
     };
-    let mut agents = match client.snapshot::<AgentsTopic>(NoArgs {}) {
-        Ok(agents) => agents,
+    let mut agents = match client.snapshot::<AgentsTopic>(AgentsWatchArgs::default()) {
+        Ok(snapshot) => snapshot.agents,
         Err(err) => return failed(&err, nothing),
     };
     agents.sort_by_key(|agent| {

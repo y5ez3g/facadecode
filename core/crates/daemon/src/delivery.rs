@@ -81,6 +81,9 @@ pub(crate) fn pending_message(
     deadline: Option<String>,
 ) -> Message {
     Message {
+        message_ref: None,
+        from_machine_id: None,
+        reply_to_machine_id: None,
         message_id: String::new(),
         from: from.from,
         from_name: from.from_name,
@@ -516,6 +519,7 @@ impl Daemon {
         let info = from.info();
         let mut targets = Vec::new();
         let mut outcomes = WindowDelivery {
+            outcome_unknown: Vec::new(),
             delivered: Vec::new(),
             not_delivered: Vec::new(),
         };
@@ -675,6 +679,9 @@ mod tests {
             (MAX_MESSAGE_CHARS, Ok(()))
         );
         let message = Message {
+            message_ref: None,
+            from_machine_id: None,
+            reply_to_machine_id: None,
             message_id: String::new(),
             from: "a999999999".into(),
             from_name: Some("\u{1D54F}".repeat(200)),

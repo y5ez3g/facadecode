@@ -493,7 +493,7 @@ impl TestHome {
         let mut wire = DaemonTestClient::open(self);
         wire.hello("terminal", DAEMON_RANGE, json!({}));
         let watching = wire.request("watch", json!({ "topic": "agents" }));
-        watching["result"]["snapshot"]
+        watching["result"]["snapshot"]["agents"]
             .as_array()
             .cloned()
             .unwrap_or_default()

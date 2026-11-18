@@ -78,7 +78,7 @@ pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
         tokio::select! {
             change = changes.recv() => match change {
                 Ok(AgentsChange::Updated { agent }) => note(&mut waits, &agent),
-                Ok(AgentsChange::Removed { agent_id }) => drop(waits.remove(&agent_id)),
+                Ok(AgentsChange::Removed { agent_id, .. }) => drop(waits.remove(&agent_id)),
                 Ok(_) => {}
                 Err(RecvError::Lagged(_)) => {
                     let infos = daemon.agent_infos();

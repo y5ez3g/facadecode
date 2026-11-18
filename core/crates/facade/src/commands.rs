@@ -6,15 +6,14 @@ use std::fmt::Write as _;
 
 use facade_base::daemon::{
     AgentArgs, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResume, AgentScreen,
-    AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsTopic, DEFAULT_TERMINAL_SIZE,
-    DeliveredVia, DeliveryStatus, InspectResult, IntegrationAdd, IntegrationArgs, IntegrationInfo,
-    IntegrationList, IntegrationRemove, IntegrationsArgs, MessagesTopic, MessagesWatchArgs,
-    PartState, RenameArgs, ResumeArgs, Said, ScreenArgs, SendArgs, StartArgs, StateReason,
-    TypeArgs, WindowDeliveryFailure, WindowRef, display_name,
+    AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsTopic, AgentsWatchArgs,
+    DEFAULT_TERMINAL_SIZE, DeliveredVia, DeliveryStatus, InspectResult, IntegrationAdd,
+    IntegrationArgs, IntegrationInfo, IntegrationList, IntegrationRemove, IntegrationsArgs,
+    MessagesTopic, MessagesWatchArgs, PartState, RenameArgs, ResumeArgs, Said, ScreenArgs,
+    SendArgs, StartArgs, StateReason, TypeArgs, WindowDeliveryFailure, WindowRef, display_name,
 };
 use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
-use facade_base::operations::NoArgs;
 use facade_base::process::EndReason;
 use unicode_width::UnicodeWidthStr;
 
@@ -78,13 +77,18 @@ pub(crate) fn start(
         command: words.command,
         name: words.name,
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
+        machine: None,
+        cwd_is_default: true,
         window: None,
+        initial_windows: None,
         location_source_window: None,
         env: environment(),
         cols,
         rows,
         prompt: words.prompt,
         call_id: None,
+        result_message_id: None,
+        result_message_machine_id: None,
         // Where a newer Facade taking over cuts the start off, its request ID repeats it, and the
         // answer says what it did.
         request_id: Some(made_request_id()),
@@ -147,7 +151,9 @@ pub(crate) enum Format {
 /// Prints every agent, one line each in aligned columns, with what it waits for and what was last
 /// said to it below.
 pub(crate) fn list(client: &mut DaemonClient, format: Format) -> anyhow::Result<()> {
-    let agents = client.snapshot::<AgentsTopic>(NoArgs {})?;
+    let agents = client
+        .snapshot::<AgentsTopic>(AgentsWatchArgs::default())?
+        .agents;
     if let Format::Json = format {
         println_or_end!("{}", serde_json::to_string_pretty(&agents)?);
         return Ok(());
@@ -255,6 +261,7 @@ pub(crate) fn send(
         to,
         text,
         reply_to,
+        reply_to_machine_id: None,
         request_id: Some(made_request_id()),
         time_left_ms: None,
     };

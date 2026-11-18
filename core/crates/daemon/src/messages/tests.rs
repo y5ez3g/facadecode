@@ -33,6 +33,9 @@ pub(crate) fn messages() -> (Arc<Messages>, Arc<Store>) {
 /// A pending message from #a1 Ada to `to`, which the store numbers as it keeps it.
 pub(crate) fn message(number: u64, to: &str) -> Message {
     Message {
+        message_ref: None,
+        from_machine_id: None,
+        reply_to_machine_id: None,
         message_id: format!("m{number}"),
         from: "a1".into(),
         from_name: Some("Ada".into()),

@@ -26,6 +26,7 @@ impl Service for Hellos {
         _: Option<u32>,
     ) -> Result<(HelloResult, Client, ()), ErrorBody> {
         let result = HelloResult {
+            machine: None,
             protocol: DAEMON_PROTOCOL_VERSION,
             build: "test".into(),
             machine_id: String::new(),

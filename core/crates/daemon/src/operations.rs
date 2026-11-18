@@ -332,6 +332,7 @@ impl Daemon {
         Ok(Some(StartResult {
             agent: agent.info(),
             prompt: prompt.and_then(|number| self.messages.message(&format!("m{number}"))),
+            result_message_machine_id: result_message_id.as_ref().map(|_| self.machine_id.clone()),
             result_message_id,
             repeated: true,
         }))
@@ -490,6 +491,9 @@ impl Daemon {
         };
         pause_for_test("after-run-start");
         let info = AgentInfo {
+            address: None,
+            label: None,
+            unreachable: false,
             agent_id: id.clone(),
             name: name.clone(),
             cli: configured.cli.clone(),
@@ -664,6 +668,7 @@ impl Daemon {
         Ok(StartResult {
             agent: info,
             prompt,
+            result_message_machine_id: result_message_id.as_ref().map(|_| self.machine_id.clone()),
             result_message_id,
             repeated: false,
         })
@@ -873,6 +878,7 @@ impl Daemon {
         if self.agents.lock().unwrap().remove(&id).is_some() {
             let _ = self.changes.send(AgentsChange::Removed {
                 agent_id: id.clone(),
+                machine_id: self.machine_id.clone(),
             });
         }
         let (reply, removed) = oneshot::channel();

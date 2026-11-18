@@ -482,7 +482,7 @@ fn two_editors_share_a_running_agent_after_adoption() {
     );
     for wire in [&mut first, &mut second] {
         let reply = wire.request("watch", json!({ "topic": "agents" }));
-        let record = reply["result"]["snapshot"]
+        let record = reply["result"]["snapshot"]["agents"]
             .as_array()
             .unwrap()
             .iter()
@@ -1192,7 +1192,7 @@ fn a_reopened_workspace_lists_its_ended_agents_under_the_same_logical_window() {
     let (mut later, reclaimed) = ide_binding(&home, &window("win-new", Some("k1"), &folders));
     assert_eq!(reclaimed, original);
     let snapshot = later.request("watch", json!({ "topic": "agents" }));
-    let kept = snapshot["result"]["snapshot"]
+    let kept = snapshot["result"]["snapshot"]["agents"]
         .as_array()
         .unwrap()
         .iter()

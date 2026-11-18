@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use facade_base::address::{default_machine_name, parse_machine_selector};
 use facade_base::daemon::{
     self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
     AgentScreen, AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsChange, ClientKind,
@@ -17,6 +18,7 @@ use facade_base::daemon::{
 };
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
+use facade_base::machine::{ExecutionOutcome, MachineIdentity, Unavailable};
 use facade_base::operations::{EmptyResult, Operation};
 use facade_base::process::ProcessState;
 use serde::Serialize;
@@ -37,6 +39,40 @@ use crate::{Cancel, Daemon, Sender};
 
 /// How long an agent has to answer an inspection.
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Checks the selected machine against the one reachable by the local start handler.
+pub(crate) fn check_local_start_machine(
+    machine: Option<&str>,
+    machine_id: &str,
+) -> Result<(), ErrorBody> {
+    let Some(machine) = machine else {
+        return Ok(());
+    };
+    let local = MachineIdentity {
+        machine_id: machine_id.to_owned(),
+        name: facade_base::system::hostname()
+            .map(|hostname| default_machine_name(&hostname))
+            .unwrap_or_default(),
+    };
+    if parse_machine_selector(machine).is_ok_and(|selector| selector.matches(&local)) {
+        return Ok(());
+    }
+    let mut error = ErrorBody::new(
+        Reason::Unavailable,
+        format!(
+            "Machine {} is unavailable. Nothing was started.",
+            daemon::display_name(machine),
+        ),
+    );
+    error.data.unavailable = Some(Unavailable {
+        execution: ExecutionOutcome::NotExecuted,
+        machine: None,
+        window: None,
+        matches: Vec::new(),
+        unanswered: Vec::new(),
+    });
+    Err(error)
+}
 
 /// What a connection holds while it is open: its window's presence, or its agent's tools.
 pub(crate) struct Presence {
@@ -118,6 +154,7 @@ impl server::Service for Daemon {
             presence._tools = Some(listed.tools_connected());
         }
         let result = HelloResult {
+            machine: None,
             protocol: hello.protocol[1].min(DAEMON_PROTOCOL_VERSION),
             build: facade_base::build_id(),
             machine_id: self.machine_id.clone(),
@@ -213,6 +250,7 @@ impl Daemon {
         match operation {
             AgentStart::NAME => {
                 let args: StartArgs = decode_arguments(args)?;
+                check_local_start_machine(args.machine.as_deref(), &self.machine_id)?;
                 let by_model = client.identity.kind == ClientKind::Mcp;
                 let args = self.checked_start(args, acting, by_model).await?;
                 let window = client

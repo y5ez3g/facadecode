@@ -2,9 +2,9 @@
 
 export const PROTOCOL = 2;
 export const OLDEST_PROTOCOL = 2;
-export const METHODS = ["hello","call","watch","unwatch","cancel","changed","closing"] as const;
-export const TOPICS = ["agents","screen","messages","windows"] as const;
-export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"] as const;
+export const METHODS = ["hello","call","watch","unwatch","cancel","changed","watch_ended","machine.table","machine.forward","machine.connected","machine.connection_failed","closing"] as const;
+export const TOPICS = ["agents","screen","messages","windows","machines"] as const;
+export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log","machine.connect","machine.add","machine.list","machine.remove","machine.rename","agent.list","cli.list","location.list","agent.start_preflight"] as const;
 export type Topic = typeof TOPICS[number];
 export type Operation = keyof Operations;
 
@@ -16,6 +16,9 @@ export interface AgentArgs {
 /** An agent record. Field names match MCP `list_agents`. */
 export interface AgentInfo {
 	readonly agent_id: string;
+	readonly address?: string;
+	readonly label?: string;
+	readonly unreachable?: boolean;
 	readonly name: string;
 	readonly cli: string;
 	readonly cwd: string;
@@ -43,22 +46,56 @@ export interface AgentInfo {
 	readonly guest?: boolean;
 }
 
+export interface AgentListResult {
+	readonly agents: AgentInfo[];
+	readonly machines: MachineQueryResult[];
+}
+
+/** How complete the agent view is for one remote running machine. */
+export interface AgentMachineState {
+	readonly machine_id: string;
+	readonly state: AgentSyncState;
+	readonly agents?: AgentInfo[];
+}
+
+/** An agent's durable identity, independently of names and routes. */
+export interface AgentRef {
+	readonly machine_id: string;
+	readonly agent_id: string;
+}
+
 /** What an agent is doing, from its CLI's own status reports, from its screen where its CLI's rule
  * reads it, and from Facade's own facts. The first state that holds, in this order, is the
  * agent's: `waiting_for_you`, `error`, `just_done`, `working`, `idle`, `starting`, then `unknown`;
  * `ended` once its process ended. */
 export type AgentState = 'starting' | 'working' | 'waiting_for_you' | 'just_done' | 'idle' | 'error' | 'ended' | 'unknown';
 
+export type AgentSyncState = 'synced' | 'pending' | 'unreachable';
+
 /** A change to the `agents` topic. Skip unknown change kinds. */
-export type AgentsChange = { readonly kind: 'updated'; readonly agent: AgentInfo } | { readonly kind: 'removed'; readonly agent_id: string };
+export type AgentsChange = { readonly kind: 'updated'; readonly agent: AgentInfo } | { readonly kind: 'removed'; readonly machine_id: string; readonly agent_id: string } | { readonly kind: 'machine_state'; readonly machine: AgentMachineState };
+
+/** The agents view and the synchronization state of its remote contributors. */
+export interface AgentsSnapshot {
+	readonly agents: AgentInfo[];
+	readonly machines: AgentMachineState[];
+}
+
+/** Arguments for the agents view. The member-machine filter is for internal forwarded watches. */
+export interface AgentsWatchArgs {
+	readonly member_machine_id?: string;
+}
 
 /** Parameters for `call`. */
-export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.adopt'; readonly args: AgentArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs };
+export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.adopt'; readonly args: AgentArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } | { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } | { readonly op: 'machine.add'; readonly args: MachineAddArgs } | { readonly op: 'machine.list'; readonly args: NoArgs } | { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } | { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } | { readonly op: 'agent.list'; readonly args: MachineQueryArgs } | { readonly op: 'cli.list'; readonly args: MachineQueryArgs } | { readonly op: 'location.list'; readonly args: MachineQueryArgs } | { readonly op: 'agent.start_preflight'; readonly args: StartArgs } | { readonly op: 'machine.deliver_human'; readonly args: DeliverHumanArgs } | { readonly op: 'machine.deliver_start_result'; readonly args: DeliverStartResultArgs };
+
+/** The identity supplied by the daemon that accepted a local call. */
+export type Caller = { readonly kind: 'terminal'; readonly machine_id: string } | { readonly kind: 'ide'; readonly window: WindowRef } | { readonly kind: 'agent'; readonly agent: AgentRef; readonly root: AgentRef; readonly yolo: boolean };
 
 /** A `changed` notification for one watch. */
 export interface ChangedParams {
 	readonly watch: number;
-	readonly change: AgentsChange | ScreenChange | MessagesChange | WindowsChange;
+	readonly change: AgentsChange | ScreenChange | MessagesChange | WindowsChange | MachinesChange;
 }
 
 /** A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1). */
@@ -71,8 +108,17 @@ export interface CliInfo {
 	readonly overrides: Overrides;
 }
 
+export interface CliListResult {
+	readonly clis: CliInfo[];
+	readonly settings_problem?: string;
+}
+
 /** The kind of client connecting to the daemon. */
-export type ClientKind = 'terminal' | 'mcp' | 'ide';
+export type ClientKind = 'terminal' | 'mcp' | 'ide' | 'machine';
+
+export type ConnectionKind = 'saved' | 'temporary';
+
+export type ConnectionState = 'connected' | 'unavailable' | 'ssh_interaction_required';
 
 /** Arguments for `daemon.log`. */
 export interface DaemonLogArgs {
@@ -82,6 +128,19 @@ export interface DaemonLogArgs {
 /** The result of `daemon.log`. */
 export interface DaemonLogResult {
 	readonly lines: string[];
+}
+
+/** A single message for the person, offered to its member windows on another machine. */
+export interface DeliverHumanArgs {
+	readonly message_ref: MessageRef;
+	readonly message: Message;
+	readonly windows: WindowRef[];
+}
+
+/** A start's result message for its creator, with the number the creator's machine reserved. */
+export interface DeliverStartResultArgs {
+	readonly recipient: AgentRef;
+	readonly message: Message;
 }
 
 /** How a message was delivered. */
@@ -126,6 +185,34 @@ export interface ErrorData {
 	readonly kept?: Kept;
 	readonly entry?: string;
 	readonly windows?: WindowDeliveryFailure[];
+	readonly window_delivery?: WindowDelivery;
+	readonly message_ref?: MessageRef;
+	readonly machine_id_conflict?: MachineIdConflict;
+	readonly ssh_interaction?: SshInteraction;
+	readonly unavailable?: Unavailable;
+	readonly candidates?: string[];
+	readonly protocol?: ProtocolMismatch;
+}
+
+export type ExecutionOutcome = 'not_executed' | 'outcome_unknown';
+
+/** A call on a machine session with facts the originating daemon takes from the local caller. */
+export interface ForwardCall {
+	readonly call: CallParams;
+	readonly by_model: boolean;
+	readonly from_name?: string;
+	readonly from_window?: string;
+	readonly window_colors?: TerminalColors;
+}
+
+/** Parameters of `machine.forward`. The outer JSON-RPC ID identifies this hop. */
+export interface ForwardParams {
+	readonly route: string[];
+	readonly caller: Caller;
+	readonly time_left_ms?: number;
+	readonly request_id?: string;
+	readonly method: string;
+	readonly params: unknown;
 }
 
 /** The messages `hook.prompt` and `hook.turn-end` take for a guest's model, at its next turn. */
@@ -142,6 +229,7 @@ export interface HelloParams {
 	readonly sessions?: string[];
 	readonly window?: WindowDescription;
 	readonly numbers_given?: NumbersGiven;
+	readonly machine?: MachineHello;
 }
 
 /** The result of `hello`: daemon details and supported topics and operations. */
@@ -149,6 +237,7 @@ export interface HelloResult {
 	readonly protocol: number;
 	readonly build: string;
 	readonly machine_id: string;
+	readonly machine?: MachineHello;
 	readonly window?: WindowRef;
 	readonly pid: number;
 	readonly agent?: string;
@@ -255,19 +344,167 @@ export interface LocationInfo {
 /** What a location is. */
 export type LocationKind = 'folder' | 'main' | 'worktree';
 
+export interface LocationListResult {
+	readonly locations: WindowLocation[];
+}
+
+/** Save the identity verified in the foreground session. */
+export interface MachineAddArgs {
+	readonly ssh_destination: string;
+	readonly remote_home?: string;
+	readonly machine_id: string;
+}
+
+/** The saved connection is ready. */
+export interface MachineAddResult {
+	readonly machine: MachineHello;
+	readonly first_connection: boolean;
+}
+
+/** A foreground machine session to authorize. */
+export interface MachineConnectArgs {
+	readonly transport: MachineTransport;
+	readonly kind: ConnectionKind;
+}
+
+/** Returned before switching the local client stream into a machine session. */
+export interface MachineConnectResult {
+	readonly ssh_destination?: string;
+	readonly remote_home?: string;
+	readonly expected_machine_id?: string;
+}
+
+/** Connection verified on the foreground stream. */
+export interface MachineConnectedParams {
+	readonly machine: MachineHello;
+	readonly first_connection: boolean;
+}
+
+/** One connection as seen from its machine table row. */
+export interface MachineConnection {
+	readonly machine_id: string;
+	readonly initiator_machine_id: string;
+	readonly kind: ConnectionKind;
+	readonly ssh_destination?: string;
+	readonly remote_home?: string;
+	readonly state: ConnectionState;
+	readonly ssh_interaction?: SshInteraction;
+}
+
+/** Foreground handshake failed after local authorization. */
+export interface MachineConnectionFailedParams {
+	readonly error: ErrorBody;
+}
+
+/** The introduction on each side of a machine hello. */
+export interface MachineHello {
+	readonly machine_id: string;
+	readonly boot_id: string;
+	readonly name: string;
+	readonly build: string;
+	readonly protocol: [number, number];
+	readonly ssh_cleans_processes?: boolean;
+}
+
+export interface MachineIdConflict {
+	readonly machine_id: string;
+	readonly paths: [string, string];
+}
+
+/** A machine's persistent identity and current display name. */
+export interface MachineIdentity {
+	readonly machine_id: string;
+	readonly name: string;
+}
+
+/** A row visible from the machine that supplies the table. */
+export interface MachineInfo {
+	readonly machine_id: string;
+	readonly boot_id?: string;
+	readonly name: string;
+	readonly build?: string;
+	readonly route?: string[];
+	readonly connections: MachineConnection[];
+}
+
+export interface MachineListResult {
+	readonly machines: MachineInfo[];
+}
+
+/** A frame from either direction of a machine session. A request without an ID is a notification. */
+export type MachineMessage = Request | Response;
+
+/** Selects a machine for a query. An omitted selector uses the operation's default. */
+export interface MachineQueryArgs {
+	readonly machine?: string;
+}
+
+/** The outcome of asking one machine for its reachable agents. */
+export interface MachineQueryResult {
+	readonly machine_id: string;
+	readonly short_id: string;
+	readonly name: string;
+	readonly build?: string;
+	readonly status: MachineQueryStatus;
+	readonly answered_at?: string;
+}
+
+export type MachineQueryStatus = 'answered' | 'unavailable' | 'timed_out' | 'error';
+
+export interface MachineRemoveArgs {
+	readonly machine: string;
+}
+
+export interface MachineRemoveResult {
+	readonly machine_id: string;
+	readonly ssh_destination: string;
+	readonly remote_home?: string;
+	readonly reachable: boolean;
+}
+
+export interface MachineRenameArgs {
+	readonly machine: string;
+	readonly name: string;
+}
+
+export interface MachineRenameResult {
+	readonly machine_id: string;
+	readonly name: string;
+}
+
+/** The complete replacement of one neighbour's table. Every row has a route, build and boot ID. */
+export interface MachineTableParams {
+	readonly machines: MachineInfo[];
+}
+
+/** The transport the local client will bridge to this machine session. */
+export type MachineTransport = { readonly kind: 'ssh'; readonly ssh_destination: string; readonly remote_home?: string } | { readonly kind: 'bridge' };
+
+/** A change to the machine table visible to a client. */
+export type MachinesChange = { readonly kind: 'updated'; readonly machine: MachineInfo } | { readonly kind: 'removed'; readonly machine_id: string };
+
 /** A message: one sender, one recipient, the complete text, and what became of it. */
 export interface Message {
 	readonly message_id: string;
+	readonly message_ref?: MessageRef;
 	readonly from: string;
+	readonly from_machine_id?: string;
 	readonly from_name?: string;
 	readonly to: string;
 	readonly text: string;
 	readonly reply_to?: string;
+	readonly reply_to_machine_id?: string;
 	readonly from_window?: string;
 	readonly call_id?: string;
 	readonly result?: StartOutcome;
 	readonly at: string;
 	readonly delivery: Delivery;
+}
+
+/** A message's identity on the machine that assigned its number. */
+export interface MessageRef {
+	readonly machine_id: string;
+	readonly message_id: string;
 }
 
 /** A change to the `messages` topic. Skip unknown change kinds. */
@@ -332,8 +569,15 @@ export interface PromptOutcome {
 	readonly delivery: Delivery;
 }
 
+export interface ProtocolMismatch {
+	readonly local_build: string;
+	readonly local_protocol: [number, number];
+	readonly remote_build: string;
+	readonly remote_protocol: [number, number];
+}
+
 /** Error reasons shared by both protocols. */
-export type Reason = 'invalid_argument' | 'not_found' | 'ambiguous_reference' | 'ended' | 'partial_input' | 'unavailable' | 'protocol_incompatible' | 'capacity_exceeded' | 'internal' | 'refused' | 'configuration_invalid' | 'cancelled' | 'worktree_failed' | 'upgrading' | 'unsupported';
+export type Reason = 'invalid_argument' | 'not_found' | 'ambiguous_reference' | 'ended' | 'partial_input' | 'unavailable' | 'protocol_incompatible' | 'machine_id_conflict' | 'ssh_interaction_required' | 'capacity_exceeded' | 'internal' | 'refused' | 'configuration_invalid' | 'cancelled' | 'worktree_failed' | 'upgrading' | 'unsupported';
 
 /** Arguments for `agent.rename`. */
 export interface RenameArgs {
@@ -407,6 +651,7 @@ export type ScreenChange = { readonly kind: 'output'; readonly data: string } | 
 /** A full screen snapshot at the start of a watch. */
 export interface ScreenSnapshot {
 	readonly agent_id: string;
+	readonly machine_id: string;
 	readonly cols: number;
 	readonly rows: number;
 	readonly redraw: string;
@@ -439,6 +684,7 @@ export interface SendArgs {
 	readonly to: string;
 	readonly text: string;
 	readonly reply_to?: string;
+	readonly reply_to_machine_id?: string;
 	readonly request_id?: string;
 	readonly time_left_ms?: number;
 }
@@ -447,11 +693,14 @@ export interface SendArgs {
  * one, and whether its failure withdrew it. */
 export interface SendResult {
 	readonly message_id: string;
+	readonly message_ref?: MessageRef;
 	readonly from: string;
+	readonly from_machine_id?: string;
 	readonly from_name?: string;
 	readonly to: string;
 	readonly text: string;
 	readonly reply_to?: string;
+	readonly reply_to_machine_id?: string;
 	readonly from_window?: string;
 	readonly call_id?: string;
 	readonly result?: StartOutcome;
@@ -471,18 +720,28 @@ export interface SessionStartResult {
 	readonly instructions?: string;
 }
 
+export interface SshInteraction {
+	readonly reason: string;
+	readonly command: string[];
+}
+
 /** Arguments for `agent.start`, supplied by the client. */
 export interface StartArgs {
 	readonly command: string[];
 	readonly name?: string;
 	readonly cwd: string;
+	readonly machine?: string;
+	readonly cwd_is_default?: boolean;
 	readonly window?: WindowRef;
+	readonly initial_windows?: WindowRef[];
 	readonly location_source_window?: WindowRef;
 	readonly env?: { readonly [key: string]: string };
 	readonly cols: number;
 	readonly rows: number;
 	readonly prompt?: string;
 	readonly call_id?: string;
+	readonly result_message_id?: string;
+	readonly result_message_machine_id?: string;
 	readonly request_id?: string;
 	readonly worktree?: Worktree;
 	readonly model?: string;
@@ -501,6 +760,7 @@ export interface StartResult {
 	readonly agent: AgentInfo;
 	readonly prompt?: Message;
 	readonly result_message_id?: string;
+	readonly result_message_machine_id?: string;
 	readonly repeated?: boolean;
 }
 
@@ -551,6 +811,14 @@ export interface TypeArgs {
 	readonly keys?: string[];
 }
 
+export interface Unavailable {
+	readonly execution: ExecutionOutcome;
+	readonly machine?: MachineIdentity;
+	readonly window?: WindowRef;
+	readonly matches?: string[];
+	readonly unanswered?: MachineIdentity[];
+}
+
 /** Parameters for `unwatch`. */
 export interface UnwatchParams {
 	readonly watch: number;
@@ -574,19 +842,26 @@ export interface UpgradeResult {
 /** What a CLI waits for. */
 export type WaitKind = 'permission' | 'question' | 'auth' | 'unknown';
 
+/** A forwarded watch ended. A new watch starts with a fresh snapshot. */
+export interface WatchEndedParams {
+	readonly watch: number;
+	readonly error: ErrorBody;
+}
+
 /** Parameters for `watch`. */
-export type WatchParams = { readonly topic: 'agents'; readonly args?: NoArgs } | { readonly topic: 'screen'; readonly args: ScreenWatchArgs } | { readonly topic: 'messages'; readonly args: MessagesWatchArgs } | { readonly topic: 'windows'; readonly args?: NoArgs };
+export type WatchParams = { readonly topic: 'agents'; readonly args: AgentsWatchArgs } | { readonly topic: 'screen'; readonly args: ScreenWatchArgs } | { readonly topic: 'messages'; readonly args: MessagesWatchArgs } | { readonly topic: 'windows'; readonly args?: NoArgs } | { readonly topic: 'machines'; readonly args?: NoArgs };
 
 /** The result of `watch`, sent before any changes for that watch. */
 export interface WatchResult {
 	readonly watch: number;
-	readonly snapshot: AgentInfo[] | ScreenSnapshot | MessagesSnapshot | WindowInfo[];
+	readonly snapshot: AgentsSnapshot | ScreenSnapshot | MessagesSnapshot | WindowInfo[] | MachineInfo[];
 }
 
 /** The member windows' outcomes for one message to the person. */
 export interface WindowDelivery {
 	readonly delivered: WindowRef[];
 	readonly not_delivered: WindowDeliveryFailure[];
+	readonly outcome_unknown: WindowRef[];
 }
 
 /** Why a member window did not take a notification. */
@@ -622,6 +897,11 @@ export interface WindowInfo {
 	readonly observed_at?: string;
 	readonly clis?: CliInfo[];
 	readonly settings_problem?: string;
+}
+
+export interface WindowLocation {
+	readonly window: WindowRef;
+	readonly location: LocationInfo;
 }
 
 /** A logical window on a Facade machine. */
@@ -672,12 +952,24 @@ export interface Operations {
 	readonly "worktree.create": { readonly args: WorktreeCreateArgs; readonly result: LocationInfo };
 	readonly "daemon.upgrade": { readonly args: UpgradeArgs; readonly result: UpgradeResult };
 	readonly "daemon.log": { readonly args: DaemonLogArgs; readonly result: DaemonLogResult };
+	readonly "machine.connect": { readonly args: MachineConnectArgs; readonly result: MachineConnectResult };
+	readonly "machine.add": { readonly args: MachineAddArgs; readonly result: MachineAddResult };
+	readonly "machine.list": { readonly args: NoArgs; readonly result: MachineListResult };
+	readonly "machine.remove": { readonly args: MachineRemoveArgs; readonly result: MachineRemoveResult };
+	readonly "machine.rename": { readonly args: MachineRenameArgs; readonly result: MachineRenameResult };
+	readonly "agent.list": { readonly args: MachineQueryArgs; readonly result: AgentListResult };
+	readonly "cli.list": { readonly args: MachineQueryArgs; readonly result: CliListResult };
+	readonly "location.list": { readonly args: MachineQueryArgs; readonly result: LocationListResult };
+	readonly "agent.start_preflight": { readonly args: StartArgs; readonly result: EmptyResult };
+	readonly "machine.deliver_human": { readonly args: DeliverHumanArgs; readonly result: WindowDelivery };
+	readonly "machine.deliver_start_result": { readonly args: DeliverStartResultArgs; readonly result: EmptyResult };
 }
 
 /** Argument, snapshot, and change types for each topic. Skip unknown change kinds. */
 export interface Topics {
-	readonly agents: { readonly args: NoArgs; readonly snapshot: AgentInfo[]; readonly change: AgentsChange };
+	readonly agents: { readonly args: AgentsWatchArgs; readonly snapshot: AgentsSnapshot; readonly change: AgentsChange };
 	readonly screen: { readonly args: ScreenWatchArgs; readonly snapshot: ScreenSnapshot; readonly change: ScreenChange };
 	readonly messages: { readonly args: MessagesWatchArgs; readonly snapshot: MessagesSnapshot; readonly change: MessagesChange };
 	readonly windows: { readonly args: NoArgs; readonly snapshot: WindowInfo[]; readonly change: WindowsChange };
+	readonly machines: { readonly args: NoArgs; readonly snapshot: MachineInfo[]; readonly change: MachinesChange };
 }

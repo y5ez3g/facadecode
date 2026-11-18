@@ -251,6 +251,9 @@ impl Daemon {
             self.catch_up_on_session(&mut record).await;
         }
         let info = AgentInfo {
+            address: None,
+            label: None,
+            unreachable: false,
             agent_id: id.clone(),
             location_id: record.location_id,
             pid: Some(run.as_ref().map_or(record.pid, |run| run.pid)),

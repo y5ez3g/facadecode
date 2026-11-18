@@ -8,7 +8,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::daemon::{Kept, TextWritten, WindowDeliveryFailure};
+use super::daemon::{Kept, TextWritten, WindowDelivery, WindowDeliveryFailure};
+use super::machine::{
+    MachineIdConflict, MessageRef, ProtocolMismatch, SshInteraction, Unavailable,
+};
 
 pub use crate::line::MAX_LINE_BYTES;
 
@@ -134,6 +137,14 @@ pub enum ServerMessage {
     Response(Response),
 }
 
+/// A frame from either direction of a machine session. A request without an ID is a notification.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MachineMessage {
+    Request(Request),
+    Response(Response),
+}
+
 /// A request error.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ErrorBody {
@@ -173,6 +184,23 @@ pub struct ErrorData {
     /// it could not take the message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows: Option<Vec<WindowDeliveryFailure>>,
+    /// The receipt for a send whose remote window outcomes could not be confirmed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_delivery: Option<WindowDelivery>,
+    /// The original kept message, where its delivery outcome is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<MessageRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_id_conflict: Option<MachineIdConflict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_interaction: Option<SshInteraction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<Unavailable>,
+    /// Complete references that matched a name or machine ID prefix.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<ProtocolMismatch>,
 }
 
 /// Error reasons shared by both protocols.
@@ -196,6 +224,10 @@ pub enum Reason {
     /// The peers share no protocol version, or a required client kind, operation, or field is
     /// unsupported.
     ProtocolIncompatible,
+    /// Two running daemons introduced themselves with the same machine ID.
+    MachineIdConflict,
+    /// A saved SSH connection needs a foreground login or verification.
+    SshInteractionRequired,
     /// A message exceeds the line limit, or input exceeds the per-call limit or available queue
     /// room.
     CapacityExceeded,
@@ -236,6 +268,13 @@ impl ErrorBody {
             kept: None,
             entry: None,
             windows: None,
+            window_delivery: None,
+            message_ref: None,
+            machine_id_conflict: None,
+            ssh_interaction: None,
+            unavailable: None,
+            candidates: Vec::new(),
+            protocol: None,
         });
         let code = if reason == Reason::InvalidArgument {
             INVALID_PARAMS
@@ -301,6 +340,8 @@ impl Reason {
             Reason::PartialInput => "partial_input",
             Reason::Unavailable => "unavailable",
             Reason::ProtocolIncompatible => "protocol_incompatible",
+            Reason::MachineIdConflict => "machine_id_conflict",
+            Reason::SshInteractionRequired => "ssh_interaction_required",
             Reason::CapacityExceeded => "capacity_exceeded",
             Reason::Internal => "internal",
             Reason::Refused => "refused",
@@ -395,6 +436,21 @@ pub fn read_server_message<R: BufRead>(
     reader: &mut R,
     buffer: &mut Vec<u8>,
 ) -> io::Result<Option<ServerMessage>> {
+    read_message(reader, buffer)
+}
+
+/// Reads a request, notification or response on a symmetric machine session.
+pub fn read_machine_message<R: BufRead>(
+    reader: &mut R,
+    buffer: &mut Vec<u8>,
+) -> io::Result<Option<MachineMessage>> {
+    read_message(reader, buffer)
+}
+
+fn read_message<T: DeserializeOwned>(
+    reader: &mut impl BufRead,
+    buffer: &mut Vec<u8>,
+) -> io::Result<Option<T>> {
     match read_line(reader, buffer)? {
         Line::Eof => Ok(None),
         Line::TooLong => Err(io::Error::new(

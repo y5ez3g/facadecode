@@ -385,6 +385,9 @@ fn joined(id: &str, name: &str, cli: &str, session: &str, cwd: String) -> (Agent
         heard_at: now.clone(),
     };
     let info = AgentInfo {
+        address: None,
+        label: None,
+        unreachable: false,
         agent_id: id.to_string(),
         name: name.to_string(),
         cli: cli.to_string(),

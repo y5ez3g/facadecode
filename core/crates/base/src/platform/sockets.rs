@@ -21,6 +21,8 @@ mod windows;
 use windows as imp;
 
 #[cfg(windows)]
+pub(crate) use windows::owner_only_pipe;
+#[cfg(windows)]
 pub use windows::server_pipe;
 
 /// The daemon's socket, accepting clients.

@@ -136,6 +136,7 @@ impl Daemon {
         self.messages.drop_inbox(id, gone);
         let _ = self.changes.send(AgentsChange::Removed {
             agent_id: id.to_string(),
+            machine_id: self.machine_id.clone(),
         });
         // With its last guest gone, the daemon may become idle.
         self.lifecycle.note_change();

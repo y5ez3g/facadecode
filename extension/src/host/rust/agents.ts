@@ -10,7 +10,7 @@ import { messageOf } from '../../base/errors';
 import { folderKeyOf } from '../../base/files';
 import { displayLine } from '../../base/text';
 import type {
-	AgentInfo, AgentsChange, CliInfo, Message, MessagesChange, MessagesSnapshot, ResumeArgs, StartArgs, StartResult, StopResult, WindowInfo, WindowRef
+	AgentInfo, AgentsChange, AgentsSnapshot, CliInfo, Message, MessagesChange, MessagesSnapshot, ResumeArgs, StartArgs, StartResult, StopResult, WindowInfo, WindowRef
 } from '../../base/coreProtocol';
 import { FacadeError, invalid } from '../../core/errors';
 import { isWithin } from '../../core/locations/catalog';
@@ -179,8 +179,8 @@ export class RustAgents implements Agents, Disposable {
 		this.subscriptions.push(
 			link.onDidBind(window => this.bound(window)),
 			deps.onDidChangeWindows(() => this.windowsChanged()),
-			link.watch<AgentInfo[], AgentsChange>('agents', {}, {
-				snapshot: agents => this.snapshot(agents),
+			link.watch<AgentsSnapshot, AgentsChange>('agents', {}, {
+				snapshot: view => this.snapshot(view.agents),
 				change: change => {
 					if (!this.complete) { return; }
 					if (change.kind === 'updated') { this.updated(change.agent); }

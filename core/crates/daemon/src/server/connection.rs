@@ -275,7 +275,7 @@ impl<S: Service> Connection<S> {
             );
             return Err(ErrorBody::new(Reason::ProtocolIncompatible, message));
         }
-        if hello.kind == ClientKind::Unknown {
+        if matches!(hello.kind, ClientKind::Unknown | ClientKind::Machine) {
             let message = "unsupported client kind; update Facade";
             return Err(ErrorBody::new(Reason::ProtocolIncompatible, message));
         }

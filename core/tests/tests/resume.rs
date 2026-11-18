@@ -782,7 +782,11 @@ fn two_member_windows_resume_one_stopped_process() {
             wire.changes(watch)
         );
         let snapshot = wire.request("watch", json!({ "topic": "agents" }));
-        assert_eq!(snapshot["result"]["snapshot"], json!([]), "{snapshot}");
+        assert_eq!(
+            snapshot["result"]["snapshot"]["agents"],
+            json!([]),
+            "{snapshot}"
+        );
         let refused = wire.call("agent.adopt", json!({ "agent": id }));
         assert_eq!(error_reason(&refused), "not_found", "{refused}");
     }

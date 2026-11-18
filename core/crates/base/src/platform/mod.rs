@@ -11,6 +11,7 @@ pub mod limits;
 pub mod programs;
 pub mod service;
 pub mod sockets;
+pub mod ssh;
 pub mod system;
 pub mod terminal;
 pub mod terminal_lines;
@@ -28,7 +29,7 @@ pub mod modules {
     #[cfg(unix)]
     pub use super::descriptors;
     pub use super::{
-        console, files, limits, programs, service, sockets, system, terminal, terminal_lines,
+        console, files, limits, programs, service, sockets, ssh, system, terminal, terminal_lines,
         unix_process,
     };
 }

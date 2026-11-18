@@ -97,9 +97,13 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `jsonrpc`: the framing and errors both protocols share (below).
 
 **The daemon**
+- `machine` defines machine introductions, caller identity, forwarded requests and machine
+  operations and topics. `address` parses selectors and formats machine-qualified references.
+  `ssh` supplies arguments for foreground and saved connections and encodes the remote home.
+  `system::hostname` and `system::login_environment` supply the host name and login environment.
 - `daemon`: the daemon protocol's types, operations and topics; see
   [PROTOCOL.md](../../../core/protocol/PROTOCOL.md). Also the shared checks and texts the protocol
-  defines: `check_message_text`, `display_name`, `typed_text`, `start_result_text`,
+  defines: `check_message_text`, `display_name`, `typed_text`, `typed_text_with_machines`, `start_result_text`,
   `is_session_id`, `location_id`, `agents_word`, `plain`.
   `WindowDescription` carries optional `colors: TerminalColors` and `env`: the terminal colors
   its agents reply to OSC 10, 11 and 12 with, and the environment whose `PATH` gives an `ide`
@@ -131,6 +135,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 **The `facade` program**
 - `daemon_client::{DaemonClient, Identity, environment, takeover_timeout}`: a blocking client
   that connects, says hello, calls, watches, and reconnects to a daemon that took over.
+  A caller that manages reconnection can call `DaemonClient::disable_auto_reconnect`.
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.
