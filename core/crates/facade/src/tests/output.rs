@@ -423,10 +423,6 @@ fn a_send_says_where_the_message_went_or_why_it_did_not() {
         Ok("m42 delivered to a3")
     );
     assert_eq!(delivered("a3", "read").as_deref(), Ok("m42 read by a3"));
-    assert_eq!(
-        delivered("human", "notified").as_deref(),
-        Ok("m42 delivered to the human's editor window")
-    );
     let waiting = sent(&message(
         "a6",
         json!({ "status": "pending", "text_written": "none" }),

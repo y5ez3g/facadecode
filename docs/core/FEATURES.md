@@ -80,8 +80,8 @@ Message headers continue to use IDs such as `#a3` and `#m42`.
   a send also withdraws its message while the paste has not begun.
 - **Inbox**: `facade messages` in an agent's terminal, or the `read_messages` tool, reads the messages waiting for that
   agent and so delivers them.
-- **To the person**: a message to `human` from an agent in an editor window that shows Facade messages goes to that
-  window. If an agent is also named human, quote `'#human'` for the human or use the agent's ID. The command line
+- **To the person**: a message to `human` from an agent goes to each of the agent's editor windows that shows Facade
+  messages, and the command reports each window. If an agent is also named human, quote `'#human'` for the human or use the agent's ID. The command line
   says 'the human' for the person using Facade. The ID is `human`. Message headers show it as `#human`.
 - **Kept**: messages and their deliveries are kept 30 days, across daemon restarts. A delivery under way goes on after a
   restart, within its 30 seconds. A send that repeats its request ID gets the first send's response, and nothing is sent

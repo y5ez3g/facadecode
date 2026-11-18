@@ -107,8 +107,10 @@ pub(super) fn agent_of_terminal() -> anyhow::Result<Option<String>> {
     if identity.sessions.is_empty() {
         return Ok(identity.agent);
     }
-    let socket = facade_base::paths::daemon_socket()?;
-    let known = hello_if_running(&socket, &identity)?.map(|client| client.hello_result.agent);
+    let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
+    let known = hello_if_running(&socket, &identity)
+        .map_err(explicit)?
+        .map(|client| client.hello_result.agent);
     Ok(known.unwrap_or(identity.agent))
 }
 
@@ -143,17 +145,20 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
 /// a usable reply in time; an error for an explicit failure, such as an unusable home, a
 /// permission error or no shared protocol version.
 pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
-    let explicit = |error: anyhow::Error| -> anyhow::Error {
-        Problem::Unreachable {
-            why: crate::errors::cause(&error),
-            log: None,
-        }
-        .into()
-    };
     let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
     let identity = identity_for(terminal_agent(), true);
     let until = Instant::now() + RUNNING_TIMEOUT;
     DaemonClient::connect(&socket, &identity, until, &mut |_| true).map_err(explicit)
+}
+
+/// An explicit failure to reach a daemon that runs, such as an unusable home, a permission error
+/// or no shared protocol version, as the catalog row.
+fn explicit(error: anyhow::Error) -> anyhow::Error {
+    Problem::Unreachable {
+        why: crate::errors::cause(&error),
+        log: None,
+    }
+    .into()
 }
 
 /// Facade did not start: why, the log that says more, and the words `facade daemon --detach` has

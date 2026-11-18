@@ -268,8 +268,8 @@ pub(crate) const PAGES: &[Page] = &[
         path: "send",
         description: "Give an agent a task or ask it a question, as yourself or, in an agent's terminal, as that \
              agent. Facade waits up to 30 seconds to deliver the message to an agent it started; a guest gets it \
-             in its inbox at once. Only agents in an editor window that shows Facade messages can send to the \
-             human.",
+             in its inbox at once. A message from an agent to the human goes to each of the agent's editor \
+             windows that shows Facade messages.",
         alias: None,
         examples: &[
             direct(

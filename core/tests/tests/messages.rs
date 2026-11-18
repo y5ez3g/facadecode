@@ -127,17 +127,10 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
             "{person}"
         );
     }
-    let terminal = refused(facade_as(&home, "a1", &["send", "#human", "x"]));
-    let hello = home.hello_result().unwrap();
-    let machine = hello["machine_id"].as_str().unwrap();
-    let refused_window = format!(
-        "Could not hand the message to window terminal on machine {machine} \
-         (window has no active messages subscription)"
-    );
-    assert!(terminal.contains(&refused_window), "{terminal}");
-    assert!(
-        terminal.contains("no member window could tell the person"),
-        "{terminal}"
+    assert_eq!(
+        refused(facade_as(&home, "a1", &["send", "#human", "x"])),
+        "error: the message was not delivered to the human: the terminal window is not showing \
+         Facade messages\n  tip: open the agent in an editor window that shows Facade messages\n"
     );
     assert!(
         refused(facade_as(&home, "a9", &["send", "ada", "x"]))

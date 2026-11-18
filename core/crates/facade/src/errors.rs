@@ -45,6 +45,12 @@ pub(crate) enum Problem {
         to: String,
         why: String,
     },
+    /// A message to the human from an agent in no editor window, such as a guest.
+    InNoWindow,
+    /// A message to the human that none of the sender's windows showed, with each window's reason.
+    NotShown { why: String },
+    /// A message to the human whose windows' outcome is unknown.
+    HumanUnconfirmed { message: String },
     /// A message whose delivery cannot be confirmed.
     Unconfirmed {
         message: String,
@@ -132,6 +138,21 @@ impl Problem {
             Problem::NotDelivered { message, to, why } => {
                 (format!("{message} was not delivered to {to}: {why}"), None)
             }
+            Problem::InNoWindow => (
+                "the message was not delivered to the human: the agent is not in any editor window"
+                    .into(),
+                None,
+            ),
+            Problem::NotShown { why } => (
+                format!("the message was not delivered to the human: {why}"),
+                Some("open the agent in an editor window that shows Facade messages".into()),
+            ),
+            Problem::HumanUnconfirmed { message } => (
+                format!("could not confirm delivery of {message} to the human"),
+                Some(format!(
+                    "look for {message} in your editor windows before sending it again"
+                )),
+            ),
             Problem::Unconfirmed {
                 message,
                 to,

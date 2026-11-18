@@ -594,23 +594,22 @@ fn messages_to_the_person_report_each_member_windows_delivery() {
         .unwrap();
     assert!(command.status.success(), "{}", stderr(&command));
     let printed = stdout(&command);
-    let lines: Vec<_> = printed.lines().collect();
-    assert_eq!(lines.len(), 3, "{printed}");
-    assert!(
-        lines[0].starts_with("#m")
-            && lines[0].ends_with("was handed to these window subscriptions"),
-        "{printed}"
+    let message = printed.split(' ').next().unwrap();
+    assert_eq!(
+        printed,
+        format!(
+            "{message} delivered to the human in window {}\n",
+            left.window_id
+        ),
+        "{}",
+        stderr(&command)
     );
-    assert!(
-        lines[1].contains(&left.window_id) && lines[1].contains(&left.machine_id),
-        "{printed}"
-    );
-    assert!(
-        lines[2].starts_with("Could not hand the message to")
-            && lines[2].contains(&right.window_id)
-            && lines[2].contains(&right.machine_id)
-            && lines[2].contains("window is disconnected"),
-        "{printed}"
+    assert_eq!(
+        stderr(&command),
+        format!(
+            "warning: {message} was not shown because window {} is closed\n",
+            right.window_id
+        )
     );
     drop(first);
     assert!(wait_until(secs(5), || disconnected(&home, &left)));

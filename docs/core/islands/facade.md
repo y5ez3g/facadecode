@@ -111,7 +111,7 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
   - `stop` and `remove` work through their agents in order, print each agent as given once it is done, report each one's failure through the reporter the layer gives them and go on; a failed connection ends the batch. They exit 1 if any failed.
   - `status` reports on the reply the layer's probe got, or says Facade did not respond. It shows this command's version, and a service's build beside its PID where it differs.
   - `send` fails, with exit code 1, when the message did not reach the recipient, or its delivery cannot be confirmed. A message that waits in a guest's inbox is not a failure.
-  - `send` to `#human` uses the window receipt to report success, listing which subscriptions took the message and why the other windows could not take it. If no window took the message or the receipt is missing, it reports an error on standard error and exits 1. A repeated send that is still pending reports an unknown outcome.
+  - `send` to the human prints one line on standard output for each window that showed the message, and a `warning:` for each that did not. Where none showed it, or the windows' outcome is unknown, it fails with a catalog row and exit code 1.
   - A service's refusal goes through `errors::about_agent` or `about_send`, so it prints as a catalog row where its facts identify one.
 - **Never does:** connect to or start the daemon; show an agent or change terminal modes; read hook input; work out which agent a terminal belongs to.
 - **Interface:** only `run` calls it. Every call blocks until the daemon responds.
