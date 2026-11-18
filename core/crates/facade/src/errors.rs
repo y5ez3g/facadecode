@@ -4,10 +4,21 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use facade_base::address::short_machine_id;
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::machine::ExecutionOutcome;
 
 /// The word that names the human as a recipient or an agent reference.
 const HUMAN: &str = "human";
+
+/// The service's refusal of a machine reference that names no machine.
+const NO_MACHINE: &str = "no machine matches that address";
+
+/// How the service begins its refusal where SSH found no `facade` on the other machine.
+const NO_FACADE: &str = "SSH could not find facade on ";
+
+/// How the service begins its refusal where the other machine's startup files printed text.
+const STARTUP_PRINTS: &str = "Unexpected SSH stdout during the machine handshake";
 
 /// How the service begins its refusal of a reference that names no agent: `no agent a9; …`.
 const MISSING_AGENT: &str = "no agent ";
@@ -57,6 +68,52 @@ pub(crate) enum Problem {
         to: String,
         progress: String,
     },
+    /// No machine has the name or ID the reader gave.
+    NoMachine { given: String },
+    /// A machine an agent runs on could not be reached, so nothing was done; `change` is the
+    /// agent `stop` or `remove` was asked to change.
+    MachineUnreachable {
+        machine: String,
+        change: Option<(Change, String)>,
+    },
+    /// A machine stopped responding after a call reached it, so its result is unknown.
+    MachineStoppedResponding {
+        machine: String,
+        change: Option<(Change, String)>,
+    },
+    /// A name no agent has on the machines that responded, while others did not respond.
+    NoAgentWhereResponded { given: String, machines: String },
+    /// SSH failed before the machines connected: its last line says why.
+    SshFailed { destination: String, why: String },
+    /// SSH reached the other machine, but no `facade` there.
+    NoFacade { destination: String },
+    /// The other machine's shell startup files printed text into the connection.
+    StartupPrints { destination: String },
+    /// The two machines' builds share no protocol version.
+    Version {
+        machine: String,
+        theirs: String,
+        ours: String,
+    },
+    /// Two running machines share a machine ID: a copied Facade home.
+    SameMachineId { short: String, paths: [String; 2] },
+    /// A saved connection's SSH needs a person: the command that repairs it.
+    SshLogin {
+        machine: String,
+        repair: Vec<String>,
+    },
+    /// A temporary connection that ended while `machine connect` ran.
+    ConnectionLost {
+        machine: String,
+        destination: String,
+    },
+}
+
+/// What `stop` or `remove` was asked to do to an agent on another machine.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Change {
+    Stop,
+    Remove,
 }
 
 impl Problem {
@@ -164,6 +221,88 @@ impl Problem {
                      output before sending it again"
                 )),
             ),
+            Problem::NoMachine { given } => (
+                format!("no machine '{given}'"),
+                Some("run 'facade machine list' to see your machines".into()),
+            ),
+            Problem::MachineUnreachable { machine, change } => (
+                match change {
+                    Some((Change::Stop, id)) => {
+                        format!("could not connect to {machine} to stop {id}")
+                    }
+                    Some((Change::Remove, id)) => {
+                        format!("could not connect to {machine} to remove {id}")
+                    }
+                    None => format!("could not connect to {machine}"),
+                },
+                Some("run 'facade machine list' to check the connection".into()),
+            ),
+            Problem::MachineStoppedResponding { machine, change } => (
+                match change {
+                    Some((Change::Stop, id)) => {
+                        format!("could not confirm that {id} stopped: {machine} stopped responding")
+                    }
+                    Some((Change::Remove, id)) => format!(
+                        "could not confirm that {id} was removed: {machine} stopped responding"
+                    ),
+                    None => format!("could not confirm the result: {machine} stopped responding"),
+                },
+                Some("run 'facade list' to check".into()),
+            ),
+            Problem::NoAgentWhereResponded { given, machines } => (
+                format!(
+                    "no agent '{given}' on the machines that responded; {machines} did not respond"
+                ),
+                Some("run 'facade list' to see your agents".into()),
+            ),
+            Problem::SshFailed { destination, why } => (
+                format!("could not connect to {destination} over SSH: {why}"),
+                Some(format!(
+                    "run 'ssh {destination}' to check that you can log in"
+                )),
+            ),
+            Problem::NoFacade { destination } => (
+                format!("could not find facade on {destination}"),
+                Some(format!(
+                    "install Facade on {destination} and add its folder to the PATH that SSH \
+                     commands use"
+                )),
+            ),
+            Problem::StartupPrints { destination } => (
+                format!(
+                    "the shell startup files on {destination} print text, which breaks the \
+                     connection"
+                ),
+                Some("make them print nothing when SSH runs a command, then try again".into()),
+            ),
+            Problem::Version {
+                machine,
+                theirs,
+                ours,
+            } => (
+                format!("{machine} runs Facade {theirs}, which cannot connect to Facade {ours}"),
+                Some(format!("install Facade {ours} on {machine}")),
+            ),
+            Problem::SameMachineId { short, paths } => (
+                format!(
+                    "two running machines have the same ID {short}: {} and {}",
+                    paths[0], paths[1]
+                ),
+                Some("a Facade home was copied; give the copy a new, empty Facade home".into()),
+            ),
+            Problem::SshLogin { machine, repair } => (
+                format!("SSH to {machine} needs you to log in"),
+                Some(repair_tip(repair)),
+            ),
+            Problem::ConnectionLost {
+                machine,
+                destination,
+            } => (
+                format!("lost the connection to {machine}"),
+                Some(format!(
+                    "run 'facade machine connect {destination}' to connect again"
+                )),
+            ),
         }
     }
 }
@@ -220,9 +359,191 @@ pub(crate) fn about_agent(given: &str, error: anyhow::Error) -> anyhow::Error {
             None => return error,
         },
         Reason::ConfigurationInvalid => return settings(error),
+        Reason::Unavailable
+            if let Some(unavailable) = &body.data.unavailable
+                && !unavailable.unanswered.is_empty()
+                && unavailable.matches.is_empty() =>
+        {
+            Problem::NoAgentWhereResponded {
+                given,
+                machines: unavailable
+                    .unanswered
+                    .iter()
+                    .map(|machine| machine.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }
+        }
+        _ => return about_machine(machine_of(&given), None, error),
+    };
+    problem.into()
+}
+
+/// The failure of `stop` or `remove` of `given`, as [`about_agent`] does, saying what was not done
+/// where the agent's machine could not be reached.
+pub(crate) fn about_change(given: &str, change: Change, error: anyhow::Error) -> anyhow::Error {
+    // A name search that some machines did not answer is `about_agent`'s to word.
+    if let Some(body) = service_error(&error)
+        && body.data.reason == Reason::Unavailable
+        && body
+            .data
+            .unavailable
+            .as_ref()
+            .is_some_and(|unavailable| unavailable.unanswered.is_empty())
+    {
+        return about_machine(machine_of(given), Some((change, given.to_string())), error);
+    }
+    about_agent(given, error)
+}
+
+/// The failure of a call that names `machine`, or reaches another machine for it, as a catalog row
+/// where the service's facts identify one; otherwise `error` unchanged.
+pub(crate) fn about_machine(
+    machine: &str,
+    change: Option<(Change, String)>,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let Some(body) = service_error(&error) else {
+        return error;
+    };
+    let data = &body.data;
+    let problem = match data.reason {
+        Reason::NotFound if body.message == NO_MACHINE => Problem::NoMachine {
+            given: machine.to_string(),
+        },
+        Reason::Unavailable => {
+            let Some(unavailable) = &data.unavailable else {
+                return error;
+            };
+            let name = unavailable
+                .machine
+                .as_ref()
+                .map_or(machine.to_string(), |machine| machine.name.clone());
+            match (unavailable.execution, unavailable.unanswered.is_empty()) {
+                // A name lookup that some machines did not answer: `about_agent` words it.
+                (_, false) => return error,
+                (ExecutionOutcome::NotExecuted, true) => Problem::MachineUnreachable {
+                    machine: name,
+                    change,
+                },
+                (ExecutionOutcome::OutcomeUnknown, true) => Problem::MachineStoppedResponding {
+                    machine: name,
+                    change,
+                },
+            }
+        }
+        Reason::SshInteractionRequired => match &data.ssh_interaction {
+            Some(interaction) => Problem::SshLogin {
+                machine: machine.to_string(),
+                repair: interaction.command.clone(),
+            },
+            None => return error,
+        },
+        Reason::MachineIdConflict => match &data.machine_id_conflict {
+            Some(conflict) => Problem::SameMachineId {
+                short: short_machine_id(&conflict.machine_id),
+                paths: conflict.paths.clone(),
+            },
+            None => return error,
+        },
         _ => return error,
     };
     problem.into()
+}
+
+/// The failure of a connection to `destination` over SSH, as a catalog row where the service's
+/// facts identify one; otherwise as [`about_machine`] does.
+pub(crate) fn about_connection(destination: &str, error: anyhow::Error) -> anyhow::Error {
+    let Some(body) = service_error(&error) else {
+        return error;
+    };
+    let destination = destination.to_string();
+    let problem = match body.data.reason {
+        Reason::NotFound if body.message.starts_with(NO_FACADE) => {
+            Problem::NoFacade { destination }
+        }
+        Reason::InvalidArgument if body.message.starts_with(STARTUP_PRINTS) => {
+            Problem::StartupPrints { destination }
+        }
+        Reason::ProtocolIncompatible => match &body.data.protocol {
+            // The service names the other machine only in its words: `… but gpu is running …`.
+            Some(protocol) => Problem::Version {
+                machine: body
+                    .message
+                    .split_once(" but ")
+                    .and_then(|(_, rest)| rest.split_once(" is running Facade "))
+                    .map_or(destination, |(name, _)| name.to_string()),
+                theirs: protocol.remote_build.clone(),
+                ours: protocol.local_build.clone(),
+            },
+            None => return error,
+        },
+        _ => return about_machine(&destination, None, error),
+    };
+    problem.into()
+}
+
+/// The machine `given` names after its last `@`, as `gpu` in `a17@gpu`; else `given`.
+fn machine_of(given: &str) -> &str {
+    given.rsplit_once('@').map_or(given, |(_, machine)| machine)
+}
+
+/// The tip with the command that repairs a saved connection: quoted for this system's shell, or,
+/// where a word needs escaping no quoting gives safely, its words one per line.
+pub(crate) fn repair_tip(words: &[String]) -> String {
+    match repair_command(words) {
+        Ok(command) => format!("run '{command}'"),
+        Err(words) => {
+            let mut tip = "run 'facade machine add' with these words, one per line:".to_string();
+            for word in words {
+                tip.push_str("\n        ");
+                tip.push_str(&word);
+            }
+            tip
+        }
+    }
+}
+
+/// The repair command as one line for this system's shell, or each word, control characters
+/// escaped, where one needs escaping that quoting cannot give.
+pub(crate) fn repair_command(words: &[String]) -> Result<String, Vec<String>> {
+    let windows = cfg!(windows);
+    let unsafe_word = |word: &String| {
+        word.chars().any(char::is_control)
+            || (windows
+                && (word.contains(['"', '%', '!', '$', '`', '“', '”'])
+                    || (word.ends_with('\\') && !bare_word(word, windows))))
+    };
+    if words.iter().any(unsafe_word) {
+        return Err(words
+            .iter()
+            .map(|word| match word.chars().any(char::is_control) {
+                true => format!("{word:?}"),
+                false => word.clone(),
+            })
+            .collect());
+    }
+    Ok(words
+        .iter()
+        .map(|word| {
+            if bare_word(word, windows) {
+                word.clone()
+            } else if windows {
+                format!("\"{word}\"")
+            } else {
+                format!("'{}'", word.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+/// Whether `word` needs no quoting.
+fn bare_word(word: &str, windows: bool) -> bool {
+    !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./@:".contains(&b) || (windows && b == b'\\'))
 }
 
 /// The failure of `agent.send` to recipient `to`, as [`about_agent`] does, with the tip for a

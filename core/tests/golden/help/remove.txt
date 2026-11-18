@@ -7,7 +7,7 @@ Remove agents that Facade started, along with their screens and inboxes. Facade 
 still running, and each CLI keeps its saved session.
 
 Arguments:
-  <AGENT>...  Agent ID or name
+  <AGENT>...  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
 
 Options:
   -h, --help  Print help

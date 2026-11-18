@@ -8,7 +8,7 @@ inbox at once. A message from an agent to the human goes to each of the agent's 
 shows Facade messages.
 
 Arguments:
-  <RECIPIENT>  Agent ID or name, or human for the human
+  <RECIPIENT>  Agent ID or name, such as a17@gpu on another machine, or human for the human
                If an agent is also named human, quote '#human' for the human or use the agent's ID
   <TEXT>       Message text, up to 8,000 characters and 540 lines
 

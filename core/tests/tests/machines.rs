@@ -227,13 +227,15 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     let sender = first.start_named_fake("caller", &[]);
     let project = facade_base::files::real_path(&second.project).unwrap();
     let project = project.to_str().unwrap();
-    first.run_facade_ok(&[
+    let started = first.run_facade_ok(&[
         "start", "--on", "second", "--cwd", project, "--name", "worker", "fake",
     ]);
     let worker = second
         .agent_from_list_json("worker")
         .expect("the remote run");
     let id = worker["agent_id"].as_str().unwrap();
+    // The command line names an agent of another machine with its machine: a1@second.
+    assert_eq!(started, format!("{id}@second\n"));
     let target = address(&second_id, id);
     let from = address(&first_id, &sender.id);
     assert_eq!(worker["cwd"], project, "{worker}");
@@ -300,9 +302,17 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "{}",
         terminal.text()
     );
+    assert!(
+        terminal.wait_for_output(secs(0), &format!("Attached to {id}@second.")),
+        "{}",
+        terminal.text()
+    );
     drop(link);
     assert!(
-        terminal.wait_for_output(secs(15), "Keys you type now are not sent"),
+        terminal.wait_for_output(
+            secs(15),
+            "Reconnecting to second. Keys you type now are not sent"
+        ),
         "{}",
         terminal.text()
     );
@@ -332,7 +342,15 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
             .is_some_and(|exit| exit.success())
     );
 
-    first.run_facade_ok(&["stop", &target]);
+    assert!(
+        terminal.wait_for_output(secs(0), &format!("Detached from {id}@second.")),
+        "{}",
+        terminal.text()
+    );
+    assert_eq!(
+        first.run_facade_ok(&["stop", &target]),
+        format!("{target}\n")
+    );
     assert_eq!(
         second.agent_from_list_json("worker").unwrap()["process"],
         "ended"
@@ -496,7 +514,7 @@ fn three_machines_switch_routes_and_resolve_names_only_when_all_answer() {
     ]);
     assert!(!conflict.status.success(), "{conflict:?}");
     assert!(
-        stderr(&conflict).contains("is in use by two running daemons")
+        stderr(&conflict).contains("two running machines have the same ID")
             && stderr(&conflict).contains("SSH duplicate"),
         "{}",
         stderr(&conflict)

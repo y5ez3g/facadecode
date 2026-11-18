@@ -13,11 +13,13 @@ use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
+use facade_base::address::{display_machine_selector, exact_machine_selector};
 use facade_base::console::{ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes};
 use facade_base::daemon::{self, ScreenChange, ScreenSnapshot, ScreenTopic};
 use facade_base::daemon_client::{DaemonClient, RECONNECT_DELAY};
 use facade_base::jsonrpc::{self, ErrorBody, Reason};
-use facade_base::operations::{CallParams, Operation};
+use facade_base::machine::{MachineIdentity, MachineList};
+use facade_base::operations::{CallParams, NoArgs, Operation};
 use facade_base::paths::{ClientSocket, core_dir};
 use facade_base::process::{EndReason, ProcessExit};
 use facade_base::unix_process::signal_number;
@@ -37,9 +39,10 @@ const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
 /// The bottom row while the attachment reconnects.
 pub(crate) const RECONNECTING: &str = "Reconnecting to Facade. Recent keys may be lost.";
 
-/// The bottom row while an agent on another machine reconnects: its input is paused.
-pub(crate) const RECONNECTING_PAUSED: &str =
-    "Reconnecting to Facade. Keys you type now are not sent.";
+/// The bottom row while an agent on `machine`, another machine, reconnects: its input is paused.
+pub(crate) fn reconnecting_paused(machine: &str) -> String {
+    format!("Reconnecting to {machine}. Keys you type now are not sent.")
+}
 
 /// Whether raw mode is on and the person's terminal still has to be restored.
 static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -75,13 +78,22 @@ pub(crate) fn attach(
         true => screen.snapshot.reference().exact_address(),
         false => screen.snapshot.agent_id.clone(),
     };
-    let input = Arc::new(AgentInput::new(address, remote));
+    // The person reads the agent as the command line writes it: `a3`, or `a17@gpu` elsewhere.
+    let shown = match remote {
+        true => format!(
+            "{}@{}",
+            screen.snapshot.agent_id,
+            machine_name(&screen.snapshot.machine_id, reconnect)
+        ),
+        false => screen.snapshot.agent_id.clone(),
+    };
+    let input = Arc::new(AgentInput::new(address, remote).shown_as(shown));
     // Register before entering raw mode so a termination signal can be handled even during setup.
     let signals = ConsoleSignals::new().map_err(|error| about_agent(agent, error.into()))?;
     let _ = writeln!(
         std::io::stderr(),
         "{}",
-        opening_line(&opening, &input.agent)
+        opening_line(&opening, &input.shown)
     );
     enter_raw_mode().map_err(|error| about_agent(agent, error.into()))?;
     follow_signals(signals, input.clone());
@@ -251,7 +263,7 @@ fn follow_agent(
             input.wait_for_write();
             screen.client.respond_to_closing();
         }
-        show_reconnecting(input.remote);
+        show_reconnecting(input.remote.then(|| machine_of(&input.shown)));
         screen = match reconnect_screen(input, reconnect) {
             Ok(again) => again,
             Err(end) => return Ok(end),
@@ -415,7 +427,10 @@ fn is_detach_record(keys: &[u8]) -> bool {
 /// At most [`MAX_QUEUED_KEY_BYTES`] wait; keys that do not fit are counted. Keys handed to a
 /// connection are never sent again, even when the write fails, since they may have arrived.
 struct AgentInput {
+    /// The agent's exact address, which every reconnect uses.
     agent: String,
+    /// The agent as the person reads it, for the lines around the attachment.
+    shown: String,
     remote: bool,
     queue: Mutex<InputQueue>,
     /// Wakes the writer for new input, a new connection or the end, and wakes whoever waits for a
@@ -483,11 +498,17 @@ fn notification<O: Operation>(args: O::Args) -> Vec<u8> {
 impl AgentInput {
     fn new(agent: String, remote: bool) -> Self {
         AgentInput {
+            shown: agent.clone(),
             agent,
             remote,
             queue: Mutex::default(),
             wake: Condvar::new(),
         }
+    }
+
+    /// The same input, with the agent shown as `shown`.
+    fn shown_as(self, shown: String) -> Self {
+        AgentInput { shown, ..self }
     }
 
     fn lock(&self) -> MutexGuard<'_, InputQueue> {
@@ -714,20 +735,50 @@ fn track_alternate_screen(bytes: &[u8]) {
     }
 }
 
+/// How the person names machine `id`: its name where unique, else `id:` and enough of its ID, from
+/// a connection of its own, as the watch's takes no calls.
+fn machine_name(id: &str, reconnect: &Reconnect) -> String {
+    let named = reconnect(&|| false, &mut |_| true)
+        .ok()
+        .and_then(|mut client| client.call::<MachineList>(NoArgs {}).ok())
+        .map(|listed| {
+            listed
+                .machines
+                .into_iter()
+                .map(|machine| MachineIdentity {
+                    machine_id: machine.machine_id,
+                    name: machine.name,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    named
+        .iter()
+        .find(|machine| machine.machine_id == id)
+        .map_or_else(
+            || exact_machine_selector(id),
+            |machine| display_machine_selector(machine, &named),
+        )
+}
+
+/// The machine `shown` names after its `@`, as `gpu` in `a17@gpu`.
+fn machine_of(shown: &str) -> &str {
+    shown.rsplit_once('@').map_or(shown, |(_, machine)| machine)
+}
+
 /// Shows a note on the bottom row while reconnecting. It saves and restores the cursor around the
 /// note and keeps it narrower than the terminal so that nothing scrolls; the redraw after
 /// reconnecting replaces both.
-fn show_reconnecting(remote: bool) {
+fn show_reconnecting(remote_machine: Option<&str>) {
     let Some(_terminal) = attached_terminal() else {
         return;
     };
-    let note = if remote {
-        RECONNECTING_PAUSED
-    } else {
-        RECONNECTING
+    let note = match remote_machine {
+        Some(machine) => reconnecting_paused(machine),
+        None => RECONNECTING.to_string(),
     };
     let width = terminal_size().map_or(80, |(cols, _)| usize::from(cols));
-    let shown = &note[..note.len().min(width.saturating_sub(1))];
+    let shown: String = note.chars().take(width.saturating_sub(1)).collect();
     write_terminal(format!("\x1b7\x1b[999;1H\x1b[0m\x1b[2K{shown}\x1b8").as_bytes());
 }
 
@@ -757,7 +808,7 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
         Ok(end) => {
             let logs =
                 core_dir().map_or_else(|_| PathBuf::from("core/logs"), |core| core.join("logs"));
-            result_line(&end, &input.agent, &logs)
+            result_line(&end, &input.shown, &logs)
         }
         Err(error) => format!("error: attachment failed: {error:#}"),
     };

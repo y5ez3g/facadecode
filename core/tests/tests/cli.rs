@@ -184,6 +184,49 @@ fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
     assert!(!reached(&home), "the usage error reached Facade");
 }
 
+/// `--cwd` names a folder on another machine, so it needs `--on`: a usage error before Facade is
+/// reached.
+#[test]
+fn start_cwd_without_on_exits_2_without_reaching_facade() {
+    let home = TestHome::new("startcwd");
+    let (out, err, code) = said(&facade(&home, &["start", "--cwd", "/work", "fake"]));
+    assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
+    assert!(err.starts_with("error: ") && err.contains("--on"), "{err}");
+    assert!(!reached(&home), "the usage error reached Facade");
+}
+
+/// `machine list` on a lone machine prints its table row and says how to connect another; a
+/// machine nobody has is a catalog error.
+#[test]
+fn machine_list_and_remove_on_a_lone_machine() {
+    let home = TestHome::new("machinelone");
+    let (out, err, code) = said(&facade(&home, &["machine", "list"]));
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    let header: Vec<&str> = lines[0].split_whitespace().collect();
+    assert_eq!(header, ["NAME", "ID", "VERSION", "ROUTE", "SAVED"], "{out}");
+    assert!(
+        lines[1].contains(" id:") && lines[1].contains("this machine"),
+        "{out}"
+    );
+    assert_eq!(
+        (err.as_str(), code),
+        (
+            "No other machines. Run 'facade machine add <DESTINATION>' to connect one.\n",
+            Some(0)
+        )
+    );
+    assert_eq!(
+        said(&facade(&home, &["machine", "remove", "nowhere"])),
+        (
+            String::new(),
+            "error: no machine 'nowhere'\n  tip: run 'facade machine list' to see your machines\n"
+                .to_string(),
+            Some(1)
+        )
+    );
+}
+
 /// `status` where nothing runs says so, shows the Facade home, and starts nothing.
 #[test]
 fn status_on_an_empty_home_starts_nothing() {

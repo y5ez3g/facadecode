@@ -25,6 +25,7 @@ Messages:
   messages     Read the inbox of the agent in this terminal
 
 Setup and info:
+  machine      Connect to Facade on other machines
   integration  Let CLIs you start yourself join Facade
   status       Show Facade's status
   version      Print the version

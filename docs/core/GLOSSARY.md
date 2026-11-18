@@ -221,7 +221,7 @@ service switch a takeover.
 | bridge | The temporary transport for a Remote-SSH window. VS Code commands carry bytes, EOF and stderr between the local window component and the remote `facade machine serve` over the existing editor connection | relay, tunnel (for this) |
 | unreachable | A machine currently has no route from here. A remote agent's `unreachable` flag reports that its running machine cannot be reached | offline, ended, removed (for this) |
 | disconnected | The display state of a remote card or attached terminal after its live feed is lost. It keeps the last view until a fresh snapshot arrives | unreachable (for a view), ended, removed |
-| SSH interaction required | The state of a saved connection when background SSH needs a person to authenticate or verify the host. Retries pause until the person runs the supplied `facade machine add` command. The reason is `ssh_interaction_required` | unreachable (for this reason) |
+| SSH interaction required | The state of a saved connection when background SSH needs a person to authenticate or verify the host. Retries pause until the person runs the supplied `facade machine add` command. The reason is `ssh_interaction_required`; the command line says `needs SSH login` | unreachable (for this reason) |
 | machine ID conflict | Two live daemons claim the same machine ID with different daemon start IDs. Facade refuses the conflicting connection and reports both paths with `machine_id_conflict` | duplicate machine name, alternate route (for this) |
 
 ## Agent and message addresses
@@ -229,7 +229,7 @@ service switch a takeover.
 | Use | Means | Not these |
 |---|---|---|
 | structured identity | An agent or message number paired with its full machine ID for storage, protocol and forwarding. In an `AgentRef` the ID names the running machine. In a `MessageRef` it names the machine that stores the message | display label, copyable address |
-| display label | The text shown for an agent or message. A local label uses its number alone, such as `#a17`. A remote label adds the machine, such as `#a17@gpu`, and uses a unique `id:` prefix if the machine name is shared | copyable address (for this) |
+| display label | The text shown for an agent or message. A local label uses its number alone, such as `#a17`. A remote label adds the machine, such as `#a17@gpu`, and uses a unique `id:` prefix if the machine name is shared. The command line writes labels bare, as `a17@gpu` and `m42@gpu`; message headers and MCP keep the `#` | copyable address (for this) |
 | copyable address | The `address` text for an agent or message, always qualified by a machine, even on its own machine. Use a unique machine name or `id:` prefix, such as `#m42@gpu` or `#m42@id:3f9a2c1d` | display label, bare number |
 
 ## Core's parts

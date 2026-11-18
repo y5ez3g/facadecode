@@ -7,7 +7,7 @@ CLI supports resuming and saved a session. In an interactive terminal it opens h
 detach and leave it running. Use '--detach' to resume it in the background instead.
 
 Arguments:
-  <AGENT>  Agent ID or name
+  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
 
 Options:
   -d, --detach  Resume in the background and print the agent's ID

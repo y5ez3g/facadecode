@@ -30,7 +30,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 ## Interface
 
-**People and agents** use the commands, grouped in the root help as Agents (`start`, `list`, alias `ls`, `attach`, `stop`, `resume`, `remove`, alias `rm`, `rename`), Inspect and control (`inspect`, `screen`, `type`), Messages (`send`, `messages`) and Setup and info (`integration`, `status`, `version`, `completion`), and `machine` (`add`, `connect`, `list`, `remove`, `rename`), which only a person may run except `machine list`. Each command's help prints the same text for `-h`, `--help` and `facade help <command>`. IDs the command line writes itself are bare, as `a3`, and an agent of another machine adds its machine, as `a17@gpu`. What each does is in [FEATURES.md](../FEATURES.md).
+**People and agents** use the commands, grouped in the root help as Agents (`start`, `list`, alias `ls`, `attach`, `stop`, `resume`, `remove`, alias `rm`, `rename`), Inspect and control (`inspect`, `screen`, `type`), Messages (`send`, `messages`) and Setup and info (`machine`, `integration`, `status`, `version`, `completion`). `machine` has the subcommands `add`, `connect`, `list`, `remove` and `rename`, on its own help page; only a person may run them, except `machine list`. Each command's help prints the same text for `-h`, `--help` and `facade help <command>`. IDs the command line writes itself are bare, as `a3`, and an agent of another machine adds its machine, as `a17@gpu`. What each does is in [FEATURES.md](../FEATURES.md).
 
 **CLIs** run `facade hook <event>` lines, which [rules](rules.md) writes into a run's settings and into an integration's entries. See [hooks](#hooks).
 
@@ -57,7 +57,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 ## Inside
 
-The layer is `main.rs`, `cli.rs`, `help.rs`, `errors.rs` and `daemon_client.rs`. `cli.rs` defines the commands and their arguments, builds the help from `help.rs` (the root page's groups, each page's description, alias and examples, with each example's words for the help tests) and writes completion scripts. `errors.rs` holds the error catalog: `Problem`, the classifiers `about_agent` and `about_send` that turn a service's refusal and the command's facts into a catalog row, and `report`, which prints any command's error. `main.rs` parses the arguments and `run` hands each command to one child island. The children never call each other. They report back through return values.
+The layer is `main.rs`, `cli.rs`, `help.rs`, `errors.rs` and `daemon_client.rs`. `cli.rs` defines the commands and their arguments, builds the help from `help.rs` (the root page's groups, each page's description, alias and examples, with each example's words for the help tests) and writes completion scripts. `errors.rs` holds the error catalog: `Problem`, the classifiers `about_agent`, `about_send`, `about_change`, `about_machine` and `about_connection` that turn a service's refusal and the command's facts into a catalog row, and `report`, which prints any command's error. `main.rs` parses the arguments and `run` hands each command to one child island. The children never call each other. They report back through return values.
 
 ```mermaid
 flowchart LR
@@ -111,7 +111,7 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
   - It reaches the daemon only through the `DaemonClient` it is given.
   - `facade start` takes `--on <machine>` and, with it, `--cwd <path>`: the machine to run on and a folder there. Without `--cwd` the agent starts in this shell's folder here, or in the login user's home on another machine.
   - `agent.start` and `agent.send` carry a request ID. If a newer Facade cuts the call off when it takes over, the call is repeated, and the result says what was done.
-  - In the background (`-d`, or without the person's terminal), `start` and `resume` print the agent's bare ID and return no agent. Otherwise they return the agent to show, by its exact address where it runs on another machine, and how it began, for attach's first line. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
+  - In the background (`-d`, or without the person's terminal), `start` and `resume` print the agent's bare ID, as `a3` or `a17@gpu`, and return no agent. Otherwise they return the agent to show, by its exact address where it runs on another machine, and how it began, for attach's first line. The first frame uses the terminal's size, or `DEFAULT_TERMINAL_SIZE` without one.
   - `resume` of an agent on another machine sends no environment: the run takes that machine's login environment.
   - `resume` inspects the agent first: a guest, a running agent and a plain program fail with their catalog errors before `agent.resume`, and it warns when the earlier CLI may still be running because its terminal closed.
   - `stop` and `remove` work through their agents in order, print each agent as given once it is done, report each one's failure through the reporter the layer gives them and go on; a failed connection ends the batch. They exit 1 if any failed.
@@ -124,7 +124,7 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 - **Never does:** connect to or start the daemon; show an agent or change terminal modes; read hook input; work out which agent a terminal belongs to.
 - **Interface:** only `run` calls it. Every call blocks until the daemon responds.
   - `start(&mut DaemonClient, name, prompt, (machine, cwd), command, Option<(u16, u16)>) -> Result<Option<Shown>>`; `resume(&mut DaemonClient, agent, Option<(u16, u16)>)` returns the same.
-  - `list` takes a `Listing` (`Table`, `Quiet` or `Json`); `inspect`, `integration`, `status` and `version` take a `Format` (`Text` or `Json`). The JSON of `list` and `inspect` carries the protocol's `AgentInfo` with its running machine, window memberships and optional location source. `screen`, `type_input`, `send`, `messages` and `rename` take the command's words.
+  - `list` takes a `Listing` (`Table`, `Quiet` or `Json`); `inspect`, `integration`, `status` and `version` take a `Format` (`Text` or `Json`). The JSON of `list` holds the agents and each machine's answer; both carry the protocol's `AgentInfo` with its running machine, window memberships and optional location source. `screen`, `type_input`, `send`, `messages` and `rename` take the command's words.
   - `stop` and `remove(&mut DaemonClient, agents, report) -> Result<i32>`.
   - `integration(&mut DaemonClient, IntegrationAction, Format)`, where `IntegrationAction` is `Add { cli }`, `Remove { cli }` or `List`.
   - `status(home, Option<&DaemonClient>, Format)` and `version(Format)`.
@@ -141,16 +141,21 @@ first-connection trust notice and Linux's SSH logout information.
 - `machine connect` keeps its session open in the foreground. `machine add` holds the foreground session while a
   separate ordinary call to `machine.add` waits for the daemon to verify its saved session to the same machine ID.
   The foreground relay flushes buffered bytes between the daemon and SSH's pipes as soon as it reads them.
-- `machine list` shows machines, reachability, routes and connections. `machine remove` removes a locally saved
-  connection and prints the remaining reachability. `machine rename` requests a name change on the selected machine.
-  Saved connections that need SSH interaction show a repair command or list its arguments when an argument
-  needs shell-specific escaping.
+- `machine list` prints a table, one row per machine with this one first: name, `id:` and short ID, version, route
+  and the SSH connection saved here; `--json` prints the protocol's list. A saved connection that needs an SSH login
+  adds a `warning:` with the command that repairs it, quoted for the shell, or its words one per line where a word
+  needs escaping quoting cannot give. `machine remove` removes a saved connection and adds a `note:` where the
+  machine still has a route through another machine. `machine rename` prints the machine's ID and new name.
+- `add` and `connect` print the trust `note:` on a first connection. `add` prints the saved connection on standard
+  output; `connect` says on standard error that it is connected and fails with exit 1 when the connection ends.
+  SSH's standard error passes through, and a failure before the machines connect prints a catalog row: SSH's last
+  line, `facade` missing there, startup files that print, versions that do not match, or a copied home.
 - `machine serve` validates the initiating daemon's machine hello before opening the local socket in the selected
   home. It forwards the hello and reply byte for byte. After the daemon accepts the hello, it copies the remaining
   session traffic through the same buffered readers, flushing each block as it arrives. A transfer error reports
   its direction and kind on standard error.
-- When Linux logind is configured to clean up this user's SSH session processes, the connection output explains
-  the applicable policy and points to `KillExcludeUsers`.
+- When Linux logind is configured to clean up this user's SSH session processes, a `warning:` points to
+  `KillExcludeUsers`.
 
 ### attach
 
@@ -162,7 +167,7 @@ first-connection trust notice and Linux's SSH logout information.
   - The screen watch it opens on each connection.
   - Its threads. The caller's thread draws the screen and reconnects. One thread reads the person's keys and, on Windows, the console's size changes, through `facade_base::console::ConsoleReader`. One thread writes the queue as `agent.type` and `agent.resize` notifications, and never holds the queue's lock while it writes. One thread follows `facade_base::console::ConsoleSignals`: a size change (SIGWINCH) queues a resize; SIGTERM, SIGHUP, SIGINT and SIGQUIT restore the terminal and exit with 128 plus the signal's number. On Windows it has nothing to follow and ends at once.
 - **Keeps:**
-  - Before the first redraw it writes one line to standard error: `Started a3 (Pixel).`, `Resumed a3 (Pixel).` or `Attached to a3.`, then `Press Ctrl-] to detach.`
+  - Before the first redraw it writes one line to standard error: `Started a3 (Pixel).`, `Resumed a3 (Pixel).` or `Attached to a3.`, then `Press Ctrl-] to detach.` An agent of another machine is named with its machine, as `a17@gpu`, which a lookup of the machines names.
   - Every end restores the person's terminal exactly once, then writes the result to standard error: `Detached from a3. …`, `a3 exited with code 0.`, `a3 was ended by SIGKILL.`, `a3's terminal closed. …`, `error: a3 was removed`, `error: could not reconnect to Facade` with a tip, or `Attachment ended by SIGTERM.` The ends are a detach, the agent ending, its removal, a termination signal and an error. Once the terminal is restored, no more of the agent's output is written.
   - Ctrl-] detaches, in plain input, in the kitty encoding, and as a win32-input-mode key-down record of the character 0x1D (`CSI <vk>;<sc>;29;1;<cs>;<rc>_`). Keys before it in the same read are still sent, and it waits up to 1 second for them. Signals do not wait.
   - The agent's output goes to the person's console unchanged. On Windows the agent's console host turns win32-input-mode on and off; the person's console follows it, so keys arrive in either form, and go to the agent as they come. The restoration turns win32-input-mode off.
@@ -170,7 +175,7 @@ first-connection trust notice and Linux's SSH logout information.
   - Keys handed to a connection are never sent again, even when the write fails.
   - On a takeover, the keys handed to the old connection are written before its response to `closing`.
   - It reconnects by the exact address of the first snapshot, machine and agent ID, never by the name the person typed. Only the first watch includes scrollback.
-  - A connect timeout, or a failed resize or watch, is retried every 500 ms for as long as the attachment lasts; an unreachable machine is retried the same way. While it reconnects, the bottom row reads `Reconnecting to Facade. Recent keys may be lost.`, or for an agent of another machine `Reconnecting to Facade. Keys you type now are not sent.` A permanent failure ends it, and so does `not_found`, as a removed agent. Detaching cancels a reconnect in progress, `hello` included.
+  - A connect timeout, or a failed resize or watch, is retried every 500 ms for as long as the attachment lasts; an unreachable machine is retried the same way. While it reconnects, the bottom row reads `Reconnecting to Facade. Recent keys may be lost.`, or for an agent of another machine `Reconnecting to gpu. Keys you type now are not sent.`, with its machine A permanent failure ends it, and so does `not_found`, as a removed agent. Detaching cancels a reconnect in progress, `hello` included.
   - For an agent of another machine, the resize waits until the new snapshot is drawn.
   - The exit code is 0 after a detach, the agent's own code or 128 plus its signal after it ends, and 1 otherwise.
 - **Never does:** connect to the daemon on its own (it only uses the `reconnect` it is given); interpret the CLI's output beyond following the alternate screen.

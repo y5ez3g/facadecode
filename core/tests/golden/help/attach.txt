@@ -7,7 +7,7 @@ Press Ctrl-] to detach and leave it running. This command exits with the agent's
 agent ends or after showing its saved screen.
 
 Arguments:
-  <AGENT>  Agent ID or name
+  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
 
 Options:
   -h, --help  Print help

@@ -33,11 +33,10 @@ use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
 use facade_base::daemon_client::DaemonClient;
 use facade_base::process::{EndReason, ProcessExit};
 
-use cli::{Command, Integration, Target, Targets};
+use cli::{Command, Integration, MachineAction, Target, Targets};
 use commands::{Format, IntegrationAction, Listing};
 use daemon_client::{connect_or_start, reconnect};
 use errors::Problem;
-use machine::MachineAction;
 
 /// How an attachment began, for the line before the agent's screen.
 pub(crate) enum Opening {
@@ -103,7 +102,12 @@ fn main() {
     }
     let hidden = matches!(
         command,
-        Command::Hook { .. } | Command::Keeper | Command::Daemon { .. }
+        Command::Hook { .. }
+            | Command::Keeper
+            | Command::Daemon { .. }
+            | Command::Machine {
+                action: MachineAction::Serve(_)
+            }
     );
     let code = run(command).unwrap_or_else(|error| {
         if hidden {

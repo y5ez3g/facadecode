@@ -29,7 +29,7 @@ pub(crate) const GROUPS: &[(&str, &[&str])] = &[
     ("Messages", &["send", "messages"]),
     (
         "Setup and info",
-        &["integration", "status", "version", "completion"],
+        &["machine", "integration", "status", "version", "completion"],
     ),
 ];
 
@@ -108,6 +108,11 @@ pub(crate) const PAGES: &[Page] = &[
                     "Fix the failing test in parser.rs",
                     "claude",
                 ],
+            ),
+            direct(
+                "Start Codex on gpu in /work/app",
+                "facade start --on gpu --cwd /work/app codex",
+                &["start", "--on", "gpu", "--cwd", "/work/app", "codex"],
             ),
         ],
     },
@@ -293,6 +298,93 @@ pub(crate) const PAGES: &[Page] = &[
             "Read waiting messages in an agent's terminal",
             "facade messages",
             &["messages"],
+        )],
+    },
+    Page {
+        path: "machine",
+        description: "Work with agents on other machines. Facade connects over SSH and opens no port. Once two \
+             machines are connected, you can list, start and message agents on both from either one.",
+        alias: None,
+        examples: &[
+            direct(
+                "Connect to gpu from your SSH config",
+                "facade machine add gpu",
+                &["machine", "add", "gpu"],
+            ),
+            direct(
+                "See the machines this one connects to",
+                "facade machine list",
+                &["machine", "list"],
+            ),
+        ],
+    },
+    Page {
+        path: "machine add",
+        description: "Connect to a machine over SSH and keep the connection. Facade reconnects on its own, even \
+             after either machine restarts. The first connection runs here, so SSH can ask for a password or a \
+             host key. Run this again to repair a connection that needs an SSH login.",
+        alias: None,
+        examples: &[
+            direct(
+                "Connect to gpu from your SSH config",
+                "facade machine add gpu",
+                &["machine", "add", "gpu"],
+            ),
+            direct(
+                "Use another Facade home on that machine",
+                "facade machine add me@10.0.0.5 --home /srv/facade",
+                &["machine", "add", "me@10.0.0.5", "--home", "/srv/facade"],
+            ),
+        ],
+    },
+    Page {
+        path: "machine connect",
+        description: "Connect to a machine over SSH until you press Ctrl-C or close this terminal. Nothing is \
+             saved.",
+        alias: None,
+        examples: &[direct(
+            "Connect to gpu for now",
+            "facade machine connect gpu",
+            &["machine", "connect", "gpu"],
+        )],
+    },
+    Page {
+        path: "machine list",
+        description: "See the machines this one connects to and how, and the connections saved here.",
+        alias: None,
+        examples: &[
+            direct(
+                "See your machines",
+                "facade machine list",
+                &["machine", "list"],
+            ),
+            direct(
+                "Print every machine as JSON",
+                "facade machine list --json",
+                &["machine", "list", "--json"],
+            ),
+        ],
+    },
+    Page {
+        path: "machine remove",
+        description: "Remove a saved connection to a machine. Its agents keep running, and other machines may \
+             still have a route to it.",
+        alias: None,
+        examples: &[direct(
+            "Stop connecting to gpu",
+            "facade machine remove gpu",
+            &["machine", "remove", "gpu"],
+        )],
+    },
+    Page {
+        path: "machine rename",
+        description: "Give a machine a new name, from any machine with a route to it. Addresses with the old \
+             name, such as 'a17@gpu', stop working.",
+        alias: None,
+        examples: &[direct(
+            "Rename machine gpu to lab",
+            "facade machine rename gpu lab",
+            &["machine", "rename", "gpu", "lab"],
         )],
     },
     Page {

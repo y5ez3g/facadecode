@@ -7,7 +7,6 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use crate::errors::Problem;
 use crate::help;
 use crate::hooks::HookEvent;
-use crate::machine::MachineAction;
 
 /// The shells `facade completion` writes a script for.
 const SHELLS: [&str; 4] = ["bash", "zsh", "fish", "powershell"];
@@ -21,13 +20,20 @@ pub(crate) struct Arguments {
 
 #[derive(clap::Args)]
 pub(crate) struct Target {
-    #[arg(value_name = "AGENT", help = "Agent ID or name")]
+    #[arg(
+        value_name = "AGENT",
+        help = "Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu"
+    )]
     pub(crate) agent: String,
 }
 
 #[derive(clap::Args)]
 pub(crate) struct Targets {
-    #[arg(value_name = "AGENT", required = true, help = "Agent ID or name")]
+    #[arg(
+        value_name = "AGENT",
+        required = true,
+        help = "Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu"
+    )]
     pub(crate) agents: Vec<String>,
 }
 
@@ -65,7 +71,7 @@ pub(crate) enum Command {
             long,
             value_name = "PATH",
             requires = "machine",
-            help = "Folder on that machine; needs --on [default: that user's home folder]"
+            help = "Folder on that machine; needs '--on' [default: that user's home folder]"
         )]
         cwd: Option<String>,
         // PROGRAM and its arguments: one trailing list, so that every word after PROGRAM is the
@@ -163,7 +169,7 @@ pub(crate) enum Command {
     Send {
         #[arg(
             value_name = "RECIPIENT",
-            help = "Agent ID or name, or human for the human\nIf an agent is also named human, quote '#human' \
+            help = "Agent ID or name, such as a17@gpu on another machine, or human for the human\nIf an agent is also named human, quote '#human' \
                     for the human or use the agent's ID"
         )]
         to: String,
@@ -181,7 +187,7 @@ pub(crate) enum Command {
     },
     #[command(about = "Read the inbox of the agent in this terminal")]
     Messages,
-    #[command(about = "Connect to Facade on other computers")]
+    #[command(about = "Connect to Facade on other machines")]
     Machine {
         #[command(subcommand)]
         action: MachineAction,
@@ -252,6 +258,60 @@ pub(crate) enum Integration {
     },
 }
 
+/// `facade machine`'s subcommands.
+#[derive(Subcommand)]
+pub(crate) enum MachineAction {
+    #[command(about = "Connect to a machine and keep the connection")]
+    Add(SshTarget),
+    #[command(about = "Connect to a machine while this command runs")]
+    Connect(SshTarget),
+    #[command(about = "List machines")]
+    List {
+        #[arg(long, help = "Print machines as JSON")]
+        json: bool,
+    },
+    #[command(about = "Remove a saved connection")]
+    Remove {
+        #[arg(value_name = "MACHINE", help = "Machine ID or name")]
+        machine: String,
+    },
+    #[command(about = "Rename a machine")]
+    Rename {
+        #[arg(value_name = "MACHINE", help = "Machine ID or name")]
+        machine: String,
+        #[arg(value_name = "NAME", help = "New name")]
+        name: String,
+    },
+    // For Facade: the far end of a machine connection, which SSH runs on the other machine.
+    #[command(hide = true)]
+    Serve(ServeArgs),
+}
+
+/// The machine `machine add` and `machine connect` reach over SSH.
+#[derive(clap::Args)]
+pub(crate) struct SshTarget {
+    #[arg(
+        value_name = "DESTINATION",
+        help = "SSH host from your SSH config, or user@host"
+    )]
+    pub(crate) ssh_destination: String,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Facade home on that machine [default: that user's Facade home]"
+    )]
+    pub(crate) home: Option<String>,
+}
+
+/// The Facade home `machine serve` serves, as a path or, from a daemon, hex-encoded.
+#[derive(clap::Args)]
+pub(crate) struct ServeArgs {
+    #[arg(long, value_name = "PATH", conflicts_with = "home_hex")]
+    pub(crate) home: Option<std::path::PathBuf>,
+    #[arg(long)]
+    pub(crate) home_hex: Option<String>,
+}
+
 /// The CLI an integration is for.
 #[derive(clap::Args)]
 pub(crate) struct IntegrationCli {
@@ -280,7 +340,8 @@ const START_ARGUMENTS: &str = "  <PROGRAM>  Built-in or configured CLI, such as 
 
 /// `type`'s Arguments section, which shows TEXT as clap shows a required argument: it is required
 /// unless keys are given, as the two usage lines say.
-const TYPE_ARGUMENTS: &str = "  <AGENT>  Agent ID or name
+const TYPE_ARGUMENTS: &str =
+    "  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
   <TEXT>   Text to type; put '--' before text that starts with '-'";
 
 /// The version of this build, which a test can have it play.

@@ -1,0 +1,16 @@
+Connect to a machine while this command runs
+
+Usage: facade machine connect [OPTIONS] <DESTINATION>
+
+Connect to a machine over SSH until you press Ctrl-C or close this terminal. Nothing is saved.
+
+Arguments:
+  <DESTINATION>  SSH host from your SSH config, or user@host
+
+Options:
+      --home <PATH>  Facade home on that machine [default: that user's Facade home]
+  -h, --help         Print help
+
+Examples:
+  # Connect to gpu for now
+  facade machine connect gpu

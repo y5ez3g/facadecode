@@ -1,0 +1,16 @@
+Remove a saved connection
+
+Usage: facade machine remove <MACHINE>
+
+Remove a saved connection to a machine. Its agents keep running, and other machines may still have a
+route to it.
+
+Arguments:
+  <MACHINE>  Machine ID or name
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Stop connecting to gpu
+  facade machine remove gpu

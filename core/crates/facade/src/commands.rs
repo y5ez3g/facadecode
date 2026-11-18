@@ -27,7 +27,9 @@ use facade_rules::integration::command_program;
 use serde_json::json;
 use unicode_width::UnicodeWidthStr;
 
-use crate::errors::{Problem, about_agent, about_send, bare_id};
+use crate::errors::{
+    Change, Problem, about_agent, about_change, about_machine, about_send, bare_id,
+};
 use crate::{ExitText, Opening, Shown};
 
 /// How a command prints: for the reader, or as JSON.
@@ -60,6 +62,7 @@ pub(crate) fn start(
     terminal: Option<(u16, u16)>,
 ) -> anyhow::Result<Option<Shown>> {
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
+    let on = machine.clone();
     // On another machine without --cwd, the daemon starts the agent in that user's home folder.
     let cwd_is_default = cwd.is_none();
     let cwd = match cwd {
@@ -88,12 +91,18 @@ pub(crate) fn start(
         effort: None,
         session: None,
     };
-    let (started, _) = client.call_with_request_id::<AgentStart>(args, false)?;
+    let (started, _) = client
+        .call_with_request_id::<AgentStart>(args, false)
+        .map_err(|error| match &on {
+            Some(machine) => about_machine(machine, None, error),
+            None => error,
+        })?;
     let here = client.hello_result.machine_id.clone();
+    let shown = display_id(client, &started.agent);
     let opening = Opening::Started {
         name: started.agent.name.clone(),
     };
-    Ok(show(&started.agent, &here, opening, terminal))
+    Ok(show(&started.agent, &here, shown, opening, terminal))
 }
 
 /// Inspects the earlier run before resuming its session in a new run.
@@ -137,16 +146,18 @@ pub(crate) fn resume(
             rows,
         })
         .map_err(|error| about_agent(&agent, error))?;
+    let shown = display_id(client, &resumed);
     let opening = Opening::Resumed {
         name: resumed.name.clone(),
     };
-    Ok(show(&resumed, &here, opening, terminal))
+    Ok(show(&resumed, &here, shown, opening, terminal))
 }
 
 /// Returns the agent to attach to, by its exact address, or prints its ID when detached.
 fn show(
     agent: &AgentInfo,
     here: &str,
+    shown: String,
     opening: Opening,
     terminal: Option<(u16, u16)>,
 ) -> Option<Shown> {
@@ -156,8 +167,20 @@ fn show(
             opening,
         });
     }
-    println_or_end!("{}", shown_id(agent));
+    println_or_end!("{shown}");
     None
+}
+
+/// The agent as the command line prints it, naming its machine where the record has no label.
+fn display_id(client: &mut DaemonClient, agent: &AgentInfo) -> String {
+    if agent.label.is_some() || agent.machine_id == client.hello_result.machine_id {
+        return shown_id(agent);
+    }
+    format!(
+        "{}@{}",
+        agent.agent_id,
+        machine_selector(client, &agent.machine_id)
+    )
 }
 
 /// The agent as the command line prints it: `a3` here, `a17@gpu` on another machine.
@@ -190,7 +213,7 @@ pub(crate) fn list(client: &mut DaemonClient, listing: Listing) -> anyhow::Resul
         let why = match machine.status {
             MachineQueryStatus::Answered => continue,
             MachineQueryStatus::Unavailable => "it is unreachable",
-            MachineQueryStatus::TimedOut => "it did not answer within 3 seconds",
+            MachineQueryStatus::TimedOut => "it did not respond within 3 seconds",
             MachineQueryStatus::Error => "it failed",
         };
         eprintln!(
@@ -384,7 +407,7 @@ fn window_failure(failure: &WindowDeliveryFailure, here: &str) -> String {
     let why = match failure.reason.as_str() {
         "window_disconnected" => "is closed",
         "not_watching" => "is not showing Facade messages",
-        "machine_unavailable" => "is on a machine that cannot be reached",
+        "machine_unavailable" => "is on a machine Facade could not connect to",
         reason => reason,
     };
     format!("{} {why}", window_name(&failure.window, here))
@@ -474,7 +497,12 @@ pub(crate) fn stop(
     agents: Vec<String>,
     report: &dyn Fn(&anyhow::Error) -> i32,
 ) -> anyhow::Result<i32> {
-    Ok(change_agents::<AgentStop>(client, agents, report))
+    Ok(change_agents::<AgentStop>(
+        client,
+        agents,
+        Change::Stop,
+        report,
+    ))
 }
 
 pub(crate) fn remove(
@@ -482,13 +510,19 @@ pub(crate) fn remove(
     agents: Vec<String>,
     report: &dyn Fn(&anyhow::Error) -> i32,
 ) -> anyhow::Result<i32> {
-    Ok(change_agents::<AgentRemove>(client, agents, report))
+    Ok(change_agents::<AgentRemove>(
+        client,
+        agents,
+        Change::Remove,
+        report,
+    ))
 }
 
 /// Run one operation per argument. A service refusal leaves the connection usable.
 fn change_agents<O: Operation<Args = AgentArgs>>(
     client: &mut DaemonClient,
     agents: Vec<String>,
+    change: Change,
     report: &dyn Fn(&anyhow::Error) -> i32,
 ) -> i32 {
     let mut code = 0;
@@ -499,7 +533,7 @@ fn change_agents<O: Operation<Args = AgentArgs>>(
             Ok(_) => println_or_end!("{}", single_line(&agent)),
             Err(error) => {
                 let refused = error.chain().any(|cause| cause.is::<ErrorBody>());
-                report(&about_agent(&agent, error));
+                report(&about_change(&agent, change, error));
                 if !refused {
                     return 1;
                 }

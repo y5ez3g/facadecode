@@ -1,0 +1,21 @@
+Connect to a machine and keep the connection
+
+Usage: facade machine add [OPTIONS] <DESTINATION>
+
+Connect to a machine over SSH and keep the connection. Facade reconnects on its own, even after
+either machine restarts. The first connection runs here, so SSH can ask for a password or a host
+key. Run this again to repair a connection that needs an SSH login.
+
+Arguments:
+  <DESTINATION>  SSH host from your SSH config, or user@host
+
+Options:
+      --home <PATH>  Facade home on that machine [default: that user's Facade home]
+  -h, --help         Print help
+
+Examples:
+  # Connect to gpu from your SSH config
+  facade machine add gpu
+
+  # Use another Facade home on that machine
+  facade machine add me@10.0.0.5 --home /srv/facade

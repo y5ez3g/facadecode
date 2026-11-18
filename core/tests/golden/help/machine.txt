@@ -1,0 +1,23 @@
+Connect to Facade on other machines
+
+Usage: facade machine <COMMAND>
+
+Work with agents on other machines. Facade connects over SSH and opens no port. Once two machines
+are connected, you can list, start and message agents on both from either one.
+
+Commands:
+  add      Connect to a machine and keep the connection
+  connect  Connect to a machine while this command runs
+  list     List machines
+  remove   Remove a saved connection
+  rename   Rename a machine
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Connect to gpu from your SSH config
+  facade machine add gpu
+
+  # See the machines this one connects to
+  facade machine list

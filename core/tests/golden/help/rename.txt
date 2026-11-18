@@ -5,7 +5,7 @@ Usage: facade rename <AGENT> <NAME>
 Give the agent a new name, or pass a space in quotes to let Facade choose one.
 
 Arguments:
-  <AGENT>  Agent ID or name
+  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
   <NAME>   New name, or " " for one chosen by Facade
 
 Options:

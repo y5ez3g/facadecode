@@ -1,0 +1,16 @@
+List machines
+
+Usage: facade machine list [OPTIONS]
+
+See the machines this one connects to and how, and the connections saved here.
+
+Options:
+      --json  Print machines as JSON
+  -h, --help  Print help
+
+Examples:
+  # See your machines
+  facade machine list
+
+  # Print every machine as JSON
+  facade machine list --json

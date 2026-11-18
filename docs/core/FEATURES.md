@@ -27,7 +27,7 @@ An agent is a CLI that Facade runs in a terminal it keeps, or a session that joi
   `hello` the highest agent and message numbers its editor gave before, and core numbers above them from then on.
 - **List**: `facade list` or `facade ls` shows one row per visible agent, with its ID, name, CLI, state, age and
   folder. Ended agents stay in the list until removed. A guest's CLI is marked `(guest)`. Use `-q` for one bare ID
-  per line or `--json` for the agent records.
+  per line or `--json` for the agent records and each machine's answer.
 - **States**: The table describes an agent's state in words such as `working`, `waiting for you: question`,
   `turn finished`, `stopped` or `exited: code 0`. A state comes from what the CLI reports and what Facade reads
   from its screen. JSON keeps the protocol values. See [States](../../core/protocol/PROTOCOL.md#states).
@@ -49,7 +49,8 @@ An agent is a CLI that Facade runs in a terminal it keeps, or a session that joi
 - **Inspect**: `facade inspect` shows an agent's state, process, Facade tools, input box, last submitted text and saved
   session. Its times include UTC. `--json` prints the full inspection.
 
-The command line prints bare IDs such as `a3`. It accepts that form, a quoted `'#a3'`, a number or an agent name.
+The command line prints bare IDs such as `a3`, and an agent of another machine with its machine, as `a17@gpu`. It
+accepts those forms, a quoted `'#a3'` or `'#a17@gpu'`, a number or an agent name, alone or as `Pixel@gpu`.
 Message headers continue to use IDs such as `#a3` and `#m42`.
 
 ## Terminals
@@ -118,8 +119,8 @@ The [MCP contract](../extension/engineering/MCP.md) gives every tool's arguments
 - **Reach**: an agent whose run has YOLO on reaches every agent. With YOLO off, it reaches its creation tree, the agents
   with its root. The person reaches every agent. A start can go anywhere, and the new agent joins its starter's tree.
 - **Across machines**: the machine that holds the target checks the caller, as its first machine filled it in. A tree
-  spans machines, and an agent with YOLO on reaches the agents of every machine it can reach. A new agent's YOLO comes
-  from the settings file of the machine it runs on. Only the person adds, connects, removes or renames machines.
+  spans machines, and an agent with YOLO on reaches the agents of every machine it has a route to. A new agent's YOLO
+  comes from the settings file of the machine it runs on. Only the person adds, connects, removes or renames machines.
 
 See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-trees).
 
@@ -159,30 +160,31 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
 - Each Facade home is a machine, with an ID made once and a name made once from the host name: the part before the
   first dot, lowercase, with every other character than `a-z`, `0-9` and `-` made `-`, runs of `-` made one, and `-`
   at either end dropped; an empty result is `machine`. Names may repeat;
-  `facade machine rename <machine> <name>` renames a machine from any machine that reaches it.
-- `facade machine add <ssh-destination> [--home <path>]` connects this machine with another and keeps the connection:
+  `facade machine rename <machine> <name>` renames a machine from any machine with a route to it.
+- `facade machine add <DESTINATION> [--home <PATH>]` connects this machine with another and keeps the connection:
   the daemon reconnects every 10 seconds, and a computer that restarted connects back the next time Facade runs. The
   first connection, and any repair, runs in the terminal, where SSH asks for passwords, MFA and host keys; running add
   again for a saved machine repairs it. `facade machine connect` stays connected only while the command runs. No port
   is opened: SSH runs `facade machine serve` on the other machine. Once connected, both machines find each other's
   agents.
-- A saved connection that needs a person stops retrying and says "SSH interaction required", with the command that
-  repairs it. A failed connection says why: SSH's own error, `facade` not found there, a startup file that writes to
-  standard output, versions that do not match, or two homes with one machine ID (a copied home: give the copy a new
-  empty home).
+- A saved connection that needs a person stops retrying; `facade machine list` shows `needs SSH login` and a
+  `warning:` with the command that repairs it. A failed connection says why: SSH's own error, `facade` not found
+  there, a startup file that writes to standard output, versions that do not match, or two homes with one machine ID
+  (a copied home: give the copy a new empty home).
 - A connection that succeeds warns when the other machine is Linux and systemd will end that login's processes when
   SSH ends (`KillUserProcesses` or `KillOnlyUsers` applying to the user): an administrator lists the user in
   `KillExcludeUsers` there. Facade changes no system settings.
-- The first connection to a machine says what it trusts: agents with YOLO on, on any machine that can reach this one,
+- The first connection to a machine says what it trusts: agents with YOLO on, on any machine with a route to this one,
   can operate this machine's agents.
-- `facade machine list` shows the machines this one reaches and those it saved but cannot reach now, each with its
-  route, connections and state; `facade machine remove <machine>` removes a saved connection only.
+- `facade machine list` shows a table of the machines this one connects to and those it saved but cannot connect to
+  now: name, ID, version, route and the SSH connection saved here; `--json` adds every connection and its state;
+  `facade machine remove <machine>` removes a saved connection only.
 - Calls go through other machines when no direct connection exists, by the route that passes the fewest machines.
   When a connection ends, only the routes through it go, and a machine is unreachable only when no route is left.
 - An agent's address names its machine: `#a17@gpu`, or `#a17@id:3f9a2c1d` when names repeat; a message's is `#m42@gpu`.
-  Numbers without a machine mean this machine. A name alone, `@Pixel`, is looked up on every machine in reach and
-  every saved one, and only a single match among machines that all answered is used; otherwise the call says which
-  machines did not answer, or lists every match. `@Pixel@gpu` asks gpu only; when an agent here is literally named
+  Numbers without a machine mean this machine. A name alone, `@Pixel`, is looked up on every machine with a route from
+  here and every saved one, and only a single match among machines that all answered is used; otherwise the call says
+  which machines did not answer, or lists every match. `@Pixel@gpu` asks gpu only; when an agent here is literally named
   `Pixel@gpu`, that meaning counts too, and finding both is an error that lists them.
 - `facade list` and `list_agents` ask every machine at once and answer when all have, or after 3 seconds, saying of
   each machine whether it answered, is unreachable, timed out or failed.
@@ -196,7 +198,7 @@ See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
   windows the agent is in, on every machine; one window that took it is enough. A call that never
   left says it was not run; one that left without an answer says its outcome is unknown. Nothing is kept to send later.
 - An editor window shows the agents of other machines that are in it, with a remote icon where the Pin would be; when
-  their machine cannot be reached they stay, marked disconnected.
+  Facade cannot connect to their machine they stay, marked disconnected.
 - A Remote-SSH window connects this computer's Facade with the remote one by itself, through a bridge over the
   editor's existing connection: no second SSH login and no open port. Reloading or closing one window leaves another's connection alone.
 
@@ -258,5 +260,5 @@ See [Disconnections and recovery](../../core/protocol/PROTOCOL.md#disconnections
   which agents started and ended, and who sent whom a message. It is kept 30 days.
 - The person's clients, such as the editor, can read the daemon log's last lines, up to 200, with the protocol's
   `daemon.log`. A client that acts for an agent cannot.
-- `list`, `inspect`, `status`, `version` and each `integration` subcommand accept `--json`. Data goes to stdout and
-  diagnostics go to stderr. CLI failures return 1, while usage errors return 2.
+- `list`, `inspect`, `status`, `version`, `machine list` and each `integration` subcommand accept `--json`. Data goes
+  to stdout and diagnostics go to stderr. CLI failures return 1, while usage errors return 2.
