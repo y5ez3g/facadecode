@@ -62,6 +62,54 @@ fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
     );
 }
 
+/// Starts a copy of the test CLI named `cli`, which runs the command Facade gives it to report its
+/// session as that CLI does on Windows, and checks that the run's session is recorded.
+#[cfg(windows)]
+fn reports_session_through_cmd_quoted(cli: &str) {
+    let home = TestHome::new(&format!("cmdquoted{cli}"));
+    let programs = home.folder().join("programs");
+    install_program(&programs, cli, &test_binaries().fakecli);
+    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+    let started = home
+        .command(&test_binaries().facade)
+        .env("PATH", &path)
+        .env("FAKECLI_SESSION", FIRST)
+        .args(["start", "--name", cli, cli])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+    let agent = started_agent(&stdout(&started));
+    assert!(
+        records_session(&home, cli, Some(FIRST)),
+        "{cli}'s command did not report its session: {}",
+        home.daemon_log()
+    );
+    assert_eq!(
+        std::fs::read_to_string(session_file(&home, &agent.id)).unwrap(),
+        format!(
+            "{FIRST}
+"
+        )
+    );
+}
+
+/// Muse Code runs its hooks on Windows as one argument of `cmd.exe /C`, quoted the standard way:
+/// Facade's session-start hook must still report the run's session.
+#[cfg(windows)]
+#[test]
+fn muse_code_s_session_start_hook_reports_the_session_through_cmd_s_standard_quoting() {
+    reports_session_through_cmd_quoted("muse");
+}
+
+/// Antigravity runs its title command on Windows as one argument of `cmd.exe /C`, quoted the
+/// standard way: Facade's title command must still report the run's conversation.
+#[cfg(windows)]
+#[test]
+fn antigravity_s_title_command_reports_the_session_through_cmd_s_standard_quoting() {
+    reports_session_through_cmd_quoted("agy");
+}
+
 /// Runs `facade resume <agent>` without a terminal, with the test programs on `PATH` so the fake
 /// CLI's rule finds its program.
 fn resume(home: &TestHome, agent: &str) -> Output {
@@ -878,13 +926,18 @@ fn a_start_with_a_session_continues_it_as_a_new_agent() {
     home.run_facade_ok(&["remove", "before"]);
     let file = home.project.parent().unwrap().join("after.args");
     let mut wire = connect(&home);
-    let args = json!({
+    let mut args = json!({
         "command": ["fake"], "session": FIRST, "name": "after", "cwd": home.project,
         "env": {
             "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path, "FAKECLI_ARGS": file,
         },
         "cols": 80, "rows": 24,
     });
+    // Windows PowerShell, which runs the session hook on Windows, does not start without it.
+    #[cfg(windows)]
+    {
+        args["env"]["SystemRoot"] = json!(std::env::var("SystemRoot").unwrap());
+    }
     let started = wire.call("agent.start", args);
     let id = started["result"]["agent"]["agent_id"]
         .as_str()

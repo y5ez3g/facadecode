@@ -110,21 +110,16 @@ impl Person {
 
     /// Runs a hook's shell command as its CLI does, with `input` on standard input.
     fn hook(&self, test: &TestHome, command: &str, input: &Value) -> Output {
-        // Codex uses the session's PowerShell shell on Windows; other hooks use cmd.exe or Git Bash.
-        // A cmd.exe hook starts with `@"…"`, or with `set "FACADE_HOME=…" &&` where the home is not
-        // the default.
-        let for_cmd = command.starts_with('@') || command.starts_with("set \"");
-        #[cfg(windows)]
-        if command.starts_with("powershell.exe ") {
-            let mut shell = self.command(test, powershell());
-            shell.args(["-NoProfile", "-Command", command]);
-            return self.run_hook(shell, input);
-        }
+        // Claude Code runs its hooks with Git Bash. Muse Code runs its own on Windows as one argument
+        // of `%COMSPEC% /C`, quoted the standard way: an encoded PowerShell hook, or a cmd.exe one,
+        // which starts with `@"…"` or with `set "FACADE_HOME=…" &&`.
+        let for_cmd = command.starts_with("powershell.exe ")
+            || command.starts_with('@')
+            || command.starts_with("set \"");
         let shell = if cfg!(windows) && for_cmd {
-            let mut cmd = self.command(test, "cmd.exe");
-            cmd.args(["/d", "/s", "/c"]);
-            #[cfg(windows)]
-            std::os::windows::process::CommandExt::raw_arg(&mut cmd, format!("\"{command}\""));
+            let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+            let mut cmd = self.command(test, comspec);
+            cmd.args(["/C", command]);
             cmd
         } else {
             let mut sh = self.command(test, SH.as_str());
@@ -900,11 +895,15 @@ fn has_the_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
         std::fs::read_to_string(file).is_ok_and(|text| text == facade_base::skill::text())
     };
     let command = command_line_of(run["pid"].as_i64().unwrap() as i32);
+    // On Windows with the scripts of its encoded PowerShell hooks, each word quoted `'…'`.
     #[cfg(windows)]
-    let command = format!(
-        "{command} {}",
-        powershell_script(&command).unwrap_or_default()
-    );
+    let command = {
+        let scripts: Vec<String> = command
+            .match_indices("powershell.exe ")
+            .filter_map(|(at, _)| powershell_script(&command[at..]))
+            .collect();
+        format!("{command} {}", scripts.join(" ")).replace('\'', "")
+    };
     match cli {
         "claude" => {
             command.contains("--plugin-dir") && skill(folder.join("plugin/skills/facade/SKILL.md"))
