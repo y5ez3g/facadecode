@@ -22,6 +22,7 @@
 //   ssh-local  an agent of an SSH window works with an agent of a local window
 //   ssh-lifetime  a Rust agent keeps its process and screen through the SSH window's lifecycle
 //   ssh-multi-window  two Rust editor windows share one Facade home on an SSH host
+//   ssh-network  each Rust Remote-SSH window links its workspace core to the local core
 //
 // and, given two hosts, `hosts`: an agent of an SSH window on the first works with an agent of an SSH window on the second.
 //
@@ -30,16 +31,17 @@
 // FACADE_IT_ONLY runs one scenario and FACADE_IT_KEEP keeps what the run left on every computer, a container included.
 
 import { resolveCliArgsFromVSCodeExecutablePath, runTests } from '@vscode/test-electron';
+import * as assert from 'assert';
 import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { WindowInfo } from '../../base/coreProtocol';
-import { EDITOR_FLAGS, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import type { AgentListResult, MachineListResult, WindowInfo } from '../../base/coreProtocol';
+import { EDITOR_FLAGS, endCore, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, until } from './editors';
 import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
 
-const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window'] as const;
+const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network'] as const;
 type Scenario = typeof SCENARIOS[number];
 
 /** A computer the run reaches over SSH, or a container it starts, as the editor and the run address it. */
@@ -123,7 +125,7 @@ async function main(): Promise<void> {
 	if (engine !== 'old' && engine !== 'rust') {
 		throw new Error('FACADE_IT_ENGINE is old or rust.');
 	}
-	const rustOnly = only === 'ssh-lifetime' || only === 'ssh-multi-window';
+	const rustOnly = only === 'ssh-lifetime' || only === 'ssh-multi-window' || only === 'ssh-network';
 	if (rustOnly && (engine !== 'rust' || !aliases.length)) {
 		throw new Error(`The ${only} journey needs the Rust engine and an SSH host.`);
 	}
@@ -421,7 +423,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				}
 			});
 		};
-		const sshMultiWindow = async (host: Host) => {
+		const sshMultiWindow = async (host: Host, network = false) => {
 			const runName = 'multi';
 			const driver = `${root}/${runName}-driver`;
 			const shared = `${root}/multi-shared`;
@@ -449,12 +451,103 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				const args = [...opened(destination), '--new-window', ...user, `--extensionDevelopmentPath=${workspaceExtension(destination)}`,
 					`--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${host.uri(driver)}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS,
 					`--extensionEnvironment=${JSON.stringify(env)}`];
-				return spawn(executable, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+				const localPath = `${path.join(extension, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`;
+				return spawn(executable, args, { env: { ...process.env, ...env, PATH: localPath }, stdio: ['ignore', 'pipe', 'pipe'] });
 			};
-			await withRustWindows(files, start, open => rustMultiWindow(open, {
-				folder: `${root}/app`, peer: `${root}/remote-peer`, shared, home: facade, remote: 'ssh-remote', files,
-				windows: async () => coreWindows(host)
-			}));
+			const localCore = path.join(extension, 'bin', 'facade');
+			const daemonLog = path.join(facade, 'core', 'logs', 'daemon.log');
+			const trace = () => fs.existsSync(daemonLog) ? fs.readFileSync(daemonLog, 'utf8') : '';
+			await withRustWindows(files, start, async open => {
+				if (!network) {
+					await rustMultiWindow(open, {
+						folder: `${root}/app`, peer: `${root}/remote-peer`, shared, home: facade, remote: 'ssh-remote',
+						files, windows: async () => coreWindows(host)
+					});
+					return;
+				}
+				const call = (args: string[], agent?: string) => execFileSync(localCore, args, {
+					encoding: 'utf8', timeout: 20_000, cwd: local.app,
+					env: { ...process.env, ...environment(), ...(agent ? { FACADE_AGENT: agent } : {}) }
+				});
+				const localMachines = () => (JSON.parse(call(['machine', 'list', '--json'])) as MachineListResult).machines;
+				const myId = localMachines().find(row => row.route?.length === 0)!.machine_id;
+				call(['machine', 'rename', 'id:' + myId.replace(/-/g, ''), 'network-local']);
+				const first = await open(`${root}/app`, 'a');
+				const theirId = first.ready.machineId;
+				assert.notStrictEqual(theirId, myId);
+				const expectLinks = async (n: number) => {
+					return await until(n + ' Remote-SSH machine links', () => {
+						const sessions = new Set<string>();
+						const event = /daemon\[(\d+)\] info: machine (\S+) (opened|closed) session SessionId\((\d+)\)/gu;
+						for (const [, pid, id, action, session] of trace().matchAll(event)) {
+							if (id !== theirId) { continue; }
+							if (action === 'opened') { sessions.add(`${pid}:${session}`); }
+							else { sessions.delete(`${pid}:${session}`); }
+						}
+						const machine = localMachines().find(row => row.machine_id === theirId);
+						const joined = machine?.route?.[0] === theirId && machine.connections.some(link => link.kind === 'temporary' && link.state === 'connected');
+						return joined && sessions.size === n ? sessions : undefined;
+					}, 45_000).catch(error => {
+						console.error(JSON.stringify(localMachines()), trace());
+						throw error;
+					});
+				};
+				const [firstLink] = await expectLinks(1);
+				const second = await open(`${root}/remote-peer`, 'b');
+				assert.strictEqual(second.ready.machineId, theirId);
+				const both = await expectLinks(2);
+				assert.ok(both.has(firstLink));
+				const secondLink = [...both].find(id => id !== firstLink)!;
+				console.log('  ✔ Two Remote-SSH windows joined the local core automatically');
+				const name = 'Network QA worker';
+				const run = call(['start', '--name', name, 'claude']);
+				const id = /^#(a\d+) pid /u.exec(run)?.[1];
+				assert.ok(id, run);
+				try {
+					const address = '#' + id + '@network-local';
+					await second.act({ kind: 'show-agent-picker' });
+					const picker = await second.workbench();
+					try {
+						await until('the network fixture in Go to Agent', () => picker.cdp.evaluate<boolean | undefined>(`(() => {
+							const row = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row'))
+								.find(row => row.textContent?.includes(${JSON.stringify(name)}));
+							if (!row) { return undefined; }
+							row.click();
+							return true;
+						})()`));
+					} finally {
+						picker.close();
+					}
+					assert.equal(await second.act<string>({ kind: 'remote-card', agent: address }), address);
+					const record = (JSON.parse(call(['list', '--json'])) as AgentListResult).agents.find(agent => agent.agent_id === id && agent.machine_id === myId);
+					assert.ok(record?.windows?.some(window => window.machine_id === theirId), JSON.stringify(record));
+					console.log('  ✔ Go to Agent adopted the original remote agent and displayed the remote icon');
+					const message = 'Remote agent asks the person';
+					const sent = call(['send', '#human', message], id);
+					assert.match(sent, /handed to these window subscriptions/u);
+					await second.act({ kind: 'notifications' });
+					const workbench = await second.workbench();
+					try {
+						await until('the remote agent notification', async () => {
+							const notices = await workbench.cdp.evaluate<string[]>(`Array.from(document.querySelectorAll(
+								'.notifications-center .notification-list-item-message'), item => item.textContent ?? '')`);
+							return notices.some(notice => notice.includes(message)) || undefined;
+						});
+					} finally {
+						workbench.cdp.close();
+					}
+					console.log('  ✔ The adopted agent sent #human to that window');
+					await first.close();
+					assert.deepStrictEqual([...(await expectLinks(1))], [secondLink]);
+					const back = await open(`${root}/app`, 'a');
+					assert.strictEqual(back.ready.machineId, theirId);
+					const rejoined = await expectLinks(2);
+					assert.ok(rejoined.has(secondLink) && !rejoined.has(firstLink), JSON.stringify([...rejoined]));
+					console.log('  ✔ Closing and reopening one window changed only its own temporary link');
+				} finally {
+					call(['stop', id]);
+				}
+			}).finally(async () => { if (network) { await endCore(localCore, facade); } });
 		};
 		const runs: { readonly scenario: Scenario; readonly title: string; readonly go: () => Promise<void> }[] = [];
 		for (const host of hosts) {
@@ -493,10 +586,10 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				}
 			] as const).filter(each => !inContainer || each.scenario === 'local-ssh').filter(each => engine !== 'rust' || each.scenario === (inContainer ? 'local-ssh' : 'ssh')));
 			if (engine === 'rust') {
-				console.log(`\nOn the Rust engine ${on} runs the journeys of one remote window only${inContainer ? ' - a container window cannot be driven by a test editor (Dev Containers attaches it again and the editor refuses), so of a container the local window\'s own journeys run, with the container started beside it' : ''}: agents of different computers do not work together there, as the owner decided - each computer runs its own core - so the scenarios between windows of different computers (and the wait for a peer window to register under extension/network) are not run.`);
 				if (host.kind === 'ssh' && host.platform !== 'windows') {
 					runs.push({ scenario: 'ssh-lifetime', title: on, go: () => sshLifetime(host) });
 					runs.push({ scenario: 'ssh-multi-window', title: on, go: () => sshMultiWindow(host) });
+					runs.push({ scenario: 'ssh-network', title: on, go: () => sshMultiWindow(host, true) });
 				}
 			}
 		}

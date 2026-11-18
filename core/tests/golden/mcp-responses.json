@@ -358,6 +358,7 @@
             "id": "#a1",
             "name": "ada",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -373,6 +374,7 @@
             "id": "#a2",
             "name": "bob",
             "cli": "fake",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -383,6 +385,16 @@
             "path": "<test>/project",
             "state": "starting",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "status": "answered",
+            "answered_at": "<time>"
           }
         ]
       }
@@ -404,6 +416,7 @@
         "id": "#a3",
         "name": "helper",
         "path": "<test>/project",
+        "address": "#a3@golden-host",
         "machine_id": "<machine ID>",
         "windows": [
           {
@@ -457,6 +470,7 @@
       "status": "success",
       "data": {
         "id": "#m1",
+        "address": "#m1@id:<compact machine ID>",
         "delivery": "typed_into_input"
       }
     }
@@ -536,10 +550,14 @@
         "messages": [
           {
             "id": "#m2",
+            "address": "#m2@id:<compact machine ID>",
             "from": "@bob #a2",
+            "from_address": "#a2@id:<compact machine ID>",
+            "from_machine_id": "<machine ID>",
             "at": "<time>",
             "text": "hi ada",
-            "reply_to": "#m1"
+            "reply_to": "#m1@id:<compact machine ID>",
+            "reply_to_machine_id": "<machine ID>"
           }
         ]
       }
@@ -564,7 +582,7 @@
         "content": [
           {
             "type": "text",
-            "text": "{\"status\":\"success\",\"data\":{\"id\":\"#m2\",\"delivery\":\"read_by_recipient\"}}"
+            "text": "{\"status\":\"success\",\"data\":{\"id\":\"#m2\",\"address\":\"#m2@id:<compact machine ID>\",\"delivery\":\"read_by_recipient\"}}"
           }
         ],
         "isError": false,
@@ -572,6 +590,7 @@
           "status": "success",
           "data": {
             "id": "#m2",
+            "address": "#m2@id:<compact machine ID>",
             "delivery": "read_by_recipient"
           }
         }
@@ -591,10 +610,14 @@
         "messages": [
           {
             "id": "#m2",
+            "address": "#m2@id:<compact machine ID>",
             "from": "@bob #a2",
+            "from_address": "#a2@id:<compact machine ID>",
+            "from_machine_id": "<machine ID>",
             "at": "<time>",
             "text": "hi ada",
-            "reply_to": "#m1"
+            "reply_to": "#m1@id:<compact machine ID>",
+            "reply_to_machine_id": "<machine ID>"
           }
         ]
       }
@@ -613,10 +636,14 @@
         "messages": [
           {
             "id": "#m2",
+            "address": "#m2@id:<compact machine ID>",
             "from": "@bob #a2",
+            "from_address": "#a2@id:<compact machine ID>",
+            "from_machine_id": "<machine ID>",
             "at": "<time>",
             "text": "hi ada",
-            "reply_to": "#m1"
+            "reply_to": "#m1@id:<compact machine ID>",
+            "reply_to_machine_id": "<machine ID>"
           }
         ]
       }
@@ -764,13 +791,16 @@
         "id": "#a4",
         "name": "twin",
         "path": "<test>/project",
+        "address": "#a4@golden-host",
         "machine_id": "<machine ID>",
         "windows": [
           {
             "machine_id": "<machine ID>",
             "window_id": "terminal"
           }
-        ]
+        ],
+        "result_message_id": "m4",
+        "result_message_machine_id": "<machine ID>"
       }
     }
   }

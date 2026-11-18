@@ -323,7 +323,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
 fn guest(home: &TestHome, session: &str) -> Value {
     let listed: Value =
         facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
-    listed
+    listed["agents"]
         .as_array()
         .unwrap()
         .iter()
@@ -736,13 +736,11 @@ fn each_cli_launches_with_yolo_on_as_its_rule_says_and_with_yolo_off_as_it_nativ
     let clis = ["claude", "codex", "agy", "muse", "opencode", "pi"];
     for cli in clis {
         let (args, folder) = launch(cli, &format!("{cli}-on"));
-        // Codex's folder as a TOML string: on Windows with its drive letter in lower case, as
-        // Codex keys its projects, and each `\` written `\\`.
+        // Codex keys Windows projects by an ASCII-lowercase path. In TOML each backslash is escaped.
         #[cfg(unix)]
         let in_toml = folder.clone();
         #[cfg(windows)]
-        let in_toml =
-            format!("{}{}", folder[..1].to_lowercase(), &folder[1..]).replace('\\', "\\\\");
+        let in_toml = folder.to_ascii_lowercase().replace('\\', "\\\\");
         let at = launch_arguments(cli);
         let added: Vec<String> = yolo_arguments(cli)
             .iter()

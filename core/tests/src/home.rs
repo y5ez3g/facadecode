@@ -199,9 +199,12 @@ impl TestHome {
         user
     }
 
-    /// The `PATH` of this test's processes and agents: the programs under test, then the system's
-    /// folders. No folder a CLI installs into (~/.local/bin, Homebrew, npm, cargo) is on it, so no
-    /// real CLI can start in a test.
+    pub(crate) fn fixture_bin(&self) -> PathBuf {
+        self.folder().join("fixture-bin")
+    }
+
+    /// The `PATH` of this test's processes and agents: any fixtures installed for this home,
+    /// the programs under test, then the system's folders. Real CLIs' install folders are omitted.
     pub fn test_path(&self) -> String {
         let programs = test_binaries()
             .fakecli
@@ -209,7 +212,10 @@ impl TestHome {
             .expect("the programs' folder")
             .display()
             .to_string();
-        std::iter::once(programs)
+        std::iter::once(self.fixture_bin())
+            .filter(|folder| folder.is_dir())
+            .map(|folder| folder.display().to_string())
+            .chain(std::iter::once(programs))
             .chain(system_folders())
             .collect::<Vec<_>>()
             .join(PATH_SEPARATOR)
@@ -350,7 +356,7 @@ impl TestHome {
     pub fn agent_from_list_json(&self, name: &str) -> Option<Value> {
         let listed: Value =
             serde_json::from_str(&stdout(&self.run_facade(&["list", "--json"]))).ok()?;
-        listed
+        listed["agents"]
             .as_array()?
             .iter()
             .find(|agent| agent["name"] == name)

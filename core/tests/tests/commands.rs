@@ -201,9 +201,11 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
     // Unnamed agents use unused suggested names while available.
     home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
     home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
-    let listed: Vec<String> = stdout(&home.run_facade(&["list"]))
+    let listing = home.run_facade_ok(&["list"]);
+    let listed: Vec<&str> = listing
         .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
+        .filter(|line| line.starts_with("#a"))
+        .filter_map(|line| line.split_whitespace().nth(1))
         .collect();
     assert_eq!(listed.len(), 3, "{listed:?}");
     assert!(

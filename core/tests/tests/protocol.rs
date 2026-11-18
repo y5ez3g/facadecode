@@ -32,7 +32,7 @@ fn hello_reports_protocol_build_and_capabilities() {
     );
     assert_eq!(
         result["topics"],
-        json!(["agents", "screen", "messages", "windows"]),
+        json!(["agents", "screen", "messages", "windows", "machines"]),
         "{welcome}"
     );
     assert!(
@@ -40,7 +40,12 @@ fn hello_reports_protocol_build_and_capabilities() {
             "agent.start",
             "agent.adopt",
             "agent.rename",
-            "agent.send"
+            "agent.send",
+            "machine.add",
+            "machine.connect",
+            "machine.list",
+            "machine.remove",
+            "machine.rename",
         ]
         .iter()
         .all(|wanted| ops.iter().any(|op| op == wanted))),

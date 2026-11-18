@@ -500,7 +500,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.deepStrictEqual([human?.status, human?.data.delivery], ['success', 'delivered_to_windows'], JSON.stringify(human));
 			assert.deepStrictEqual(human?.data.windows, {
 				delivered: [{ machine_id: recipientWindow.machine_id, window_id: recipientWindow.id, name: window }],
-				not_delivered: []
+				not_delivered: [],
+				outcome_unknown: []
 			}, JSON.stringify(human));
 			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
 			await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);

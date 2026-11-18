@@ -268,10 +268,10 @@ fn an_editor_window_lists_its_folders_and_the_checkouts_of_their_repositories() 
     );
 }
 
-/// A disconnected window without a workspace can rebind until recovery. Recovery keeps windows
-/// referenced by an agent record as a member or as its location source.
+/// Recovery keeps every disconnected window without a workspace, since an agent on another
+/// machine can reference one that has no references in this daemon's store.
 #[test]
-fn recovery_removes_only_unreferenced_windows_without_a_workspace() {
+fn recovery_keeps_disconnected_windows_without_a_workspace() {
     let home = TestHome::new("windowprune");
     let empty = window("win-unused", None, &[]);
     let (unused_wire, unused) = ide_binding(&home, &empty);
@@ -316,11 +316,8 @@ fn recovery_removes_only_unreferenced_windows_without_a_workspace() {
     drop((reloaded, terminal));
     home.wait_for_idle_exit();
 
-    assert!(
-        listed(&home, &unused.window_id).is_none(),
-        "recovery removes the unreferenced window"
-    );
     for (reference, label) in [
+        (&unused, "win-unused window"),
         (&member, "win-member window"),
         (&source, "win-source window"),
     ] {

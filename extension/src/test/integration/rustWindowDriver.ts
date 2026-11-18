@@ -93,7 +93,7 @@ export function facadeAs(agent: string | undefined, ...args: string[]): string {
 }
 
 export function listed(): ListedAgent[] {
-	return JSON.parse(facade('list', '--json')) as ListedAgent[];
+	return (JSON.parse(facade('list', '--json')) as { readonly agents: ListedAgent[] }).agents;
 }
 
 function windowOf(id: string): string {

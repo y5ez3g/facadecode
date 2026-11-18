@@ -12,7 +12,7 @@ fn with_session(home: &TestHome, session: &str) -> Option<Value> {
     let listed: Value =
         facade_scenarios::serde_json::from_str(&stdout(&home.run_facade(&["list", "--json"])))
             .ok()?;
-    listed
+    listed["agents"]
         .as_array()?
         .iter()
         .find(|agent| agent["session"] == session)
@@ -466,7 +466,7 @@ fn a_guest_starts_an_agent_with_its_cli_s_environment() {
         let listed: Value =
             facade_scenarios::serde_json::from_str(&stdout(&home.run_facade(&["list", "--json"])))
                 .unwrap();
-        let agent = listed
+        let agent = listed["agents"]
             .as_array()
             .unwrap()
             .iter()
@@ -542,7 +542,7 @@ fn member(home: &TestHome) -> (McpTestClient, Value) {
     let member = McpTestClient::spawn(home, home.command(&test_binaries().mcp));
     let listed: Value =
         facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
-    let record = listed
+    let record = listed["agents"]
         .as_array()
         .unwrap()
         .iter()

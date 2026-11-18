@@ -1645,14 +1645,16 @@ impl Golden {
             }
         }
         placeholders.push((env!("CARGO_PKG_VERSION").to_string(), "<version>"));
-        if let Some(machine) = home
-            .hello_result()
-            .as_ref()
-            .and_then(|hello| hello["machine_id"].as_str())
-            .filter(|id| !id.is_empty())
-        {
-            placeholders.push((machine.to_string(), "<machine ID>"));
-        }
+        let hello = home.hello_result().expect("the golden test's daemon");
+        let machine = hello["machine_id"].as_str().expect("the machine ID");
+        let selector = facade_base::address::exact_machine_selector(machine);
+        home.run_facade_ok(&["machine", "rename", &selector, "golden-host"]);
+        placeholders.push((machine.to_string(), "<machine ID>"));
+        placeholders.push((selector, "id:<compact machine ID>"));
+        placeholders.push((
+            facade_base::address::short_machine_id(machine),
+            "<short machine ID>",
+        ));
         placeholders.sort_by_key(|(text, _)| std::cmp::Reverse(text.len()));
         Golden {
             cases: serde_json::Map::new(),

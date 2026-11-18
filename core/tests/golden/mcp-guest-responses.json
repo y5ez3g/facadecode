@@ -51,6 +51,7 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -66,6 +67,7 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -76,6 +78,16 @@
             "path": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "status": "answered",
+            "answered_at": "<time>"
           }
         ]
       }
@@ -131,6 +143,7 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -146,6 +159,7 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -161,6 +175,7 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -171,6 +186,16 @@
             "path": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "status": "answered",
+            "answered_at": "<time>"
           }
         ]
       }
@@ -226,6 +251,7 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -241,6 +267,7 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -256,6 +283,7 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -271,6 +299,7 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -281,6 +310,16 @@
             "path": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "status": "answered",
+            "answered_at": "<time>"
           }
         ]
       }
@@ -338,6 +377,7 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -353,6 +393,7 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -368,6 +409,7 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -383,6 +425,7 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -398,6 +441,7 @@
             "id": "#a5",
             "name": "#a5",
             "cli": "muse",
+            "address": "#a5@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -408,6 +452,16 @@
             "path": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "status": "answered",
+            "answered_at": "<time>"
           }
         ]
       }
@@ -464,6 +518,7 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -479,6 +534,7 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -494,6 +550,7 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -509,6 +566,7 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -524,6 +582,7 @@
             "id": "#a5",
             "name": "#a5",
             "cli": "muse",
+            "address": "#a5@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -539,6 +598,7 @@
             "id": "#a6",
             "name": "#a6",
             "cli": "opencode",
+            "address": "#a6@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -549,6 +609,16 @@
             "path": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "status": "answered",
+            "answered_at": "<time>"
           }
         ]
       }
@@ -606,6 +676,7 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -621,6 +692,7 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -636,6 +708,7 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -651,6 +724,7 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -666,6 +740,7 @@
             "id": "#a5",
             "name": "#a5",
             "cli": "muse",
+            "address": "#a5@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -681,6 +756,7 @@
             "id": "#a6",
             "name": "#a6",
             "cli": "opencode",
+            "address": "#a6@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -696,6 +772,7 @@
             "id": "#a7",
             "name": "#a7",
             "cli": "pi",
+            "address": "#a7@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
               {
@@ -706,6 +783,16 @@
             "path": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "short_id": "<short machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "status": "answered",
+            "answered_at": "<time>"
           }
         ]
       }
@@ -723,6 +810,7 @@
       "status": "success",
       "data": {
         "id": "#m1",
+        "address": "#m1@id:<compact machine ID>",
         "delivery": "waiting_in_inbox"
       }
     }

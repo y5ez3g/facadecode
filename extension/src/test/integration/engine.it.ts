@@ -11,6 +11,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { AgentListResult } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
 import { until } from './editors';
 import { aliasOf, hasAgentTab, keepConversation, listed, newCard, resumeCard, state } from './rustWindowDriver';
@@ -71,7 +72,8 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			await until('the terminal\'s `facade list`', () => fs.existsSync(`${out}.done`) ? true : undefined, 60_000);
 			assert.strictEqual(fs.readFileSync(`${out}.done`, 'utf8').trim(), '0', fs.existsSync(`${out}.json`) ? fs.readFileSync(`${out}.json`, 'utf8') : 'no output');
 			assert.strictEqual(path.basename(path.dirname(path.dirname(fs.readFileSync(`${out}.which`, 'utf8').trim()))), 'core', `the terminal runs core's own facade: ${fs.readFileSync(`${out}.which`, 'utf8')}`);
-			const seen = (JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as ReturnType<typeof listed>).find(agent => `#${agent.agent_id}` === alias);
+			const { agents } = JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as AgentListResult;
+			const seen = agents.find(agent => `#${agent.agent_id}` === alias);
 			assert.ok(seen, `the terminal lists ${alias}: ${fs.readFileSync(`${out}.json`, 'utf8')}`);
 			assert.ok(seen.machine_id && seen.windows?.length === 1 && seen.windows[0].machine_id === seen.machine_id
 				&& seen.windows[0].window_id !== 'terminal', 'it is the editor window\'s agent on this machine');

@@ -280,7 +280,8 @@ export async function endCore(program: string, home: string, ms = 30_000): Promi
 	const env = { ...own, FACADE_HOME: home };
 	const call = (...args: string[]) => spawnSync(program, args, { env, encoding: 'utf8', timeout: 15_000 });
 	const listed = call('list', '--json');
-	for (const agent of listed.status === 0 ? JSON.parse(listed.stdout || '[]') as { agent_id?: string }[] : []) {
+	const agents = listed.status === 0 ? (JSON.parse(listed.stdout) as { agents: { agent_id?: string }[] }).agents : [];
+	for (const agent of agents) {
 		if (agent.agent_id) {
 			call('remove', agent.agent_id);
 		}

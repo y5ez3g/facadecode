@@ -187,7 +187,7 @@ fn with_session(test: &TestHome, session: &str) -> Option<Value> {
     let listed: Value =
         facade_scenarios::serde_json::from_str(&stdout(&test.run_facade(&["list", "--json"])))
             .ok()?;
-    listed
+    listed["agents"]
         .as_array()?
         .iter()
         .find(|agent| agent["session"] == session)

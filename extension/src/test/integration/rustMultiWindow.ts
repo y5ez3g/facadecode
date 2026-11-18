@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentInfo, WindowInfo, WindowRef } from '../../base/coreProtocol';
+import type { AgentInfo, MessageRef, WindowInfo, WindowRef } from '../../base/coreProtocol';
 import { freePort, Workbench } from './cdpInput';
 import { endEditors, normalizeDriveLetter, until } from './editors';
 import type { PinIdentity, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
@@ -112,7 +112,7 @@ async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): P
 }
 
 /** Read the real notification center, then use its Open Message button to check the ID. */
-async function expectNotice(window: DrivenWindow, id: string, text: string, earlier?: string): Promise<void> {
+async function expectNotice(window: DrivenWindow, message: MessageRef, text: string, earlier?: string): Promise<void> {
 	await window.act({ kind: 'notifications' });
 	const workbench = await window.workbench();
 	try {
@@ -134,8 +134,10 @@ async function expectNotice(window: DrivenWindow, id: string, text: string, earl
 			return !!button;
 		})()`);
 		assert.ok(opened, 'the notice offers Open Message');
-		const document = await window.act<string>({ kind: 'message', id });
-		assert.ok(document.includes(`#${id}`) && document.includes(text), document);
+		const id = `#${message.message_id}`;
+		const address = `${id}@id:${message.machine_id.replace(/-/g, '')}`;
+		const document = await window.act<string>({ kind: 'message', address });
+		assert.ok(document.includes(id) && document.includes(text), document);
 	} finally {
 		workbench.cdp.close();
 	}
@@ -193,7 +195,7 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	const original = await firstMember(first, before.id);
 	const earlier = 'Sent before the other window joined';
 	const earlyId = await first.act<string>({ kind: 'send', agent: before.id, text: earlier });
-	await expectNotice(first, earlyId, earlier);
+	await expectNotice(first, { machine_id: first.ready.machineId, message_id: earlyId }, earlier);
 	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: before.id }), before);
 	const both = await other.act<WindowRef[]>({ kind: 'members', agent: before.id });
 	assert.strictEqual(both.length, 2);
@@ -203,7 +205,8 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	await Promise.all([expectAgent(first, before.id, false), expectAgent(other, before.id, false)]);
 	const shared = 'Sent to both member windows';
 	const sharedId = await first.act<string>({ kind: 'send', agent: before.id, text: shared });
-	await Promise.all([expectNotice(first, sharedId, shared), expectNotice(other, sharedId, shared, earlier)]);
+	const sharedMessage = { machine_id: first.ready.machineId, message_id: sharedId };
+	await Promise.all([expectNotice(first, sharedMessage, shared), expectNotice(other, sharedMessage, shared, earlier)]);
 	console.log('  ✔ Both member windows show the same message once, and the new member does not show the earlier message');
 	await first.act({ kind: 'pin', agent: before.id });
 	await other.act({ kind: 'pin', agent: before.id });
