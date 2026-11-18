@@ -2669,6 +2669,13 @@
           "minimum": 0,
           "maximum": 65535,
           "description": "The most messages in a page, 1 to 200. Defaults to 100."
+        },
+        "last": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The newest messages of the selection, this many, 1 to 200, in one page. Excludes `ids`,\n`cursor` and `limit`."
         }
       },
       "description": "Arguments for the `messages` topic: which messages of the inbox to read. Without `ids` or `all`,\nthe messages not yet delivered."

@@ -350,9 +350,10 @@ fn inbox_position(client: &mut DaemonClient, after: &str) -> Result<String, Erro
     Ok(address.message_id.to_string())
 }
 
-/// Reads the inbox of the agent the server acts for: the messages not yet delivered, which reading
-/// delivers; every message after `after`; or the `last` newest. Messages longer together than a
-/// result carries go to a JSON file.
+/// Reads the inbox of the agent the server acts for, a page of at most 100: the messages not yet
+/// delivered; the messages after `after`; or the `last` newest. Facade delivers only the messages
+/// it returns. `next_cursor`, where more follow, is the `after` that reads them. Messages longer
+/// together than a result carries go to a JSON file.
 pub(super) fn read(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
     let after = match optional(arguments, "after")
         .map(|after| inbox_position(client, &after))
@@ -364,15 +365,16 @@ pub(super) fn read(client: &mut DaemonClient, arguments: &Map<String, Value>) ->
     let last = arguments
         .get("last")
         .and_then(Value::as_u64)
-        .and_then(|last| usize::try_from(last).ok());
+        .and_then(|last| u16::try_from(last).ok());
     let selection = MessagesWatchArgs {
         ids: None,
         all: after.is_some() || last.is_some(),
         cursor: after,
         limit: None,
+        last,
     };
-    let mut messages = match client.snapshot::<MessagesTopic>(selection) {
-        Ok(snapshot) => snapshot.messages,
+    let snapshot = match client.snapshot::<MessagesTopic>(selection) {
+        Ok(snapshot) => snapshot,
         Err(err) => {
             return failed(
                 &err,
@@ -380,10 +382,7 @@ pub(super) fn read(client: &mut DaemonClient, arguments: &Map<String, Value>) ->
             );
         }
     };
-    if let Some(last) = last {
-        let older = messages.len().saturating_sub(last);
-        messages.drain(..older);
-    }
+    let messages = &snapshot.messages;
     let machine_id = client.hello_result.machine_id.clone();
     let remote_sender = messages.iter().any(|message| {
         !matches!(message.from.as_str(), FACADE | HUMAN)
@@ -403,19 +402,23 @@ pub(super) fn read(client: &mut DaemonClient, arguments: &Map<String, Value>) ->
         .iter()
         .map(|message| message.text.chars().count())
         .sum();
+    let mut result = json!({ "messages": views });
     if length > MAX_INLINE_CHARS
         && let Some(first) = messages.first()
     {
         let kind = ResultFile::Messages {
             first: &first.message_id,
         };
+        // Where their file cannot be written they go inline: this read delivered them, so an
+        // answer too long beats losing them.
         if let Ok(path) = result_files::write(kind, &json!(views).to_string()) {
-            return envelope::success(json!({ "file": path }));
+            result = json!({ "file": path });
         }
     }
-    // Short enough, or their file could not be written: this read delivered them, so an answer too
-    // long beats losing them.
-    envelope::success(json!({ "messages": views }))
+    if let Some(next) = &snapshot.next_cursor {
+        result["next_cursor"] = json!(format!("#{next}"));
+    }
+    envelope::success(result)
 }
 
 #[cfg(test)]

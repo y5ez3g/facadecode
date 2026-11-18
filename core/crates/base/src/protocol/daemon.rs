@@ -1931,6 +1931,10 @@ pub struct MessagesWatchArgs {
     /// The most messages in a page, 1 to 200. Defaults to 100.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
+    /// The newest messages of the selection, this many, 1 to 200, in one page. Excludes `ids`,
+    /// `cursor` and `limit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<u16>,
 }
 
 /// The inbox at the start of a `messages` watch.

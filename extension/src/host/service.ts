@@ -52,9 +52,9 @@ import { OrdinaryInput } from './input';
 import { createLocationService, createWorktreeService } from './locations/index';
 import { editorEnvironment } from './editorEnvironment';
 import { namesOf, WAIT_SECONDS, yoloOf } from './settings';
-import { FacadeSettings } from './facadeSettings';
+import type { FacadeSettings } from './facadeSettings';
 import { homeReloadText, UnusableHome, unusableHomeText, useFacadeHome } from './home';
-import { migratedText, notMadeText } from './settingsNotice';
+import { editorFacadeSettings, notMadeText } from './settingsNotice';
 import { serveRemoteSshMachine, showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch, watchSettingsFile } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
@@ -241,19 +241,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const worktrees = createWorktreeService(locations, log);
 	// Facade's settings file (CONFIGURATION-1.1, 1.3): made now where it does not exist - from the editor's old Facade settings, said once
 	// by the window that made it (CONFIGURATION-6.3) - and read on every use
-	const settings = new FacadeSettings({
-		legacy: name => vscode.workspace.getConfiguration().inspect(name)?.globalValue,
-		log: line => log.event(line),
-		migrated: (file, notes) => {
-			const open = vscode.l10n.t("Open");
-			void Promise.resolve(vscode.window.showInformationMessage(migratedText(settings.shown, notes), open)).then(choice => {
-				if (choice === open) {
-					return vscode.window.showTextDocument(vscode.Uri.file(file));
-				}
-				return undefined;
-			}).catch(err => log.event(`Could not open ${settings.shown}: ${messageOf(err)}`));
-		}
-	});
+	const settings = editorFacadeSettings(line => log.event(line));
 	settings.snapshot();
 	const yolo = yoloOf(settings);
 	const names = namesOf(settings);

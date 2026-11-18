@@ -397,6 +397,21 @@ fn a_read_takes_ids_or_a_page_and_a_limit_from_1_to_200() {
         }),
         "next is not a cursor this inbox gave"
     );
+    assert!(
+        refused(MessagesWatchArgs {
+            last: Some(1),
+            limit: Some(5),
+            ..MessagesWatchArgs::default()
+        })
+        .starts_with("last selects messages itself")
+    );
+    assert_eq!(
+        refused(MessagesWatchArgs {
+            last: Some(0),
+            ..MessagesWatchArgs::default()
+        }),
+        "last must be between 1 and 200"
+    );
 }
 
 /// A read and a paste never both take a message: once its paste began, a read delivers it with

@@ -444,7 +444,8 @@ Adopting an agent brings its future notifications into the window.
 
 The arguments select messages:
 by default those not yet delivered, including failed ones; `ids`, 1 to 100 message IDs, rereads those; `all` pages every
-kept message; `cursor` continues from a page's `next_cursor`, and `limit` sets a page's size, 1 to 200, 100 by default. A snapshot
+kept message; `cursor` continues from a page's `next_cursor`, and `limit` sets a page's size, 1 to 200, 100 by default;
+`last` selects that many of the newest messages instead, in one page, without `ids`, `cursor` or `limit`. A snapshot
 delivers every message it returns that was not yet delivered, through `read`: its typist never types a message it has not
 begun, and its sender's `agent.send` responds. A message whose paste the typist had begun is finished in the terminal, and its
 `text_written` is `unknown`, without `enter_written`. The snapshot's messages are delivered on disk before it is answered. Its

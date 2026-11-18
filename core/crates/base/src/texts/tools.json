@@ -148,7 +148,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Read your inbox. Without a filter it delivers unread messages. Message and sender addresses include their machines. In text from another machine, bare agent IDs point to the sender's machine. A long list returns data.file.",
+    "description": "Read your own inbox without waiting. With neither after nor last, it returns your undelivered messages. after reads messages after the one it names. last selects the newest ones. Reading delivers only the messages returned. One read returns at most 100. Use next_cursor as after to read the next page. Message and sender addresses include their machines. In text from another machine, bare agent IDs point to the sender's machine. New messages arrive by themselves, even after your turn ends. Do not poll. Messages from Facade are its 🔔 results. A long list returns data.file.",
     "inputSchema": {
       "type": "object",
       "properties": {

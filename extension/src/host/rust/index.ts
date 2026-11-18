@@ -7,6 +7,7 @@
 // Pins, order, filters and where tabs are.
 
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
@@ -23,16 +24,18 @@ import { COMMANDS } from '../../ui/catalog';
 import { registerUi } from '../../ui/commands/index';
 import { registerWorktreeCommands } from '../../ui/commands/worktree';
 import type { MachineLaunch } from '../../ui/pickers/machineLaunch';
+import { reasonText } from '../../ui/presentation';
 import { HostClis } from '../clis';
 import { WindowContact } from '../contact';
 import { WindowColours } from '../execution/terminalColours';
-import { FacadeSettings } from '../facadeSettings';
+import type { FacadeSettings } from '../facadeSettings';
 import { WorkspaceLaunchHistory } from '../history';
 import { WindowHuman } from '../human';
 import { editorUriOf } from '../locations/workspaceFolders';
 import { WorkspacePins } from '../pins';
 import type { KeptWorkspaceState } from '../workspaceState';
 import { namesOf } from '../settings';
+import { editorFacadeSettings } from '../settingsNotice';
 import { watchSettingsFile } from '../showLaunch';
 import { windowAddress } from '../windowNetwork';
 import { RustAgents } from './agents';
@@ -157,6 +160,14 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	const { root, home, identity } = deps;
 	const output = vscode.window.createOutputChannel('Facade Code', { log: true });
 	const log: LogPort = { event: text => output.info(text) };
+	// Make the settings file before connecting to core (CONFIGURATION-1.3, 6.3). Core uses defaults, including YOLO on, for a missing file.
+	const settings = editorFacadeSettings(line => log.event(line));
+	const firstRead = settings.snapshot();
+	if (firstRead.problems.length && !fs.existsSync(settings.file)) {
+		// Fall back to the old engine, which reports the settings problem and blocks launches (CONFIGURATION-1.3, 6.2).
+		output.dispose();
+		throw new Error(firstRead.problems.map(problem => reasonText(problem.said, problem.text)).join('; '));
+	}
 	const kept = deps.keep(log);
 	// The window component takes this activation's terminals as the window's, retiring those an earlier one left (ARCHITECTURE-2.2)
 	const terminalOwner = { session: identity.session, claim: kept.claim };
@@ -274,7 +285,6 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		}
 	});
 
-	const settings = new FacadeSettings({ log: line => log.event(line) });
 	const hostClis = new HostClis({ settings, log: line => log.event(line), home, version: String(context.extension.packageJSON.version) });
 	const locations = new RustLocations(windowInfo, windowChanged.event, foldersOf, identity.remote, () => link.update(description()));
 	const clis = new RustClis(windowInfo, () => hostClis.icons());

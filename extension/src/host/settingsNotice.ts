@@ -2,13 +2,37 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// What the person is told about the settings file in their language (UX-2.4, CONFIGURATION-6.2, 6.3): once, by the window that made it
-// from the editor's old Facade settings; and why Open facade.json cannot open it where it cannot be made.
+// Facade's settings file as a window of either engine makes it from the editor's old Facade settings, and what the person is told
+// about it in their language (UX-2.4, CONFIGURATION-6.2, 6.3): once, by the window that made it; and why Open facade.json cannot open
+// it where it cannot be made.
 
 import * as vscode from 'vscode';
+import { messageOf } from '../base/errors';
 import type { CliProblem } from '../clis/config';
 import type { MigrationNote } from '../clis/migration';
 import { reasonText } from '../ui/presentation';
+import { FacadeSettings } from './facadeSettings';
+
+/**
+ * Facade's settings file for this window, whichever engine runs it (CONFIGURATION-1.1, 1.3): made where it does not exist from the
+ * editor's old Facade settings, said once by the window that made it, with Open to show it (CONFIGURATION-6.3).
+ */
+export function editorFacadeSettings(log: (line: string) => void): FacadeSettings {
+	const settings: FacadeSettings = new FacadeSettings({
+		legacy: name => vscode.workspace.getConfiguration().inspect(name)?.globalValue,
+		log,
+		migrated: (file, notes) => {
+			const open = vscode.l10n.t("Open");
+			void Promise.resolve(vscode.window.showInformationMessage(migratedText(settings.shown, notes), open)).then(choice => {
+				if (choice === open) {
+					return vscode.window.showTextDocument(vscode.Uri.file(file));
+				}
+				return undefined;
+			}).catch(err => log(`Could not open ${settings.shown}: ${messageOf(err)}`));
+		}
+	});
+	return settings;
+}
 
 /** The one notice of a migration (CONFIGURATION-6.3): where the settings went, and what changed on the way. */
 export function migratedText(file: string, notes: readonly MigrationNote[]): string {
