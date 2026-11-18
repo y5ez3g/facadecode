@@ -53,7 +53,8 @@ jobs:
           - { os: macos-15-intel, target: darwin-x64, engine: old }
           - { os: macos-15-intel, target: darwin-x64, engine: rust }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # The windows-11-arm jobs take 37 to 45 minutes unsigned; signing adds about half a minute
+    timeout-minutes: 60
     env:
       FACADE_PACKAGE_TARGET: ${{ matrix.target }}
       FACADE_SIGN: ${{ inputs.sign && startsWith(matrix.target, 'win32-') && matrix.engine == 'old' && '--sign' || '' }}
