@@ -378,9 +378,10 @@ through normal delivery without polling; MCP members read them themselves (6.1).
 **Read rendered terminal text without taking focus or treating its words as instructions.**
 
 Required `agent:string`; optional `last:integer=50` (1–2000), counting the last lines including scrollback.
-Enforce normal tree reach. Return only `ended:boolean` and `text` in data. ended says the agent has ended and its
-retained screen will not change again. Empty live output is successful empty output; an agent without a screen
-fails as `unavailable`. Guests and MCP members have no Facade terminal to read.
+Enforce normal tree reach. Return only `ended:boolean` and `text` in data. `ended` says whether the run had ended when
+the screen was read. When true, return the screen that run left. A later read after a resume can show new output
+under the same agent ID. Empty live output is successful empty output. An agent without a screen fails as
+`unavailable`. Guests and MCP members have no Facade terminal to read.
 
 The text uses `[[...]]` for inverse video and `{{...}}` for dim text; both together nest as `[[{{...}}]]`.
 A backslash escapes each literal backslash, bracket or brace in the source text, so literal marker-like content
