@@ -1,5 +1,5 @@
 //! The text formats of the CLIs' own files and command lines, as Facade writes and reads them:
-//! JSON with comments, POSIX shell words, TOML values, and settings merged with the person's.
+//! JSON with comments, shell commands, TOML values, and settings merged with the person's.
 
 use facade_base::system::{SYSTEM, System};
 use serde_json::Value;
@@ -76,6 +76,81 @@ pub(crate) fn encoded_powershell(script: &str) -> String {
     )
 }
 
+/// An argument of a Facade hook. Encoded PowerShell writes both kinds as literals.
+pub(crate) enum HookArg<'a> {
+    /// A fixed word written as-is in the POSIX and cmd.exe forms.
+    Word(&'a str),
+    /// A word quoted in the POSIX and cmd.exe forms, such as a session file path.
+    Literal(&'a str),
+}
+
+/// Writes `<program> hook <event> <args>` with `variables` set, in the form `cli` passes intact
+/// to its shell. Unix and Claude Code's Git Bash on Windows take POSIX words. Antigravity's
+/// Windows hooks take cmd.exe words verbatim. Antigravity's title command and the other Windows
+/// commands use encoded PowerShell, with every argument and variable value written as a literal.
+pub(crate) fn facade_hook<'a>(
+    cli: &str,
+    program: &str,
+    event: &str,
+    args: &[HookArg<'_>],
+    variables: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> String {
+    let verbatim_cmd = SYSTEM == System::Windows && cli == "agy" && event != "title";
+    let encoded = SYSTEM == System::Windows && cli != "claude" && !verbatim_cmd;
+    let literal: fn(&str) -> String = if encoded {
+        powershell_word
+    } else if verbatim_cmd {
+        |word| format!("\"{word}\"")
+    } else {
+        shell_word
+    };
+    let mut command: String = variables
+        .into_iter()
+        .map(|(name, value)| {
+            if encoded {
+                format!("$env:{name}={}; ", literal(value))
+            } else if verbatim_cmd {
+                format!("set \"{name}={value}\" && ")
+            } else {
+                format!("{name}={} ", literal(value))
+            }
+        })
+        .collect();
+    if encoded {
+        command.push_str("& ");
+    } else if verbatim_cmd {
+        command.push('@');
+    }
+    command.push_str(&literal(program));
+    for arg in [HookArg::Word("hook"), HookArg::Word(event)]
+        .iter()
+        .chain(args)
+    {
+        command.push(' ');
+        match arg {
+            HookArg::Word(word) if !encoded => command.push_str(word),
+            HookArg::Word(word) | HookArg::Literal(word) => command.push_str(&literal(word)),
+        }
+    }
+    if encoded {
+        command.push_str("; exit $LASTEXITCODE");
+        encoded_powershell(&command)
+    } else {
+        command
+    }
+}
+
+/// Reads the literal words of a Facade hook in POSIX or cmd.exe form. Each variable is one
+/// `NAME=value` word, followed by the program and its arguments. Returns None for other shell
+/// syntax.
+pub(crate) fn shell_words(command: &str) -> Option<Vec<String>> {
+    if command.starts_with("set \"") || command.starts_with('@') {
+        cmd_words(command)
+    } else {
+        posix_words(command)
+    }
+}
+
 /// The literal words of Facade's encoded PowerShell hooks, including their optional home.
 pub(crate) fn encoded_powershell_words(command: &str) -> Option<Vec<String>> {
     let encoded =
@@ -123,89 +198,9 @@ fn take_powershell_word(rest: &mut &str) -> Option<String> {
     None
 }
 
-/// The shell a CLI runs Facade's hook commands with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Shell {
-    /// A POSIX shell: `/bin/sh` on Unix, and Git Bash, which Claude Code runs its hooks with on
-    /// Windows and which takes `'C:\…'` words as they are.
-    Posix,
-    /// cmd.exe, used by the other Windows CLIs; Codex hooks use encoded PowerShell instead.
-    Cmd,
-}
-
 /// The characters a cmd.exe word may hold without quotes.
 fn is_plain_for_cmd(c: char) -> bool {
     c.is_ascii_alphanumeric() || "._:/\\-".contains(c)
-}
-
-impl Shell {
-    /// The shell `cli` runs its hook commands with on this system.
-    pub(crate) fn of(cli: &str) -> Shell {
-        match SYSTEM {
-            System::Windows if cli != "claude" => Shell::Cmd,
-            _ => Shell::Posix,
-        }
-    }
-
-    /// `path` as the first word of a command, the program it runs. A cmd.exe command starts with
-    /// `@`, never with a quote: `cmd /c` without `/s` would take a line's first and last quote
-    /// away.
-    pub(crate) fn program(self, path: &str) -> String {
-        match self {
-            Shell::Posix => shell_word(path),
-            Shell::Cmd => format!("@\"{path}\""),
-        }
-    }
-
-    /// `text` as one argument of a command; None where the shell cannot carry it: for cmd.exe, a
-    /// text holding `"` or a line break.
-    pub(crate) fn word(self, text: &str) -> Option<String> {
-        match self {
-            Shell::Posix => Some(shell_word(text)),
-            Shell::Cmd if text.contains(['"', '\n', '\r']) => None,
-            Shell::Cmd if !text.is_empty() && text.chars().all(is_plain_for_cmd) => {
-                Some(text.to_string())
-            }
-            Shell::Cmd => Some(format!("\"{text}\"")),
-        }
-    }
-
-    /// `command`, run with `variables` set. Facade's values hold no `"`.
-    pub(crate) fn with_variables(self, variables: &[(String, String)], command: &str) -> String {
-        let set: String = variables
-            .iter()
-            .map(|(name, value)| match self {
-                Shell::Posix => format!("{name}={} ", shell_word(value)),
-                Shell::Cmd => format!("set \"{name}={value}\" && "),
-            })
-            .collect();
-        set + command
-    }
-
-    /// The program and arguments that run `command` with this shell.
-    pub(crate) fn command(self, command: &str) -> Vec<String> {
-        let line: &[&str] = match self {
-            Shell::Posix => &["/bin/sh", "-c"],
-            Shell::Cmd => &["cmd.exe", "/d", "/s", "/c"],
-        };
-        line.iter()
-            .copied()
-            .chain([command])
-            .map(String::from)
-            .collect()
-    }
-
-    /// The words of `command`, written by [`Shell::program`], [`Shell::word`] and
-    /// [`Shell::with_variables`] for either shell: each variable it sets as a `NAME=value` word,
-    /// then the program and its arguments. None where it holds anything else a shell reads. For
-    /// recognizing Facade's own commands, on either system.
-    pub(crate) fn words(command: &str) -> Option<Vec<String>> {
-        if command.starts_with("set \"") || command.starts_with('@') {
-            cmd_words(command)
-        } else {
-            posix_words(command)
-        }
-    }
 }
 
 /// The characters outside quotes that make a command more than plain words to a POSIX shell.
@@ -243,8 +238,8 @@ fn posix_words(command: &str) -> Option<Vec<String>> {
     (!quoted && !escaped).then_some(words)
 }
 
-/// The words of a cmd.exe line in the form [`Shell::Cmd`] writes: `set "NAME=value" && ` prefixes,
-/// then `@` and the program in quotes, then plain or quoted words.
+/// The words of a Facade cmd.exe hook: `set "NAME=value" && ` prefixes, then `@` and the
+/// program in quotes, then plain or quoted words.
 fn cmd_words(command: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut rest = command;

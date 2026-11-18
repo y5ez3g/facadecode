@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 
 use super::SKILL_FILE;
-use super::run_tools::facade_hook;
 use super::servers::{Entry, SERVER, agy_entry};
+use crate::formats::{HookArg, facade_hook};
 
 /// Where Antigravity reads a folder's plugin of Facade's tools: the only file Facade writes into
 /// the person's project.
@@ -50,7 +50,7 @@ pub fn plugin_files(program: &str, facade: &str) -> Vec<(String, String)> {
         args: Vec::new(),
         env: &[],
     };
-    let instructions = facade_hook(facade, "instructions", "agy");
+    let instructions = facade_hook("agy", facade, "instructions", &[HookArg::Word("agy")], []);
     let manifest =
         json!({ "name": SERVER, "description": plugin_description(&facade_base::version()) });
     let servers = json!({ "mcpServers": { SERVER: agy_entry(&entry) } });

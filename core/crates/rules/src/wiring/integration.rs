@@ -14,11 +14,9 @@ use super::servers::{
     Entry, SERVER, agy_entry, claude_entry, codex_entry, is_server_program, muse_guest_entry,
     opencode_allow, opencode_entry, pi_entry,
 };
-use crate::formats::{
-    Shell, encoded_powershell, encoded_powershell_words, parse_jsonc, powershell_word,
-};
+use crate::formats::{HookArg, encoded_powershell_words, facade_hook, parse_jsonc, shell_words};
 use facade_base::programs::program_name;
-use facade_base::system::{SYSTEM, System, env_var, home_folder_in};
+use facade_base::system::{env_var, home_folder_in};
 
 /// The CLIs Facade integrates.
 pub const CLIS: [&str; 6] = ["claude", "codex", "opencode", "pi", "muse", "agy"];
@@ -825,41 +823,31 @@ fn hook_events(cli: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
-/// The command of Facade's hook for `event` of `cli`, for the shell `cli` runs it with. The
+/// The command of Facade's hook for `event`, in the form `facade_hook` gives `cli`. The
 /// approval hook names its CLI as a run's does, and no Facade home.
 fn hook_command(event: &str, cli: &str, programs: &Programs) -> String {
-    if SYSTEM == System::Windows && cli == "codex" {
-        let home = programs
-            .home
-            .map(|home| format!("$env:FACADE_HOME={}; ", powershell_word(home)))
-            .unwrap_or_default();
-        return encoded_powershell(&format!(
-            "{home}& {} 'hook' {} '--cli' 'codex'; exit $LASTEXITCODE",
-            powershell_word(programs.facade),
-            powershell_word(event),
-        ));
+    let cli_arg = HookArg::Word(cli);
+    if event == "approve" {
+        return facade_hook(cli, programs.facade, event, &[cli_arg], []);
     }
-    let shell = Shell::of(cli);
-    let facade = shell.program(programs.facade);
-    match (event, programs.home) {
-        ("approve", _) => format!("{facade} hook approve {cli}"),
-        (_, Some(home)) => shell.with_variables(
-            &[("FACADE_HOME".into(), home.into())],
-            &format!("{facade} hook {event} --cli {cli}"),
-        ),
-        (_, None) => format!("{facade} hook {event} --cli {cli}"),
-    }
+    facade_hook(
+        cli,
+        programs.facade,
+        event,
+        &[HookArg::Word("--cli"), cli_arg],
+        programs.home.map(|home| ("FACADE_HOME", home)),
+    )
 }
 
-/// Whether `command` is one of Facade's hooks for `cli`, in either shell's form, whatever its
+/// Whether `command` is one of Facade's hooks for `cli`, in its current or earlier form, whatever its
 /// Facade home or the path of its `facade`.
 fn is_facade_hook(command: &str, cli: &str) -> bool {
-    let words = (if cli == "codex" {
+    let words = (if matches!(cli, "codex" | "muse") {
         encoded_powershell_words(command)
     } else {
         None
     })
-    .or_else(|| Shell::words(command))
+    .or_else(|| shell_words(command))
     .unwrap_or_default();
     let skip = usize::from(
         words
@@ -1166,6 +1154,8 @@ fn whole_place(kind: Kind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::{encoded_powershell, powershell_word};
+    use facade_base::system::{SYSTEM, System};
 
     const PROGRAMS: Programs = Programs {
         facade: "/opt/facade/facade",
@@ -1180,7 +1170,7 @@ mod tests {
 
     /// `rest` after the program `/opt/facade/facade`, as `cli` runs its hooks on this system.
     fn facade_command(cli: &str, rest: &str) -> String {
-        if SYSTEM == System::Windows && cli == "codex" {
+        if SYSTEM == System::Windows && matches!(cli, "codex" | "muse") {
             let args = rest
                 .split_whitespace()
                 .map(powershell_word)
@@ -1528,7 +1518,7 @@ mod tests {
             assert!(!is_facade_hook(command, "claude"), "{command}");
         }
         assert_eq!(
-            Shell::words(&hook_command(
+            shell_words(&hook_command(
                 "prompt",
                 "claude",
                 &Programs {
@@ -1878,20 +1868,20 @@ mod tests {
         );
         assert_eq!(
             moved["hooks"]["Stop"][0]["hooks"][0]["command"],
-            match facade_base::system::SYSTEM {
-                facade_base::system::System::Unix => {
-                    "FACADE_HOME='/h' '/new/facade' hook turn-end --cli muse"
-                }
-                facade_base::system::System::Windows => {
-                    r#"set "FACADE_HOME=/h" && @"/new/facade" hook turn-end --cli muse"#
-                }
+            match SYSTEM {
+                System::Unix => "FACADE_HOME='/h' '/new/facade' hook turn-end --cli muse".into(),
+                System::Windows => encoded_powershell(
+                    "$env:FACADE_HOME='/h'; & '/new/facade' 'hook' 'turn-end' '--cli' 'muse'; exit $LASTEXITCODE",
+                ),
             }
         );
         assert_eq!(
             moved["hooks"]["PermissionRequest"][0]["hooks"][0]["command"],
-            match facade_base::system::SYSTEM {
-                facade_base::system::System::Unix => "'/new/facade' hook approve muse",
-                facade_base::system::System::Windows => r#"@"/new/facade" hook approve muse"#,
+            match SYSTEM {
+                System::Unix => "'/new/facade' hook approve muse".into(),
+                System::Windows => encoded_powershell(
+                    "& '/new/facade' 'hook' 'approve' 'muse'; exit $LASTEXITCODE",
+                ),
             }
         );
 
@@ -1928,6 +1918,24 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(json(&left), own);
+
+        let earlier = json!({ "schema_version": 1, "hooks": { "Stop": [{
+            "hooks": [{ "type": "command",
+                "command": r#"set "FACADE_HOME=/h" && @"/new/facade" hook turn-end --cli muse"# }]
+        }] } })
+        .to_string();
+        let found = parts(Kind::MuseSettings, &earlier).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            held(Kind::MuseSettings, Some(&earlier), &MOVED),
+            Held::Changed
+        );
+        let updated = write(Kind::MuseSettings, Some(&earlier), &MOVED).unwrap();
+        assert_eq!(json(&updated)["hooks"]["Stop"], moved["hooks"]["Stop"]);
+        let removed = take_out(Kind::MuseSettings, &earlier, &found)
+            .unwrap()
+            .unwrap();
+        assert_eq!(json(&removed), json!({ "schema_version": 1 }));
 
         assert!(
             write(Kind::MuseSettings, Some("{\"model\": \"m\"}"), &PROGRAMS)
