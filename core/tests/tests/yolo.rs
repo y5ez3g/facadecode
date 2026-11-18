@@ -139,7 +139,7 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     let start =
         |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd });
     let mcp = ada.call("start_agent", start("nope"));
-    assert_eq!(mcp["reason"], "configuration_invalid", "{mcp}");
+    assert_eq!(mcp["reason"], "invalid_settings", "{mcp}");
     assert!(
         mcp["message"]
             .as_str()
@@ -280,7 +280,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
         ("stop_agent", json!({ "agent": "#a2" })),
     ] {
         let refused = ada.call(tool, arguments);
-        assert_eq!(refused["reason"], "out_of_reach", "{tool}: {refused}");
+        assert_eq!(refused["reason"], "refused", "{tool}: {refused}");
     }
     let named = ada.call("send_message", json!({ "to": "@bob", "text": "hi" }));
     assert_eq!(named["reason"], "not_found", "{named}");
@@ -357,7 +357,7 @@ fn a_guest_takes_yolo_from_the_settings_file_as_it_joins_for_its_reach() {
         "{listed}"
     );
     let refused = off.call("read_screen", json!({ "agent": "#a1" }));
-    assert_eq!(refused["reason"], "out_of_reach", "{refused}");
+    assert_eq!(refused["reason"], "refused", "{refused}");
     settings(&home, r#"{"yolo": true}"#);
     let mut on = McpTestClient::open_guest(&home, "claude", &[("CLAUDE_CODE_SESSION_ID", "c2")]);
     assert_eq!(guest(&home, "c2")["yolo"], true);
@@ -374,7 +374,7 @@ fn a_guest_takes_yolo_from_the_settings_file_as_it_joins_for_its_reach() {
     assert_eq!(guest(&home, "c1")["yolo"], false, "the YOLO it joined with");
     assert_eq!(
         off.call("read_screen", json!({ "agent": "#a1" }))["reason"],
-        "out_of_reach"
+        "refused"
     );
     let old = home.kill_daemon();
     home.wait_for_daemon_after(old, secs(30))

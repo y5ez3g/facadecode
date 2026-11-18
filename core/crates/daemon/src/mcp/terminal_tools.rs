@@ -134,13 +134,14 @@ fn type_into(client: &mut DaemonClient, input: TypeArgs) -> Value {
         Err(err) => err,
     };
     match err.downcast_ref::<ErrorBody>() {
-        Some(error) if error.data.reason == Reason::PartialInput => envelope::failure(
-            "partial_input",
-            format!(
+        Some(error) if error.data.reason == Reason::PartialInput => {
+            let mut refusal = envelope::refusal(error);
+            refusal["message"] = json!(format!(
                 "{}; only part of the input reached {agent}; read its screen before typing again",
                 error.message
-            ),
-        ),
+            ));
+            refusal
+        }
         _ => agent_failed(
             client,
             &err,

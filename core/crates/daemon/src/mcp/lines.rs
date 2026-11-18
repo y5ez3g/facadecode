@@ -4,6 +4,7 @@
 
 use std::time::Instant;
 
+use facade_base::jsonrpc::Reason;
 use serde_json::{Value, json};
 
 use super::{Relay, Serves, ToolCall, envelope, guest_sessions, instructions};
@@ -228,14 +229,14 @@ fn call_tool(
 fn unconfigured() -> Value {
     let message = "this Facade server was not started for a Facade agent, so it serves no tools; \
                    nothing was done";
-    envelope::failure("configuration_invalid", message)
+    envelope::failure(Reason::CallerUnavailable.canonical_name(), message)
 }
 
 /// What a guest's server answers where the Facade run has a server of its own.
 fn aside() -> Value {
     let message = "this Facade server serves no tools here: the Facade run it started in has a \
                    server of its own; nothing was done";
-    envelope::failure("configuration_invalid", message)
+    envelope::failure(Reason::CallerUnavailable.canonical_name(), message)
 }
 
 #[cfg(test)]
@@ -282,23 +283,28 @@ mod tests {
         );
     }
 
-    /// A server for no one, before a member joins, lists no tools, and a call does nothing.
+    /// A server without a caller cannot execute a tool.
     #[test]
     fn a_server_without_its_agent_serves_no_tools() {
-        let unconfigured = |line: &str| {
-            Relay::for_test(&[], &[])
-                .respond(&Serves::Nobody, line.as_bytes(), Instant::now())
+        let relay = Relay::for_test(&[], &[]);
+        let answer = |serves: &Serves, line: &str| {
+            relay
+                .respond(serves, line.as_bytes(), Instant::now())
                 .expect("an answer")
         };
+        let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}"#;
+        for serves in [Serves::Nobody, Serves::Aside] {
+            assert_eq!(answer(&serves, list)["result"], json!({ "tools": [] }));
+            let called = answer(&serves, call);
+            assert_eq!(
+                called["result"]["structuredContent"]["reason"], "caller_unavailable",
+                "{called}"
+            );
+        }
+        let called = answer(&Serves::Guest("codex".into()), call);
         assert_eq!(
-            unconfigured(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["result"],
-            json!({ "tools": [] })
-        );
-        let called = unconfigured(
-            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}"#,
-        );
-        assert_eq!(
-            called["result"]["structuredContent"]["reason"], "configuration_invalid",
+            called["result"]["structuredContent"]["reason"], "caller_unavailable",
             "{called}"
         );
     }

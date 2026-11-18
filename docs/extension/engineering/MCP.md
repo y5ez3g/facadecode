@@ -47,13 +47,14 @@ narrative headline. Parsing the text as JSON yields exactly `structuredContent`.
 a success sets it to false. There is no `accepted` status.
 
 ```ts
-type Result<T> =
+type Result<T, FailureData = never> =
   | { status: "success"; data?: T }
-  | { status: "failure"; reason: string; message: string };
+  | { status: "failure"; reason: string; message: string; data?: FailureData };
 ```
 
 Success includes `data` only when it has facts to return. stop_agent, type_text and press_keys return status alone.
-Failure has only `status`, `reason` and `message`: no `data`, `effects`, `error`, error code or `recovery` object.
+Failure has `status`, `reason` and `message`. Rust failures can also give structured facts in `data`, such as
+partially written input, retained worktrees, window delivery outcomes and protocol version details.
 The message says what went wrong, whether anything was done, and what to do next. Partial or unknown effects must be
 stated in that message; unknown does not mean nothing happened. CLI/Git/transport errors keep their useful diagnostic.
 
@@ -68,12 +69,17 @@ Common failure reasons:
 | Reason | Meaning |
 | --- | --- |
 | `invalid_argument` | Missing, unknown or invalid arguments, including an invalid startup window, path or CLI |
-| `not_found` | No matching agent or message |
+| `not_found` | No matching agent or message, or another missing target reported by the Rust daemon |
 | `ambiguous_reference` | A name matches more than one agent; give an ID |
-| `out_of_reach` | The target is outside the caller's creation tree with YOLO off |
+| `refused` | Rust daemon refusal, including a target outside the caller's creation tree with YOLO off |
+| `out_of_reach` | Old-engine refusal for a target outside the caller's creation tree with YOLO off |
 | `ended` | The target ended and cannot take the requested input |
 | `unsupported` | An unknown tool or a CLI without message input support |
-| `configuration_invalid` | Invalid settings or a server that cannot act for this caller |
+| `invalid_settings` | Rust could not read or validate Facade settings |
+| `caller_unavailable` | The Rust tool server cannot act for a caller, including when the session has its own server |
+| `incompatible_protocol` | The Rust daemon or its peer needs a different protocol version, with details in `data.protocol` when available |
+| `upgrading` | The Rust daemon is handing over to a newer build |
+| `configuration_invalid` | Invalid settings or a server without a caller on the old engine |
 | `unavailable` | Facade or a window cannot be reached, or the result is unknown |
 | `capacity_exceeded` | Input capacity is exhausted |
 | `partial_input` | Only part of the input reached the terminal |

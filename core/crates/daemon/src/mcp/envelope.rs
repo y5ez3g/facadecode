@@ -4,7 +4,7 @@
 //! it as JSON text and gets the same object as the call's structured content.
 
 use facade_base::daemon::WindowDeliveryOutcome;
-use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure};
+use facade_base::jsonrpc::{ErrorBody, SendFailure};
 use serde_json::{Value, json};
 
 use super::addresses::Addresses;
@@ -28,8 +28,7 @@ pub(super) fn failure(reason: &str, message: impl Into<String>) -> Value {
     json!({ "status": "failure", "reason": reason, "message": message.into() })
 }
 
-/// The daemon's error and structured details. The tools name an agent out of the caller's
-/// reach `out_of_reach`, and a daemon handing over to a newer build `unavailable`.
+/// The daemon's error with the public reason and structured details.
 pub(super) fn refusal(error: &ErrorBody) -> Value {
     refusal_with_addresses(error, &Addresses::default())
 }
@@ -39,11 +38,7 @@ pub(super) fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_
         error,
         window_delivery: outcomes,
     } = error.clone().into();
-    let reason = match error.data.reason {
-        Reason::Refused => "out_of_reach",
-        Reason::Upgrading => "unavailable",
-        other => other.as_str(),
-    };
+    let reason = error.data.reason.canonical_name();
     let mut refused = failure(reason, error.message.clone());
     if let Value::Object(mut details) = json!(error.data) {
         details.remove("reason");
@@ -106,8 +101,9 @@ pub(super) fn window_delivery(
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{WindowDelivery, WindowDeliveryFailure, WindowRef};
-    use facade_base::machine::{ExecutionOutcome, MessageRef, Unavailable};
+    use facade_base::daemon::{TextWritten, WindowDelivery, WindowDeliveryFailure, WindowRef};
+    use facade_base::jsonrpc::Reason;
+    use facade_base::machine::{ExecutionOutcome, MessageRef, ProtocolMismatch, Unavailable};
 
     use super::*;
 
@@ -185,8 +181,7 @@ mod tests {
         );
     }
 
-    /// A success carries data only where it has some; a failure, its reason and message alone; an
-    /// agent out of reach is `out_of_reach`.
+    /// The envelope carries data only when the tool has facts to report.
     #[test]
     fn the_envelope_holds_status_and_data_or_reason_and_message() {
         assert_eq!(success(json!({})), json!({ "status": "success" }));
@@ -198,9 +193,41 @@ mod tests {
             serde_json::to_string(&failure("not_found", "no agent #a9")).unwrap(),
             r#"{"status":"failure","reason":"not_found","message":"no agent #a9"}"#
         );
+    }
+
+    #[test]
+    fn daemon_refusals_keep_their_canonical_reason_and_details() {
+        for (reason, name) in [
+            (Reason::InvalidSettings, "invalid_settings"),
+            (Reason::CallerUnavailable, "caller_unavailable"),
+            (Reason::Refused, "refused"),
+            (Reason::Upgrading, "upgrading"),
+            (Reason::NotFound, "not_found"),
+            (Reason::InvalidArgument, "invalid_argument"),
+        ] {
+            let error = ErrorBody::new(reason, "the call could not go ahead");
+            assert_eq!(refusal(&error), failure(name, error.message));
+        }
+        let mut mismatch =
+            ErrorBody::new(Reason::IncompatibleProtocol, "different protocol versions");
+        mismatch.data.protocol = Some(ProtocolMismatch {
+            local_build: "here".into(),
+            local_protocol: [2, 2],
+            remote_build: "there".into(),
+            remote_protocol: [1, 1],
+        });
+        let reply = refusal(&mismatch);
+        assert_eq!(reply["reason"], "incompatible_protocol", "{reply}");
+        assert_eq!(reply["data"], json!({ "protocol": mismatch.data.protocol }));
+
+        let mut partial = ErrorBody::new(Reason::PartialInput, "the run ended during input");
+        partial.data.text_written = Some(TextWritten::Partial);
+        partial.data.enter_written = Some(false);
+        let reply = refusal(&partial);
+        assert_eq!(reply["reason"], "partial_input", "{reply}");
         assert_eq!(
-            refusal(&ErrorBody::new(Reason::Refused, "#a2 is out of your reach"))["reason"],
-            "out_of_reach"
+            reply["data"],
+            json!({ "text_written": "partial", "enter_written": false })
         );
     }
 }

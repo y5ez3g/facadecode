@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 
 use facade_base::daemon::{AgentArgs, AgentInspect, HookSession, HookSessionStart, is_session_id};
+use facade_base::jsonrpc::Reason;
 use facade_base::process::ProcessState;
 use serde_json::Value;
 
@@ -111,7 +112,10 @@ pub(super) fn agent_for_call(relay: &Relay, cli: &str, meta: &Value) -> Result<S
                 "this tool call names no session of {cli}, so Facade cannot tell whose it is; \
                  nothing was done"
             );
-            Err(envelope::failure("configuration_invalid", message))
+            Err(envelope::failure(
+                Reason::CallerUnavailable.canonical_name(),
+                message,
+            ))
         }
     }
 }
@@ -149,7 +153,7 @@ fn join(
     started.agent_id.ok_or_else(|| {
         let message =
             format!("Facade lists {cli}'s session {session} as no guest; nothing was done");
-        envelope::failure("unavailable", message)
+        envelope::failure(Reason::CallerUnavailable.canonical_name(), message)
     })
 }
 

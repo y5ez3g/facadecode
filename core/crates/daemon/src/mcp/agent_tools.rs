@@ -230,8 +230,7 @@ pub(super) fn start(
     }
 }
 
-/// A start the daemon refused, saying where a worktree it made stays. A window or folder it does
-/// not find is the caller's argument.
+/// A start the daemon refused, saying where a worktree it made stays.
 fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
     let mut refused = envelope::refusal_with_addresses(error, addresses);
     if let Some(unavailable) = &error.data.unavailable {
@@ -251,9 +250,6 @@ fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
             "{}; the worktree it made stays at {folder}",
             error.message
         ));
-    }
-    if error.data.reason == Reason::NotFound {
-        refused["reason"] = json!("invalid_argument");
     }
     refused
 }
@@ -507,5 +503,16 @@ mod tests {
             error.data.kept.unwrap().path.as_deref(),
             Some("/work/review")
         );
+    }
+
+    #[test]
+    fn a_start_reports_a_daemon_not_found_as_not_found() {
+        let error = ErrorBody::new(
+            Reason::NotFound,
+            "the agent this start acts for is no longer listed",
+        );
+        let refused = start_refused(&error, &Addresses::default());
+        assert_eq!(refused["reason"], "not_found", "{refused}");
+        assert_eq!(refused["message"], error.message, "{refused}");
     }
 }

@@ -556,7 +556,7 @@
     },
     "response": {
       "status": "failure",
-      "reason": "invalid_argument",
+      "reason": "not_found",
       "message": "No CLI \"nope\" is configured at <test>/project; the CLIs there are claude, codex, agy, muse, opencode, pi, fake."
     }
   },
