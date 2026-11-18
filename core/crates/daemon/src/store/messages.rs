@@ -23,7 +23,7 @@ use rusqlite::{Connection, Row, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use super::{Store, column_names, log};
+use super::{Store, log};
 use crate::HUMAN;
 
 /// What a message not yet delivered satisfies. `messages_undelivered` holds the messages it
@@ -35,13 +35,11 @@ const COLUMNS: &str = "number, \"from\", from_name, \"to\", text, reply_to, at, 
                        text_written, enter_written, deadline, delivered_via, delivered_at, paste, \
                        from_window, call_id, result_owed, result, human_windows";
 
-/// Creates the table, its later columns and its indexes where they are missing, in one
-/// transaction. `messages_undelivered` keeps a read of what waits as long as what waits, not as
-/// 30 days of an inbox.
-pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
-    let transaction = connection.transaction()?;
-    transaction.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS messages (
+/// Creates the table and its indexes. `messages_undelivered` lets reads scan only messages that
+/// are still waiting.
+pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(&format!(
+        "CREATE TABLE messages (
 			number INTEGER PRIMARY KEY,
 			\"from\" TEXT NOT NULL,
 			from_name TEXT,
@@ -57,29 +55,17 @@ pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
 			delivered_via TEXT,
 			delivered_at TEXT,
 			paste INTEGER,
+			from_window TEXT,
+			call_id TEXT,
+			result_owed INTEGER,
+			result TEXT,
+			request_id TEXT,
 			human_windows TEXT
 		);
-		CREATE INDEX IF NOT EXISTS messages_inbox ON messages (\"to\", number);
-		CREATE INDEX IF NOT EXISTS messages_undelivered ON messages (\"to\", number) WHERE {UNDELIVERED};"
-    ))?;
-    let columns = column_names(&transaction, "messages")?;
-    for (column, kind) in [
-        ("from_window", "TEXT"),
-        ("call_id", "TEXT"),
-        ("result_owed", "INTEGER"),
-        ("result", "TEXT"),
-        ("request_id", "TEXT"),
-    ] {
-        if !columns.iter().any(|known| known == column) {
-            transaction
-                .execute_batch(&format!("ALTER TABLE messages ADD COLUMN {column} {kind}"))?;
-        }
-    }
-    transaction.execute_batch(
-        "CREATE INDEX IF NOT EXISTS messages_request ON messages (\"from\", request_id) \
-         WHERE request_id IS NOT NULL;",
-    )?;
-    transaction.commit()
+		CREATE INDEX messages_inbox ON messages (\"to\", number);
+		CREATE INDEX messages_undelivered ON messages (\"to\", number) WHERE {UNDELIVERED};
+		CREATE INDEX messages_request ON messages (\"from\", request_id) WHERE request_id IS NOT NULL;"
+    ))
 }
 
 /// A send's own ID as its sender gave it, and the earliest time at which a message it kept still
@@ -842,51 +828,6 @@ mod tests {
                 .human_inbox(&other)
                 .unwrap()
                 .is_empty()
-        );
-    }
-
-    /// A store from before messages were kept gains the table and its indexes as it opens, keeps
-    /// its rows, and its message numbers go on.
-    #[test]
-    fn a_store_from_before_messages_were_kept_gains_them_and_its_numbers_go_on() {
-        let core = Core::new("migrate");
-        let store = core.open();
-        store.insert(&crate::store::tests::record("a1")).unwrap();
-        {
-            let connection = store.connection.lock().unwrap();
-            connection
-                .execute_batch("DROP TABLE messages; UPDATE message_numbers SET next = 7;")
-                .unwrap();
-        }
-        drop(store);
-        let opened = Store::open(&core.0, &[]).unwrap();
-        assert_eq!(opened.records.len(), 1, "the agent's row stays");
-        let indexes: Vec<String> = {
-            let connection = opened.store.connection.lock().unwrap();
-            let mut statement = connection
-                .prepare(
-                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' \
-                     ORDER BY name",
-                )
-                .unwrap();
-            statement
-                .query_map([], |row| row.get(0))
-                .unwrap()
-                .map(Result::unwrap)
-                .collect()
-        };
-        assert_eq!(
-            indexes,
-            ["messages_inbox", "messages_request", "messages_undelivered"]
-        );
-        assert_eq!(
-            opened
-                .store
-                .insert_message(&message(0, "a1"), None)
-                .unwrap()
-                .into_message()
-                .message_id,
-            "m7"
         );
     }
 

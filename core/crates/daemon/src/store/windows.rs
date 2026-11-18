@@ -8,18 +8,17 @@ use rusqlite::{Connection, params};
 
 use super::{Store, WindowRow, log};
 
-/// Creates the table where it is missing.
-pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
+pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS windows (
+        "CREATE TABLE windows (
 			window_id TEXT PRIMARY KEY,
 			label TEXT NOT NULL,
 			environment TEXT NOT NULL,
 			workspace TEXT,
 			folders TEXT NOT NULL,
 			branch_prefix TEXT,
-			sequence INTEGER,
-			instance TEXT
+			sequence INTEGER NOT NULL,
+			instance TEXT NOT NULL
 		);",
     )
 }

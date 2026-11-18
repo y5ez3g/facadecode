@@ -24,10 +24,9 @@ pub(crate) struct GuestRecord {
     pub(crate) heard_at: String,
 }
 
-/// Creates the table where it is missing.
-pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
+pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS guests (
+        "CREATE TABLE guests (
 			agent_id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			cli TEXT NOT NULL,

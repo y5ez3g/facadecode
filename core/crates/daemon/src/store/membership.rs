@@ -9,13 +9,13 @@ use super::Store;
 
 pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS agent_windows (
+        "CREATE TABLE agent_windows (
             agent_id TEXT NOT NULL,
             machine_id TEXT NOT NULL,
             window_id TEXT NOT NULL,
             PRIMARY KEY (agent_id, machine_id, window_id)
         );
-        CREATE INDEX IF NOT EXISTS agent_windows_by_window ON agent_windows (machine_id, window_id);",
+        CREATE INDEX agent_windows_by_window ON agent_windows (machine_id, window_id);",
     )
 }
 

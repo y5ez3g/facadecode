@@ -534,7 +534,7 @@ impl Daemon {
             yolo,
             request_id: args.request_id.clone(),
             prompt: None,
-            location_id: Some(info.location_id.clone()),
+            location_id: info.location_id.clone(),
         };
         // The prompt is committed with the record, so that a start answered with it never loses
         // it; its delivery time begins once the CLI's tools connected or will not.

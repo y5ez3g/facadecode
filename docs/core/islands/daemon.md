@@ -10,7 +10,8 @@ child islands each own one kind of data. This layer joins them.
 - The agent list: every agent listed, by its ID, with its handle.
 - `core/facade.db`, its schema and its one connection. It keeps this machine's ID, logical
   windows, agent memberships, and each run's recorded location source. The parts get handles
-  of their own tables. Each write across tables is one transaction.
+  of their own tables. The first open creates the schema and counters in one transaction.
+  Each write across tables is one transaction.
 - The `agents` topic's changes, which every listed agent's record goes out on.
 - The starts under way with a request ID, so that a repeated start waits for the first one's response.
 - What each open watch lets go of when it ends: a screen viewer, or a window's watch that lets Facade
@@ -50,8 +51,7 @@ child islands each own one kind of data. This layer joins them.
 
 - Branch by operating system: base's platform does.
 - Name a CLI or branch by one outside tests: rules does.
-- Change the daemon protocol, the store's schema (it only adds tables and columns), the MCP tool
-  definitions or their golden files.
+- Change the daemon protocol, the MCP tool definitions or their golden files.
 
 ## Interface
 
