@@ -152,7 +152,7 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'send': {
 			const sent = facadeAs(action.agent, 'send', '#human', action.text);
-			const id = /#(m\d+)/u.exec(sent)?.[1];
+			const id = /^#?(m\d+)\b/mu.exec(sent)?.[1];
 			assert.ok(id, sent);
 			return id;
 		}
