@@ -179,7 +179,7 @@ words after. The window starts no ptyd, shim or Facade tools of its own,
 keeps no record of its agents, and offers no Show Agent Launch. The window component is the same for both engines: an
 old-engine agent's request to a Rust window finds it unavailable.
 
-End Agent calls `agent.stop` for a running agent. End Agent and normal exit record the conversation in `conversations/`
+Stop Agent calls `agent.stop` for a running agent. Stops and exits record the conversation in `conversations/`
 for Resume and leave the agent's record in core (RULES-4.1). Go to Agent uses `agent.adopt` to add the editor's
 logical window to an existing agent. `agent.list` queries the network for Go to Agent. The `machines` topic gives New
 Agent its targets. `cli.list` and `location.list` read the chosen machine and `agent.start_preflight` checks the

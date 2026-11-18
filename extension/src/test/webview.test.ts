@@ -1342,11 +1342,11 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; Rename and End always; never Pin or Unpin, its button\'s', async () => {
-		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); agents[1] = newCard(2, { menu: { pin: true, moveUp: true, moveDown: false } }); agents[2] = newCard(3, { pinned: true, menu: { unpin: true, moveUp: false, moveDown: false } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 4).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
+	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; the ended context only for Dismiss Agent; never Pin or Unpin, its button\'s', async () => {
+		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); agents[1] = newCard(2, { menu: { pin: true, moveUp: true, moveDown: false } }); agents[2] = newCard(3, { pinned: true, menu: { unpin: true, dismiss: true, moveUp: false, moveDown: false } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 4).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
 			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-2', webviewMoveUp: true, preventDefaultContextMenuItems: true },
-			{ webviewSection: 'agent', run_id: 'run-3', preventDefaultContextMenuItems: true },
+			{ webviewSection: 'agent', run_id: 'run-3', webviewAgentEnded: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-4', preventDefaultContextMenuItems: true }
 		]);
 	});

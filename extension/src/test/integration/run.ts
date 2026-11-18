@@ -685,7 +685,7 @@ async function main(): Promise<void> {
 	};
 	/**
 	 * The Rust engine's acceptance on the extension's side, in one window on it (engine.it.ts): the window runs on core of its Facade
-	 * root, its terminal's `facade list` shows the editor's agent, Resume Agent restores the record End Agent retained, and a program
+	 * root, its terminal's `facade list` shows the editor's agent, Resume Agent restores the record Stop Agent retained, and a program
 	 * is told the theme's colours.
 	 */
 	const rustJourneys = async () => {

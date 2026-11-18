@@ -13,7 +13,7 @@ import { REQUEST_MS } from './requests';
 import { dotOf } from './status';
 import {
 	ConversationEntry, ConversationKey, ConversationStore, ConversationTitlePort, Pin, PinStore, conversationId, LocationId,
-	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
+	ActivityReport, AgentCloseResult, Agents, AliasPort, canDismiss, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
 	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError, SaidSource, TabPlace,
 	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
@@ -543,7 +543,7 @@ export class AgentService implements Agents, Disposable {
 
 	/**
 	 * A run its grace ended without that end confirmed (LIFECYCLE-3.5): a red card that says so, holding its conversation and Pin -
-	 * its Pin is not restored beside it - and never reattached. End Agent ends it again.
+	 * its Pin is not restored beside it - and never reattached. Stop Agent retries the stop.
 	 */
 	private showUncertain(each: LiveRun): void {
 		const english = 'Could not confirm that it stopped';
@@ -986,7 +986,17 @@ export class AgentService implements Agents, Disposable {
 		}
 	}
 
-	async close(id: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'> {
+	async stop(id: RunId): Promise<AgentCloseResult> {
+		const run = this.runs.get(id);
+		return run && canDismiss(run.facts) ? 'already_ended' : this.close(id);
+	}
+
+	async dismiss(id: RunId): Promise<void> {
+		const run = this.runs.get(id);
+		if (run && canDismiss(run.facts)) { await this.close(id); }
+	}
+
+	async close(id: RunId): Promise<AgentCloseResult> {
 		const run = this.runs.get(id);
 		if (!run) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
@@ -996,7 +1006,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	/** Removes `run`'s pair at once and ends its process in the background (LIFECYCLE-3.1), its Pin already seen to. */
-	private async closeRun(run: Run): Promise<CleanupResult | 'already_ended' | 'not_started'> {
+	private async closeRun(run: Run): Promise<AgentCloseResult> {
 		const id = run.facts.id;
 		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
@@ -1347,7 +1357,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	/**
-	 * A Pin that cannot start here keeps its own red card, holding the Pin, so the person sees why and can end it with End Agent, which
+	 * A Pin that cannot start here keeps its own red card, holding the Pin, so the person sees why and can dismiss it with Dismiss Agent, which
 	 * Unpins (LIFECYCLE-3.4: failures retain their individual entries).
 	 */
 	private unrestorable(pin: Pin, reason: string, english = reason): RunId {

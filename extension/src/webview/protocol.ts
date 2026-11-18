@@ -7,6 +7,7 @@
 
 /** What a card's context menu offers beyond its fixed actions (PANEL-2.2): each only where it would do something now. */
 export interface CardMenu {
+	readonly dismiss?: true;
 	readonly pin?: boolean;
 	readonly unpin?: boolean;
 	readonly moveUp: boolean;

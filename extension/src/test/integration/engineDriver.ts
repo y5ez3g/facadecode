@@ -116,7 +116,7 @@ export async function activate(): Promise<void> {
 			write({ phase: 'old-still', cards: cards.map(card => card.runId), alive: two.agents.map(agent => alive(agent.pid)), core: coreRuns(), setting: vscode.workspace.getConfiguration('facade').get('rustEngine') });
 			// Both ended: the old engine has nothing running, and a start is refused where it says to reload
 			for (const agent of two.agents) {
-				await vscode.commands.executeCommand('facade.closeAgent', { run_id: agent.runId });
+				await vscode.commands.executeCommand('facade.stopAgent', { run_id: agent.runId });
 			}
 			await until('both to end', async () => (await state()).cardCount === 0 && two.agents.every(agent => !alive(agent.pid)) ? true : undefined);
 			// The window learns the old runs are gone within its poll of ptyd; a start after that is refused

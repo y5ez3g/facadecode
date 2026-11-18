@@ -167,10 +167,10 @@ async function checkLive(before: RunningAgent): Promise<void> {
 }
 
 export async function stop(card: Card): Promise<void> {
-	await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+	await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	await until(`#${card.alias.slice(1)} to stop and its card to close`, async () => {
 		const agent = listed().find(each => `#${each.agent_id}` === card.alias);
-		assert.ok(agent, `End Agent keeps ${card.alias}'s record`);
+		assert.ok(agent, `Stop Agent keeps ${card.alias}'s record`);
 		return agent.process === 'ended' && !(await state()).cards.some(each => each.alias === card.alias) && !hasAgentTab(card) || undefined;
 	});
 }

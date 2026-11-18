@@ -215,7 +215,7 @@ function received(alias: string): string[] {
 async function closePublicAgent(alias: string): Promise<void> {
 	const card = (await state()).cards.find(each => each.alias === alias);
 	assert.ok(card, `No card for ${alias}`);
-	await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+	await vscode.commands.executeCommand(card.menu.dismiss ? 'facade.dismissAgent' : 'facade.stopAgent', { run_id: card.runId });
 }
 
 function argsOf(alias: string): { readonly cwd: string; readonly args: string[]; readonly env: { readonly [name: string]: string } } {
@@ -355,7 +355,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const stop = await script(alias, [{ tool: 'stop_agent', arguments: { agent: child } }, { tool: 'list_agents', arguments: {} }]);
 		assert.strictEqual(stop.content('stop_agent')?.status, 'success', JSON.stringify(stop.content('stop_agent')));
 		assert.ok(card.runId);
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId }).then(undefined, () => undefined);
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
 	});
 
 	test('its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it', async function () {
@@ -457,7 +457,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await until('the child card to go', async () => (await state()).cards.some(each => each.alias === child) ? undefined : true);
 		assert.ok(!(stop.content('list_agents')?.data.agents as { agent_id: string }[]).some(each => each.agent_id === child), 'a stopped child is no longer listed');
 
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 
 	test('messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once', async function () {
@@ -578,7 +578,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.strictEqual(received(childAlias).filter(each => each.includes('Wait for my messages.')).length, initialPastes, 'the inbox handoff starts no second prompt paste');
 
 		await closePublicAgent(childOf(started));
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 
 	test('a submission its CLI takes slowly, or whose Enter it misses, is pasted once: Enter again over its own draft, never the text (RULES-1.6)', async function () {
@@ -603,7 +603,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			fs.rmSync(quirks, { force: true });
 		}
 		await closePublicAgent(childOf(started));
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 });
 

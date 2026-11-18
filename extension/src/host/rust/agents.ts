@@ -19,7 +19,7 @@ import { keptName, labelOf, repeatedNames, suggestName } from '../../core/names'
 import { conversationId } from '../../core/ports';
 import { dotOf } from '../../core/status';
 import type {
-	ActivityUnknown, Agents, CleanupResult, ConversationEntry, ConversationKey, ConversationTitlePort, Disposable, Event, HumanPort,
+	ActivityUnknown, AgentCloseResult, Agents, ConversationEntry, ConversationKey, ConversationTitlePort, Disposable, Event, HumanPort,
 	LaunchHistoryPort, LaunchRequest, Location, LocationId, LocationPort, LogPort, OtherAgent, PairFacts, Pin, ResumeResult, RetainedConversation,
 	RunChange, RunError, RunFacts, RunId, RustPin, RustPinStore, SaidSource, StartOutcome, TabPlace
 } from '../../core/ports';
@@ -71,8 +71,6 @@ export interface DismissedAgents {
 	retain(keep: (agent: string) => boolean): void;
 }
 
-type EndResult = CleanupResult | 'already_ended' | 'not_started';
-
 /** What a start of this window is before core answers it, and how it went. */
 interface Pending {
 	readonly name: string;
@@ -88,12 +86,12 @@ interface Pending {
 
 interface ResumeAttempt {
 	readonly result: Promise<AgentInfo>;
-	closing?: Promise<EndResult>;
+	closing?: Promise<AgentCloseResult>;
 }
 
 interface StopAttempt {
 	readonly info: AgentInfo;
-	readonly result: Promise<EndResult>;
+	readonly result: Promise<AgentCloseResult>;
 }
 
 interface UnconfirmedStart {
@@ -109,9 +107,9 @@ interface Run {
 	agent?: string;
 	/** A start this window asked for, until core gives it an agent. */
 	pending?: Pending;
-	/** End Agent during launch answers once the launch and any resulting stop are settled. */
-	closeAfterLaunch?: PromiseWithResolvers<EndResult>;
-	/** A start or resume core refused: red until End Agent (UX-2.4). */
+	/** Stop Agent during launch answers once the launch and any resulting stop are settled. */
+	closeAfterLaunch?: PromiseWithResolvers<AgentCloseResult>;
+	/** A start or resume core refused: red until dismissal (UX-2.4). */
 	failure?: RunError;
 	/** It continues a session - Recent's, a Pin's, or its own resumed - rather than beginning one (PANEL-1.4). */
 	resumed?: boolean;
@@ -133,7 +131,7 @@ const UNKNOWN: { readonly [reason: string]: ActivityUnknown } = { not_shown: 'no
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 /**
- * `Agents` on core: a start, a resume, End Agent and a rename are core's operations; the cards are core's records
+ * `Agents` on core: core handles a start, a resume, a stop and a rename; the cards are core's records
  * of this window, a start this window asked for shown from its acceptance (LIFECYCLE-1.5). Pins and Recent's names stay the window's.
  */
 export class RustAgents implements Agents, Disposable {
@@ -154,7 +152,7 @@ export class RustAgents implements Agents, Disposable {
 	private readonly byAgent = new Map<string, RunId>();
 	/** Starts awaiting a number, including those whose cards were closed before core answered. */
 	private readonly starting = new Map<RunId, Run>();
-	/** The reply may have been lost after the process started. Keep this evidence even after End Agent removes the card. */
+	/** The reply may have been lost after the process started. Keep this evidence even after Stop Agent removes the card. */
 	private readonly unconfirmedStarts = new Map<RunId, UnconfirmedStart>();
 	private readonly adopting = new Map<string, Promise<AgentInfo>>();
 	private readonly resuming = new Map<string, ResumeAttempt>();
@@ -336,7 +334,7 @@ export class RustAgents implements Agents, Disposable {
 					this.closed.set(agent, info);
 					this.updated(info);
 				}
-				run.closeAfterLaunch.resolve(this.stop(info));
+				run.closeAfterLaunch.resolve(this.stopRecord(info));
 				return id;
 			}
 			this.updated(info, false);
@@ -404,9 +402,34 @@ export class RustAgents implements Agents, Disposable {
 	}
 
 	// -----------------------------------------------------------------------------------------------------------------------------
-	// End Agent and Rename
+	// Stop Agent, Dismiss Agent and Rename
 
-	async close(id: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<EndResult> {
+	async stop(id: RunId): Promise<AgentCloseResult> {
+		const run = this.runs.get(id);
+		return run && this.endedHere(run) ? 'already_ended' : this.close(id);
+	}
+
+	async dismiss(id: RunId): Promise<void> {
+		const run = this.runs.get(id);
+		// close reaches only its ended branch after this check, with no asynchronous work in between.
+		if (run && this.endedHere(run)) { await this.close(id); }
+	}
+
+	private endedHere(run: Run): boolean {
+		if (run.agent) {
+			const info = this.all.get(run.agent);
+			return info !== undefined && this.confirmedEnd(info);
+		}
+		return !!run.failure && !this.unconfirmedStarts.has(run.id);
+	}
+
+	private confirmedEnd(info: AgentInfo): boolean {
+		const agent = agentAddress(info);
+		return this.hasSnapshot() && info.process === 'ended' && !info.unreachable
+			&& !this.resuming.has(agent) && !this.unconfirmedResumes.has(agent);
+	}
+
+	async close(id: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<AgentCloseResult> {
 		const run = this.runs.get(id);
 		if (!run) { throw agentMissing(id); }
 		const uncertain = this.unconfirmedStarts.get(id);
@@ -418,13 +441,13 @@ export class RustAgents implements Agents, Disposable {
 		return 'already_ended';
 	}
 
-	private closeStart(run: Run): Promise<EndResult> {
-		run.closeAfterLaunch ??= deferred<EndResult>();
+	private closeStart(run: Run): Promise<AgentCloseResult> {
+		run.closeAfterLaunch ??= deferred<AgentCloseResult>();
 		if (run.pending?.machine === undefined) { this.drop(run, 'close'); }
 		return run.closeAfterLaunch.promise;
 	}
 
-	private async closeRecord(info: AgentInfo, forWorktreeDeletion = false): Promise<EndResult> {
+	private async closeRecord(info: AgentInfo, forWorktreeDeletion = false): Promise<AgentCloseResult> {
 		const agent = agentAddress(info);
 		const resuming = this.resuming.get(agent);
 		const uncertain = this.unconfirmedResumes.get(agent);
@@ -448,7 +471,7 @@ export class RustAgents implements Agents, Disposable {
 			const window = this.window;
 			resuming.closing ??= resuming.result.then(resumed => {
 				if (!this.owns(window)) { throw bindingChanged(); }
-				return this.removedAgents.has(agent) ? 'already_ended' : this.stop(resumed);
+				return this.removedAgents.has(agent) ? 'already_ended' : this.stopRecord(resumed);
 			}, (err: unknown) => {
 				if (this.owns(window) && this.removedAgents.has(agent)) { return 'already_ended'; }
 				if (resumeRefused(info.agent_id, err)) { return 'not_started'; }
@@ -460,7 +483,7 @@ export class RustAgents implements Agents, Disposable {
 			this.remember(info);
 			return 'already_ended';
 		}
-		return this.stop(info);
+		return this.stopRecord(info);
 	}
 
 	worktreeAgents(path: string): number {
@@ -525,14 +548,14 @@ export class RustAgents implements Agents, Disposable {
 		}
 	}
 
-	private stop(info: AgentInfo): Promise<EndResult> {
+	private stopRecord(info: AgentInfo): Promise<AgentCloseResult> {
 		const agent = agentAddress(info);
 		const stopping = this.stopping.get(agent);
 		if (stopping && !isNewProcess(stopping.info, info)) { return stopping.result; }
 		this.remember(info);
 		const window = this.window;
 		const local = this.local(info);
-		const result = this.deps.link.call<StopResult>('agent.stop', { agent }).then((stopped): EndResult => {
+		const result = this.deps.link.call<StopResult>('agent.stop', { agent }).then((stopped): AgentCloseResult => {
 			this.deps.log.event(`Ended ${this.agentLabel(info)}: ${stopped.already_ended ? 'already ended' : 'stopped'}`);
 			const current = this.all.get(agent);
 			if (!local && this.owns(window) && current && !isNewProcess(info, current)) {
@@ -541,7 +564,7 @@ export class RustAgents implements Agents, Disposable {
 				if (run) { this.drop(run, 'close'); }
 			}
 			return stopped.already_ended ? 'already_exited' : 'terminated';
-		}, (err: unknown): EndResult => {
+		}, (err: unknown): AgentCloseResult => {
 			if (this.stopping.get(agent)?.result === result) { this.stopping.delete(agent); }
 			this.deps.log.event(`Could not stop ${this.agentLabel(info)} in core: ${messageOf(err)}`);
 			if (local && stopRefused(err)) { return 'failed'; }
@@ -615,10 +638,10 @@ export class RustAgents implements Agents, Disposable {
 		return (this.runOf(agent) ?? this.project(this.requireAgent(agent), undefined, true))?.id ?? agent;
 	}
 
-	async closeOtherAgent(agent: string): Promise<EndResult> {
+	async stopOtherAgent(agent: string): Promise<AgentCloseResult> {
 		const info = this.requireAgent(agent);
 		if (info.guest) { throw agentMissing(agent); }
-		return this.closeRecord(info);
+		return this.confirmedEnd(info) ? 'already_ended' : this.closeRecord(info);
 	}
 
 	private adoptRecord(info: AgentInfo): Promise<AgentInfo> {
@@ -758,6 +781,8 @@ export class RustAgents implements Agents, Disposable {
 		});
 		const attempt: ResumeAttempt = { result };
 		this.resuming.set(agent, attempt);
+		const run = this.runOf(agent);
+		if (run) { this.refresh(run, 'lifecycle'); }
 		return attempt;
 	}
 
@@ -1017,6 +1042,10 @@ export class RustAgents implements Agents, Disposable {
 		if (this.complete) { this.resetSnapshot(); }
 		for (const [agent, info] of this.all) {
 			if (!this.local(info) && !info.unreachable) { this.all.set(agent, { ...info, unreachable: true }); }
+			if (this.local(info) && info.process === 'ended') {
+				const run = this.runOf(agent);
+				if (run) { this.refresh(run); }
+			}
 		}
 		this.machinesChanged();
 	}
@@ -1333,11 +1362,11 @@ export class RustAgents implements Agents, Disposable {
 		}
 		this.emit({ run: run.id, kind: kind ?? (before.name !== after.name ? 'renamed'
 			: before.lifecycle !== after.lifecycle || before.error !== after.error || before.pin !== after.pin
-				|| before.disconnected !== after.disconnected ? 'lifecycle' : 'reported') });
+				|| before.disconnected !== after.disconnected || before.endUnconfirmed !== after.endUnconfirmed ? 'lifecycle' : 'reported') });
 	}
 
 	/**
-	 * A zero exit or a Facade stop closes its card (RULES-3.3). Any other end keeps the red card until End Agent.
+	 * A zero exit or a Facade stop closes its card (RULES-3.3). Any other end keeps the red card until Dismiss Agent.
 	 */
 	private cleanExit(info: AgentInfo): boolean {
 		return info.process === 'ended' && ((info.exit?.code === 0 && !info.exit.signal) || info.state_detail?.how === 'stopped');
@@ -1365,7 +1394,8 @@ export class RustAgents implements Agents, Disposable {
 				createdAt: pending.createdAt, lifecycle: failure ? 'ended' : 'starting', phase: pending.worktree ? 'creating_worktree' : 'launching_cli',
 				activity: 'unknown', reporting: false, root: run.id, origin: 'human', tools: 'not_injected',
 				...pending.sessionId ? { sessionId: pending.sessionId, resumed: true as const } : {},
-				...failure ? { error: failure, end: { kind: 'failed' as const, at: failure.at } } : {}
+				...failure ? { error: failure, end: { kind: 'failed' as const, at: failure.at } } : {},
+				...this.unconfirmedStarts.has(run.id) ? { endUnconfirmed: true as const } : {}
 			};
 		}
 		const local = this.local(info);
@@ -1423,6 +1453,7 @@ export class RustAgents implements Agents, Disposable {
 					break;
 			}
 		}
+		if (facts.lifecycle === 'ended' && !this.confirmedEnd(info)) { facts.endUnconfirmed = true; }
 		// The same error object while it lasts, so a refresh says `reported` rather than `lifecycle`
 		if (facts.error && run.facts?.error && JSON.stringify({ ...facts.error, at: 0 }) === JSON.stringify({ ...run.facts.error, at: 0 })) {
 			facts.error = run.facts.error;

@@ -176,7 +176,7 @@ function setUp(options: { readonly createMs?: number } = {}) {
 		unreachable: () => { reachable = false; },
 		/** Another window takes the workspace's agents over. */
 		disown: () => { owned = false; },
-		/** Ends a run as End Agent does: its card goes at once. */
+		/** Stops a run as Stop Agent does: its card goes at once. */
 		close: (run: RunId) => { runs.delete(run); changes.fire({ run, kind: 'removed', cause: 'close' }); },
 		end: (run: RunId) => { runs.set(run, { ...runs.get(run)!, lifecycle: 'ended' }); changes.fire({ run, kind: 'lifecycle' }); }
 	};

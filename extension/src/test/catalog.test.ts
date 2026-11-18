@@ -26,7 +26,8 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.unpinAgent', 'Unpin Agent'],
 	['facade.showActiveAgents', 'Go to Agent...'],
 	['facade.renameAgent', 'Rename Agent...'],
-	['facade.closeAgent', 'End Agent'],
+	['facade.stopAgent', 'Stop Agent'],
+	['facade.dismissAgent', 'Dismiss Agent'],
 	['facade.showAgentDetails', 'Show Agent Details'],
 	['facade.filter', 'Filter by Working Location...', '$(filter)'],
 	['facade.openSettings', 'Open Settings'],
@@ -73,13 +74,13 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		assert.ok(contributes.commands.every((each: { category: string }) => english(each.category) === 'Facade Code'));
 		const text = JSON.stringify(manifest);
 		// Gone in this step too: Refresh, New Agent Here, the working-location commands and their context keys
-		for (const retired of ['facadeDots', 'facade.stopAgent', 'facade.nextAgent', 'facade.startAgent', 'ChatRoom', 'deleteWorktree', 'facade.refresh', 'facade.newAgentHere', 'webviewHere',
+		for (const retired of ['facadeDots', 'facade.closeAgent', 'facade.nextAgent', 'facade.startAgent', 'ChatRoom', 'deleteWorktree', 'facade.refresh', 'facade.newAgentHere', 'webviewHere',
 			'facade.customize', 'facade.openInNewWindow', 'facade.revealIn', 'facade.openContainingFolder', 'facade.revealRemote', 'facade.copyPath', 'facade.openTerminalHere', 'canManageWorktrees', 'facade.remote']) {
 			assert.ok(!text.includes(retired), retired);
 		}
 	});
 
-	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, End Agent for every card; the palette by availability, context-only commands hidden', () => {
+	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, Stop Agent or Dismiss Agent based on lifecycle; the palette by availability, context-only commands hidden', () => {
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
@@ -97,12 +98,14 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
 				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
 				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' },
-				{ command: 'facade.closeAgent', when: card, group: '4_close@1' }
+				{ command: 'facade.stopAgent', when: `${card} && !webviewAgentEnded`, group: '4_close@1' },
+				{ command: 'facade.dismissAgent', when: `${card} && webviewAgentEnded`, group: '4_close@1' }
 			],
 			commandPalette: [
 				{ command: 'facade.showAgentLaunch', when: 'facade.engine != rust' },
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
-				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
+				{ command: 'facade.stopAgent', when: 'facade.agentSelected && !facade.agentSelectedEnded' },
+				{ command: 'facade.dismissAgent', when: 'facade.agentSelected && facade.agentSelectedEnded' },
 				{ command: 'facade.showAgentDetails', when: 'facade.agentSelected && facade.agentSelectedVisible' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
 				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedPinnable && !facade.agentSelectedPinned' },
@@ -192,7 +195,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				const disposables = registerUi({
 					savedName: () => undefined,
 					agents: { requested: () => undefined, started: async () => ({ state: 'closed' }), warmedUp: async () => undefined, list: () => [], get: () => undefined, onDidChange: emitter.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: () => {}, unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
-			launch: () => '', close: async () => 'already_ended', rename: () => undefined },
+			launch: () => '', stop: async () => 'already_ended', dismiss: async () => undefined, close: async () => 'already_ended', rename: () => undefined },
 					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
 					clis: { list: async () => ({ clis: [], problems: [] }) },

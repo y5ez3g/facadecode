@@ -1279,6 +1279,7 @@ function contextOf(card: Card): string {
 	return JSON.stringify({
 		webviewSection: 'agent',
 		run_id: card.runId,
+		...(menu.dismiss ? { webviewAgentEnded: true } : {}),
 		...(menu.moveUp ? { webviewMoveUp: true } : {}),
 		...(menu.moveDown ? { webviewMoveDown: true } : {}),
 		preventDefaultContextMenuItems: true

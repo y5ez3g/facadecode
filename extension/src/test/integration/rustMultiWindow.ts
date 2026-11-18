@@ -233,7 +233,7 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	assertSameRun(left, right, 'both workspaces restored the same process');
 	assertSameRun({ ...left, pid: before.pid }, before, 'the resume kept the number, session and cwd');
 	assert.notStrictEqual(left.pid, before.pid, 'the original process ended before the resume');
-	console.log('  ✔ End Agent closes both member windows\' cards and tabs, and both Pins restore one process by the original number');
+	console.log('  ✔ Stop Agent closes both member windows\' cards and tabs, and both Pins restore one process by the original number');
 	await deleteWorktree(restored[0], restored[1], original, member);
 	await Promise.all(restored.map(window => window.close()));
 	await sameWorkspace(start, journey);
@@ -267,7 +267,7 @@ async function deleteWorktree(source: DrivenWindow, peer: DrivenWindow, sourceRe
 		})()`));
 		const confirmation = await until('the Delete Worktree confirmation', () => workbench.cdp.evaluate<string | undefined>(
 			`document.querySelector('.monaco-dialog-box')?.textContent ?? undefined`));
-		assert.ok(confirmation.includes(agent.cwd) && confirmation.includes('Its agent will be ended.'), confirmation);
+		assert.ok(confirmation.includes(agent.cwd) && confirmation.includes('Its agent will be stopped.'), confirmation);
 		const confirmed = await workbench.cdp.evaluate<boolean>(`(() => {
 			const button = Array.from(document.querySelectorAll('.monaco-dialog-box .monaco-button'))
 				.find(button => button.textContent?.trim() === 'Delete');

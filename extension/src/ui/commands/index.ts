@@ -33,7 +33,7 @@ interface RustUi {
 	queryOtherAgents(): Promise<readonly OtherAgent[]>;
 	readonly onDidChangeOtherAgents: Event<void>;
 	adoptAgent(agent: string): Promise<RunId>;
-	closeOtherAgent(agent: string): ReturnType<Agents['close']>;
+	stopOtherAgent(agent: string): ReturnType<Agents['stop']>;
 	retainedConversations(): readonly RetainedConversation[];
 	resumeRetained(agent: string, options: { readonly reveal: boolean }): Promise<RunId>;
 	worktreeAgents(path: string): number;
@@ -214,7 +214,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			const window = rust?.window();
 			return goToAgent({
 				model, agents: deps.agents, media, reveal: run => agent.reveal(run),
-				copyReference: run => agent.copyReference(run), close: run => agent.close(run), ...deps.icons ? { icons: deps.icons } : {},
+				copyReference: run => agent.copyReference(run), stop: run => agent.stop(run), dismiss: run => agent.dismiss(run), ...deps.icons ? { icons: deps.icons } : {},
 				...rust ? { others: {
 					list: () => rust.window() === window ? rust.otherAgents() : [],
 					query: async () => { checkWindow(window); return rust.queryOtherAgents(); },
@@ -224,9 +224,9 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 						catch (err) { deps.notifyError(rust.describeError(err), {}); }
 					},
 					copyReference: facts => rust.window() === window ? agent.copyReference(facts.id, facts) : Promise.resolve(),
-					close: facts => agent.close(facts.id, { facts, stop: () => {
+					stop: facts => agent.stop(facts.id, { facts, stop: () => {
 						checkWindow(window);
-						return rust.closeOtherAgent(facts.id);
+						return rust.stopOtherAgent(facts.id);
 					} })
 				} } : {}
 			});

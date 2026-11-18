@@ -947,9 +947,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([ui.dialogs, back, ui.updates, left, cli, closed, launched], [
 				[
-					{ kind: 'warning', args: ['Remove "shop" from this workspace? Files stay on disk.', { modal: true, detail: 'Its agent will be ended.' }, 'Remove'], over: undefined },
-					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '3 associated agents will be ended.' }, 'Remove'], over: undefined },
-					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '3 associated agents will be ended.' }, 'Remove'], over: undefined }
+					{ kind: 'warning', args: ['Remove "shop" from this workspace? Files stay on disk.', { modal: true, detail: 'Its agent will be stopped.' }, 'Remove'], over: undefined },
+					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '3 associated agents will be stopped.' }, 'Remove'], over: undefined },
+					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '3 associated agents will be stopped.' }, 'Remove'], over: undefined }
 				],
 				['New Agent · Select Folder', 'Select a folder', ['shop', 'docs', '', 'Add Folder to Workspace...'], []],
 				[[1, 1]],
@@ -1019,7 +1019,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.hide();
 			await done;
 			assert.deepStrictEqual([ui.dialogs[0], cancelled, removing.map(each => each.id), during, after, errors], [
-				{ kind: 'warning', args: ['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\nIts agent will be ended.' }, 'Delete'], over: undefined },
+				{ kind: 'warning', args: ['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\nIts agent will be stopped.' }, 'Delete'], over: undefined },
 				[['main', 'login-fix', '', 'New Worktree...'], 0],
 				[LOGIN.id],
 				[['main', '', 'New Worktree...'], true, [], ['run-1']],
@@ -1047,7 +1047,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([offered, ui.dialogs[0].args, closed, errors], [
 				[['login-fix', 'close: Delete Worktree']],
-				['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\n2 associated agents will be ended.' }, 'Delete'],
+				['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\n2 associated agents will be stopped.' }, 'Delete'],
 				['run-1', 'run-2'],
 				[]
 			]);
@@ -1708,9 +1708,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				model: { ordered: () => [local], placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' }), placesShown: () => true },
 				agents: { onDidChange: new TestEmitter<RunChange>().event },
 				media: { path: '/extension/media' } as never,
-				reveal: async () => undefined, copyReference: async () => undefined, close: async () => undefined,
+				reveal: async () => undefined, copyReference: async () => undefined, stop: async () => undefined, dismiss: async () => undefined,
 				others: { list: () => [], query: async () => [{ facts: remote, windows: [] }], onDidChange: report.event,
-					open: async id => void adopted.push(id), copyReference: async () => undefined, close: async () => false }
+					open: async id => void adopted.push(id), copyReference: async () => undefined, stop: async () => false }
 			});
 			const picker = ui.current!;
 			assert.deepStrictEqual(picker.items.map(item => item.label), ['Ada']);
@@ -1734,21 +1734,22 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				model: { ordered: () => [], placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' }), placesShown: () => true },
 				agents: { onDidChange: new TestEmitter<RunChange>().event },
 				media: { path: '/extension/media' } as never,
-				reveal: async () => undefined, copyReference: async () => undefined, close: async () => undefined,
+				reveal: async () => undefined, copyReference: async () => undefined, stop: async () => undefined, dismiss: async () => undefined,
 				others: {
 					list: () => [], query: async () => [gpu, peer].map(facts => ({ facts, windows: [] })), onDidChange: report.event,
 					open: async () => undefined, copyReference: async () => undefined,
-					close: async facts => { stopped.push(facts.id); return confirmed; }
+					stop: async facts => { stopped.push(facts.id); return confirmed; }
 				}
 			});
 			const picker = ui.current!;
 			await settle();
-			const end = picker.item('GPU agent').buttons![1];
-			picker.press(0, end);
+			const stop = picker.item('GPU agent').buttons![1] as { tooltip: string };
+			assert.strictEqual(stop.tooltip, 'Stop Agent');
+			picker.press(0, stop);
 			await settle();
 			assert.deepStrictEqual(picker.labels(), ['GPU agent', 'Server agent']);
 			confirmed = true;
-			picker.press(0, end);
+			picker.press(0, stop);
 			await settle();
 			report.fire();
 			assert.deepStrictEqual(picker.labels(), ['Server agent']);
@@ -1769,7 +1770,12 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				media: { path: '/extension/media' } as never,
 				reveal: async run => void did.push(`reveal ${run}`),
 				copyReference: async run => void did.push(`copy ${run}`),
-				close: async run => { did.push(`close ${run}`); runs = runs.filter(each => each.id !== run); changed.fire({ run, kind: 'removed', cause: 'close' }); }
+				stop: async run => void did.push(`stop ${run}`),
+				dismiss: async run => {
+					did.push(`dismiss ${run}`);
+					runs = runs.filter(each => each.id !== run);
+					changed.fire({ run, kind: 'removed', cause: 'close' });
+				}
 			});
 			const picker = ui.current!;
 			const listed = picker.items.map(item => [item.label, item.description, item.detail]);
@@ -1784,9 +1790,12 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const byReference = picker.items.map(item => item.description);
 			picker.type('Ada');
 			const all = picker.items.length;
-			const [copy, close] = picker.items[1].buttons!;
+			const [copy, dismiss] = picker.items[1].buttons!;
+			const stop = picker.items[2].buttons![1];
+			assert.deepStrictEqual(picker.items.slice(0, 3).map(item => (item.buttons![1] as { tooltip: string }).tooltip), ['Stop Agent', 'Dismiss Agent', 'Stop Agent']);
 			picker.press(0, copy);
-			picker.press(1, close);
+			picker.press(2, stop);
+			picker.press(1, dismiss);
 			await settle();
 			const afterClose = picker.items.map(item => item.description);
 			// Every agent in the window's one place to work: none says it (PANEL-1.3)
@@ -1810,7 +1819,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				['#a1 · main · Fix login', '#a3 · main', 'main · Unnamed work', '#a5 · main · Same'],
 				['#a1 · Fix login', '#a3', 'Unnamed work', '#a5 · Same'],
 				4,
-				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
+				[`copy ${run(1).id}`, `stop ${run(3).id}`, `dismiss ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
 		});
 
@@ -1825,7 +1834,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				media: { path: '/extension/media' } as never,
 				reveal: async () => undefined,
 				copyReference: async () => undefined,
-				close: async () => undefined
+				stop: async () => undefined, dismiss: async () => undefined
 			});
 			const picker = ui.current!;
 			const before = reads;
@@ -1858,7 +1867,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				media: { path: '/extension/media' } as never,
 				reveal: async () => undefined,
 				copyReference: async () => undefined,
-				close: async () => undefined
+				stop: async () => undefined, dismiss: async () => undefined
 			});
 			const described = ui.current!.items[0].description;
 			ui.current!.hide();
@@ -1881,7 +1890,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				media: { path: '/extension/media' } as never,
 				reveal: async () => undefined,
 				copyReference: async () => undefined,
-				close: async () => undefined
+				stop: async () => undefined, dismiss: async () => undefined
 			});
 			const picker = ui.current!;
 			const described = picker.items.map(item => item.description);
@@ -1900,7 +1909,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				media: { path: '/extension/media' } as never,
 				reveal: async () => undefined,
 				copyReference: async () => undefined,
-				close: async () => undefined
+				stop: async () => undefined, dismiss: async () => undefined
 			});
 			const picker = ui.current!;
 			const shown = [picker.items[0].label, picker.items[0].description];

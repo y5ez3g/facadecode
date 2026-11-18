@@ -300,9 +300,9 @@ the card the pointer was on stays as under it - its buttons and, unless selected
 closes high contrast's dashed edge (UX-2.1) - until the page hears of the pointer again, on that card or elsewhere, or
 until 1000 ms after the menu is gone, closed or never shown, with nothing heard. A click on the card that closes its menu,
 its press reaching the editor's menu and only its release the page, so leaves the card as it was. Groups: Rename; Move
-Up/Down; End Agent for starting, live and retained-ended records. It has no other entries: no Pin or Unpin, which the card's Pin
+Up/Down; Stop Agent for a starting or live process, and Dismiss Agent for an ended pair. It has no other entries: no Pin or Unpin, which the card's Pin
 button and the palette do (1.3, UX-3.1), no worktree deletion or bulk selection action. Enable actions by actual
-availability; name editing need not wait for CLI readiness. LIFECYCLE-3.1 owns End Agent. No menu outside a card, not even the webview's
+availability; name editing need not wait for CLI readiness. LIFECYCLE-3.1 owns both lifecycle actions. No menu outside a card, not even the webview's
 default Cut/Copy/Paste. Context targets its stable run ID, revalidated against current host state under 3.1, never the
 selected row by fallback. Palette targeting follows UX-3.1.
 

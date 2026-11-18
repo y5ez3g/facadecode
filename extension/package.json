@@ -101,8 +101,13 @@
 				"category": "%command.category%"
 			},
 			{
-				"command": "facade.closeAgent",
-				"title": "%command.closeAgent%",
+				"command": "facade.stopAgent",
+				"title": "%command.stopAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.dismissAgent",
+				"title": "%command.dismissAgent%",
 				"category": "%command.category%"
 			},
 			{
@@ -218,8 +223,13 @@
 					"group": "2_move@2"
 				},
 				{
-					"command": "facade.closeAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
+					"command": "facade.stopAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && !webviewAgentEnded",
+					"group": "4_close@1"
+				},
+				{
+					"command": "facade.dismissAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewAgentEnded",
 					"group": "4_close@1"
 				}
 			],
@@ -233,8 +243,12 @@
 					"when": "facade.agentSelected"
 				},
 				{
-					"command": "facade.closeAgent",
-					"when": "facade.agentSelected"
+					"command": "facade.stopAgent",
+					"when": "facade.agentSelected && !facade.agentSelectedEnded"
+				},
+				{
+					"command": "facade.dismissAgent",
+					"when": "facade.agentSelected && facade.agentSelectedEnded"
 				},
 				{
 					"command": "facade.showAgentDetails",

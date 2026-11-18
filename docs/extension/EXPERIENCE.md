@@ -78,7 +78,7 @@ it, without moving the list or taking focus (LIFECYCLE-2.2). Progress is shown i
 **A failed accepted launch retains its card and terminal; a usable CLI remains available if its Facade tools fail.**
 
 The second line explains the actual error. Operation errors go to the initiator: human UI errors to that window's
-person, agent operation errors to that agent, with no extra human popup. End Agent removes the retained pair
+person, agent operation errors to that agent, with no extra human popup. Dismiss Agent removes the retained pair
 immediately; closing its tab only hides it. Native Git post-create preparation does not gate CLI startup once the
 worktree exists and Git recognizes it.
 
@@ -110,9 +110,9 @@ machine through the window, the window explains which agents can control agents 
 
 ### 2.3 A turn ends, a process exits, or the person ends an agent
 
-**A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until End Agent.**
+**A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until Dismiss Agent.**
 
-Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. End Agent
+Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. Stop Agent
 removes a local card and terminal immediately and cleans up the process in the background. A card for a process
 on another Facade machine stays until its stop is confirmed (LIFECYCLE-3.1). A successful Rust stop
 closes the other connected members' cards and tabs too (RULES-4.1). Closing one tab only hides that window's view
@@ -142,8 +142,8 @@ continue a saved agent with its original number (LIFECYCLE-3.2). Pin and the nat
 same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
 Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
 card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a
-hidden one hidden. Closing a tab showing its pin mark unpins it. End Agent and normal exit preserve the Pin on the
-Rust engine, and each workspace decides what it pins. On the old engine, both unpin the agent. Whole-window close
+hidden one hidden. Closing a tab showing its pin mark unpins it. Stop Agent, Dismiss Agent and normal exit preserve the Pin on the
+Rust engine, and each workspace decides what it pins. On the old engine, all three unpin the agent. Whole-window close
 and abnormal exit preserve the intent on either engine. The pinned agents' tabs reopen one after another in the
 Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own
 restoration and capability limits.
@@ -230,7 +230,7 @@ outcome remains unchanged. An agent explicitly contacts the person through `#hum
 
 **Stopping or cancellation does not undo completed input or user files.**
 
-Canceling an unaccepted picker changes nothing. End Agent on an accepted launch immediately removes UI and prevents
+Canceling an unaccepted picker changes nothing. Stop Agent on an accepted launch immediately removes UI and prevents
 later CLI startup; a worktree already created stays. Hiding its tab does neither. Facade does not manage Git
 initialization, initial commits, or native post-create preparation jobs; it deletes only a clean linked worktree the
 person confirms. External removal of a window folder/worktree closes its affected agents. An unconfirmed remote cleanup

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The Rust engine's acceptance on the extension's side (spec.md "验收"), in one window that runs on it: core of this Facade root runs the
-// agents, the window's terminal reaches it with `facade`, End Agent hides the card and tab and keeps the record for Resume Agent,
+// agents, the window's terminal reaches it with `facade`, Stop Agent hides the card and tab and keeps the record for Resume Agent,
 // and a program asking its terminal's colours is told the theme's. Fake CLIs only; the window runs
 // `FACADE_IT_ONLY=engine` (or the whole suite with FACADE_IT_ENGINE=rust) and no other part of the suite asks for these.
 
@@ -79,12 +79,12 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 				&& seen.windows[0].window_id !== 'terminal', 'it is the editor window\'s agent on this machine');
 		} finally {
 			shell.dispose();
-			await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId }).then(undefined, () => undefined);
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
 			await until('the agent to go', async () => (await state()).cards.some(each => each.runId === card.runId) ? undefined : true);
 		}
 	});
 
-	test('End Agent hides the card and tab, and Resume Agent continues the retained agent by number (LIFECYCLE-3.1, 3.3)', async function () {
+	test('Stop and Dismiss close the appropriate pair and Resume restores the original number (LIFECYCLE-3.1, 3.3)', async function () {
 		this.timeout(120_000);
 		const first = await newCard();
 		const alias = aliasOf(first);
@@ -97,11 +97,11 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		await until('its screen log in core', () => fs.existsSync(path.join(screens, id)) ? true : undefined);
 		await until('its terminal tab to open', () => hasAgentTab(first) || undefined);
 
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: first.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: first.runId });
 		await until('its card and terminal tab to close', async () => !(await state()).cards.some(card => card.alias === alias) && !hasAgentTab(first) || undefined);
-		const stopped = await until('End Agent to stop the retained agent', () => {
+		const stopped = await until('Stop Agent to stop the retained agent', () => {
 			const record = listed().find(agent => agent.agent_id === id);
-			assert.ok(record, `End Agent retains ${alias} in facade list`);
+			assert.ok(record, `Stop Agent retains ${alias} in facade list`);
 			return record.process === 'ended' ? record : undefined;
 		});
 		assert.strictEqual(stopped.session, session);
@@ -121,8 +121,23 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			const [agent] = records;
 			assert.strictEqual(agent?.agent_id, id, 'core lists the resumed agent by its original number');
 			assert.strictEqual(agent.process, 'running');
+			assert.ok(agent.pid, 'the resumed fake CLI has a PID');
+			await until('the resumed tab to open', () => hasAgentTab(second) || undefined);
+
+			process.kill(agent.pid, 'SIGKILL');
+			const ended = await until('the fake CLI to leave an ended card', async () =>
+				(await state()).cards.find(card => card.alias === alias && card.menu.dismiss));
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: ended.runId });
+			assert.ok((await state()).cards.some(card => card.runId === ended.runId), 'a stale Stop leaves an ended card');
+			await vscode.commands.executeCommand('facade.dismissAgent', { run_id: ended.runId });
+			await until('Dismiss Agent to close the ended pair', async () => !(await state()).cards.some(card => card.alias === alias) && !hasAgentTab(second) || undefined);
+			const kept = listed().find(each => each.agent_id === id);
+			assert.deepStrictEqual([kept?.process, kept?.session], ['ended', session]);
 		} finally {
-			await vscode.commands.executeCommand('facade.closeAgent', { run_id: second.runId }).then(undefined, () => undefined);
+			const card = (await state()).cards.find(each => each.alias === alias);
+			if (card) {
+				await vscode.commands.executeCommand(card.menu.dismiss ? 'facade.dismissAgent' : 'facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
+			}
 		}
 	});
 
@@ -158,7 +173,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		} finally {
 			await theme.update('colorTheme', original, vscode.ConfigurationTarget.Global);
 			for (const card of cards) {
-				await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId }).then(undefined, () => undefined);
+				await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
 			}
 		}
 	});

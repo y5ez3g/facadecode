@@ -447,7 +447,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, titles: { r
 /** The sentence a removal's confirmation adds where it closes agents (WORKTREES-3.3): none where it closes none. */
 function closingText(count: number): string | undefined {
 	// {0} is how many agents, two or more
-	return count === 0 ? undefined : count === 1 ? vscode.l10n.t("Its agent will be ended.") : vscode.l10n.t("{0} associated agents will be ended.", count);
+	return count === 0 ? undefined : count === 1 ? vscode.l10n.t("Its agent will be stopped.") : vscode.l10n.t("{0} associated agents will be stopped.", count);
 }
 
 /** Whether the person confirmed `message` with `action`, asked in a modal warning: anything else is no (LIFECYCLE-1.3). */

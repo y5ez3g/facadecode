@@ -108,7 +108,7 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 		} finally {
 			// The isolated test owns every card here. Failed models must not keep spending usage during the window grace period.
 			const cards = await state().then(current => current.cards, () => []);
-			await Promise.allSettled(cards.map(card => vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId })));
+			await Promise.allSettled(cards.map(card => vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId })));
 		}
 	});
 
@@ -191,8 +191,8 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 		console.log(`Native collaboration calls: ${JSON.stringify(calls.map(({ tool, by, status }) => ({ tool, by, status })))}`);
 		if (process.env.FACADE_IT_REAL_DECISIONS === '1') { await decisionProbe(first, terminal); }
 
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: second.runId });
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: first.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: second.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: first.runId });
 	}
 });
 

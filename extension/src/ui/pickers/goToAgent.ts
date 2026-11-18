@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { Agents, Event, OtherAgent, RunFacts, RunId } from '../../core/ports';
+import { canDismiss, type Agents, type Event, type OtherAgent, type RunFacts, type RunId } from '../../core/ports';
 import { PanelModel, REPORT_COALESCE_MS } from '../model';
 import { cliIcon, plainText } from '../presentation';
 import { matchesCliSearch } from './search';
@@ -14,7 +14,8 @@ export interface GoToAgentDeps {
 	readonly media: vscode.Uri;
 	readonly reveal: (run: RunId) => Promise<unknown>;
 	readonly copyReference: (run: RunId) => Promise<void>;
-	readonly close: (run: RunId) => Promise<unknown>;
+	readonly stop: (run: RunId) => Promise<unknown>;
+	readonly dismiss: (run: RunId) => Promise<unknown>;
 	readonly others?: {
 		list(): readonly OtherAgent[];
 		/** Network candidates, in addition to those already known by this window. */
@@ -22,7 +23,7 @@ export interface GoToAgentDeps {
 		readonly onDidChange: Event<void>;
 		open(agent: string): Promise<void>;
 		copyReference(facts: RunFacts): Promise<void>;
-		close(facts: RunFacts): Promise<boolean>;
+		stop(facts: RunFacts): Promise<boolean>;
 	};
 	/** The icon each CLI shows, by its API ID (CONFIGURATION-2.4); none: each name's own. */
 	readonly icons?: () => (cli: string) => string;
@@ -61,11 +62,12 @@ function matchesText(query: string, text: string): boolean {
 /**
  * Go to Agent (LIFECYCLE-2.3) lists this window's agents and available running agents from other windows. Search by name, CLI,
  * title, location, short ID or copied reference. Choosing an agent opens its terminal in this window, adopting it when needed.
- * The row buttons copy its reference or end it and keep the picker open.
+ * The row buttons copy its reference, stop its process or dismiss its ended card. They keep the picker open.
  */
 export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	const copy: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('copy'), tooltip: vscode.l10n.t("Copy Agent Reference") };
-	const close: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("End Agent") };
+	const stop: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Stop Agent") };
+	const dismiss: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Dismiss Agent") };
 	const picker = vscode.window.createQuickPick<Item>();
 	picker.title = vscode.l10n.t("Go to Agent");
 	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location, or ID");
@@ -84,7 +86,7 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 			// Its title's lines joined with a space, as the row is one line: the stored and searchable title stays whole (LIFECYCLE-2.3)
 			description: plainText([facts.name ? facts.alias : undefined, placesShown ? place : undefined, facts.title?.split(/\r?\n/).join(' ')].filter(Boolean).join(' · ')),
 			iconPath: cliIcon(deps.media, icon(facts.cli)),
-			buttons: [copy, close],
+			buttons: [copy, canDismiss(facts) ? dismiss : stop],
 			run: facts.id
 		};
 		// The window's one place to work, left unsaid, still matches a search (LIFECYCLE-2.3)
@@ -127,7 +129,7 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 					continue;
 				}
 				const labels = windows.map(({ label, connected }) => plainText(connected === false ? `${label} (${disconnected})` : label).replace(/\r?\n/g, ' '));
-				items.push({ ...item, description: [item.description, labels.join(', ')].filter(Boolean).join(' · '), alwaysShow: !!query, other: facts });
+				items.push({ ...item, description: [item.description, labels.join(', ')].filter(Boolean).join(' · '), alwaysShow: !!query, buttons: [copy, stop], other: facts });
 			}
 		}
 		picker.items = items;
@@ -171,16 +173,20 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 				if (item.other && others) {
 					if (button === copy) {
 						void others.copyReference(item.other);
-					} else {
-						void others.close(item.other).then(ended => {
+					} else if (button === stop) {
+						void others.stop(item.other).then(ended => {
 							if (ended && open) {
 								stopped.add(item.run);
 								refreshNow();
 							}
 						});
 					}
-				} else {
-					void (button === copy ? deps.copyReference(item.run) : deps.close(item.run));
+				} else if (button === copy) {
+					void deps.copyReference(item.run);
+				} else if (button === stop) {
+					void deps.stop(item.run);
+				} else if (button === dismiss) {
+					void deps.dismiss(item.run);
 				}
 			}),
 			picker.onDidHide(() => {

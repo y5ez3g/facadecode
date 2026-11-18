@@ -5,6 +5,7 @@
 import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
 import { repeatedNames } from '../core/names';
+import { canDismiss } from '../core/ports';
 import type { CardMenu, PanelFilter, PanelState, PlaceKind } from '../webview/protocol';
 import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel, onePlaceOf } from './cardView';
 import { arranged, atEnd, atStart, moved, PanelPrefs, withNew } from './order';
@@ -412,6 +413,7 @@ export class PanelModel implements Disposable {
 			const local = facts.remoteMachine === undefined;
 			const withinArea = (other: string) => visible(other) && !!byId.get(other)?.pin === !!facts.pin;
 			const menu: CardMenu = {
+				...canDismiss(facts) ? { dismiss: true } : {},
 				...(local && facts.pinnable && !facts.pin ? { pin: true } : {}),
 				...(local && facts.pin ? { unpin: true } : {}),
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
@@ -435,7 +437,7 @@ export class PanelModel implements Disposable {
 				capabilities: { remote: this.deps.remote },
 				...(exited.length ? { exited } : {})
 			},
-			...(selected ? { selection: { run: selected.id, ended: selected.lifecycle === 'ended', ...(selectedLocal && selected.pin ? { pinned: true } : {}), ...(selectedLocal && selected.pinnable ? { pinnable: true } : {}) } } : {})
+			...(selected ? { selection: { run: selected.id, ended: canDismiss(selected), ...(selectedLocal && selected.pin ? { pinned: true } : {}), ...(selectedLocal && selected.pinnable ? { pinnable: true } : {}) } } : {})
 		};
 	}
 

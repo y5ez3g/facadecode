@@ -43,7 +43,8 @@ Packages are available for macOS (Intel x64 and Apple silicon), Linux (x64 and A
 The **Facade Code** panel in the Activity Bar shows all agents in your window. Each card displays the agent's name, its CLI, and a status dot, with ⓘ details showing its title, folder, and creator.
 
 - **Start and configure.** Click **New Agent...** to choose a CLI. In the picker, select **Change Name...** to name your session or **Change Working Location...** to pick a folder or create a Git worktree.
-- **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it; open the card's gear menu and choose **End Agent** to end the session.
+- **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it. In the card's gear menu, **Stop Agent** stops the process and **Dismiss Agent** closes an ended card.
+- **Custom keyboard shortcuts.** Replace any binding to `facade.closeAgent` in `keybindings.json` with `facade.stopAgent` for stopping or `facade.dismissAgent` for dismissing an ended card.
 - **Pin and resume.** Use **Pin Agent** to keep essential agents at the top of the panel and restore them when the workspace opens again. Use **Resume Agent...** in the panel header to search history and restore past conversations in their original folders.
 
 For details on agent cards, resuming sessions, pinning, git worktrees, and window reloads, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#one-panel-for-every-agent).

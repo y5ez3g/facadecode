@@ -923,11 +923,14 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual([world.agents.list().map(run => run.id), world.execution.pairs.has(id), world.retained.has(id)], [[], false, false]);
 	});
 
-	test('explicit close removes card and terminal at once and cleans up in the background (J07, LIFECYCLE-3.1)', async () => {
+	test('Stop Agent removes a live pair at once and Dismiss leaves it in place (J07, LIFECYCLE-3.1)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		const closing = world.agents.close(id);
+		await world.agents.dismiss(id);
+		assert.strictEqual(world.agents.get(id)?.lifecycle, 'running');
+		assert.deepStrictEqual(world.execution.removed, []);
+		const closing = world.agents.stop(id);
 		assert.strictEqual(world.agents.get(id), undefined, 'gone from the record at once');
 		assert.deepStrictEqual(world.execution.removed, [id], 'its terminal is gone at once');
 		assert.strictEqual(await closing, 'terminated');
@@ -935,13 +938,15 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.get(id), undefined, 'its later exit does not bring it back');
 	});
 
-	test('a close removes the card and terminal at once even where its kept record cannot be removed - the store refuses the write (LIFECYCLE-3.1)', async () => {
+	test('Dismiss removes the ended pair even where its kept record cannot be removed - the store refuses the write (LIFECYCLE-3.1)', async () => {
 		const world = setUp({ planError: new PlanError('claude is not installed in this environment.', 'not_found') });
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		assert.ok(world.retained.has(id), 'its failed start is kept for a reload');
 		world.retained.delete = () => { throw new Error('Timed out after 5 seconds waiting for another window to release the lock'); };
-		assert.strictEqual(await world.agents.close(id), 'already_ended');
+		assert.strictEqual(await world.agents.stop(id), 'already_ended');
+		assert.ok(world.agents.get(id), 'a stale Stop leaves the known ended card');
+		await world.agents.dismiss(id);
 		assert.deepStrictEqual([world.agents.get(id), world.execution.removed, world.changes.filter(change => change.kind === 'removed').map(change => change.run)], [undefined, [id], [id]]);
 		assert.ok(world.log.some(line => /Could not remove the kept record of run-.*: Timed out/.test(line)));
 	});

@@ -113,7 +113,7 @@ Durations and curves are Fluent's, chosen and decided: a card's insertion 200 ms
 card in view after a normal process exit fades as its row closes up from its own height in 150 ms, `cubic-bezier(1,0,1,1)`,
 as its fast motion leaves - one out of view or cut by an edge, or the list gliding, goes at once; a card's details enter
 as Fluent's popover does, fading in as they slide 10 px in from the ⓘ's side over 400 ms, `cubic-bezier(0,0,0,1)`, and
-leave at once (PANEL-1.5); text changes in place. No motion on first draw/filter change. End Agent and confirmed location removal remove the card and terminal
+leave at once (PANEL-1.5); text changes in place. No motion on first draw/filter change. Stop Agent, Dismiss Agent and confirmed location removal remove the card and terminal
 immediately, without animation. Dot and scrolling durations belong to PANEL. Long-running animation changes only
 opacity/transform. The panel and a busy tab's spinner (LIFECYCLE-2.2) follow both `workbench.reduceMotion` and the
 system preference; as the extension host cannot read the system preference, the tab takes it from the panel's page, and
@@ -172,7 +172,7 @@ as menu-only. Arguments bypass a picker only
 when their schema fully identifies the target; invalid arguments fail without guessing. The table is the authoritative
 command inventory, not a second description of behavior.
 
-For Rename, Pin, Unpin, End Agent and Show Agent Details, a palette invocation without an explicit target uses
+For Rename, Pin, Unpin, Stop Agent, Dismiss Agent and Show Agent Details, a palette invocation without an explicit target uses
 PANEL-2.1's current selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does not
 open a target picker. Rename still asks for the new name. Explicit arguments and the card menu target that exact run and
 are validated against current state, without falling back to the selection.
@@ -185,7 +185,8 @@ are validated against current state, without falling back to the selection.
 | `unpinAgent` | Unpin Agent | Pinned record; the card's Pin button | LIFECYCLE-3.4 |
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
-| `closeAgent` | End Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
+| `stopAgent` | Stop Agent | Starting or running agent; card and Go to Agent | LIFECYCLE-3.1 |
+| `dismissAgent` | Dismiss Agent | Ended pair in this window; card and Go to Agent | LIFECYCLE-3.1 |
 | `showAgentDetails` | Show Agent Details | A selected record whose card the filter shows; the card's ⓘ | PANEL-1.5 |
 | `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
 | `openSettings` | Open Settings | Always; panel `…` menu, New Agent's gear and configuration entries; opens the Settings section or remote facade.json under CONFIGURATION-1.2 | CONFIGURATION-1.2 |
@@ -207,8 +208,8 @@ Hidden from palette: `newWorktree` (view-menu creation), `moveUp` (Move Up) and 
 `filterOn` (the filled-icon form of `filter`, shown while a filter is active), `revealAgent` (Show Agent,
 notification navigation), and `openSettingsFile` (Open facade.json, used by Edit in facade.json links and error notifications under
 CONFIGURATION-1.2). The worktree command follows WORKTREES-4.3. Facade contributes no terminal-tab context
-entries; the card's gear menu covers Rename, Move Up, Move Down and End Agent, its Pin button pinning and unpinning
-(PANEL-1.3, 2.2), and the palette's selected-agent actions Rename, Pin, Unpin, End Agent and Show Agent Details (3.1), and no internal
+entries; the card's gear menu covers Rename, Move Up, Move Down, Stop Agent and Dismiss Agent. Its Pin button handles pinning and unpinning
+(PANEL-1.3, 2.2). The palette offers Rename, Pin, Unpin, Stop Agent, Dismiss Agent and Show Agent Details as applicable (3.1). No internal
 `$mid` terminal-context trick is used. There is no scripted-start command; UI and MCP use the same internal launch
 service.
 

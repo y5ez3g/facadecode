@@ -642,7 +642,7 @@ export interface WorktreePort {
 // ---------------------------------------------------------------------------------------------------------------------------
 // Runs as the core records them (RULES-2.2, 3.1)
 
-/** Internal lifecycle (RULES-3.1); explicit close removes the run from the UI at once, whatever this says. */
+/** Internal lifecycle (RULES-3.1). */
 export type Lifecycle = 'starting' | 'running' | 'ended';
 
 /** The visible startup stage of an accepted launch (LIFECYCLE-1.5). */
@@ -695,6 +695,8 @@ export interface RunFacts {
 	readonly yolo: boolean;
 	readonly createdAt: number;
 	readonly lifecycle: Lifecycle;
+	/** The card looks ended, but the latest start, resume or exit is still unconfirmed. */
+	readonly endUnconfirmed?: true;
 	readonly phase: Phase;
 	readonly pid?: number;
 	readonly startedAt?: number;
@@ -894,6 +896,14 @@ export interface OtherAgent {
 	readonly windows: readonly { readonly label: string; readonly connected?: boolean }[];
 }
 
+/** Whether the card can offer Dismiss Agent (LIFECYCLE-3.1). */
+export function canDismiss(facts: RunFacts): boolean {
+	return facts.lifecycle === 'ended' && !facts.endUnconfirmed;
+}
+
+/** The actual cleanup outcome, shared by editor Stop and existing close flows. */
+export type AgentCloseResult = CleanupResult | 'already_ended' | 'not_started';
+
 export interface Agents {
 	/** Whether this window still owns its workspace's agents: once another window took them over, none is this window's (RULES-4.1). */
 	owned?(): boolean;
@@ -920,8 +930,12 @@ export interface Agents {
 	creationPending?(run: RunId): boolean;
 	/** Its post-start creation prompt was delivered or given up: its input is held for it no longer (RULES-1.10). */
 	creationSettled?(run: RunId): void;
-	/** End Agent, the single action ending for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
-	close(run: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<CleanupResult | 'already_ended' | 'not_started'>;
+	/** Stop Agent rechecks the run before stopping. An ended pair remains available to dismiss. */
+	stop(run: RunId): Promise<AgentCloseResult>;
+	/** Dismiss Agent closes a confirmed ended pair in this window (LIFECYCLE-3.1). */
+	dismiss(run: RunId): Promise<void>;
+	/** The close and cleanup used by the existing MCP and worktree flows. */
+	close(run: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<AgentCloseResult>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */
 	rename(run: RunId, name: string): void;
 	list(): readonly RunFacts[];

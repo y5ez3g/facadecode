@@ -15,7 +15,8 @@ export const COMMANDS = {
 	unpinAgent: 'facade.unpinAgent',
 	showActiveAgents: 'facade.showActiveAgents',
 	renameAgent: 'facade.renameAgent',
-	closeAgent: 'facade.closeAgent',
+	stopAgent: 'facade.stopAgent',
+	dismissAgent: 'facade.dismissAgent',
 	/** The selected card's details, for the keyboard (PANEL-1.5, UX-2.3). */
 	showAgentDetails: 'facade.showAgentDetails',
 	filter: 'facade.filter',

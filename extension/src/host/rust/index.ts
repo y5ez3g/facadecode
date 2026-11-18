@@ -404,7 +404,7 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 				queryOtherAgents: () => agents.queryOtherAgents(),
 				onDidChangeOtherAgents: agents.onDidChangeOtherAgents,
 				adoptAgent: agent => agents.adoptAgent(agent),
-				closeOtherAgent: agent => agents.closeOtherAgent(agent),
+				stopOtherAgent: agent => agents.stopOtherAgent(agent),
 				retainedConversations: () => agents.retainedConversations(),
 				resumeRetained: (agent, options) => agents.resumeRetained(agent, options),
 				worktreeAgents: path => agents.worktreeAgents(path),

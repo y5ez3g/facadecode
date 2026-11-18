@@ -49,9 +49,11 @@ function harness() {
 	const empty = () => [];
 	const ignore = () => { };
 	const disconnected = new Map<string, boolean>();
+	const dismissed = new Set<string>();
+	const removed: string[] = [];
 	const deps = {
 		link, terminals: {
-			openPair: ignore, bind: ignore, tabLabel: ignore, spin: ignore, removePair: ignore, note: ignore,
+			openPair: ignore, bind: ignore, tabLabel: ignore, spin: ignore, removePair: (run: string) => removed.push(run), note: ignore, exited: ignore,
 			setReachable: (run: string, reachable: boolean) => disconnected.set(run, !reachable),
 			tabOpen: () => false, reveal: async () => true
 		},
@@ -60,13 +62,16 @@ function harness() {
 		machineName: (machine: string) => machine === gpu ? 'gpu' : 'server',
 		environment: () => ({ LOCAL: 'editor' }), pins: { list: empty }, titles: { title: async () => undefined },
 		history: { remember: () => assert.fail('remote paths must stay outside local launch history') },
+		dismissed: { has: (agent: string) => dismissed.has(agent), set: (agent: string, dismiss: boolean) => dismiss ? dismissed.add(agent) : dismissed.delete(agent), retain: () => undefined },
 		contact: { contact: (notice: MessageRecord) => notifications.push(notice) }, human: { error: ignore },
 		log: { event: ignore }, describe: (err: Error) => err.message, newRunId: () => 'start-fixture'
 	};
-	const { RustAgents } = withModules({ vscode: { l10n: { t: (message: string) => message } } })<typeof import('../host/rust/agents')>(require.resolve('../host/rust/agents'));
+	const load = withModules({ vscode: { l10n: { t: (message: string) => message } } });
+	const { RustAgents } = load<typeof import('../host/rust/agents')>(require.resolve('../host/rust/agents'));
+	const { DaemonError: LinkError } = load<typeof import('../host/rust/types')>(require.resolve('../host/rust/types'));
 	const agents = new RustAgents(deps as unknown as RustAgentsDeps);
 	return {
-		agents, calls, notifications, disconnected,
+		agents, calls, notifications, disconnected, dismissed, removed, LinkError,
 		answer: (fn: typeof answer) => { answer = fn; },
 		disconnect: () => { connected = false; listing().disconnected?.(); },
 		reconnect: () => { connected = true; rebound(); },
@@ -156,7 +161,7 @@ suite('Rust machine network windows (RULES-2.2, PANEL-1.3, LIFECYCLE-2.3)', () =
 		const [candidate] = await view.agents.queryOtherAgents();
 		const run = await view.agents.adoptAgent(candidate.facts.id);
 		assert.strictEqual(run, agentAddress(remote));
-		assert.strictEqual(await view.agents.close(run), 'terminated');
+		assert.strictEqual(await view.agents.stop(run), 'terminated');
 		view.listing.change({ kind: 'updated', agent: { ...joined, process: 'ended', state: 'ended', exit: { code: 0, at } } });
 		assert.strictEqual(view.agents.get(run), undefined);
 		const [retained] = view.agents.retainedConversations();
@@ -173,11 +178,49 @@ suite('Rust machine network windows (RULES-2.2, PANEL-1.3, LIFECYCLE-2.3)', () =
 		view.listing.snapshot({ agents: [], machines: [{ machine_id: gpu, state: 'synced', agents: [remote] }] });
 		const lost = new DaemonError('the target did not answer', 'unavailable', { reason: 'unavailable', unavailable: { execution: 'outcome_unknown' } });
 		view.answer(() => { throw lost; });
-		await assert.rejects(view.agents.close(agentAddress(remote)), err => err === lost);
+		await assert.rejects(view.agents.stop(agentAddress(remote)), err => err === lost);
 		const refused = new DaemonError('Stop refused', 'refused', { reason: 'refused' });
 		view.answer(() => { throw refused; });
-		await assert.rejects(view.agents.close(agentAddress(remote)), err => err === refused);
+		await assert.rejects(view.agents.stop(agentAddress(remote)), err => err === refused);
 		assert.strictEqual(view.agents.get(agentAddress(remote))?.pid, remote.pid);
+	});
+
+	test('dismisses a confirmed ended member only in this window and keeps the record for Resume', async () => {
+		const view = harness();
+		const remote = record(gpu);
+		const run = agentAddress(remote);
+		const ended = { ...remote, process: 'ended', state: 'ended', exit: { code: 2, at } } satisfies AgentInfo;
+		const report = (agent: AgentInfo) => view.listing.change({ kind: 'updated', agent });
+		view.listing.snapshot({ agents: [], machines: [{ machine_id: gpu, state: 'synced', agents: [remote] }] });
+
+		await view.agents.dismiss(run);
+		assert.strictEqual(view.agents.get(run)?.lifecycle, 'running');
+		assert.deepStrictEqual(view.calls, []);
+		report(ended);
+
+		const resume = Promise.withResolvers<AgentInfo>();
+		view.answer(() => resume.promise);
+		const pending = view.agents.resumeRetained(run, { reveal: false });
+		assert.strictEqual(view.agents.get(run)?.endUnconfirmed, true);
+		await view.agents.dismiss(run);
+		assert.ok(view.agents.get(run), 'a pending Resume keeps its pair');
+		const refused = new view.LinkError('Resume refused', 'refused', { reason: 'refused' });
+		resume.reject(refused);
+		await assert.rejects(pending, err => err === refused);
+
+		assert.strictEqual(await view.agents.stop(run), 'already_ended');
+		assert.ok(view.agents.get(run), 'a stale Stop leaves the known ended card');
+		await view.agents.dismiss(run);
+		assert.strictEqual(view.agents.get(run), undefined);
+		assert.deepStrictEqual(view.removed, [run]);
+		assert.deepStrictEqual([...view.dismissed], [run]);
+		assert.deepStrictEqual(view.agents.retainedConversations().map(({ agent, entry }) => [agent, entry.key.sessionId]), [[run, remote.session]]);
+		assert.deepStrictEqual(view.calls.map(({ op }) => op), ['agent.resume']);
+
+		view.answer(() => ({ ...remote, pid: 43 }));
+		assert.strictEqual(await view.agents.resumeRetained(run, { reveal: false }), run);
+		assert.strictEqual(view.agents.get(run)?.pid, 43);
+		assert.deepStrictEqual([...view.dismissed], []);
 	});
 
 	test('retries remote screens after a refusal or late watch end and ignores the old generation', async () => {

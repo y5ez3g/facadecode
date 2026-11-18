@@ -227,8 +227,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name) ? true : undefined);
 		}
 
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
-		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'End Agent removes the card at once');
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Stop Agent removes the card at once');
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
@@ -264,7 +264,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.strictEqual(fs.existsSync(`${RECORD}.received.${alias}`), false, 'the draft was never submitted');
 		} finally {
 			watching?.dispose();
-			await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 		}
 	});
 
@@ -316,7 +316,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			shell.dispose();
 		} finally {
 			for (const run of cards) {
-				await vscode.commands.executeCommand('facade.closeAgent', { run_id: run }).then(undefined, () => undefined);
+				await vscode.commands.executeCommand('facade.stopAgent', { run_id: run }).then(undefined, () => undefined);
 			}
 			await vscode.commands.executeCommand('workbench.action.closeAllGroups');
 		}
@@ -414,7 +414,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} finally {
 			await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
 			await history.then(undefined, () => undefined);
-			await Promise.all((await started()).map(card => vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId })));
+			await Promise.all((await started()).map(card => vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId })));
 			await until('the resumed cards to close', async () => (await started()).length === 0 || undefined);
 		}
 	});
@@ -441,7 +441,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			await new Promise(resolve => setTimeout(resolve, 500));
 			return (await state()).filter ? await state() : undefined;
 		}, 60_000);
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
 		const said = await until('the page to say so', async () => {
 			const text = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '#empty p' });

@@ -348,7 +348,7 @@ never prove idle.
 
 ### 3.3 Exit classification is independent of who caused it
 
-**Normal CLI exit removes the pair; abnormal exit retains a red pair until the person ends it with End Agent.**
+**Normal CLI exit removes the pair; abnormal exit retains a red pair until the person uses Dismiss Agent.**
 
 Normal means exit 0, a completed explicit stop, or a verified native exit/interrupt outcome such as the adapter's
 Ctrl+C handling. An unexplained nonzero/signal exit is abnormal. Record its actual code/signal; do not guess a cause
@@ -388,7 +388,7 @@ their window to a non-guest agent through Go to Agent (LIFECYCLE-2.3), or throug
 (4.2). Membership stays until the agent record is removed. Closing a tab only affects the current window's presentation
 and its workspace's Pin under 4.2.
 
-End Agent hides the initiating pair under LIFECYCLE-3.1. Successful stop from any member or `facade stop` hides the
+Stop Agent handles the initiating pair under LIFECYCLE-3.1. Successful stop from any member or `facade stop` hides the
 card and tab in every connected member window. The number, membership, saved conversation and each workspace's Pin
 stay, and open windows wait for a later restoration. `facade remove` deletes the record and its membership and
 invalidates its Pins (4.2). A stop failure goes to the initiator. A still-running agent can reattach at the next
@@ -456,7 +456,7 @@ automatic restoration under the pinned number. The Pin stays for later verificat
 
 Clearing a Pin because its record is gone requires its original machine's complete snapshot without the number, its
 record-removal event, or a `not_found` response to adopting that number. Loss of connection, an unknown outcome or any
-Resume error preserves the Pin. End Agent and normal exit preserve all Pins. Facade's Delete Worktree command unpins its
+Resume error preserves the Pin. Stop Agent, Dismiss Agent and normal exit preserve all Rust Pins. Facade's Delete Worktree command unpins its
 affected agents in the initiating workspace (WORKTREES-3.2). Other location removal keeps the Pin.
 
 Manual Resume in any member window can restore the original number, including after its card was dismissed.
@@ -521,8 +521,8 @@ own operations without turning them into a public feature.
 
 **Cancellation ends unstarted work and does not undo files or submitted input.**
 
-Canceling a picker has no effects. Closing an accepted launch - End Agent or stop_agent; hiding its tab is no close
-(LIFECYCLE-2.2) - prevents later spawn and ends its own pending input; created worktrees/branches remain. Native
+Canceling a picker has no effects. Stopping an accepted launch with Stop Agent or stop_agent
+(LIFECYCLE-3.1) prevents later spawn and ends its own pending input. Created worktrees and branches remain. Native
 post-create environment preparation is not a Facade-managed job. There is no message-recall tool, worktree-delete API or
 stop-with-delete option; a person deletes a clean linked worktree only by WORKTREES-3.2's confirmed picker action,
 otherwise with their usual Git tools. Facade observes actual location loss under 2.4.
