@@ -7,11 +7,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { AgentInfo, AgentListResult, AgentsChange, AgentsSnapshot, ErrorBody, Message, MessagesChange, MessagesSnapshot, Operation, ScreenChange, ScreenSnapshot, Topic, WindowRef } from '../base/coreProtocol';
 import type { MessageRecord } from '../core/messagePorts';
-import type { Location, RunChange } from '../core/ports';
+import type { HumanFailure, Location, RunChange, RustPin } from '../core/ports';
 import type { RunBinding } from '../host/execution/agentPty';
 import type { RustAgentsDeps } from '../host/rust/agents';
 import { agentAddress, messageAddress } from '../host/rust/references';
 import { DaemonError, type DaemonLink, type WatchListener } from '../host/rust/types';
+import { statusOf, type CardWords } from '../ui/cardView';
 import { settingsOf, sourceOf } from './settingsFixtures';
 import { tempDir } from './util';
 import { withModules } from './withModules';
@@ -35,6 +36,8 @@ function record(machine_id: string, extra: Partial<AgentInfo> = {}): AgentInfo {
 function harness(location?: Location, resumeProblem: RustAgentsDeps['resumeProblem'] = () => undefined) {
 	const calls: { op: Operation; args: object }[] = [];
 	const notifications: MessageRecord[] = [];
+	const pins: RustPin[] = [];
+	const failures: HumanFailure[] = [];
 	const watches = new Map<Topic, WatchListener<never, never>>();
 	let answer: (op: Operation) => unknown = op => { throw new Error(`Unexpected ${op}`); };
 	let rebound = () => { };
@@ -67,18 +70,18 @@ function harness(location?: Location, resumeProblem: RustAgentsDeps['resumeProbl
 		resumeProblem,
 		clis: empty, windows: empty, onDidChangeWindows: () => none, onDidChangeMachines: () => none,
 		machineName: (machine: string) => machine === gpu ? 'gpu' : 'server',
-		environment: () => ({ LOCAL: 'editor' }), pins: { list: empty }, titles: { title: async () => undefined },
+		environment: () => ({ LOCAL: 'editor' }), pins: { list: () => pins }, titles: { title: async () => undefined },
 		history: { remember: () => { assert.ok(location, 'remote paths stay outside local launch history'); } },
 		dismissed: { has: (agent: string) => dismissed.has(agent), set: (agent: string, dismiss: boolean) => dismiss ? dismissed.add(agent) : dismissed.delete(agent), retain: () => undefined },
-		contact: { contact: (notice: MessageRecord) => notifications.push(notice) }, human: { error: ignore },
+		contact: { contact: (notice: MessageRecord) => notifications.push(notice) }, human: { error: ignore, failed: (failure: HumanFailure) => failures.push(failure) },
 		log: { event: ignore }, describe: (err: Error) => err.message, newRunId: () => 'start-fixture'
 	};
-	const load = withModules({ vscode: { l10n: { t: (message: string) => message } } });
+	const load = withModules({ vscode: { l10n: { t: (message: string, ...args: unknown[]) => message.replace(/\{(\d+)\}/g, (_, at: string) => String(args[Number(at)])) } } });
 	const { RustAgents } = load<typeof import('../host/rust/agents')>(require.resolve('../host/rust/agents'));
 	const { DaemonError: LinkError } = load<typeof import('../host/rust/types')>(require.resolve('../host/rust/types'));
 	const agents = new RustAgents(deps as unknown as RustAgentsDeps);
 	return {
-		agents, calls, notifications, disconnected, dismissed, removed, LinkError,
+		agents, calls, notifications, disconnected, dismissed, removed, pins, failures, LinkError,
 		answer: (fn: typeof answer) => { answer = fn; },
 		disconnect: () => { connected = false; listing().disconnected?.(); },
 		reconnect: () => { connected = true; rebound(); },
@@ -301,13 +304,52 @@ suite('Rust machine network windows (RULES-2.2, PANEL-1.3, LIFECYCLE-2.3)', () =
 		] as const) {
 			const refusal = new view.LinkError(body.message, body.data.reason, body.data);
 			view.answer(() => { throw refusal; });
-			await assert.rejects(resume(), { message: body.message, said });
+			await assert.rejects(resume(), error => {
+				assert.ok(error instanceof Error);
+				assert.strictEqual(error.cause, refusal);
+				assert.strictEqual(error.message, body.message);
+				assert.deepStrictEqual((error as Error & { said?: unknown }).said, said);
+				return true;
+			});
 			assert.strictEqual(refusal.data, body.data);
 		}
 		const unknown = new view.LinkError('A tool reported this conversation is unavailable.', 'unavailable', { reason: 'unavailable' });
 		view.answer(() => { throw unknown; });
 		await assert.rejects(resume(), error => error === unknown);
 		assert.deepStrictEqual(view.calls.map(call => call.op), ['agent.resume', 'agent.resume', 'agent.resume']);
+	});
+
+	test('a failed automatic Pin resume keeps the original identity and shows the localized settings refusal on its card', async () => {
+		const view = harness();
+		const ended = record(local, { cli: 'work', process: 'ended', state: 'ended', pid: undefined, exit: { code: 0, at } });
+		const agent = agentAddress(ended);
+		const pin = {
+			id: 'pin-saved', conversation: { environment: 'local', cli: ended.cli, sessionId: ended.session! },
+			location: ended.location_id, cwd: ended.cwd, name: ended.name, machine_id: local, agent: ended.agent_id
+		};
+		view.pins.push(pin);
+		const message = "clis.work runs Codex now, but this conversation is Claude Code's; it cannot be resumed with it";
+		const data = { reason: 'unsupported', entry: ended.cli } as const;
+		const refusal = new view.LinkError(message, data.reason, data);
+		view.answer(() => { throw refusal; });
+		view.listing.snapshot({ agents: [ended], machines: [] });
+
+		await view.agents.restorePins();
+		const run = view.agents.get(agent);
+		assert.ok(run);
+		assert.strictEqual(run.pin, pin.id);
+		assert.strictEqual(run.sessionId, ended.session);
+		assert.deepStrictEqual(view.calls.map(({ op }) => op), ['agent.resume']);
+		const reason = "clis.work runs another CLI now, but this session is Claude Code's; it cannot be resumed with it";
+		const words = {
+			startFailed: (text: string) => `Start failed · ${text}`,
+			error: (text: string) => `Error · ${text}`
+		} as CardWords;
+		const card = statusOf(run, words);
+		assert.deepStrictEqual([card.line, card.stateText, card.dot], [`Start failed · ${reason}`, `Error · Start failed · ${reason}`, 'error']);
+		assert.deepStrictEqual(view.failures.map(failure => [failure.kind, failure.reason]), [['restore', reason]]);
+		assert.strictEqual(run.error?.english, message);
+		assert.strictEqual(refusal.data, data);
 	});
 
 	test('retries remote screens after a refusal or late watch end and ignores the old generation', async () => {

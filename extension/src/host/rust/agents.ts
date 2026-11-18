@@ -20,13 +20,14 @@ import { keptName, labelOf, repeatedNames, suggestName } from '../../core/names'
 import { conversationId } from '../../core/ports';
 import { dotOf } from '../../core/status';
 import type {
-	ActivityUnknown, AgentCloseResult, Agents, ConversationEntry, ConversationKey, ConversationTitlePort, Disposable, Event, HumanPort,
+	ActivityUnknown, AgentCloseResult, Agents, ConversationEntry, ConversationKey, ConversationTitlePort, Disposable, Event, FacadeReason, HumanPort,
 	LaunchHistoryPort, LaunchRequest, Location, LocationId, LocationPort, LogPort, OtherAgent, PairFacts, Pin, ResumeResult, RetainedConversation,
 	RunChange, RunError, RunFacts, RunId, RustPin, RustPinStore, SaidSource, StartOutcome, TabPlace
 } from '../../core/ports';
 import type { ConversationFile } from '../../record/conversations';
 import type { WindowContact } from '../contact';
 import type { RemoteLaunchRequest } from '../../ui/pickers/machineLaunch';
+import { reasonText } from '../../ui/presentation';
 import { agentAddress, machineSelector, messageAddress } from './references';
 import { DaemonError, type DaemonLink, type RustTerminals } from './types';
 
@@ -389,9 +390,10 @@ export class RustAgents implements Agents, Disposable {
 
 	/** Makes `run` red with why its start or resume was refused, said in its terminal and, where `told`, to the person (UX-2.4, RULES-1.8). */
 	private fail(run: Run, err: unknown, told: string | undefined): void {
-		const daemon = err instanceof DaemonError ? err : undefined;
+		const original = err instanceof ResumeSettingsError ? err.cause : err;
+		const daemon = original instanceof DaemonError ? original : undefined;
 		const english = messageOf(err);
-		const reason = daemon ? this.deps.describe(daemon) : english;
+		const reason = err instanceof ResumeSettingsError ? reasonText(err.said, english) : daemon ? this.deps.describe(daemon) : english;
 		const kept = daemon?.data.kept;
 		const worktree = kept && (kept.branch || kept.path) ? { ...kept.branch ? { branch: kept.branch } : {}, ...kept.path ? { folder: kept.path } : {} } : undefined;
 		run.failure = { reason, ...reason !== english ? { english } : {}, source: daemon?.reason === 'worktree_failed' ? 'worktree' : 'launch', at: Date.now(), ...worktree ? { worktree } : {} };
@@ -739,7 +741,7 @@ export class RustAgents implements Agents, Disposable {
 			attempt = this.requestResume(info);
 		}
 		if (attempt) {
-			const resumed = await attempt.result.catch((err: unknown) => { throw resumeSettingsError(err, info.cli); });
+			const resumed = await attempt.result;
 			if (!this.owns(window)) { throw bindingChanged(); }
 			if (this.local(resumed)) { this.deps.history.remember(resumed.location_id, resumed.cli); }
 		}
@@ -801,7 +803,7 @@ export class RustAgents implements Agents, Disposable {
 			if (current && !resumeRefused(info.agent_id, err) && !(this.hasSnapshot() && isNewProcess(info, current))) {
 				this.unconfirmedResumes.set(agent, { before: info, error: err });
 			}
-			throw err;
+			throw resumeSettingsError(err, info.cli);
 		}
 		await this.waitForSnapshot(window);
 		if (agentAddress(resumed) !== agent || !this.isMember(resumed)) { throw agentMissing(agent); }
@@ -1639,14 +1641,21 @@ function resumeRefused(agent: string, err: unknown): boolean {
 		&& (err.message === `agent #${agent} is running or already resuming` || err.message === `agent #${agent} is running`));
 }
 
-/** Translate the two v2 settings refusals for Resume Agent, preserving service diagnostics and their values. */
+/** A known refusal the editor can translate, with the daemon's original reason and fields still available. */
+class ResumeSettingsError extends FacadeError {
+	constructor(override readonly cause: DaemonError, said: FacadeReason) {
+		super(cause.reason === 'unavailable' ? 'UNAVAILABLE' : 'INVALID', cause.reason, cause.message, said);
+	}
+}
+
+/** Translate the two v2 settings refusals shared by Resume Agent and Pin restoration. */
 function resumeSettingsError(err: unknown, cli: string): unknown {
 	if (!(err instanceof DaemonError)) { return err; }
 	const setting = entrySetting(cli);
 	if (err.reason === 'unsupported' && err.data.entry === cli && err.message.startsWith(setting)) {
 		const changed = /^ runs .+ now, but this conversation is (.+)'s; it cannot be resumed with it$/.exec(err.message.slice(setting.length));
 		if (changed) {
-			return new FacadeError('INVALID', err.reason, err.message, { kind: 'resume_type_changed', values: [setting, changed[1]] });
+			return new ResumeSettingsError(err, { kind: 'resume_type_changed', values: [setting, changed[1]] });
 		}
 	}
 	if (err.reason === 'unavailable') {
@@ -1655,7 +1664,7 @@ function resumeSettingsError(err: unknown, cli: string): unknown {
 		const end = ', so this conversation cannot be resumed with it.';
 		if (err.message.startsWith(start) && err.message.endsWith(end)) {
 			const file = err.message.slice(start.length, -end.length);
-			return new FacadeError('UNAVAILABLE', err.reason, err.message, { kind: 'resume_entry_gone', values: [quoted, file] });
+			return new ResumeSettingsError(err, { kind: 'resume_entry_gone', values: [quoted, file] });
 		}
 	}
 	return err;
