@@ -12,13 +12,14 @@
 //! (CONFIGURATION-2). The core reads the file and never writes it.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 /// The settings file's name, in the Facade home.
 pub const SETTINGS_FILE: &str = "facade.json";
 
 /// The settings a launch takes from the file.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 pub struct Settings {
     /// Whether a launch runs with YOLO on (RULES-4.3, CONFIGURATION-1.4): true unless the file says
     /// false.
@@ -29,6 +30,52 @@ pub struct Settings {
     /// The members of `clis` in the file's order: each CLI entry's name, and its value as the file
     /// holds it (CONFIGURATION-2.1).
     pub clis: Vec<Member>,
+    source: Option<Source>,
+}
+
+#[derive(Clone)]
+struct Source {
+    file: String,
+    text: String,
+}
+
+/// A position in the settings file, with a 1-based line and UTF-16 column.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SourceLocation<'a> {
+    pub file: &'a str,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl fmt::Display for SourceLocation<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.file, self.line, self.column)
+    }
+}
+
+impl Settings {
+    /// Locates a [`Member::at`] or [`Node::at`] from this file's CLI entries.
+    /// Returns `None` when there are no parsed CLI entries.
+    pub fn source_location(&self, at: usize) -> Option<SourceLocation<'_>> {
+        let source = self.source.as_ref()?;
+        Some(location_in(&source.text, &source.file, at))
+    }
+}
+
+impl fmt::Debug for Settings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Settings")
+            .field("yolo", &self.yolo)
+            .field("names", &self.names)
+            .field("clis", &self.clis)
+            .finish()
+    }
+}
+
+impl PartialEq for Settings {
+    fn eq(&self, other: &Self) -> bool {
+        self.yolo == other.yolo && self.names == other.names && self.clis == other.clis
+    }
 }
 
 impl Default for Settings {
@@ -37,6 +84,7 @@ impl Default for Settings {
             yolo: true,
             names: None,
             clis: Vec::new(),
+            source: None,
         }
     }
 }
@@ -51,7 +99,7 @@ const SETTINGS: [(&str, &str); 4] = [
 
 const NAMES_ARE_STRINGS: &str = "names must be a list of strings";
 
-/// The settings file of the Facade home.
+/// The path to the settings file of the Facade home, even before the file exists.
 pub fn settings_file() -> anyhow::Result<PathBuf> {
     Ok(crate::paths::facade_home()?.join(SETTINGS_FILE))
 }
@@ -108,10 +156,7 @@ pub fn shown(file: &Path) -> String {
 pub fn parse(text: &str, shown: &str) -> Result<Settings, Vec<String>> {
     // Editors read a JSON file without its byte order mark.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let place = |at: usize| {
-        let (line, column) = line_and_column(text, at);
-        format!("{shown}:{line}:{column}")
-    };
+    let place = |at| location_in(text, shown, at);
     let document = Cursor { text, at: 0 }.document();
     let mut problems = Vec::new();
     // Past the first place the text stops being JSON with comments, it reads wrong: that place is
@@ -166,6 +211,12 @@ pub fn parse(text: &str, shown: &str) -> Result<Settings, Vec<String>> {
         }
     }
     if problems.is_empty() {
+        if !settings.clis.is_empty() {
+            settings.source = Some(Source {
+                file: shown.to_owned(),
+                text: text.to_owned(),
+            });
+        }
         Ok(settings)
     } else {
         Err(problems)
@@ -174,9 +225,9 @@ pub fn parse(text: &str, shown: &str) -> Result<Settings, Vec<String>> {
 
 /// The names of `names`, each trimmed; each one that is not a string, or is only spaces, is a
 /// problem placed by `place`.
-fn read_names(
+fn read_names<'a>(
     names: Vec<Node>,
-    place: &impl Fn(usize) -> String,
+    place: &impl Fn(usize) -> SourceLocation<'a>,
     problems: &mut Vec<String>,
 ) -> Vec<String> {
     let mut kept = Vec::new();
@@ -205,9 +256,9 @@ fn quoted(key: &str) -> String {
     serde_json::Value::from(key).to_string()
 }
 
-/// The 1-based line and column of byte `at` in `text`, as an editor counts them: lines end with CR
-/// LF, LF or CR alone, and columns count UTF-16 code units. `at` is where a character begins.
-fn line_and_column(text: &str, at: usize) -> (usize, usize) {
+/// Locates byte `at` in `text` as an editor does. Lines end with CR LF, LF or CR alone.
+/// `at` is where a character begins or where the text ends.
+fn location_in<'a>(text: &str, file: &'a str, at: usize) -> SourceLocation<'a> {
     let before = &text[..at.min(text.len())];
     let (mut line, mut line_begins) = (1, 0);
     for (index, char) in before.char_indices() {
@@ -222,7 +273,11 @@ fn line_and_column(text: &str, at: usize) -> (usize, usize) {
             line_begins = index + 1;
         }
     }
-    (line, before[line_begins..].encode_utf16().count() + 1)
+    SourceLocation {
+        file,
+        line,
+        column: before[line_begins..].encode_utf16().count() + 1,
+    }
 }
 
 /// Each key a second time in the same object of `text`, with the byte where that key begins.
@@ -619,10 +674,14 @@ mod tests {
             names(r#"{"names": ["\ufeff"]}"#).unwrap_err()[0]
                 .ends_with("the name at position 1 must not be empty or only spaces")
         );
-        let text = r#"{"$schema": "https://example.invalid/facade.json", "clis": {"y": [1], "x": 42}, "yolo": false}"#;
-        let read = read(text).unwrap();
-        assert!(!read.yolo && read.names.is_none());
-        let members: Vec<(&str, &str)> = read
+        let text = concat!(
+            "\u{feff}{\"clis\": {\"y\": [\"😀\", 1],\r\n",
+            "  \"x\": 42},\r",
+            r#"  "yolo": false, "$schema": "https://example.invalid/facade.json"}"#,
+        );
+        let settings = read(text).unwrap();
+        assert!(!settings.yolo && settings.names.is_none());
+        let members: Vec<(&str, &str)> = settings
             .clis
             .iter()
             .map(|member| (member.key.as_str(), member.value.json.kind()))
@@ -632,6 +691,20 @@ mod tests {
             [("y", "array"), ("x", "number")],
             "each entry as it is, in the file's order"
         );
+        let y = &settings.clis[0];
+        let Json::Array(items) = &y.value.json else {
+            panic!("y must be an array");
+        };
+        assert_eq!(
+            settings.source_location(items[1].at),
+            Some(SourceLocation {
+                file: FILE,
+                line: 1,
+                column: 23,
+            })
+        );
+        let x = settings.source_location(settings.clis[1].at).unwrap();
+        assert_eq!(x.to_string(), format!("{FILE}:2:3"));
     }
 
     /// Each whole-file problem is said with the file's path, and the line and column of where it
@@ -781,7 +854,9 @@ mod tests {
     fn a_missing_file_holds_every_default_and_an_unreadable_one_says_why() {
         let folder = TestFolder::new("settings");
         let file = folder.join(SETTINGS_FILE);
-        assert_eq!(read_file(&file), Ok(yolo(true)));
+        let missing = read_file(&file).unwrap();
+        assert_eq!(missing, yolo(true));
+        assert_eq!(missing.source_location(0), None);
         std::fs::write(&file, r#"{"yolo": false}"#).unwrap();
         assert_eq!(read_file(&file), Ok(yolo(false)));
         std::fs::remove_file(&file).unwrap();
