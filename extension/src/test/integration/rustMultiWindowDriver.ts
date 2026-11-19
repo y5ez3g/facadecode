@@ -37,6 +37,7 @@ export interface WindowReady {
 	readonly remote: string | null;
 	readonly home: string;
 	readonly machineId: string;
+	readonly platform: NodeJS.Platform;
 }
 
 export interface SavedPin {
@@ -282,8 +283,8 @@ async function actions(): Promise<void> {
 export async function activate(): Promise<void> {
 	try {
 		const home = process.env.FACADE_HOME;
-	assert.ok(home && normalizeDriveLetter(home).startsWith(normalizeDriveLetter(`${path.dirname(control)}${path.sep}`)),
-		'the window and driver use the test Facade home');
+		assert.ok(home && normalizeDriveLetter(home).startsWith(normalizeDriveLetter(`${path.dirname(control)}${path.sep}`)),
+			'the window and driver use the test Facade home');
 		const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 		assert.ok(folder, 'the test window has a workspace folder');
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
@@ -294,7 +295,9 @@ export async function activate(): Promise<void> {
 		const hello = await helloInCore(home, [3, 3]);
 		const core = hello.result as HelloResult | undefined;
 		assert.ok(core?.protocol === 3 && core.machine_id, JSON.stringify(hello));
-		answer(`${control}.ready`, { result: { folder, remote: vscode.env.remoteName ?? null, home, machineId: core.machine_id } satisfies WindowReady });
+		answer(`${control}.ready`, { result: {
+			folder, remote: vscode.env.remoteName ?? null, home, machineId: core.machine_id, platform: process.platform
+		} satisfies WindowReady });
 		void actions();
 	} catch (error) {
 		answer(`${control}.ready`, { error: error instanceof Error ? error.stack ?? error.message : String(error) });

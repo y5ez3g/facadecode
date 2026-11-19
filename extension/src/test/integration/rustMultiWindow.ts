@@ -252,7 +252,8 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 		const window = await open(place, profile);
 		machineId ??= window.ready.machineId;
 		assert.deepStrictEqual({
-			...window.ready, folder: normalizeDriveLetter(window.ready.folder), home: normalizeDriveLetter(window.ready.home)
+			folder: normalizeDriveLetter(window.ready.folder), home: normalizeDriveLetter(window.ready.home),
+			remote: window.ready.remote, machineId: window.ready.machineId
 		}, { folder: normalizeDriveLetter(place), remote, home: normalizeDriveLetter(home), machineId });
 		return window;
 	};
@@ -314,12 +315,15 @@ async function worktreeLifetime(source: DrivenWindow, peer: DrivenWindow): Promi
 	const adopted = await peer.act<RunningAgent>({ kind: 'adopt', agent: agent.agent_id });
 	assert.strictEqual(adopted.pid, agent.pid);
 	assert.strictEqual(normalizeDriveLetter(adopted.cwd), normalizeDriveLetter(agent.cwd));
-	await source.act({ kind: 'delete-worktree', folder: agent.cwd });
+	// Windows holds the worktree directory open until the process using it exits.
+	const cwdLocksWorktree = source.ready.platform === 'win32';
+	if (!cwdLocksWorktree) { await source.act({ kind: 'delete-worktree', folder: agent.cwd }); }
 	const kept = await peer.act<RunningAgent>({ kind: 'running', agent: agent.agent_id });
-	assertSameRun(kept, adopted, 'Git deletion leaves the Orchestrator process running');
+	assertSameRun(kept, adopted, 'the peer holds the original worktree agent');
 	await peer.act({ kind: 'remove', agent: agent.agent_id });
 	await peer.act({ kind: 'wait-for-exit', pid: adopted.pid });
-	console.log('  ✔ Git owns worktree deletion. The other workspace keeps its original agent until Remove');
+	if (cwdLocksWorktree) { await source.act({ kind: 'delete-worktree', folder: agent.cwd }); }
+	console.log('  ✔ The peer attaches to the original worktree process, and Git removes its directory');
 }
 
 async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<void> {
