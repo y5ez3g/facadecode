@@ -18,13 +18,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { freePort, Workbench } from './cdpInput';
-import { EDITOR_FLAGS, editorProfile, endEditors, endMatching } from './editors';
+import { EDITOR_FLAGS, editorProfile, endEditors } from './editors';
 
 export interface FocusProbeContext {
 	readonly executable: string;
 	/** The run's temporary folder, and the parent of each session's Facade root. */
 	readonly root: string;
 	readonly home: string;
+	readonly endMatching: (text: string) => void;
 	/** The suite's editor settings. */
 	readonly settings: { readonly [setting: string]: unknown };
 	/** Writes Facade's settings file in a session's Facade root: the built-ins but Claude Code's turned off (CONFIGURATION-1.1). */
@@ -140,8 +141,8 @@ async function session(ctx: FocusProbeContext, name: string, short: string, with
 		try {
 			await endEditors([editor]);
 		} finally {
-			endMatching(user);
-			endMatching(path.join(facade, 'extension', 'ptyd'));
+			ctx.endMatching(user);
+			ctx.endMatching(path.join(facade, 'extension', 'ptyd'));
 		}
 	}
 }

@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { callInCore, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { callInCore, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import type { V3InspectResult } from '../../base/coreProtocol';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
@@ -140,6 +140,7 @@ async function main(): Promise<void> {
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
 	const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
+	const endMatching = testProcessCleanup(root);
 	const repo = path.join(root, 'app');
 	newRepository(repo);
 
@@ -872,6 +873,7 @@ async function main(): Promise<void> {
 			}
 		}
 	};
+	let suiteFailure: unknown;
 	try {
 		// `custom` alone is the program's journey, without the built-ins' six
 		if (!only || only === 'journeys' || only === 'custom') {
@@ -934,7 +936,7 @@ async function main(): Promise<void> {
 		}
 		// Asked for alone: evidence of keys typed while a mark borrows the focus, and of covered fronts (LIFECYCLE-3.4)
 		if (only === 'probe') {
-			await focusProbe({ executable, root, home, extension, windowComponent, record, claudeConfig, fake, env: probeEnv, settings,
+			await focusProbe({ executable, root, home, extension, windowComponent, record, claudeConfig, fake, env: probeEnv, settings, endMatching,
 				facadeSettings: facade => facadeSettings(facade, alone('claude')) });
 		}
 		// Never unasked: it installs a released build's packages
@@ -956,16 +958,23 @@ async function main(): Promise<void> {
 				if (cli.id === 'claude') { untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root); }
 			}
 		}
+	} catch (error) {
+		suiteFailure = error;
+		throw error;
 	} finally {
-		if (keep) {
-			console.log(`Kept ${root}`);
-		} else {
-			if (process.platform === 'win32') {
-				// Drain test-profile children that can outlive their editor and keep the run directory locked.
-				endMatching(`${root}${path.sep}`);
+		try {
+			if (keep) {
+				console.log(`Kept ${root}`);
+			} else {
+				if (process.platform === 'win32') {
+					// Drain test-profile children that can outlive their editor and keep the run directory locked.
+					endMatching(`${root}${path.sep}`);
+				}
+				// On Windows a file a process just ended held can stay locked for a moment
+				fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 			}
-			// On Windows a file a process just ended held can stay locked for a moment
-			fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		} catch (cleanup) {
+			throw suiteFailure === undefined ? cleanup : new AggregateError([suiteFailure, cleanup], 'Editor journey and final cleanup both failed.');
 		}
 	}
 }

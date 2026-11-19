@@ -116,23 +116,36 @@ export async function registeredWindow(facade: string, matches: (label: string) 
 }
 
 /**
- * Ends every process whose command line contains `text` - the editors, ptyds and CLIs a run leaves, never anything else - as
- * `pkill -f` does; on Windows, which has none, by each process's command line, the text given by name rather than quoted.
+ * Prepare cleanup for a run's own editors, ptyds and CLIs. Build the Windows helper before starting any editor.
  */
-export function endMatching(text: string): void {
+export function testProcessCleanup(root: string): (text: string) => void {
 	if (process.platform !== 'win32') {
-		spawnSync('pkill', ['-TERM', '-f', text]);
-		return;
+		return text => { spawnSync('pkill', ['-TERM', '-f', text]); };
 	}
 	const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-	const script = path.resolve(__dirname, '..', '..', '..', '..', 'scripts', 'stop-test-processes.ps1');
-	const stopped = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-RunnerPid', String(process.pid)], {
-		env: { ...process.env, FACADE_IT_END: text }, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 20_000, windowsHide: true
+	const source = path.resolve(__dirname, '..', '..', '..', '..', 'scripts', 'stop-test-processes.cs');
+	const program = path.join(root, 'stop-test-processes.exe');
+	execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command',
+		'Add-Type -Path $env:FACADE_IT_CLEANUP_SOURCE -OutputAssembly $env:FACADE_IT_CLEANUP_EXE -OutputType ConsoleApplication -ErrorAction Stop'], {
+		env: { ...process.env, FACADE_IT_CLEANUP_SOURCE: source, FACADE_IT_CLEANUP_EXE: program },
+		stdio: ['ignore', 'inherit', 'inherit'], timeout: 30_000, windowsHide: true
 	});
-	if (stopped.status !== 0) {
-		const reason = stopped.error?.message || stopped.stderr?.trim() || `PowerShell exited with status ${stopped.status}`;
-		throw new Error(`Could not stop test processes for ${text}. ${reason}`);
-	}
+	return text => {
+		const relative = path.relative(root, text);
+		if (!path.isAbsolute(text) || path.isAbsolute(relative) || relative.split(path.sep)[0] === '..') {
+			throw new Error(`Expected a cleanup path in ${root}, got ${text}.`);
+		}
+		// A child that inherits a pipe can keep spawnSync waiting after the helper has exited.
+		const diagnostics = path.join(root, 'process-cleanup.log');
+		const file = fs.openSync(diagnostics, 'w');
+		try {
+			const stopped = spawnSync(program, [text, String(process.pid)], { stdio: ['ignore', 'ignore', file], timeout: 20_000, windowsHide: true });
+			if (stopped.status !== 0) {
+				const reason = stopped.error?.message || fs.readFileSync(diagnostics, 'utf8').trim() || `Helper exited with status ${stopped.status}`;
+				throw new Error(`Could not stop test processes for ${text}. ${reason}`);
+			}
+		} finally { fs.closeSync(file); }
+	};
 }
 
 /**

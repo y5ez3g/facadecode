@@ -37,7 +37,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import type { V2AgentInfo, V2MachineConnection, V2MachineInfo, V3InspectResult } from '../../base/coreProtocol';
-import { EDITOR_FLAGS, editorProfile, endCore, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, until } from './editors';
+import { EDITOR_FLAGS, editorProfile, endCore, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
 
@@ -142,6 +142,7 @@ async function main(): Promise<void> {
 
 	// One path on every computer: short, for the editor's sockets, and made anew on each
 	const root = fs.mkdtempSync(path.posix.join(base, 'fdrt-'));
+	const endMatching = testProcessCleanup(root);
 	const name = path.basename(root);
 	const facade = `${root}/facade`;
 	const claude = `${root}/claude`;

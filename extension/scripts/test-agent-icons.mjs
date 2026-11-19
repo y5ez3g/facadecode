@@ -9,7 +9,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { officialEditor, sanitizedEnvironment, EDITOR_FLAGS, endMatching } = require('../build/out/test/integration/editors.js');
+const { officialEditor, sanitizedEnvironment, EDITOR_FLAGS, testProcessCleanup } = require('../build/out/test/integration/editors.js');
 const source = path.resolve(import.meta.dirname, '..');
 const stage = path.join(source, 'build', 'extension');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fd-icons-')));
@@ -78,6 +78,7 @@ function driver() {
 }
 fs.writeFileSync(file('driver/extension.cjs'), `(${driver.toString()})();`);
 sanitizedEnvironment();
+const endMatching = testProcessCleanup(root);
 const log = fs.openSync(file('editor.log'), 'a');
 const child = spawn(officialEditor(), [file('workspace'), '--new-window', '--disable-extensions',
 	'--user-data-dir', file('u'), '--extensions-dir', file('x'), '--shared-data-dir', file('s'),

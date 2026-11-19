@@ -1,21 +1,11 @@
-param([Parameter(Mandatory = $true)][int]$RunnerPid)
-
-$ErrorActionPreference = 'Stop'
-$marker = $env:FACADE_IT_END
-if ($marker -notmatch '^(?:[A-Za-z]:[\\/]|[\\/]{2})') {
-    throw 'Expected the absolute path of a test profile or service.'
-}
-$marker = [IO.Path]::GetFullPath($marker)
-if ($marker -eq [IO.Path]::GetPathRoot($marker)) {
-    throw 'Expected the absolute path of a test profile or service.'
-}
-
-Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
-public static class FacadeTestProcesses {
+internal static class FacadeTestProcesses {
     private const int QueryLimitedInformation = 0x1000;
     private const int Terminate = 0x0001;
     private const int Synchronize = 0x100000;
@@ -39,6 +29,29 @@ public static class FacadeTestProcesses {
     [DllImport("ntdll.dll")]
     private static extern int NtQueryInformationProcess(IntPtr handle, int kind, IntPtr buffer, int size, out int returned);
 
+    public static int Main(string[] args) {
+        try {
+            int runnerPid;
+            if (args.Length != 2 || !int.TryParse(args[1], out runnerPid) || runnerPid <= 0 ||
+                !Regex.IsMatch(args[0], @"^(?:[A-Za-z]:[\\/]|[\\/]{2})")) {
+                throw new ArgumentException("Expected an absolute test path and the test runner's PID.");
+            }
+            string marker = Path.GetFullPath(args[0]);
+            if (marker == Path.GetPathRoot(marker)) throw new ArgumentException("Expected a non-root test path.");
+            int ownPid;
+            using (var self = Process.GetCurrentProcess()) ownPid = self.Id;
+            foreach (var process in Process.GetProcesses()) {
+                using (process) {
+                    if (process.Id != ownPid && process.Id != runnerPid) StopIfOwned(process.Id, marker);
+                }
+            }
+            return 0;
+        } catch (Exception exception) {
+            Console.Error.WriteLine(exception);
+            return 1;
+        }
+    }
+
     private static string CommandLine(IntPtr handle) {
         int size;
         NtQueryInformationProcess(handle, ProcessCommandLineInformation, IntPtr.Zero, 0, out size);
@@ -54,7 +67,7 @@ public static class FacadeTestProcesses {
         } finally { Marshal.FreeHGlobal(buffer); }
     }
 
-    public static void StopIfOwned(int pid, string marker) {
+    private static void StopIfOwned(int pid, string marker) {
         IntPtr handle = OpenProcess(QueryLimitedInformation | Terminate | Synchronize, false, pid);
         if (handle == IntPtr.Zero) return;
         try {
@@ -69,13 +82,4 @@ public static class FacadeTestProcesses {
             if (WaitForSingleObject(handle, 2000) != 0) throw new TimeoutException("Test process " + pid + " did not exit.");
         } finally { CloseHandle(handle); }
     }
-}
-'@
-
-foreach ($process in [Diagnostics.Process]::GetProcesses()) {
-    try {
-        if ($process.Id -ne $PID -and $process.Id -ne $RunnerPid) {
-            [FacadeTestProcesses]::StopIfOwned($process.Id, $marker)
-        }
-    } finally { $process.Dispose() }
 }
