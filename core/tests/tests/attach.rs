@@ -394,7 +394,9 @@ fn detach_delivers_preceding_input() {
 fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     use std::io::{BufRead, BufReader, Read, Write};
     let home = TestHome::new("attachbadhello");
-    home.start_fake("held");
+    // Use the fake terminal without its MCP relay, which would also try to start the lost daemon.
+    home.add_custom_cli("attach-fixture", &test_binaries().fakecli);
+    home.run_facade_ok(&["start", "-d", "--name", "held", "attach-fixture"]);
     let mut command = home.command(&test_binaries().facade);
     command
         .args(["attach", "held"])
@@ -405,29 +407,34 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     pause_process(keeper);
     home.kill_daemon();
     std::fs::remove_file(home.daemon_socket()).unwrap();
+    assert!(
+        term.wait_for_output(LOADED_TIMEOUT, "Connection lost. Reconnecting."),
+        "{}",
+        term.text_with_scrollback()
+    );
+    term.send(b"held keys");
+    home.wait_for_gate("attach-buffered-input");
+
+    // The keys are already counted when the next connection starts its hello.
     let listener = std::os::unix::net::UnixListener::bind(home.daemon_socket()).unwrap();
-    let (arrived, received) = std::sync::mpsc::channel();
-    let (release, resume) = std::sync::mpsc::channel();
     let peer = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(LOADED_TIMEOUT)).unwrap();
         let mut hello = String::new();
         BufReader::new(stream.try_clone().unwrap())
             .read_line(&mut hello)
             .unwrap();
-        arrived.send(()).unwrap();
-        resume.recv_timeout(secs(10)).unwrap();
+        let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
+        assert_eq!(hello["method"], "hello");
         stream.write_all(b"{malformed\n").unwrap();
-        // Keep the peer connected until Attach rejects the reply, even on a socket that
-        // would report a reset before giving the reader the last bytes of a closed peer.
-        stream.set_read_timeout(Some(secs(10))).unwrap();
+        // End the reply without closing the read half while Attach handles it.
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
         assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+        listener
     });
-    received.recv_timeout(secs(10)).unwrap();
-    term.send(b"held keys");
-    home.wait_for_gate("attach-buffered-input");
-    release.send(()).unwrap();
     assert_eq!(
-        term.wait_exit(secs(5)).and_then(|status| status.code()),
+        term.wait_exit(LOADED_TIMEOUT)
+            .and_then(|status| status.code()),
         Some(1),
         "{}",
         term.text_with_scrollback()
@@ -442,6 +449,12 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         "{}",
         term.text_with_scrollback()
     );
-    peer.join().unwrap();
+    let listener = peer.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let extra = listener.accept();
+    assert!(
+        matches!(&extra, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "a malformed hello must end Attach without another reconnect: {extra:?}"
+    );
     resume_process(keeper);
 }
