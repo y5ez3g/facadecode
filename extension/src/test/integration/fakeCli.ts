@@ -92,7 +92,10 @@ if (sessionFile) {
 		if (file) {
 			const flag = args.findIndex(arg => ['--resume', '--conversation', '--session', 'resume'].includes(arg));
 			const session = flag >= 0 ? args[flag + 1] : process.env.FACADE_IT_AS === 'opencode' ? `ses_fake${randomUUID().replace(/-/g, '').slice(0, 12)}` : randomUUID();
-			fs.writeFileSync(file, `${session}\n`);
+			// The native report replaces the file atomically. An empty file clears the session.
+			const next = `${file}.${process.pid}.next`;
+			fs.writeFileSync(next, `${session}\n`);
+			fs.renameSync(next, file);
 		}
 	}
 	if (hook && !sessionFile) {
@@ -198,10 +201,19 @@ function quirks(): Quirks {
 	}
 }
 
+/** Read the PTY size directly. The cached columns and rows update when Node receives a resize event. */
+function terminalSize(): [number, number] {
+	return process.stdout.isTTY ? process.stdout.getWindowSize() : [80, 24];
+}
+
+let drawnSize: [number, number] | undefined;
+
 /** Redraws the whole screen in one synchronized update, so that no reading ever sees half of it. */
 function draw(): void {
-	const width = Math.max(20, process.stdout.columns || 80);
-	const height = Math.max(8, process.stdout.rows || 24);
+	const [columns, rows] = terminalSize();
+	drawnSize = [columns, rows];
+	const width = Math.max(20, columns || 80);
+	const height = Math.max(8, rows || 24);
 	if (quirks().garble) {
 		// Its input gone behind a screen of its own: the cursor at its top, nothing a reader knows
 		process.stdout.write(`\x1b[?2026h\x1b[H\x1b[J\x1b[1;1HStill loading the workspace...\x1b[1;1H\x1b[?2026l`);
@@ -396,6 +408,10 @@ function start(): void {
 				process.stdout.write(`${ESC}]7501;state=idle:title=${Buffer.from(reportedTitle).toString('base64')}${ST}`);
 			}
 			draw();
+		} else {
+			// A resized test PTY still needs a new input frame if its resize event arrives late.
+			const [columns, rows] = terminalSize();
+			if (columns !== drawnSize?.[0] || rows !== drawnSize?.[1]) { draw(); }
 		}
 	}, 200).unref();
 	// Bracketed paste on, as Claude Code turns it on: a paste comes whole, its line breaks no Enter

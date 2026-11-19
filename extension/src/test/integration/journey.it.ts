@@ -426,9 +426,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const resumeAt = launch.args.indexOf(fixture.args[0]);
 			assert.ok(resumeAt >= 0, 'the native resume option accompanies the MCP configuration');
 			assert.deepStrictEqual(launch.args.slice(resumeAt, resumeAt + 2), fixture.args);
-			await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
+			const pinnable = await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId && each.menu.pin));
 			await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
-			await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
+			await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId && each.pinned)).catch(async error => {
+				console.error('Resumed Pin state', JSON.stringify({ before: pinnable, after: (await state()).cards.find(each => each.runId === card.runId) ?? null }));
+				throw error;
+			});
 			if (RUST) {
 				await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
 				await until('the unpinned workspace card', async () => (await state()).cards.find(each => each.runId === card.runId && !each.pinned));

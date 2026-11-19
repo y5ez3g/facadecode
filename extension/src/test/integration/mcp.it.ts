@@ -134,7 +134,7 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined)
 		.catch(async (error: Error) => {
 			if (RUST && CLI === 'agy') {
-				try { await agyStartRecord(card, alias, address); }
+				try { await rustAgentRecord(alias, address); }
 				catch (diagnostic) { console.error(`Rust agy startup diagnostics unavailable: ${diagnostic}`); }
 				throw error;
 			}
@@ -143,9 +143,9 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	return { card, alias, address };
 }
 
-/** Late, read-only evidence for the Rust agy server wait: never the historical first-draft frame or a reason to start core. */
-async function agyStartRecord(card: Card, alias: string, address: string): Promise<void> {
-	console.error(`Rust agy startup diagnostics ${JSON.stringify({ started_at: new Date().toISOString(), runId: card.runId, alias, engine: 'rust', platform: process.platform, arch: process.arch })}`);
+/** Capture the current state of a fixture agent after an MCP failure, through its existing Orchestrator. */
+async function rustAgentRecord(alias: string, address: string): Promise<void> {
+	console.error(`Rust MCP diagnostics ${JSON.stringify({ started_at: new Date().toISOString(), alias, platform: process.platform, arch: process.arch })}`);
 	try {
 		const configured = process.env.FACADE_HOME;
 		if (!configured || !RECORD || !path.isAbsolute(configured) || !path.isAbsolute(RECORD) || fakeAlias(address) !== alias) {
@@ -206,7 +206,15 @@ async function agyStartRecord(card: Card, alias: string, address: string): Promi
 				console.error(`${file}${base64 ? ' (base64)' : ''} at ${new Date().toISOString()}:\n${fs.readFileSync(file).toString(base64 ? 'base64' : 'utf8')}`);
 			} catch (error) { console.error(`${file} unavailable: ${error}`); }
 		}
-	} finally { console.error(`Rust agy startup diagnostics ended_at=${new Date().toISOString()}`); }
+	} finally { console.error(`Rust MCP diagnostics ended_at=${new Date().toISOString()}`); }
+}
+
+async function expectSent(receipt: { readonly status?: string } | undefined, alias: string, address?: string): Promise<void> {
+	if (address && receipt?.status !== 'success') {
+		try { await rustAgentRecord(alias, address); }
+		catch (error) { console.error(`Rust MCP delivery diagnostics unavailable: ${error}`); }
+	}
+	assert.strictEqual(receipt?.status, 'success', JSON.stringify(receipt));
 }
 
 /** What a start that brought no Facade server left: the daemon's lines about the agent, and the fake CLI's records of its MCP panel and its input. */
@@ -382,7 +390,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			assert.ok(id && original.includes(address), original);
 			const sent = await script(child.alias, [{ tool: 'send_message', arguments: { to: address, text: child.reply, reply_to: id } }]);
 			const receipt = sent.content('send_message');
-			assert.strictEqual(receipt?.status, 'success', JSON.stringify(receipt));
+			await expectSent(receipt, alias, address);
 			const returned = /^(m\d+)@([^@\s]+)$/u.exec(receipt.data.id);
 			assert.ok(returned, JSON.stringify(receipt));
 			const [, replyId, machine] = returned;
@@ -545,7 +553,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		if (RUST) {
 			// Core's results: a send answers how it went in, a refused one why (MCP-1.2, RULES-1.4, 1.5)
 			const [delivered, held, human] = [0, 1, 2].map(nth => sending.content('send_message', nth));
-			assert.deepStrictEqual([delivered?.status, delivered?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(delivered));
+			await expectSent(delivered, childAlias, started.data.id);
+			assert.strictEqual(delivered.data.delivery, 'typed_into_input', JSON.stringify(delivered));
 			assert.ok(received(childAlias).some(each => each.includes('Hello from your creator.\nTwo lines, one message.')), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
 			assert.ok(JSON.stringify(sending.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
 			assert.deepStrictEqual([held?.status, held?.reason], ['failure', 'input_draft'], JSON.stringify(held));
@@ -650,7 +659,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const before = input().length;
 			fs.writeFileSync(quirks, JSON.stringify(quirk));
 			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text } }])).content('send_message');
-			assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
+			await expectSent(sent, childAlias, RUST ? started.data.id : undefined);
 			await new Promise(resolve => setTimeout(resolve, 5_000));
 			const missed = RUST && 'swallow' in quirk;
 			assert.strictEqual(input().slice(before).split(text).length - 1, 1, 'the message was pasted once');
