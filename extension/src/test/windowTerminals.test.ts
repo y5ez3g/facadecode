@@ -294,22 +294,25 @@ suite('Window terminal registration: actual objects across workspace host genera
 		});
 	}
 
-	test('ARCHITECTURE-2.2, LIFECYCLE-3.5: reattachment alone sends no retire; once the activation\'s pinned tabs are open it goes once, naming every reattached run - its tab open again or hidden - and both old groups are disposed of, a hidden run\'s dead tab among them', async () => {
+	test('ARCHITECTURE-2.2, LIFECYCLE-3.5: after pinned tabs open, retirement includes hidden and confirmed unrecreated runs', async () => {
+		const legacy = '#a3@id:00000000000040008000000000000003';
 		bind('run-a', 'Old'); bind('run-b', 'Old other');
+		bind(legacy, 'Confirmed old v2 tab'); bind('unknown', 'Unconfirmed old tab');
 		const old = restartLocalHost();
 		const runtime = manager(false);
 		const pinned = runtime.create({ run: 'run-a', name: 'Pinned', cli: 'claude' }, false);
 		runtime.create({ run: 'run-b', name: 'Hidden', cli: 'claude' }, false);
 		const kinds = () => commands.map(each => each.kind).filter(kind => kind === 'retire');
 		await runtime.finishRestore();
-		assert.deepStrictEqual([kinds(), old.map(each => each.disposed)], [[], [0, 0]], 'its pinned tab has not opened yet');
+		assert.deepStrictEqual([kinds(), old.map(each => each.disposed)], [[], [0, 0, 0, 0]], 'its pinned tab has not opened yet');
 		pinned.open(false);
 		await clock.tick(0);
-		await runtime.retirePredecessor();
+		const current = terminals[terminals.length - 1];
+		await runtime.retirePredecessor(['run-a', 'run-b', legacy, legacy]);
 		const sent = commands.filter(each => each.kind === 'retire') as unknown as { runs: readonly string[]; hidden: readonly string[] }[];
-		assert.deepStrictEqual(sent.map(each => [each.runs, each.hidden]), [[['run-a', 'run-b'], ['run-b']]]);
-		// Its own group goes, and so does the group of the run brought back with its tab hidden: its old tab would stay, dead
-		assert.deepStrictEqual(old.map(each => each.disposed), [1, 1]);
+		assert.deepStrictEqual(sent.map(each => [each.runs, each.hidden]), [[['run-a', 'run-b', legacy], ['run-b', legacy]]]);
+		assert.deepStrictEqual(old.map(each => each.disposed), [1, 1, 1, 0]);
+		assert.strictEqual(current.disposed, 0, 'the registered current tab stays open');
 	});
 
 	test('ARCHITECTURE-2.2: retire waits for a tab still being created, so that its run is named as registered, not as hidden', async () => {

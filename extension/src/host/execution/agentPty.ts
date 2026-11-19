@@ -8,6 +8,7 @@ import { MouseModes } from '../../base/mouseModes';
 import { MouseReports } from '../../base/mouseReports';
 import { TerminalReplies } from '../../base/terminalReplies';
 import { SPINNER_FRAMES as FRAMES, spunName } from '../../base/tabSpinner';
+import type { Disposable } from '../../core/ports';
 import type { TerminalColours } from '../../ptyd/protocol';
 import { HiddenAnswers, type RunScreen } from './hiddenAnswers';
 
@@ -48,10 +49,20 @@ export interface RunBinding {
 	readonly answersQueries: boolean;
 }
 
+/** A screen stream with complete redraws from the Orchestrator (RULES-6.3). */
+export interface ScreenBinding extends Pick<RunBinding, 'input' | 'resize'> {
+	readonly answersQueries: true;
+	watchScreen(draw: (screen: RunScreen) => void): Disposable;
+}
+
+function plainNote(text: string): string {
+	// eslint-disable-next-line no-control-regex
+	return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trimEnd();
+}
+
 /** A line of Facade's own in the terminal: dim, one line per line of text, no escape sequence of the text's own. */
 function noteLine(text: string): string {
-	// eslint-disable-next-line no-control-regex
-	const lines = text.replace(/\r\n?/g, '\n').split('\n').map(line => line.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trimEnd());
+	const lines = text.replace(/\r\n?/g, '\n').split('\n').map(plainNote);
 	return lines.map(line => `\x1b[2m${line}\x1b[0m\r\n`).join('');
 }
 
@@ -82,7 +93,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private unopenedLength = 0;
 	/** Whether Facade's own lines are on screen, to be scrolled away before the run's screen is drawn. */
 	private noted = false;
-	private binding: RunBinding | undefined;
+	private binding: RunBinding | ScreenBinding | undefined;
+	private screenWatch: Disposable | undefined;
 	/** The number of the last output drawn; undefined until the run's screen is. */
 	private applied: number | undefined;
 	/** Output that came while the run's screen was being taken, drawn after it. */
@@ -163,12 +175,19 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.write(noteLine(text));
 	}
 
+	/** Shows an Attach notice on the bottom row without moving the cursor used by later output. */
+	screenNote(text: string): void {
+		const width = (this.size?.columns ?? 80) - 1;
+		const shown = [...plainNote(text)].slice(0, Math.max(0, width)).join('');
+		this.write(`\x1b7\x1b[999;1H\x1b[0m\x1b[2K${shown}\x1b8`);
+	}
+
 	/**
 	 * Shows the run's process from now on (ARCHITECTURE-2.3). `taken` is its screen where the caller has it already - a reattach,
 	 * which claimed the run - drawn where the terminal is open; else the screen is taken as the terminal opens, or now where it is
 	 * open. A terminal not open keeps none of the run's output for later, so it takes the screen anew as it opens.
 	 */
-	bind(binding: RunBinding, taken?: RunScreen): void {
+	bind(binding: RunBinding | ScreenBinding, taken?: RunScreen): void {
 		// A stand-in answered through the binding before; one this binding needs starts anew (ARCHITECTURE-2.3)
 		this.letStandInGo();
 		this.binding = binding;
@@ -180,7 +199,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 			this.early = undefined;
 			if (this.opened) {
 				this.take();
-			} else {
+			} else if ('snapshot' in binding) {
 				this.answerHidden(binding, taken, early);
 			}
 		}
@@ -424,12 +443,13 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.mouseModes.reset();
 		// A screen still being taken was for the terminal that went
 		this.ticket++;
+		this.stopWatching();
 		// The questions written to the terminal that went are answered by none that opens later (ARCHITECTURE-2.3)
 		this.replies.reset();
 		// Its tab gone, what the run asks its terminal is the window's to answer where its supervisor leaves that to it (ARCHITECTURE-2.3)
 		if (this.standIn) {
 			this.standIn.resume();
-		} else if (this.binding) {
+		} else if (this.binding && 'snapshot' in this.binding) {
 			this.answerHidden(this.binding);
 		}
 	}
@@ -508,6 +528,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 			waiter(false);
 		}
 		this.letStandInGo();
+		this.stopWatching();
 		clearInterval(this.spinner);
 		this.spinner = undefined;
 		this.binding = undefined;
@@ -539,8 +560,17 @@ export class AgentPty implements vscode.Pseudoterminal {
 			return;
 		}
 		this.stale = false;
-		this.early = [];
 		const ticket = ++this.ticket;
+		this.stopWatching();
+		if ('watchScreen' in binding) {
+			this.screenWatch = binding.watchScreen(({ screen, seq }) => {
+				if (this.opened && this.binding === binding && this.ticket === ticket) {
+					this.draw(screen, seq, true);
+				}
+			});
+			return;
+		}
+		this.early = [];
 		binding.snapshot().then(({ screen, seq }) => {
 			// A screen taken for an earlier opening is not this one's: drawn, it would reset what the later one draws (ARCHITECTURE-2.3)
 			if (this.binding !== binding || this.ticket !== ticket) {
@@ -570,8 +600,13 @@ export class AgentPty implements vscode.Pseudoterminal {
 		});
 	}
 
+	private stopWatching(): void {
+		this.screenWatch?.dispose();
+		this.screenWatch = undefined;
+	}
+
 	/** Draws the run's screen as it stood at output `seq`, then what came after it, then how its process ended where it did. */
-	private draw(screen: string, seq: number): void {
+	private draw(screen: string, seq: number, completeRedraw = false): void {
 		// The tab answers what follows this screen; a stand-in what came up to it (ARCHITECTURE-2.3)
 		this.standIn?.handOver(seq);
 		this.standIn = undefined;
@@ -579,7 +614,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.early = undefined;
 		// A redraw - the connection came back - starts from a reset terminal; Facade's own lines are scrolled away first, so that
 		// the run's screen starts where its program's cursor positions expect it (ARCHITECTURE-2.3)
-		const before = this.drawn ? '\x1bc' : this.noted ? `${'\r\n'.repeat(this.size?.rows ?? 30)}\x1b[H` : '';
+		const before = completeRedraw ? '' : this.drawn ? '\x1bc' : this.noted ? `${'\r\n'.repeat(this.size?.rows ?? 30)}\x1b[H` : '';
 		this.applied = seq;
 		this.noted = false;
 		this.drawn = true;

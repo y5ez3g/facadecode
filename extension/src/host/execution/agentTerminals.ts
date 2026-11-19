@@ -78,7 +78,7 @@ interface TerminalOptions {
 	/** The person closed `run`'s tab - `marked` where it showed its pin mark - as the editor reports a close of theirs (LIFECYCLE-2.2, 3.4). */
 	readonly closed: (run: RunId, marked: boolean) => void;
 	readonly pinned?: (run: RunId, pinned: boolean) => void;
-	readonly renamed: (run: RunId, name: string) => void;
+	readonly renamed?: (run: RunId, name: string) => void;
 	/** The window's terminal colours, which each terminal reports as it opens and the theme changes (ARCHITECTURE-2.3). */
 	readonly colours?: WindowColours;
 	/** Where `run`'s tab is now: open in the group of `column`, or hidden - kept for a reload (LIFECYCLE-2.2, 3.5). */
@@ -1058,16 +1058,18 @@ export class AgentTerminals implements vscode.Disposable {
 	/**
 	 * A pinned sequence's tabs are open: a recreated local registry may retire its predecessor's UI resources for the runs registered by now,
 	 * once, and releases each hidden run's old tab - at the activation's end and after each later restoration (ARCHITECTURE-2.2).
+	 * The Orchestrator can also supply confirmed run keys whose tabs this host has not recreated.
 	 */
-	async retirePredecessor(): Promise<void> {
+	async retirePredecessor(knownRuns: readonly RunId[] = []): Promise<void> {
 		const owner = this.options.terminalOwner;
 		if (!owner) { return; }
 		const restored = [...this.entries.values()];
 		await this.creation;
 		// Every reattached run, its tab open again or hidden: a hidden one's old tab would otherwise stay, dead (ARCHITECTURE-2.2)
 		const kept = restored.filter(pair => this.entries.get(pair.run) === pair);
-		const runs = kept.map(pair => pair.run);
-		const hidden = kept.filter(pair => !pair.terminal).map(pair => pair.run);
+		const unrebuilt = [...new Set(knownRuns)].filter(run => !this.entries.has(run));
+		const runs = [...kept.map(pair => pair.run), ...unrebuilt];
+		const hidden = [...kept.filter(pair => !pair.terminal).map(pair => pair.run), ...unrebuilt];
 		await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...owner, kind: 'retire', runs, hidden });
 	}
 
@@ -1324,7 +1326,7 @@ export class AgentTerminals implements vscode.Disposable {
 				pair.pty.sayName();
 			} else if (shown) {
 				const before = pair.pty.tabName();
-				this.options.renamed(pair.run, shown.renamed);
+				this.options.renamed?.(pair.run, shown.renamed);
 				if (this.entries.get(pair.run) === pair && pair.pty.tabName() === before) {
 					pair.pty.sayName();
 				}
