@@ -1,7 +1,7 @@
 //! Logical editor windows, their current instances and connections, and their locations as last
 //! read. A workspace window can reopen under the same logical ID with a new binding generation.
 
-mod locations;
+pub(crate) mod locations;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -704,6 +704,19 @@ impl Windows {
             .get(id)
             .map(|window| window.description.folders.clone())
             .unwrap_or_default()
+    }
+
+    /// Creates a worktree for a start on this machine, sharing the same turns as legacy calls.
+    #[allow(
+        dead_code,
+        reason = "The v3 start handlers are wired in the daemon layer"
+    )]
+    pub(crate) async fn create_local_worktree(
+        &self,
+        source: &Path,
+        branch: &str,
+    ) -> Result<LocationInfo, ErrorBody> {
+        locations::create_worktree(source, branch, &self.creations).await
     }
 
     /// Makes a worktree from the target window's checkout, or directly from the terminal's
