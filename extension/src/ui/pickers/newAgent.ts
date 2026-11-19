@@ -65,7 +65,7 @@ export function orderedClis(choices: readonly CliChoice[], last: string | undefi
 type Does = 'start' | 'settings' | 'location' | 'name' | 'openFolder';
 type Item = vscode.QuickPickItem & { readonly does?: Does; readonly cli?: CliChoice };
 
-function changeLocationItem(where?: string): Item {
+export function changeLocationItem(where?: string): vscode.QuickPickItem & { readonly does: 'location' } {
 	return {
 		label: vscode.l10n.t("Change Working Location..."),
 		description: where === undefined ? undefined : plainText(where),
@@ -73,6 +73,10 @@ function changeLocationItem(where?: string): Item {
 		alwaysShow: true,
 		does: 'location'
 	};
+}
+
+export function changeNameItem(name: string): vscode.QuickPickItem & { readonly does: 'name' } {
+	return { label: vscode.l10n.t("Change Name..."), description: plainText(name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' };
 }
 
 /**
@@ -244,7 +248,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 			// A labeled line: the editor draws one without a label as all but invisible, and a label right of the item below it
 			{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator },
 			...changeable ? [changeLocationItem(where)] : [],
-			{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
+			changeNameItem(at.name)
 		];
 	};
 	const itemsOf = (choices: CliChoices | Error, now: Catalog): { readonly items: Item[]; readonly active?: Item } => {

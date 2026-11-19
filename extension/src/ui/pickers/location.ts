@@ -139,6 +139,14 @@ export function locationIcon(location: Location): vscode.ThemeIcon {
 type LocationItem = vscode.QuickPickItem & { readonly location?: Location };
 type FolderItem = vscode.QuickPickItem & { readonly folder?: WorkspaceFolderInfo; readonly add?: true };
 
+export function addFolderItem(): vscode.QuickPickItem & { readonly add: true } {
+	return { label: vscode.l10n.t("Add Folder to Workspace..."), iconPath: new vscode.ThemeIcon('add'), add: true };
+}
+
+export function removeFolderButton(): vscode.QuickInputButton {
+	return { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Remove Folder from Workspace") };
+}
+
 /** The locations of a workspace folder, in the catalog's order (WORKTREES-1.2): every one associated with it. */
 export function locationsIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location[] {
 	// A folder inside one of them is none of their own (WORKTREES-1.2)
@@ -272,13 +280,13 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
 		if (catalog.folders.length < 2) {
 			return catalog.folders[0] ?? BACK;
 		}
-		const remove: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Remove Folder from Workspace") };
+		const remove = removeFolderButton();
 		const items: FolderItem[] = [
 			// Its name, then the folder that holds it, as VS Code lists recent folders: the home folder as ~. Removing one is offered
 			// where another stays (LIFECYCLE-1.3)
 			...catalog.folders.map((each): FolderItem => ({ ...folderRow(catalog, each), buttons: [remove] })),
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
-			{ label: vscode.l10n.t("Add Folder to Workspace..."), iconPath: new vscode.ThemeIcon('add'), add: true }
+			addFolderItem()
 		];
 		const shown = active;
 		// The folder given selected, else the first
@@ -288,7 +296,10 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
 		}
 		if (picked.item.add) {
 			// The first added selected; the step as it was where the editor added none
-			active = await flow.aside(() => addFolder(deps)) ?? active;
+			active = await flow.aside(() => addFolder(deps.locations).catch(err => {
+				deps.log.event(`The editor could not add a folder to the workspace: ${messageOf(err)}`);
+				return undefined;
+			})) ?? active;
 			continue;
 		}
 		const chosen = picked.item.folder!;
@@ -462,21 +473,16 @@ const ADD_FOLDER_COMMAND = 'workbench.action.addRootFolder';
  * Add Folder to Workspace... (LIFECYCLE-1.3): the editor's own command, whose dialog and title are the editor's. Answers the first folder it
  * added, once the catalog has what it added; none where it added none - the dialog cancelled, or only folders open already chosen.
  */
-async function addFolder(deps: FolderStepDeps): Promise<WorkspaceFolderInfo | undefined> {
+export async function addFolder(locations: FolderStepDeps['locations']): Promise<WorkspaceFolderInfo | undefined> {
 	const open = () => (vscode.workspace.workspaceFolders ?? []).map(each => each.uri.toString());
 	const before = new Set(open());
-	try {
-		await vscode.commands.executeCommand(ADD_FOLDER_COMMAND);
-	} catch (err) {
-		deps.log.event(`The editor could not add a folder to the workspace: ${messageOf(err)}`);
-		return undefined;
-	}
+	await vscode.commands.executeCommand(ADD_FOLDER_COMMAND);
 	const added = open().filter(uri => !before.has(uri));
 	if (!added.length) {
 		return undefined;
 	}
-	await foldersSettled(deps.locations, folders => added.every(uri => folders.some(each => each.uri === uri)));
-	return deps.locations.snapshot().folders.find(each => each.uri === added[0]);
+	await foldersSettled(locations, folders => added.every(uri => folders.some(each => each.uri === uri)));
+	return locations.snapshot().folders.find(each => each.uri === added[0]);
 }
 
 /**
@@ -489,21 +495,25 @@ async function removeFolder(deps: FolderStepDeps, folder: WorkspaceFolderInfo): 
 	// Those in a Resume cwd the catalog has no record of yet count with the anchor they kept (WORKTREES-1.2)
 	const known = new Set(deps.locations.snapshot().locations.map(each => each.id));
 	const closing = deps.agents.list().filter(run => gone.has(run.location) || (run.within !== undefined && gone.has(run.within) && !known.has(run.location))).length;
+	await removeWorkspaceFolder(deps.locations, folder, closingText(closing)).catch(err => deps.log.event(messageOf(err)));
+}
+
+/** Asks to remove the editor's folder entry and waits for the editor to apply it (RULES-6.5). */
+export async function removeWorkspaceFolder(locations: FolderStepDeps['locations'], folder: WorkspaceFolderInfo, detail?: string): Promise<void> {
 	// {0} is the workspace folder's name
-	if (!await confirmed(vscode.l10n.t("Remove \"{0}\" from this workspace? Files stay on disk.", folder.name), vscode.l10n.t("Remove"), closingText(closing))) {
+	if (!await confirmed(vscode.l10n.t("Remove \"{0}\" from this workspace? Files stay on disk.", folder.name), vscode.l10n.t("Remove"), detail)) {
 		return;
 	}
 	// Where it is now: the folders may have changed while the person was asked
-	const folders = deps.locations.snapshot().folders;
+	const folders = locations.snapshot().folders;
 	const at = folders.find(each => each.uri === folder.uri);
 	if (!at || folders.length < 2) {
 		return;
 	}
 	if (!vscode.workspace.updateWorkspaceFolders(at.index, 1)) {
-		deps.log.event(`The editor did not remove ${folder.path} from the workspace`);
-		return;
+		throw new Error(`The editor did not remove ${folder.path} from the workspace`);
 	}
-	await foldersSettled(deps.locations, left => !left.some(each => each.uri === folder.uri));
+	await foldersSettled(locations, left => !left.some(each => each.uri === folder.uri));
 }
 
 /** Resolves once the catalog's workspace folders are as `settled` says, or after {@link FOLDERS_CHANGE_MS}. */
