@@ -37,7 +37,7 @@ use crate::{Sender, ToolsGiven};
 
 pub(crate) use screen::{ScreenLog, recover, recover_after_clean_end, saved_size, screen_writes};
 pub(crate) use state::{Kept, instant_of, read_kept, state_file};
-pub(crate) use typist::{MessageTyping, Typing, TypingAnswer, delivery_time};
+pub(crate) use typist::{MessageTyping, Typing, TypingAnswer};
 pub(crate) use viewers::{ViewerChange, ViewerSender, ViewerSnapshot, viewer_channel};
 
 /// Rows of scrollback each agent's screen keeps.
@@ -100,6 +100,8 @@ pub(crate) struct Inspection {
     pub(crate) agent: AgentInfo,
     pub(crate) input: InputInfo,
     pub(crate) session_tracking: bool,
+    pub(crate) viewers: Vec<String>,
+    pub(crate) title: Option<String>,
 }
 
 /// Says whether input was taken.
@@ -131,6 +133,12 @@ pub(crate) enum AgentCommand {
         reply: InputReply,
     },
     Resize(u16, u16),
+    /// Resizes the terminal and applies colors already authorized by the service.
+    ResizeTerminal {
+        cols: u16,
+        rows: u16,
+        colors: Option<TerminalColors>,
+    },
     /// Takes colors from the verified member editor window requesting this size.
     ResizeFromWindow {
         cols: u16,
@@ -145,6 +153,15 @@ pub(crate) enum AgentCommand {
     /// Adds a viewer: its snapshot goes through `reply` before any change.
     AddViewer {
         viewer: u64,
+        tx: ViewerSender,
+        keep_scrollback: bool,
+        include_scrollback: bool,
+        reply: oneshot::Sender<ViewerSnapshot>,
+    },
+    /// Attaches to a running terminal and keeps the viewer's name for this watch.
+    AttachViewer {
+        viewer: u64,
+        name: Option<String>,
         tx: ViewerSender,
         keep_scrollback: bool,
         include_scrollback: bool,
@@ -342,7 +359,14 @@ struct Shared {
 struct Record {
     info: AgentInfo,
     installed_run: u64,
-    color_source: Option<WindowRef>,
+    color_source: ColorSource,
+    title: Option<String>,
+}
+
+enum ColorSource {
+    Default,
+    Window(WindowRef),
+    Terminal,
 }
 
 impl Shared {
@@ -351,7 +375,8 @@ impl Shared {
             record: Mutex::new(Record {
                 info,
                 installed_run: FIRST_RUN,
-                color_source,
+                color_source: color_source.map_or(ColorSource::Default, ColorSource::Window),
+                title: None,
             }),
             run: AtomicU64::new(FIRST_RUN),
         }
@@ -401,6 +426,11 @@ impl AgentHandle {
         self.shared.record.lock().unwrap().info.clone()
     }
 
+    /// The full title supplied by the terminal, for the caller to project.
+    pub(crate) fn title(&self) -> Option<String> {
+        self.shared.record.lock().unwrap().title.clone()
+    }
+
     /// The installed run number and record as they stand under the same lock.
     pub(crate) fn installed_record(&self) -> (u64, AgentInfo) {
         let record = self.shared.record.lock().unwrap();
@@ -409,7 +439,10 @@ impl AgentHandle {
 
     /// The member window supplying the screen's terminal colors, if any.
     pub(crate) fn color_source(&self) -> Option<WindowRef> {
-        self.shared.record.lock().unwrap().color_source.clone()
+        match &self.shared.record.lock().unwrap().color_source {
+            ColorSource::Window(window) => Some(window.clone()),
+            _ => None,
+        }
     }
 
     pub(crate) fn is_guest(&self) -> bool {
@@ -477,6 +510,13 @@ impl AgentHandle {
     /// Records the committed YOLO setting for a resumed run.
     pub(crate) fn set_yolo(&self, yolo: bool) {
         self.shared.record.lock().unwrap().info.yolo = yolo;
+    }
+
+    /// Applies a guest's committed name. A guest has no actor to take the rename command.
+    pub(crate) fn rename_guest(&self, name: String) -> AgentInfo {
+        let mut record = self.shared.record.lock().unwrap();
+        record.info.name = name;
+        record.info.clone()
     }
 
     /// A guest's turn began or ended: the new record where its state changed.

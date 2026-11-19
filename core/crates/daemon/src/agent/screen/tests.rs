@@ -207,6 +207,12 @@ mod tests {
         copy_dir(&dir, &copy);
         let recovered = recover_quietly(&copy, None);
         assert_eq!(state(&recovered.screen), state(&recorder.screen));
+        assert_eq!(
+            recovered.log.unwrap().recovered_title.as_deref(),
+            Some("a title")
+        );
+        let (_, title) = load(&copy, "a1").unwrap();
+        assert_eq!(title.as_deref(), Some("a title"));
     }
 
     /// The log of agent a1 in `dir`'s generation `generation`, and its length.

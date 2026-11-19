@@ -41,10 +41,16 @@ pub(crate) struct ViewerSnapshot {
 /// A viewer asking for its snapshot.
 pub(crate) struct ViewerRequest {
     pub(crate) viewer: u64,
+    pub(crate) kind: ViewKind,
     pub(crate) tx: ViewerSender,
     pub(crate) keep_scrollback: bool,
     pub(crate) include_scrollback: bool,
     pub(crate) reply: oneshot::Sender<ViewerSnapshot>,
+}
+
+pub(crate) enum ViewKind {
+    Legacy,
+    Attach(Option<String>),
 }
 
 /// The viewers of one agent's screen.
@@ -64,6 +70,7 @@ enum Drawing {
 /// One admitted viewer and the frame it is owed.
 struct Viewer {
     id: u64,
+    kind: ViewKind,
     tx: ViewerSender,
     keep_scrollback: bool,
     drawing: Drawing,
@@ -93,9 +100,21 @@ impl Viewers {
         self.waiting.push(request);
     }
 
-    /// Removes an admitted watch.
+    /// Removes a watch or its pending snapshot request.
     pub(crate) fn remove(&mut self, viewer: u64) {
         self.active.retain(|v| v.id != viewer);
+        self.waiting.retain(|v| v.viewer != viewer);
+    }
+
+    /// Names of admitted connections, in admission order.
+    pub(crate) fn names(&self) -> Vec<String> {
+        self.active
+            .iter()
+            .filter_map(|v| match &v.kind {
+                ViewKind::Attach(name) if !v.tx.queue.is_closed() => name.clone(),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Captures waiting watches after synchronized output has finished.
@@ -116,11 +135,14 @@ impl Viewers {
                 exit: exit.cloned(),
                 process,
             };
-            if request.reply.send(snapshot).is_err() {
+            if request.reply.send(snapshot).is_err()
+                || (process != ProcessState::Running && matches!(request.kind, ViewKind::Attach(_)))
+            {
                 continue;
             }
             self.active.push(Viewer {
                 id: request.viewer,
+                kind: request.kind,
                 tx: request.tx,
                 keep_scrollback: request.keep_scrollback,
                 drawing: Drawing::Current,
@@ -176,7 +198,9 @@ impl Viewers {
     /// Queues the run's exit immediately for current watches, after redraw for others.
     pub(crate) fn send_exit(&mut self, exit: &ProcessExit) {
         self.active.retain_mut(|v| match v.drawing {
-            Drawing::Current => v.tx.send(ViewerChange::Exit(exit.clone())),
+            Drawing::Current => {
+                v.tx.send(ViewerChange::Exit(exit.clone())) && matches!(v.kind, ViewKind::Legacy)
+            }
             _ => {
                 v.drawing = Drawing::RedrawThenExit;
                 true
@@ -222,6 +246,7 @@ impl Viewer {
         let mut alive = self.tx.send(frame);
         if let Some(exit) = exit.filter(|_| owes_exit) {
             alive &= self.tx.send(ViewerChange::Exit(exit.clone()));
+            alive &= matches!(self.kind, ViewKind::Legacy);
         }
         alive
     }

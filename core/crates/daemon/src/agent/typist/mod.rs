@@ -1,4 +1,4 @@
-//! Serializes program input and confirms message submission from the CLI's input box.
+//! Serializes program input and submits messages over the CLI's own draft.
 //! The actor owns terminal I/O; byte receipts anchor every delay to actual writes.
 
 mod probe;
@@ -8,22 +8,18 @@ use std::time::Duration;
 
 use facade_base::daemon::{DeliveryFailure, InputInfo, InputState, TextWritten};
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::terminal::{PASTE_BYTES_PER_MS, key_down_records};
-use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict, Rule};
+use facade_base::terminal::key_down_records;
+use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use self::probe::{Next, PROBE_READ, Probe};
 use super::{ESCAPE_DELAY, PASTE_END, PASTE_START, Submission};
 use crate::Sender;
-use crate::messages::{DeliveryHandle, Outcome};
+use crate::messages::{DeliveryHandle, Outcome, RESPONSE_GRACE};
 
 const PASTE_DELAY: Duration = Duration::from_millis(100);
-const DRAFT_TIMEOUT: Duration = Duration::from_secs(2);
-const EMPTY_TIMEOUT: Duration = Duration::from_secs(3);
-const ENTER_INTERVAL: Duration = Duration::from_secs(2);
 const READ_INTERVAL: Duration = Duration::from_millis(500);
-const MAX_JOINED_BYTES: usize = 32 * 1024;
 
 /// Terminal modes sampled by the actor; no locks are taken.
 #[derive(Clone, Copy, Debug, Default)]
@@ -178,7 +174,7 @@ pub(crate) struct MessageTyping {
     text: String,
     submission: Box<Submission>,
     deadline: Instant,
-    alone: bool,
+    prompt: bool,
 }
 
 impl MessageTyping {
@@ -194,11 +190,11 @@ impl MessageTyping {
             text,
             submission: Box::new(submission),
             deadline,
-            alone: false,
+            prompt: false,
         }
     }
 
-    /// Keeps a first prompt, which must occupy its own paste; no I/O or locks.
+    /// Keeps a first prompt, which goes ahead of waiting messages; no I/O or locks.
     pub(crate) fn start_prompt(
         text: String,
         number: u64,
@@ -206,7 +202,7 @@ impl MessageTyping {
         submission: Submission,
     ) -> MessageTyping {
         let mut prompt = Self::new(text, number, deadline, submission);
-        prompt.alone = true;
+        prompt.prompt = true;
         prompt
     }
 
@@ -254,13 +250,9 @@ struct Batch {
 }
 
 enum DeliveryPhase {
-    Waiting,
     Draft(DraftCheck),
-    Entered {
-        draft: DraftCheck,
-        shown: String,
-        at: Instant,
-    },
+    Entered,
+    Clearing { until: Instant },
 }
 
 struct DraftCheck {
@@ -268,10 +260,11 @@ struct DraftCheck {
     text: String,
     stable: Option<(Instant, String)>,
     recovered: bool,
+    typed: Option<u64>,
 }
 
 impl DraftCheck {
-    fn new(rule: &PasteRule, text: String, recovered: bool) -> Self {
+    fn new(rule: &PasteRule, text: String, typed: Option<u64>) -> Self {
         let prefix = if rule.lead && text.starts_with(LEAD) {
             LEAD
         } else {
@@ -281,7 +274,8 @@ impl DraftCheck {
             text: text[prefix.len()..].to_owned(),
             prefix,
             stable: None,
-            recovered,
+            recovered: typed.is_none(),
+            typed,
         }
     }
 
@@ -295,21 +289,11 @@ impl Batch {
         self.messages.iter().map(|m| m.deadline).min()
     }
 
-    fn poll_at(&self, now: Instant) -> Instant {
-        self.deadline()
-            .map_or(now + READ_INTERVAL, |due| due.min(now + READ_INTERVAL))
-    }
-
     fn held(&self) -> usize {
         match self.phase {
-            DeliveryPhase::Waiting => self.messages.iter().map(MessageTyping::most_bytes).sum(),
             DeliveryPhase::Draft(_) => 1,
-            DeliveryPhase::Entered { .. } => 0,
+            DeliveryPhase::Entered | DeliveryPhase::Clearing { .. } => 0,
         }
-    }
-
-    fn begun(&self) -> bool {
-        !matches!(self.phase, DeliveryPhase::Waiting)
     }
 }
 
@@ -556,14 +540,16 @@ impl Typist {
         }
         if let Some(batch) = self.batch.take() {
             let (text_written, enter_written) = self.delivery_progress(&batch, written);
-            self.deliveries.settle(
-                &numbers(&batch.messages),
+            let outcome = if enter_written == Some(true) {
+                Outcome::Typed
+            } else {
                 Outcome::Failed {
                     reason: DeliveryFailure::Ended,
                     text_written,
                     enter_written,
-                },
-            );
+                }
+            };
+            self.settle_batch(batch, outcome);
         }
         let pending: Vec<_> = self.inbox.drain(..).collect();
         self.deliveries
@@ -573,10 +559,9 @@ impl Typist {
 
     /// Restores a persisted paste without retyping; persistence on refusal may block, no typist lock.
     pub(crate) fn finish_paste(&mut self, messages: Vec<MessageTyping>) {
-        self.return_waiting();
         match (self.paste, self.batch.is_none()) {
             (Some(rule), true) => {
-                let draft = DraftCheck::new(rule, joined(&messages), true);
+                let draft = DraftCheck::new(rule, joined(&messages), None);
                 self.batch = Some(Batch {
                     messages,
                     phase: DeliveryPhase::Draft(draft),
@@ -590,7 +575,6 @@ impl Typist {
 
     /// Queues the first prompt ahead of unbegun deliveries, synchronously and without locks.
     pub(crate) fn deliver_first(&mut self, prompt: MessageTyping) {
-        self.return_waiting();
         self.inbox.push_front(prompt);
     }
 
@@ -645,7 +629,7 @@ impl Typist {
     }
     /// Reads whether delivery has passed persistence and awaits settlement; no I/O or locks.
     pub(crate) fn pasting(&self) -> bool {
-        self.batch.as_ref().is_some_and(Batch::begun)
+        self.batch.is_some()
     }
     /// Reads whether a program call is pending or active; no I/O or locks.
     pub(crate) fn types_calls(&self) -> bool {
@@ -654,15 +638,6 @@ impl Typist {
     /// Reads whether message confirmation needs input observations; no I/O or locks.
     pub(crate) fn reads_input(&self) -> bool {
         self.batch.is_some() || !self.inbox.is_empty()
-    }
-
-    fn return_waiting(&mut self) {
-        if self.batch.as_ref().is_some_and(|batch| !batch.begun()) {
-            let batch = self.batch.take().expect("unbegun batch");
-            for message in batch.messages.into_iter().rev() {
-                self.inbox.push_front(message);
-            }
-        }
     }
 
     fn record_write(&mut self, offset: u64, length: usize, delay: Duration) {
@@ -697,17 +672,25 @@ impl Typist {
     }
 
     fn stalled(&mut self, now: Instant) -> Step {
-        let deadline = self
-            .batch
-            .as_ref()
-            .filter(|batch| batch.begun())
-            .and_then(Batch::deadline);
-        match deadline {
-            Some(at) if at <= now => {
-                let batch = self.batch.take().expect("stalled delivery");
-                self.settle_batch(batch, Outcome::UNCONFIRMED)
-            }
-            _ => Step::wait(deadline),
+        let Some(batch) = &self.batch else {
+            return Step::default();
+        };
+        let deadline = match batch.phase {
+            DeliveryPhase::Draft(_) => batch.deadline(),
+            // A byte in flight may reach the terminal. Its write receipt decides whether
+            // Enter went, and Post can still report an unknown outcome if the terminal hangs.
+            DeliveryPhase::Entered => None,
+            DeliveryPhase::Clearing { until } => Some(until),
+        };
+        if deadline.is_some_and(|at| at <= now) {
+            let batch = self.batch.take().expect("stalled delivery");
+            let outcome = match batch.phase {
+                DeliveryPhase::Clearing { .. } => Self::uncleared(),
+                _ => Outcome::UNCONFIRMED,
+            };
+            self.settle_batch(batch, outcome)
+        } else {
+            Step::wait(deadline)
         }
     }
 
@@ -717,8 +700,8 @@ impl Typist {
             .as_ref()
             .is_some_and(|receipt| receipt.complete(written));
         match &batch.phase {
-            DeliveryPhase::Waiting => (TextWritten::None, Some(false)),
-            DeliveryPhase::Entered { .. } => (TextWritten::Full, Some(full)),
+            DeliveryPhase::Entered => (TextWritten::Full, Some(full)),
+            DeliveryPhase::Clearing { .. } => (TextWritten::Full, Some(false)),
             DeliveryPhase::Draft(draft) if draft.recovered => (TextWritten::Unknown, None),
             DeliveryPhase::Draft(_) => {
                 let text = if full {
@@ -747,48 +730,6 @@ impl Typist {
         Step::wait((!self.inbox.is_empty() || !self.calls.is_empty()).then(Instant::now))
     }
 
-    fn gather(&mut self, batch: &mut Batch) {
-        batch
-            .messages
-            .retain(|message| self.deliveries.still_to_type(message.number));
-        let mut size: usize = batch
-            .messages
-            .iter()
-            .map(|message| message.text.len())
-            .sum();
-        while let Some(next) = self.inbox.front() {
-            if !batch.messages.is_empty()
-                && (next.alone
-                    || batch.messages.iter().any(|message| message.alone)
-                    || size + next.text.len() > MAX_JOINED_BYTES)
-            {
-                break;
-            }
-            let message = self.inbox.pop_front().expect("queued message");
-            if self.deliveries.still_to_type(message.number) {
-                size += message.text.len();
-                batch.messages.push(message);
-            }
-        }
-    }
-
-    fn fit_deadlines(&mut self, batch: &mut Batch, rule: &PasteRule, now: Instant) {
-        while let Some(due) = batch.deadline() {
-            if now + delivery_budget(rule, self.console, &joined(&batch.messages)) <= due {
-                break;
-            }
-            let message = batch.messages.pop().expect("delivery with a deadline");
-            if batch.messages.is_empty() {
-                self.deliveries.settle(
-                    &[message.number],
-                    Outcome::untyped(DeliveryFailure::Timeout),
-                );
-            } else {
-                self.inbox.push_front(message);
-            }
-        }
-    }
-
     fn advance_delivery(
         &mut self,
         now: Instant,
@@ -806,206 +747,234 @@ impl Typist {
             );
             return Step::default();
         };
-        loop {
-            if self.paste_held && !self.pasting() {
-                return Step::default();
-            }
-            let mut batch = match self.batch.take() {
-                Some(batch) => batch,
-                None if self.inbox.is_empty() => return Step::default(),
-                None => Batch {
-                    messages: Vec::new(),
-                    phase: DeliveryPhase::Waiting,
-                },
+        if let Some(batch) = self.batch.take() {
+            return match batch.phase {
+                DeliveryPhase::Entered => self.settle_batch(batch, Outcome::Typed),
+                DeliveryPhase::Clearing { until } => self.check_cleared(batch, read(), now, until),
+                DeliveryPhase::Draft(draft) => self.check_draft(
+                    batch.messages,
+                    draft,
+                    rule,
+                    now,
+                    offset,
+                    typed,
+                    read(),
+                    paused,
+                ),
             };
-            match std::mem::replace(&mut batch.phase, DeliveryPhase::Waiting) {
-                DeliveryPhase::Draft(draft) => {
-                    return self.check_draft(batch, draft, rule, now, offset, read, paused);
-                }
-                DeliveryPhase::Entered { draft, shown, at } => {
-                    return self.check_enter(batch, draft, shown, at, now, offset, read, paused);
-                }
-                DeliveryPhase::Waiting => {}
-            }
-            self.gather(&mut batch);
-            let reading = read();
-            let info = self.recall(reading.clone()).info;
-            let reason = match info.state {
-                InputState::Usable => DeliveryFailure::Timeout,
-                InputState::Draft => DeliveryFailure::InputDraft,
-                InputState::Interaction => DeliveryFailure::InputInteraction,
-                _ => DeliveryFailure::InputUnknown,
-            };
-            let mut expired = Vec::new();
-            batch.messages.retain(|message| {
-                if message.deadline > now {
-                    true
-                } else {
-                    expired.push(message.number);
-                    false
-                }
-            });
-            self.deliveries.settle(&expired, Outcome::untyped(reason));
-            // A row that may be a hint or a draft is probed once a run, the messages waiting.
-            if paused.is_none() && !batch.messages.is_empty() && self.unprobed(&reading) {
-                self.batch = Some(batch);
-                return self.begin_probe(&reading, now, offset, typed);
-            }
-            if info.state == InputState::Usable && paused.is_none() {
-                self.fit_deadlines(&mut batch, rule, now);
-                batch.messages.sort_by_key(|message| message.number);
-                crate::gate_for_test("before-paste-begins");
-                let granted = self.deliveries.begin_paste(&numbers(&batch.messages));
-                let Some(granted) = granted else {
-                    let wake = batch.poll_at(now);
-                    self.batch = Some(batch);
-                    return Step::wait(Some(wake));
-                };
-                batch
-                    .messages
-                    .retain(|message| granted.contains(&message.number));
-                if !batch.messages.is_empty() {
-                    let draft = DraftCheck::new(rule, joined(&batch.messages), false);
-                    let mut write = draft.prefix.as_bytes().to_vec();
-                    write_paste(
-                        &draft.text,
-                        modes.bracketed_paste,
-                        records_above_bmp(self.console),
-                        &mut write,
-                    );
-                    batch.phase = DeliveryPhase::Draft(draft);
-                    self.record_write(offset, write.len(), PASTE_DELAY);
-                    self.batch = Some(batch);
-                    return Step {
-                        write,
-                        wake: Some(now + READ_INTERVAL),
-                    };
-                }
-            }
-            if batch.messages.is_empty() {
-                continue;
-            }
-            let wake = batch.poll_at(now);
-            self.batch = Some(batch);
-            return Step::wait(Some(paused.map_or(wake, |at| at.max(now).min(wake))));
         }
+        if self.paste_held || self.inbox.is_empty() {
+            return Step::default();
+        }
+        let reading = read();
+        let info = self.recall(reading.clone()).info;
+        let reason = match info.state {
+            InputState::Usable => DeliveryFailure::Timeout,
+            InputState::Draft => DeliveryFailure::InputDraft,
+            InputState::Interaction => DeliveryFailure::InputInteraction,
+            _ => DeliveryFailure::InputUnknown,
+        };
+        let mut expired = Vec::new();
+        self.inbox.retain(|message| {
+            if !self.deliveries.still_to_type(message.number) {
+                return false;
+            }
+            if message.deadline <= now {
+                expired.push(message.number);
+                return false;
+            }
+            true
+        });
+        self.deliveries.settle(&expired, Outcome::untyped(reason));
+        if self.inbox.is_empty() {
+            return Step::default();
+        }
+        if paused.is_none() && self.unprobed(&reading) {
+            return self.begin_probe(&reading, now, offset, typed);
+        }
+        if info.state == InputState::Usable && paused.is_none() {
+            let (index, next) = self
+                .inbox
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, message)| (!message.prompt, message.number))
+                .expect("at least one message");
+            crate::gate_for_test("before-paste-begins");
+            if let Some(granted) = self.deliveries.begin_paste(&[next.number]) {
+                let next = self.inbox.remove(index).expect("admitted message");
+                if granted.is_empty() {
+                    return Step::wait((!self.inbox.is_empty()).then_some(now));
+                }
+                let draft = DraftCheck::new(rule, next.text.clone(), Some(typed));
+                let mut write = draft.prefix.as_bytes().to_vec();
+                write_paste(
+                    &draft.text,
+                    modes.bracketed_paste,
+                    records_above_bmp(self.console),
+                    &mut write,
+                );
+                let wake = (now + READ_INTERVAL).min(next.deadline);
+                self.batch = Some(Batch {
+                    messages: vec![next],
+                    phase: DeliveryPhase::Draft(draft),
+                });
+                self.record_write(offset, write.len(), PASTE_DELAY);
+                return Step {
+                    write,
+                    wake: Some(wake),
+                };
+            }
+        }
+        Step::wait(
+            self.inbox
+                .iter()
+                .map(|message| message.deadline)
+                .chain(paused)
+                .min()
+                .map(|due| due.min(now + READ_INTERVAL)),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
     fn check_draft(
         &mut self,
-        mut batch: Batch,
+        messages: Vec<MessageTyping>,
         mut draft: DraftCheck,
         rule: &PasteRule,
         now: Instant,
         offset: u64,
-        read: &dyn Fn() -> BoxReading,
+        typed: u64,
+        reading: BoxReading,
         paused: Option<Instant>,
     ) -> Step {
-        if batch.deadline().is_some_and(|due| now >= due) {
+        let deadline = messages
+            .iter()
+            .map(|m| m.deadline)
+            .min()
+            .expect("started paste");
+        let untouched = *draft.typed.get_or_insert(typed) == typed;
+        let own = reading.draft.filter(|text| {
+            untouched
+                && reading.info.state == InputState::Draft
+                && facade_rules::is_own_draft(
+                    rule,
+                    text,
+                    &draft.text,
+                    draft.prefix(),
+                    reading.info.hidden,
+                )
+        });
+        let same = |observed: &str, shown: &str| {
+            facade_rules::is_same_draft(
+                observed,
+                shown,
+                &draft.text,
+                draft.prefix(),
+                reading.info.hidden,
+            )
+        };
+        if now >= deadline {
+            if own.as_deref().is_some_and(|text| {
+                draft
+                    .stable
+                    .as_ref()
+                    .is_none_or(|(_, shown)| same(text, shown))
+            }) {
+                // The paste started in an empty input. The person's input has not changed,
+                // and the input box still shows this paste alone. Backspace only that draft.
+                let write =
+                    vec![b'\x7f'; draft.prefix.chars().count() + draft.text.chars().count()];
+                let until = now + RESPONSE_GRACE;
+                self.record_write(offset, write.len(), Duration::ZERO);
+                self.batch = Some(Batch {
+                    messages,
+                    phase: DeliveryPhase::Clearing { until },
+                });
+                return Step {
+                    write,
+                    wake: Some(until),
+                };
+            }
             let outcome = if draft.recovered {
                 Outcome::UNCONFIRMED
             } else {
-                Outcome::Failed {
-                    reason: DeliveryFailure::SubmissionUnconfirmed,
-                    text_written: TextWritten::Full,
-                    enter_written: Some(false),
-                }
+                Self::uncleared()
             };
-            // Restore the phase for byte accounting and takeover queries.
-            batch.phase = DeliveryPhase::Draft(draft);
-            return self.settle_batch(batch, outcome);
+            return self.settle_batch(
+                Batch {
+                    messages,
+                    phase: DeliveryPhase::Draft(draft),
+                },
+                outcome,
+            );
         }
-        let BoxReading {
-            info,
-            draft: observed,
-            ..
-        } = read();
-        let own = observed.filter(|text| {
-            info.state == InputState::Draft
-                && facade_rules::is_own_draft(rule, text, &draft.text, draft.prefix(), info.hidden)
-        });
         let wake = match own {
             None => {
                 draft.stable = None;
-                batch.deadline().map(|due| (now + READ_INTERVAL).min(due))
+                now + READ_INTERVAL
             }
             Some(observed) => {
+                if draft
+                    .stable
+                    .as_ref()
+                    .is_some_and(|(_, shown)| !same(&observed, shown))
+                {
+                    draft.stable = None;
+                }
                 let since = draft.stable.get_or_insert((now, observed)).0;
                 let settled = since + facade_rules::settle_time(rule, &draft.text);
                 if now >= settled && paused.is_none() {
                     crate::pause_for_test("before-message-enter");
-                    let shown = draft.stable.take().expect("stable draft").1;
-                    batch.phase = DeliveryPhase::Entered {
-                        draft,
-                        shown,
-                        at: now,
-                    };
-                    self.batch = Some(batch);
+                    self.batch = Some(Batch {
+                        messages,
+                        phase: DeliveryPhase::Entered,
+                    });
                     self.record_write(offset, 1, Duration::ZERO);
                     crate::gate_for_test("message-enter");
                     return Step {
                         write: vec![b'\r'],
-                        wake: Some(now + READ_INTERVAL),
+                        wake: None,
                     };
                 }
-                let ready = settled.max(paused.unwrap_or(now));
-                Some(batch.deadline().map_or(ready, |due| ready.min(due)))
+                settled.max(paused.unwrap_or(now))
             }
         };
-        batch.phase = DeliveryPhase::Draft(draft);
-        self.batch = Some(batch);
-        Step::wait(wake)
+        self.batch = Some(Batch {
+            messages,
+            phase: DeliveryPhase::Draft(draft),
+        });
+        Step::wait(Some(wake.min(deadline)))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn check_enter(
-        &mut self,
-        mut batch: Batch,
-        draft: DraftCheck,
-        shown: String,
-        mut at: Instant,
-        now: Instant,
-        offset: u64,
-        read: &dyn Fn() -> BoxReading,
-        paused: Option<Instant>,
-    ) -> Step {
-        // Empty again, or showing a hint this run's probe found.
-        let BoxReading {
-            info,
-            draft: observed,
-            ..
-        } = self.recall(read());
-        if info.state == InputState::Usable {
-            return self.settle_batch(batch, Outcome::Typed);
+    fn uncleared() -> Outcome {
+        Outcome::Failed {
+            reason: DeliveryFailure::SubmissionUnconfirmed,
+            text_written: TextWritten::Full,
+            enter_written: Some(false),
         }
-        if batch.deadline().is_some_and(|due| now >= due) {
+    }
+
+    fn check_cleared(
+        &mut self,
+        batch: Batch,
+        reading: BoxReading,
+        now: Instant,
+        until: Instant,
+    ) -> Step {
+        if self.recall(reading).info.state == InputState::Usable {
             return self.settle_batch(
                 batch,
-                Outcome::Failed {
-                    reason: DeliveryFailure::SubmissionUnconfirmed,
+                Outcome::Withdrawn {
+                    reason: DeliveryFailure::Timeout,
                     text_written: TextWritten::Full,
-                    enter_written: Some(true),
                 },
             );
         }
-        let same = info.state == InputState::Draft
-            && observed.is_some_and(|text| {
-                facade_rules::is_same_draft(&text, &shown, &draft.text, draft.prefix(), info.hidden)
-            });
-        let result = if same && now >= at + ENTER_INTERVAL && paused.is_none() {
-            at = now;
-            self.record_write(offset, 1, Duration::ZERO);
-            Step {
-                write: vec![b'\r'],
-                wake: Some(now + READ_INTERVAL),
-            }
-        } else {
-            Step::wait(batch.deadline().map(|due| (now + READ_INTERVAL).min(due)))
-        };
-        batch.phase = DeliveryPhase::Entered { draft, shown, at };
+        if now >= until {
+            return self.settle_batch(batch, Self::uncleared());
+        }
         self.batch = Some(batch);
-        result
+        Step::wait(Some(until))
     }
 }
 
@@ -1024,31 +993,12 @@ fn joined(messages: &[MessageTyping]) -> String {
     text
 }
 
-fn paste_time(text: &str) -> Duration {
-    Duration::from_millis(text.len().div_ceil(PASTE_BYTES_PER_MS) as u64)
-}
-
 /// How much longer a CLI that reads console input records takes to read `text` a key at a time:
 /// its wait for each UTF-16 code unit.
 fn console_time(console: Option<ConsoleTyping>, text: &str) -> Duration {
     console.map_or(Duration::ZERO, |console| {
         console.per_char * text.encode_utf16().count() as u32
     })
-}
-
-/// The whole time a delivery of `text` to a CLI of `rule` takes at most: its paste, the draft
-/// showing and settling, the CLI reading it a key at a time where it does, and the input emptying
-/// after Enter.
-pub(crate) fn delivery_time(rule: &'static Rule, text: &str) -> Duration {
-    delivery_budget(&rule.paste, facade_rules::console_typing(rule), text)
-}
-
-fn delivery_budget(rule: &PasteRule, console: Option<ConsoleTyping>, text: &str) -> Duration {
-    facade_rules::settle_time(rule, text)
-        + DRAFT_TIMEOUT
-        + EMPTY_TIMEOUT
-        + paste_time(text) * 2
-        + console_time(console, text)
 }
 
 /// Whether characters above U+FFFF go as key-down records.
@@ -1918,7 +1868,7 @@ mod tests {
 
     /// A message waits while a draft holds the input and goes in as one paste once it is empty. Its
     /// Enter goes once the input shows it as its own draft for its CLI's settle time, and it is
-    /// delivered once the input is empty again.
+    /// delivered once Enter reaches the terminal.
     #[test]
     fn a_message_waits_for_an_empty_input_and_gets_its_enter_only_over_its_own_draft() {
         let post = test_messages();
@@ -1958,20 +1908,14 @@ mod tests {
             "the fake CLI's settle time"
         );
         terminal.step(&mut typist, shown + Duration::from_millis(80), ANY);
+        assert_eq!(became(&post, number), PENDING, "Enter is only queued");
         assert_eq!(terminal.write_all(), b"\r");
-        assert_eq!(
-            became(&post, number),
-            PENDING,
-            "not delivered before the input is empty again"
-        );
-        terminal.reading = input(InputState::Usable, None);
         terminal.step(&mut typist, shown + Duration::from_millis(300), ANY);
         assert_eq!(became(&post, number), TYPED);
         assert!(!typist.busy() && typist.held_bytes() == 0);
     }
 
-    /// A run's start prompt goes before the messages that waited for it, those gathered for a paste
-    /// among them, and alone: the messages follow in a paste of their own once the CLI took it.
+    /// A run's start prompt goes first, ahead of every waiting message.
     #[test]
     fn a_start_prompt_goes_before_the_messages_waiting_and_in_a_paste_of_its_own() {
         let post = test_messages();
@@ -2026,16 +1970,15 @@ mod tests {
         terminal.step(&mut typist, start + Duration::from_millis(3200), ANY);
         assert_eq!(
             terminal.write_all(),
-            b"\x1b[200~first\r\rsecond\r\rthird\x1b[201~",
-            "the messages after it, in the order they came"
+            b"\x1b[200~first\x1b[201~",
+            "the first of the waiting messages follows"
         );
         for number in [first_number, second_number, third_number] {
             assert_eq!(became(&post, number), PENDING);
         }
     }
 
-    /// A message fails at its deadline, saying what held the input, with nothing typed. A paste
-    /// goes only where it, its Enter, and its confirmation fit before the deadline.
+    /// A message fails at its deadline, saying what held the input, with nothing typed.
     #[test]
     fn a_message_fails_at_its_deadline_saying_what_held_the_input() {
         let start = Instant::now();
@@ -2068,21 +2011,6 @@ mod tests {
                 "{state:?}"
             );
         }
-        // An empty input with too little time left for the paste, its Enter, and its confirmation:
-        // nothing is typed.
-        let mut typist = typist_for("fake", &post);
-        let mut terminal = Terminal {
-            reading: input(InputState::Usable, None),
-            ..Terminal::default()
-        };
-        let (typing, number, told) = message_told(&post, "hello", start + Duration::from_secs(1));
-        typist.deliver(typing);
-        terminal.step(&mut typist, start, ANY);
-        assert!(terminal.write_all().is_empty());
-        assert_eq!(
-            withdrawn(&post, number, &told),
-            failed(DeliveryFailure::Timeout, TextWritten::None, false)
-        );
     }
 
     #[test]
@@ -2189,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn messages_waiting_together_go_in_one_paste_with_one_enter() {
+    fn waiting_messages_each_get_their_own_paste_and_enter() {
         let post = test_messages();
         let mut typist = typist_for("fake", &post);
         let mut terminal = Terminal {
@@ -2206,24 +2134,36 @@ mod tests {
         terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
         assert_eq!(
             terminal.write_all(),
-            b"\x1b[200~first\r\rsecond\x1b[201~",
-            "each whole, in order, a blank line between them"
+            b"\x1b[200~first\x1b[201~",
+            "the first message uses the input alone"
         );
         terminal.step(&mut typist, start + Duration::from_millis(1010), ANY);
-        // The fake CLI shows a paste of several lines as its placeholder.
-        terminal.reading = input(InputState::Draft, Some("[Pasted text #1 +2 lines]"));
+        terminal.reading = input(InputState::Draft, Some("first"));
         let wake = terminal
             .step(&mut typist, start + Duration::from_secs(2), ANY)
             .unwrap();
         terminal.step(&mut typist, wake, ANY);
         assert_eq!(terminal.write_all(), b"\r");
-        assert_eq!(
-            typist.take_submitted(),
-            None,
-            "nothing is said before the CLI takes the messages"
+        terminal.step(&mut typist, start + Duration::from_secs(3), ANY);
+        assert_eq!(became(&post, first_number), TYPED);
+        assert_eq!(became(&post, second_number), PENDING);
+        assert_eq!(typist.take_submitted().unwrap().text, "first");
+        terminal.step(&mut typist, start + Duration::from_secs(3), ANY);
+        assert!(
+            terminal.write_all().is_empty(),
+            "the second waits for empty input"
         );
         terminal.reading = input(InputState::Usable, None);
-        terminal.step(&mut typist, start + Duration::from_secs(3), ANY);
+        terminal.step(&mut typist, start + Duration::from_secs(4), ANY);
+        assert_eq!(terminal.write_all(), b"\x1b[200~second\x1b[201~");
+        terminal.step(&mut typist, start + Duration::from_millis(4010), ANY);
+        terminal.reading = input(InputState::Draft, Some("second"));
+        let wake = terminal
+            .step(&mut typist, start + Duration::from_secs(5), ANY)
+            .unwrap();
+        terminal.step(&mut typist, wake, ANY);
+        assert_eq!(terminal.write_all(), b"\r");
+        terminal.step(&mut typist, wake, ANY);
         assert_eq!(
             (became(&post, first_number), became(&post, second_number)),
             (TYPED, TYPED)
@@ -2236,10 +2176,9 @@ mod tests {
         );
     }
 
-    /// Messages waiting together join in the order they were sent, whatever order they reached the
-    /// typist in.
+    /// Waiting messages go in the order they were sent, regardless of when they reached the typist.
     #[test]
-    fn messages_join_in_the_order_they_were_sent() {
+    fn messages_go_in_the_order_they_were_sent() {
         let post = test_messages();
         let mut typist = typist_for("fake", &post);
         let mut terminal = Terminal {
@@ -2254,7 +2193,7 @@ mod tests {
         terminal.step(&mut typist, start, ANY);
         terminal.reading = input(InputState::Usable, None);
         terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
-        assert_eq!(terminal.write_all(), b"\x1b[200~first\r\rsecond\x1b[201~");
+        assert_eq!(terminal.write_all(), b"\x1b[200~first\x1b[201~");
     }
 
     /// Claude takes a paste alone as material, so a message's first header words are typed before
@@ -2294,10 +2233,9 @@ mod tests {
         assert_eq!(became(&post, number), TYPED);
     }
 
-    /// A result goes in a paste with no typed lead, even into a CLI that gets one, and joins the
-    /// messages waiting with it.
+    /// A result goes in without a lead, even into a CLI configured to type one before a message.
     #[test]
-    fn a_result_is_pasted_without_a_lead_and_joins_the_messages_waiting_with_it() {
+    fn a_result_is_pasted_without_a_lead() {
         let post = test_messages();
         let mut typist = typist_for("claude", &post);
         let mut terminal = Terminal {
@@ -2321,20 +2259,18 @@ mod tests {
         terminal.reading = input(InputState::Usable, None);
         terminal.step(&mut typist, start + Duration::from_secs(1), ANY);
         let pasted = "\x1b[200~🔔 Nova (#a2) has started. · #m6\rYour initial message #m4 has been \
-                      passed on.\r\r📨 Message from #human · #m7\rhi\x1b[201~";
+                      passed on.\x1b[201~";
         assert_eq!(String::from_utf8(terminal.write_all()).unwrap(), pasted);
         assert_eq!(
             (became(&post, result_number), became(&post, later_number)),
             (PENDING, PENDING),
-            "one paste, still to be confirmed"
+            "the result is still to be submitted and the next message waits"
         );
     }
 
-    /// A pasted message the CLI does not take fails at its deadline as unconfirmed, with what
-    /// reached the terminal. An Enter the CLI is slow to take goes again only over the same own
-    /// draft, two seconds later.
+    /// A paste that never shows its draft fails. Once Enter is written, the delivery settles.
     #[test]
-    fn a_pasted_message_the_cli_does_not_take_fails_as_unconfirmed() {
+    fn a_paste_with_no_visible_draft_fails_and_a_written_enter_settles_once() {
         let start = Instant::now();
         let deadline = start + Duration::from_secs(10);
         let post = test_messages();
@@ -2380,36 +2316,17 @@ mod tests {
         terminal.step(&mut typist, wake, ANY);
         assert_eq!(terminal.write_all(), b"\r");
         terminal.step(&mut typist, wake + Duration::from_secs(1), ANY);
-        assert!(
-            terminal.write_all().is_empty(),
-            "no second Enter within two seconds"
-        );
-        terminal.step(&mut typist, wake + ENTER_INTERVAL, ANY);
-        assert_eq!(
-            terminal.write_all(),
-            b"\r",
-            "Enter again over its own draft"
-        );
-        terminal.reading = input(InputState::Draft, Some("hello, edited"));
-        terminal.step(&mut typist, wake + ENTER_INTERVAL * 3, ANY);
-        assert!(
-            terminal.write_all().is_empty(),
-            "never over a draft that is not its own"
-        );
+        assert_eq!(became(&post, number), TYPED);
         terminal.step(&mut typist, deadline, ANY);
-        assert_eq!(
-            became(&post, number),
-            failed(
-                DeliveryFailure::SubmissionUnconfirmed,
-                TextWritten::Full,
-                true
-            )
+        assert!(
+            terminal.write_all().is_empty(),
+            "Enter is never sent a second time"
         );
+        assert_eq!(became(&post, number), TYPED);
     }
 
     /// No Enter goes at or after a message's deadline: a draft that first shows just before it gets
-    /// none, as its settle time would end after it, and the message fails as unconfirmed with its
-    /// text written.
+    /// none, as its settle time would end after it. Its draft is removed and it is withdrawn.
     #[test]
     fn no_enter_goes_at_or_after_a_message_s_deadline() {
         let start = Instant::now();
@@ -2420,7 +2337,7 @@ mod tests {
             reading: input(InputState::Usable, None),
             ..Terminal::default()
         };
-        let (typing, number) = message(&post, "hello", deadline);
+        let (typing, number, told) = message_told(&post, "hello", deadline);
         typist.deliver(typing);
         terminal.step(&mut typist, start, ANY);
         terminal.write_all();
@@ -2433,14 +2350,21 @@ mod tests {
             "it wakes at the deadline, not after"
         );
         terminal.step(&mut typist, deadline, ANY);
-        assert!(terminal.write_all().is_empty(), "no Enter at the deadline");
+        assert_eq!(
+            terminal.write_all(),
+            b"\x7f\x7f\x7f\x7f\x7f",
+            "only its own draft is erased"
+        );
         assert_eq!(
             became(&post, number),
-            failed(
-                DeliveryFailure::SubmissionUnconfirmed,
-                TextWritten::Full,
-                false
-            )
+            PENDING,
+            "the withdrawal awaits the redraw"
+        );
+        terminal.reading = input(InputState::Usable, None);
+        terminal.step(&mut typist, deadline + Duration::from_millis(10), ANY);
+        assert_eq!(
+            withdrawn(&post, number, &told),
+            failed(DeliveryFailure::Timeout, TextWritten::Full, false)
         );
         assert!(!typist.busy() && typist.held_bytes() == 0);
     }
@@ -2490,14 +2414,12 @@ mod tests {
         }
     }
 
-    /// A paste goes only where its delivery fits before the deadline, as CLIS-2.1 times it: 2
-    /// seconds for the message's own draft to show, the CLI's settle time, and 3 seconds for the
-    /// input to empty, each with the paste's own time.
+    /// The time left limits submission, without imposing a separate paste-rate length limit.
     #[test]
-    fn a_message_is_pasted_only_where_its_delivery_fits_before_its_deadline() {
+    fn a_message_can_start_before_its_deadline_without_a_paste_rate_limit() {
         let start = Instant::now();
         let post = test_messages();
-        for (left, pasted) in [(4900, false), (5200, true)] {
+        for (left, pasted) in [(0, false), (4900, true)] {
             let mut typist = typist_for("fake", &post);
             let mut terminal = Terminal {
                 reading: input(InputState::Usable, None),
@@ -2517,11 +2439,9 @@ mod tests {
         }
     }
 
-    /// Messages that would make a paste too long for an earlier message's deadline wait for the
-    /// next paste. Antigravity takes 45 ms a line: with a 300-line message, a short one with 9
-    /// seconds left would not fit, so it goes alone and the long one after it.
+    /// A short message is delivered separately when a longer one waits after it.
     #[test]
-    fn a_message_that_fits_alone_is_never_failed_by_a_longer_one_waiting_with_it() {
+    fn a_short_message_is_delivered_before_a_longer_waiting_one() {
         let post = test_messages();
         let mut typist = typist_for("agy", &post);
         let mut terminal = Terminal {
@@ -2598,10 +2518,9 @@ mod tests {
         );
     }
 
-    /// Messages taken off a joined paste go back to the queue in order: after the first goes alone,
-    /// the next paste has the second before the third.
+    /// Once the first and its Enter are written, the second uses the next empty input.
     #[test]
-    fn messages_taken_off_a_joined_paste_keep_their_order() {
+    fn the_second_waiting_message_precedes_the_third() {
         let post = test_messages();
         let mut typist = typist_for("agy", &post);
         let mut terminal = Terminal {
@@ -2638,9 +2557,8 @@ mod tests {
         terminal.step(&mut typist, now, ANY);
         let pasted = terminal.write_all();
         assert!(
-            pasted.starts_with(b"\x1b[200~line\rline")
-                && pasted.ends_with(b"line\r\rthird\x1b[201~"),
-            "the second, then the third"
+            pasted.starts_with(b"\x1b[200~line\rline") && pasted.ends_with(b"line\x1b[201~"),
+            "the second uses its own paste while the third waits"
         );
     }
 
@@ -2752,7 +2670,7 @@ mod tests {
         assert_eq!(
             became(&post, first_number),
             TYPED,
-            "settled as the input emptied"
+            "settled as soon as Enter reached the terminal"
         );
         let begun: Vec<Option<u64>> = post
             .pending()
@@ -2794,7 +2712,7 @@ mod tests {
     /// A paste the daemon before this one began is never typed again. An empty input confirms
     /// nothing: the old daemon may have pressed Enter, or its paste may never have reached the
     /// terminal. Once the input shows the paste whole as its own draft for the CLI's settle time,
-    /// Enter goes, and the input emptying after it confirms the message.
+    /// Enter goes, and writing it confirms the message.
     #[test]
     fn a_paste_begun_before_a_restart_is_never_typed_again_and_gets_enter_only_over_its_own_draft()
     {
@@ -2917,10 +2835,7 @@ mod tests {
         assert_eq!(became(&post, later_number), PENDING);
     }
 
-    /// A paste begun before a restart goes ahead of messages gathered for a paste not begun,
-    /// however they reached the typist first: they wait behind it, then go on in the order they
-    /// came. A paste holds them in the order they were sent, so the order they wait in shows where
-    /// they go in two pastes: here their deadline leaves time for one of them at a time.
+    /// Messages that have not begun wait for a recovered paste and then go in sending order.
     #[test]
     fn a_paste_begun_before_a_restart_goes_ahead_of_messages_not_pasted_yet() {
         let post = test_messages();
@@ -2931,19 +2846,7 @@ mod tests {
         };
         let start = Instant::now();
         let (earlier, later) = ("a".repeat(4000), "b".repeat(4000));
-        let one = delivery_budget(
-            &facade_rules::find("fake").unwrap().unwrap().paste,
-            None,
-            &earlier,
-        );
-        assert!(
-            delivery_budget(
-                &facade_rules::find("fake").unwrap().unwrap().paste,
-                None,
-                &format!("{earlier}\n\n{later}")
-            ) > one
-        );
-        let due = start + Duration::from_secs(1) + one;
+        let due = start + Duration::from_secs(20);
         let (first, first_number) = message(&post, &earlier, due);
         let (second, second_number) = message(&post, &later, due);
         typist.deliver(first);

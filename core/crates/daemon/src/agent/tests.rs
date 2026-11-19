@@ -517,7 +517,11 @@ async fn a_synchronized_update_the_actor_ends_after_its_timeout_is_in_the_log() 
     harness
         .handle
         .mailbox()
-        .send(AgentCommand::Resize(40, 6))
+        .send(AgentCommand::ResizeTerminal {
+            cols: 40,
+            rows: 6,
+            colors: None,
+        })
         .await
         .unwrap();
     harness.cli.write_all(b"\x1b[?2026l tail").unwrap();
@@ -1264,15 +1268,19 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
     let (tx, mut feed) = viewer_channel();
     let (reply, snapshot) = oneshot::channel();
     harness
-        .send(AgentCommand::AddViewer {
+        .send(AgentCommand::AttachViewer {
             viewer: 1,
+            name: Some("terminal one".into()),
             tx,
             keep_scrollback: false,
             include_scrollback: false,
             reply,
         })
         .await;
-    snapshot.await.unwrap();
+    assert_eq!(snapshot.await.unwrap().process, ProcessState::Running);
+    let (reply, inspection) = oneshot::channel();
+    harness.send(AgentCommand::Inspect { reply }).await;
+    assert_eq!(inspection.await.unwrap().viewers, ["terminal one"]);
     harness
         .cli
         .write_all(&vec![b'x'; 3 * VIEWER_BUDGET])
@@ -1306,10 +1314,11 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
         "incremental output stays within the viewer budget"
     );
     assert!(
-        tokio::time::timeout(Duration::from_millis(100), feed.recv())
+        tokio::time::timeout(Duration::from_secs(1), feed.recv())
             .await
-            .is_err(),
-        "no further changes are expected"
+            .expect("the watch closes")
+            .is_none(),
+        "Attach ends with the run"
     );
     harness.stop().await;
 }

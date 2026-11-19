@@ -434,25 +434,6 @@ impl Daemon {
         }
         if let Some(prompt) = args.prompt.as_deref() {
             command_line::check_start_prompt(prompt, &configured, program)?;
-            let widest = Message {
-                from_machine_id: (origin.caller.machine_id() != self.machine_id)
-                    .then(|| origin.caller.machine_id().to_string()),
-                from_window: origin.from_window.clone(),
-                ..crate::delivery::pending_message(
-                    origin.sender.clone(),
-                    "a999999999",
-                    prompt.to_owned(),
-                    None,
-                    None,
-                )
-            };
-            crate::delivery::check_fits(
-                configured.rule,
-                "the new agent",
-                &widest,
-                "start it with a shorter prompt and send the rest as messages",
-                |message| self.message_text(message),
-            )?;
         }
         Ok(configured)
     }
