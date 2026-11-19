@@ -347,7 +347,9 @@ fn when_both_services_pause_past_the_watchdog_at_most_the_daemon_is_replaced() {
 #[test]
 fn a_keeper_and_daemon_asked_to_end_take_their_sockets_with_them() {
     let home = TestHome::new("socketsend");
-    home.start_fake("w1");
+    // Keep a PTY alive without an MCP relay that can restart the daemon during shutdown.
+    home.add_custom_cli("shutdown-fixture", &test_binaries().fakecli);
+    home.run_facade_ok(&["start", "-d", "--name", "w1", "shutdown-fixture"]);
     let (keeper, daemon) = (
         home.keeper_pid().expect("expected a running keeper"),
         home.daemon_pid().expect("expected a running daemon"),
@@ -366,9 +368,11 @@ fn a_keeper_and_daemon_asked_to_end_take_their_sockets_with_them() {
     assert!(
         wait_until(secs(5), || !socket_exists(&home.keeper_socket())
             && !socket_exists(&home.daemon_socket())),
-        "sockets remain after shutdown: keeper {} daemon {}",
+        "sockets remain after shutdown: keeper {} daemon {}\nkeeper: {}\ndaemon: {}",
         socket_exists(&home.keeper_socket()),
-        socket_exists(&home.daemon_socket())
+        socket_exists(&home.daemon_socket()),
+        home.keeper_log(),
+        home.daemon_log()
     );
     // The keeper restarts a daemon that ends, but not while it is shutting down: no daemon is left
     // behind.
