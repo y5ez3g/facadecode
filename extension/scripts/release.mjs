@@ -1,5 +1,5 @@
-// Releases tested VSIX files (ARCHITECTURE-4.3): first all of them to the GitHub Release of their `extension/<version>` tag,
-// then the very files on that Release to VS Code Marketplace and Open VSX. Nothing is rebuilt or repacked on the way.
+// Releases the tested VSIX and core files to the GitHub Release of their extension/<version> tag.
+// VS Code Marketplace and Open VSX get the VSIX files from that Release.
 //
 //   node scripts/release.mjs github --tag extension/<v> --input-dir <dir>   files of this run's native CI jobs
 //   node scripts/release.mjs github --backfill                              every version in archive/catalog.json
@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { coreArchive, coreInstallers, coreVersionFile } from '../../core/scripts/package-core.mjs';
 import { CORE, withWorkspaceVersion } from './core.mjs';
 import { filesOfZip } from './native.mjs';
 
@@ -116,6 +117,23 @@ export function collectFromRun(version, dir) {
 	});
 }
 
+/** The standalone archives tested by the same native jobs as the VSIX files, and the installers from this tag. */
+function collectCoreFromRun(version, dir, work) {
+	const archives = fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+		.filter(entry => entry.isFile() && entry.name.startsWith('facade-core-'));
+	const paths = nativeTargets.map(target => {
+		const file = coreArchive(target);
+		const matches = archives.filter(entry => entry.name === file);
+		assert.equal(matches.length, 1, `Expected one tested ${file}, found ${matches.length}`);
+		return path.join(matches[0].parentPath, file);
+	});
+	assert.equal(archives.length, paths.length, 'Unexpected standalone core archive in the run');
+	const releaseVersion = path.join(work, coreVersionFile);
+	fs.writeFileSync(releaseVersion, version + '\n');
+	paths.push(...coreInstallers.map(file => path.join(CORE, file)), releaseVersion);
+	return paths.map(file => ({ file: path.basename(file), path: file, sha256: sha256(fs.readFileSync(file)) }));
+}
+
 function run(command, args, options = {}) {
 	const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options });
 	if (result.error) throw result.error;
@@ -153,18 +171,20 @@ function extensionReleaseVersions() {
 		.map(r => /^extension\/(\d+\.\d+\.\d+)$/.exec(r.tagName)?.[1]).filter(Boolean);
 }
 
-/** Downloads every asset of the Release and checks each against SHA256SUMS and its own manifests. */
-function downloadRelease(tag, version, dir) {
+/** Downloads the requested Release assets and checks each against SHA256SUMS and any VSIX manifests. */
+function downloadRelease(tag, version, dir, coreFiles = []) {
 	fs.mkdirSync(dir, { recursive: true });
-	gh(['release', 'download', tag, '--repo', repository, '--dir', dir, '--clobber']);
+	const files = targetsFor(version).map(target => ({ target, file: fileFor(version, target) }));
+	files.push(...coreFiles.map(file => ({ file })));
+	const patterns = [SUMS, ...files.map(asset => asset.file)].flatMap(file => ['--pattern', file]);
+	gh(['release', 'download', tag, '--repo', repository, '--dir', dir, '--clobber', ...patterns]);
 	const sums = parseChecksums(fs.readFileSync(path.join(dir, SUMS), 'utf8'));
-	return targetsFor(version).map(target => {
-		const file = fileFor(version, target);
+	return files.map(({ target, file }) => {
 		assert.ok(sums.has(file), `${SUMS} on ${tag} does not list ${file}`);
 		const local = path.join(dir, file);
 		assert.ok(fs.existsSync(local), `${tag} has no ${file}`);
 		assert.equal(sha256(fs.readFileSync(local)), sums.get(file), `${file} on ${tag} differs from ${SUMS}`);
-		verifyVsix(version, target, local);
+		if (target) verifyVsix(version, target, local);
 		return { target, file, path: local, sha256: sums.get(file) };
 	});
 }
@@ -174,17 +194,18 @@ function downloadRelease(tag, version, dir) {
  * has: a file of the same name with other bytes stops the release, and only missing files are added. The Release is then
  * downloaded again and checked file by file.
  */
-export function publishGithubRelease({ tag, version, commit, artifacts, notes, latest, work }) {
+export function publishGithubRelease({ tag, version, commit, artifacts, core = [], notes, latest, work }) {
+	const assets = [...artifacts, ...core];
 	const stage = fs.mkdtempSync(path.join(work, `${version}-`));
-	fs.writeFileSync(path.join(stage, SUMS), checksumsText(artifacts));
-	const files = [...artifacts.map(a => a.path), path.join(stage, SUMS)];
+	fs.writeFileSync(path.join(stage, SUMS), checksumsText(assets));
+	const files = [...assets.map(a => a.path), path.join(stage, SUMS)];
 	let release = existingRelease(tag);
 	if (!release) {
 		const notesFile = path.join(stage, 'notes.md');
 		fs.writeFileSync(notesFile, notes);
 		gh(['release', 'create', tag, '--repo', repository, '--verify-tag', '--title', `Facade Code Extension ${version}`,
 			'--notes-file', notesFile, `--latest=${latest}`, ...files]);
-		console.log(`${tag}: Release created with ${artifacts.length} VSIX files and ${SUMS}.`);
+		console.log(`${tag}: Release created with ${assets.length} files and ${SUMS}.`);
 	} else {
 		const existing = fs.mkdtempSync(path.join(work, `${version}-existing-`));
 		const present = new Set(release.assets.map(a => a.name));
@@ -200,9 +221,9 @@ export function publishGithubRelease({ tag, version, commit, artifacts, notes, l
 		if (latest && JSON.parse(gh(['api', `repos/${repository}/releases/latest`])).tag_name !== tag) gh(['release', 'edit', tag, '--repo', repository, '--latest']);
 		console.log(`${tag}: Release already there; ${missing.length} missing file(s) added, the rest match byte for byte.`);
 	}
-	const checked = downloadRelease(tag, version, fs.mkdtempSync(path.join(work, `${version}-check-`)));
-	assert.deepEqual(checked.map(a => [a.file, a.sha256]), artifacts.map(a => [a.file, a.sha256]), `${tag} differs from the released files`);
-	console.log(`${tag}: downloaded again; all ${artifacts.length} VSIX files match.`);
+	const checked = downloadRelease(tag, version, fs.mkdtempSync(path.join(work, `${version}-check-`)), core.map(asset => asset.file));
+	assert.deepEqual(checked.map(a => [a.file, a.sha256]), assets.map(a => [a.file, a.sha256]), `${tag} differs from the released files`);
+	console.log(`${tag}: downloaded again; all ${assets.length} files match.`);
 	return checked;
 }
 
@@ -251,12 +272,13 @@ async function releaseRun(tag, inputDir, work) {
 	assert.equal(manifest.version, version, `${tag} is not the checked-out extension version ${manifest.version}`);
 	const commit = resolveCommit(tag);
 	const artifacts = collectFromRun(version, inputDir);
+	const core = collectCoreFromRun(version, inputDir, work);
 	const runUrl = process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : 'a local build';
 	const notes = `${releaseNotes(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), version)}\n\n---\n\n` +
 		`Built and tested on native runners for every platform by ${runUrl}, from ${commit}. ` +
-		`These files are the ones published to VS Code Marketplace and Open VSX; their SHA-256 values are in ${SUMS}.\n`;
+		`The VSIX files are published to VS Code Marketplace and Open VSX. SHA-256 values for all assets are in ${SUMS}.\n`;
 	const newest = [version, ...extensionReleaseVersions()].sort(compareVersions).at(-1);
-	publishGithubRelease({ tag, version, commit, artifacts, notes, latest: version === newest, work });
+	publishGithubRelease({ tag, version, commit, artifacts, core, notes, latest: version === newest, work });
 }
 
 async function marketplaceVersions() {

@@ -131,6 +131,42 @@ jobs:
         if: matrix.engine == 'old'
       - run: npm run test:package
         if: matrix.engine == 'old'
+      - name: Pack core from the native VSIX
+        if: matrix.engine == 'old'
+        run: |
+          node ../core/scripts/package-core.mjs --target "$FACADE_PACKAGE_TARGET" \
+            --vsix "build/vsix/facadecode-$FACADE_PACKAGE_TARGET-"*.vsix --out-dir build/core
+      - name: Install the local core archive on Linux and macOS
+        if: matrix.engine == 'old' && runner.os != 'Windows'
+        run: |
+          root=$(mktemp -d "$RUNNER_TEMP/facade-install.XXXXXX")
+          mkdir "$root/home" "$root/tmp"
+          env -i HOME="$root/home" PATH="$PATH" FACADE_HOME="$root/state" TMPDIR="$root/tmp" \
+            sh ../core/install.sh --install-root "$root/home/.local" \
+            --package "build/core/facade-core-$FACADE_PACKAGE_TARGET.tar.gz" --no-path --no-activate
+          "$root/home/.local/bin/facade" version
+          test -x "$root/home/.local/bin/facade-mcp"
+      - name: Install the local core archive on Windows
+        if: matrix.engine == 'old' && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $target = $env:FACADE_PACKAGE_TARGET
+          Get-ChildItem Env: | Where-Object { $_.Name -match '^(FACADE|CLAUDE)_' } |
+            ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+          $root = Join-Path $env:RUNNER_TEMP ("facade-install-" + [guid]::NewGuid())
+          $env:USERPROFILE = $env:HOME = Join-Path $root 'home'
+          $env:LOCALAPPDATA = Join-Path $env:HOME 'AppData\Local'
+          $env:APPDATA = Join-Path $env:HOME 'AppData\Roaming'
+          $env:FACADE_HOME = Join-Path $root 'state'
+          $env:TEMP = $env:TMP = Join-Path $root 'tmp'
+          New-Item -ItemType Directory -Path $env:TEMP | Out-Null
+          $install = Join-Path $env:LOCALAPPDATA 'Facade'
+          & ..\core\install.ps1 -InstallRoot $install -Package "build\core\facade-core-$target.zip" -NoPath -NoActivate
+          & "$install\bin\facade.exe" version
+          if ($LASTEXITCODE -ne 0) { throw 'Installed facade did not run.' }
+          foreach ($file in 'facade-mcp.exe', 'conpty\OpenConsole.exe', 'conpty\conpty.dll') {
+            if (-not (Test-Path -LiteralPath "$install\bin\$file" -PathType Leaf)) { throw "Missing $file." }
+          }
       # The Rust engine's journeys need the built extension and core's programs (scripts/build-it.mjs), not the packages
       - run: npm run bundle
         if: matrix.engine == 'rust'
@@ -164,5 +200,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: extension-${{ matrix.target }}
-          path: extension/build/vsix/*.vsix
+          path: |
+            extension/build/vsix/*.vsix
+            extension/build/core/facade-core-*
           if-no-files-found: error

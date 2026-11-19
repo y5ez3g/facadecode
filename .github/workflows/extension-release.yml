@@ -1,6 +1,6 @@
 name: Extension release
 
-# Tag extension/<version>: build and test every platform, put all VSIX files on that tag's GitHub Release first,
+# Tag extension/<version>: build and test every platform, put VSIX and core assets on that tag's GitHub Release first,
 # then, once approved in the extension-stores environment, publish the Release's files to VS Code Marketplace and Open VSX.
 on:
   push:
@@ -77,7 +77,7 @@ jobs:
         with:
           pattern: extension-*
           path: extension/build/release-input
-      - name: Put every VSIX on the Release and check it again
+      - name: Put the tested VSIX and core assets on the Release and check them again
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
