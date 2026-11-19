@@ -13,7 +13,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { AgentListRow } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
-import { until } from './editors';
+import { normalizeDriveLetter, until } from './editors';
 import { aliasOf, hasAgentTab, inspect, keepConversation, listed, newCard, recordOf, resumeCard, state, stop } from './rustWindowDriver';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -22,6 +22,9 @@ const HOME = process.env.FACADE_HOME!;
 const ON = process.env.FACADE_IT_JOURNEY === 'engine';
 
 type Card = PanelState['cards'][number];
+
+/** The editor and Node can preserve different drive-letter casing for the same Windows folder. */
+const resolvedFolder = (file: string) => normalizeDriveLetter(fs.realpathSync(file));
 
 /** A launch's recorded arguments. */
 async function launchOf(alias: string): Promise<{ cwd: string; args: string[] }> {
@@ -78,7 +81,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			assert.ok(seen, `the terminal lists ${created.agent.address}: ${fs.readFileSync(`${out}.json`, 'utf8')}`);
 			assert.strictEqual(seen.name, card.name);
 			assert.strictEqual(seen.type, 'managed');
-			assert.strictEqual(fs.realpathSync(seen.folder), fs.realpathSync(vscode.workspace.workspaceFolders![0].uri.fsPath));
+			assert.strictEqual(resolvedFolder(seen.folder), resolvedFolder(vscode.workspace.workspaceFolders![0].uri.fsPath));
 		} finally {
 			shell.dispose();
 			await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId });
@@ -117,7 +120,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 				const launch = await launchOf(alias);
 				return launch.args[launch.args.indexOf('--resume') + 1] === session ? launch : undefined;
 			});
-			assert.strictEqual(fs.realpathSync(resumed.cwd), fs.realpathSync(launch.cwd), 'in the same folder');
+			assert.strictEqual(resolvedFolder(resumed.cwd), resolvedFolder(launch.cwd), 'in the same folder');
 			const agent = await recordOf(id);
 			assert.strictEqual(agent.session, session);
 			assert.deepStrictEqual(listed().map(each => each.id), [stopped.address], 'one running agent keeps the original address');
@@ -142,7 +145,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 				const record = await recordOf(continued.alias);
 				return record.session === session ? record : undefined;
 			});
-			assert.strictEqual(fs.realpathSync(saved.cwd), fs.realpathSync(launch.cwd));
+			assert.strictEqual(resolvedFolder(saved.cwd), resolvedFolder(launch.cwd));
 			assert.deepStrictEqual(listed().map(each => each.id), [saved.address]);
 		} finally {
 			await vscode.commands.executeCommand('facade.deleteAgent', { run_id: cleanup.runId });
