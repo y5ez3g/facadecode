@@ -1,14 +1,12 @@
 //! Model and effort (CONFIGURATION-3.3, CLIS-1.4). A rule's `choices` section says which arguments
-//! pass each one to the CLI, written the CLI's way. The start's choice comes first, the entry's
-//! second. When the section names no arguments for one, Facade never passes it and the CLI's own
-//! configuration applies.
+//! pass each one to the CLI and how to read choices already present in native arguments.
 
 use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 use serde::Deserialize;
 
-use crate::args::ArgsGrammar;
+use crate::args::{ArgsGrammar, ChoiceValue};
 use crate::formats::toml_string;
 
 /// Matches where a choice goes: `${value}` as given, `${value_toml}` and `${value_json}` quoted
@@ -99,6 +97,41 @@ impl Choices {
             .both()
             .map(|choice| grammar.holds(words, choice.options, choice.key));
         (model, effort)
+    }
+
+    /// The choices known from the actual CLI words, before adding managed run options.
+    pub(super) fn values_in(&self, grammar: &ArgsGrammar, words: &[String]) -> [Option<String>; 2] {
+        self.both().map(|choice| {
+            let value = match grammar.choice_value(words, choice.options, choice.key)? {
+                ChoiceValue::Option(value) => value,
+                ChoiceValue::Override(value) => self.override_string(&value)?,
+            };
+            (!value.trim().is_empty()).then_some(value)
+        })
+    }
+
+    /// Decodes native overrides using the format named by the rule's override template.
+    fn override_string(&self, value: &str) -> Option<String> {
+        let format = self
+            .both()
+            .into_iter()
+            .flat_map(|choice| choice.args.into_iter().flatten())
+            .find_map(|arg| VALUE.captures(arg)?.get(1))?;
+        match format.as_str() {
+            "_json" => serde_json::from_str(value).ok(),
+            "_toml" => match toml::from_str::<toml::Table>(&format!("value={value}")) {
+                Ok(table) => table.get("value")?.as_str().map(str::to_owned),
+                Err(_) => {
+                    // Codex also accepts plain words that require quotes in TOML.
+                    let value = value.trim();
+                    value
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "_.:/@+-".contains(c))
+                        .then(|| value.to_owned())
+                }
+            },
+            _ => None,
+        }
     }
 
     /// Rejects a section whose arguments do not hold exactly one placeholder, or whose spelling
