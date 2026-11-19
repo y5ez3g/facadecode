@@ -45,14 +45,17 @@ export async function state(): Promise<PanelState> {
 
 export async function pickCard(command: string, resumeId?: string): Promise<Card> {
 	const before = new Set((await state()).cards.map(card => card.runId));
-	void vscode.commands.executeCommand(command);
-	return until(`a card from ${command}`, async () => {
+	const picker = vscode.commands.executeCommand(command);
+	void picker.then(undefined, () => undefined);
+	const card = await until(`a card from ${command}`, async () => {
 		const added = (await state()).cards.find(card => card.orchestrator?.running &&
 			(resumeId === undefined ? !before.has(card.runId) : card.alias === resumeId));
 		if (added) { return added; }
 		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 		return undefined;
 	});
+	await picker;
+	return card;
 }
 
 export const newCard = () => pickCard('facade.newAgent');

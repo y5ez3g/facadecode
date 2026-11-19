@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { Response, V3HelloParams, V3InspectResult, V3ScreenText } from '../../base/coreProtocol';
 import { lineReader } from '../../base/lines';
+import { unspun } from '../../base/tabSpinner';
 import { linesOf as cardLines } from '../detailLines';
 import { coreProgram, coreSocket, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
@@ -348,8 +349,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
 		assert.strictEqual(initialize?.serverInfo?.name, 'facade');
 		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), EIGHT);
-		const terminals = () => vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length;
-		const openTabs = terminals();
+		const terminalNames = () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
+			.filter(tab => tab.input instanceof vscode.TabInputTerminal).map(tab => unspun(tab.label));
+		await until('the creator’s terminal tab', () => terminalNames().includes(card.name) || undefined);
 		const helpers = [
 			{ name: 'Reviewer', prompt: 'Review the README.', reply: 'I reviewed the README.' },
 			{ name: 'Verifier', prompt: 'Verify the test setup.', reply: 'I verified the test setup.' }
@@ -370,7 +372,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			const cards = (await state()).cards;
 			return references.every(helper => cards.some(each => each.name === helper.name)) || undefined;
 		});
-		assert.strictEqual(terminals(), openTabs, 'helpers add cards without opening terminals');
+		const openTabs = terminalNames();
+		assert.ok(openTabs.includes(card.name), 'the creator’s terminal stays open');
+		assert.ok(references.every(helper => !openTabs.includes(helper.name)), `helpers add cards without opening terminals: ${openTabs.join(', ')}`);
 		for (const child of references) {
 			const original = await until(`${child.name} to accept its first task`, () =>
 				received(child.alias).find(text => text.endsWith(child.prompt)));
@@ -639,7 +643,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const childAlias = childOf(started);
 		const quirks = `${RECORD}.quirks.${childAlias}`;
 		const once = (text: string) => received(childAlias).filter(each => each.includes(text)).length;
-		const input = () => fs.readFileSync(`${RECORD}.stdin.${childAlias}`, 'utf8').trim().split('\n')
+		const transcript = `${RECORD}.stdin.${childAlias}`;
+		const input = () => (fs.existsSync(transcript) ? fs.readFileSync(transcript, 'utf8') : '').trim().split('\n').filter(Boolean)
 			.map(line => (JSON.parse(line) as { data: string }).data).join('');
 		for (const [quirk, text] of [[{ slowMs: 4_500 }, 'Taken slowly.'], [{ swallow: 1 }, 'Enter missed once.']] as const) {
 			const before = input().length;

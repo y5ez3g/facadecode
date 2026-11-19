@@ -126,9 +126,12 @@ async function perform(action: Action): Promise<unknown> {
 		case 'open-shell-agent': {
 			const card = await pickCard('facade.goToAgent');
 			assert.strictEqual(card.name, action.name);
-			await until(`${action.address}'s terminal tab`, () => hasAgentTab(card) || undefined);
-			const terminal = vscode.window.activeTerminal;
-			assert.ok(terminal && terminal.name.startsWith(card.name), 'Go to Agent selected the attached terminal');
+			const terminal = await until('Go to Agent to select the attached terminal', () => {
+				const tab = agentTab(card);
+				if (!tab?.isActive || !tab.group.isActive) { return undefined; }
+				return vscode.window.terminals.find(each =>
+					'pty' in each.creationOptions && each.creationOptions.name === card.name);
+			});
 			terminal.sendText(action.text, true);
 			await until('the editor input on the agent screen', () =>
 				facade('screen', action.address, '--lines', '120').includes(action.text) || undefined);
