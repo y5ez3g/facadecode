@@ -107,7 +107,7 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 		assert.deepStrictEqual(wrong, []);
 	});
 
-	test('Continue Session and custom CLI help use the same session terminology in each language', () => {
+	test('Continue Session, Resume and Pin use the same session terminology in each language', () => {
 		const sessionWords = {
 			'zh-cn': /会话/, 'zh-tw': /工作階段/, 'pt-br': /sess(?:ão|ões)/i, es: /sesi(?:ón|ones)/i,
 			ru: /бесед/i, de: /Sitzung/, ja: /セッション/, fr: /session/i, ko: /세션/, tr: /oturum/i, pl: /sesj/i,
@@ -119,25 +119,21 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 			"{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it",
 			'{0} is no longer in clis of {1}, so this session cannot be resumed with it.',
 			'Its CLI cannot resume this exact session, so it cannot be pinned.',
-			'config.custom.launch',
-			'config.custom.launch.start',
-			'config.custom.launch.resume',
+			'No agents or saved sessions to resume',
+			'A Pin needs a saved session.',
+			'This Pin has no saved session.',
+			'Removed the Pin for {0} because its saved session is gone.',
 		]);
 		for (const locale of LOCALES) {
 			const texts = textsOf(locale).filter(each => ids.has(each.id));
 			assert.strictEqual(texts.length, ids.size, locale);
 			for (const each of texts) {
 				assert.match(each.text, sessionWords[locale], shown(each));
-				if (each.id === 'config.custom.launch.resume') {
-					assert.ok(each.text.includes('`${sessionId}`'), shown(each));
-				}
 			}
 		}
 		const traditional = textsOf('zh-tw');
-		assert.match(traditional.find(each => each.id === 'config.custom.launch.resume')!.text, /用於恢復/);
 		assert.strictEqual(traditional.find(each => each.id === 'Open a folder to continue a saved session.')!.text,
 			'請開啟資料夾以接續已儲存的工作階段。');
-		assert.match(textsOf('ru').find(each => each.id === 'config.custom.launch.resume')!.text, /идентификатором этой беседы/);
 	});
 
 	test('settings repairs keep the quoted type and say which line or item to remove in Chinese and Korean', () => {

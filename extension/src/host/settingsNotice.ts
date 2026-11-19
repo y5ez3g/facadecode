@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Facade's settings file as a window of either engine makes it from the editor's old Facade settings, and what the person is told
+// The old engine's settings file as the editor makes it from earlier Facade settings, and what the person is told
 // about it in their language (UX-2.4, CONFIGURATION-6.2, 6.3): once, by the window that made it; and why Open facade.json cannot open
 // it where it cannot be made.
 
@@ -14,12 +14,19 @@ import { reasonText } from '../ui/presentation';
 import { FacadeSettings } from './facadeSettings';
 
 /**
- * Facade's settings file for this window, whichever engine runs it (CONFIGURATION-1.1, 1.3): made where it does not exist from the
+ * The old engine's settings file for this window (CONFIGURATION-1.1, 1.3): made where it does not exist from the
  * editor's old Facade settings, said once by the window that made it, with Open to show it (CONFIGURATION-6.3).
  */
 export function editorFacadeSettings(log: (line: string) => void): FacadeSettings {
 	const settings: FacadeSettings = new FacadeSettings({
-		legacy: name => vscode.workspace.getConfiguration().inspect(name)?.globalValue,
+		legacy: name => {
+			const previous = vscode.workspace.getConfiguration().inspect(name);
+			if (vscode.env.remoteName === undefined) {
+				return previous?.globalValue;
+			}
+			// VS Code merges local and remote values for unregistered keys. Use the remote machine's value for migration.
+			return (previous as { readonly globalRemoteValue?: unknown } | undefined)?.globalRemoteValue;
+		},
 		log,
 		migrated: (file, notes) => {
 			const open = vscode.l10n.t("Open");

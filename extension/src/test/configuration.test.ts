@@ -9,7 +9,6 @@ import * as path from 'path';
 import { refusedArguments, takeChoices } from '../clis/args';
 import { BUILT_IN_NAMES } from '../base/names';
 import { ROBOT_ICONS } from '../base/robot';
-import { WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { BUILT_IN_ADAPTERS, BUILT_IN_FACTS, iconOf } from '../clis/catalog';
 import { entrySetting, readEntries, readEntry } from '../clis/entries';
 import { Migration, migrationOf, settingsText } from '../clis/migration';
@@ -18,7 +17,7 @@ import { parseSettings } from '../clis/settingsFile';
 import { FacadeSettings, shownFile } from '../host/facadeSettings';
 import { catalogFrom, runSettingsOf, TEST_SETTINGS_FILE } from './settingsFixtures';
 import { tempDir } from './util';
-import { TestEmitter, withModules } from './withModules';
+import { withModules } from './withModules';
 
 const FILE = TEST_SETTINGS_FILE;
 
@@ -931,25 +930,19 @@ suite('What the person is told of a migration (CONFIGURATION-6.2, 6.3)', () => {
 	});
 });
 
-suite('A window on the Rust engine makes the settings file from the old settings, as the old engine does (CONFIGURATION-1.3, 6.3)', () => {
-	const claude = '/opt/claude/bin/claude';
-	const stop = new Error('Stopped at connectDaemon');
-	const none = { dispose: () => undefined };
+suite('Opening the execution host settings (CONFIGURATION-7.1, UX-6.2)', () => {
+	const l10n = { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)])) };
 	let temp: ReturnType<typeof tempDir>;
 	let previousHome: string | undefined;
-	let root: string;
+	let legacyRoot: string;
 	let file: string;
-	let atConnect: (string | undefined)[];
-	let notices: { text: string; items: string[] }[];
 
 	setup(() => {
 		temp = tempDir('fd-rust-settings-');
 		previousHome = process.env.FACADE_HOME;
-		root = path.join(temp.dir, '.facade');
-		file = path.join(root, 'facade.json');
-		process.env.FACADE_HOME = root;
-		atConnect = [];
-		notices = [];
+		legacyRoot = path.join(temp.dir, 'legacy');
+		file = path.join(temp.dir, 'status', 'facade.json');
+		process.env.FACADE_HOME = legacyRoot;
 	});
 
 	teardown(() => {
@@ -957,67 +950,91 @@ suite('A window on the Rust engine makes the settings file from the old settings
 		temp.remove();
 	});
 
-	function activate(old: Record<string, unknown>, linkSync = fs.linkSync): Promise<() => Promise<void>> {
+	function settingsFor(linkSync = fs.linkSync) {
+		const opened: { file: string; preview: boolean; text: string }[] = [];
+		const errors: string[] = [];
+		const created: string[] = [];
+		let requests = 0;
+		let edit: (() => Promise<void>) | undefined;
 		const vscode = {
-			Uri: { from: (parts: object) => parts },
-			EventEmitter: TestEmitter,
-			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, at: string) => String(args[Number(at)])) },
-			window: {
-				createOutputChannel: () => ({ ...none, info: () => undefined }),
-				activeColorTheme: { kind: 2 },
-				onDidChangeActiveColorTheme: () => none,
-				showInformationMessage: async (text: string, ...items: string[]) => { notices.push({ text, items }); return undefined; }
+			l10n,
+			Uri: { file: (fsPath: string) => ({ fsPath }) },
+			commands: {
+				registerCommand: (id: string, run: () => Promise<void>) => {
+					assert.strictEqual(id, 'facade.openSettingsFile');
+					edit = run;
+					return { dispose: () => { edit = undefined; } };
+				}
 			},
-			workspace: { getConfiguration: () => ({
-				get: () => undefined,
-				inspect: (name: string) => Object.hasOwn(old, name) ? { globalValue: old[name] } : undefined
-			}) },
-			commands: { executeCommand: async (id: string) => id === WINDOW_TERMINALS_COMMAND }
+			window: {
+				showTextDocument: async (uri: { fsPath: string }, options: { preview: boolean }) => {
+					opened.push({ file: uri.fsPath, preview: options.preview, text: fs.readFileSync(uri.fsPath, 'utf8') });
+				},
+				showErrorMessage: async (text: string) => { errors.push(text); }
+			}
 		};
 		const hostFs = new Proxy(fs, { get: (target, key) => key === 'linkSync' ? linkSync : Reflect.get(target, key) });
-		const { activateRust } = withModules({ vscode, fs: hostFs, './connection': {
-			connectDaemon: async ({ home }: { home: string }) => {
-				const settingsFile = path.join(home, 'facade.json');
-				atConnect.push(fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : undefined);
-				throw stop;
-			}
-		} })<typeof import('../host/rust/index')>(require.resolve('../host/rust/index'));
-		const context = { extensionPath: temp.dir, extension: { packageJSON: { version: '1.0.0' } } };
-		return activateRust(context as Parameters<typeof activateRust>[0], {
-			root, home: path.join(root, 'extension'), identity: { version: 1, session: 'session', token: 'token' },
-			keep: () => ({ key: 'key', claim: { owner: 'key', generation: 1, token: 'claim' }, handedOver: false,
-				bind: () => assert.fail('Core did not return a window') }),
-			openSettings: async () => undefined, openSettingsFile: () => none
+		const { rustSettings } = withModules({ vscode, fs: hostFs })<typeof import('../host/rust/settings')>(require.resolve('../host/rust/settings'));
+		const settings = rustSettings({
+			status: async () => { requests++; return { settings_file: file }; },
+			log: { event: text => created.push(text) }
 		});
+		return { settings, opened, errors, created, requests: () => requests, edit: () => (edit ?? assert.fail('Edit command was not registered'))() };
 	}
 
-	test('before connecting to core, it writes the old YOLO choice and Claude path and offers Open once, including after reload', async () => {
-		const old = { 'facade.yolo': false, 'facade.claude.path': claude };
-		await assert.rejects(activate(old), error => error === stop);
-		const [text] = atConnect;
-		assert.ok(text, 'facade.json is present when core is reached');
-		const made = parseSettings(text, file);
-		assert.deepStrictEqual(made.problems, []);
-		assert.strictEqual(made.yolo, false);
-		assert.strictEqual(catalogFrom(text).entries.find(each => each.entry.name === 'claude')?.entry.program, claude);
-		await assert.rejects(activate(old), error => error === stop);
-		assert.deepStrictEqual(atConnect, [text, text]);
-		assert.deepStrictEqual(notices, [{
-			text: `Facade's settings moved to ${shownFile(file)}. Your earlier settings are in it; the editor's Facade settings are no longer read.`,
-			items: ['Open']
-		}]);
+	test('both settings entry points open the status path and preserve saved edits', async () => {
+		const result = settingsFor();
+		const command = result.settings.register();
+		try {
+			assert.strictEqual(result.requests(), 0);
+			assert.strictEqual(fs.existsSync(file), false);
+			await result.settings.open();
+			assert.deepStrictEqual(parseSettings(fs.readFileSync(file, 'utf8'), file), { file, yolo: true, clis: [], problems: [] });
+			const edited = '{ // keep this comment\n\t"yolo": false\n}\n';
+			fs.writeFileSync(file, edited);
+			await result.edit();
+			assert.deepStrictEqual(result.opened, [
+				{ file, preview: false, text: '{}\n' },
+				{ file, preview: false, text: edited }
+			]);
+			assert.deepStrictEqual([result.requests(), fs.existsSync(legacyRoot), result.created, result.errors], [2, false, ['Created ' + shownFile(file)], []]);
+		} finally {
+			command.dispose();
+		}
 	});
 
-	test('a migration conflict leaves no file and stops activation before core can apply defaults (CONFIGURATION-6.2)', async () => {
-		await assert.rejects(activate({ 'facade.yolo': false, 'facade.custom': [] }), /facade\.custom has no place in facade\.json/);
-		assert.strictEqual(fs.existsSync(file), false);
-		assert.deepStrictEqual([atConnect, notices], [[], []]);
+	test('old engine migration reads earlier settings from the remote host', () => {
+		const vscode = {
+			env: { remoteName: 'ssh-remote' },
+			l10n,
+			window: { showInformationMessage: async () => undefined },
+			workspace: { getConfiguration: () => ({
+				inspect: (name: string) => ({
+					'facade.yolo': { globalValue: false, globalRemoteValue: undefined },
+					'facade.claude.path': { globalValue: '/remote/claude', globalRemoteValue: '/remote/claude' }
+				} as Record<string, { globalValue: unknown; globalRemoteValue: unknown }>)[name]
+			}) }
+		};
+		const { editorFacadeSettings } = withModules({ vscode })<typeof import('../host/settingsNotice')>(require.resolve('../host/settingsNotice'));
+		const settings = editorFacadeSettings(() => undefined);
+		assert.strictEqual(settings.ensure().kind, 'created');
+		const text = fs.readFileSync(path.join(legacyRoot, 'facade.json'), 'utf8');
+		assert.strictEqual(settings.snapshot().yolo, true);
+		assert.strictEqual(catalogFrom(text).entries.find(each => each.entry.name === 'claude')?.entry.program, '/remote/claude');
 	});
 
-	test('a settings write failure stops activation before core can apply defaults (CONFIGURATION-1.3)', async () => {
+	test('reports exclusive creation failure without opening a document', async () => {
 		const denied = () => { throw Object.assign(new Error('Link denied'), { code: 'EACCES' }); };
-		await assert.rejects(activate({ 'facade.yolo': false }, denied), /facade\.json could not be created: Link denied/);
-		assert.deepStrictEqual(fs.readdirSync(root), []);
-		assert.deepStrictEqual([atConnect, notices], [[], []]);
+		const result = settingsFor(denied);
+		const command = result.settings.register();
+		try {
+			await assert.rejects(result.settings.open(), /facade\.json could not be created: Link denied/);
+			await result.edit();
+			assert.deepStrictEqual(result.errors, [shownFile(file) + ' could not be created: Link denied']);
+			assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), []);
+			assert.deepStrictEqual([result.opened, result.created], [[], []]);
+		} finally {
+			command.dispose();
+		}
 	});
 });
