@@ -13,9 +13,6 @@ use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::key_input::{KeyProblem, MAX_KEYS};
 use facade_base::machine::ExecutionOutcome;
 
-/// The word that names the human as a recipient or an agent reference.
-const HUMAN: &str = "human";
-
 /// The service's refusal of a machine reference that names no machine.
 const NO_MACHINE: &str = "no machine matches that address";
 
@@ -25,33 +22,16 @@ const NO_FACADE: &str = "SSH could not find facade on ";
 /// How the service begins its refusal where the other machine's startup files printed text.
 const STARTUP_PRINTS: &str = "Unexpected SSH stdout during the machine handshake";
 
-/// How the service begins its refusal of a reference that names no agent: `no agent a9; …`.
-const MISSING_AGENT: &str = "no agent ";
-
 /// A failure whose cause the command knows, worded for the reader.
 #[derive(Debug)]
 pub(crate) enum Problem {
-    /// No agent has the name or ID the reader gave.
-    NoAgent { given: String },
-    /// More than one agent has the name the reader gave.
-    SeveralNamed { given: String },
-    /// `human` names both the human and an agent; `sending` where the human could be meant.
-    HumanCollision { given: String, sending: bool },
-    /// The agent ended, so it takes no input or messages.
-    Ended { agent: String },
-    /// `resume` of an agent that runs.
-    StillRunning { id: String },
-    /// `resume` of an agent started as a plain program.
-    PlainProgram { id: String },
-    /// A guest, whose terminal is not Facade's.
-    Guest { id: String },
+    /// An operation wanted a running agent and the Orchestrator found an ended one.
+    Ended { diagnostic: String, agent: String },
     /// `attach` without an interactive terminal.
     NotInteractive { given: String },
-    /// `messages` outside an agent's terminal.
-    NotAgentTerminal,
     /// The start command omitted the CLI name.
     MissingCli { available: Vec<String> },
-    /// An option before `start`'s PROGRAM that Facade does not know.
+    /// An option before `start`'s CLI that Facade does not know.
     UnknownStartOption { option: String },
     /// The execution machine requires an absolute folder.
     StartFolder { machine: String, folder: String },
@@ -69,12 +49,6 @@ pub(crate) enum Problem {
         to: String,
         why: String,
     },
-    /// A message to the human from an agent in no editor window, such as a guest.
-    InNoWindow,
-    /// A message to the human that none of the sender's windows showed, with each window's reason.
-    NotShown { why: String },
-    /// A message to the human whose windows' outcome is unknown.
-    HumanUnconfirmed { message: String },
     /// A message whose delivery cannot be confirmed.
     Unconfirmed {
         message: String,
@@ -83,19 +57,13 @@ pub(crate) enum Problem {
     },
     /// No machine has the name or ID the reader gave.
     NoMachine { given: String },
-    /// A machine an agent runs on could not be reached, so nothing was done; `change` is the
-    /// agent `stop` or `remove` was asked to change.
-    MachineUnreachable {
-        machine: String,
-        change: Option<(Change, String)>,
-    },
+    /// The request's machine could not be reached.
+    MachineUnreachable { diagnostic: String },
     /// A machine stopped responding after a call reached it, so its result is unknown.
     MachineStoppedResponding {
         machine: String,
         change: Option<(Change, String)>,
     },
-    /// A name no agent has on the machines that responded, while others did not respond.
-    NoAgentWhereResponded { given: String, machines: String },
     /// SSH failed before the machines connected: its last line says why.
     SshFailed { destination: String, why: String },
     /// SSH reached the other machine, but no `facade` there.
@@ -139,6 +107,7 @@ impl Problem {
         match self {
             Problem::MissingCli { .. }
             | Problem::UnknownStartOption { .. }
+            | Problem::StartFolder { .. }
             | Problem::Keys(_)
             | Problem::TypeControl { .. } => 2,
             _ => 1,
@@ -147,54 +116,18 @@ impl Problem {
 
     /// What happened, and the next step where there is one.
     fn lines(&self) -> (String, Option<String>) {
-        let list_tip = || Some("run 'facade list' and use the agent's ID".to_string());
         match self {
-            Problem::NoAgent { given } => (
-                format!("no agent '{given}'"),
-                Some("run 'facade list' to see your agents".into()),
-            ),
-            Problem::SeveralNamed { given } => (
-                format!("more than one agent is named '{given}'"),
-                list_tip(),
-            ),
-            Problem::HumanCollision { given, sending } => (
-                format!("'{given}' matches both the human and an agent named human"),
-                match sending {
-                    true => Some(
-                        "quote '#human' for the human, or run 'facade list' for the agent's ID"
-                            .into(),
-                    ),
-                    false => list_tip(),
-                },
-            ),
-            Problem::Ended { agent } => (
-                format!("{agent} has ended"),
+            Problem::Ended { diagnostic, agent } => (
+                service_words(diagnostic),
                 Some(format!(
-                    "run 'facade inspect {agent}' to check for a saved session"
+                    "run 'facade screen {agent}' for the last screen or 'facade resume {agent}' to continue"
                 )),
-            ),
-            Problem::StillRunning { id } => (
-                format!("{id} is still running"),
-                Some(format!("run 'facade attach {id}' to watch it")),
-            ),
-            Problem::PlainProgram { id } => (
-                format!("{id} was started as a plain program and cannot resume"),
-                None,
-            ),
-            Problem::Guest { id } => (
-                format!("{id} was started outside Facade, so Facade cannot control it"),
-                Some("use the program where the guest is running".into()),
             ),
             Problem::NotInteractive { given } => (
                 "'facade attach' needs an interactive terminal".into(),
                 Some(format!(
                     "run 'facade screen {given}' to see its recent output"
                 )),
-            ),
-            Problem::NotAgentTerminal => (
-                "'facade messages' reads an agent's inbox and must run in that agent's terminal"
-                    .into(),
-                Some("messages for the human appear in the editor window".into()),
             ),
             Problem::MissingCli { available } => (
                 "choose a CLI to start".into(),
@@ -205,12 +138,11 @@ impl Problem {
                 }),
             ),
             Problem::UnknownStartOption { option } => (
-                format!("unexpected option '{option}' before the program"),
+                format!("unexpected option '{option}' before the CLI"),
                 Some(if option == "--cwd" || option.starts_with("--cwd=") {
                     "use '--folder' to choose the agent's folder".into()
                 } else {
-                    "put the program's options after its name: 'facade start claude --model opus'"
-                        .into()
+                    "put CLI-specific options after the CLI name".into()
                 }),
             ),
             Problem::StartFolder { machine, folder } => (
@@ -233,7 +165,7 @@ impl Problem {
                 Some("press a control key with '--key', for example '--key Esc'".into()),
             ),
             Problem::Unreachable { why, log } => (
-                format!("could not connect to Facade: {why}"),
+                format!("could not connect to the Orchestrator: {why}"),
                 log.as_ref()
                     .map(|log| format!("check '{}' for details", log.display())),
             ),
@@ -244,21 +176,6 @@ impl Problem {
             Problem::NotDelivered { message, to, why } => {
                 (format!("{message} was not delivered to {to}: {why}"), None)
             }
-            Problem::InNoWindow => (
-                "the message was not delivered to the human: the agent is not in any editor window"
-                    .into(),
-                None,
-            ),
-            Problem::NotShown { why } => (
-                format!("the message was not delivered to the human: {why}"),
-                Some("open the agent in an editor window that shows Facade messages".into()),
-            ),
-            Problem::HumanUnconfirmed { message } => (
-                format!("could not confirm delivery of {message} to the human"),
-                Some(format!(
-                    "look for {message} in your editor windows before sending it again"
-                )),
-            ),
             Problem::Unconfirmed {
                 message,
                 to,
@@ -274,16 +191,8 @@ impl Problem {
                 format!("no machine '{given}'"),
                 Some("run 'facade machine list' to see your machines".into()),
             ),
-            Problem::MachineUnreachable { machine, change } => (
-                match change {
-                    Some((Change::Stop, id)) => {
-                        format!("could not connect to {machine} to stop {id}")
-                    }
-                    Some((Change::Remove, id)) => {
-                        format!("could not connect to {machine} to remove {id}")
-                    }
-                    None => format!("could not connect to {machine}"),
-                },
+            Problem::MachineUnreachable { diagnostic } => (
+                service_words(diagnostic),
                 Some("run 'facade machine list' to check the connection".into()),
             ),
             Problem::MachineStoppedResponding { machine, change } => (
@@ -296,13 +205,10 @@ impl Problem {
                     ),
                     None => format!("could not confirm the result: {machine} stopped responding"),
                 },
-                Some("run 'facade list' to check".into()),
-            ),
-            Problem::NoAgentWhereResponded { given, machines } => (
-                format!(
-                    "no agent '{given}' on the machines that responded; {machines} did not respond"
-                ),
-                Some("run 'facade list' to see your agents".into()),
+                Some(match change {
+                    Some((_, id)) => format!("run 'facade inspect {id}' to check"),
+                    None => "run 'facade machine list' to check the connection".into(),
+                }),
             ),
             Problem::SshFailed { destination, why } => (
                 format!("could not connect to {destination} over SSH: {why}"),
@@ -313,8 +219,7 @@ impl Problem {
             Problem::NoFacade { destination } => (
                 format!("could not find facade on {destination}"),
                 Some(format!(
-                    "install Facade on {destination} and add its folder to the PATH that SSH \
-                     commands use"
+                    "run the Facade Code installer on {destination} and try again"
                 )),
             ),
             Problem::StartupPrints { destination } => (
@@ -329,8 +234,12 @@ impl Problem {
                 theirs,
                 ours,
             } => (
-                format!("{machine} runs Facade {theirs}, which cannot connect to Facade {ours}"),
-                Some(format!("install Facade {ours} on {machine}")),
+                format!("{machine} runs Orchestrator {theirs}, which cannot connect to {ours}"),
+                Some(if facade_base::takes_over(theirs, ours) {
+                    "run 'facade upgrade' here and try again".into()
+                } else {
+                    format!("install Facade Code {ours} on {machine}")
+                }),
             ),
             Problem::SameMachineId { short, paths } => (
                 format!(
@@ -384,62 +293,30 @@ fn service_error(error: &anyhow::Error) -> Option<&ErrorBody> {
         .find_map(|cause| cause.downcast_ref::<ErrorBody>())
 }
 
-/// Whether `given` names the human: `human` or `@human`, in any case.
-fn names_human(given: &str) -> bool {
-    let name = given.trim();
-    let name = name.strip_prefix('@').unwrap_or(name);
-    name.eq_ignore_ascii_case(HUMAN)
-}
-
-/// The failure of a call that names one agent, `given` as the reader typed it, as a catalog row
-/// where the service's reason identifies one; otherwise `error` unchanged.
+/// Preserves the Orchestrator's lookup diagnostic and adds a command where it can help.
 pub(crate) fn about_agent(given: &str, error: anyhow::Error) -> anyhow::Error {
     let Some(body) = service_error(&error) else {
         return error;
     };
-    // Only the service's own "no agent …" says the agent named is missing: a missing caller or
-    // terminal is not found either.
-    let missing = body.message.starts_with(MISSING_AGENT);
-    let reason = body.data.reason;
-    let given = given.to_string();
-    let problem = match reason {
-        Reason::NotFound if missing => Problem::NoAgent { given },
-        Reason::AmbiguousReference if names_human(&given) => Problem::HumanCollision {
-            given,
-            sending: false,
-        },
-        Reason::AmbiguousReference => Problem::SeveralNamed { given },
-        // The service names the ended agent by its ID only in these words; any other text, such
-        // as input that partly reached the terminal, keeps the service's words.
-        Reason::Ended => match ended_agent(&body.message) {
-            Some(agent) => Problem::Ended { agent },
-            None => return error,
-        },
-        Reason::ConfigurationInvalid => return settings(error),
-        Reason::Unavailable
-            if let Some(unavailable) = &body.data.unavailable
-                && !unavailable.unanswered.is_empty()
-                && unavailable.matches.is_empty() =>
-        {
-            Problem::NoAgentWhereResponded {
-                given,
-                machines: unavailable
-                    .unanswered
-                    .iter()
-                    .map(|machine| machine.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            }
+    match body.data.reason {
+        Reason::Ended => Problem::Ended {
+            diagnostic: body.message.clone(),
+            agent: body
+                .data
+                .candidates
+                .first()
+                .map_or_else(|| given.to_owned(), String::clone),
         }
-        _ => return about_machine(machine_of(&given), None, error),
-    };
-    problem.into()
+        .into(),
+        Reason::ConfigurationInvalid => settings(error),
+        _ => about_machine(machine_of(given), None, error),
+    }
 }
 
 /// The failure of `stop` or `remove` of `given`, as [`about_agent`] does, saying what was not done
 /// where the agent's machine could not be reached.
 pub(crate) fn about_change(given: &str, change: Change, error: anyhow::Error) -> anyhow::Error {
-    // A name search that some machines did not answer is `about_agent`'s to word.
+    // Keep the Orchestrator's account of an incomplete search.
     if let Some(body) = service_error(&error)
         && body.data.reason == Reason::Unavailable
         && body
@@ -494,11 +371,10 @@ pub(crate) fn about_machine(
                 .as_ref()
                 .map_or(machine.to_string(), |machine| machine.name.clone());
             match (unavailable.execution, unavailable.unanswered.is_empty()) {
-                // A name lookup that some machines did not answer: `about_agent` words it.
+                // A search can report which machines did not answer.
                 (_, false) => return error,
                 (ExecutionOutcome::NotExecuted, true) => Problem::MachineUnreachable {
-                    machine: name,
-                    change,
+                    diagnostic: body.message.clone(),
                 },
                 (ExecutionOutcome::OutcomeUnknown, true) => Problem::MachineStoppedResponding {
                     machine: name,
@@ -620,44 +496,6 @@ fn bare_word(word: &str, windows: bool) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_./@:".contains(&b) || (windows && b == b'\\'))
 }
 
-/// The failure of `agent.send` to recipient `to`, as [`about_agent`] does, with the tip for a
-/// recipient that may be the human, and the ended agent a unique name named.
-pub(crate) fn about_send(to: &str, error: anyhow::Error) -> anyhow::Error {
-    let Some(body) = service_error(&error) else {
-        return error;
-    };
-    let reason = body.data.reason;
-    if reason == Reason::Ended
-        && let Some(agent) = ended_by_name(to, &body.message)
-    {
-        return Problem::Ended { agent }.into();
-    }
-    match reason {
-        Reason::AmbiguousReference if names_human(to) => Problem::HumanCollision {
-            given: to.to_string(),
-            sending: true,
-        }
-        .into(),
-        _ => about_agent(to, error),
-    }
-}
-
-/// The agent ID in the service's refusal of a message to `to`, a name only one ended agent has:
-/// `Ada ended: #a3 takes no messages`. None where the name is several agents', or for other words.
-pub(crate) fn ended_by_name(to: &str, message: &str) -> Option<String> {
-    let id = message
-        .strip_prefix(to)?
-        .strip_prefix(" ended: #")?
-        .strip_suffix(" takes no messages")?;
-    agent_id(id)
-}
-
-/// `id` where it is an agent ID, `a` and digits.
-fn agent_id(id: &str) -> Option<String> {
-    let digits = id.strip_prefix('a')?;
-    (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())).then(|| id.to_string())
-}
-
 /// The settings file's failure, with the service's diagnostic, which names its path.
 fn settings(error: anyhow::Error) -> anyhow::Error {
     match service_error(&error) {
@@ -688,7 +526,23 @@ pub(crate) fn words(error: &anyhow::Error) -> String {
             diagnostic: service_words(&body.message),
         }
         .to_string(),
-        Some(body) => format!("error: {}", service_words(&body.message)),
+        Some(body) => {
+            let message = service_words(&body.message);
+            if body.data.reason == Reason::AmbiguousReference
+                && body
+                    .data
+                    .candidates
+                    .iter()
+                    .any(|candidate| !message.contains(candidate))
+            {
+                format!(
+                    "error: {message}\n  tip: choose {}",
+                    body.data.candidates.join(", ")
+                )
+            } else {
+                format!("error: {message}")
+            }
+        }
         None => format!("error: {error:#}"),
     }
 }
@@ -696,9 +550,17 @@ pub(crate) fn words(error: &anyhow::Error) -> String {
 /// Prints a command's error to stderr and returns the exit code it ends with.
 pub(crate) fn report(error: &anyhow::Error) -> i32 {
     eprintln!("{}", words(error));
-    error
-        .downcast_ref::<Problem>()
-        .map_or(1, Problem::exit_code)
+    exit_code(error)
+}
+
+pub(crate) fn exit_code(error: &anyhow::Error) -> i32 {
+    if let Some(problem) = error.downcast_ref::<Problem>() {
+        return problem.exit_code();
+    }
+    match service_error(error).map(|body| body.data.reason) {
+        Some(Reason::InvalidArgument) => 2,
+        _ => 1,
+    }
 }
 
 /// Why `error` happened, without a prefix: the service's own words, or the error's chain.
@@ -707,25 +569,6 @@ pub(crate) fn cause(error: &anyhow::Error) -> String {
         Some(body) => service_words(&body.message),
         None => format!("{error:#}"),
     }
-}
-
-/// The agent ID in the service's refusal of input or a message to an agent that ended:
-/// `#a3 ended; nothing was typed` from `agent.type`, `#a3 ended; it takes no messages` from
-/// `agent.send`. None for any other words.
-pub(crate) fn ended_agent(message: &str) -> Option<String> {
-    let ended = ["; nothing was typed", "; it takes no messages"]
-        .iter()
-        .find_map(|clause| message.strip_suffix(clause))?;
-    agent_id(ended.strip_prefix('#')?.strip_suffix(" ended")?)
-}
-
-/// The bare agent ID that `given` writes, as `a3`, `#a3` or `3` do; None for a name.
-pub(crate) fn bare_id(given: &str) -> Option<String> {
-    let rest = given.trim();
-    let rest = rest.strip_prefix('#').unwrap_or(rest);
-    let digits = rest.strip_prefix('a').unwrap_or(rest);
-    (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| format!("a{digits}"))
 }
 
 /// The context of a failure to start OpenSSH for `machine add` or `connect`.
@@ -793,17 +636,17 @@ pub(crate) fn serve_copy_ended(to_daemon: bool, error: &io::Error) -> String {
 /// its log, where it logged one.
 pub(crate) fn keeper_exited(line: Option<&str>) -> String {
     match line {
-        Some(line) => format!("the Facade keeper exited before it started, saying: {line}"),
-        None => "the Facade keeper exited before it started and logged nothing".to_string(),
+        Some(line) => format!("the Orchestrator keeper exited before it started, saying: {line}"),
+        None => "the Orchestrator keeper exited before it started and logged nothing".to_string(),
     }
 }
 
 /// Why Facade could not be reached in `seconds`: a daemon that runs but is not ready, or none.
 pub(crate) fn daemon_slow(daemon_runs: bool, seconds: u64) -> String {
     if daemon_runs {
-        "Facade is still starting".to_string()
+        "Orchestrator is still starting".to_string()
     } else {
-        format!("the Facade daemon did not start within {seconds} seconds")
+        format!("the Orchestrator daemon did not start within {seconds} seconds")
     }
 }
 
@@ -812,24 +655,15 @@ pub(crate) fn see_log(why: &str, log: &Path) -> String {
     format!("{why}; see {}", log.display())
 }
 
-/// The context of a takeover after which this build's daemon did not answer in `seconds`.
+/// The context of a takeover after which this build's daemon did not respond in `seconds`.
 pub(crate) fn takeover_silent(ours: &str, seconds: u64) -> String {
-    format!("Facade {ours} did not answer within {seconds} seconds of taking over")
+    format!("Orchestrator {ours} did not respond within {seconds} seconds of taking over")
 }
 
-/// The line a command prints where the running Facade `theirs` refused to let this build take
-/// over. `hidden` is `facade daemon --detach`'s line for a program's log.
-pub(crate) fn takeover_refused(
-    ours: &str,
-    theirs: &str,
-    error: &anyhow::Error,
-    hidden: bool,
-) -> String {
-    if hidden {
-        return format!("facade: Facade {ours} could not take over from {theirs}: {error:#}");
-    }
+/// Why this build could not take over from the running Orchestrator.
+pub(crate) fn takeover_refused(ours: &str, theirs: &str, error: &anyhow::Error) -> String {
     format!(
-        "warning: could not upgrade running Facade {theirs}: {}; continuing with {theirs}",
+        "could not upgrade Orchestrator {theirs} to {ours}: {}",
         cause(error)
     )
 }
@@ -845,23 +679,9 @@ pub(crate) fn took_over(
 ) -> String {
     if hidden {
         return format!(
-            "facade: Facade {ours} took over from {from}; {agents} kept running ({:.1} s)",
+            "facade: Orchestrator {ours} took over from {from}. {agents} kept running ({:.1} s)",
             took.as_secs_f64()
         );
     }
-    format!("note: upgraded running Facade {from} to {ours}; {agents} kept running")
-}
-
-/// The line a command prints where the running Facade `theirs` answered again after a takeover
-/// began: it runs on, and the logs say why.
-pub(crate) fn older_runs_on(ours: &str, theirs: &str, logs: &str, hidden: bool) -> String {
-    if hidden {
-        return format!(
-            "facade: Facade {ours} could not take over from {theirs}, which runs on; see {logs}"
-        );
-    }
-    format!(
-        "warning: could not upgrade running Facade {theirs}: check '{logs}' for details; \
-         continuing with {theirs}"
-    )
+    format!("note: upgraded Orchestrator {from} to {ours}. {agents} kept running")
 }

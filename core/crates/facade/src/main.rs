@@ -29,14 +29,14 @@ mod tests;
 use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
 
+use anyhow::Context as _;
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
 use facade_base::daemon_client::DaemonClient;
-use facade_base::machine::MachineQueryArgs;
 use facade_base::process::{EndReason, ProcessExit};
-use facade_base::v3::ResumeTarget;
+use facade_base::v3::{MachineQueryArgs, ResumeListArgs, ResumeTarget};
 use unicode_width::UnicodeWidthStr;
 
-use cli::{Command, MachineAction, StartOptions, Target, Targets};
+use cli::{Command, MachineAction, Target, Targets};
 use commands::{Format, Listing};
 use daemon_client::{connect_or_start, reconnect};
 use errors::Problem;
@@ -118,7 +118,7 @@ fn main() {
     let code = run(command).unwrap_or_else(|error| {
         if hidden {
             eprintln!("facade: {error:#}");
-            1
+            errors::exit_code(&error)
         } else {
             errors::report(&error)
         }
@@ -187,31 +187,21 @@ fn is_hook_line() -> bool {
         .is_some_and(|word| word == "hook")
 }
 
-/// Does nothing for a hook line another build wrote, naming an event or an argument this build
-/// does not know, or a word that is not UTF-8: a hook never fails its CLI. Says why where the CLI
-/// keeps a hook's errors, prints the empty output of a CLI that reads every hook's output as JSON,
-/// and exits 0.
+/// Keeps a CLI running if its managed hook cannot be parsed.
 fn skip_hook_line(error: &clap::Error) -> ! {
-    let words: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|word| word.to_string_lossy().into_owned())
-        .collect();
-    let reason = error.to_string();
-    let reason = reason
-        .lines()
-        .next()
-        .map_or("", |line| line.trim_start_matches("error: "));
+    let mut words = std::env::args_os().skip(2);
+    let event = words.next();
+    let cli = words.next();
     facade_base::log::write(
         "facade",
         "warn",
-        &format!(
-            "did nothing for `{}`, which this build cannot use: {reason}",
-            words.join(" ")
-        ),
+        &format!("ignored a hook this build cannot use: {:?}", error.kind()),
     );
-    if let Some(output) = words
-        .iter()
-        .find_map(|word| facade_rules::hook::empty_output(word))
+    if event.as_deref().is_some_and(|word| word == "instructions")
+        && let Some(output) = cli
+            .as_deref()
+            .and_then(std::ffi::OsStr::to_str)
+            .and_then(facade_rules::hook::empty_output)
     {
         println_or_end!("{output}");
     }
@@ -243,15 +233,14 @@ fn show(client: DaemonClient, shown: Option<Shown>) -> anyhow::Result<i32> {
 fn run(command: Command) -> anyhow::Result<i32> {
     match command {
         Command::Hook { event } => {
-            let agent = daemon_client::terminal_agent();
-            hooks::run(event, agent.as_deref(), &|| {
-                daemon_client::connect_running(daemon_client::terminal_agent())
-            });
+            let agent = std::env::var("FACADE_AGENT").ok();
+            hooks::run(event, agent.as_deref());
             Ok(0)
         }
         Command::Keeper => facade_keeper::serve().map(|()| 0),
-        Command::Daemon { detach: false } => facade_daemon::run().map(|()| 0),
-        Command::Daemon { detach: true } => daemon_client::detach(),
+        Command::Daemon { takeover: true, .. } => daemon_client::takeover(),
+        Command::Daemon { detach: true, .. } => daemon_client::detach(),
+        Command::Daemon { .. } => facade_daemon::run().map(|()| 0),
         Command::Machine { action } => machine::run(action, &connect_or_start, &|home, wake| {
             if let Some(home) = home {
                 // SAFETY: the initial command chooses the home before opening a socket or starting
@@ -260,44 +249,39 @@ fn run(command: Command) -> anyhow::Result<i32> {
             }
             daemon_client::machine_socket(wake)
         }),
-        Command::Start {
-            name,
-            prompt,
-            detach,
-            machine,
-            folder,
-            command_line,
-        } => {
-            // An option Facade does not know fails before Facade is reached.
-            cli::check_start(&command_line)?;
+        Command::Start { options, detach } => {
+            cli::check_start(&options.cli_and_args)?;
             let terminal = shown_terminal(detach);
             let mut client = connect_or_start()?;
-            let options = StartOptions {
-                name,
-                prompt,
-                machine,
-                folder,
-                worktree: None,
-                model: None,
-                effort: None,
-                cli_and_args: command_line,
-            };
             let shown = commands::start(&mut client, options, terminal)?;
             show(client, shown)
         }
         Command::Resume {
             detach,
-            target: Target { agent },
+            machine,
+            folder,
+            all,
+            json,
+            reference,
         } => {
-            let terminal = shown_terminal(detach);
             let mut client = connect_or_start()?;
-            let target = ResumeTarget {
-                reference: agent,
-                machine: None,
-                folder: None,
-            };
-            let shown = commands::resume(&mut client, target, terminal)?;
-            show(client, shown)
+            if let Some(reference) = reference {
+                let terminal = shown_terminal(detach);
+                let target = ResumeTarget {
+                    reference,
+                    machine,
+                    folder,
+                };
+                let shown = commands::resume(&mut client, target, terminal)?;
+                show(client, shown)
+            } else {
+                let args = ResumeListArgs {
+                    machine,
+                    folder,
+                    all,
+                };
+                commands::resume_list(&mut client, args, format(json)).map(done)
+            }
         }
         Command::Attach(Target { agent }) => {
             if !interactive() {
@@ -305,7 +289,11 @@ fn run(command: Command) -> anyhow::Result<i32> {
             }
             attach::attach(connect_or_start()?, &agent, Opening::Attached, &reconnect)
         }
-        Command::List { quiet, json } => {
+        Command::List {
+            quiet,
+            json,
+            machine,
+        } => {
             let listing = match (quiet, json) {
                 (true, _) => Listing::Quiet,
                 (_, true) => Listing::Json,
@@ -313,7 +301,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             };
             commands::list(
                 &mut connect_or_start()?,
-                MachineQueryArgs::default(),
+                MachineQueryArgs { machine },
                 listing,
             )
             .map(done)
@@ -323,9 +311,10 @@ fn run(command: Command) -> anyhow::Result<i32> {
             target: Target { agent },
         } => commands::inspect(&mut connect_or_start()?, agent, format(json)).map(done),
         Command::Screen {
+            json,
             lines,
             target: Target { agent },
-        } => commands::screen(&mut connect_or_start()?, agent, lines, Format::Text).map(done),
+        } => commands::screen(&mut connect_or_start()?, agent, lines, format(json)).map(done),
         Command::Type {
             target: Target { agent },
             text,
@@ -346,9 +335,19 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Remove(Targets { agents }) => {
             commands::remove(&mut connect_or_start()?, agents, &errors::report)
         }
-        Command::Status { json } => {
-            let mut client = daemon_client::probe()?;
-            commands::status(client.as_mut(), None, format(json)).map(done)
+        Command::Status { json, machine } => {
+            let mut client = if machine.is_some() {
+                Some(connect_or_start()?)
+            } else {
+                daemon_client::probe()?
+            };
+            commands::status(client.as_mut(), machine, format(json)).map(done)
+        }
+        Command::Upgrade => {
+            let status = facade_base::install::upgrade_command()
+                .status()
+                .context("could not start the Facade Code installer")?;
+            Ok(i32::from(!status.success()))
         }
         Command::Version { json } => commands::version(format(json)).map(done),
         Command::Completion { shell } => {

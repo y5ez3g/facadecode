@@ -9,9 +9,8 @@ use std::fmt::Write as _;
 pub(crate) const MAX_WIDTH: usize = 100;
 
 /// What Facade is for, at the top of the root page.
-const ROOT_INTRODUCTION: &str = "Facade runs AI coding agents, such as Claude Code and Codex, and lets you work \
-     with them as a team. Facade keeps the terminals of the agents it starts, so you can watch them, step in or \
-     give them a task. Agents can also start and message one another to share the work.\n\nLearn more at \
+const ROOT_INTRODUCTION: &str = "Start AI coding agents and use their terminals from the Shell. You can watch \
+     an agent work, step in or send it a task. Agents can also start and message one another.\n\nLearn more at \
      https://facadecode.com";
 
 /// The line at the bottom of the root page.
@@ -29,7 +28,7 @@ pub(crate) const GROUPS: &[(&str, &[&str])] = &[
     ("Messages", &["send"]),
     (
         "Setup and info",
-        &["machine", "status", "version", "completion"],
+        &["machine", "status", "version", "completion", "upgrade"],
     ),
 ];
 
@@ -77,8 +76,11 @@ pub(crate) struct Page {
 pub(crate) const PAGES: &[Page] = &[
     Page {
         path: "start",
-        description: "Start PROGRAM as an agent. In an interactive terminal it opens here; press Ctrl-] to \
-             detach and leave it running. Use '--detach' to start it in the background instead.",
+        description: "Start a built-in or configured CLI. Place Facade options before the CLI name. In an \
+             interactive terminal, Ctrl-] detaches and returns 0. If the agent exits first, this command \
+             returns the CLI's exit code. Use '-d' to start in the background and print the address. A \
+             successful start means the agent is running. Delivery of '--prompt' is separate. Scripts \
+             that need confirmation can start first, then run 'facade send ADDRESS TEXT' and check its result.",
         alias: None,
         examples: &[
             direct(
@@ -87,15 +89,17 @@ pub(crate) const PAGES: &[Page] = &[
                 &["start", "claude"],
             ),
             direct(
-                "Name the agent and pass options to Codex",
-                "facade start --name review codex --model gpt-6.2-sol",
+                "Choose a name, model and effort",
+                "facade start --name review --model gpt-6.2-sol --effort high codex",
                 &[
                     "start",
                     "--name",
                     "review",
-                    "codex",
                     "--model",
                     "gpt-6.2-sol",
+                    "--effort",
+                    "high",
+                    "codex",
                 ],
             ),
             direct(
@@ -115,14 +119,16 @@ pub(crate) const PAGES: &[Page] = &[
                 &["start", "--folder", "./app", "codex"],
             ),
             direct(
-                "Start Codex on gpu in /work/app",
-                "facade start --machine gpu --folder /work/app codex",
+                "Create a worktree on gpu and start there",
+                "facade start --machine gpu --folder /work/app --worktree review codex",
                 &[
                     "start",
                     "--machine",
                     "gpu",
                     "--folder",
                     "/work/app",
+                    "--worktree",
+                    "review",
                     "codex",
                 ],
             ),
@@ -130,9 +136,9 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "list",
-        description: "See what your agents are doing and which ones are waiting for you, oldest first. Ended \
-             agents stay listed until you remove them. Sessions that join through an integration are marked as \
-             guests.",
+        description: "Show running managed agents and connected guests on machines already connected, with the \
+             latest starts and resumes first. Use 'facade resume' to find ended agents with saved sessions. \
+             '--machine' queries one machine and wakes it if needed.",
         alias: Some("ls"),
         examples: &[
             direct(
@@ -141,7 +147,7 @@ pub(crate) const PAGES: &[Page] = &[
                 &["list"],
             ),
             direct(
-                "Print agent IDs, one per line",
+                "Print agent addresses, one per line",
                 "facade ls -q",
                 &["ls", "-q"],
             ),
@@ -149,9 +155,9 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "attach",
-        description: "Watch the agent work and use its terminal here, or see its saved screen if it has already \
-             ended. Press Ctrl-] to detach and leave it running. This command exits with the agent's exit code \
-             when the agent ends or after showing its saved screen.",
+        description: "Watch a running managed agent and use its terminal. Ctrl-] detaches and returns 0. If \
+             the agent exits first, this command returns the CLI's exit code. Use 'facade screen' to read an \
+             ended agent's last screen.",
         alias: None,
         examples: &[
             direct("Watch agent a3", "facade attach a3", &["attach", "a3"]),
@@ -164,8 +170,8 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "stop",
-        description: "Stop agents that Facade started and keep them in your list. You can still read their \
-             screens, remove them or resume a saved session if the CLI supports it.",
+        description: "Stop running managed agents. You can read their screens, remove them or resume a saved \
+             session. Agents they started keep running.",
         alias: None,
         examples: &[
             direct("Stop agent a3", "facade stop a3", &["stop", "a3"]),
@@ -178,11 +184,22 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "resume",
-        description: "Pick up where an ended agent that Facade started left off, with the same ID, name and \
-             screen, if its CLI supports resuming and saved a session. In an interactive terminal it opens here; \
-             press Ctrl-] to detach and leave it running. Use '--detach' to resume it in the background instead.",
+        description: "Without a reference, list resumable agents and CLI sessions for the current folder. Use \
+             '--folder' or '--machine' to look elsewhere. With a reference, resume the agent or start a new \
+             agent from a CLI session. In an interactive terminal, Ctrl-] detaches and returns 0. If the \
+             agent exits first, this command returns the CLI's exit code. Use '-d' to run in the background.",
         alias: None,
         examples: &[
+            direct(
+                "List resumable agents and CLI sessions",
+                "facade resume",
+                &["resume"],
+            ),
+            direct(
+                "List ended agents across awake machines",
+                "facade resume --all",
+                &["resume", "--all"],
+            ),
             direct(
                 "Resume agent a3 and work with it here",
                 "facade resume a3",
@@ -197,8 +214,8 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "remove",
-        description: "Remove agents that Facade started, along with their screens and inboxes. Facade stops any \
-             that are still running, and each CLI keeps its saved session.",
+        description: "Remove agents that the Orchestrator started, along with their screens and inboxes. The \
+             Orchestrator stops any that are still running, and each CLI keeps its saved session.",
         alias: Some("rm"),
         examples: &[
             direct("Remove agent a3", "facade rm a3", &["rm", "a3"]),
@@ -207,7 +224,7 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "rename",
-        description: "Give the agent a new name, or pass a space in quotes to let Facade choose one.",
+        description: "Change the agent's display name. Pass an empty or blank name to let the Orchestrator choose one.",
         alias: None,
         examples: &[
             direct(
@@ -216,7 +233,7 @@ pub(crate) const PAGES: &[Page] = &[
                 &["rename", "a3", "reviewer"],
             ),
             direct(
-                "Let Facade choose a new name for agent a3",
+                "Let the Orchestrator choose a new name for agent a3",
                 "facade rename a3 \" \"",
                 &["rename", "a3", " "],
             ),
@@ -224,8 +241,8 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "inspect",
-        description: "See what an agent is doing and what it is waiting for. You can also check its Facade \
-             tools, its saved session and the last text submitted to it.",
+        description: "See the agent's address, state, launch settings and saved session. You can also check \
+             who started it, who is watching its terminal, and whether YOLO is on.",
         alias: None,
         examples: &[
             direct(
@@ -242,8 +259,8 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "screen",
-        description: "Print what an agent has shown recently: the last lines of its screen and scrollback as \
-             plain text.",
+        description: "Print recent terminal output and scrollback, including the last screen of an ended agent. \
+             Use '--json' for the text and its screen details.",
         alias: None,
         examples: &[
             direct(
@@ -252,9 +269,9 @@ pub(crate) const PAGES: &[Page] = &[
                 &["screen", "a3"],
             ),
             direct(
-                "Print the last 200 lines",
-                "facade screen -n 200 a3",
-                &["screen", "-n", "200", "a3"],
+                "Print the last 200 lines with screen details",
+                "facade screen --json -n 200 a3",
+                &["screen", "--json", "-n", "200", "a3"],
             ),
         ],
     },
@@ -283,27 +300,19 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "send",
-        description: "Give an agent a task or ask it a question, as yourself or, in an agent's terminal, as that \
-             agent. Facade waits up to 30 seconds to deliver the message to an agent it started; a guest gets it \
-             in its inbox at once. A message from an agent to the human goes to each of the agent's editor \
-             windows that shows Facade messages.",
+        description: "Send a message from the command line. The Orchestrator waits up to 30 seconds for a \
+             managed agent's terminal to receive it or a guest to read it. On delivery, this command prints \
+             the message address.",
         alias: None,
-        examples: &[
-            direct(
-                "Ask agent a3 to review a change",
-                "facade send a3 \"Please review the diff in src/parser.rs\"",
-                &["send", "a3", "Please review the diff in src/parser.rs"],
-            ),
-            direct(
-                "From an agent in an editor window, tell the human the tests passed",
-                "facade send human \"Done: all tests pass\"",
-                &["send", "human", "Done: all tests pass"],
-            ),
-        ],
+        examples: &[direct(
+            "Ask an agent on gpu to review a change",
+            "facade send a3@gpu \"Please review the diff in src/parser.rs\"",
+            &["send", "a3@gpu", "Please review the diff in src/parser.rs"],
+        )],
     },
     Page {
         path: "machine",
-        description: "Work with agents on other machines. Facade connects over SSH and opens no port. Once two \
+        description: "Work with agents on other machines. Orchestrators connect over SSH and open no port. Once two \
              machines are connected, you can list, start and message agents on both from either one.",
         alias: None,
         examples: &[
@@ -321,10 +330,10 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "machine add",
-        description: "Connect to a machine over SSH and keep the connection. Facade reconnects on its own, even \
-             after either machine restarts. The first connection runs here, so SSH can ask for a password or a \
-             host key. Set up SSH keys so Facade can reconnect in the background. \
-             Run this again to repair a connection that needs an SSH login.",
+        description: "Connect over SSH and save the connection. Use the same arguments you would give ssh. \
+             Put '--home' before those arguments to use another remote Facade home. SSH can ask for a \
+             password or host key here. Saved machines connect automatically while awake. An operation that names \
+             a sleeping machine wakes it. Run the same command again when a saved connection needs a login.",
         alias: None,
         examples: &[
             direct(
@@ -333,16 +342,29 @@ pub(crate) const PAGES: &[Page] = &[
                 &["machine", "add", "gpu"],
             ),
             direct(
-                "Use another Facade home on that machine",
-                "facade machine add me@10.0.0.5 --home /srv/facade",
-                &["machine", "add", "me@10.0.0.5", "--home", "/srv/facade"],
+                "Connect as another user on port 2222",
+                "facade machine add -p 2222 me@10.0.0.5",
+                &["machine", "add", "-p", "2222", "me@10.0.0.5"],
+            ),
+            direct(
+                "Use an SSH key and another remote Facade home",
+                "facade machine add --home /srv/facade -i ~/.ssh/work me@gpu",
+                &[
+                    "machine",
+                    "add",
+                    "--home",
+                    "/srv/facade",
+                    "-i",
+                    "~/.ssh/work",
+                    "me@gpu",
+                ],
             ),
         ],
     },
     Page {
         path: "machine connect",
-        description: "Connect to a machine over SSH until you press Ctrl-C or close this terminal. Nothing is \
-             saved.",
+        description: "Keep a temporary SSH connection until you press Ctrl-C or close this terminal. Use \
+             the same SSH arguments and optional '--home' as 'facade machine add'.",
         alias: None,
         examples: &[direct(
             "Connect to gpu for now",
@@ -352,8 +374,8 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "machine list",
-        description: "See the machines this one connects to and how, and the connections saved here. \
-             Copy an ID from the table to select a machine.",
+        description: "See connected and saved machines, their state, and how to sign in again when needed. \
+             Copy a machine selector from the table to use in a command.",
         alias: None,
         examples: &[
             direct(
@@ -370,8 +392,8 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "machine remove",
-        description: "Remove a saved connection to a machine. Its agents keep running, and other machines may \
-             still have a route to it.",
+        description: "Forget this machine's saved SSH arguments and close that connection. Agents keep running, \
+             and another route may still be available.",
         alias: None,
         examples: &[direct(
             "Stop connecting to gpu",
@@ -392,14 +414,28 @@ pub(crate) const PAGES: &[Page] = &[
     },
     Page {
         path: "status",
-        description: "Check whether Facade responds and see its Facade home, where it keeps settings and logs. If \
-             it responds, you also see this command's version, Facade's services and the agent count. This \
-             command never starts Facade.",
+        description: "Show the Orchestrator's version, Facade home, and settings file. When running, it also \
+             shows the daemon and keeper process IDs, active agent count and connected machines. Local status \
+             checks for a running service. '--machine' queries another machine and wakes it if needed.",
+        alias: None,
+        examples: &[
+            direct("Check the local Orchestrator", "facade status", &["status"]),
+            direct(
+                "Check the Orchestrator on gpu",
+                "facade status --machine gpu",
+                &["status", "--machine", "gpu"],
+            ),
+        ],
+    },
+    Page {
+        path: "upgrade",
+        description: "Install the latest stable version of Facade Code. A compatible running Orchestrator \
+             hands over to the new version while its agents keep running.",
         alias: None,
         examples: &[direct(
-            "Check whether Facade responds",
-            "facade status",
-            &["status"],
+            "Install the latest stable version",
+            "facade upgrade",
+            &["upgrade"],
         )],
     },
     Page {
@@ -442,7 +478,7 @@ pub(crate) const PAGES: &[Page] = &[
     },
 ];
 
-/// The page of command `path`, such as `machine add`.
+/// The page of the command at `path`, such as `machine add`.
 pub(crate) fn page(path: &str) -> Option<&'static Page> {
     PAGES.iter().find(|page| page.path == path)
 }

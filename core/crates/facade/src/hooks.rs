@@ -24,7 +24,6 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use facade_base::daemon_client::DaemonClient;
 use facade_base::daemon_client::environment;
 use facade_base::paths;
 use facade_rules::hook;
@@ -74,11 +73,7 @@ pub(crate) enum HookEvent {
 
 /// Runs a hook: reads its input and prints its output in the CLI's format, never failing. `agent`
 /// is the run's `FACADE_AGENT`, whose folder holds the run's instructions.
-pub(crate) fn run(
-    event: HookEvent,
-    agent: Option<&str>,
-    _connect: &dyn Fn() -> Option<DaemonClient>,
-) {
+pub(crate) fn run(event: HookEvent, agent: Option<&str>) {
     match event {
         HookEvent::SessionStart { file, skill } => start_run_session(&file, skill),
         HookEvent::Title { file, command } => retitle(&file, command.as_deref()),
