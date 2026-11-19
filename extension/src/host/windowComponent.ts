@@ -9,16 +9,54 @@
 import * as crypto from 'crypto';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { messageOf } from '../base/errors';
 import {
-	isDamagedWindowIdentity, isUnreadableWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, WORKSPACE_MACHINE_BRIDGE_COMMAND,
-	type DamagedWindowIdentity, type UnreadableWindowIdentity, type WindowIdentity
+	isDamagedWindowIdentity, isLegacyWindowInstance, isUnreadableWindowIdentity, isWindowIdentity, isWindowTerminalIdentity,
+	WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND, WORKSPACE_MACHINE_BRIDGE_COMMAND,
+	type DamagedWindowIdentity, type LegacyWindowInstance, type TerminalOwner, type UnreadableWindowIdentity, type WindowIdentity
 } from '../base/windowIdentity';
+import type { LogPort } from '../core/ports';
+import { nextOwnerClaim } from '../record/ownership';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 import { RemoteSshWorkspace } from './remoteSshWorkspace';
 import { FACADE_PROGRAM } from './rust/types';
 
 /** The window component's extension ID. */
 export const WINDOW_COMPONENT = 'facade.facadecode-window';
+
+/** The local component can retire a previous host's terminal tabs (ARCHITECTURE-6.3). */
+export async function optionalTerminalOwner(_context: vscode.ExtensionContext, home: string, log: LogPort): Promise<
+	(TerminalOwner & { readonly remote: boolean }) | undefined
+> {
+	const session = vscode.env.sessionId;
+	try {
+		const identity: unknown = await vscode.commands.executeCommand(WINDOW_TERMINAL_OWNER_COMMAND, session);
+		if (!isWindowTerminalIdentity(identity, session)) { return undefined; }
+		const claim = nextOwnerClaim(`rust-terminal:${identity.token}`, home);
+		const owner = { session, claim, remote: vscode.env.remoteName !== undefined };
+		if (await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...owner, kind: 'activate', handedOver: true }) === true) {
+			return owner;
+		}
+	} catch (error) {
+		const message = messageOf(error);
+		if (!message.includes(`'${WINDOW_TERMINAL_OWNER_COMMAND}' not found`)) {
+			log.event(`Could not prepare cleanup for previous Facade tabs: ${message}`);
+		}
+	}
+	return undefined;
+}
+
+/** Reads a previous v2 instance for a native window that can still identify it. */
+export async function legacyWindowInstance(): Promise<LegacyWindowInstance | undefined> {
+	const session = vscode.env.sessionId;
+	try {
+		const value: unknown = await vscode.commands.executeCommand(WINDOW_LEGACY_INSTANCE_COMMAND, session);
+		return isLegacyWindowInstance(value, session) ? value : undefined;
+	} catch (error) {
+		if (!messageOf(error).includes(`'${WINDOW_LEGACY_INSTANCE_COMMAND}' not found`)) { throw error; }
+		return undefined;
+	}
+}
 
 /** How long activation waits for the window component to answer (ARCHITECTURE-4.3). */
 export const COMPONENT_WAIT_MS = 60_000;

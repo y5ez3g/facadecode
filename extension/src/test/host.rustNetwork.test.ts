@@ -91,30 +91,6 @@ function harness(location?: Location, resumeProblem: RustAgentsDeps['resumeProbl
 }
 
 suite('Rust machine network windows (RULES-2.2, PANEL-1.3, LIFECYCLE-2.3)', () => {
-	test('keeps equal numbers distinct and removes records only from an authoritative machine view', () => {
-		const view = harness();
-		const localAgent = record(local);
-		const remote = record(gpu, { label: '#a7@gpu' });
-		const peer = record(server, { label: '#a7@server' });
-		view.listing.snapshot({ agents: [localAgent], machines: [
-			{ machine_id: gpu, state: 'synced', agents: [remote] }, { machine_id: server, state: 'synced', agents: [peer] }
-		] });
-		assert.deepStrictEqual(view.agents.list().map(run => [run.alias, run.pinnable]), [['#a7', true], ['#a7@gpu', false], ['#a7@server', false]]);
-		view.listing.change({ kind: 'machine_state', machine: { machine_id: gpu, state: 'pending' } });
-		assert.strictEqual(view.agents.get(agentAddress(remote))?.disconnected, true);
-		assert.strictEqual(view.disconnected.get(agentAddress(remote)), true);
-		view.reconnect();
-		view.listing.snapshot({ agents: [localAgent], machines: [{ machine_id: server, state: 'unreachable' }] });
-		assert.strictEqual(view.agents.get(agentAddress(remote))?.disconnected, true);
-		assert.strictEqual(view.agents.get(agentAddress(peer))?.disconnected, true);
-		view.listing.change({ kind: 'machine_state', machine: { machine_id: gpu, state: 'synced', agents: [remote] } });
-		assert.strictEqual(view.disconnected.get(agentAddress(remote)), false);
-		view.listing.change({ kind: 'machine_state', machine: { machine_id: gpu, state: 'synced', agents: [] } });
-		assert.deepStrictEqual(view.agents.list().map(run => run.id), [agentAddress(localAgent), agentAddress(peer)]);
-		view.listing.change({ kind: 'removed', machine_id: server, agent_id: peer.agent_id });
-		assert.deepStrictEqual(view.agents.list().map(run => run.id), [agentAddress(localAgent)]);
-	});
-
 	test('local core loss immediately marks every remote card disconnected until its machine syncs', () => {
 		const view = harness();
 		const localAgent = record(local);

@@ -7,6 +7,8 @@ import { isOwnerClaim, type OwnerClaim } from './ownership';
 
 /** Public command shared by the workspace and local window components; it is not a palette action. */
 export const WINDOW_IDENTITY_COMMAND = 'facade.window.identity';
+export const WINDOW_TERMINAL_OWNER_COMMAND = 'facade.window.terminalOwner';
+export const WINDOW_LEGACY_INSTANCE_COMMAND = 'facade.window.legacyInstance';
 export const WINDOW_TERMINALS_COMMAND = 'facade.window.terminals';
 /** Carries this Remote-SSH window's machine relay over VS Code's existing connection. */
 export const WORKSPACE_MACHINE_BRIDGE_COMMAND = 'facade.workspace.machineBridge';
@@ -78,6 +80,25 @@ export interface WindowIdentity {
 	readonly component?: string;
 }
 
+/** The local terminal registry's handover identity. */
+export interface WindowTerminalIdentity {
+	readonly version: 1;
+	readonly session: string;
+	readonly token: string;
+}
+
+export interface LegacyWindowInstance extends WindowTerminalIdentity {
+	readonly instanceId: string;
+}
+
+export function isWindowTerminalIdentity(value: unknown, session: string): value is WindowTerminalIdentity {
+	return isJsonObject(value) && value.version === 1 && value.session === session && isWindowToken(value.token);
+}
+
+export function isLegacyWindowInstance(value: unknown, session: string): value is LegacyWindowInstance {
+	return isJsonObject(value) && typeof value.instanceId === 'string' && /^win-[0-9a-f]{16}$/.test(value.instanceId)
+		&& isWindowTerminalIdentity(value, session);
+}
 export function isWindowToken(value: unknown): value is string {
 	return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 }

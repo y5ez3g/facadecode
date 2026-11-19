@@ -5,7 +5,8 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { WINDOW_IDENTITY_COMMAND } from '../base/windowIdentity';
+import { WINDOW_IDENTITY_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { tempDir } from './util';
 import { TestEmitter, withModules } from './withModules';
 
 const SESSION = 'session-1';
@@ -21,7 +22,7 @@ function fakeEditor() {
 	const notices: { readonly kind: 'warning' | 'information'; readonly text: string; readonly actions: readonly string[]; answer(choice: string | undefined): void }[] = [];
 	const providers = new Map<string, { resolveWebviewView(view: unknown): void }>();
 	const vscode = {
-		env: { language: 'en' },
+		env: { language: 'en', sessionId: SESSION },
 		l10n: { t: (text: string) => text },
 		commands: {
 			executeCommand: async (id: string, ...args: unknown[]) => {
@@ -63,6 +64,25 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 		// A late answer of an earlier editor session identifies no window
 		editor.handlers.set(WINDOW_IDENTITY_COMMAND, () => ({ ...IDENTITY, session: 'session-0' }));
 		assert.strictEqual(await editor.component.waitForWindowIdentity(SESSION, 1_000), undefined);
+
+		const home = tempDir('fd-terminal-owner-');
+		try {
+			editor.executed.length = 0;
+			editor.handlers.set(WINDOW_TERMINAL_OWNER_COMMAND, () => IDENTITY);
+			editor.handlers.set(WINDOW_TERMINALS_COMMAND, request => {
+				assert.deepStrictEqual(request && Object.assign({}, request, { claim: undefined }), {
+					session: SESSION, remote: false, kind: 'activate', handedOver: true, claim: undefined,
+				});
+				return true;
+			});
+			const owner = await editor.component.optionalTerminalOwner({} as never, home.dir, { event: assert.fail });
+			assert.strictEqual(owner?.claim.owner, `rust-terminal:${IDENTITY.token}`);
+			assert.deepStrictEqual(editor.executed, [WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND]);
+			editor.handlers.set(WINDOW_TERMINAL_OWNER_COMMAND, () => ({ ...IDENTITY, session: 'session-0' }));
+			assert.strictEqual(await editor.component.optionalTerminalOwner({} as never, home.dir, { event: assert.fail }), undefined);
+		} finally {
+			home.remove();
+		}
 	});
 
 	test('a component the editor installs or activates later is waited for: asked again as extensions change, and at least twice a second', async () => {
@@ -85,6 +105,8 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 
 	test('a component that never answers within the wait is none, and the waiting ends then', async () => {
 		const editor = fakeEditor();
+		assert.strictEqual(await editor.component.optionalTerminalOwner({} as never, 'unused', { event: assert.fail }), undefined);
+		assert.deepStrictEqual(editor.executed, [WINDOW_TERMINAL_OWNER_COMMAND]);
 		const began = Date.now();
 		assert.strictEqual(await editor.component.waitForWindowIdentity(SESSION, 300), undefined);
 		const waited = Date.now() - began;
