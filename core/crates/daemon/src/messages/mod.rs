@@ -11,8 +11,9 @@
 //!   a paste before it is written, a read before its snapshot is answered, a settlement before the
 //!   send it answers. A restart so finds at most one paste of each agent begun and not settled.
 //! - A typist and a read never both take a message: whichever comes first owns it.
-//! - A message may be withdrawn only while none of it can have been typed. A start's prompt is
-//!   never withdrawn: the first task an agent is given stays in its inbox even where it timed out.
+//! - A send can cancel before its paste begins. A delivery that times out untyped is withdrawn,
+//!   including a start's prompt. The terminal can also withdraw a message once it confirms clearing
+//!   its paste before Enter. A withdrawn request keeps a private receipt for repeats.
 //! - A start's prompt from an agent owes that agent a result. The settlement that ends the prompt
 //!   writes the result in the same transaction, and the result is delivered like any message.
 //! - A send with a request ID finds, within the hour, the message it kept first, and keeps no other.
@@ -30,7 +31,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentInfo, Message, SendOutcome};
+use facade_base::daemon::{AgentInfo, Delivery, DeliveryStatus, Message, SendOutcome, TextWritten};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::{AgentDeliverStartResultArgs, AgentRef, MessageRef};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -41,6 +42,8 @@ use crate::{HUMAN, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
 pub(crate) use human::{human_result, no_window_delivery};
+#[allow(unused_imports)] // The verified relay supplies the selection when it is wired in.
+pub(crate) use inbox::InboxRead;
 pub(crate) use outcome::{Due, Outcome, delivery_limit};
 pub(crate) use restart::{Recipient, TakeUp, decide};
 
@@ -105,6 +108,8 @@ pub(crate) enum PostedHuman {
 pub(crate) enum Earlier {
     Delivering(Message, watch::Receiver<Option<Settled>>),
     Settled(Message),
+    /// The message's private receipt. A failure with no reason records an explicit cancellation.
+    Withdrawn(Message),
     HumanReady(SendOutcome),
     HumanInFlight(watch::Receiver<Option<HumanSend>>),
 }
@@ -151,9 +156,9 @@ fn warn(message: &str) {
 /// A message being delivered.
 struct Open {
     message: Message,
-    /// Whether its paste began: a read still takes it, with what reached the terminal unknown.
+    /// Whether its paste began: the compatibility read can still take it.
     pasted: bool,
-    /// Whether it is a start's prompt, which is never withdrawn.
+    /// Whether it is a start's prompt, which has no send call to cancel.
     prompt: bool,
     /// The result it owes, where it is a start's prompt from an agent or guest.
     owes: Option<OwedResult>,
@@ -162,9 +167,8 @@ struct Open {
 }
 
 impl Open {
-    /// Whether it may still go back out of its inbox: none of it can have been typed, and it is no
-    /// start's prompt.
-    fn may_withdraw(&self) -> bool {
+    /// Whether the send itself can cancel this delivery.
+    fn may_cancel(&self) -> bool {
         !self.pasted && !self.prompt && self.owes.is_none()
     }
 }
@@ -278,9 +282,13 @@ impl Deliveries {
         let KeptMessage {
             mut message,
             window_delivery,
+            withdrawn,
             ..
         } = kept;
         self.identify(&mut message);
+        if withdrawn {
+            return Earlier::Withdrawn(message);
+        }
         if message.to == HUMAN {
             return match open.human.get(&number(&message)) {
                 Some(settled) => Earlier::HumanInFlight(settled.subscribe()),
@@ -298,13 +306,6 @@ impl Deliveries {
             }
             None => Earlier::Settled(message),
         }
-    }
-
-    /// Deletes message `number` from the table. Returns whether it did.
-    fn delete(&self, number: u64) -> bool {
-        blocking_in_place(|| self.table.delete_message(number))
-            .inspect_err(|err| warn(&format!("{err:#}; #m{number} stays")))
-            .is_ok()
     }
 }
 
@@ -430,18 +431,35 @@ impl Messages {
         Ok(kept.map(|kept| self.deliveries.posted(&mut open, kept)))
     }
 
-    /// Withdraws message `number` for its send's `cancel`, where its paste has not begun: it is
-    /// deleted, its send learns it was cancelled, and watchers that it is gone. Returns whether it
-    /// was withdrawn.
+    /// Withdraws message `number` for its send's `cancel` before its paste begins. After the store
+    /// hides it and keeps any replay receipt, the send learns it was cancelled and watchers that
+    /// it is gone.
     pub(crate) fn withdraw(&self, number: u64) -> bool {
         let deliveries = &self.deliveries;
         let mut open = deliveries.lock();
-        if !open.agents.get(&number).is_some_and(Open::may_withdraw) {
+        if !open.agents.get(&number).is_some_and(Open::may_cancel) {
             return false;
         }
-        if let Err(err) = blocking_in_place(|| deliveries.table.delete_message(number)) {
-            warn(&format!("{err:#}; #m{number} goes on"));
-            return false;
+        let cancelled = Delivery {
+            status: DeliveryStatus::Failure,
+            reason: None,
+            text_written: TextWritten::None,
+            enter_written: Some(false),
+            deadline: None,
+            delivered_via: None,
+            delivered_at: None,
+        };
+        match blocking_in_place(|| {
+            deliveries
+                .table
+                .settle_with_withdrawals(&[(number, &cancelled)], &[], &[number])
+        }) {
+            Ok(written) if written.settled.contains(&number) => {}
+            Ok(_) => return false,
+            Err(err) => {
+                warn(&format!("{err:#}; #m{number} goes on"));
+                return false;
+            }
         }
         let Some(gone) = open.agents.remove(&number) else {
             return false;

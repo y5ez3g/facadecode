@@ -644,6 +644,29 @@ impl Daemon {
                 }
                 return result;
             }
+            Earlier::Withdrawn(message) => {
+                if message.delivery.reason.is_none() {
+                    return settled_answer(
+                        Some(Settled::Cancelled),
+                        &message.to,
+                        &message.message_id,
+                    )
+                    .map(|(message, withdrawn)| SendOutcome {
+                        message,
+                        repeated: true,
+                        withdrawn,
+                        window_delivery: None,
+                    })
+                    .map_err(Into::into);
+                }
+                log_repeat(&message, request_id);
+                return Ok(SendOutcome {
+                    message,
+                    repeated: true,
+                    withdrawn: true,
+                    window_delivery: None,
+                });
+            }
             Earlier::Settled(message) => (message, None),
             Earlier::Delivering(message, settled) => (message, Some(settled)),
         };
@@ -1020,7 +1043,7 @@ impl Daemon {
                     .and_then(|outcome| outcome.clone());
                 settled_answer(outcome, to, id)?.0
             }
-            Posted::Earlier(Earlier::Settled(message)) => message,
+            Posted::Earlier(Earlier::Settled(message) | Earlier::Withdrawn(message)) => message,
             Posted::Earlier(Earlier::HumanReady(_) | Earlier::HumanInFlight(_)) => {
                 return Err(ErrorBody::internal(
                     "a start result was addressed to the person",

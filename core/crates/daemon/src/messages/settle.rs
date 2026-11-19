@@ -74,10 +74,14 @@ impl Deliveries {
     /// results they owe in one transaction, tells their sends, and withdraws those the outcome
     /// takes back. One whose inbox went is told nothing: dropping it closes its send's channel.
     pub(super) fn settle_open(&self, open: &mut OpenMap, numbers: &[u64], outcome: Outcome) {
+        let cleaned_paste = matches!(outcome, Outcome::Withdrawn { .. });
         let ending: Vec<u64> = numbers
             .iter()
             .copied()
-            .filter(|number| open.contains_key(number))
+            .filter(|number| {
+                open.get(number)
+                    .is_some_and(|delivery| !cleaned_paste || delivery.pasted)
+            })
             .collect();
         if ending.is_empty() {
             return;
@@ -86,18 +90,38 @@ impl Deliveries {
         let delivery = outcome.delivery(&at);
         let writes: Vec<(u64, &Delivery)> =
             ending.iter().map(|number| (*number, &delivery)).collect();
+        let mut withdrawals: Vec<u64> = ending
+            .iter()
+            .copied()
+            .filter(|number| outcome.withdraws(open[number].pasted))
+            .collect();
         let due = Due::now();
         let results = owed_results(open, &writes, &at, &due);
-        let written = blocking_in_place(|| self.table.settle_messages(&writes, &results))
-            .unwrap_or_else(|err| {
+        let written = match blocking_in_place(|| {
+            if cleaned_paste {
+                self.table.settle_cleaned_paste(&writes, &results)
+            } else if withdrawals.is_empty() {
+                self.table.settle_messages(&writes, &results)
+            } else {
+                self.table
+                    .settle_with_withdrawals(&writes, &results, &withdrawals)
+            }
+        }) {
+            Ok(written) => written,
+            Err(err) => {
+                warn(&format!("{err:#}"));
+                if cleaned_paste {
+                    return;
+                }
                 // The sends still learn what happened. After a restart the table shows what it
                 // last wrote, and the prompts among them still owe their results.
-                warn(&format!("{err:#}"));
+                withdrawals.clear();
                 Settlement {
                     settled: ending.clone(),
                     results: Vec::new(),
                 }
-            });
+            }
+        };
         for number in ending {
             let Some(ended) = open.remove(&number) else {
                 continue;
@@ -105,12 +129,11 @@ impl Deliveries {
             if !written.settled.contains(&number) {
                 continue;
             }
-            let withdraw = outcome.withdraws() && ended.may_withdraw();
             let message = Message {
                 delivery: delivery.clone(),
                 ..ended.message
             };
-            if withdraw && self.delete(number) {
+            if withdrawals.contains(&number) {
                 ended
                     .settled
                     .send_replace(Some(Settled::Withdrawn(Box::new(message.clone()))));

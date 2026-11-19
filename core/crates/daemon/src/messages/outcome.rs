@@ -6,13 +6,19 @@ use std::time::{Duration, SystemTime};
 use facade_base::daemon::{DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, TextWritten};
 use tokio::time::Instant;
 
-use super::DELIVERY_TIME;
+use super::{DELIVERY_TIME, RESPONSE_GRACE};
 
 /// How a delivery ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     /// Typed and submitted.
     Typed,
+    /// The terminal cleared this message's own paste before submitting it.
+    #[allow(dead_code)] // The terminal sends this after it confirms the cleanup.
+    Withdrawn {
+        reason: DeliveryFailure,
+        text_written: TextWritten,
+    },
     /// Not delivered. `text_written` says how much of it reached the terminal; `enter_written` is
     /// None where nobody knows whether its Enter did.
     Failed {
@@ -39,55 +45,56 @@ impl Outcome {
         }
     }
 
-    /// Whether this failure takes a sent message back out of its inbox: its recipient's CLI could
-    /// not take it in time and none of it was typed, so its sender can simply send it again.
-    pub(super) fn withdraws(self) -> bool {
-        matches!(
-            self,
+    /// Takes a message out of its inbox when it expired before pasting or the terminal confirmed
+    /// clearing its paste before Enter.
+    pub(super) fn withdraws(self, pasted: bool) -> bool {
+        match self {
+            Outcome::Withdrawn { .. } => pasted,
             Outcome::Failed {
-                reason: DeliveryFailure::Timeout
+                reason:
+                    DeliveryFailure::Timeout
                     | DeliveryFailure::InputDraft
                     | DeliveryFailure::InputInteraction
                     | DeliveryFailure::InputUnknown,
                 text_written: TextWritten::None,
                 ..
-            }
-        )
+            } => !pasted,
+            _ => false,
+        }
     }
 
     /// The delivery this outcome records, ending at `at`.
     pub(super) fn delivery(self, at: &str) -> Delivery {
-        let (status, reason, text_written, enter_written, delivered_via, delivered_at) = match self
-        {
-            Outcome::Typed => (
-                DeliveryStatus::Success,
-                None,
-                TextWritten::Full,
-                Some(true),
-                Some(DeliveredVia::TypedIntoInput),
-                Some(at.to_string()),
-            ),
+        let (reason, text_written, enter_written) = match self {
+            Outcome::Typed => {
+                return Delivery {
+                    status: DeliveryStatus::Success,
+                    reason: None,
+                    text_written: TextWritten::Full,
+                    enter_written: Some(true),
+                    deadline: None,
+                    delivered_via: Some(DeliveredVia::TypedIntoInput),
+                    delivered_at: Some(at.to_string()),
+                };
+            }
+            Outcome::Withdrawn {
+                reason,
+                text_written,
+            } => (reason, text_written, Some(false)),
             Outcome::Failed {
                 reason,
                 text_written,
                 enter_written,
-            } => (
-                DeliveryStatus::Failure,
-                Some(reason),
-                text_written,
-                enter_written,
-                None,
-                None,
-            ),
+            } => (reason, text_written, enter_written),
         };
         Delivery {
-            status,
-            reason,
+            status: DeliveryStatus::Failure,
+            reason: Some(reason),
             text_written,
             enter_written,
             deadline: None,
-            delivered_via,
-            delivered_at,
+            delivered_via: None,
+            delivered_at: None,
         }
     }
 }
@@ -118,6 +125,11 @@ pub(crate) struct Due {
 }
 
 impl Due {
+    /// Caps an inbox wait at the same whole call budget as a send, including its answer grace.
+    pub(super) fn inbox_wait(until: Instant) -> Instant {
+        until.min(Instant::now() + DELIVERY_TIME + RESPONSE_GRACE * 2)
+    }
+
     /// A whole delivery's time from now.
     pub(crate) fn now() -> Due {
         Due::within(None)

@@ -39,7 +39,9 @@ mod windows;
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use integrations::{IntegrationFile, IntegrationTable};
 pub(crate) use membership::MembershipTable;
-pub(crate) use messages::{Gone, Kept, KeptMessage, MessageTable, RequestId, Settlement};
+pub(crate) use messages::{
+    Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, Settlement,
+};
 pub(crate) use windows::WindowTable;
 
 const SCHEMA: &str = "
@@ -201,7 +203,7 @@ impl Store {
             initialize(&mut connection, held)
                 .map_err(|err| anyhow::anyhow!("could not initialize {}: {err}", path.display()))?;
         }
-        migrate_guest_yolo(&mut connection).map_err(unreadable)?;
+        migrate(&mut connection).map_err(unreadable)?;
         let (machine_id, machine_name) = connection
             .query_row(
                 "SELECT machine_id, name FROM machine WHERE singleton = 1",
@@ -470,7 +472,7 @@ impl Store {
     pub(crate) fn in_memory() -> Arc<Store> {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection, &[]).unwrap();
-        migrate_guest_yolo(&mut connection).unwrap();
+        migrate(&mut connection).unwrap();
         Arc::new(Store {
             connection: Mutex::new(connection),
         })
@@ -612,15 +614,18 @@ fn initialize(connection: &mut Connection, held: &[String]) -> rusqlite::Result<
     transaction.commit()
 }
 
-fn migrate_guest_yolo(connection: &mut Connection) -> rusqlite::Result<()> {
+fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version == 0 {
-        let transaction = connection.transaction()?;
-        transaction.execute("ALTER TABLE guests ADD COLUMN yolo INTEGER", [])?;
-        transaction.pragma_update(None, "user_version", 1)?;
-        transaction.commit()?;
+    if version >= 2 {
+        return Ok(());
     }
-    Ok(())
+    let transaction = connection.transaction()?;
+    if version == 0 {
+        transaction.execute("ALTER TABLE guests ADD COLUMN yolo INTEGER", [])?;
+    }
+    messages::migrate_withdrawals(&transaction)?;
+    transaction.pragma_update(None, "user_version", 2)?;
+    transaction.commit()
 }
 
 pub(super) fn machine_uuid() -> String {

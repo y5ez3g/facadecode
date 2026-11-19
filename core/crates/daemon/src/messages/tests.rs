@@ -185,10 +185,10 @@ fn a_request_id_posts_one_message_found_while_delivered_and_once_settled() {
     let Posted::New(first, _) = post.post(fresh("a2"), Some("r1"), Some("win-1")).unwrap() else {
         panic!("a new message")
     };
-    let again = post.post(fresh("a2"), Some("r1"), Some("win-1")).unwrap();
+    let again = post.post(fresh("a2"), Some("r1"), Some("win-2")).unwrap();
     assert!(
         matches!(&again, Posted::Earlier(Earlier::Delivering(message, _)) if *message == first),
-        "it joins the first"
+        "it joins the first even from another window"
     );
     assert!(matches!(
         post.find_request(machine_id, HUMAN, "a2", "r1", Some("win-1"))
@@ -197,7 +197,7 @@ fn a_request_id_posts_one_message_found_while_delivered_and_once_settled() {
     ));
     post.settle(&[1], Outcome::Typed);
     let settled = post
-        .find_request(machine_id, HUMAN, "a2", "r1", Some("win-1"))
+        .find_request(machine_id, HUMAN, "a2", "r1", None)
         .unwrap();
     assert!(matches!(
         settled,
@@ -206,8 +206,6 @@ fn a_request_id_posts_one_message_found_while_delivered_and_once_settled() {
     for (machine, from, to, request, window) in [
         (machine_id.as_str(), HUMAN, "a2", "r2", Some("win-1")),
         (machine_id.as_str(), "a4", "a2", "r1", None),
-        (machine_id.as_str(), HUMAN, "a2", "r1", Some("win-2")),
-        (machine_id.as_str(), HUMAN, "a2", "r1", None),
         ("another-machine", HUMAN, "a2", "r1", Some("win-1")),
         (machine_id.as_str(), HUMAN, "a3", "r1", Some("win-1")),
     ] {
@@ -221,14 +219,21 @@ fn a_request_id_posts_one_message_found_while_delivered_and_once_settled() {
     assert!(matches!(different, Posted::New(message, _) if message.message_id == "m2"));
 }
 
-/// A withdrawal takes a message whose paste has not begun out of the deliveries and the store:
-/// its send learns it was withdrawn, watchers that it is removed, and its paste never begins.
-/// One whose paste began, and one settled, stay.
+/// A cancellation takes a message out of the inbox and keeps its receipt for a repeated send.
+/// A send cannot cancel a begun paste. Its typist can withdraw it after confirming cleanup.
 #[test]
 fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
-    let (post, _store) = messages();
+    let folder = TestFolder::new("messages-cancelled");
+    let (post, _store) = messages_on_disk(&folder);
     let typist = post.delivery_handle();
-    let settled = self::post(&post, 1, "a2");
+    let message = Message {
+        at: facade_base::time::iso_now(),
+        ..message(1, "a2")
+    };
+    let Posted::New(sent, settled) = post.post(message.clone(), Some("cancelled"), None).unwrap()
+    else {
+        panic!("a new message")
+    };
     let mut changes = post.subscribe();
     assert!(post.withdraw(1));
     assert!(matches!(*settled.borrow(), Some(Settled::Cancelled)));
@@ -246,13 +251,46 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
         Some(Vec::new()),
         "its paste never begins"
     );
-    let _pasting = self::post(&post, 2, "a2");
+    let (reopened, _store) = messages_on_disk(&folder);
+    let repeated = reopened.post(message, Some("cancelled"), None).unwrap();
+    assert!(
+        matches!(repeated, Posted::Earlier(Earlier::Withdrawn(receipt))
+        if receipt.message_id == sent.message_id
+            && receipt.delivery.status == DeliveryStatus::Failure
+            && receipt.delivery.reason.is_none()
+            && receipt.text.is_empty())
+    );
+    let pasting = self::post(&post, 2, "a2");
     assert_eq!(typist.begin_paste(&[2]), Some(vec![2]));
     assert!(!post.withdraw(2), "a message whose paste began goes on");
     let _typed = self::post(&post, 3, "a2");
     post.settle(&[3], Outcome::Typed);
     assert!(!post.withdraw(3), "a settled message stays");
     assert!(post.message("m2").is_some() && post.message("m3").is_some());
+
+    typist.settle(
+        &[2],
+        Outcome::Withdrawn {
+            reason: DeliveryFailure::Timeout,
+            text_written: TextWritten::Full,
+        },
+    );
+    let receipt = withdrawn(&pasting).delivery;
+    assert_eq!(
+        (
+            receipt.status,
+            receipt.reason,
+            receipt.text_written,
+            receipt.enter_written
+        ),
+        (
+            DeliveryStatus::Failure,
+            Some(DeliveryFailure::Timeout),
+            TextWritten::Full,
+            Some(false)
+        )
+    );
+    assert!(post.message("m2").is_none());
 }
 
 /// A delivery's deadline is what is left of its send's 30 seconds as it reached the daemon, at
@@ -481,22 +519,62 @@ fn a_read_takes_ids_or_a_page_and_a_limit_from_1_to_200() {
     );
 }
 
-/// A read and a paste never both take a message: once its paste began, a read delivers it with
-/// what was typed unknown; once a read took it, no paste may type it.
-#[test]
-fn a_typist_and_a_read_never_both_take_a_message() {
+/// A read and a paste never both take a message. Only the projected prefix is delivered.
+#[tokio::test]
+async fn a_typist_and_a_read_never_both_take_a_message() {
     let (post, _store) = messages();
     let typist = post.delivery_handle();
-    self::post(&post, 1, "a2");
-    self::post(&post, 2, "a2");
+    let post_for_read = |number| {
+        let mut message = message(number, "a2");
+        message.delivery.deadline = Some(Due::now().at);
+        post_new(&post, message).1
+    };
+    let typing = post_for_read(1);
+    let read = post_for_read(2);
+    let later = post_for_read(3);
     assert_eq!(typist.begin_paste(&[1]), Some(vec![1]));
     assert!(
         !typist.still_to_type(1),
         "once its paste began, it is not to be typed again"
     );
-    post.read("a2", &MessagesWatchArgs::default()).unwrap();
+    let first = post
+        .read_inbox(
+            "a2",
+            InboxRead::default(),
+            crate::Cancel::default(),
+            |page| {
+                assert_eq!(ids(page), ["m2", "m3"]);
+                Ok((1, page.messages[0].clone()))
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.message_id, "m2");
+    assert!(typing.borrow().is_none());
+    assert_eq!(
+        kept(&read).delivery.delivered_via,
+        Some(DeliveredVia::ReadByRecipient)
+    );
     assert!(!typist.still_to_type(2), "once read, it is never typed");
     assert_eq!(typist.begin_paste(&[2]), Some(Vec::new()));
+    assert!(later.borrow().is_none());
+    let continued = post
+        .read_inbox(
+            "a2",
+            InboxRead {
+                after: Some(first.message_id),
+                ..InboxRead::default()
+            },
+            crate::Cancel::default(),
+            |page| Ok((page.messages.len(), page.clone())),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(&continued), ["m3"]);
+    assert_eq!(
+        kept(&later).delivery.delivered_via,
+        Some(DeliveredVia::ReadByRecipient)
+    );
 }
 
 /// Each change is in the store when the call that makes it returns: the message, the beginning
@@ -628,7 +706,14 @@ fn messages_older_than_30_days_are_deleted_and_numbers_go_on() {
 #[tokio::test(start_paused = true)]
 async fn a_message_nobody_settled_by_its_deadline_fails_as_timeout() {
     let (post, _store) = messages();
-    let mut settled = self::post(&post, 1, "a2");
+    let message = Message {
+        at: facade_base::time::iso_now(),
+        ..message(1, "a2")
+    };
+    let Posted::New(sent, mut settled) = post.post(message.clone(), Some("timeout"), None).unwrap()
+    else {
+        panic!("a new message")
+    };
     let deadline = Instant::now() + Duration::from_secs(1);
     post.settle_by_deadline(1, &mut settled, deadline).await;
     assert_eq!(Instant::now(), deadline + RESPONSE_GRACE);
@@ -640,6 +725,12 @@ async fn a_message_nobody_settled_by_its_deadline_fails_as_timeout() {
             Some(DeliveryFailure::Timeout),
             TextWritten::None
         )
+    );
+    assert!(post.inbox("a2").is_empty());
+    let repeated = post.post(message, Some("timeout"), None).unwrap();
+    assert!(
+        matches!(repeated, Posted::Earlier(Earlier::Withdrawn(receipt))
+        if receipt.message_id == sent.message_id && receipt.delivery == delivery)
     );
 }
 
@@ -775,8 +866,7 @@ fn prompt(post: &Messages, store: &Store, caller: &str, to: &str) -> (u64, u64) 
 /// The settlement of a start's prompt, by its typist or a read, writes the result it owes in
 /// the same transaction: from Facade, to the prompt's sender, under the number the prompt
 /// keeps, with its call, its facts and their words. The result is handed on for delivery, once;
-/// a later read of a prompt that failed writes none. A result for a caller that was removed is
-/// not written, and nothing is handed on.
+/// a timed-out prompt is withdrawn. A result for a caller that was removed is not written.
 #[test]
 fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
     let folder = TestFolder::new("messages-prompt-result");
@@ -847,13 +937,25 @@ fn a_prompt_s_settlement_writes_the_result_it_owes_and_hands_it_on_once() {
         )
     );
 
-    let (failed, _) = prompt(&post, &store, "a5", "a6");
+    let (failed, owed) = prompt(&post, &store, "a5", "a6");
     post.settle(&[failed], Outcome::untyped(DeliveryFailure::Timeout));
-    assert!(results.try_recv().is_ok());
+    let PostedResult::Local {
+        message: result, ..
+    } = results.try_recv().unwrap()
+    else {
+        panic!("the failure result is for a local caller")
+    };
+    assert_eq!(result.message_id, format!("m{owed}"));
     assert_eq!(
-        ids(&post.read("a6", &MessagesWatchArgs::default()).unwrap()),
-        [format!("m{failed}")],
-        "a read delivers it after all"
+        result.result.unwrap().prompt.delivery.reason,
+        Some(DeliveryFailure::Timeout)
+    );
+    assert!(post.message(&format!("m{failed}")).is_none());
+    assert!(
+        post.read("a6", &MessagesWatchArgs::default())
+            .unwrap()
+            .messages
+            .is_empty()
     );
     assert!(results.try_recv().is_err(), "with no second result");
 

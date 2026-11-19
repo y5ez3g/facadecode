@@ -9,7 +9,8 @@
 //!
 //! `request_id` keeps the sender's own ID of the send, where it gave one. The same sender's same ID
 //! within the hour finds the message again through `messages_request`, in the transaction that
-//! would keep a new one, so that two calls with one ID keep one message.
+//! would keep a new one, so that two calls with one ID keep one message. A withdrawal with a
+//! request ID keeps only its receipt, hidden from all inbox and history reads.
 //!
 //! A message takes its number in the transaction that writes it, so no message lacks one and no
 //! number goes to two. Deleting messages never lowers the counter. A value this build does not
@@ -35,7 +36,7 @@ const UNDELIVERED: &str = "status != 'success'";
 const COLUMNS: &str = "number, \"from\", from_name, \"to\", text, reply_to, at, status, reason, \
                        text_written, enter_written, deadline, delivered_via, delivered_at, paste, \
                        from_window, call_id, result_owed, result, human_windows, \
-                       from_machine_id, reply_to_machine_id, result_owed_machine_id";
+                       from_machine_id, reply_to_machine_id, result_owed_machine_id, withdrawn";
 
 /// Creates the table and its indexes. `messages_undelivered` lets reads scan only messages that
 /// are still waiting.
@@ -75,6 +76,15 @@ pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     ))
 }
 
+pub(super) fn migrate_withdrawals(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "ALTER TABLE messages ADD COLUMN withdrawn INTEGER NOT NULL DEFAULT 0;
+         DROP INDEX messages_request;
+         CREATE INDEX messages_request ON messages
+             (\"from\", from_machine_id, \"to\", request_id, at) WHERE request_id IS NOT NULL;",
+    )
+}
+
 /// A send's own ID as its sender gave it, and the earliest time at which a message it kept still
 /// answers it: an hour before now.
 #[derive(Clone, Copy, Debug)]
@@ -110,6 +120,7 @@ pub(crate) struct KeptMessage {
     pub(crate) message: Message,
     pub(crate) paste: Option<u64>,
     pub(crate) result_owed: Option<MessageRef>,
+    pub(crate) withdrawn: bool,
     /// The window subscriptions that took or refused a message to the person.
     pub(crate) window_delivery: Option<Vec<WindowDeliveryOutcome>>,
 }
@@ -126,6 +137,16 @@ pub(crate) struct Gone {
 pub(crate) struct Settlement {
     pub(crate) settled: Vec<u64>,
     pub(crate) results: Vec<u64>,
+}
+
+/// A read of eligible pending mail, or of history as well when paging or reading the tail.
+pub(crate) struct InboxPage<'a> {
+    pub(crate) machine_id: &'a str,
+    pub(crate) after: Option<u64>,
+    pub(crate) last: Option<usize>,
+    pub(crate) limit: usize,
+    pub(crate) reply_to: Option<(&'a str, u64)>,
+    pub(crate) now: &'a str,
 }
 
 /// A message's number, from its ID `m<number>`.
@@ -208,6 +229,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
                 message_id: format!("m{number}"),
             }),
         window_delivery,
+        withdrawn: row.get("withdrawn")?,
     })
 }
 
@@ -240,7 +262,7 @@ fn write(
         &format!(
             "INSERT INTO messages ({COLUMNS}, request_id, request_window_id) VALUES
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16,
-              NULL, ?17, NULL, NULLIF(?18, (SELECT machine_id FROM machine)), ?19, NULL, ?20, ?21)"
+              NULL, ?17, NULL, NULLIF(?18, (SELECT machine_id FROM machine)), ?19, NULL, 0, ?20, ?21)"
         ),
         params![
             number,
@@ -280,13 +302,12 @@ fn find_request(
     let mut statement = connection.prepare(&format!(
         "SELECT {COLUMNS} FROM messages WHERE \"from\" = ?1
          AND from_machine_id IS NULLIF(?2, (SELECT machine_id FROM machine)) AND \"to\" = ?3
-         AND request_window_id IS ?4 AND request_id = ?5 AND at >= ?6 ORDER BY number LIMIT 1"
+         AND request_id = ?4 AND at >= ?5 ORDER BY number LIMIT 1"
     ))?;
     let mut rows = statement.query(params![
         from,
         from_machine_id,
         to,
-        request.caller_window_id,
         request.id,
         request.since
     ])?;
@@ -340,7 +361,7 @@ pub(super) fn result_number(reference: &MessageRef) -> anyhow::Result<i64> {
 /// Deletes `owner`'s inbox, in `connection`'s transaction. The messages it sent stay. Returns what
 /// it deleted.
 pub(super) fn delete_inbox(connection: &Connection, owner: &str) -> rusqlite::Result<Vec<Gone>> {
-    delete_returning(connection, "\"to\" = ?1", owner)
+    delete_returning(connection, "\"to\" = ?1 AND withdrawn = 0", owner)
 }
 
 /// Deletes the messages `filter` selects with `value`, returning each.
@@ -350,15 +371,19 @@ fn delete_returning(
     value: &str,
 ) -> rusqlite::Result<Vec<Gone>> {
     let mut statement = connection.prepare(&format!(
-        "DELETE FROM messages WHERE {filter} RETURNING number, \"to\""
+        "DELETE FROM messages WHERE {filter} RETURNING number, \"to\", withdrawn"
     ))?;
-    let gone = statement.query_map([value], |row| {
-        Ok(Gone {
-            number: row.get::<_, i64>(0)? as u64,
-            to: row.get(1)?,
-        })
-    })?;
-    gone.collect()
+    let mut rows = statement.query([value])?;
+    let mut gone = Vec::new();
+    while let Some(row) = rows.next()? {
+        if !row.get::<_, bool>(2)? {
+            gone.push(Gone {
+                number: row.get::<_, i64>(0)? as u64,
+                to: row.get(1)?,
+            });
+        }
+    }
+    Ok(gone)
 }
 
 /// Writes `result` under the number prompt `prompt` keeps for it and clears that number, where the
@@ -406,6 +431,22 @@ fn recipient_there(connection: &Connection, recipient: &str) -> rusqlite::Result
     )
 }
 
+/// Preserves a withdrawn request's original settlement and discards its contents.
+fn hide_withdrawal(connection: &Connection, number: u64) -> rusqlite::Result<()> {
+    let number = number as i64;
+    let kept = connection.execute(
+        "UPDATE messages SET withdrawn = 1, text = '', from_name = NULL, reply_to = NULL,
+         reply_to_machine_id = NULL, from_window = NULL, request_window_id = NULL, call_id = NULL,
+         result = NULL, result_owed = NULL, result_owed_machine_id = NULL, human_windows = NULL
+         WHERE number = ?1 AND request_id IS NOT NULL",
+        [number],
+    )?;
+    if kept == 0 {
+        connection.execute("DELETE FROM messages WHERE number = ?1", [number])?;
+    }
+    Ok(())
+}
+
 /// Writes message `number`'s delivery where its row satisfies `condition`. Returns whether a row
 /// changed.
 fn write_delivery(
@@ -417,7 +458,7 @@ fn write_delivery(
     let changed = connection.execute(
         &format!(
             "UPDATE messages SET status = ?2, reason = ?3, text_written = ?4, enter_written = ?5, \
-             deadline = ?6, delivered_via = ?7, delivered_at = ?8 WHERE number = ?1 AND {condition}"
+             deadline = ?6, delivered_via = ?7, delivered_at = ?8 WHERE number = ?1 AND withdrawn = 0 AND ({condition})"
         ),
         params![
             number as i64,
@@ -437,6 +478,11 @@ fn write_delivery(
 /// read and expire messages here. Every method blocks.
 #[derive(Clone)]
 pub(crate) struct MessageTable(Arc<Store>);
+
+enum Withdrawal<'a> {
+    Unstarted(&'a [u64]),
+    CleanedPaste,
+}
 
 impl MessageTable {
     pub(super) fn new(store: Arc<Store>) -> MessageTable {
@@ -567,7 +613,10 @@ impl MessageTable {
         let deleted = self.0.with(
             || format!("delete #m{number}"),
             |connection| {
-                connection.execute("DELETE FROM messages WHERE number = ?1", [number as i64])
+                connection.execute(
+                    "DELETE FROM messages WHERE number = ?1 AND withdrawn = 0",
+                    [number as i64],
+                )
             },
         )?;
         Ok(deleted == 1)
@@ -617,7 +666,7 @@ impl MessageTable {
                 connection
                     .query_row(
                         &format!(
-                            "SELECT {COLUMNS} FROM messages WHERE number = ?1 AND \"to\" = ?2"
+                            "SELECT {COLUMNS} FROM messages WHERE number = ?1 AND \"to\" = ?2 AND withdrawn = 0"
                         ),
                         params![number as i64, owner],
                         read_message,
@@ -661,7 +710,7 @@ impl MessageTable {
             |connection| {
                 connection.execute(
                     "UPDATE messages SET deadline = ?2, from_name = coalesce(from_name, ?3) \
-                     WHERE number = ?1 AND status = 'pending' AND deadline IS NULL",
+                     WHERE number = ?1 AND status = 'pending' AND withdrawn = 0 AND deadline IS NULL",
                     params![number as i64, deadline, from_name],
                 )
             },
@@ -679,7 +728,7 @@ impl MessageTable {
             |transaction| {
                 for number in numbers {
                     transaction.execute(
-                        "UPDATE messages SET paste = ?1 WHERE number = ?2",
+                        "UPDATE messages SET paste = ?1 WHERE number = ?2 AND withdrawn = 0",
                         params![*first as i64, *number as i64],
                     )?;
                 }
@@ -697,7 +746,37 @@ impl MessageTable {
         settled: &[(u64, &Delivery)],
         results: &[(u64, Message)],
     ) -> anyhow::Result<Settlement> {
-        self.write_deliveries(settled, "status = 'pending'", results)
+        self.settle_with_withdrawals(settled, results, &[])
+    }
+
+    /// Settles still-pending deliveries and withdraws only those whose paste has yet to start.
+    /// Owed results, the final receipt, and the withdrawal are committed with the delivery.
+    pub(crate) fn settle_with_withdrawals(
+        &self,
+        settled: &[(u64, &Delivery)],
+        results: &[(u64, Message)],
+        withdrawals: &[u64],
+    ) -> anyhow::Result<Settlement> {
+        self.write_deliveries(
+            settled,
+            "status = 'pending'",
+            results,
+            Withdrawal::Unstarted(withdrawals),
+        )
+    }
+
+    /// Post uses this after the terminal confirms clearing its own paste before Enter.
+    pub(crate) fn settle_cleaned_paste(
+        &self,
+        settled: &[(u64, &Delivery)],
+        results: &[(u64, Message)],
+    ) -> anyhow::Result<Settlement> {
+        self.write_deliveries(
+            settled,
+            "status = 'pending'",
+            results,
+            Withdrawal::CleanedPaste,
+        )
     }
 
     /// Writes, in one transaction, the delivery of each message a read handed over, unless it was
@@ -707,7 +786,21 @@ impl MessageTable {
         read: &[(u64, &Delivery)],
         results: &[(u64, Message)],
     ) -> anyhow::Result<Settlement> {
-        self.write_deliveries(read, UNDELIVERED, results)
+        self.write_deliveries(read, UNDELIVERED, results, Withdrawal::Unstarted(&[]))
+    }
+
+    /// Commits only still-pending messages whose terminal paste has yet to begin.
+    pub(crate) fn record_unstarted_reads(
+        &self,
+        read: &[(u64, &Delivery)],
+        results: &[(u64, Message)],
+    ) -> anyhow::Result<Settlement> {
+        self.write_deliveries(
+            read,
+            "status = 'pending' AND paste IS NULL",
+            results,
+            Withdrawal::Unstarted(&[]),
+        )
     }
 
     fn write_deliveries(
@@ -715,13 +808,23 @@ impl MessageTable {
         deliveries: &[(u64, &Delivery)],
         condition: &str,
         results: &[(u64, Message)],
+        withdrawal: Withdrawal<'_>,
     ) -> anyhow::Result<Settlement> {
         self.0.transaction(
             || "save the delivery of messages".to_string(),
             |transaction| {
                 let mut written = Settlement::default();
                 for (number, delivery) in deliveries {
-                    if !write_delivery(transaction, *number, delivery, condition)? {
+                    let (withdraw, eligible) = match withdrawal {
+                        Withdrawal::CleanedPaste => {
+                            (true, "status = 'pending' AND paste IS NOT NULL")
+                        }
+                        Withdrawal::Unstarted(numbers) if numbers.contains(number) => {
+                            (true, "status = 'pending' AND paste IS NULL")
+                        }
+                        Withdrawal::Unstarted(_) => (false, condition),
+                    };
+                    if !write_delivery(transaction, *number, delivery, eligible)? {
                         continue;
                     }
                     written.settled.push(*number);
@@ -730,6 +833,9 @@ impl MessageTable {
                         && write_result(transaction, *number, result)?
                     {
                         written.results.push(*number);
+                    }
+                    if withdraw {
+                        hide_withdrawal(transaction, *number)?;
                     }
                 }
                 Ok(written)
@@ -752,7 +858,7 @@ impl MessageTable {
             || "read messages".to_string(),
             |connection| {
                 let mut statement = connection.prepare(&format!(
-                    "SELECT {COLUMNS} FROM messages WHERE {filter} ORDER BY number{limit}"
+                    "SELECT {COLUMNS} FROM messages WHERE withdrawn = 0 AND ({filter}) ORDER BY number{limit}"
                 ))?;
                 let mut rows = statement.query(values)?;
                 let mut messages = Vec::new();
@@ -834,10 +940,42 @@ impl MessageTable {
             false => format!(" AND {UNDELIVERED}"),
         };
         let filter = format!(
-            "number IN (SELECT number FROM messages WHERE \"to\" = ?1{undelivered} \
+            "number IN (SELECT number FROM messages WHERE withdrawn = 0 AND \"to\" = ?1{undelivered} \
              ORDER BY number DESC LIMIT {last})"
         );
         self.select_messages(&filter, None, [owner])
+    }
+
+    /// Selects only messages this owner can take, plus delivered history on an explicit history
+    /// read. Filters run before the page limit so an earlier unrelated message cannot block a reply.
+    pub(crate) fn readable_inbox(
+        &self,
+        owner: &str,
+        page: &InboxPage<'_>,
+    ) -> anyhow::Result<Vec<Message>> {
+        let history = page.after.is_some() || page.last.is_some();
+        let (reply_machine, reply_number) = page.reply_to.unzip();
+        let values = params![
+            owner,
+            page.after.unwrap_or(0) as i64,
+            page.now,
+            history,
+            reply_number.map(|number| number as i64),
+            page.machine_id,
+            reply_machine,
+        ];
+        let eligible = "\"to\" = ?1 AND number > ?2 \
+            AND ((status = 'pending' AND paste IS NULL AND (deadline IS NULL OR deadline > ?3)) \
+                 OR (?4 AND status = 'success')) \
+            AND (?5 IS NULL OR (reply_to = ?5 AND COALESCE(reply_to_machine_id, ?6) = ?7))";
+        match page.last {
+            Some(last) => self.select_messages(
+                &format!("number IN (SELECT number FROM messages WHERE withdrawn = 0 AND ({eligible}) ORDER BY number DESC LIMIT {last})"),
+                None,
+                values,
+            ),
+            None => self.select_messages(eligible, Some(page.limit), values),
+        }
     }
 
     /// Every kept message of `owner`'s inbox, by number.
@@ -861,7 +999,7 @@ impl MessageTable {
             || "read messages".to_string(),
             |connection| {
                 connection.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM messages WHERE number = ?1)",
+                    "SELECT EXISTS (SELECT 1 FROM messages WHERE number = ?1 AND withdrawn = 0)",
                     [number as i64],
                     |row| row.get(0),
                 )
@@ -1047,8 +1185,8 @@ mod tests {
 
     /// A message kept with a request ID is its sender's for the hour: the same sender's same ID
     /// finds it in the transaction that would keep another, which takes no number. Another sender's
-    /// same ID, the same ID once the first is deleted, and the same ID after the hour keep new
-    /// messages.
+    /// same ID and the same ID after the hour keep new messages. A withdrawal is private and
+    /// keeps its original failure even when the retry arrives through another window.
     #[test]
     fn a_request_id_keeps_one_message_per_sender_and_recipient_within_the_hour() {
         let store = Store::in_memory();
@@ -1104,36 +1242,40 @@ mod tests {
             )
             .unwrap();
         assert_eq!(found.map(|kept| kept.message.message_id), Some("m1".into()));
-        assert!(
-            store.message_table().delete_message(1).unwrap()
-                && !store.message_table().keeps_message(1).unwrap()
-                && !store.message_table().delete_message(1).unwrap()
-        );
-        assert!(
-            store
-                .find_request(
-                    "a1",
-                    "a2",
-                    RequestId {
-                        id: "r1",
-                        since: within,
-                        caller_window_id: None,
-                    }
-                )
-                .unwrap()
-                .is_none()
-        );
+        let table = store.message_table();
+        let stopped = failure(DeliveryFailure::Timeout);
         assert_eq!(
-            keep(&message(0, "a2"), "r1", within)
-                .into_message()
-                .message_id,
-            "m3",
-            "a deleted message's ID is free, its number not"
+            table
+                .settle_with_withdrawals(&[(1, &stopped)], &[], &[1])
+                .unwrap()
+                .settled,
+            [1]
         );
+        assert!(!table.keeps_message(1).unwrap());
+        assert!(table.inbox_message("a2", 1).unwrap().is_none());
+        assert_eq!(numbers(&table.inbox_last("a2", true, 2).unwrap()), ["m2"]);
+        let repeated = store
+            .find_request(
+                "a1",
+                "a2",
+                RequestId {
+                    id: "r1",
+                    since: within,
+                    caller_window_id: Some("other-window"),
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert!(repeated.withdrawn);
+        assert!(repeated.message.text.is_empty());
+        assert_eq!(repeated.message.message_id, "m1");
+        assert_eq!(repeated.message.delivery, stopped);
+        assert!(matches!(keep(&message(0, "a2"), "r1", within),
+                Kept::Earlier(kept) if kept.withdrawn && kept.message.message_id == "m1"));
         let after_the_hour = keep(&message(0, "a2"), "r1", "2026-11-10T00:00:00.001Z");
-        assert!(matches!(after_the_hour, Kept::New(new) if new.message_id == "m4"));
+        assert!(matches!(after_the_hour, Kept::New(new) if new.message_id == "m3"));
         assert!(
-            matches!(keep(&message(0, "a3"), "r1", within), Kept::New(new) if new.message_id == "m5")
+            matches!(keep(&message(0, "a3"), "r1", within), Kept::New(new) if new.message_id == "m4")
         );
     }
 
@@ -1236,12 +1378,14 @@ mod tests {
                     paste: Some(1),
                     result_owed: None,
                     window_delivery: None,
+                    withdrawn: false,
                 },
                 KeptMessage {
                     message: kept[2].clone(),
                     paste: None,
                     result_owed: None,
                     window_delivery: None,
+                    withdrawn: false,
                 }
             ]
         );
@@ -1398,6 +1542,7 @@ mod tests {
                 paste: None,
                 result_owed: Some(reference.clone()),
                 window_delivery: None,
+                withdrawn: false,
             }]
         );
         assert!(
