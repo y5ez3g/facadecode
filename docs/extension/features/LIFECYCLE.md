@@ -16,15 +16,10 @@ document owns launch, naming, terminal, finding, closing, Resume and Pin interac
 
 **New Agent shows the working location, editable suggested name and CLI choices in one native picker.**
 
-On the Rust engine, offer a Machine step when the Facade network has another machine. Preselect This machine and show
-its name. Each Facade home has its own machine ID. Use that ID for the current window and the chosen target, even when
-machines share an SSH host or saved name. Show the saved machine names. A machine without a route shows
-`Needs SSH login` when its saved connection needs interaction, or `Unavailable` otherwise. Enter on either row leaves
-the picker open. For another reachable machine, offer the working locations its connected windows supply and allow an
-absolute path on that machine. With no selected path, use its login home. List only the CLIs available in its login
-environment. Allow returning to Machine while a query is pending, with a
-three-second bound on querying other machines. Changing machines clears the prior location and CLI choices. On confirmation,
-preflight the location and CLI before starting. A preflight failure preserves the choices and shows its reason.
+New Agent opens the CLI picker for the current window's Facade machine (RULES-2.1). The Machine step belongs to
+Change Working Location (1.3). After the person chooses a location on another machine, the CLI picker shows that
+machine and location in the title and lists the CLIs available in its login environment. On confirmation, preflight
+the remote location and CLI before starting. A preflight failure preserves the choices and shows its reason.
 
 With a folder open, use `New Agent · {name} · {location}` as the title, or `New Agent · {name}` in the window's one
 place to work (1.3); placeholder: `Select a CLI`. In a multi-folder window, prefix a checkout's location with its
@@ -48,8 +43,8 @@ show the file path and available line/column information, with Open Settings. Ch
 `enabled`: a valid disabled entry is not listed; an invalid disabled entry still appears under Unavailable with its
 error. An uninstalled built-in with no configuration error is not listed.
 The bottom items,
-under a separator labeled `Options`, are `Change Working Location...` and `Change Name...`; where nothing can be chosen
-(1.3) `Change Name...` is alone there. The location item's description shows the full current working location,
+under a separator labeled `Options`, are `Change Working Location...` and `Change Name...`. Where 1.3 offers
+no location change, `Change Name...` is alone there. The location item's description shows the full current working location,
 including `New worktree {branch} from {source}` for a proposed worktree, and its environment when that is not this
 machine. The name item's description shows the full current name. These items edit the values; they are not the only
 place the current choices appear. A person can accept the suggested name or leave it empty; an empty name keeps its
@@ -58,7 +53,8 @@ title segment (`New Agent ·  · main`). Change Name uses the title `New Agent �
 supplies the Enter/Escape instructions. With no usable CLI, `Open Settings` has the detail `Install a supported CLI in this environment, or configure its
 path.`; where the CLIs cannot be listed at all, it carries that failure as its detail. A configuration error also
 offers this item. It follows the same Open Settings flow. With no folder, a local launch uses PANEL-1.2's
-Open Folder prerequisite picker and its wording instead of the CLI step. Missing optional Git does not block creation or
+Open Folder prerequisite picker and its wording. Add `Change Working Location...` under `Options` there whenever
+the Rust engine lists another Facade machine, so the same flow can reach a remote location (1.3). Missing optional Git does not block creation or
 trigger a Git initialization suggestion. Cancel closes without effects or changing successful-launch history.
 
 ### 1.2 Human location history
@@ -77,15 +73,29 @@ without an unavailable-location note.
 
 ### 1.3 Changing location
 
-**Change Working Location selects folder, then location, and returns to the same CLI picker.**
+**Change Working Location chooses a location and returns to the CLI picker for its machine.**
 
+On the Rust engine, when another Facade machine is listed, the first step inside Change Working Location is
+`New Agent · Machine`. Preselect the machine of the current working location, initially `This machine` with its
+name alongside. Use VS Code's `device-desktop` codicon for `This machine` and `globe` for every other machine.
+Show the saved machine names. Use the Facade machine ID for the window and each target, including
+when machines share an SSH host or saved name. A machine without a route shows `Needs SSH login` when its saved
+connection needs interaction, or `Unavailable` otherwise. Enter on either row leaves the picker open.
+
+For another reachable machine, offer the working locations its connected windows supply, its login home (`~`),
+and entry of an absolute path on that machine. Return to Machine with Back from the location list, including
+while the catalog loads, with a three-second bound on querying another machine. Back from path entry returns to
+that machine's location list. Back from Machine keeps the name and prior working location in the CLI picker.
+Accept a location before changing which machine's CLIs appear, keeping the chosen name. Escape cancels the flow.
+
+For this window's machine, start with its workspace folders or offer Open Folder if it has no folder.
 Use workspace-folder order and skip a single-choice step. Inside a folder, use WORKTREES-1.2's catalog. An ordinary
 folder is a normal choice. In a folder inside a Git repository, the location step offers New Worktree, its row
 `New Worktree...` naming its source as `from {branch}` (WORKTREES-2.1); where a prerequisite is missing - no commit yet,
 no native creation - that row shows why as its detail and cannot be chosen (WORKTREES-2.3). The step shows at once and
 adds the row when its check completes. A folder in no repository, or where Git is missing, is a plain folder and has no
-New Worktree row; when nothing can be chosen - one folder whose only location is a plain folder - the picker offers no
-location change, as an action that does nothing would be. Once Git found no repository there, or is missing, that folder
+New Worktree row. With one plain folder as the window's only location, the CLI picker offers Change Working Location
+only when another Facade machine is listed. Once Git found no repository there, or is missing, that folder
 is the window's one place to work, which goes without saying: the title does not name it, nor does a Resume Agent line
 (3.2), and where every agent works there neither do Go to Agent rows (2.3), and the panel offers no filter (PANEL-2.3);
 details keep it, and cards show no location anywhere (PANEL-1.3). A second folder, a repository found there or a worktree
@@ -561,7 +571,7 @@ once. No UI waits for it.
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Plain/no-Git/multi-folder flow, current Settings tab and Change Name placeholder, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
+| 1.1–1.5 | Plain/no-Git/multi-folder flow, current Settings tab and Change Name placeholder, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, window CLI picker before any machine selection, local and remote location changes including from a folderless window, Back and Escape, unavailable machines, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
 | 2.1–2.3 | Configured/default names, trimming and case-insensitive exclusions, empty/exhausted lists, blank starts/renames, invalid names blocking starts, ID names omitted from Resume/Pin, duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
 | 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, Rust agent continuity after window close and original-number restoration, the old engine's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |

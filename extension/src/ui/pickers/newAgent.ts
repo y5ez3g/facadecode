@@ -10,7 +10,7 @@ import { locationLabel, onePlaceOf } from '../cardView';
 import { COMMANDS } from '../catalog';
 import { cliIcon, launchFailureText, openSettingsLabel, plainText, reasonOf, reasonText } from '../presentation';
 import { chooseLocation, Destination, environmentLabel, type LocationDeps, worktreeSourceLabel } from './location';
-import { chooseMachine, launchOnMachine, type MachineLaunch } from './machineLaunch';
+import { chooseMachine, chooseRemoteCli, chooseRemoteLocation, type MachineLaunch, type RemoteDestination, type RemoteLaunchRequest } from './machineLaunch';
 import { BACK, Flow } from './stepping';
 
 export interface NewAgentDeps {
@@ -65,59 +65,66 @@ export function orderedClis(choices: readonly CliChoice[], last: string | undefi
 type Does = 'start' | 'settings' | 'location' | 'name' | 'openFolder';
 type Item = vscode.QuickPickItem & { readonly does?: Does; readonly cli?: CliChoice };
 
+function changeLocationItem(where?: string): Item {
+	return {
+		label: vscode.l10n.t("Change Working Location..."),
+		description: where === undefined ? undefined : plainText(where),
+		iconPath: new vscode.ThemeIcon('folder'),
+		alwaysShow: true,
+		does: 'location'
+	};
+}
+
 /**
- * New Agent (LIFECYCLE-1.1-1.3): one native picker titled `New Agent` with the CLIs to choose from - the last one used first and
- * selected, never started until chosen - and, at its bottom, `Change Working Location...` showing the location and its environment and
- * `Change Name...` showing an editable suggested name. Escape anywhere ends it with nothing done. Choosing a CLI closes it and starts
- * the agent - in a new worktree where one was chosen, made only now - whose card and terminal show at once. `startAt` is where
- * it starts instead of the remembered location - the filtered empty panel's location (LIFECYCLE-1.2) - while it is offered;
- * the person can change it as ever.
+ * New Agent (LIFECYCLE-1.1–1.3) starts with the window's CLIs. Change Working Location can change the machine
+ * as part of choosing the agent's working location. A CLI choice accepts the launch and any proposed worktree.
+ * `startAt` is the filtered empty panel's location, while offered (LIFECYCLE-1.2).
  */
 export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promise<void> {
 	const title = vscode.l10n.t("New Agent");
 	const flow = new Flow();
 	const network = deps.network;
-	const machines = network?.machines();
 	// None left, or an empty `names`: the box starts blank, and the agent is named by its ID (LIFECYCLE-2.1)
-	const draft = { name: deps.suggest?.() ?? suggestName(deps.agents.list().map(run => run.name), deps.names?.()) ?? '' };
-	if (!network || !machines?.others.length) {
-		await newLocalAgent(flow, deps, title, draft, startAt);
-		return;
-	}
-	let current = machines.local.id;
-	for (;;) {
-		const available = network.machines();
-		if (!available || available.local.id !== machines.local.id) { flow.close(); return; }
-		const machine = await chooseMachine(flow, title, available, current);
-		if (!machine) { return; }
-		current = machine.id;
-		const result = current === machines.local.id
-			? await newLocalAgent(flow, deps, title, draft, startAt, true)
-			: await launchOnMachine(flow, { ...deps, network }, title, machine, draft);
-		if (result !== BACK) { return; }
-	}
-}
-
-async function newLocalAgent(flow: Flow, deps: NewAgentDeps, title: string, draft: { name: string }, startAt?: LocationId, back = false): Promise<typeof BACK | undefined> {
+	let name = deps.suggest?.() ?? suggestName(deps.agents.list().map(run => run.name), deps.names?.()) ?? '';
 	const catalog = deps.locations.snapshot();
-	if (!catalog.folders.length) {
-		return openFolder(flow, title, back);
-	}
+	const found = catalog.folders.length ? (catalog.locations.find(each => each.id === startAt) ?? defaultLocation(catalog, deps.history.last().location)) : undefined;
+	let local: Destination | undefined = found ? { location: found } : undefined;
+	let remote: RemoteDestination | undefined;
+	let retry: { readonly cli: string; readonly problem?: string } | undefined;
 	// Opening a location catalog reads Git again where needed; plain folders are there meanwhile (WORKTREES-1.1, 1.3)
-	deps.locations.refresh().catch(err => deps.log.event(`Could not refresh the working locations: ${messageOf(err)}`));
-	const found = (startAt === undefined ? undefined : catalog.locations.find(each => each.id === startAt)) ?? defaultLocation(catalog, deps.history.last().location);
-	if (!found) {
-		return openFolder(flow, title, back);
+	if (catalog.folders.length) {
+		deps.locations.refresh().catch(err => deps.log.event(`Could not refresh the working locations: ${messageOf(err)}`));
 	}
-	let destination: Destination = { location: found };
-	for (; ;) {
-		const picked = await chooseCli(flow, deps, { title, destination, name: draft.name }, back);
-		if (!picked || picked === BACK) {
-			return picked;
-		}
+	for (;;) {
+		const picked = remote ? await chooseRemoteCli(flow, deps.media, title, name, remote, retry)
+			: local ? await chooseCli(flow, deps, { title, destination: local, name })
+				: await chooseOpenFolder(flow, title, network, false);
+		if (!picked || picked === BACK) { return; }
 		if (picked.does === 'start' && picked.cli) {
-			flow.close();
-			start(deps, draft.name, destination, picked.cli);
+			if (remote && network) {
+				const { machine, location } = remote;
+				const cli = picked.cli;
+				const request: RemoteLaunchRequest = { name, cli: cli.id, ...location ? { location } : {} };
+				const checked = await flow.checking(() => network.preflight(machine.id, request).then(() => true as const, reasonOf));
+				if (checked === undefined) { return; }
+				if (checked !== true) {
+					retry = { cli: cli.id, problem: checked };
+					continue;
+				}
+				flow.close();
+				try {
+					deps.select(network.launch(machine.id, request));
+				} catch (error) {
+					deps.notifyError(launchFailureText(name || cli.displayName, reasonOf(error)), {});
+				}
+			} else if (local) {
+				flow.close();
+				start(deps, name, local, picked.cli);
+			}
+			return;
+		}
+		if (picked.does === 'openFolder') {
+			await openFolder(flow);
 			return;
 		}
 		if (picked.does === 'settings') {
@@ -127,34 +134,70 @@ async function newLocalAgent(flow: Flow, deps: NewAgentDeps, title: string, draf
 			return;
 		}
 		if (picked.does === 'name') {
-			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: draft.name, placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"), back: true });
-			if (typed === undefined) {
-				return;
-			}
+			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: name, placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"), back: true });
+			if (typed === undefined) { return; }
 			if (typed !== BACK) {
-				draft.name = normalizeName(typed);
+				name = normalizeName(typed);
+				if (retry) { retry = { cli: retry.cli }; }
 			}
 		} else if (picked.does === 'location') {
-			const chosen = await chooseLocation(flow, deps, {
-				folder: vscode.l10n.t("New Agent · Select Folder"),
-				location: vscode.l10n.t("New Agent · Working Location"),
-				branch: vscode.l10n.t("New Agent · New Worktree")
-			}, destination);
-			if (chosen === undefined) {
-				return;
-			}
+			const chosen = await chooseWorkingLocation(flow, deps, title, local, remote);
+			if (chosen === undefined) { return; }
 			if (chosen !== BACK) {
-				destination = chosen;
-			} else if (!deps.locations.snapshot().locations.some(each => each.id === destination.location.id)) {
-				// Its folder removed or its worktree deleted in the flow (LIFECYCLE-1.3): the first folder's first location, as at first use
-				const found = defaultLocation(deps.locations.snapshot(), undefined);
-				if (!found) {
-					return;
+				if ('machine' in chosen) {
+					retry = retry && remote?.machine.id === chosen.machine.id ? { cli: retry.cli } : undefined;
+					remote = chosen;
+				} else {
+					local = chosen;
+					remote = undefined;
+					retry = undefined;
 				}
-				destination = { location: found };
 			}
+			local = localDestination(deps.locations.snapshot(), local);
 		}
 	}
+}
+
+/** After a location is removed, fall back to the window's first location (LIFECYCLE-1.3). */
+function localDestination(catalog: Catalog, current?: Destination): Destination | undefined {
+	if (!catalog.folders.length) { return undefined; }
+	if (current && catalog.locations.some(location => location.id === current.location.id)) { return current; }
+	const first = defaultLocation(catalog, undefined);
+	return first ? { location: first } : undefined;
+}
+
+/** Back from the chosen machine's locations returns to the machine list. Only a completed location choice changes the CLI step. */
+async function chooseWorkingLocation(flow: Flow, deps: NewAgentDeps, title: string, local?: Destination, remote?: RemoteDestination): Promise<Destination | RemoteDestination | typeof BACK | undefined> {
+	const network = deps.network;
+	const machines = network?.machines();
+	if (network && !machines) { flow.close(); return undefined; }
+	const localStep = () => chooseLocalLocation(flow, deps, title, localDestination(deps.locations.snapshot(), local));
+	if (!network || !machines?.others.length) {
+		return local || remote ? localStep() : BACK;
+	}
+	let focused = remote?.machine.id ?? machines.local.id;
+	for (;;) {
+		const machine = await chooseMachine(flow, title, network, focused);
+		if (!machine || machine === BACK) { return machine; }
+		focused = machine.id;
+		const chosen = machine.id === machines.local.id ? await localStep()
+			: await chooseRemoteLocation(flow, network, machine, remote?.machine.id === machine.id ? remote.location : undefined);
+		if (chosen !== BACK) { return chosen; }
+	}
+}
+
+async function chooseLocalLocation(flow: Flow, deps: NewAgentDeps, title: string, current?: Destination): Promise<Destination | typeof BACK | undefined> {
+	if (current) {
+		return chooseLocation(flow, deps, {
+			folder: vscode.l10n.t("New Agent · Select Folder"),
+			location: vscode.l10n.t("New Agent · Working Location"),
+			branch: vscode.l10n.t("New Agent · New Worktree")
+		}, current);
+	}
+	const picked = await chooseOpenFolder(flow, title, undefined, true);
+	if (picked === BACK) { return BACK; }
+	if (picked) { await openFolder(flow); }
+	return undefined;
 }
 
 /**
@@ -176,7 +219,7 @@ function start(deps: NewAgentDeps, name: string, destination: Destination, cli: 
 }
 
 /** The picker's CLI step: the item chosen, or none where the person ended the flow. */
-async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: string; readonly destination: Destination; readonly name: string }, back: boolean): Promise<Item | typeof BACK | undefined> {
+async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: string; readonly destination: Destination; readonly name: string }): Promise<Item | undefined> {
 	const catalog = deps.locations.snapshot();
 	const { location, worktree } = at.destination;
 	const place = worktree ? vscode.l10n.t("New worktree {0} from {1}", worktree.branch, locationLabel({ ...location, label: worktreeSourceLabel(location) }, catalog)) : locationLabel(location, catalog);
@@ -191,23 +234,16 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		? vscode.l10n.t("{0} · {1}", at.title, at.name) : vscode.l10n.t("{0} · {1} · {2}", at.title, at.name, titleWhere);
 	const settingsButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: openSettingsLabel() };
 	/**
-	 * The step's bottom as the catalog is now (LIFECYCLE-1.3): nothing to change the location to - one folder whose only location is a
-	 * plain folder - is said as a label, never an action that does nothing; a folder Git then finds in a repository offers its change.
+	 * A lone plain folder offers no local change. A discovered repository or another Facade machine adds the choice (LIFECYCLE-1.3).
 	 */
 	const bottomOf = (now: Catalog): Item[] => {
 		const inFolder = now.locations.filter(each => !each.within && each.folders.some(folder => folder.uri === location.folders[0]?.uri));
-		const changeable = now.folders.length > 1 || inFolder.length > 1 || inFolder.some(each => each.kind === 'checkout') || !!worktree;
+		const changeable = now.folders.length > 1 || inFolder.length > 1 || inFolder.some(each => each.kind === 'checkout') || !!worktree
+			|| !!deps.network?.machines()?.others.length;
 		return [
 			// A labeled line: the editor draws one without a label as all but invisible, and a label right of the item below it
 			{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator },
-			// Nothing to change the location to: the title says it, and no item offers a change that does nothing (LIFECYCLE-1.3)
-			...!changeable ? [] : [{
-				label: vscode.l10n.t("Change Working Location..."),
-				description: plainText(where),
-				iconPath: new vscode.ThemeIcon('folder'),
-				alwaysShow: true,
-				does: 'location' as const
-			}],
+			...changeable ? [changeLocationItem(where)] : [],
 			{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
 		];
 	};
@@ -238,7 +274,6 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		// Change item shown meanwhile would leave the focus on another CLI than the one preselected, which an Enter then starts
 		items: [],
 		busy: true,
-		back,
 		// The CLIs of the location's environment, found as the step shows (CLIS-1.1); the step up keeps its place meanwhile. Git metadata
 		// read later changes the bottom alone, the item in focus kept, so that an Enter right then takes what the person sees (LIFECYCLE-1.1)
 		live: picker => {
@@ -258,20 +293,32 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 			};
 			deps.clis.list(location).then(choices => { found = choices; show(); }, err => { found = err instanceof Error ? err : new Error(messageOf(err)); show(); });
 			const listening = deps.locations.onDidChange(show);
-			return { dispose: () => { up = false; listening.dispose(); } };
+			const machines = deps.network?.onDidChange?.(show);
+			return { dispose: () => { up = false; listening.dispose(); machines?.dispose(); } };
 		}
 	});
-	return picked === BACK ? BACK : picked?.item;
+	return picked && picked !== BACK ? picked.item : undefined;
 }
 
-/** No folder is open: the picker offers Open Folder (LIFECYCLE-1.1). */
-async function openFolder(flow: Flow, title: string, back: boolean): Promise<typeof BACK | undefined> {
+/** The folder prerequisite also allows changing to another machine from the first step (LIFECYCLE-1.1). */
+async function chooseOpenFolder(flow: Flow, title: string, network: MachineLaunch | undefined, back: boolean): Promise<Item | typeof BACK | undefined> {
 	const item: Item = { label: vscode.l10n.t("Open Folder..."), detail: vscode.l10n.t("A workspace folder is required to run agents."), iconPath: new vscode.ThemeIcon('folder-opened'), does: 'openFolder' };
-	const picked = await flow.pick<Item>({ title, placeholder: vscode.l10n.t("Open a folder to continue"), items: [item], active: item, back });
-	if (picked === BACK) { return BACK; }
+	const change = changeLocationItem();
+	const itemsOf = (): Item[] => network?.machines()?.others.length
+		? [item, { label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator }, change] : [item];
+	const picked = await flow.pick<Item>({
+		title, placeholder: vscode.l10n.t("Open a folder to continue"), items: itemsOf(), active: item, back,
+		live: picker => network?.onDidChange?.(() => {
+			const active = picker.activeItems[0];
+			const items = itemsOf();
+			picker.items = items;
+			picker.activeItems = [active && items.includes(active) ? active : item];
+		})
+	});
+	return picked && picked !== BACK ? picked.item : picked;
+}
+
+async function openFolder(flow: Flow): Promise<void> {
 	flow.close();
-	if (picked) {
-		await vscode.commands.executeCommand('vscode.openFolder');
-	}
-	return undefined;
+	await vscode.commands.executeCommand('vscode.openFolder');
 }

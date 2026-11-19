@@ -54,12 +54,13 @@ commands repeat that reason. A window without its window component shows ARCHITE
 button that shows the component in the Extensions view, themed as the empty states' buttons are (UX-2.1).
 
 Invoking New Agent with no folder opens a native Quick Pick titled `New Agent`, with placeholder
-`Open a folder to continue` and one item: `Open Folder...`, detail
+`Open a folder to continue` and the item `Open Folder...`, detail
 `A workspace folder is required to run agents.` The placeholder identifies the next action and the detail explains
-the prerequisite. Cancel changes nothing. Opening a folder uses the editor's normal behavior as above; it does not
+the prerequisite. LIFECYCLE-1.1 also offers Change Working Location here when another Facade machine is listed.
+Cancel changes nothing. Opening a folder uses the editor's normal behavior as above; it does not
 automatically launch an agent. This prerequisite step does not ask the person to select a CLI.
 
-Once a folder is available, New Agent uses LIFECYCLE-1.1's CLI picker. Configuration errors come before the disabled
+Once a folder is available for a local launch, New Agent uses LIFECYCLE-1.1's CLI picker. Configuration errors come before the disabled
 check: an invalid entry with `enabled: false` appears under Unavailable with its error and Open Settings. A valid
 disabled entry is not listed (CONFIGURATION-4.1).
 
@@ -137,11 +138,11 @@ agent with no tab open keeping it hidden, and a Pin that cannot be saved opening
 follows the quieter text, including the selected foreground at 80% opacity; high-contrast selections use full opacity.
 The icon's internal space keeps its visible shape smaller than the name's letters.
 
-For an agent whose running machine ID differs from the window's Facade machine ID, show the remote codicon in the
-Pin position and place the details and menu buttons to its left. The icon has no action or Tab stop and stays visible
-while the buttons show. Its tooltip and the card's accessible label say `Running on {0}`, using the running machine's
-name with its short ID when names repeat. Remote agents have no Pin. A loss of connection keeps the card and
-shows the connection status until the running machine can be reached again.
+For an agent whose running machine ID differs from the window's Facade machine ID, show VS Code's `globe` codicon at
+14 px in the Pin position and place the details and menu buttons to its left. The icon has no action or Tab stop and
+stays visible while the buttons show. Its tooltip and the card's accessible label say `Running on {0}`, using the
+running machine's name with its short ID when names repeat. Remote agents have no Pin. A loss of connection keeps
+the card and shows the connection status until the running machine can be reached again.
 
 ### 1.4 Second line and dot
 

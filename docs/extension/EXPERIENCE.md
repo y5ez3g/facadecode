@@ -24,9 +24,10 @@ explanation; there is no separate tutorial, team wizard or product-mode choice.
 
 **The person sees the location and suggested name, chooses a CLI, and continues in its editor terminal.**
 
-The last successfully used CLI is first and preselected; choosing it still starts only after the person's action. Change
-Working Location and Change Name remain at the bottom of the same picker - Change Name alone where there is no location
-to change (1.5). A name has an editable recommendation from `names` and may contain spaces or repeat. A blank name
+The picker opens with CLI choices in the window's execution environment. The last successfully used CLI is first
+and preselected. The person chooses a CLI to start the agent. Change Working Location and Change Name remain at
+the bottom of the same picker, with Change Name alone where there is no location to change (1.5).
+A name has an editable recommendation from `names` and may contain spaces or repeat. A blank name
 is filled in; an empty or exhausted list uses the agent ID (LIFECYCLE-2.1). CLI login and permissions remain in the terminal. The current name and actual location remain visible while searching for a
 CLI - the window's one place to work going without saying - as specified in LIFECYCLE-1.1. No account or CLI setup is
 silently performed by Facade. Open Settings shows Facade's section in the editor's Settings. Its Edit in facade.json
@@ -36,19 +37,19 @@ Claude setup for another API, and choose that entry in the picker
 
 ### 1.3 Default working location
 
-**Human New Agent uses the last successfully used location; first use starts with the first folder's first location.**
+**Human New Agent opens on the window's machine, at the last successfully used location still offered there.**
 
-An opened main checkout is first; an opened worktree is first when that worktree is the folder opened. A plain folder is
-its own location. Canceling a picker or an agent-created launch does not change the human default. Details and
-missing-location fallback belong to
-[LIFECYCLE-1](features/LIFECYCLE.md#1-launch).
+First use starts with the first folder's first location. An opened main checkout is first, or an opened worktree when that
+worktree is the folder opened. A plain folder is its own location. LIFECYCLE-1.2 defines the successful human launches
+that update this default and the fallback when a location is missing.
 
 ### 1.4 Initial exceptions
 
 **A missing prerequisite is explained where the person can correct it without changing what they selected.**
 
-No folder: the picker offers Open Folder. No CLI: the picker explains discovery in this environment and offers
-Open Settings. Choose Edit in facade.json there, or edit the file opened directly in a remote window whose Settings
+With no folder, the picker offers Open Folder and still lets the person choose an available remote working location
+when another Facade machine is listed (LIFECYCLE-1.1). When no CLI is available, the picker explains discovery in this
+environment and offers Open Settings. Choose Edit in facade.json there, or edit the file opened directly in a remote window whose Settings
 open as JSON (CONFIGURATION-1.2).
 A bad file blocks new starts with its error; a bad entry leaves other entries usable (CONFIGURATION-4.1).
 If old settings cannot be migrated together, the file link explains the conflict and opens the old editor settings
@@ -59,10 +60,11 @@ not block either step. A removed location is reselected; no silent CLI substitut
 
 **Change Working Location is an item in the same menu that shows the current location and CLI choices.**
 
-Choose a folder, then its location/worktree, then return to CLI selection. A single-folder window has no folder step; a
-plain folder outside a Git repository has no location step, and in a single-folder window there is no location to
-change, the window's one place to work going without saying (LIFECYCLE-1.3). Back preserves selections; Escape makes no
-launch or worktree. Creating a worktree is an advanced choice in this flow, with the same contract as
+With multiple Facade machines, choose the machine inside Change Working Location, then choose a working location on it.
+On this window's machine, choose a folder and its location or worktree, skipping single-choice steps. On another
+machine, choose a location there or its login home. The picker returns to the chosen location's CLIs with the same name
+(LIFECYCLE-1.3). Back preserves selections. Escape cancels without launching an agent or creating a worktree.
+Creating a worktree is an advanced choice in this flow, with the same contract as
 [Worktrees](features/WORKTREES.md).
 
 ### 1.6 Seeing the agent start

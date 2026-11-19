@@ -4,6 +4,7 @@
 
 import * as assert from 'assert';
 import { spawn, ChildProcess } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -837,8 +838,16 @@ suite('The agent panel in Chromium', function () {
 			[[], [['Ada', '#a1'], ['Ada', '#a2'], ['Cy', null]]]);
 		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.agent')].map(card => JSON.parse(card.dataset.vscodeContext).webviewAgentEnded === true)`),
 			[true, false, false]);
-		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.remote-status')].map(icon => [icon.tagName, icon.title, icon.closest('.agent').querySelector('.pin-button').hidden])`),
-			[['SPAN', 'Running on gpu', true]]);
+		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.agent')].map(card =>
+			[...card.querySelectorAll('.remote-status')].map(status => {
+				const icon = status.querySelector('svg');
+				const { width, height } = icon.getBoundingClientRect();
+				return [status.tagName, status.title, card.querySelector('.pin-button').hidden,
+					icon.getAttribute('viewBox'), width, height, icon.childElementCount, getComputedStyle(icon.querySelector('path')).fillRule];
+			}))`), [[], [], [['SPAN', 'Running on gpu', true, '0 0 16 16', 14, 14, 1, 'nonzero']]]);
+		const globePath: string = await evaluate(`document.querySelector('.remote-status svg path').getAttribute('d')`);
+		assert.strictEqual(createHash('sha256').update(globePath).digest('hex'),
+			'06b0276dc7ce4a4233e18ae71682b9bf7c607643da389ca9d11c67795c2083e1', 'the VS Code globe path (PANEL-1.3)');
 	});
 
 	test('PANEL-1.3: Pin and Unpin refit the same card, and a repeated name\'s ID comes and goes without losing its name', async () => {

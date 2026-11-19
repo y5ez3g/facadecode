@@ -357,6 +357,7 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	restorePins();
 	const settingsChanged = new vscode.EventEmitter<void>();
 	const network: MachineLaunch = {
+		onDidChange: machines.onDidChange,
 		machines: () => machines.choices(),
 		catalog: machine => machines.catalog(machine),
 		preflight: (machine, request) => agents.preflightRemote(machine, request),

@@ -207,6 +207,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 						close: async path => rust.window() === window && rust.closeWorktreeAgents(path)
 					},
 					network: {
+						onDidChange: rust.network.onDidChange,
 						machines: () => rust.window() === window ? rust.network.machines() : undefined,
 						catalog: async machine => { checkWindow(window); return rust.network.catalog(machine); },
 						preflight: async (machine, request) => { checkWindow(window); return rust.network.preflight(machine, request); },
