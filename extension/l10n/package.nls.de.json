@@ -9,7 +9,7 @@
 	"command.hideAgent": "Ausblenden",
 	"command.renameAgent": "Agent umbenennen...",
 	"command.stopAgent": "Agent stoppen",
-	"command.deleteAgent": "Löschen",
+	"command.deleteAgent": "Entfernen",
 	"command.copyAgentReference": "Agentenreferenz kopieren",
 	"command.dismissAgent": "Agent ausblenden",
 	"command.showAgentDetails": "Agent-Details anzeigen",

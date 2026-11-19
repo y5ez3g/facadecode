@@ -9,7 +9,7 @@
 	"command.hideAgent": "隱藏",
 	"command.renameAgent": "重新命名 Agent...",
 	"command.stopAgent": "停止 Agent",
-	"command.deleteAgent": "刪除",
+	"command.deleteAgent": "移除",
 	"command.copyAgentReference": "複製 Agent 參照",
 	"command.dismissAgent": "收起 Agent",
 	"command.showAgentDetails": "顯示 Agent 詳細資料",

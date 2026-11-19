@@ -9,7 +9,7 @@
 	"command.hideAgent": "Gizle",
 	"command.renameAgent": "Aracıyı Yeniden Adlandır...",
 	"command.stopAgent": "Aracıyı Durdur",
-	"command.deleteAgent": "Sil",
+	"command.deleteAgent": "Kaldır",
 	"command.copyAgentReference": "Aracı Referansını Kopyala",
 	"command.dismissAgent": "Aracıyı Kapat",
 	"command.showAgentDetails": "Aracı Ayrıntılarını Göster",

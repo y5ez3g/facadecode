@@ -9,7 +9,7 @@
 	"command.hideAgent": "숨기기",
 	"command.renameAgent": "에이전트 이름 바꾸기...",
 	"command.stopAgent": "에이전트 중지",
-	"command.deleteAgent": "삭제",
+	"command.deleteAgent": "제거",
 	"command.copyAgentReference": "에이전트 참조 복사",
 	"command.dismissAgent": "에이전트 닫기",
 	"command.showAgentDetails": "에이전트 세부 정보 표시",
