@@ -81,19 +81,9 @@ fn launch(cli: &str, given: &[&str], environment: &[(&str, &str)]) -> CommandLin
 
 /// Starts `cli` in `cwd` with Facade's server, in an environment holding `environment`.
 fn launch_in(cwd: &Path, cli: &str, given: &[&str], environment: &[(&str, &str)]) -> CommandLine {
-    let env = [
-        ("FACADE_AGENT".to_string(), "a3".to_string()),
-        ("FACADE_HOME".to_string(), "/home/.facade".to_string()),
-    ];
+    let env = run_variables();
     let folder = PathBuf::from("/home/.facade/core/runs/a3/1f");
-    let server = Server {
-        program: "/opt/facade-mcp",
-        env: &env,
-        folder: &folder,
-        instructions: "You are Facade agent #a3.",
-        cwd,
-        facade: "/opt/facade",
-    };
+    let server = test_server(cwd, &folder, &env);
     let mut environment: BTreeMap<String, String> = environment
         .iter()
         .map(|(name, value)| (name.to_string(), value.to_string()))
@@ -110,6 +100,17 @@ fn launch_in(cwd: &Path, cli: &str, given: &[&str], environment: &[(&str, &str)]
         &environment,
         None,
     )
+}
+
+fn test_server<'a>(cwd: &'a Path, folder: &'a Path, env: &'a [(String, String)]) -> Server<'a> {
+    Server {
+        program: "/opt/facade-mcp",
+        env,
+        folder,
+        instructions: "You are Facade agent #a3.",
+        cwd,
+        facade: "/opt/facade",
+    }
 }
 
 /// The variables of the run, which Facade sets in its CLI's environment besides what the launch
@@ -1118,6 +1119,42 @@ fn a_pi_run_beside_the_guest_extension_is_given_the_tools() {
         launch_in(&cwd, "pi", &[], &[("HOME", home.to_str().unwrap())]).tools,
         Tools::Injected
     );
+
+    let agent_dir = home.join(".pi/agent");
+    let mcp_file = agent_dir.join("mcp.json");
+    let guest_config = r#"{"mcpServers":{"facade":{"command":"/opt/facade-mcp","args":[]}}}"#;
+    write(mcp_file.clone(), guest_config);
+    let environment = BTreeMap::from([(
+        "PI_CODING_AGENT_DIR".into(),
+        agent_dir.to_str().unwrap().to_owned(),
+    )]);
+    let report = report();
+    let variables = run_variables();
+    let credential = "1".repeat(64);
+    let relay_args = words(&[crate::RUN_CREDENTIAL_ARG, &credential]);
+    let managed = start_managed_launch_command(
+        find("pi").unwrap().unwrap(),
+        &[],
+        Some(&report),
+        Some(&ManagedServer {
+            server: test_server(&cwd, report.folder(), &variables),
+            args: &relay_args,
+        }),
+        &environment,
+        None,
+    );
+    assert_eq!(managed.tools, Tools::Injected);
+    assert!(managed.uses_run_credential);
+    assert_eq!(after(&managed, "-e"), in_run("facade-pi.mjs"));
+    let extension = &managed
+        .files
+        .iter()
+        .find(|(name, _)| name == "facade-pi.mjs")
+        .unwrap()
+        .1;
+    assert!(extension.contains(r#"pi.registerMcpServer("facade_managed", "#));
+    assert!(extension.contains(&format!("\"args\":{}", json!(relay_args))));
+    assert_eq!(std::fs::read_to_string(mcp_file).unwrap(), guest_config);
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -1251,6 +1288,51 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
             .count(),
         1
     );
+
+    let rule = find("agy").unwrap().unwrap();
+    let report = report();
+    let variables = run_variables();
+    let server = test_server(&cwd, report.folder(), &variables);
+    let environment = BTreeMap::new();
+    let first = "1".repeat(64);
+    let second = "2".repeat(64);
+    let managed = start_managed_launch_command(
+        rule,
+        &[],
+        Some(&report),
+        Some(&ManagedServer {
+            server,
+            args: &words(&[crate::RUN_CREDENTIAL_ARG, &first]),
+        }),
+        &environment,
+        None,
+    );
+    let resumed = resume_managed_launch_command(
+        rule,
+        "dc2e7f8d-c453-43f5-8619-d8d49f7c7478",
+        &[],
+        Some(&report),
+        Some(&ManagedServer {
+            server,
+            args: &words(&[crate::RUN_CREDENTIAL_ARG, &second]),
+        }),
+        &environment,
+        None,
+    )
+    .unwrap();
+    assert!(managed.uses_run_credential && resumed.uses_run_credential);
+    assert_eq!(
+        managed.plugin,
+        crate::plugin_files_v3(server.program, server.facade)
+    );
+    assert_eq!(managed.plugin, resumed.plugin);
+    for (launch, credential) in [(managed, first), (resumed, second)] {
+        assert_eq!(launch.env, [("FACADE_RUN_TOKEN".to_owned(), credential)]);
+        let mut environment = BTreeMap::from_iter(launch.env);
+        rule.remove_wiring_environment(&mut environment);
+        assert!(environment.is_empty());
+    }
+
     std::fs::remove_dir_all(&home).unwrap();
     std::fs::remove_dir_all(&cwd).unwrap();
 }

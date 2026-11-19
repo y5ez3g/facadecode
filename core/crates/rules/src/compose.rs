@@ -3,16 +3,17 @@
 //! person's words.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 
 use serde_json::json;
 
-use crate::Rule;
 use crate::formats::merge_settings;
 use crate::wiring::{self, Hooked, MergedSettings, Server, SessionReport, Tools, Wiring};
+use crate::{ManagedServer, Rule};
 
 /// The command line of a run's CLI.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct CommandLine {
     /// The program, then its arguments.
     pub command: Vec<String>,
@@ -29,6 +30,34 @@ pub struct CommandLine {
     pub plugin: Vec<(String, String)>,
     /// How the CLI was given Facade's tools.
     pub tools: Tools,
+    /// The run's credential is present in the relay configuration this command will load.
+    pub uses_run_credential: bool,
+}
+
+impl fmt::Debug for CommandLine {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The run's credential can be in its arguments, environment, or file contents.
+        formatter
+            .debug_struct("CommandLine")
+            .field("captures", &self.captures)
+            .field("uses_run_credential", &self.uses_run_credential)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ServerForRun<'a> {
+    Legacy(&'a Server<'a>),
+    Managed(&'a ManagedServer<'a>),
+}
+
+impl<'a> ServerForRun<'a> {
+    fn settings(self) -> &'a Server<'a> {
+        match self {
+            Self::Legacy(server) => server,
+            Self::Managed(server) => &server.server,
+        }
+    }
 }
 
 /// The command line that starts `rule`'s CLI, in order: the program, the rule's arguments, YOLO's,
@@ -50,7 +79,44 @@ pub fn start_command_line(
     environment: &BTreeMap<String, String>,
     yolo: Option<&Path>,
 ) -> CommandLine {
-    let (mut wiring, tools) = wire(rule, server, environment, yolo);
+    start(
+        rule,
+        words,
+        session,
+        server.map(ServerForRun::Legacy),
+        environment,
+        yolo,
+    )
+}
+
+/// Builds the command line of a new managed run with its own MCP configuration.
+pub fn start_managed_launch_command(
+    rule: &Rule,
+    words: &[String],
+    session: Option<&SessionReport<'_>>,
+    server: Option<&ManagedServer<'_>>,
+    environment: &BTreeMap<String, String>,
+    yolo: Option<&Path>,
+) -> CommandLine {
+    start(
+        rule,
+        words,
+        session,
+        server.map(ServerForRun::Managed),
+        environment,
+        yolo,
+    )
+}
+
+fn start(
+    rule: &Rule,
+    words: &[String],
+    session: Option<&SessionReport<'_>>,
+    server: Option<ServerForRun<'_>>,
+    environment: &BTreeMap<String, String>,
+    yolo: Option<&Path>,
+) -> CommandLine {
+    let (mut wiring, tools, uses_run_credential) = wire(rule, server, environment, yolo);
     let reports =
         session.is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session));
     let hooked = hook(rule, words, session, &wiring, environment);
@@ -60,7 +126,15 @@ pub fn start_command_line(
         args: merged,
         files: settings_files,
         mut rest,
-    } = merge(rule, &wiring, rest, server, session, yolo, environment);
+    } = merge(
+        rule,
+        &wiring,
+        rest,
+        server.map(ServerForRun::settings),
+        session,
+        yolo,
+        environment,
+    );
     // A CLI that reports its session through its settings reports it only where they merged.
     let captures = hooked.reported || (reports && !merged.is_empty());
     let after_words = wiring.takes_values_to_next_option && hook_args.is_empty();
@@ -81,6 +155,7 @@ pub fn start_command_line(
         files: [wiring.files, hooked.files, settings_files].concat(),
         plugin: wiring.plugin,
         tools,
+        uses_run_credential,
     }
 }
 
@@ -99,8 +174,49 @@ pub fn resume_command_line(
     environment: &BTreeMap<String, String>,
     yolo: Option<&Path>,
 ) -> Option<CommandLine> {
+    resume(
+        rule,
+        id,
+        words,
+        session,
+        server.map(ServerForRun::Legacy),
+        environment,
+        yolo,
+    )
+}
+
+/// Resumes a session with saved CLI arguments, current YOLO, and this run's MCP configuration.
+pub fn resume_managed_launch_command(
+    rule: &Rule,
+    id: &str,
+    words: &[String],
+    session: Option<&SessionReport<'_>>,
+    server: Option<&ManagedServer<'_>>,
+    environment: &BTreeMap<String, String>,
+    yolo: Option<&Path>,
+) -> Option<CommandLine> {
+    resume(
+        rule,
+        id,
+        words,
+        session,
+        server.map(ServerForRun::Managed),
+        environment,
+        yolo,
+    )
+}
+
+fn resume(
+    rule: &Rule,
+    id: &str,
+    words: &[String],
+    session: Option<&SessionReport<'_>>,
+    server: Option<ServerForRun<'_>>,
+    environment: &BTreeMap<String, String>,
+    yolo: Option<&Path>,
+) -> Option<CommandLine> {
     let resume = rule.resume_args(id)?;
-    let (mut wiring, tools) = wire(rule, server, environment, yolo);
+    let (mut wiring, tools, uses_run_credential) = wire(rule, server, environment, yolo);
     let reports =
         session.is_some_and(|session| wiring::report_session(&rule.cli, &mut wiring, session));
     let mut command = vec![rule.program.clone()];
@@ -116,7 +232,7 @@ pub fn resume_command_line(
         rule,
         &wiring,
         hooked.rest,
-        server,
+        server.map(ServerForRun::settings),
         session,
         yolo,
         environment,
@@ -133,6 +249,7 @@ pub fn resume_command_line(
         files: [wiring.files, hooked.files, settings_files].concat(),
         plugin: wiring.plugin,
         tools,
+        uses_run_credential,
     })
 }
 
@@ -140,20 +257,28 @@ pub fn resume_command_line(
 /// merged into theirs. Without a server, no tools.
 fn wire(
     rule: &Rule,
-    server: Option<&Server>,
+    server: Option<ServerForRun<'_>>,
     environment: &BTreeMap<String, String>,
     yolo: Option<&Path>,
-) -> (Wiring, Tools) {
-    let given = server.map(|server| wiring::wire(&rule.cli, server, environment));
-    let (mut wiring, tools) = match given {
-        Some(Ok(Some(wiring))) => (wiring, Tools::Injected),
-        Some(Err(reason)) => (Wiring::default(), Tools::NotGiven(reason)),
-        Some(Ok(None)) | None => (Wiring::default(), Tools::NotInjected),
+) -> (Wiring, Tools, bool) {
+    let given = match server {
+        Some(ServerForRun::Managed(server)) => wiring::wire_managed(&rule.cli, server, environment)
+            .map(|result| {
+                result.map(|output| (output.wiring, output.tools, output.uses_run_credential))
+            }),
+        Some(ServerForRun::Legacy(server)) => wiring::wire(&rule.cli, server, environment)
+            .map(|result| result.map(|wiring| (wiring, Tools::Injected, false))),
+        None => Ok(None),
+    };
+    let (mut wiring, tools, uses_run_credential) = match given {
+        Ok(Some(output)) => output,
+        Err(reason) => (Wiring::default(), Tools::NotGiven(reason), false),
+        Ok(None) => (Wiring::default(), Tools::NotInjected, false),
     };
     if let Some(settings) = yolo.and_then(|folder| rule.yolo.settings(folder)) {
         merge_settings(wiring.settings.get_or_insert_with(|| json!({})), &settings);
     }
-    (wiring, tools)
+    (wiring, tools, uses_run_credential)
 }
 
 /// What having the CLI report its session through a hook, plugin or extension adds, and the

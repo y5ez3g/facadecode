@@ -2,7 +2,7 @@
 //! built into the program and checked as it is read: the program to run and how it reads its
 //! arguments, how its session is reported and resumed, how its screen draws its message input and
 //! takes a paste, what its screen shows of its state where its own reports do not say it, and how
-//! Facade's tools, hooks and integration enter it.
+//! Facade's tools and hooks enter it.
 //!
 //! A rule's exact name, such as `claude`, selects that rule. Any other word, a path such as
 //! `/opt/bin/claude` included, is a program without a rule.
@@ -28,18 +28,25 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
 pub use command_line::{Choices, TrustQuestion, YoloRule, entries};
-pub use compose::{CommandLine, resume_command_line, start_command_line};
+pub use compose::{
+    CommandLine, resume_command_line, resume_managed_launch_command, start_command_line,
+    start_managed_launch_command,
+};
 pub use formats::shell_word;
 pub use input::{
     BoxReading, InputLine, LineCell, ProbeVerdict, is_own_draft, is_same_draft, read_box,
     read_box_for_typing, read_draft, read_input, restored, settle_time, shape_of, space_taken,
     verdict_of, with_paste_text,
 };
-pub use sessions::*;
+pub use sessions::{
+    Reported, SESSION_FILE, SESSION_VARIABLES, SavedSession, SessionFile, WriteFailure,
+    is_session_variable, list_sessions, parse_session_id, read_session_file, run_folder,
+    session_evidence, session_from_hook, session_from_title, session_variable, write_session_file,
+};
 pub use state::{ScreenState, read_state};
 pub use wiring::{
     INSTRUCTIONS_FILE, PLUGIN_FOLDER, PLUGIN_MEMBERS, SKILL_FILE, Server, SessionReport, Tools,
-    guest_entry_serves_run, hook, integration, plugin_files, plugin_version,
+    guest_entry_serves_run, hook, integration, plugin_files, plugin_files_v3, plugin_version,
     runs_start_guest_entry, session_ends_with_process, uses_folder_plugin,
 };
 pub use wrappers::direct_command;
