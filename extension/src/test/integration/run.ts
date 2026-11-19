@@ -860,9 +860,15 @@ async function main(): Promise<void> {
 			try {
 				await endEditors(editors);
 			} finally {
-				endMatching(user);
-				endMatching(path.join(facade, 'extension', 'ptyd'));
-				await endRust(facade);
+				try {
+					console.log('    Ending the engine switch editor and terminal helpers.');
+					endMatching(user);
+					endMatching(path.join(facade, 'extension', 'ptyd'));
+				} finally {
+					console.log('    Ending the engine switch Orchestrator.');
+					await endRust(facade);
+				}
+				console.log('    Engine switch cleanup finished.');
 			}
 		}
 	};
