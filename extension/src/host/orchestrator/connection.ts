@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { timeout } from '../../base/async';
-import type { AgentListResult, ChangedParams, HelloResult, ScreenChange, UpgradeArgs, V3HelloParams, V3Operation, V3Topic, WatchEndedParams, WatchResult } from '../../base/coreProtocol';
+import type { ChangedParams, HelloResult, ScreenChange, UpgradeArgs, V2AgentListResult, V3HelloParams, V3Operation, V3Topic, WatchEndedParams, WatchResult } from '../../base/coreProtocol';
 import { messageOf } from '../../base/errors';
 import type { Disposable, Event } from '../../core/ports';
 import { Connection, connectDaemonSocket, errorOf, startDaemon, unavailable, type DaemonOptions } from '../rust/rpc';
@@ -287,7 +287,7 @@ class Link implements OrchestratorLink {
 	private async legacyKeeperAgents(connection: Connection, machineId: string): Promise<readonly string[]> {
 		try {
 			const machine = `id:${machineId.replace(/-/g, '')}`;
-			const listed = await connection.ask('call', { op: 'agent.list', args: { machine } }, HELLO_WAIT_MS) as AgentListResult;
+			const listed = await connection.ask('call', { op: 'agent.list', args: { machine } }, HELLO_WAIT_MS) as V2AgentListResult;
 			return listed.agents
 				.filter(agent => agent.machine_id === machineId && agent.process === 'running' && !agent.guest)
 				.map(agent => `${agent.agent_id}@${machineId}`);

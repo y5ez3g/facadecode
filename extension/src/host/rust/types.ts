@@ -2,11 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// What the parts of the Rust engine share: a window on it is an `ide` client of Facade core, and reaches core only through the
-// daemon protocol (ARCHITECTURE-1.1).
-
-import type { Disposable, Event, ExecutionPort, RunId } from '../../core/ports';
-import type { ErrorData, Operation, Reason, ResizeArgs, Topic, TypeArgs, WindowDescription, WindowRef } from '../../base/coreProtocol';
+import type { ErrorData, Reason } from '../../base/coreProtocol';
 
 /** The engine a window runs its agents on, chosen once as it opens or reloads: core, or the extension's own. */
 export type Engine = 'rust' | 'old';
@@ -29,12 +25,6 @@ export function encodeTerminalInput(data: string): Base64Input {
 	return Buffer.from(data, 'utf8').toString('base64') as Base64Input;
 }
 
-/** Notification arguments at the daemon boundary: a plain input string must be encoded before it can be `raw`. */
-export interface TerminalNotificationArgs {
-	readonly 'agent.type': Omit<TypeArgs, 'raw'> & { readonly raw?: Base64Input };
-	readonly 'agent.resize': ResizeArgs;
-}
-
 export interface WatchListener<S, C> {
 	snapshot(snapshot: S): void;
 	change(change: C): void;
@@ -42,41 +32,4 @@ export interface WatchListener<S, C> {
 	disconnected?(): void;
 	/** Core refused or ended the watch. Its next snapshot needs a new watch. */
 	ended?(error: DaemonError): void;
-}
-
-/** This window's connection to core, kept across core's restarts and handovers to a newer build. */
-export interface DaemonLink {
-	/** Runs `op` for the current window binding. A call refused as `upgrading` can retry for that binding on the next connection. */
-	call<R>(op: Operation, args: object): Promise<R>;
-	/** Sends `op` without a response: what the person types, and a terminal's size. Dropped while disconnected. */
-	notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]): void;
-	/** Follows `topic`: its snapshot, then its changes; a snapshot again after each reconnection, before its changes. */
-	watch<S, C>(topic: Topic, args: object, on: WatchListener<S, C>): Disposable;
-	/** Describes the window again (`window.update`); the next `hello` describes it so too. */
-	update(window: WindowDescription): Promise<void>;
-	/** The machine of the last verified binding. */
-	readonly machineId: string;
-	/** The last verified logical window binding. */
-	readonly window: WindowRef;
-	/** Fires for each new connection, after updating the binding and before installing watches. */
-	readonly onDidBind: Event<WindowRef>;
-	/** Whether the link currently has a usable, bound connection. */
-	readonly connected: boolean;
-	/** The logical window ID during the protocol transition. */
-	readonly windowId: string;
-	dispose(): void;
-}
-
-/** The agents' editor terminals on the Rust engine: today's tabs, each drawing its agent's screen from core. */
-export interface RustTerminals extends Pick<ExecutionPort, 'openPair' | 'note' | 'removePair' | 'reveal' | 'tabOpen' | 'reopen' | 'rename'
-	| 'tabLabel' | 'pinTab' | 'spin' | 'hideTab' | 'openPinned' | 'pinnedOpened' | 'onDidActivate' | 'onDidClosePair' | 'onDidRenameTab'
-	| 'onDidPinTab' | 'onDidPlaceTab'> {
-	/** The run's terminal shows core's agent `agent` from now on. */
-	bind(run: RunId, agent: string, remote?: { readonly reachable: boolean }): void;
-	/** A remote tab pauses input until a fresh snapshot from the running machine arrives. */
-	setReachable(run: RunId, reachable: boolean): void;
-	/** The run's agent ended: its terminal says so in `text`. */
-	exited(run: RunId, text: string): void;
-	/** The system's reduced-motion preference, as the panel's page says it (LIFECYCLE-2.2). */
-	systemMotion(reduced: boolean): void;
 }

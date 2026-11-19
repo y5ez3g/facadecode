@@ -5,8 +5,8 @@ together. This file routes work on the extension in `extension/`; the repository
 
 ## 1 Start here
 
-1. Read [the extension's specification index](../docs/extension/README.md), then [PRODUCT](../docs/extension/PRODUCT.md)
-   and [EXPERIENCE](../docs/extension/EXPERIENCE.md). These say what the user is building in plain terms.
+1. Read [Facade Code](../docs/facade-code.md) for the product and its VS Code entry point. Use
+   [the extension's specification index](../docs/extension/README.md) to find the editor's rules and engineering contracts.
 2. Read [RULES](../docs/extension/RULES.md), then the feature you are changing. UI work also reads [UX](../docs/extension/UX.md).
 3. Before implementation/testing, read [ARCHITECTURE](../docs/extension/engineering/ARCHITECTURE.md), especially group 5, and
    [VERIFICATION](../docs/extension/engineering/VERIFICATION.md). Respect the already dirty working tree.
@@ -15,8 +15,9 @@ together. This file routes work on the extension in `extension/`; the repository
 
 ## 2 The specification
 
-**Only `../docs/extension/` defines the extension's product. It is the authority: where the code disagrees with it, the
-code is fixed, or the owning rule is amended first. It is not a runtime certification.**
+**[Facade Code](../docs/facade-code.md) defines the product.** The extension's rules in `../docs/extension/` define the
+editor interaction and the optional old engine. Where code disagrees with a rule, fix the code or amend the owning rule
+first.
 
 The [specification index](../docs/extension/README.md) lists its layers and each document's responsibility. Product constrains
 experience and shared rules; those constrain features and UX; engineering implements their contracts.

@@ -3,8 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { WindowRef } from '../../base/coreProtocol';
-import type { Agents, ConversationDiscoveryPort, ConversationEntry, ConversationKey, CliCatalogPort, Event, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, OtherAgent, RetainedConversation, RunId, WorktreePort } from '../../core/ports';
+import type { Agents, ConversationDiscoveryPort, ConversationEntry, ConversationKey, CliCatalogPort, Event, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, RunId, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
@@ -13,33 +12,15 @@ import { PanelView } from '../panel';
 import { pickFilter } from '../pickers/filter';
 import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
-import type { MachineLaunch } from '../pickers/machineLaunch';
 import { pickSession } from '../pickers/resume';
 import { messageOf } from '../../base/errors';
 import { newAgent } from '../pickers/newAgent';
+import { createRustPickers, type RustPickerDeps } from '../pickers/orchestrator';
 import { PanelPrefs } from '../order';
-import { AgentActions, registerAgentCommands, targetOf } from './agent';
+import { AgentActions, registerAgentCommands, registerRustAgentCommands, targetOf, type RustCardActions } from './agent';
 
 /** Defined by the build: true only in the integration suite's build, whose test commands the shipped one has none of (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
-
-/** The composition root supplies these capabilities only for a Rust window. */
-interface RustUi {
-	readonly window: () => WindowRef;
-	readonly ready: () => Promise<unknown>;
-	readonly onDidChangeWindow: vscode.Event<Promise<unknown>>;
-	readonly network: MachineLaunch;
-	otherAgents(): readonly OtherAgent[];
-	queryOtherAgents(): Promise<readonly OtherAgent[]>;
-	readonly onDidChangeOtherAgents: Event<void>;
-	adoptAgent(agent: string): Promise<RunId>;
-	stopOtherAgent(agent: string): ReturnType<Agents['stop']>;
-	retainedConversations(): readonly RetainedConversation[];
-	resumeRetained(agent: string, options: { readonly reveal: boolean }): Promise<RunId>;
-	worktreeAgents(path: string): number;
-	closeWorktreeAgents(path: string): Promise<boolean>;
-	describeError(err: unknown): string;
-}
 
 /** What the panel, its commands and its pickers are given by the composition root. */
 export interface UiDeps {
@@ -63,7 +44,6 @@ export interface UiDeps {
 	readonly worktrees: WorktreePort;
 	readonly execution: Pick<ExecutionPort, 'reveal' | 'tabOpen' | 'onDidActivate'>;
 	readonly workspaceState: Pick<vscode.Memento, 'get' | 'update'>;
-	readonly rust?: RustUi;
 	readonly extensionUri: vscode.Uri;
 	readonly log: LogPort;
 	/** A human-operation error, one neutralized line with only Show or Edit in facade.json (UX-1.2, RULES-1.8). */
@@ -76,9 +56,32 @@ export interface UiDeps {
 	readonly motion?: (reduced: boolean) => void;
 }
 
+export interface OrchestratorUiDeps {
+	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange' | 'pins'> & RustCardActions;
+	readonly pickers: Omit<RustPickerDeps, 'select' | 'locations' | 'media'>;
+	readonly locations: LocationPort;
+	readonly workspaceState: ConstructorParameters<typeof PanelPrefs>[0];
+	readonly onDidActivate: Event<RunId | undefined>;
+	readonly openSettings: () => Promise<void>;
+	readonly extensionUri: vscode.Uri;
+	readonly log: LogPort;
+	readonly notifyError: HumanPort['error'];
+	readonly ready: Promise<unknown>;
+	readonly motion: (reduced: boolean) => void;
+}
+
 /** The words a card is said in, in the window's language (PANEL-1.4). */
-function cardWords(): CardWords {
+function cardWords(orchestrator = false): CardWords {
 	return {
+		...(orchestrator ? { orchestrator: {
+			justDone: vscode.l10n.t('Just done'),
+			waitingForYou: vscode.l10n.t('Waiting for you'),
+			ended: vscode.l10n.t('Ended'),
+			unknown: vscode.l10n.t('Unknown'),
+			stateError: vscode.l10n.t('Error'),
+			machine: (value: string) => vscode.l10n.t('Machine: {0}', value),
+			address: (value: string) => vscode.l10n.t('Address: {0}', value)
+		} } : {}),
 		title: value => vscode.l10n.t("Title: {0}", value),
 		// The details' first row where a run has no title: its CLI has not saved one yet; or Facade has no history reader for its CLI
 		untitledPending: vscode.l10n.t("No title yet"),
@@ -141,6 +144,98 @@ function cardWords(): CardWords {
 	};
 }
 
+export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposable[] {
+	const { agents, locations } = deps;
+	const model = new PanelModel({
+		agents, locations,
+		prefs: new PanelPrefs(deps.workspaceState, deps.log, true),
+		words: cardWords(true),
+		remote: vscode.env.remoteName !== undefined,
+		ready: deps.ready,
+		orchestrator: true,
+		icons: () => deps.pickers.icons
+	});
+	const pickers = createRustPickers({
+		...deps.pickers, locations,
+		media: vscode.Uri.joinPath(deps.extensionUri, 'media'),
+		select: run => model.select(run)
+	});
+	const actions: RustCardActions = {
+		open: async run => {
+			const opened = await agents.open(run);
+			if (opened) { model.select(run); }
+			return opened;
+		},
+		hide: run => agents.hide(run),
+		stop: run => agents.stop(run),
+		remove: run => agents.remove(run),
+		setPinned: (run, pinned) => agents.setPinned(run, pinned),
+		rename: (run, name) => agents.rename(run, name)
+	};
+	const act = async (what: Act, run: string | undefined): Promise<Outcome['reason'] | undefined> => {
+		try {
+			switch (what) {
+				case 'open':
+					if (run === undefined || !agents.get(run)) { return 'gone'; }
+					return await actions.open(run) ? undefined : 'failed';
+				case 'new':
+					await pickers.newAgent(locationOfFilter(model.currentFilter(), locations.snapshot().locations));
+					return undefined;
+				case 'continueSession':
+					await pickers.resumeAgent();
+					return undefined;
+				case 'clearFilter':
+					model.setFilter(undefined);
+					return undefined;
+				case 'openFolder':
+					await vscode.commands.executeCommand('vscode.openFolder');
+					return undefined;
+				case 'rename':
+					if (run === undefined || !agents.get(run)) { return 'gone'; }
+					await vscode.commands.executeCommand(COMMANDS.renameAgent, { webview: PANEL_VIEW, webviewSection: 'agent', run_id: run, preventDefaultContextMenuItems: true });
+					void vscode.commands.executeCommand(`${PANEL_VIEW}.focus`);
+					return undefined;
+				case 'pin':
+				case 'unpin':
+					if (run === undefined || !agents.get(run)) { return 'gone'; }
+					await actions.setPinned(run, what === 'pin');
+					return undefined;
+			}
+		} catch (error) {
+			deps.pickers.notifyError(error);
+			return 'failed';
+		}
+	};
+	const view = new PanelView(deps.extensionUri, model, act, deps.log, deps.motion);
+	return [
+		model, view,
+		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
+		deps.onDidActivate(run => model.activated(run)),
+		vscode.commands.registerCommand(COMMANDS.newAgent, () => pickers.newAgent()),
+		vscode.commands.registerCommand(COMMANDS.resumeAgent, () => pickers.resumeAgent()),
+		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, locations, deps.log)),
+		vscode.commands.registerCommand(COMMANDS.filterOn, () => pickFilter(model, locations, deps.log)),
+		vscode.commands.registerCommand(COMMANDS.openSettings, () => deps.openSettings()),
+		vscode.commands.registerCommand(COMMANDS.showAgentDetails, (arg?: unknown) => {
+			const run = targetOf(arg, model, agents, true);
+			return run === undefined ? undefined : view.showDetails(run);
+		}),
+		...registerRustAgentCommands({ model, agents, actions, notifyError: deps.notifyError, goToAgent: pickers.goToAgent }),
+		...registerTestUi(model, view, agents)
+	];
+}
+
+function registerTestUi(model: PanelModel, view: PanelView, agents: Pick<Agents, 'get'>): vscode.Disposable[] {
+	return typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [
+		vscode.commands.registerCommand(TEST_COMMANDS.state, () => model.state()),
+		vscode.commands.registerCommand(TEST_COMMANDS.selectRow, (arg?: unknown) => {
+			const run = targetOf(arg, model, agents, false);
+			if (run !== undefined) { model.select(run); }
+		}),
+		vscode.commands.registerCommand(TEST_COMMANDS.probe, (args: { readonly op: string; readonly selector: string; readonly index?: number }) => view.probe(args))
+	] : [];
+}
+
 /**
  * The panel (PANEL), its commands (UX-3) and pickers (LIFECYCLE-1, 2): the view provider, every `facade.` command this extension owns
  * but New Worktree, and the context keys. Answers what the extension disposes as it deactivates.
@@ -148,11 +243,10 @@ function cardWords(): CardWords {
 export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	const words = cardWords();
 	const media = vscode.Uri.joinPath(deps.extensionUri, 'media');
-	const rust = deps.rust;
 	const model = new PanelModel({
 		agents: deps.agents,
 		locations: deps.locations,
-		prefs: new PanelPrefs(deps.workspaceState, deps.log, rust !== undefined),
+		prefs: new PanelPrefs(deps.workspaceState, deps.log),
 		words,
 		remote: vscode.env.remoteName !== undefined,
 		ready: deps.ready,
@@ -161,82 +255,36 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		...deps.icons ? { icons: deps.icons } : {}
 	});
 	const agent = new AgentActions({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError });
-	const checkWindow = (window: WindowRef | undefined) => {
-		if (rust && rust.window() !== window) {
-			throw new Error(vscode.l10n.t('Facade cannot do this right now'));
-		}
-	};
-	const sessions = async (kind: 'resume' | 'continue') => {
-		const window = rust?.window();
-		const source = kind === 'resume' ? rust && {
-			kind: 'resume' as const,
-			retained: () => { checkWindow(window); return rust.retainedConversations(); },
-			resume: (id: string) => { checkWindow(window); return rust.resumeRetained(id, { reveal: true }); }
-		} : deps.conversations && {
-			kind: 'continue' as const,
-			conversations: deps.conversations,
-			savedName: deps.savedName,
-			continueSession: (entry: ConversationEntry) => { checkWindow(window); return deps.agents.resume(entry, { reveal: true }); }
-		};
-		if (!source) { return; }
-		// Both pickers show while the window prepares the selected source (UX-1.1).
+	const sessions = async () => {
+		if (!deps.conversations) { return; }
+		// Show the picker while the window prepares the saved sessions (UX-1.1).
 		const prepared = (async () => {
-			await (rust ? rust.ready() : deps.ready);
+			await deps.ready;
 			await deps.locations.refresh().catch(err => deps.log.event(`Using known working locations: ${messageOf(err)}`));
-			if (source.kind === 'continue') { await deps.agents.refreshConversations(); }
-			checkWindow(window);
+			await deps.agents.refreshConversations();
 		})();
 		prepared.catch(() => undefined);
 		try {
-			await pickSession({ ...source, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
+			await pickSession({
+				kind: 'continue', conversations: deps.conversations, savedName: deps.savedName,
+				continueSession: (entry: ConversationEntry) => deps.agents.resume(entry, { reveal: true }),
+				locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
 				reveal: run => agent.reveal(run), select: run => model.select(run),
 				notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
 				...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
 		} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved sessions: {0}", messageOf(err)), {}); }
 	};
 	const flows = {
-		newAgent: (startAt?: LocationId) => {
-			const window = rust?.window();
-			return newAgent({
-				agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history,
-				select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media,
-				...deps.names ? { names: deps.names } : {}, ...deps.remote ? { remote: deps.remote } : {},
-				...rust ? {
-					worktreeAgents: {
-						count: path => rust.worktreeAgents(path),
-						close: async path => rust.window() === window && rust.closeWorktreeAgents(path)
-					},
-					network: {
-						onDidChange: rust.network.onDidChange,
-						machines: () => rust.window() === window ? rust.network.machines() : undefined,
-						catalog: async machine => { checkWindow(window); return rust.network.catalog(machine); },
-						preflight: async (machine, request) => { checkWindow(window); return rust.network.preflight(machine, request); },
-						launch: (machine, request) => { checkWindow(window); return rust.network.launch(machine, request); }
-					}
-				} : {}
-			}, startAt);
-		},
-		goToAgent: () => {
-			const window = rust?.window();
-			return goToAgent({
-				model, agents: deps.agents, media, reveal: run => agent.reveal(run),
-				copyReference: run => agent.copyReference(run), stop: run => agent.stop(run), dismiss: run => agent.dismiss(run), ...deps.icons ? { icons: deps.icons } : {},
-				...rust ? { others: {
-					list: () => rust.window() === window ? rust.otherAgents() : [],
-					query: async () => { checkWindow(window); return rust.queryOtherAgents(); },
-					onDidChange: rust.onDidChangeOtherAgents,
-					open: async id => {
-						try { checkWindow(window); await agent.reveal(await rust.adoptAgent(id)); }
-						catch (err) { deps.notifyError(rust.describeError(err), {}); }
-					},
-					copyReference: facts => rust.window() === window ? agent.copyReference(facts.id, facts) : Promise.resolve(),
-					stop: facts => agent.stop(facts.id, { facts, stop: () => {
-						checkWindow(window);
-						return rust.stopOtherAgent(facts.id);
-					} })
-				} } : {}
-			});
-		}
+		newAgent: (startAt?: LocationId) => newAgent({
+			agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history,
+			select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media,
+			...deps.names ? { names: deps.names } : {}, ...deps.remote ? { remote: deps.remote } : {}
+		}, startAt),
+		goToAgent: () => goToAgent({
+			model, agents: deps.agents, media, reveal: run => agent.reveal(run),
+			copyReference: run => agent.copyReference(run), stop: run => agent.stop(run), dismiss: run => agent.dismiss(run),
+			...deps.icons ? { icons: deps.icons } : {}
+		})
 	};
 	/** What the page's actions do, their targets revalidated by run ID (PANEL-3.1). */
 	const act = async (what: Act, target: string | undefined): Promise<Outcome['reason'] | undefined> => {
@@ -244,7 +292,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			case 'open':
 				return target === undefined || !deps.agents.get(target) ? 'gone' : await agent.reveal(target) ? undefined : 'failed';
 			case 'continueSession':
-				await sessions('continue');
+				await sessions();
 				return undefined;
 			case 'new':
 				// From the filtered empty panel, at the filtered location; from the other empty panel, where New Agent would (PANEL-1.2, LIFECYCLE-1.2)
@@ -277,13 +325,11 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	const view = new PanelView(deps.extensionUri, model, act, deps.log, deps.motion);
 	return [
 		model,
-		...rust ? [rust.onDidChangeWindow(ready => model.rebind(ready))] : [],
 		...deps.settingsChanged ? [deps.settingsChanged(() => model.refresh())] : [],
 		view,
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
 		deps.execution.onDidActivate(run => model.activated(run)),
-		...rust ? [vscode.commands.registerCommand(COMMANDS.resumeAgent, () => sessions('resume'))] : [],
-		vscode.commands.registerCommand(COMMANDS.continueSession, () => sessions('continue')),
+		vscode.commands.registerCommand(COMMANDS.continueSession, sessions),
 		vscode.commands.registerCommand(COMMANDS.newAgent, () => flows.newAgent()),
 		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, deps.locations, deps.log)),
 		// The same, its title button filled while a filter is on (UX-3.2)
@@ -296,15 +342,6 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		...registerAgentCommands({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError }, agent, flows),
 		// Open Settings: the editor's Settings at Facade Code's section, whose Edit in facade.json link opens the file (CONFIGURATION-1.2)
 		vscode.commands.registerCommand(COMMANDS.openSettings, () => deps.openSettings()),
-		...(typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [
-			vscode.commands.registerCommand(TEST_COMMANDS.state, () => model.state()),
-			vscode.commands.registerCommand(TEST_COMMANDS.selectRow, (arg?: unknown) => {
-				const run = targetOf(arg, model, deps.agents, false);
-				if (run !== undefined) {
-					model.select(run);
-				}
-			}),
-			vscode.commands.registerCommand(TEST_COMMANDS.probe, (args: { readonly op: string; readonly selector: string; readonly index?: number }) => view.probe(args))
-		] : [])
+		...registerTestUi(model, view, deps.agents)
 	];
 }

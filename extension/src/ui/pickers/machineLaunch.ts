@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { WindowRef } from '../../base/coreProtocol';
+import type { V2WindowRef } from '../../base/coreProtocol';
 import type { CliChoice, RunId } from '../../core/ports';
 import { cliIcon, plainText, reasonOf } from '../presentation';
 import { BACK, Flow } from './stepping';
@@ -17,7 +17,7 @@ export interface LaunchMachine {
 export interface RemoteLocation {
 	readonly label: string;
 	readonly cwd: string;
-	readonly source?: WindowRef;
+	readonly source?: V2WindowRef;
 }
 
 export interface RemoteLaunchRequest {

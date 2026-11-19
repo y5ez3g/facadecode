@@ -2,24 +2,20 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The local window component, as the workspace extension waits for it (ARCHITECTURE-4.3). The editor installs it through the
-// extension pack and may activate it after this extension - in a remote window it installs it locally only after the remote one -
-// so activation waits a bounded time for its command. Without it Facade cannot tell this window from another, and says so plainly.
+// The local component can retire stale Rust tabs (ARCHITECTURE-6.3). The old engine waits for its window services
+// (ARCHITECTURE-4.3) when VS Code has not activated the component yet.
 
 import * as crypto from 'crypto';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import {
 	isDamagedWindowIdentity, isLegacyWindowInstance, isUnreadableWindowIdentity, isWindowIdentity, isWindowTerminalIdentity,
-	WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND, WORKSPACE_MACHINE_BRIDGE_COMMAND,
+	WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND,
 	type DamagedWindowIdentity, type LegacyWindowInstance, type TerminalOwner, type UnreadableWindowIdentity, type WindowIdentity
 } from '../base/windowIdentity';
 import type { LogPort } from '../core/ports';
 import { nextOwnerClaim } from '../record/ownership';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
-import { RemoteSshWorkspace } from './remoteSshWorkspace';
-import { FACADE_PROGRAM } from './rust/types';
 
 /** The window component's extension ID. */
 export const WINDOW_COMPONENT = 'facade.facadecode-window';
@@ -113,15 +109,6 @@ export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_
 			}
 		});
 	}
-}
-
-/** Answers this window's local component once the Rust engine on its Remote-SSH host is ready. */
-export function serveRemoteSshMachine(context: vscode.ExtensionContext, identity: WindowIdentity, home: string): vscode.Disposable {
-	const bridge = new RemoteSshWorkspace(identity, path.join(context.extensionPath, FACADE_PROGRAM), home);
-	const command = vscode.commands.registerCommand(WORKSPACE_MACHINE_BRIDGE_COMMAND, (request: unknown) => bridge.request(request));
-	const disposable = vscode.Disposable.from(command, bridge);
-	context.subscriptions.push(disposable);
-	return disposable;
 }
 
 /**
