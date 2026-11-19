@@ -3,21 +3,20 @@
 use std::io;
 use std::time::Duration;
 
-use facade_base::daemon::{
-    ClientKind, DAEMON_PROTOCOL_VERSION, HelloParams, HelloResult, MIN_DAEMON_PROTOCOL_VERSION,
-    methods,
-};
+use facade_base::daemon::{ClientKind, HelloParams, HelloResult, methods};
 use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Reason, Request, Response, decode_arguments, encode_line,
 };
 use facade_base::machine::{
-    AdvertiseParams, ExecutionOutcome, ForwardParams, MachineHello, MachineIdentity,
-    ProtocolMismatch, Unavailable,
+    self, ExecutionOutcome, MachineHello, MachineIdentity, ProtocolMismatch, Unavailable,
 };
 use facade_base::operations::EmptyResult;
+use facade_base::v3;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+use super::advertise;
 
 const INTRODUCTION_TIMEOUT: Duration = Duration::from_secs(10);
 const HELLO_ID: u64 = 0;
@@ -33,6 +32,23 @@ pub(super) enum Frame {
     Response(Response),
 }
 
+pub(crate) enum OutboundCaller {
+    Legacy(machine::Caller),
+    Current(v3::Caller),
+}
+
+impl From<machine::Caller> for OutboundCaller {
+    fn from(caller: machine::Caller) -> Self {
+        Self::Legacy(caller)
+    }
+}
+
+impl From<v3::Caller> for OutboundCaller {
+    fn from(caller: v3::Caller) -> Self {
+        Self::Current(caller)
+    }
+}
+
 /// The hop reads only the route and deadline. Only the destination decodes the application fields.
 pub(super) struct Forward {
     pub(super) route: Vec<String>,
@@ -41,8 +57,46 @@ pub(super) struct Forward {
 }
 
 impl Forward {
-    pub(super) fn from_origin(params: ForwardParams) -> Self {
-        Self::decode(serde_json::to_value(params).expect("forward parameters serialize"))
+    pub(super) fn control(route: Vec<String>, method: &str) -> Self {
+        Self {
+            route,
+            time_left_ms: None,
+            fields: serde_json::Map::from_iter([("method".to_owned(), Value::from(method))]),
+        }
+    }
+
+    pub(super) fn method(&self) -> &str {
+        self.fields
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    }
+
+    pub(super) fn from_origin(
+        caller: impl Into<OutboundCaller>,
+        method: String,
+        params: Value,
+        request_id: Option<String>,
+    ) -> Self {
+        let value = match caller.into() {
+            OutboundCaller::Legacy(caller) => serde_json::to_value(machine::ForwardParams {
+                caller,
+                route: Vec::new(),
+                time_left_ms: None,
+                request_id,
+                method,
+                params,
+            }),
+            OutboundCaller::Current(caller) => serde_json::to_value(v3::ForwardParams {
+                caller,
+                route: Vec::new(),
+                time_left_ms: None,
+                request_id,
+                method,
+                params,
+            }),
+        };
+        Self::decode(value.expect("forward parameters serialize"))
             .expect("forward parameters form an envelope")
     }
 
@@ -210,21 +264,25 @@ pub(super) fn reports_timeout(error: &ErrorBody) -> bool {
 }
 
 pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<(), ErrorBody> {
-    let supported = [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION];
+    let supported = local.protocol_range;
     if remote.protocol_range == supported {
         return Ok(());
     }
+    let resolution = if facade_base::takes_over(&remote.build, &local.build)
+        || remote.protocol_range[0] > supported[1]
+    {
+        "Upgrade Facade on this machine first.".to_owned()
+    } else {
+        format!(
+            "Install a Facade build with protocol {} on {}.",
+            supported[1], remote.name,
+        )
+    };
     let mut error = ErrorBody::new(
         Reason::IncompatibleProtocol,
         format!(
-            "Facade {} supports daemon protocol {:?}, but {} is running Facade {} with protocol {:?}. Install a build with protocol {} on {}.",
-            local.build,
-            supported,
-            remote.name,
-            remote.build,
-            remote.protocol_range,
-            supported[1],
-            remote.name,
+            "Facade {} supports daemon protocol {:?}, but {} is running Facade {} with protocol {:?}. {resolution}",
+            local.build, supported, remote.name, remote.build, remote.protocol_range,
         ),
     );
     error.data.protocol = Some(ProtocolMismatch {
@@ -242,17 +300,29 @@ pub(super) async fn introduce(
     local: MachineHello,
 ) -> Result<MachineHello, ErrorBody> {
     in_time(async {
-        let hello = HelloParams {
-            protocol_range: local.protocol_range,
-            build: local.build.clone(),
-            kind: ClientKind::Machine,
-            agent: None,
-            sessions: Vec::new(),
-            window: None,
-            numbers_given: None,
-            machine: Some(local.clone()),
+        let hello = if local.protocol_range == v3::DAEMON_PROTOCOL_RANGE {
+            Request::new(
+                Some(HELLO_ID),
+                methods::HELLO,
+                v3::HelloParams::for_machine(local.clone()),
+            )
+        } else {
+            Request::new(
+                Some(HELLO_ID),
+                methods::HELLO,
+                HelloParams {
+                    protocol_range: local.protocol_range,
+                    build: local.build.clone(),
+                    kind: ClientKind::Machine,
+                    agent: None,
+                    sessions: Vec::new(),
+                    window: None,
+                    numbers_given: None,
+                    machine: Some(local.clone()),
+                },
+            )
         };
-        send(write, &Request::new(Some(HELLO_ID), methods::HELLO, hello)).await?;
+        send(write, &hello).await?;
         let Frame::Response(response) = read.initial().await? else {
             return Err(unexpected_output());
         };
@@ -271,7 +341,7 @@ pub(super) async fn introduce(
             )
         })?;
         protocol(&local, &remote)?;
-        if hello.protocol != DAEMON_PROTOCOL_VERSION
+        if hello.protocol != local.protocol_range[1]
             || hello.build != remote.build
             || hello.machine_id != remote.machine_id
         {
@@ -289,14 +359,15 @@ pub(super) async fn introduce(
 pub(super) async fn exchange_tables<T>(
     read: &mut Reader<impl AsyncBufRead + Unpin>,
     write: &mut (impl AsyncWrite + Unpin),
-    machines: Vec<facade_base::machine::MachineInfo>,
-    reserve: impl FnOnce(AdvertiseParams) -> Result<T, ErrorBody>,
+    protocol: u32,
+    machines: Vec<v3::MachineInfo>,
+    reserve: impl FnOnce(v3::AdvertiseParams) -> Result<T, ErrorBody>,
 ) -> Result<T, ErrorBody> {
     let received = in_time(async {
         let table = Request::new(
             Some(INITIAL_TABLE_ID),
             methods::ADVERTISE,
-            AdvertiseParams { machines },
+            advertise::encode(protocol, machines),
         );
         let sending = send(write, &table);
         let receiving = async {
@@ -306,7 +377,7 @@ pub(super) async fn exchange_tables<T>(
                         && request.id == Some(INITIAL_TABLE_ID)
                         && request.method == methods::ADVERTISE =>
                 {
-                    decode_arguments(request.params)
+                    advertise::decode(protocol, request.params)
                 }
                 _ => Err(ErrorBody::invalid_argument(
                     "Expected the peer's machine table.",
@@ -360,7 +431,9 @@ pub(super) async fn reject(
     let _ = tokio::time::timeout(Duration::from_millis(250), send(write, &response)).await;
 }
 
-async fn in_time<T>(work: impl Future<Output = Result<T, ErrorBody>>) -> Result<T, ErrorBody> {
+pub(super) async fn in_time<T>(
+    work: impl Future<Output = Result<T, ErrorBody>>,
+) -> Result<T, ErrorBody> {
     tokio::time::timeout(INTRODUCTION_TIMEOUT, work)
         .await
         .unwrap_or_else(|_| {

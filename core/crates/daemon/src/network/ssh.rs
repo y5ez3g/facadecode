@@ -1,17 +1,65 @@
-//! The pipes of one background SSH session and the diagnostics it leaves on stderr.
+//! Opens one saved SSH session and negotiates the remote Facade entry point.
 
 use std::io;
+use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, BufReader};
+use facade_base::jsonrpc::{ErrorBody, MAX_LINE_BYTES, Reason};
+use facade_base::machine::SshInteraction;
+use facade_base::ssh::{
+    BOOTSTRAP_INSTALL, BOOTSTRAP_READY, BOOTSTRAP_SERVE, BootstrapAction, REMOTE_BOOTSTRAP_BEGIN,
+    REMOTE_PLATFORM_PROBE, RemoteLoginShell, RemoteProbe, SshMode, bootstrap_action,
+    parse_remote_platform, parse_remote_probe, remote_install_command,
+    remote_login_bootstrap_command, ssh_login_args,
+};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::task::JoinHandle;
+
+use super::{SavedSsh, wire};
 
 const STDERR_BYTES: usize = 32 * 1024;
 const EXIT_GRACE: Duration = Duration::from_millis(250);
 pub(super) const RETRY_AFTER: Duration = Duration::from_secs(10);
+
+pub(super) struct FailedAttempt {
+    pub(super) error: ErrorBody,
+    pub(super) sleeping: bool,
+    pub(super) ssh_error: Option<String>,
+}
+
+impl From<ErrorBody> for FailedAttempt {
+    fn from(error: ErrorBody) -> Self {
+        Self {
+            error,
+            sleeping: false,
+            ssh_error: None,
+        }
+    }
+}
+
+impl FailedAttempt {
+    pub(super) fn from_ssh(
+        ssh: &SavedSsh,
+        diagnostics: Diagnostics,
+        error: ErrorBody,
+        sleeping: bool,
+    ) -> Self {
+        let ssh_error = (!diagnostics.stderr.trim().is_empty()).then(|| diagnostics.stderr.clone());
+        let error = if sleeping {
+            ErrorBody::new(Reason::Unavailable, "The machine is sleeping.")
+        } else {
+            ssh_failure(ssh, diagnostics, error)
+        };
+        Self {
+            error,
+            sleeping,
+            ssh_error,
+        }
+    }
+}
 
 pub(super) struct Pipes {
     pub(super) read: BufReader<ChildStdout>,
@@ -20,7 +68,64 @@ pub(super) struct Pipes {
 }
 
 impl Pipes {
-    pub(super) fn spawn(mut command: Command) -> io::Result<Self> {
+    pub(super) async fn open(
+        ssh: &SavedSsh,
+        build: &str,
+        wake: bool,
+        control_dir: Option<&Path>,
+    ) -> Result<Self, FailedAttempt> {
+        let home = ssh.config.remote_home.as_deref();
+        let args = ssh_login_args(&ssh.argv, SshMode::Saved, control_dir)
+            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        let mut command = Command::from(facade_base::programs::command("ssh"));
+        // Keep OpenSSH's diagnostics recognizable while retaining their original text.
+        command.args(args).env("LC_ALL", "C");
+        let mut pipes = Self::spawn(command).map_err(|error| {
+            let reason = if error.kind() == io::ErrorKind::NotFound {
+                Reason::NotFound
+            } else {
+                Reason::Unavailable
+            };
+            ErrorBody::new(reason, format!("Could not start SSH: {error}"))
+        })?;
+        let (shell, probe) = match wire::in_time(pipes.probe(home, build, wake)).await {
+            Ok(probed) => probed,
+            Err(error) => {
+                return Err(FailedAttempt::from_ssh(
+                    ssh,
+                    pipes.finish().await,
+                    error,
+                    false,
+                ));
+            }
+        };
+        let action = bootstrap_action(&probe, build, wake)
+            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        let ready = match action {
+            BootstrapAction::Serve => wire::in_time(pipes.serve(BOOTSTRAP_SERVE)).await,
+            BootstrapAction::Install => pipes.serve(BOOTSTRAP_INSTALL).await,
+            BootstrapAction::NeedsInstall | BootstrapAction::UpgradeLocal => {
+                return Err(version_error(probe, action).into());
+            }
+        };
+        match ready {
+            Ok(()) => Ok(pipes),
+            Err(error) => {
+                let mut failure = FailedAttempt::from_ssh(ssh, pipes.finish().await, error, false);
+                if action == BootstrapAction::Install
+                    && let Ok(command) = remote_install_command(shell.system(), build, home)
+                {
+                    failure.error.message.push_str(&format!(
+                        "\nTo install Facade manually on {}, run:\n{command}",
+                        ssh.config.ssh_destination,
+                    ));
+                }
+                Err(failure)
+            }
+        }
+    }
+
+    fn spawn(mut command: Command) -> io::Result<Self> {
         #[cfg(windows)]
         let (read, write) = {
             let stdio = facade_base::ssh::ssh_stdio()?;
@@ -64,6 +169,107 @@ impl Pipes {
             },
         })
     }
+
+    async fn probe(
+        &mut self,
+        home: Option<&str>,
+        build: &str,
+        wake: bool,
+    ) -> Result<(RemoteLoginShell, RemoteProbe), ErrorBody> {
+        self.send(REMOTE_PLATFORM_PROBE).await?;
+        let shell = find_login_line(
+            &mut self.read,
+            parse_remote_platform,
+            "SSH closed before identifying the remote login shell.",
+        )
+        .await?;
+        let command = remote_login_bootstrap_command(shell, home, build, wake)
+            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        self.send(command.as_bytes()).await?;
+        find_login_line(
+            &mut self.read,
+            |line| (line == REMOTE_BOOTSTRAP_BEGIN).then_some(()),
+            "SSH closed before the remote Facade bootstrap began.",
+        )
+        .await?;
+        let line = read_control(&mut self.read).await?.ok_or_else(|| {
+            ErrorBody::new(
+                Reason::Unavailable,
+                "SSH closed before reporting the remote Facade version.",
+            )
+        })?;
+        let line = std::str::from_utf8(&line)
+            .map_err(|_| ErrorBody::invalid_argument("Expected a UTF-8 Facade version line."))?;
+        let probe = parse_remote_probe(line)
+            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        Ok((shell, probe))
+    }
+
+    async fn send(&mut self, bytes: &[u8]) -> Result<(), ErrorBody> {
+        self.write.write_all(bytes).await.map_err(wire::io_error)?;
+        self.write.flush().await.map_err(wire::io_error)
+    }
+
+    async fn serve(&mut self, action: &[u8]) -> Result<(), ErrorBody> {
+        self.send(action).await?;
+        match read_control(&mut self.read).await? {
+            Some(line) if line == BOOTSTRAP_READY.as_bytes() => Ok(()),
+            Some(_) => Err(ErrorBody::invalid_argument(
+                "Expected the remote Facade bootstrap to report ready.",
+            )),
+            None => Err(ErrorBody::new(
+                Reason::Unavailable,
+                "SSH closed before the remote Facade bootstrap was ready.",
+            )),
+        }
+    }
+
+    async fn finish(self) -> Diagnostics {
+        let Self {
+            read,
+            write,
+            process,
+        } = self;
+        drop((read, write));
+        process.finish().await
+    }
+}
+
+async fn find_login_line<T>(
+    read: &mut BufReader<ChildStdout>,
+    parse: impl Fn(&[u8]) -> Option<T>,
+    closed: &str,
+) -> Result<T, ErrorBody> {
+    while let Some(line) = read_control(read).await? {
+        if let Some(value) = parse(&line) {
+            return Ok(value);
+        }
+    }
+    Err(ErrorBody::new(Reason::Unavailable, closed))
+}
+
+async fn read_control(read: &mut BufReader<ChildStdout>) -> Result<Option<Vec<u8>>, ErrorBody> {
+    let mut line = Vec::new();
+    let bytes = read
+        .take(MAX_LINE_BYTES as u64 + 1)
+        .read_until(b'\n', &mut line)
+        .await
+        .map_err(wire::io_error)?;
+    if bytes == 0 {
+        return Ok(None);
+    }
+    if bytes > MAX_LINE_BYTES {
+        return Err(ErrorBody::line_too_long());
+    }
+    if line.pop() != Some(b'\n') {
+        return Err(ErrorBody::invalid_argument(
+            "Incomplete remote Facade bootstrap line.",
+        ));
+    }
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    Ok(Some(line))
 }
 
 pub(super) struct Process {
@@ -101,6 +307,9 @@ pub(super) struct Diagnostics {
 
 impl Diagnostics {
     pub(super) fn needs_interaction(&self) -> bool {
+        if self.status.and_then(|status| status.code()) != Some(255) {
+            return false;
+        }
         let stderr = self.stderr.to_ascii_lowercase();
         [
             "permission denied (",
@@ -113,17 +322,58 @@ impl Diagnostics {
         .iter()
         .any(|reason| stderr.contains(reason))
     }
+}
 
-    pub(super) fn missing_facade(&self) -> bool {
-        let stderr = self.stderr.to_ascii_lowercase();
-        matches!(self.status.and_then(|s| s.code()), Some(127 | 9009))
-            || [
-                "facade: command not found",
-                "facade: not found",
-                "'facade' is not recognized",
-                "facade: the term",
-            ]
-            .iter()
-            .any(|reason| stderr.contains(reason))
+fn version_error(probe: RemoteProbe, action: BootstrapAction) -> ErrorBody {
+    match (probe, action) {
+        (RemoteProbe::Missing, _) => ErrorBody::new(
+            Reason::NotFound,
+            "Facade is not installed on the remote machine. Connect to it explicitly to install Facade.",
+        ),
+        (RemoteProbe::Installed(version), action) => {
+            let resolution = if action == BootstrapAction::UpgradeLocal {
+                "Upgrade Facade on this machine first."
+            } else {
+                "Connect to the remote machine explicitly to upgrade Facade."
+            };
+            ErrorBody::new(
+                Reason::IncompatibleProtocol,
+                format!("The remote machine runs Facade {version}. {resolution}"),
+            )
+        }
     }
+}
+
+fn ssh_failure(ssh: &SavedSsh, diagnostics: Diagnostics, mut error: ErrorBody) -> ErrorBody {
+    let config = &ssh.config;
+    if !matches!(
+        error.data.reason,
+        Reason::Unavailable | Reason::InvalidArgument
+    ) {
+        return error;
+    }
+    if diagnostics.needs_interaction() {
+        let mut command = vec!["facade".to_owned(), "machine".to_owned(), "add".to_owned()];
+        if let Some(home) = &config.remote_home {
+            command.extend(["--home".to_owned(), home.clone()]);
+        }
+        command.extend(ssh.argv.iter().cloned());
+        let mut error = ErrorBody::new(Reason::SshInteractionRequired, "SSH needs interaction.");
+        error.data.ssh_interaction = Some(SshInteraction {
+            reason: diagnostics.stderr,
+            command,
+        });
+        return error;
+    }
+    if !diagnostics.stderr.trim().is_empty() {
+        if error.data.reason == Reason::Unavailable
+            && diagnostics.status.is_some_and(|status| !status.success())
+        {
+            error.message = diagnostics.stderr;
+        } else {
+            error.message.push('\n');
+            error.message.push_str(&diagnostics.stderr);
+        }
+    }
+    error
 }
