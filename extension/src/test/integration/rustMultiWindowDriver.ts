@@ -77,7 +77,7 @@ async function view(): Promise<WindowView> {
 
 async function goToCard(reference: string): Promise<PanelState['cards'][number]> {
 	const { agent } = await inspect(reference);
-	assert.strictEqual(agent.process, 'running', `${agent.address} can be attached`);
+	assert.strictEqual(agent.process, 'running', `${agent.address} can be attached. Exit ${JSON.stringify(agent.exit)}`);
 	const picker = vscode.commands.executeCommand('facade.goToAgent');
 	let closed = false;
 	void picker.then(() => { closed = true; }, () => { closed = true; });
@@ -271,10 +271,13 @@ async function perform(action: Action): Promise<unknown> {
 			const cwd = vscode.workspace.workspaceFolders![0].uri.fsPath;
 			const home = process.env.FACADE_HOME!;
 			const user = path.join(path.dirname(control), 'worktree-agent-home');
+			// The Windows Node fixture needs SystemRoot to initialize its random number generator.
+			const systemRoot = process.platform === 'win32' ? process.env.SystemRoot : undefined;
 			fs.mkdirSync(user, { recursive: true });
 			const args: V3StartArgs = {
 				cli: 'claude', name: 'Worktree agent', folder: cwd, worktree: action.branch,
 				env: {
+					...(systemRoot ? { SystemRoot: systemRoot } : {}),
 					PATH: process.env.PATH ?? '', HOME: user, USERPROFILE: user, FACADE_HOME: home,
 					CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR!, FACADE_IT_RECORD: process.env.FACADE_IT_RECORD!
 				},
