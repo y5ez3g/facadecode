@@ -1,6 +1,6 @@
 # Glossary
 
-One meaning, one word. New code, documentation comments, logs, error messages, test names and the text Facade core gives
+One meaning, one word. New code, documentation comments, logs, error messages, test names and the text Facade Code gives
 people and models use the words below. Where a person sees a word, in a command, `--help`, an MCP tool, the settings
 file or a model's instructions, the code uses that word too. Some older names in the code still differ; [Names not yet
 changed](#names-not-yet-changed) lists them, and a change that touches one renames it.
@@ -9,36 +9,49 @@ Each table gives the word to use, what it means, and the words not to use for th
 have a meaning of its own elsewhere in this glossary.
 
 Other programs and protocols keep their own words: the standard library's `spawn` and `create_dir`, JSON-RPC's `id` and
-`result`, alacritty's `scrolling_history`, Antigravity's `conversationId`. Names already on the wire keep their spelling for
-now; [Names on the wire](#names-on-the-wire) lists those that differ from this glossary.
+`result`, alacritty's `scrolling_history`, Antigravity's `conversationId`. Names a protocol still carries keep their spelling.
+[Names on the wire](#names-on-the-wire) lists those that differ from this glossary.
+
+## Product and entry points
+
+| Use | Means | Not these |
+|---|---|---|
+| Orchestrator | The service that manages agents in one Facade home, with a keeper and a daemon | Facade core, Rust engine, Rust agent, Facade (for the service) |
+| Facade | The three entry points to the Orchestrator on the local machine: Shell, MCP and VS Code | Orchestrator (for the entry points) |
+| Shell | The `facade` commands for people and scripts | command line (for the entry point) |
+| MCP | The entry point for agents and external apps, through `facade-mcp` | — |
+| VS Code | The editor extension entry point for people | Orchestrator (for the extension) |
 
 ## Agents and runs
 
 | Use | Means | Not these |
 |---|---|---|
-| agent | A CLI session Facade knows, with its own ID such as `#a3`: a run Facade started, or a guest | — |
-| run | One CLI run Facade started, from a start or a resume until it ends | process, child, session (for this) |
+| agent | A named participant with its own number and address, either a managed agent or a Guest | — |
+| managed agent | An agent the Orchestrator starts and whose terminal it holds | Rust agent |
+| run | One execution of a managed agent's CLI, from a start or a resume until it ends | process, child, session (for this) |
 | process | An operating system's process: its ID, its group (on Windows, its job), its exit | run (for this) |
 | session | A CLI's own session, the one it can resume | conversation |
-| guest | A CLI session a person started that joined Facade through an integration | — |
-| MCP member | An MCP client that neither Facade started nor a CLI's hooks report, listed as a guest through its relay | — |
-| CLI | One of the coding CLIs Facade runs, such as Claude Code or Codex; `facade` itself is not one | tool, client (for this) |
+| Guest | An agent created for a single `facade-mcp` connection with its own identity. It has a name and inbox for the life of that connection | MCP member, hook-based guest |
+| CLI | A coding program the Orchestrator runs, such as Claude Code or Codex | tool, client (for this) |
 | rule | A CLI's built-in knowledge file, `core/rules/<cli>.json` | — |
 | entry | An item of `clis` in the settings file, named by its CLI's name, as `ErrorData.entry` gives the entry that caused an error | setup |
 | not installed | A built-in CLI whose entry has no problem and names no program of its own, and whose program is not found where a start would run, `CliInfo.not_installed` | missing, absent |
-| command line | The program, arguments and environment a CLI starts with, `CommandLine` in code | launch |
+| launch command | The program, arguments and environment the Orchestrator uses to start or resume a CLI | command line (for this) |
+| launch options | The CLI arguments, model and effort a start used, `LaunchOptions`. The agent's record keeps them, and a resume uses them again | — |
 | record | An agent's record: its ID, name, CLI, folder and reach, kept in the store | — |
 | numbers given | The highest agent and message numbers an editor gave before it used core, `NumbersGiven`; core's next numbers are above them | — |
+
+The first tool call fixes the identity of a `facade-mcp` connection. A connection acts for a managed agent when it proves
+the identity of that run or matches the agent's own CLI session. Each other connection joins as a Guest.
 
 ## Starting and ending
 
 | Use | Means | Not these |
 |---|---|---|
-| start | Start a new agent; also start Facade's keeper or daemon | create, launch |
+| start | Start a new managed agent, or start a keeper or daemon | create, launch |
 | spawn | Create an operating system process, as `std::process::Command::spawn` does | — |
-| resume | Run an ended agent again in its session, keeping its ID: a new run of the same agent | restart |
-| continue | Run a CLI in one of its sessions again: `agent.resume` continues an ended agent's session as the same agent, `agent.start` with `session` continues a session as a new agent | resume (for a new agent) |
-| stop | Facade ending a running agent: a hangup, then a kill at the deadline | terminate |
+| resume | Run a CLI session again, through `agent.resume`. Resuming an ended agent runs it in its session as the same agent, with the same address. Resuming a CLI session written `<cli>:<session>`, such as `claude:7f3e9a1c`, starts a new agent in that session, with a new address | restart |
+| stop | The Orchestrator ending a running agent by hanging up, then killing it at the deadline | terminate |
 | remove | Delete an agent's record, stopping it first if it runs | delete, forget (for this) |
 | end, ended | A run that no longer runs, for any reason | finish, gone |
 | exit | A process's own exit code or signal | — |
@@ -49,20 +62,18 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 
 | Use | Means | Not these |
 |---|---|---|
-| message | A Facade message, with its number such as `#m12` | mail, letter, note |
+| message | Text sent to one agent, with its own message number such as `m17` | mail, letter, note |
 | send | Put a message on its way | post |
-| deliver, delivery | Bring a message to its recipient: type it into the CLI's input, or let the recipient take it | hand over |
-| take | A guest's hook or a reader collecting the messages that wait | — |
+| deliver, delivery | Submit a message to a managed agent's input box and press Enter, or have a Guest take it with `read_messages` | hand over |
+| take | Collect a waiting message with `read_messages` | — |
 | inbox | The messages waiting for one agent | mailbox |
 | settle | A delivery getting its outcome: delivered or failed | — |
-| withdraw | Take a message out of the inbox before its paste began: its send was cancelled, or it failed before a byte was typed | retract |
-| result | A message Facade itself sends about a delivery, shown with 🔔 | notice |
-| person | The one using Facade; the person's ID is `human`, written `#human` | user |
+| withdraw | Remove a waiting message when its send is canceled. If the recipient has yet to take the message or receive it through Enter by the 30-second deadline, remove it and erase any text already pasted for it | retract |
+| result | A message the Orchestrator sends about first-prompt delivery or an agent waiting, shown with 🔔 | notice |
+| person | Someone using Facade, addressed as "you" in help | user |
+| command line | The sender of a message from Shell, shown as "the command line". It has no address or inbox | human, anonymous (for the sender) |
 | sender, recipient | Who sent a message and who it is for | from, to (outside the wire fields) |
 | first prompt | The task an agent is started with, delivered once its CLI is ready | — |
-
-Public `facade` help and the text the command line writes call the person "the human". Where a command prints the
-identity itself, it uses `human`, as in `Started by: human`. Help addresses the reader as "you".
 
 ## Input
 
@@ -95,8 +106,8 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 | checkpoint | A saved screen in the screen log, which a recovery replays from | snapshot (for this) |
 | replay | Rebuild a screen from its log | — |
 | query, reply | A terminal's question, such as a cursor position request or a color query (OSC 10, 11 and 12), and the terminal's answer to it | answer (for this) |
-| terminal colors | The foreground, background and cursor colors an editor window's terminals draw with, `TerminalColors`; its agents' screens reply to color queries with them | theme, palette (for this) |
-| client | A program connected to the daemon: a `facade` command, the relay, an editor | — |
+| terminal colors | The foreground, background and cursor colors VS Code supplies when attached. The agent's screen replies to color queries with them | theme, palette (for this) |
+| client | A program connected to the daemon, such as a `facade` command, the relay or the VS Code extension | — |
 | viewer | A client showing an agent's screen | subscriber, watcher |
 | watch, topic, snapshot, change | A client's subscription to a topic, what it gets first, and each change after | — |
 
@@ -121,7 +132,7 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 
 | Use | Means | Not these |
 |---|---|---|
-| state | What an agent is doing: one of eight, such as `working` or `waiting_for_you` | status (for this) |
+| state | What an agent is doing. A managed agent has one of eight states, such as `working` or `waiting_for_you`. A connected Guest is `online` | status (for this) |
 | waiting | The state of an agent that needs the person; its kind is `WaitKind` | blocked (for this) |
 | tools | Whether an agent's CLI can use Facade's tools, and why not | — |
 
@@ -129,22 +140,16 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 
 | Use | Means | Not these |
 |---|---|---|
-| window | An editor window that connects to the daemon | — |
-| logical window | The daemon's stable identity for a window. An editor instance can reconnect to it, and a reopened workspace can bind a new instance to it | instance, workspace (for this) |
-| window reference | The pair `{machine_id, window_id}` identifying a logical window on its machine, `WindowRef` in code | window ID alone, instance ID |
-| instance | One opening of an editor window. Its ID is `WindowDescription.id` in `hello`. A reload keeps the instance and reopening uses a new one | logical window, connection (for this) |
-| terminal window | The window with ID `terminal` on each machine. It is the default member when the person starts an agent from a plain terminal | — |
-| member, membership | A member is a logical window an agent belongs to. A membership is that relationship. `AgentInfo.windows` lists the agent's member window references | owner, ownership (for this) |
-| adopt | Add the calling editor's logical window as another member of an existing agent, through `agent.adopt` | take over, move, attach |
-| location | A place a window offers to start agents in: a checkout, a worktree or a folder; an agent's location is the innermost one that holds its folder | place |
-| location source window | The window on the running machine that supplied the start's location, recorded as the optional window reference `location_source_window`. A start from a direct path can omit it | member window (for this) |
+| window | A VS Code window. A viewer can supply its name when it attaches | — |
+| workspace | The VS Code context that stores the Panel's agent list and Pins. Windows on the same workspace share that list | logical window, member window (for the list) |
+| Attach | Open a live view of an agent's terminal and type into it. Shell uses `facade attach` for the same action | adopt, take over |
+| Pin | Keep an agent on the workspace's list of agents to resume when it reopens | pinning an editor tab (for this) |
+| location | A machine and folder offered when starting an agent. The folder can be a checkout, worktree or ordinary folder | place |
 | folder | A folder on disk | directory, dir |
 | checkout | A Git working copy | working copy |
 | worktree | A further working copy Git made from a checkout | — |
-| grace | On the old engine, the time runs keep going after their owning extension host disconnects, giving the workspace time to reconnect. On the Rust engine, agents keep running after their window disconnects | — |
-| take over | A newer build taking over the running Facade. On the old engine, a window taking over the runs of another window of the same workspace | hand over |
-| Rust engine | The editor extension running its agents on core, as its setting `facade.rustEngine` chooses; a word of the extension's, which core's code does not use | — |
-| old engine | The editor extension's own back end, from before core | original engine, legacy engine |
+| grace | In the old engine, the time runs stay alive so a disconnected extension host can reconnect | — |
+| old engine | The editor extension's original back end, available through the `facade.rustEngine` setting labeled **Facade: Rust Engine** during the transition | original engine, legacy engine |
 
 ## Settings
 
@@ -153,25 +158,30 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 | settings file | `facade.json` in the Facade home | configuration file, config file |
 | settings | What the settings file holds | configuration, config |
 | problem | One thing wrong in the settings file, with where it is | issue |
-| home | The folder `FACADE_HOME` names, `~/.facade` by default | root, base (for this) |
-| home folder | The operating system user's own home: `HOME` on macOS and Linux, `USERPROFILE` on Windows; Facade's is the Facade home | home (for this) |
+| Facade home | The folder `FACADE_HOME` names, `~/.facade` by default | root, base (for this) |
+| home folder | The operating system user's own home, `HOME` on macOS and Linux or `USERPROFILE` on Windows | Facade home (for this) |
 
 ## Reach
 
 | Use | Means | Not these |
 |---|---|---|
-| creation tree | An agent and every agent it started, directly or not | family, lineage |
+| creation tree | The first agent and every agent it started, directly or through another agent, across all machines | own group, family, lineage |
 | creator | The agent that started an agent | parent |
+| started by | What started an agent: its creator, the command line or VS Code, as `inspect` shows | creator (for the command line or VS Code) |
 | root | The first agent of a creation tree | — |
-| reach | The agents a caller's tools act on: everyone with YOLO, otherwise its creation tree | access, scope |
-| YOLO | Running a CLI without its own permission questions; with it, an agent's reach is everyone | — |
+| reach | The agents an MCP caller can find, message, reply to and operate on. With YOLO on, this is all agents. With YOLO off, it is the caller's entire creation tree | access, scope |
+| YOLO | A machine setting that defaults to on. A managed agent reads it at start or resume and keeps it for that run. A Guest reads it when it joins and keeps it for that connection | — |
 
-## Wiring, integrations and hooks
+YOLO on lets the Orchestrator bypass a CLI's permissions, trust questions and sandbox where supported. YOLO off leaves the
+CLI's own permission prompts, trust questions and sandbox in effect. Both modes waive Facade tool confirmations for every
+CLI. Questions a CLI asks the person remain available in both modes. For a Guest, YOLO determines reach. Shell and VS Code
+have full reach for the actions they offer.
+
+## Wiring and hooks
 
 | Use | Means | Not these |
 |---|---|---|
-| wiring | Facade's way into each CLI: the MCP server entry, hooks and plugins a run gets, and the format of integrations | — |
-| integration | What Facade writes into a CLI's user settings so that sessions a person starts join as guests | — |
+| wiring | The MCP server entry, hooks and plugins the Orchestrator gives a managed run | — |
 | hook | A command a CLI runs when something happens, such as `facade hook session-start` | — |
 | hook output | What a hook prints for the CLI to read; functions that make it are `*_output` | answer |
 | plugin, extension | A CLI's own way to extend it, by that CLI's own name | — |
@@ -183,8 +193,8 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 
 | Use | Means | Not these |
 |---|---|---|
-| keeper | The process that holds every agent's terminal and starts the daemon | service (for this) |
-| daemon | The process that runs agents, messages and the protocol | service (for this) |
+| keeper | The Orchestrator process that holds managed agents' terminals and starts the daemon | service (for this) |
+| daemon | The Orchestrator process that manages agents and messages and serves its clients | service (for this) |
 | relay | `facade-mcp`: forwards MCP lines between an MCP client and the daemon, line by line | proxy, bridge, shim |
 | link | A reconnecting connection between local Facade services, such as the relay's `DaemonLink` or the daemon's keeper link | — |
 | program | An executable file | binary, executable |
@@ -193,44 +203,50 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 | install | Copy a build's programs, and on Windows its ConPTY folder, into `core/bin/<build>/` | — |
 | version | A three-part version number | — |
 | sync | The daemon giving a keeper the terminals it lacks, with `agent.sync` | hand over |
+| takeover, take over | Switching the running Orchestrator to a newer build | hand over, upgrade (for the service switch) |
 | drain | The daemon letting calls under way finish before a newer build takes over | — |
 | closing | Telling clients that a newer build takes over | — |
 | quiet | An agent that neither types nor reads during a takeover | paused, frozen |
 | roll back | Go back to the build before | revert |
-| upgrade | A person installing a newer version; in text for people only | — |
-
-In public `facade` diagnostics, "upgrade the running Facade" means switching the running services to the newer
-command's build. Installation instructions use "upgrade" for installing a newer version. Code and protocol call the
-service switch a takeover.
+| upgrade | Installing a newer version of the Orchestrator and its entry-point programs | takeover (for the installation) |
 
 ## Machines and connections
 
 | Use | Means | Not these |
 |---|---|---|
-| machine | One Facade home and the core that manages it. Two Facade homes on the same computer are two machines. Use `facade machine`, `machine.*` and the `machines` topic | node, peer, host (for this) |
-| machine ID | The persistent ID of a machine, stored in its home's database as a lowercase UUID v4 with hyphens and given as `machine_id` | host name, OS machine ID, node ID, peer ID |
-| short ID | The first eight hexadecimal digits of a machine ID after removing hyphens, used for display. An `id:` selector uses a unique prefix of 8 to 32 hexadecimal digits. The ID column in `facade machine list` prints the shortest such selector | machine ID, machine name (for this) |
+| machine | One Facade home and its Orchestrator. Two Facade homes on the same computer are two machines | node, peer, host (for this) |
+| machine ID | The permanent ID of a machine, represented internally by a lowercase UUID v4 with hyphens in `machine_id` | host name, OS machine ID, node ID, peer ID |
+| short ID | The first eight hexadecimal digits of a machine ID, such as `9a0d44b2` | `id:` prefix |
 | machine name | The name a machine stores for itself, initially derived from its host name. A person can rename it, and machines can share a name | machine ID, host name (for this) |
+| machine selector | A machine name, short ID or full ID. Look it up by name and by ID. If it matches different machines, report the ambiguity | `id:` selector |
 | daemon start ID | A random UUID v4 generated each time the daemon starts and kept in memory. Machine introductions and tables carry it as `boot_id` to recognize the same running daemon on several connections | machine ID, OS boot ID |
-| connection | A direct, bidirectional channel between two machines. A live connection carries one machine session over SSH or a bridge | link, route (for this) |
-| saved connection | An SSH connection whose destination, remote home and machine ID the daemon keeps for background reconnects. `facade machine add` saves it once the background hello verifies the machine ID | — |
-| temporary connection | A connection held by a foreground `facade machine connect` command or by one Remote-SSH window. It closes when the command exits or the window closes or reloads | saved connection (for this) |
+| connection | A direct SSH channel between two machines that carries one bidirectional machine session | link, route (for this) |
+| saved connection | An SSH connection saved by `facade machine add` so awake machines can reconnect in the background | — |
+| temporary connection | A connection held by a foreground `facade machine connect` command until that command exits | saved connection (for this) |
+| remote probe | What Facade runs first over a new SSH login: it learns the login shell and the version of Facade installed there, `RemoteProbe` | probe (for this) |
 | machine session | The two-way JSON-RPC exchange on a live connection. The daemons introduce themselves with `hello` before exchanging requests, responses, notifications and cancellations | CLI session, SSH login (for this) |
 | route | The ordered machine IDs a call passes through. The forwarded `route` gives the remaining machines and ends with the destination | connection, link (for this) |
 | forward, forwarding | Carry a call or subscription through an intermediate machine. The original caller and payload travel intact, and responses follow the request's path back | relay (for this) |
-| bridge | The temporary transport for a Remote-SSH window. VS Code commands carry bytes, EOF and stderr between the local window component and the remote `facade machine serve` over the existing editor connection | relay, tunnel (for this) |
-| unreachable | A machine currently has no route from here. A remote agent's `unreachable` flag reports that its running machine cannot be reached | offline, ended, removed (for this) |
+| sleeping, sleep | A machine whose Orchestrator exited because it had no running agents, local entry points using it, or work in progress | asleep, offline, unreachable (for this) |
+| wake | Start a sleeping machine's Orchestrator over SSH when an operation names it or needs it along the saved route to the named machine | reconnect (for this) |
+| unreachable | A known machine the Orchestrator could not reach over the network | sleeping, ended, removed (for this) |
 | disconnected | The display state of a remote card or attached terminal after its live feed is lost. It keeps the last view until a fresh snapshot arrives | unreachable (for a view), ended, removed |
-| SSH interaction required | The state of a saved connection when background SSH needs a person to authenticate or verify the host. Retries pause until the person runs the supplied `facade machine add` command. The reason is `ssh_interaction_required`; the command line says `needs SSH login` | unreachable (for this reason) |
+| SSH interaction required | The state of a saved connection when background SSH needs a person to authenticate or verify the host. Shell shows `needs SSH login` and gives the `facade machine add` command to run | unreachable (for this reason) |
 | machine ID conflict | Two live daemons claim the same machine ID with different daemon start IDs. Facade refuses the conflicting connection and reports both paths with `machine_id_conflict` | duplicate machine name, alternate route (for this) |
 
 ## Agent and message addresses
 
 | Use | Means | Not these |
 |---|---|---|
-| structured identity | An agent or message number paired with its full machine ID for storage, protocol and forwarding. In an `AgentRef` the ID names the running machine. In a `MessageRef` it names the machine that stores the message | display label, copyable address |
-| display label | The text shown for an agent or message. A local label uses its number alone, such as `#a17`. A remote label adds the machine, such as `#a17@gpu`, and uses a unique `id:` prefix if the machine name is shared. The command line writes labels bare, as `a17@gpu` and `m42@gpu`; message headers and MCP keep the `#` | copyable address (for this) |
-| copyable address | The `address` text for an agent or message, always qualified by a machine, even on its own machine. Use a unique machine name or `id:` prefix, such as `#m42@gpu` or `#m42@id:3f9a2c1d` | display label, bare number |
+| agent number | A number such as `a3`, issued once on the agent's machine | name, address (for this) |
+| message number | A number such as `m17`, issued once on the recipient's machine | address (for this) |
+| structured identity | The full machine ID and agent or message number used in storage, protocol and forwarding. An `AgentRef` identifies the agent's machine, and a `MessageRef` identifies the recipient's machine | name, address (for this) |
+| address | A number qualified by a machine, such as `a3@devbox`, `a3@9a0d44b2` or `m17@devbox`. Facade gives a machine-qualified agent address, including for agents on the local machine. MCP uses the single field `id` for it | `#a3`, `@name`, `id:` prefix |
+
+Use a machine name when it resolves to one machine, then its short ID, then its full ID. A bare agent number or name
+searches awake, reachable machines for agents the caller can use for the operation. Send results give a qualified message
+address, such as `m17@9a0d44b2`. An inbox and incoming headers show its own message numbers, such as `m17`. A reference to
+a message on another machine includes the machine.
 
 ## Core's parts
 
@@ -314,10 +330,10 @@ code that mirrors them keeps it too.
 | `status`: the MCP result's field, the `facade status` command, the Program Status Protocol (OSC 7501) | The outcome of a call; Facade's own state; a CLI reporting its state |
 | reason `configuration_invalid` | The settings file has problems |
 | `process` in an agent's record | The state of the run's operating system process |
-| the rule file keys `launch` and `status` | The rule's command line and state sections |
+| the rule file keys `launch` and `status` | The rule's launch command and state sections |
 | `BlockKind` and the value `blocked` of the Program Status Protocol | What a CLI reports it waits for; Facade's word is waiting, `WaitKind` |
 | `answer` in `PROTOCOL.md`'s prose | response |
-| `HandOver`, the result of `hook.prompt` and `hook.turn-end` | The messages a guest takes at its next turn: take |
+| `AgentCreator`, the type of `started_by` | What started an agent: started by. Only its `Agent` value is a creator |
 
 ## Names from elsewhere
 
@@ -342,6 +358,7 @@ stay.
 
 | Rule | Names in the code |
 |---|---|
+| launch command | `CommandLine`, `CommandLineRule`, `start_command_line`, `resume_command_line` |
 | start, not launch | `service::launch`, `Supervisor::launch`, `launch_with_settings` |
 | send, not post | `Messages::post`, `Posted` |
 | folder, not dir | `paths::core_dir`, `socket_dir` |
@@ -359,4 +376,5 @@ stay.
 | `_DELAY` or a threshold, not `_AFTER` or `AFTER_` | `ENTER_DRAWN_AFTER`, `HEALTHY_AFTER`, `AFTER_REPEATS`, `CHECKPOINT_AFTER_BYTES` |
 | `_INTERVAL`, not `_EVERY` | `FOLLOW_EVERY` |
 | process, not one system's name, for code on every system | `unix_process` |
-| console, not terminal, for the person's | facade's `terminal_size`, `restore_terminal`, `RESTORE_TERMINAL_SEQUENCE` |
+| console, not terminal, for the person's | facade's `terminal_size`, `RESTORE_TERMINAL_SEQUENCE` |
+| machine and machine session, not peer and link | the network's `Peer`, `peer`, `links`, `pending_links` and `close_link`; the hidden command `facade machine link` |
