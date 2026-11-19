@@ -27,44 +27,35 @@ fn clear_draft(home: &TestHome, agent: &str) {
     home.run_facade_ok(&["type", agent, "--key", "Ctrl+C"]);
 }
 
-/// A connection acting for agent `agent`.
-fn acting_for(home: &TestHome, agent: &str) -> DaemonTestClient {
-    drop(connect(home));
-    let mut wire = DaemonTestClient::open(home);
-    assert!(wire.hello("terminal", DAEMON_RANGE, json!({ "agent": agent }))["result"].is_object());
-    wire
-}
-
-/// A connection acting for `agent` that follows its inbox from an empty snapshot, which delivers
-/// nothing.
-fn follow_inbox(home: &TestHome, agent: &str) -> (DaemonTestClient, u64) {
-    let mut wire = acting_for(home, agent);
-    let watching = wire.request("watch", json!({ "topic": "messages" }));
-    assert_eq!(
-        watching["result"]["snapshot"]["messages"],
-        json!([]),
-        "{watching}"
-    );
-    (wire, watching["result"]["watch"].as_u64().unwrap())
-}
-
-/// The messages changes the inbox watch got, by their kind and message ID.
-fn inbox_changes(inbox: &DaemonTestClient, watch: u64) -> Vec<(String, String)> {
-    inbox
-        .changes(watch)
+/// The IDs of the messages agent `agent`'s own `read_messages` gives with `arguments`.
+fn read_ids(home: &TestHome, agent: &str, arguments: Value) -> Vec<String> {
+    let read = McpTestClient::open_configured(home, agent).call("read_messages", arguments);
+    assert_eq!(read["status"], "success", "{read}");
+    read["data"]["messages"]
+        .as_array()
+        .unwrap()
         .iter()
-        .map(|changed| {
-            let change = &changed["change"];
-            let id = change["message"]["message_id"]
-                .as_str()
-                .or(change["message_id"].as_str())
-                .unwrap_or_default();
-            (
-                change["kind"].as_str().unwrap_or_default().to_string(),
-                id.to_string(),
-            )
-        })
+        .map(|message| message["id"].as_str().unwrap().to_string())
         .collect()
+}
+
+/// The facts of a send's receipt: its message's ID and delivery status, and whether it repeated
+/// an earlier call.
+fn facts(answer: &Value) -> (&Value, &Value, Option<&Value>) {
+    let result = &answer["result"];
+    (
+        &result["message"]["message_id"],
+        &result["message"]["delivery"]["status"],
+        result.get("repeated"),
+    )
+}
+
+/// The start of the test CLI as agent `name` in the test project, as a client asks for it.
+fn fake_start(home: &TestHome, name: &str) -> Value {
+    json!({
+        "cli": "fake", "name": name, "folder": home.project,
+        "env": { "PATH": home.path_with_test_programs() }, "cols": 80, "rows": 24,
+    })
 }
 
 /// `facade.db`, opened beside the running daemon.
@@ -75,7 +66,8 @@ fn store(home: &TestHome) -> rusqlite::Connection {
 }
 
 /// Message `number`'s delivery status and request ID, as `facade.db` keeps them: read from the
-/// store itself, since a read through Facade would deliver it. None where it is not kept.
+/// store itself, since a read through Facade would deliver it, and a send's receipt comes only
+/// once it is settled. None where it is not kept.
 fn kept(home: &TestHome, number: u64) -> Option<(String, Option<String>)> {
     store(home)
         .query_row(
@@ -92,17 +84,6 @@ fn kept_with_text(home: &TestHome, text: &str) -> i64 {
         .query_row(
             "SELECT COUNT(*) FROM messages WHERE text = ?1",
             [text],
-            |row| row.get(0),
-        )
-        .unwrap()
-}
-
-/// How many messages `facade.db` keeps whose text is like `pattern`, as SQL's LIKE reads it.
-fn kept_like(home: &TestHome, pattern: &str) -> i64 {
-    store(home)
-        .query_row(
-            "SELECT COUNT(*) FROM messages WHERE text LIKE ?1",
-            [pattern],
             |row| row.get(0),
         )
         .unwrap()
@@ -133,7 +114,8 @@ fn sent_at(home: &TestHome, number: u64, at: &str) {
 fn a_send_repeated_by_its_request_id_answers_its_message_and_types_it_once() {
     let home = TestHome::new("relsend");
     home.start_named_fake("worker", &[]);
-    home.start_named_fake("boss", &[]);
+    let boss = home.start_named_fake("boss", &[]);
+    let carol = home.start_named_fake("carol", &[]);
     let mut person = connect(&home);
     let send = |wire: &mut DaemonTestClient, text: &str, request: &str| {
         wire.call(
@@ -143,39 +125,45 @@ fn a_send_repeated_by_its_request_id_answers_its_message_and_types_it_once() {
     };
     let first = send(&mut person, "hello", "r1");
     assert_eq!(
-        (
-            &first["result"]["message_id"],
-            &first["result"]["delivery"]["status"]
-        ),
-        (&json!("m1"), &json!("success")),
+        facts(&first),
+        (&json!("m1"), &json!("success"), None),
         "{first}"
     );
-    assert!(first["result"].get("repeated").is_none(), "{first}");
     let again = send(&mut person, "hello again", "r1");
-    let facts = (
-        &again["result"]["message_id"],
-        &again["result"]["repeated"],
-        &again["result"]["text"],
-    );
     assert_eq!(
-        facts,
-        (&json!("m1"), &json!(true), &json!("hello")),
+        (facts(&again), &again["result"]["message"]["text"]),
+        (
+            (&json!("m1"), &json!("success"), Some(&json!(true))),
+            &json!("hello")
+        ),
         "the first message, whatever the repeat says: {again}"
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from #human · #m1\nhello"],
+        ["📨 Message from the command line · m1\nhello"],
         "typed once"
     );
-    let mut boss = acting_for(&home, "a2");
-    let theirs = send(&mut boss, "from the boss", "r1");
-    assert_eq!(
-        (
-            &theirs["result"]["message_id"],
-            theirs["result"].get("repeated")
-        ),
-        (&json!("m2"), None),
-        "another sender's own: {theirs}"
+    // Two agents' relays, both run by this test's process, give their first calls the same
+    // request ID: each sender's is its own.
+    let theirs: Vec<Value> = [&boss.id, &carol.id]
+        .map(|agent| {
+            McpTestClient::relay_configured(&home, agent).call(
+                "send_message",
+                json!({ "to": "worker", "text": format!("from {agent}") }),
+            )
+        })
+        .into_iter()
+        .collect();
+    let receipts: Vec<&str> = theirs
+        .iter()
+        .map(|sent| {
+            assert_eq!(sent["status"], "success", "{sent}");
+            sent["data"]["id"].as_str().unwrap()
+        })
+        .collect();
+    assert!(
+        receipts[0].starts_with("m2@") && receipts[1].starts_with("m3@"),
+        "another sender's own: {theirs:?}"
     );
     let refused = person.call(
         "agent.send",
@@ -183,26 +171,23 @@ fn a_send_repeated_by_its_request_id_answers_its_message_and_types_it_once() {
     );
     assert_eq!(error_reason(&refused), "not_found", "{refused}");
     assert_eq!(
-        send(&mut person, "found", "r2")["result"]["message_id"],
-        "m3",
+        facts(&send(&mut person, "found", "r2")).0,
+        "m4",
         "a refused send keeps nothing"
     );
     sent_at(&home, 1, "2020-01-01T00:00:00.000Z");
     let later = send(&mut person, "an hour later", "r1");
     assert_eq!(
-        (
-            &later["result"]["message_id"],
-            later["result"].get("repeated")
-        ),
-        (&json!("m4"), None),
+        facts(&later),
+        (&json!("m5"), &json!("success"), None),
         "after the hour: {later}"
     );
     assert_eq!(typed(&home, "hello"), 1);
     home.run_facade_ok(&["stop", "worker"]);
     let ended = send(&mut person, "to an ended agent", "r1");
     assert_eq!(
-        (&ended["result"]["message_id"], &ended["result"]["repeated"]),
-        (&json!("m4"), &json!(true)),
+        facts(&ended),
+        (&json!("m5"), &json!("success"), Some(&json!(true))),
         "looked for before `to` is: {ended}"
     );
 }
@@ -222,11 +207,9 @@ fn a_request_id_of_1_to_200_characters_is_taken_and_any_other_refused() {
         )
     };
     let start = |id: &str| {
-        json!({
-            "command": ["fake"], "name": "helper", "cwd": home.project,
-            "env": { "PATH": home.path_with_test_programs() }, "cols": 80, "rows": 24,
-            "request_id": id,
-        })
+        let mut start = fake_start(&home, "helper");
+        start["request_id"] = json!(id);
+        start
     };
     for id in [String::new(), "r".repeat(201)] {
         let refused = send(&mut person, &id);
@@ -244,52 +227,59 @@ fn a_request_id_of_1_to_200_characters_is_taken_and_any_other_refused() {
             id.len()
         );
     }
-    assert_eq!(
-        (kept_with_text(&home, "hi"), home.agents().len()),
-        (0, 1),
-        "nothing sent or started"
-    );
+    assert_eq!(home.agents().len(), 1, "nothing started");
     let taken = send(&mut person, &"r".repeat(200));
-    assert_eq!(taken["result"]["delivery"]["status"], "success", "{taken}");
+    assert_eq!(
+        facts(&taken),
+        (&json!("m1"), &json!("success"), None),
+        "nothing was sent before: {taken}"
+    );
 }
 
-/// A send to a guest is answered at once, pending until the guest's next turn takes it, and so is
-/// its repeat by its request ID: the repeat waits for no turn either.
+/// A send to a Guest is delivered once the Guest's read takes it, and its repeat by its request ID
+/// is answered at once as the first call was: it waits for no read again.
 #[test]
 fn a_repeated_send_to_a_guest_is_answered_at_once_as_its_first_call_was() {
     let home = TestHome::new("relguest");
     connect(&home);
-    let mut hooks = DaemonTestClient::open(&home);
-    hooks.hello("terminal", DAEMON_RANGE, json!({}));
-    assert_eq!(
-        hooks.call(
-            "hook.session-start",
-            json!({ "cli": "claude", "session": "s1" })
-        )["result"]["agent_id"],
-        "a1"
-    );
+    // A facade-mcp connection that no managed agent's run made is a Guest, listed from its first
+    // tool call.
+    let mut guest = McpTestClient::relay(&home, &[], &[]);
+    let listed = guest.call("list_agents", json!({}));
+    assert_eq!(listed["status"], "success", "{listed}");
+    let address = home
+        .agents()
+        .into_iter()
+        .find(|agent| agent["type"] == "guest")
+        .unwrap_or_else(|| panic!("no Guest is listed: {:?}", home.agents()))["address"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let mut person = connect(&home);
-    let send = json!({ "to": "a1", "text": "at your next turn", "request_id": "g1" });
-    let first = person.call("agent.send", send.clone());
+    let send = json!({ "to": address, "text": "read me", "request_id": "g1" });
+    let sending = person.send("call", json!({ "op": "agent.send", "args": send.clone() }));
+    let read = guest.call("read_messages", json!({ "wait": true }));
+    assert_eq!(read["data"]["messages"][0]["id"], "m1", "{read}");
+    let first = person
+        .wait_for_response(sending, secs(10))
+        .expect("the send answers once the Guest takes its message");
     assert_eq!(
         (
-            &first["result"]["message_id"],
-            &first["result"]["delivery"]["status"]
+            facts(&first),
+            &first["result"]["message"]["delivery"]["delivered_via"]
         ),
-        (&json!("m1"), &json!("pending")),
+        ((&json!("m1"), &json!("success"), None), &json!("read")),
         "{first}"
     );
     let asked = std::time::Instant::now();
     let again = person.call("agent.send", send);
     assert!(asked.elapsed() < secs(5), "answered at once");
-    let facts = (
-        &again["result"]["message_id"],
-        &again["result"]["delivery"]["status"],
-        &again["result"]["repeated"],
-    );
     assert_eq!(
-        facts,
-        (&json!("m1"), &json!("pending"), &json!(true)),
+        (facts(&again), &again["result"]["message"]["delivery"]),
+        (
+            (&json!("m1"), &json!("success"), Some(&json!(true))),
+            &first["result"]["message"]["delivery"]
+        ),
         "{again}"
     );
 }
@@ -299,22 +289,20 @@ fn a_repeated_send_to_a_guest_is_answered_at_once_as_its_first_call_was() {
 #[test]
 fn calls_with_one_request_id_at_once_keep_one_message_and_both_answer_it() {
     let home = TestHome::new("relsendjoin");
-    home.start_named_fake("worker", &[]);
+    let worker = home.start_named_fake("worker", &[]);
     type_draft(&home, "worker", "my draft");
-    let (inbox, watch) = follow_inbox(&home, "a1");
     let (mut one, mut two) = (connect(&home), connect(&home));
     let call = json!({
         "op": "agent.send", "args": { "to": "worker", "text": "once", "request_id": "r1" },
     });
     let (first, second) = (one.send("call", call.clone()), two.send("call", call));
     assert!(
-        wait_until(secs(10), || inbox_changes(&inbox, watch)
-            .contains(&("updated".into(), "m1".into()))),
+        wait_until(secs(10), || kept(&home, 1)
+            .is_some_and(|kept| kept.0 == "pending")),
         "{:?}",
-        inbox_changes(&inbox, watch)
+        kept(&home, 1)
     );
     std::thread::sleep(Duration::from_millis(500));
-    assert!(kept(&home, 2).is_none(), "one message");
     clear_draft(&home, "worker");
     let answers = [
         one.wait_for_response(first, secs(30)).expect("an answer"),
@@ -322,10 +310,7 @@ fn calls_with_one_request_id_at_once_keep_one_message_and_both_answer_it() {
     ];
     for answer in &answers {
         assert_eq!(
-            (
-                &answer["result"]["message_id"],
-                &answer["result"]["delivery"]["status"]
-            ),
+            (facts(answer).0, facts(answer).1),
             (&json!("m1"), &json!("success")),
             "{answer}"
         );
@@ -340,71 +325,80 @@ fn calls_with_one_request_id_at_once_keep_one_message_and_both_answer_it() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from #human · #m1\nonce"]
+        ["📨 Message from the command line · m1\nonce"]
+    );
+    assert_eq!(
+        read_ids(&home, &worker.id, json!({ "last": 10 })),
+        ["m1"],
+        "one message"
     );
 }
 
 /// A send cut off by a daemon restart goes again by the request ID its relay made: the repeat joins
-/// the message the next daemon took up, and the call answers what became of it, typed once. The
-/// model sees no repeat of its own.
+/// the message the next daemon took up, and the call answers what became of it, typed once. A
+/// send withdrawn before typing also answers with its original settlement on a new connection.
+/// Stopping or removing the original recipient leaves these receipts bound to that recipient,
+/// even when the sender's daemon restarts after a replacement takes the same name.
 #[test]
 fn a_send_cut_off_by_a_restart_is_repeated_by_its_request_id_and_typed_once() {
     let home = TestHome::new("relrestart");
-    home.start_named_fake("worker", &[]);
-    home.start_named_fake("boss", &[]);
+    let worker = home.start_named_fake("worker", &[]);
+    let boss = home.start_named_fake("boss", &[]);
     type_draft(&home, "worker", "my draft");
-    let mut boss = McpTestClient::open(&home, "a2");
+    let mut boss = McpTestClient::open_configured(&home, &boss.id);
     let own = boss.send(
         "tools/call",
         json!({
             "name": "send_message",
-            "arguments": { "to": "#a1", "text": "survive" },
+            "arguments": { "to": "worker", "text": "survive" },
         }),
     );
     let made = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": "#a1", "text": "also" } }),
+        json!({ "name": "send_message", "arguments": { "to": "worker", "text": "also" } }),
     );
     assert!(
         wait_until(secs(10), || kept(&home, 1).is_some()
             && kept(&home, 2).is_some()),
         "both kept"
     );
-    assert!(
-        kept(&home, 1).unwrap().1.is_some() && kept(&home, 2).unwrap().1.is_some(),
-        "every send carries a request ID"
+    let request_ids = [1, 2].map(|number| {
+        kept(&home, number)
+            .unwrap()
+            .1
+            .expect("every send carries a request ID")
+    });
+    assert_ne!(
+        request_ids[0], request_ids[1],
+        "each new send gets its own ID"
     );
     let old = home.kill_daemon();
     home.wait_for_daemon_after(old, secs(30))
         .expect("the keeper starts the next daemon");
     clear_draft(&home, "worker");
-    let envelope = |answer: Option<Value>| {
-        answer.expect("the cut call is answered")["result"]["structuredContent"].clone()
-    };
-    let kept_own = envelope(boss.answer(own, secs(30)));
-    let number: i64 = store(&home)
-        .query_row(
-            "SELECT number FROM messages WHERE text = 'survive'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let facts = (
-        &kept_own["status"],
-        &kept_own["data"]["id"],
-        kept_own["data"].get("repeated"),
-        kept_own["data"].get("request_id"),
-    );
-    assert_eq!(
-        facts,
-        (&json!("success"), &json!(format!("#m{number}")), None, None),
-        "answered as a first call: {kept_own}"
-    );
-    let kept_made = envelope(boss.answer(made, secs(30)));
-    assert!(
-        kept_made["status"] == "success" && kept_made["data"].get("request_id").is_none(),
-        "{kept_made}"
-    );
+    for (call, text) in [(own, "survive"), (made, "also")] {
+        let receipt = boss.tool_answer(call);
+        assert_eq!(receipt["status"], "success", "{receipt}");
+        let address = receipt["data"]["id"].as_str().expect("the send receipt");
+        let (id, machine) = address
+            .split_once('@')
+            .expect("a machine-qualified receipt");
+        assert!(!machine.is_empty(), "{receipt}");
+        assert!(receipt["data"].get("repeated").is_none(), "{receipt}");
+        assert!(receipt["data"].get("request_id").is_none(), "{receipt}");
+        let number: i64 = store(&home)
+            .query_row(
+                "SELECT number FROM messages WHERE text = ?1",
+                [text],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(id, format!("m{number}"), "{receipt}");
+        assert_eq!(kept_with_text(&home, text), 1, "the original row survives");
+    }
+    for (index, request_id) in request_ids.into_iter().enumerate() {
+        assert_eq!(kept(&home, index as u64 + 1).unwrap().1, Some(request_id));
+    }
     assert!(
         wait_until(secs(30), || typed(&home, "also") == 1),
         "{:?}",
@@ -416,6 +410,95 @@ fn a_send_cut_off_by_a_restart_is_repeated_by_its_request_id_and_typed_once() {
         "typed once: {:?}",
         home.submitted_messages()
     );
+
+    type_draft(&home, "worker", "my next draft");
+    let withdrawn_args = json!({
+        "to": "worker",
+        "text": "this one expired before delivery",
+        "request_id": "withdrawn-during-reconnect",
+        "time_left_ms": 2_000,
+    });
+    let first = connect(&home).call("agent.send", withdrawn_args.clone());
+    let withdrawn = &first["result"];
+    assert_eq!(withdrawn["withdrawn"], true, "{first}");
+    assert_eq!(
+        withdrawn["message"]["delivery"]["status"], "failure",
+        "{first}"
+    );
+    assert_eq!(withdrawn["message"]["message_id"], "m3", "{first}");
+
+    let repeated = |connection: &mut DaemonTestClient, args, original: &Value| {
+        let replay = connection.call("agent.send", args);
+        let result = &replay["result"];
+        assert_eq!(result["repeated"], true, "{replay}");
+        assert_eq!(result["id"], original["id"], "{replay}");
+        assert_eq!(
+            result.get("withdrawn"),
+            original.get("withdrawn"),
+            "{replay}"
+        );
+        assert_eq!(result["message"]["to"], worker.id, "{replay}");
+        assert_eq!(
+            result["message"]["delivery"], original["message"]["delivery"],
+            "the repeat returns the original delivery result: {replay}"
+        );
+    };
+    clear_draft(&home, "worker");
+    let mut reconnected = connect(&home);
+    repeated(&mut reconnected, withdrawn_args.clone(), withdrawn);
+    let mut inbox = McpTestClient::open_configured(&home, &worker.id);
+    let history = inbox.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(history["status"], "success", "{history}");
+    let kept = history["data"]["messages"]
+        .as_array()
+        .expect("inline history");
+    assert_eq!(kept.len(), 2, "{history}");
+    assert!(
+        kept.iter().all(|message| message["id"] != "m3"),
+        "{history}"
+    );
+    drop(inbox);
+
+    let success_args = json!({
+        "to": "worker", "text": "new request", "request_id": "success-before-removal"
+    });
+    let sent = reconnected.call("agent.send", success_args.clone());
+    let success = &sent["result"];
+    assert_eq!(success["message"]["message_id"], "m4", "{sent}");
+    assert_eq!(
+        success["message"]["delivery"]["status"], "success",
+        "{sent}"
+    );
+
+    home.run_facade_ok(&["stop", "worker"]);
+    repeated(&mut reconnected, withdrawn_args.clone(), withdrawn);
+    repeated(&mut reconnected, success_args.clone(), success);
+    let ended = reconnected.call(
+        "agent.send",
+        json!({ "to": "worker", "text": "a fresh request", "request_id": "new-while-stopped" }),
+    );
+    assert_eq!(error_reason(&ended), "ended", "{ended}");
+
+    home.run_facade_ok(&["rm", "worker"]);
+    let replacement = home.start_named_fake("worker", &[]);
+    assert_ne!(replacement.id, worker.id);
+    drop(reconnected);
+    let origin = home.kill_daemon();
+    home.wait_for_daemon_after(origin, secs(30))
+        .expect("the sending daemon restarts while the replacement is running");
+    let mut reconnected = connect(&home);
+    repeated(&mut reconnected, withdrawn_args, withdrawn);
+    repeated(&mut reconnected, success_args, success);
+
+    let next = reconnected.call(
+        "agent.send",
+        json!({ "to": "worker", "text": "for the replacement", "request_id": "new-send" }),
+    );
+    assert_eq!(next["result"]["message"]["message_id"], "m5", "{next}");
+    assert_eq!(next["result"]["message"]["to"], replacement.id, "{next}");
+    assert_eq!(typed(&home, "this one expired before delivery"), 0);
+    assert_eq!(typed(&home, "new request"), 1);
+    assert_eq!(typed(&home, "for the replacement"), 1);
 }
 
 /// Two starts with one request ID at once start one agent: the second waits for the first's answer
@@ -425,11 +508,8 @@ fn two_starts_with_one_request_id_at_once_start_one_agent() {
     let home = TestHome::new("relstarttwo");
     home.start_facade_with(&[("FACADE_TEST_GATES", "after-run-start-response")]);
     let (mut one, mut two) = (connect(&home), connect(&home));
-    let args = json!({
-        "command": ["fake"], "name": "helper", "cwd": home.project,
-        "env": { "PATH": home.path_with_test_programs() }, "cols": 80, "rows": 24,
-        "request_id": "s1",
-    });
+    let mut args = fake_start(&home, "helper");
+    args["request_id"] = json!("s1");
     let first = one.send("call", json!({ "op": "agent.start", "args": args.clone() }));
     home.wait_for_gate("after-run-start-response");
     let second = two.send("call", json!({ "op": "agent.start", "args": args }));
@@ -492,11 +572,10 @@ fn a_repeated_start_with_a_worktree_makes_no_second_worktree() {
     let repo = home.project.parent().unwrap().join("repo");
     repository(&repo);
     let mut person = connect(&home);
-    let args = json!({
-        "command": ["fake"], "name": "branch", "cwd": repo,
-        "env": { "PATH": home.path_with_test_programs() }, "cols": 80, "rows": 24,
-        "request_id": "w1", "worktree": { "branch": "feat-x", "base_ref": "HEAD" },
-    });
+    let mut args = fake_start(&home, "branch");
+    args["folder"] = json!(repo);
+    args["request_id"] = json!("w1");
+    args["worktree"] = json!("feat-x");
     let first = person.call("agent.start", args.clone());
     let cwd = first["result"]["agent"]["cwd"]
         .as_str()
@@ -531,15 +610,13 @@ fn a_repeated_start_with_a_worktree_makes_no_second_worktree() {
 }
 
 /// A send whose message waits behind a draft is withdrawn by its client's `cancel`: it answers
-/// `cancelled`, nothing of it is typed, no read returns it, the inbox's watchers learn it is
-/// removed, and its number is not given again. A `cancel` with an ID of its own is answered `{}`;
-/// one of a send already answered changes nothing.
+/// `cancelled`, nothing of it is typed, no read returns it, and its number is not given again. A
+/// `cancel` with an ID of its own is answered `{}`; one of a send already answered changes nothing.
 #[test]
 fn a_cancelled_send_whose_paste_has_not_begun_is_withdrawn_and_kept_nowhere() {
     let home = TestHome::new("relcancel");
-    home.start_named_fake("worker", &[]);
+    let worker = home.start_named_fake("worker", &[]);
     type_draft(&home, "worker", "my draft");
-    let (mut inbox, watch) = follow_inbox(&home, "a1");
     let mut person = connect(&home);
     let sending = person.send(
         "call",
@@ -552,27 +629,21 @@ fn a_cancelled_send_whose_paste_has_not_begun_is_withdrawn_and_kept_nowhere() {
         .wait_for_response(sending, secs(10))
         .expect("the send answers");
     assert_eq!(error_reason(&answer), "cancelled", "{answer}");
-    assert!(kept(&home, 1).is_none(), "not kept");
     assert!(
-        wait_until(secs(5), || inbox_changes(&inbox, watch)
-            .contains(&("removed".into(), "m1".into()))),
-        "{:?}",
-        inbox_changes(&inbox, watch)
-    );
-    let read = inbox.request(
-        "watch",
-        json!({ "topic": "messages", "args": { "all": true } }),
-    );
-    assert_eq!(
-        read["result"]["snapshot"]["messages"],
-        json!([]),
+        read_ids(&home, &worker.id, json!({})).is_empty(),
         "no read returns it"
     );
     clear_draft(&home, "worker");
     let next = person.call("agent.send", json!({ "to": "worker", "text": "after" }));
     assert_eq!(
-        next["result"]["message_id"], "m2",
+        facts(&next),
+        (&json!("m2"), &json!("success"), None),
         "its number is not given again: {next}"
+    );
+    assert_eq!(
+        read_ids(&home, &worker.id, json!({ "last": 10 })),
+        ["m2"],
+        "kept nowhere"
     );
     assert!(
         !home
@@ -587,72 +658,6 @@ fn a_cancelled_send_whose_paste_has_not_begun_is_withdrawn_and_kept_nowhere() {
         late["result"],
         json!({}),
         "a call no longer under way is left as it ended"
-    );
-    assert_eq!(kept(&home, 2).map(|kept| kept.0), Some("success".into()));
-}
-
-/// A `messages` watch that fell behind more changes than its channel holds resends its inbox as it
-/// stands, and removes what it had given that is no longer kept: here a message withdrawn while the
-/// watch was held, whose own removal is among the changes the watch missed.
-#[test]
-fn a_watch_that_fell_behind_removes_a_message_withdrawn_meanwhile() {
-    let home = TestHome::new("rellag");
-    home.start_facade_with(&[("FACADE_TEST_GATES", "after-messages-change")]);
-    home.start_named_fake("worker", &[]);
-    type_draft(&home, "worker", "my draft");
-    let (inbox, watch) = follow_inbox(&home, "a1");
-    let mut person = connect(&home);
-    let send = |person: &mut DaemonTestClient, text: &str| {
-        person.send(
-            "call",
-            json!({ "op": "agent.send", "args": { "to": "worker", "text": text } }),
-        )
-    };
-    let first = send(&mut person, "withdrawn meanwhile");
-    // The watch gives the message, and is held after it.
-    home.wait_for_gate("after-messages-change");
-    assert_eq!(
-        person.request("cancel", json!({ "id": first }))["result"],
-        json!({})
-    );
-    assert_eq!(
-        error_reason(
-            &person
-                .wait_for_response(first, secs(10))
-                .expect("its send answers")
-        ),
-        "cancelled"
-    );
-    // More changes than the channel's 1,024, each message kept and then withdrawn: 15 at a time, as
-    // a connection runs 16 calls.
-    for round in 0..40 {
-        let sends: Vec<u64> = (0..15)
-            .map(|n| send(&mut person, &format!("more {round}.{n}")))
-            .collect();
-        assert!(
-            wait_until(secs(10), || kept_like(&home, &format!("more {round}.%"))
-                == 15),
-            "round {round}"
-        );
-        for id in &sends {
-            person.request("cancel", json!({ "id": id }));
-        }
-        assert!(
-            sends
-                .iter()
-                .all(|id| person.wait_for_response(*id, secs(10)).is_some()),
-            "round {round}"
-        );
-    }
-    home.release_gate("after-messages-change");
-    let removed = ("removed".to_string(), "m1".to_string());
-    assert!(
-        wait_until(secs(10), || inbox_changes(&inbox, watch).contains(&removed)),
-        "{:?}",
-        inbox_changes(&inbox, watch)
-            .iter()
-            .take(4)
-            .collect::<Vec<_>>()
     );
 }
 
@@ -712,7 +717,7 @@ fn a_cancel_at_the_beginning_of_a_paste_wins_or_loses_whole() {
 #[test]
 fn a_cancelled_send_whose_paste_began_goes_on() {
     let home = TestHome::new("relcancelbegun");
-    home.start_named_fake("worker", &[("FAKECLI_IGNORE_ENTER", "1")]);
+    let worker = home.start_named_fake("worker", &[("FAKECLI_IGNORE_ENTER", "1")]);
     let mut person = connect(&home);
     let sending = person.send(
         "call",
@@ -732,8 +737,12 @@ fn a_cancelled_send_whose_paste_began_goes_on() {
         .expect("an answer");
     assert_ne!(error_reason(&answer), "cancelled", "{answer}");
     assert_eq!(
-        answer["result"]["delivery"]["text_written"], "full",
+        answer["result"]["message"]["delivery"]["text_written"], "full",
         "{answer}"
     );
-    assert!(kept(&home, 1).is_some(), "kept");
+    assert_eq!(
+        read_ids(&home, &worker.id, json!({ "last": 1 })),
+        ["m1"],
+        "kept"
+    );
 }

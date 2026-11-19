@@ -6,24 +6,17 @@
 //! and an agent whose run has YOLO off reaches only its creation tree.
 
 use std::path::Path;
-
-use facade_base::daemon::WindowRef;
 use std::process::Stdio;
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
-/// `path` with symbolic links resolved, as Facade lists locations.
+/// `path` with symbolic links resolved, as Facade gives folders.
 fn real(path: &Path) -> String {
     facade_base::files::real_path(path)
         .unwrap()
         .to_string_lossy()
         .into_owned()
-}
-
-/// A local editor window `id` with `folders`.
-fn window(id: &str, folders: &[String]) -> Value {
-    json!({ "id": id, "label": format!("{id} window"), "environment": "local", "folders": folders })
 }
 
 /// Writes Facade's settings file, `facade.json` in the test's Facade home, as `text`.
@@ -32,33 +25,24 @@ fn settings(home: &TestHome, text: &str) {
     std::fs::write(home.path.join("facade.json"), text).unwrap();
 }
 
-/// Agent `name`'s record, as `facade list --json` gives it.
+/// Agent `name`'s record, as the `agents` topic gives it.
 fn record(home: &TestHome, name: &str) -> Value {
-    home.agent_from_list_json(name)
+    home.agents()
+        .into_iter()
+        .find(|agent| agent["name"] == name)
         .unwrap_or_else(|| panic!("no agent {name}"))
 }
 
-/// Starts the test CLI as agent `name` in window `window` at `cwd`, as the window's client starts
-/// one.
-fn start_in_window(
-    wire: &mut DaemonTestClient,
-    home: &TestHome,
-    window: &WindowRef,
-    cwd: &str,
-    name: &str,
-) -> Value {
-    let env = json!({ "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path });
-    let started = wire.call("agent.start", json!({
-        "command": ["fake"], "name": name, "cwd": cwd, "location_source_window": window, "env": env, "cols": 80,
-        "rows": 24,
-    }));
-    started["result"]["agent"].clone()
+/// The machine part of the addresses Facade gives in this test's home.
+fn host(home: &TestHome) -> String {
+    let address = home.agents()[0]["address"].as_str().unwrap().to_string();
+    address.split_once('@').unwrap().1.to_string()
 }
 
 /// Each launch reads `yolo` from Facade's settings file, `facade.json`, as it is accepted, and
-/// keeps it for its run: a start from a terminal or into an editor window alike. A missing file, an
-/// empty one, and one without `yolo` mean on. A daemon that starts again reads the file as it is
-/// then. `facade inspect` says a run's YOLO.
+/// keeps it for its run: a start from a terminal or from an editor alike. A missing file, an empty
+/// one, and one without `yolo` mean on. A daemon that starts again reads the file as it is then.
+/// `facade inspect` says a run's YOLO.
 #[test]
 fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
     let home = TestHome::new("yolofile");
@@ -74,12 +58,19 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
     settings(&home, r#"{"yolo": false}"#);
     home.start_named_fake("off", &[]);
     assert_eq!(record(&home, "off")["yolo"], false);
-    let (mut editor, reference) =
-        ide_binding(&home, &window("win-1", std::slice::from_ref(&folder)));
+    let mut editor = DaemonTestClient::open(&home);
+    editor.hello("ide", DAEMON_RANGE, json!({}));
+    let env = json!({ "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path });
+    let from_the_editor = editor.call(
+        "agent.start",
+        json!({
+            "cli": "fake", "name": "from-the-editor", "folder": folder, "env": env, "cols": 80,
+            "rows": 24,
+        }),
+    );
     assert_eq!(
-        start_in_window(&mut editor, &home, &reference, &folder, "into-the-window")["yolo"],
-        false,
-        "a window's start reads the same file"
+        from_the_editor["result"]["agent"]["yolo"], false,
+        "an editor's start reads the same file: {from_the_editor}"
     );
     settings(
         &home,
@@ -106,17 +97,18 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
             .find_map(|line| Some(line.strip_prefix("YOLO:")?.trim().to_string()))
     };
     assert_eq!(yolo("after-restart").as_deref(), Some("off"));
-    assert_eq!(yolo("on").as_deref(), Some("on: can address every agent"));
+    assert_eq!(yolo("on").as_deref(), Some("on"));
 }
 
-/// A settings file Facade cannot read as it must refuses every start, `facade start` and
-/// `start_agent` alike, saying each of its problems with the file's path, line and column, and
-/// nothing starts (CONFIGURATION-4.1). Fixed, the next start goes.
+/// A settings file Facade cannot read as it must refuses every start that uses what is wrong:
+/// `yolo`, which every start reads, `facade start` and `start_agent` alike, saying each of its
+/// problems with the file's path, line and column, and nothing starts (CONFIGURATION-4.1). Fixed,
+/// the next start goes.
 #[test]
 fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     let home = TestHome::new("yolobadfile");
     home.start_named_fake("ada", &[]);
-    let cwd = record(&home, "ada")["folder"].as_str().unwrap().to_string();
+    let cwd = record(&home, "ada")["cwd"].as_str().unwrap().to_string();
     let file = home.path.join("facade.json").display().to_string();
     settings(&home, "{\n  \"yolo\": \"false\",\n  \"colour\": 1\n}");
     let said = format!(
@@ -136,8 +128,7 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
         stderr(&refused)
     );
     let mut ada = McpTestClient::open(&home, "a1");
-    let start =
-        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd });
+    let start = |name: &str| json!({ "name": name, "cli": "fake", "folder": cwd });
     let mcp = ada.call("start_agent", start("nope"));
     assert_eq!(mcp["reason"], "invalid_settings", "{mcp}");
     assert!(
@@ -153,19 +144,20 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
 }
 
 /// An agent started by an agent's client records its creator and joins its creator's tree, whose
-/// first agent stays the root down the generations; a command in an agent's terminal acts for it
-/// too. The person's start is the first of a tree of its own. The tools show them by reference, and
-/// the instructions name the creator.
+/// first agent stays the root down the generations. A command in an agent's terminal acts for the
+/// command line, as the person's start does, which is the first of a tree of its own. The
+/// instructions name the creator.
 #[test]
 fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
     let home = TestHome::new("yolotrees");
     home.start_named_fake("ada", &[]);
-    let cwd = record(&home, "ada")["folder"].as_str().unwrap().to_string();
+    let host = host(&home);
+    let cwd = record(&home, "ada")["cwd"].as_str().unwrap().to_string();
     let mut ada = McpTestClient::open(&home, "a1");
     let child = |server: &mut McpTestClient, name: &str| {
         let started = server.call(
             "start_agent",
-            json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd }),
+            json!({ "name": name, "cli": "fake", "folder": cwd }),
         );
         assert_eq!(started["status"], "success", "{started}");
         record(&home, name)
@@ -181,11 +173,14 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
         (&json!("a2"), &json!("a1"), &json!("a1"), &json!(true))
     );
     let mut bea_server = McpTestClient::open(&home, "a2");
+    let started_by = format!(" You were started by ada (a1@{host}). ");
     assert!(
         bea_server.initialized()["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains(" Your creator is ada (#a1). ")
+            .contains(&started_by),
+        "{}",
+        bea_server.initialized()
     );
     let cy = child(&mut bea_server, "cy");
     assert_eq!(
@@ -204,9 +199,9 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
     assert!(in_terminal.status.success(), "{}", stderr(&in_terminal));
     let dee = record(&home, "dee");
     assert_eq!(
-        (&dee["creator"], &dee["root"]),
-        (&json!("a2"), &json!("a1")),
-        "a command in bea's terminal acts for bea: {dee}"
+        (dee.get("creator"), &dee["root"]),
+        (None, &dee["agent_id"]),
+        "a command in bea's terminal acts for the command line: {dee}"
     );
     home.start_named_fake("eve", &[]);
     let eve = record(&home, "eve");
@@ -215,75 +210,73 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
         (None, &eve["agent_id"]),
         "the person's start is the first of its own tree"
     );
-    let listed = ada.call("list_agents", json!({}));
-    let row = |id: &str| {
-        listed["data"]["agents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["id"] == id)
-            .cloned()
-            .unwrap()
-    };
-    assert_eq!(row("#a2")["creator"], "#a1", "{listed}");
-    assert_eq!(row("#a1")["creator"], "#human", "{listed}");
     assert!(
         ada.initialized()["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains(" Your creator is the person (#human). ")
+            .contains(" You were started from the command line. "),
+        "{}",
+        ada.initialized()
     );
 }
 
 /// An agent whose run has YOLO off finds, lists, reads, types into, stops and sends to only the
-/// agents of its creation tree, which a start into another window joins: any other agent is refused
-/// as out of its tree, with nothing done, and a name of one names nothing. An agent whose run has
-/// YOLO on, and the person, reach every agent.
+/// agents of its creation tree: any other agent is refused as out of its reach, with nothing done,
+/// by its number and by its name alike, without its address. An agent whose run has YOLO on, and
+/// the person, reach every agent.
 #[test]
 fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     let home = TestHome::new("yoloreach");
     let folder = real(&home.project);
-    let (_editor, reference) = ide_binding(&home, &window("win-1", std::slice::from_ref(&folder)));
     settings(&home, r#"{"yolo": false}"#);
     home.start_named_fake("ada", &[]);
     home.start_named_fake("bob", &[]);
+    let host = host(&home);
     let mut ada = McpTestClient::open(&home, "a1");
     let started = ada.call(
         "start_agent",
-        json!({ "name": "cy", "cli": "fake", "window": reference.window_id, "folder": folder }),
+        json!({ "name": "cy", "cli": "fake", "folder": folder }),
     );
-    assert_eq!(
-        started["data"]["windows"],
-        json!([reference.window_id]),
-        "{started}"
-    );
+    assert_eq!(started["status"], "success", "{started}");
     assert_eq!(record(&home, "cy")["root"], "a1");
     let listed = ada.call("list_agents", json!({}));
-    let ids: Vec<&Value> = listed["data"]["agents"]
+    let mut ids: Vec<&str> = listed["data"]["agents"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| &row["id"])
+        .filter_map(|row| row["id"].as_str())
         .collect();
-    assert_eq!(ids, [&json!("#a1"), &json!("#a3")], "{listed}");
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        [format!("a1@{host}"), format!("a3@{host}")],
+        "{listed}"
+    );
     for (tool, arguments) in [
-        ("read_screen", json!({ "agent": "#a2" })),
+        ("read_screen", json!({ "agent": "a2" })),
         (
             "type_text",
-            json!({ "agent": "#a2", "text": "typed from outside" }),
+            json!({ "agent": "a2", "text": "typed from outside" }),
         ),
-        ("press_keys", json!({ "agent": "#a2", "keys": ["Enter"] })),
+        ("press_keys", json!({ "agent": "a2", "keys": ["Enter"] })),
         (
             "send_message",
-            json!({ "to": "#a2", "text": "sent from outside" }),
+            json!({ "to": "a2", "text": "sent from outside" }),
         ),
-        ("stop_agent", json!({ "agent": "#a2" })),
+        ("stop_agent", json!({ "agent": "a2" })),
     ] {
         let refused = ada.call(tool, arguments);
         assert_eq!(refused["reason"], "refused", "{tool}: {refused}");
     }
-    let named = ada.call("send_message", json!({ "to": "@bob", "text": "hi" }));
-    assert_eq!(named["reason"], "not_found", "{named}");
+    let named = ada.call("send_message", json!({ "to": "bob", "text": "hi" }));
+    assert!(
+        named["reason"] == "refused"
+            && !named["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&format!("a2@{host}")),
+        "by its name as by its number, without its address: {named}"
+    );
     assert_eq!(record(&home, "bob")["process"], "running");
     assert!(
         !home.screen("bob").contains("from outside"),
@@ -302,7 +295,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     );
     let launched = ada.call(
         "start_agent",
-        json!({ "name": "eve", "cli": "fake", "window": reference.window_id, "folder": folder }),
+        json!({ "name": "eve", "cli": "fake", "folder": folder }),
     );
     assert_eq!(launched["status"], "success", "{launched}");
     assert_eq!(
@@ -311,7 +304,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
         "its tree is ada's, its YOLO the file's"
     );
     assert_eq!(
-        dan.call("read_screen", json!({ "agent": "#a2" }))["status"],
+        dan.call("read_screen", json!({ "agent": "a2" }))["status"],
         "success"
     );
     assert!(
@@ -320,74 +313,80 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     );
 }
 
-/// The record of the guest that has `session`, as `facade list --json` gives it.
-fn guest(home: &TestHome, session: &str) -> Value {
-    let listed: Value =
-        facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
-    listed["agents"]
+/// A guest, an MCP connection that no managed agent's CLI made, joined at its first tool call:
+/// it, its roster, and its record.
+fn guest(home: &TestHome) -> (McpTestClient, Value, Value) {
+    let mut guest = McpTestClient::spawn(home, home.command(&test_binaries().mcp));
+    let roster = guest.call("list_agents", json!({}));
+    let address = roster["data"]["agents"]
         .as_array()
-        .unwrap()
-        .iter()
-        .find(|agent| agent["session"] == session)
-        .cloned()
-        .unwrap_or_else(|| panic!("no guest {session}: {listed}"))
+        .and_then(|agents| agents.iter().find(|agent| agent["type"] == "guest"))
+        .and_then(|agent| agent["id"].as_str())
+        .unwrap_or_else(|| panic!("the connection is no guest: {roster}"))
+        .to_string();
+    let id = address.split_once('@').unwrap().0.to_string();
+    let record = home.agent_record(&id).expect("the guest's record");
+    (guest, roster, record)
 }
 
 /// A guest takes `yolo` from the settings file as it joins, for its reach alone (Core Review's
 /// N25): with it off, the guest's tools reach only the tree it heads, and refuse any other agent as
-/// out of it; with it on, every agent. A guest keeps the YOLO it joined with until the daemon lists
-/// it again after a restart, which reads the file as it is then, as a join does; and one that joins
-/// while the file cannot be read reaches only its own tree.
+/// out of it; with it on, every agent. A guest keeps the YOLO it joined with for its connection,
+/// across a restart of the daemon too; and one that joins while the file cannot be read reaches
+/// only its own tree.
 #[test]
 fn a_guest_takes_yolo_from_the_settings_file_as_it_joins_for_its_reach() {
     let home = TestHome::new("yologuest");
     home.start_named_fake("bob", &[]);
     settings(&home, r#"{"yolo": false}"#);
-    let mut off = McpTestClient::open_guest(&home, "claude", &[("CLAUDE_CODE_SESSION_ID", "c1")]);
-    let joined = guest(&home, "c1");
+    let (mut off, listed, joined) = guest(&home);
     assert_eq!(
-        (&joined["guest"], &joined["yolo"], &joined["root"]),
-        (&json!(true), &json!(false), &joined["agent_id"]),
+        (&joined["type"], &joined["yolo"], &joined["root"]),
+        (&json!("guest"), &json!(false), &joined["agent_id"]),
         "{joined}"
     );
-    let listed = off.call("list_agents", json!({}));
     assert_eq!(
         listed["data"]["agents"].as_array().map(Vec::len),
         Some(1),
         "{listed}"
     );
-    let refused = off.call("read_screen", json!({ "agent": "#a1" }));
+    let refused = off.call("read_screen", json!({ "agent": "a1" }));
     assert_eq!(refused["reason"], "refused", "{refused}");
     settings(&home, r#"{"yolo": true}"#);
-    let mut on = McpTestClient::open_guest(&home, "claude", &[("CLAUDE_CODE_SESSION_ID", "c2")]);
-    assert_eq!(guest(&home, "c2")["yolo"], true);
-    let all = on.call("list_agents", json!({}));
+    let (mut on, all, joined_on) = guest(&home);
+    assert_eq!(joined_on["yolo"], true, "{joined_on}");
     assert_eq!(
         all["data"]["agents"].as_array().map(Vec::len),
         Some(3),
         "{all}"
     );
     assert_eq!(
-        on.call("read_screen", json!({ "agent": "#a1" }))["status"],
+        on.call("read_screen", json!({ "agent": "a1" }))["status"],
         "success"
     );
-    assert_eq!(guest(&home, "c1")["yolo"], false, "the YOLO it joined with");
+    let off_id = joined["agent_id"].as_str().unwrap();
     assert_eq!(
-        off.call("read_screen", json!({ "agent": "#a1" }))["reason"],
+        home.agent_record(off_id).unwrap()["yolo"],
+        false,
+        "the YOLO it joined with"
+    );
+    assert_eq!(
+        off.call("read_screen", json!({ "agent": "a1" }))["reason"],
         "refused"
     );
     let old = home.kill_daemon();
     home.wait_for_daemon_after(old, secs(30))
         .expect("the keeper starts the next daemon");
-    assert!(
-        wait_until(secs(10), || guest(&home, "c1")["yolo"] == true),
-        "listed again, it reads the file as it is now"
-    );
-    settings(&home, r#"{"yolo": "yes"}"#);
-    let _unread = McpTestClient::open_guest(&home, "claude", &[("CLAUDE_CODE_SESSION_ID", "c3")]);
     assert_eq!(
-        guest(&home, "c3")["yolo"],
-        false,
+        off.call("read_screen", json!({ "agent": "a1" }))["reason"],
+        "refused",
+        "its connection keeps the YOLO it joined with"
+    );
+    assert_eq!(home.agent_record(off_id).unwrap()["yolo"], false);
+    settings(&home, r#"{"yolo": "yes"}"#);
+    let (_unread, _, unread) = guest(&home);
+    assert_eq!(
+        unread["yolo"], false,
         "a file that cannot be read gives a guest only its own tree"
     );
 }
@@ -523,7 +522,7 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
         claude_asking(&bin, &keys, answered);
         let path = format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str());
         let args = json!({
-            "command": ["claude"], "name": name, "cwd": home.project,
+            "cli": "claude", "name": name, "folder": home.project,
             "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
         });
         assert!(wire.call("agent.start", args)["result"].is_object());
@@ -731,7 +730,7 @@ fn each_cli_launches_with_yolo_on_as_its_rule_says_and_with_yolo_off_as_it_nativ
         assert!(started.status.success(), "{cli}: {}", stderr(&started));
         (
             arguments(&argv),
-            record(&home, name)["folder"].as_str().unwrap().to_string(),
+            record(&home, name)["cwd"].as_str().unwrap().to_string(),
         )
     };
     let clis = ["claude", "codex", "agy", "muse", "opencode", "pi"];

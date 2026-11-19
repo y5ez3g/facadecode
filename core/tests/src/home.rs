@@ -81,17 +81,36 @@ impl Isolation {
 pub struct TestAgent {
     /// The agent ID, such as `a1`.
     pub id: String,
+    /// The address the start printed, such as `a1@laptop`. A bare ID or name is looked up on every
+    /// reachable machine; the address names this agent alone.
+    pub address: String,
     pub pid: i32,
     pub process: facade_base::process::ProcessIdentity,
 }
 
 static HOMES: AtomicU64 = AtomicU64::new(0);
 
-/// The agent ID that `facade start` or `facade resume` printed in the background: one bare ID and a
-/// line break, such as `a1\n`.
+/// The settings entry of the test's shell as a custom program: [`TestHome::shell_cli`].
+pub const SHELL_CLI: &str = "sh";
+
+/// The machine-local ID in the address printed by a background start or resume.
 pub fn started_id(out: &str) -> String {
-    let id = out.strip_suffix('\n').unwrap_or(out);
-    let id = id.strip_suffix('\r').unwrap_or(id);
+    let line = out.strip_suffix('\n').unwrap_or(out);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let id = if DAEMON_RANGE[1] >= 3 {
+        let (id, machine) = line
+            .split_once('@')
+            .unwrap_or_else(|| panic!("expected a machine address: {out:?}"));
+        assert!(
+            !machine.is_empty()
+                && !machine.starts_with("id:")
+                && !machine.contains(['@', '\r', '\n']),
+            "unexpected machine selector: {out:?}"
+        );
+        id
+    } else {
+        line
+    };
     assert!(
         id.strip_prefix('a').is_some_and(
             |number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
@@ -353,10 +372,39 @@ impl TestHome {
         self.start_fake_with(name, &[])
     }
 
-    /// Starts a fake CLI agent with extra environment variables, such as `FAKECLI_NAME`.
+    /// Starts a fake CLI agent with extra environment variables, such as `FAKECLI_NAME`. Facade
+    /// starts only the CLIs a machine's settings list, so it starts the test CLI by its rule.
     pub fn start_fake_with(&self, name: &str, env: &[(&str, &str)]) -> TestAgent {
-        let fake = test_binaries().fakecli.to_string_lossy().into_owned();
-        self.start_in_background(name, &fake, env)
+        self.start_named_fake(name, env)
+    }
+
+    /// Lists `program` in this home's settings as the custom program `name`, keeping what the
+    /// settings file has. Facade starts only the CLIs a machine's settings list; a custom program
+    /// runs as it is, without a rule, Facade's tools or a session.
+    pub fn add_custom_cli(&self, name: &str, program: &Path) {
+        self.add_custom_cli_with(name, program, &[]);
+    }
+
+    /// [`TestHome::add_custom_cli`], with the words its entry gives the program every start.
+    pub fn add_custom_cli_with(&self, name: &str, program: &Path, args: &[&str]) {
+        let file = self.path.join("facade.json");
+        let mut settings: Value = match std::fs::read_to_string(&file) {
+            Ok(text) => serde_json::from_str(&text).expect("the test's facade.json is JSON"),
+            Err(_) => json!({}),
+        };
+        settings["clis"][name] = json!({ "type": "custom", "program": program, "args": args });
+        std::fs::write(
+            &file,
+            format!("{}\n", serde_json::to_string_pretty(&settings).unwrap()),
+        )
+        .unwrap();
+    }
+
+    /// The custom program `sh`, the test's shell, for an agent that runs a script: `facade start
+    /// sh -c <script>`.
+    pub fn shell_cli(&self) -> &'static str {
+        self.add_custom_cli(SHELL_CLI, &shell());
+        SHELL_CLI
     }
 
     /// Starts the fake CLI by its rule's name, `fake`, which finds `facade-fakecli` on the test
@@ -390,9 +438,9 @@ impl TestHome {
     /// box.
     fn start_in_background(&self, name: &str, cli: &str, env: &[(&str, &str)]) -> TestAgent {
         let mut command = self.command(&test_binaries().facade);
-        // Without a terminal, start prints the agent ID; the agent keeps running.
+        // Background start prints a reference; the agent keeps running.
         command
-            .args(["start", "--name", name, cli])
+            .args(["start", "-d", "--name", name, cli])
             .stdin(Stdio::null());
         for (key, value) in env {
             command.env(key, value);
@@ -406,11 +454,12 @@ impl TestHome {
         );
         let agent = self.started_agent(&stdout(&output));
         // Allow up to 30 seconds for parallel tests on a busy machine; return as soon as the
-        // condition holds.
+        // condition holds. The address names this agent where a connected machine has one of the
+        // same name or ID.
         assert!(
-            wait_until(secs(30), || self.screen(name).contains("❯")),
+            wait_until(secs(30), || self.screen(&agent.address).contains("❯")),
             "{name} did not draw its input box: {}",
-            self.screen(name)
+            self.screen(&agent.address)
         );
         agent
     }
@@ -430,6 +479,7 @@ impl TestHome {
     /// process its record names.
     pub fn started_agent(&self, out: &str) -> TestAgent {
         let id = started_id(out);
+        let address = out.trim_end_matches(['\r', '\n']).to_string();
         let record = self
             .agent_record(&id)
             .unwrap_or_else(|| panic!("{id} is not listed"));
@@ -440,6 +490,7 @@ impl TestHome {
         TestAgent {
             process: process_identity(pid),
             id,
+            address,
             pid,
         }
     }

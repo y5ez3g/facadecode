@@ -1,35 +1,33 @@
-Facade runs AI coding agents, such as Claude Code and Codex, and lets you work with them as a team.
-Facade keeps the terminals of the agents it starts, so you can watch them, step in or give them a
-task. Agents can also start and message one another to share the work.
+Start AI coding agents and use their terminals from the Shell. You can watch an agent work, step in
+or send it a task. Agents can also start and message one another.
 
 Learn more at https://facadecode.com
 
 Usage: facade [OPTIONS] [COMMAND]
 
 Agents:
-  start        Start an agent
-  list         List agents
-  attach       Watch an agent and use its terminal
-  stop         Stop one or more agents
-  resume       Resume an ended agent's session
-  remove       Remove one or more agents
-  rename       Rename an agent
+  start       Start an agent
+  list        List active agents
+  attach      Watch an agent and use its terminal
+  stop        Stop one or more agents
+  resume      List resumable sessions or resume one
+  remove      Remove one or more agents
+  rename      Rename an agent
 
 Inspect and control:
-  inspect      Show what an agent is doing
-  screen       Print an agent's recent output
-  type         Type text or press keys in an agent's terminal
+  inspect     Show what an agent is doing
+  screen      Print an agent's recent output
+  type        Type text or press keys in an agent's terminal
 
 Messages:
-  send         Send a message to an agent or the human
-  messages     Read the inbox of the agent in this terminal
+  send        Send a message to an agent
 
 Setup and info:
-  machine      Connect to Facade on other machines
-  integration  Let CLIs you start yourself join Facade
-  status       Show Facade's status
-  version      Print the version
-  completion   Print a shell completion script
+  machine     Connect to other machines over SSH
+  status      Show Orchestrator status
+  version     Print the version
+  completion  Print a shell completion script
+  upgrade     Upgrade Facade Code
 
 Options:
   -h, --help     Print help

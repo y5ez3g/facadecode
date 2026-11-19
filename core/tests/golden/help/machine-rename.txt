@@ -6,7 +6,7 @@ Give a machine a new name, from any machine with a route to it. Addresses with t
 'a17@gpu', stop working.
 
 Arguments:
-  <MACHINE>  Machine name or 'id:' followed by 8 to 32 hex digits from 'facade machine list'
+  <MACHINE>  Machine name or ID from 'facade machine list'
   <NAME>     New name
 
 Options:

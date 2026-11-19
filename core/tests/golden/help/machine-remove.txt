@@ -2,11 +2,11 @@ Remove a saved connection
 
 Usage: facade machine remove <MACHINE>
 
-Remove a saved connection to a machine. Its agents keep running, and other machines may still have a
-route to it.
+Forget this machine's saved SSH arguments and close that connection. Agents keep running, and
+another route may still be available.
 
 Arguments:
-  <MACHINE>  Machine name or 'id:' followed by 8 to 32 hex digits from 'facade machine list'
+  <MACHINE>  Machine name or ID from 'facade machine list'
 
 Options:
   -h, --help  Print help

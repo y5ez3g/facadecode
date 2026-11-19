@@ -29,7 +29,7 @@ fn the_keeper_refuses_every_process_but_its_own_daemon_at_hello() {
         alive(&agent.process),
         "the refused client must not stop the agent"
     );
-    assert!(home.agent_from_list_json("w1").expect("w1 is listed")["process"] == "running");
+    assert!(home.agent_from_watch("w1").expect("w1 is recorded")["process"] == "running");
 }
 
 /// A second daemon loses the daemon lock and exits without touching the running daemon's socket,
@@ -85,16 +85,15 @@ fn daemon_responds_while_keeper_is_blocked() {
     let home = TestHome::new("pausedkeeper");
     home.start_fake("w1");
     let keeper = home.keeper_pid().expect("expected a running keeper");
+    let cli = home.shell_cli();
     pause_process(keeper);
     let mut flood = connect(&home);
-    let cwd = home.project.clone();
+    let args = json!({
+        "cli": cli, "args": ["-c", "sleep 600"], "folder": home.project,
+        "env": { "PATH": SYSTEM_PATH.as_str() }, "cols": 80, "rows": 24,
+    });
     std::thread::spawn(move || {
-        let pad = "x".repeat(1 << 20);
         for _ in 0..24 {
-            let args = json!({
-                "command": ["/nonexistent/program"], "cwd": cwd, "env": { "PAD": pad }, "cols": 80,
-                "rows": 24,
-            });
             flood.send("call", json!({ "op": "agent.start", "args": args }));
         }
         std::thread::sleep(secs(30));
@@ -117,12 +116,11 @@ fn daemon_responds_while_keeper_is_blocked() {
 fn agents_do_not_inherit_other_ptys_or_launcher_fds() {
     use std::os::unix::process::CommandExt;
     let home = TestHome::new("descriptors");
-    let fake = test_binaries().fakecli.to_string_lossy().into_owned();
     // The fake CLI writes the descriptors it was given before it opens anything itself. A shell
     // would list its own too.
     let mut first = home.command(&test_binaries().facade);
     first
-        .args(["start", "--name", "first", &fake])
+        .args(["start", "-d", "--name", "first", "fake"])
         .env("FAKECLI_FDS", "first-fds")
         .stdin(std::process::Stdio::null());
     // SAFETY: open and dup2 are async-signal-safe. Descriptor 9 intentionally remains open across
@@ -199,10 +197,12 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         wait_until(secs(10), || !alive(&agent.process)),
         "the replacement keeper stopped the CLI"
     );
-    assert_eq!(
-        home.list_state("w1").as_deref(),
-        Some("stopped"),
-        "Facade knows it stopped the CLI"
+    let inspected = home.run_facade_ok(&["inspect", "w1"]);
+    assert!(
+        inspected
+            .lines()
+            .any(|line| line.starts_with("State:") && line[6..].trim() == "stopped"),
+        "the record retains the stop: {inspected}"
     );
 }
 
@@ -217,13 +217,13 @@ fn a_stopped_cli_is_still_running_and_a_stop_ends_it() {
     // The keeper hears of the stop at once; a second is ample for it to misread one as an exit.
     std::thread::sleep(secs(1));
     assert_eq!(
-        home.agent_from_list_json("w1").unwrap()["process"],
+        home.agent_from_watch("w1").unwrap()["process"],
         "running",
         "a stopped CLI has not ended"
     );
     resume_process(agent.pid);
     home.run_facade_ok(&["stop", "w1"]);
-    let record = home.agent_from_list_json("w1").unwrap();
+    let record = home.agent_from_watch("w1").unwrap();
     assert_eq!(record["process"], "ended");
     assert_ne!(record["exit"]["signal"], "SIGSTOP", "{record}");
     assert!(
@@ -245,8 +245,9 @@ fn a_keeper_dying_after_the_daemon_registered_a_start_hands_the_run_over() {
     let mut wire = connect(&home);
     let daemon = home.lock_record("daemon").unwrap().0;
     let args = json!({
-        "command": [SH.as_str(), "-c", "echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > cli-pid; echo READY; while :; do sleep 0.2; done"],
-        "name": "kept", "cwd": home.project,
+        "cli": home.shell_cli(),
+        "args": ["-c", "echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > cli-pid; echo READY; while :; do sleep 0.2; done"],
+        "name": "kept", "folder": home.project,
         "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
     });
     let asked = wire.send("call", json!({ "op": "agent.start", "args": args }));
@@ -337,7 +338,7 @@ fn when_both_services_pause_past_the_watchdog_at_most_the_daemon_is_replaced() {
     assert!(
         alive(&agent.process)
             && home
-                .agent_from_list_json("w1")
+                .agent_from_watch("w1")
                 .is_some_and(|agent| agent["process"] == "running")
     );
 }
@@ -387,21 +388,33 @@ fn an_explicit_start_refusal_preserves_every_other_pipelined_start() {
     // Establish the keeper connection before sending all thirty calls.
     start_script(&mut wire, &home, "warm", "sleep 600");
     let keeper = home.lock_record("keeper").unwrap();
+    let invalid = home
+        .project
+        .join(format!("invalid-program{}", std::env::consts::EXE_SUFFIX));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The executable bit lets resolution reach the keeper. A missing interpreter makes
+        // exec fail, while an executable text file without a shebang can run under sh.
+        let interpreter = home.project.join("missing-interpreter");
+        std::fs::write(&invalid, format!("#!{}\n", interpreter.display())).unwrap();
+        std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[cfg(windows)]
+    std::fs::write(&invalid, "not an executable").unwrap();
+    home.add_custom_cli("invalid-program", &invalid);
+    let start_error = format!("could not start {}", invalid.display());
     let requests: Vec<_> = (0..30)
         .map(|n| {
             let good = n % 5 != 0;
-            let command = if good {
-                json!([SH.as_str(), "-c", "sleep 600"])
-            } else {
-                json!(["/no/such/cli"])
-            };
+            let cli = if good { SHELL_CLI } else { "invalid-program" };
             let asked = wire.send(
                 "call",
                 json!({
                     "op": "agent.start",
                     "args": {
-                        "command": command, "cwd": home.project,
-                        "env": { "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+                        "cli": cli, "args": ["-c", "sleep 600"], "folder": home.project,
+                        "env": { "PATH": SYSTEM_PATH.as_str() }, "cols": 80, "rows": 24,
                     },
                 }),
             );
@@ -422,11 +435,11 @@ fn an_explicit_start_refusal_preserves_every_other_pipelined_start() {
                 response["result"]["agent"]["pid"].as_i64().unwrap() as i32,
             ));
         } else {
+            assert_eq!(error_reason(&response), "unavailable", "{response}");
             assert!(
                 response["error"]["message"]
                     .as_str()
-                    .unwrap()
-                    .contains("could not start /no/such/cli"),
+                    .is_some_and(|message| message.contains(&start_error)),
                 "{response}"
             );
         }

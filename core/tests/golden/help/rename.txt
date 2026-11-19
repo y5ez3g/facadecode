@@ -2,11 +2,11 @@ Rename an agent
 
 Usage: facade rename <AGENT> <NAME>
 
-Give the agent a new name, or pass a space in quotes to let Facade choose one.
+Change the agent's display name. Pass an empty or blank name to let the Orchestrator choose one.
 
 Arguments:
-  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
-  <NAME>   New name, or " " for one chosen by Facade
+  <AGENT>  Agent address such as a17@gpu, or an agent ID or name
+  <NAME>   New name, or " " for one chosen by the Orchestrator
 
 Options:
   -h, --help  Print help
@@ -15,5 +15,5 @@ Examples:
   # Rename agent a3 to reviewer
   facade rename a3 reviewer
 
-  # Let Facade choose a new name for agent a3
+  # Let the Orchestrator choose a new name for agent a3
   facade rename a3 " "

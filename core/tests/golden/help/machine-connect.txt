@@ -1,14 +1,15 @@
 Connect to a machine while this command runs
 
-Usage: facade machine connect [OPTIONS] <DESTINATION>
+Usage: facade machine connect [OPTIONS] <SSH-ARG>...
 
-Connect to a machine over SSH until you press Ctrl-C or close this terminal. Nothing is saved.
+Keep a temporary SSH connection until you press Ctrl-C or close this terminal. Use the same SSH
+arguments and optional '--home' as 'facade machine add'.
 
 Arguments:
-  <DESTINATION>  SSH host from your SSH config, or user@host
+  <SSH-ARG>...  The arguments you would use after ssh, including the destination
 
 Options:
-      --home <PATH>  Facade home on that machine [default: that user's Facade home]
+      --home <PATH>  Remote Facade home. Put this option before the SSH arguments
   -h, --help         Print help
 
 Examples:

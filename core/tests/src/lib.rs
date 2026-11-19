@@ -28,6 +28,10 @@ pub fn secs(seconds: u64) -> Duration {
     Duration::from_secs(seconds)
 }
 
+/// The notice shown while a Shell Attach reconnects.
+pub const ATTACH_RECONNECT_NOTE: &str =
+    "Connection lost. Reconnecting. Keys typed while disconnected are not sent.";
+
 /// How long the harness waits for what has to come: a response, a daemon's start, a gate. A machine
 /// running many tests at once, as the Linux gate's does, has taken over 15 seconds for what takes
 /// milliseconds alone. A wait ends as soon as its condition holds, so only a failing test waits all

@@ -1,11 +1,10 @@
-//! A new Facade taking over while agents run: the keeper becoming another build in place, the same
-//! process, with every run, and a command of a newer build handing the running Facade over to it.
+//! Daemon takeovers preserve the keeper, running agents, screens and delivery outcomes.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use facade_scenarios::serde_json::json;
+use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
 /// The command line of process `pid`.
@@ -340,25 +339,37 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
     }
 }
 
-/// A window whose connection ended during an upgrade keeps its running agent and screen.
+/// A disconnected v2 editor's workspace imports the same running agent after v3 takes over.
 #[test]
-fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
+fn an_editor_recovers_its_running_agent_after_v2_takeover() {
     let home = TestHome::new("windowupgrade");
-    // Earlier daemons use this setting to give recovered windows a 1.5-second grace period.
-    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", "1500")]);
-    let folder = facade_base::files::real_path(&home.project).unwrap();
-    let (mut editor, reference) = ide_binding(
-        &home,
-        &json!({
-            "id": "win-1", "label": "Editor", "environment": "local", "workspace": "app",
-            "folders": [folder],
-        }),
+    let old = v2_facade(&home);
+    let launched = home
+        .command(&old)
+        .args(["daemon", "--detach"])
+        .output()
+        .unwrap();
+    assert!(launched.status.success(), "{}", stderr(&launched));
+    let workspace = "13300abc00000002";
+    let mut editor = DaemonTestClient::open(&home);
+    let hello = editor.hello(
+        "ide",
+        [2, 2],
+        json!({ "window": {
+        "id": "win-1", "label": "Editor", "environment": "local", "workspace": workspace,
+        "folders": [home.project],
+    } }),
     );
+    assert_eq!(hello["result"]["protocol"], 2, "{hello}");
+    assert_eq!(hello["result"]["build"], V2_TEST_BUILD, "{hello}");
+    let machine = &hello["result"]["machine_id"];
+    let window = &hello["result"]["window"];
+    assert_eq!(window["machine_id"], *machine, "{hello}");
     let started = editor.call(
         "agent.start",
         json!({
             "command": [shell(), "-c", "echo BEFORE-UPGRADE; sleep 600"], "name": "kept",
-            "cwd": folder, "location_source_window": reference, "cols": 80, "rows": 24,
+            "cwd": home.project, "location_source_window": window, "cols": 80, "rows": 24,
             "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
         }),
     );
@@ -366,55 +377,68 @@ fn an_editor_window_s_agents_outlive_a_newer_daemon_taking_over() {
     let id = before["agent_id"]
         .as_str()
         .expect("an editor agent started");
+    assert_eq!(before["windows"], json!([window]), "{started}");
     let process = process_identity(before["pid"].as_i64().expect("the agent has a PID") as i32);
-    assert!(wait_for_screen_text(&home, id, "BEFORE-UPGRADE"));
-    let screen = home.screen(id);
-    let daemon = home.daemon_pid().unwrap();
-
-    let next = newer();
-    let output = home
-        .command(program_of_build(&home, &next))
-        .arg("list")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let hello = home.hello_result().expect("the new daemon answers");
-    assert_eq!(hello["build"], next);
-    assert_ne!(hello["pid"], daemon);
+    let mut screen = Value::Null;
+    assert!(
+        wait_until(secs(10), || {
+            screen = editor.call("agent.screen", json!({ "agent": id }))["result"]["text"].clone();
+            screen
+                .as_str()
+                .is_some_and(|text| text.contains("BEFORE-UPGRADE"))
+        }),
+        "{screen}"
+    );
     drop(editor);
 
-    std::thread::sleep(secs(3));
-    let after = home
-        .agent_from_list_json("kept")
-        .expect("the agent's record");
-    assert_eq!(after["agent_id"], id);
-    assert_eq!(after["windows"], json!([reference]));
-    assert_eq!(after["location_source_window"], json!(reference));
+    home.run_facade_ok(&["daemon", "--takeover"]);
+    let mut editor = DaemonTestClient::open(&home);
+    let upgraded = editor.hello("ide", DAEMON_RANGE, json!({}));
+    assert_eq!(upgraded["result"]["protocol"], 3, "{upgraded}");
+    assert_eq!(upgraded["result"]["build"], CURRENT, "{upgraded}");
+    assert_ne!(upgraded["result"]["pid"], hello["result"]["pid"]);
+    assert_eq!(
+        upgraded["result"]["keeper"]["pid"],
+        hello["result"]["keeper"]["pid"]
+    );
+    let reference = json!({ "machine_id": machine, "agent_id": id });
+    let import = editor.call(
+        "workspace.import_legacy",
+        json!({ "machine_id": machine, "workspace_key": workspace }),
+    );
+    assert_eq!(import["result"]["agents"], json!([reference]), "{import}");
+    let inspected = editor.call("agent.inspect", json!({ "reference": reference }));
+    let after = &inspected["result"]["agent"];
+    assert_eq!(after["agent_id"], id, "{inspected}");
     assert_eq!(after["process"], "running", "{after}");
     assert_eq!(after["pid"], before["pid"]);
     assert!(alive(&process), "the original process is still alive");
-    assert_eq!(home.screen(id), screen);
-    let windows = connect(&home).request("watch", json!({ "topic": "windows" }));
-    let window = windows["result"]["snapshot"]
+    let after = editor.call("agent.screen", json!({ "agent": after["address"] }));
+    assert_eq!(after["result"]["text"], screen, "{after}");
+    let watch = editor.request("watch", json!({ "topic": "agents" }));
+    let rows = watch["result"]["snapshot"]["agents"]
         .as_array()
-        .expect("the windows snapshot")
-        .iter()
-        .find(|window| window["window_id"] == reference.window_id)
-        .expect("the disconnected window stays listed");
-    assert_eq!(window["connected"], false, "{window}");
+        .expect("the editor's roster");
+    assert!(
+        rows.iter().any(|row| row["agent_id"] == id
+            && row["machine_id"] == *machine
+            && row["pid"] == before["pid"]),
+        "{watch}"
+    );
 }
 
-/// A command of a newer build hands the running Facade over to it and says so on one line. The
-/// agents' CLIs and the keeper keep their processes, the keeper as the new build; a new daemon
-/// serves them. Once the new build proves healthy, the launchers point at it.
-/// A newer build's `status` shows its own version beside the running services' older build, and
-/// upgrades nothing: the daemon keeps its process and build.
+/// A newer command's status reports the running services' version and process IDs. It leaves the
+/// running services untouched.
 #[test]
-fn a_newer_build_s_status_shows_both_builds_and_upgrades_nothing() {
+fn a_newer_build_s_status_reports_the_running_service_without_upgrading_it() {
     let home = TestHome::new("statusnewer");
     home.start_named_fake("w1", &[]);
     let hello = home.hello_result().unwrap();
     let (daemon, keeper) = (hello["pid"].clone(), hello["keeper"]["pid"].clone());
+    let machines: Value =
+        facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"]))
+            .unwrap();
+    let machine = machines["machines"][0]["selector"].as_str().unwrap();
     let program = program_of_build(&home, &newer());
     let status = home
         .command(&program)
@@ -426,10 +450,10 @@ fn a_newer_build_s_status_shows_both_builds_and_upgrades_nothing() {
         (stdout(&status), stderr(&status), status.status.code()),
         (
             format!(
-                "Facade is running.\n  Home:      {}\n  Version:   {}\n  Daemon:    pid {daemon} \
-                 ({CURRENT})\n  Keeper:    pid {keeper} ({CURRENT})\n  Agents:    1\n",
+                "Orchestrator running.\n  Home:      {}\n  Settings:  {}\n  Version:   {CURRENT}\n  Daemon:    pid {daemon} \
+                 ({CURRENT})\n  Keeper:    pid {keeper}\n  Agents:    1\n  Machines:  {machine}\n",
                 home.path.display(),
-                newer()
+                home.path.join("facade.json").display(),
             ),
             String::new(),
             Some(0)
@@ -443,6 +467,7 @@ fn a_newer_build_s_status_shows_both_builds_and_upgrades_nothing() {
     );
 }
 
+/// A newer build takes over the running daemon while the agent and keeper processes continue.
 #[test]
 fn a_newer_build_s_command_takes_over_while_agents_run() {
     let home = TestHome::new("takeover");
@@ -499,13 +524,13 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     );
     assert!(
         said.starts_with(&format!(
-            "note: upgraded running Facade {CURRENT} to {}; 2 agents kept running",
+            "note: upgraded Orchestrator {CURRENT} to {}. 2 agents kept running",
             newer()
         )),
         "{said}"
     );
     assert!(
-        Table::parse(&stdout(&listed)).column("NAME") == ["w1", "w2"],
+        Table::parse(&stdout(&listed)).column("NAME") == ["w2", "w1"],
         "{}",
         stdout(&listed)
     );
@@ -628,7 +653,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -691,7 +716,7 @@ fn a_message_entered_as_a_newer_facade_takes_over_is_settled_by_the_daemon_befor
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -788,7 +813,7 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -841,26 +866,26 @@ fn start_asking_from_its_screen(home: &TestHome, name: &str) {
     assert!(started.status.success(), "{}", stderr(&started));
     // Its start readies its tools in a panel, which closes before the input shows again.
     let ready = || {
-        home.agent_from_list_json(name)
+        home.agent_from_watch(name)
             .is_some_and(|agent| agent["tools_state"] == "available")
             && home.screen(name).contains("? for shortcuts")
     };
     assert!(
         wait_until(secs(15), ready),
         "{:?} {}",
-        home.agent_from_list_json(name),
+        home.agent_from_watch(name),
         home.screen(name)
     );
     home.run_facade_ok(&["type", name, "/fake menu Which branch?"]);
     home.run_facade_ok(&["type", name, "--key", "Enter"]);
     let waits = || {
-        home.agent_from_list_json(name)
+        home.agent_from_watch(name)
             .is_some_and(|agent| agent["state"] == "waiting_for_you")
     };
     assert!(
         wait_until(secs(10), waits),
         "{:?} {}",
-        home.agent_from_list_json(name),
+        home.agent_from_watch(name),
         home.screen(name)
     );
 }
@@ -881,14 +906,14 @@ fn an_agent_asking_from_its_screen_still_waits_for_the_person_after_a_takeover()
         .unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
     // Past the screen's read, and with nothing written since: the state is what the recovered
     // screen shows.
     std::thread::sleep(std::time::Duration::from_secs(1));
-    let agent = home.agent_from_list_json("ada").unwrap();
+    let agent = home.agent_from_watch("ada").unwrap();
     assert_eq!(
         agent["state"],
         "waiting_for_you",
@@ -907,7 +932,7 @@ fn an_agent_asking_from_its_screen_still_waits_for_the_person_after_a_crash() {
     home.wait_for_daemon_after(old, secs(20))
         .expect("the keeper starts the daemon again");
     std::thread::sleep(std::time::Duration::from_secs(2));
-    let agent = home.agent_from_list_json("ada").unwrap();
+    let agent = home.agent_from_watch("ada").unwrap();
     assert_eq!(
         agent["state"],
         "waiting_for_you",
@@ -950,7 +975,7 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
     let listed = asking.wait_with_output().unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -969,6 +994,8 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
 fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_places_the_new_build_s()
  {
     let home = TestHome::new("takeoverplugin");
+    let old = v2_facade(&home);
+    let old_version = facade_base::build_version(V2_TEST_BUILD);
     let programs = home.folder().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
     install_program(&programs, "agy", &test_binaries().fakecli);
@@ -1007,9 +1034,9 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
     };
     let plugin = home.project.join(".agents/plugins/facade");
     let version = || std::fs::read_to_string(plugin.join("plugin.json")).unwrap_or_default();
-    start(&test_binaries().facade, "ada");
+    start(&old, "ada");
     assert!(
-        version().contains(&format!("Facade core {CURRENT}")),
+        version().contains(&format!("Facade core {old_version}")),
         "{}",
         version()
     );
@@ -1020,25 +1047,24 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
         .output()
         .unwrap();
     assert!(
-        listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+        listed.status.success() && stderr(&listed).contains("upgraded Orchestrator "),
         "{}",
         stderr(&listed)
     );
     assert!(
-        version().contains(&format!("Facade core {CURRENT}")),
+        version().contains(&format!("Facade core {old_version}")),
         "the run keeps its plugin: {}",
         version()
     );
     start(&program, "bea");
     assert!(
-        version().contains(&format!("Facade core {CURRENT}")),
+        version().contains(&format!("Facade core {old_version}")),
         "a start beside the run leaves it: {}",
         version()
     );
     stop("ada");
     assert!(
-        version().contains(&format!("Facade core {CURRENT}")),
+        version().contains(&format!("Facade core {old_version}")),
         "bea's run uses it still: {}",
         version()
     );
@@ -1068,18 +1094,18 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
 #[test]
 fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
     let home = TestHome::new("takeoversends");
-    home.start_named_fake("worker", &[]);
-    home.start_named_fake("boss", &[]);
+    let worker = home.start_named_fake("worker", &[]);
+    let boss = home.start_named_fake("boss", &[]);
     home.run_facade_ok(&["type", "worker", "my draft"]);
     assert!(
         wait_until(secs(10), || home.screen("worker").contains("❯ my draft")),
         "{}",
         home.screen("worker")
     );
-    let mut boss = McpTestClient::open(&home, "a2");
+    let mut boss = McpTestClient::open_configured(&home, &boss.id);
     let tool = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": "#a1", "text": "from the tool" } }),
+        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": "from the tool" } }),
     );
     let command = home
         .command(&test_binaries().facade)
@@ -1108,7 +1134,7 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
         .unwrap();
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1133,12 +1159,13 @@ fn sends_waiting_through_a_takeover_are_typed_once_and_answered() {
     );
     let sent = command.wait_with_output().unwrap();
     assert!(sent.status.success(), "{}{}", stdout(&sent), stderr(&sent));
-    // Messages waiting together go in one paste.
+    // Count submitted body lines, regardless of how many messages share a paste.
     let typed = |text: &str| {
         home.submitted_messages()
             .iter()
-            .map(|submitted| submitted.matches(text).count())
-            .sum::<usize>()
+            .flat_map(|submitted| submitted.lines())
+            .filter(|line| *line == text)
+            .count()
     };
     assert!(
         wait_until(secs(10), || typed("from the tool") == 1
@@ -1196,11 +1223,11 @@ fn machine_list_shows_the_version_and_json_keeps_the_build() {
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     let table = stdout(&output);
-    let shown = table
-        .lines()
-        .nth(1)
-        .and_then(|row| row.split_whitespace().nth(2));
-    assert_eq!(shown, Some(version.as_str()), "{table}");
+    assert_eq!(
+        Table::parse(&table).column("VERSION"),
+        [version.as_str()],
+        "{table}"
+    );
 
     let json = home.run_facade_ok(&["machine", "list", "--json"]);
     let listed: facade_scenarios::serde_json::Value =
@@ -1255,9 +1282,7 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
     );
 }
 
-/// An attached terminal stays attached through a takeover: it says that the newer build takes over
-/// and reconnects, with no note of a lost connection. Keys typed before it, while the daemon before
-/// drains, once its agents went quiet, and after it reach the agent once each.
+/// An attached terminal reconnects through a takeover. Each connected input reaches the agent once.
 #[test]
 fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once() {
     let home = TestHome::new("takeoverattach");
@@ -1319,17 +1344,20 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
     assert!(
         listed.status.success()
             && stderr(&listed).contains(&format!(
-                "upgraded running Facade {CURRENT} to {}; 1 agent kept running",
+                "upgraded Orchestrator {CURRENT} to {}. 1 agent kept running",
                 newer()
             )),
         "{}",
         stderr(&listed)
     );
     assert!(
-        term.wait_for_output(secs(10), "Reconnecting to Facade. Recent keys may be lost."),
+        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
         "{}",
         term.text()
     );
+    assert!(term.wait_for(secs(10), |text| text.contains("quiet")
+        && !text.contains(ATTACH_RECONNECT_NOTE)));
+    assert_eq!(term.output_count("Keys not sent:"), 0);
     term.send(b"after\r");
     let all = ["before", "during", "quiet", "after"];
     assert!(
@@ -1422,7 +1450,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         "tools/call",
         json!({
             "name": "send_message",
-            "arguments": { "to": format!("#a{AGENTS}"), "text": "waiting by the tool" },
+            "arguments": { "to": agents[AGENTS - 1].address, "text": "waiting by the tool" },
         }),
     );
     let waiting_command = home
@@ -1456,7 +1484,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
                 let text = format!("tool {}", sent.len());
                 let answer = client.call(
                     "send_message",
-                    json!({ "to": format!("#a{}", 2 + sent.len() % (AGENTS - 2)), "text": text }),
+                    json!({ "to": agents[1 + sent.len() % (AGENTS - 2)].address, "text": text }),
                 );
                 sent.push((text, answer));
             }
@@ -1490,7 +1518,7 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
     });
     assert!(
         listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&listed).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&listed)
     );
@@ -1671,16 +1699,18 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     let asked = asking.wait_with_output().unwrap();
     assert!(
         asked.status.success()
-            && stderr(&asked).contains(&format!("upgraded running Facade {CURRENT} to ")),
+            && stderr(&asked).contains(&format!("upgraded Orchestrator {CURRENT} to ")),
         "{}",
         stderr(&asked)
     );
     assert_eq!(home.hello_result().unwrap()["build"], newer());
-    let state = |name: &str| home.list_state(name).unwrap_or_default();
-    assert!(
-        !["stopped", "ended"].contains(&state("started").as_str()) && state("stopped") == "stopped",
-        "{}",
-        stdout(&home.run_facade(&["list"]))
+    assert_eq!(
+        home.agent_from_watch("started").unwrap()["process"],
+        "running"
+    );
+    assert_eq!(
+        home.agent_from_watch("stopped").unwrap()["process"],
+        "ended"
     );
     assert_eq!(
         home.screen("typed").matches("typed under way").count(),
@@ -1690,7 +1720,7 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     );
 }
 
-/// The test CLI under each of the six CLIs' names, through a takeover: each keeps its process and
+/// The test CLI under each of the six CLIs' names, through a v2 takeover: each keeps its process and
 /// its tools reconnect. Nothing its run was given names a build's folder, so once the new build
 /// proves healthy, the hook lines its CLI runs, which name the launcher, run the new build; what
 /// they give the model is the run's own, the skill and instructions of the build that started it,
@@ -1702,7 +1732,19 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     const CLIS: [&str; 6] = ["claude", "codex", "agy", "muse", "opencode", "pi"];
     const SESSION: &str = "96da4482-2bae-4a45-b193-a5664c19826c";
     let home = TestHome::new("takeoversix");
-    home.start_facade_with(&[("FACADE_TEST_TRIAL_MS", "2000")]);
+    let old = v2_facade(&home);
+    let launched = home
+        .command(&old)
+        .args(["daemon", "--detach"])
+        .env("FACADE_TEST_TRIAL_MS", "2000")
+        .output()
+        .unwrap();
+    assert!(launched.status.success(), "{}", stderr(&launched));
+    let mut legacy = DaemonTestClient::open(&home);
+    let before = legacy.hello("terminal", [2, 2], json!({}));
+    assert_eq!(before["result"]["protocol"], 2, "{before}");
+    assert_eq!(before["result"]["build"], V2_TEST_BUILD, "{before}");
+    let old_version = facade_base::build_version(V2_TEST_BUILD);
     let programs = home.folder().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
     let path = format!(
@@ -1711,11 +1753,11 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         home.path_with_test_programs()
     );
     let bin = home.path.join("core").join("bin");
-    let run = |name: &str| home.agent_from_list_json(name).unwrap_or_default();
+    let run = |name: &str| home.agent_from_watch(name).unwrap_or_default();
     let mut runs = Vec::new();
     for cli in CLIS {
         install_program(&programs, cli, &test_binaries().fakecli);
-        let mut start = home.facade_in_an_empty_home();
+        let mut start = home.command(&old);
         start.env("PATH", &path);
         // Antigravity starts its plugin's server from its `/mcp` panel, which Facade's start opens;
         // the test CLI runs the others' from the launcher their settings name, as each CLI does.
@@ -1730,15 +1772,20 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             .output()
             .unwrap();
         assert!(started.status.success(), "{cli}: {}", stderr(&started));
-        let available = || run(&name)["tools_state"] == "available";
+        let mut old_run = || {
+            let result = legacy.call("agent.inspect", json!({ "agent": name }));
+            assert!(result["result"]["agent"].is_object(), "{result}");
+            result["result"]["agent"].clone()
+        };
         assert!(
-            wait_until(secs(30), available),
+            wait_until(secs(30), || old_run()["tools_state"] == "available"),
             "{cli}'s tools before: {}",
-            run(&name)
+            old_run()
         );
-        let pid = run(&name)["pid"].as_i64().unwrap() as i32;
+        let pid = old_run()["pid"].as_i64().unwrap() as i32;
         runs.push((cli, name, process_identity(pid)));
     }
+    drop(legacy);
     let program = program_of_build(&home, &newer());
     let listed = home
         .command(&program)
@@ -1747,8 +1794,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         .output()
         .unwrap();
     assert!(
-        listed.status.success()
-            && stderr(&listed).contains(&format!("upgraded running Facade {CURRENT} to ")),
+        listed.status.success() && stderr(&listed).contains("upgraded Orchestrator "),
         "{}",
         stderr(&listed)
     );
@@ -1764,7 +1810,11 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             run(name)
         );
     }
-    assert_eq!(home.hello_result().unwrap()["build"], newer());
+    let after = home.hello_result().unwrap();
+    assert_eq!(after["protocol"], 3, "{after}");
+    assert_eq!(after["build"], newer());
+    assert_eq!(after["keeper"]["pid"], before["result"]["keeper"]["pid"]);
+    assert_ne!(after["pid"], before["result"]["pid"]);
     // What each run was given, its arguments, its environment and its files, names Facade's
     // programs by their launchers only.
     let mut hooks = Vec::new();
@@ -1798,7 +1848,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         }
         let files = given.len() - before_files;
         for text in &given {
-            for build in [CURRENT.to_string(), newer()] {
+            for build in [V2_TEST_BUILD.to_string(), newer()] {
                 assert!(
                     !text.contains(&bin.join(&build).display().to_string()),
                     "{cli}'s run names build {build}'s folder: {text}"
@@ -1834,7 +1884,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     // The person deletes the build before; the servers that started from it run on, and the hooks
     // run the new build. Windows deletes no program while it runs, so there the build stays.
     #[cfg(unix)]
-    std::fs::remove_dir_all(bin.join(CURRENT)).unwrap();
+    std::fs::remove_dir_all(bin.join(V2_TEST_BUILD)).unwrap();
     assert!(!hooks.is_empty(), "no run's hook runs Facade's launcher");
     let ran = home.folder().join(format!("build-{}/ran.log", newer()));
     let hooks_ran = || {
@@ -1955,7 +2005,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         }
         if matches!(cli.as_str(), "codex" | "muse") {
             assert!(
-                own(skill).ends_with(&format!("Written by Facade core {CURRENT}.\n")),
+                own(skill).ends_with(&format!("Written by Facade core {old_version}.\n")),
                 "{cli}'s skill is the build before's: {}",
                 own(skill)
             );

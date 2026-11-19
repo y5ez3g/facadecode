@@ -2,6 +2,14 @@
 
 use facade_scenarios::*;
 
+/// The copyable address Facade gives the agent with this ID, such as `a1@host`.
+fn address(home: &TestHome, id: &str) -> String {
+    home.agent_record(id).expect("the agent is recorded")["address"]
+        .as_str()
+        .expect("an address")
+        .to_string()
+}
+
 #[cfg(unix)]
 #[test]
 fn attach_restores_bracketed_paste_and_cooked_mode_on_signal() {
@@ -58,7 +66,8 @@ fn attach_restores_main_screen_on_detach_or_signal() {
         "printf '\\033[?1049hALT-READY'; sleep 60",
     );
     assert!(wait_for_screen_text(&home, &agent, "ALT-READY"));
-    let detached = format!("Detached from {agent}. Run 'facade attach {agent}' to return.");
+    let address = address(&home, &agent);
+    let detached = format!("Detached from {address}. Run 'facade attach {address}' to return.");
     // Termination signals reach attach on Unix alone.
     #[cfg_attr(windows, allow(unused_mut))]
     let mut ends = vec![("ctrl-]", detached.as_str(), 0)];
@@ -232,7 +241,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
         .unwrap_or_default();
     assert!(
         last.contains("Attachment ended by SIGTERM.")
-            && !term.text().contains("Reconnecting to Facade"),
+            && !term.text().contains(ATTACH_RECONNECT_NOTE),
         "{}",
         term.text()
     );
@@ -273,9 +282,10 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
         term.wait_exit(secs(5))
             .is_some_and(|status| status.success())
     );
+    let address = address(&home, &agent);
     assert!(
         term.wait_for(secs(2), |text| text.contains(&format!(
-            "Detached from {agent}. Run 'facade attach {agent}' to return."
+            "Detached from {address}. Run 'facade attach {address}' to return."
         ))),
         "{}",
         term.text()
@@ -348,7 +358,7 @@ fn attach_forwards_input_and_ctrl_bracket_detaches() {
         alive(&agent.process),
         "the agent keeps running after a detach"
     );
-    assert!(home.agent_from_list_json("w1").expect("w1 is listed")["process"] == "running");
+    assert!(home.agent_from_watch("w1").expect("w1 is recorded")["process"] == "running");
 }
 
 /// Input preceding Ctrl-] in the same read must reach the agent.

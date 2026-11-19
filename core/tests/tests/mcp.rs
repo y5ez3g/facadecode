@@ -8,31 +8,6 @@ use std::process::Stdio;
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
-/// A connection acting for `agent` that follows its inbox from an empty snapshot.
-fn follow_inbox(home: &TestHome, agent: &str) -> (DaemonTestClient, u64) {
-    let mut wire = DaemonTestClient::open(home);
-    assert!(wire.hello("terminal", DAEMON_RANGE, json!({ "agent": agent }))["result"].is_object());
-    let watching = wire.request("watch", json!({ "topic": "messages" }));
-    assert_eq!(
-        watching["result"]["snapshot"]["messages"],
-        json!([]),
-        "{watching}"
-    );
-    (wire, watching["result"]["watch"].as_u64().unwrap())
-}
-
-/// Waits until the inbox has `count` messages pending.
-fn wait_for_pending(inbox: &DaemonTestClient, watch: u64, count: usize) -> bool {
-    wait_until(secs(30), || {
-        inbox
-            .changes(watch)
-            .iter()
-            .filter(|changed| changed["change"]["message"]["delivery"]["status"] == "pending")
-            .count()
-            >= count
-    })
-}
-
 fn type_draft(home: &TestHome, agent: &str, draft: &str) {
     home.run_facade_ok(&["type", agent, draft]);
     assert!(
@@ -51,7 +26,7 @@ fn press_keys_checks_normalized_batches_before_typing() {
     let pressed = home.project.join("pressed");
     let agent = home.start_named_fake("ada", &[("FAKECLI_KEYS", pressed.to_str().unwrap())]);
     assert!(wait_for_screen_text(&home, &agent.id, "❯"));
-    let mut client = McpTestClient::open(&home, &agent.id);
+    let mut client = McpTestClient::open_configured(&home, &agent.id);
 
     let mut keys = vec!["界"];
     keys.extend(std::iter::repeat_n("A", 99));
@@ -99,69 +74,100 @@ fn press_keys_checks_normalized_batches_before_typing() {
     );
 }
 
-/// Messages whose text adds up to more than 8,000 characters are returned without it; their text is
-/// in a file only this user can read, each message whole between lines naming it.
+/// A managed agent can take whole long messages from its inbox while a draft holds terminal
+/// delivery. Only the messages included in each inline page are delivered by the read.
 #[test]
-fn a_long_read_puts_the_messages_in_a_file() {
-    let home = TestHome::new("mcpfile");
-    home.start_named_fake("ada", &[]);
-    home.start_named_fake("bob", &[]);
+fn a_managed_read_delivers_only_whole_inline_messages() {
+    let home = TestHome::new("mcp-managed-pages");
+    let ada = home.start_named_fake("ada", &[]);
+    let bob = home.start_named_fake("bob", &[]);
     type_draft(&home, "ada", "hold");
-    let (inbox, watch) = follow_inbox(&home, "a1");
-    let mut bob = McpTestClient::open(&home, "a2");
+    let mut receiver = McpTestClient::open_configured(&home, &ada.id);
+    let mut sender = McpTestClient::open_configured(&home, &bob.id);
     let long = ["x".repeat(5000), "y".repeat(5000)];
-    for text in &long {
-        bob.send(
+    let sends = long.each_ref().map(|text| {
+        sender.send(
             "tools/call",
-            json!({ "name": "send_message", "arguments": { "to": "#a1", "text": text } }),
-        );
-    }
-    assert!(wait_for_pending(&inbox, watch, 2));
-    let mut ada = McpTestClient::open(&home, "a1");
-    let read = ada.call("read_messages", json!({}));
-    let path = std::path::PathBuf::from(read["data"]["file"].as_str().expect("a file"));
+            json!({ "name": "send_message", "arguments": { "to": "ada", "text": text } }),
+        )
+    });
+    let store = rusqlite::Connection::open_with_flags(
+        home.path.join("core/facade.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    store.busy_timeout(secs(5)).unwrap();
+    let pending = || {
+        store
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE status = 'pending' AND text IN (?1, ?2)",
+                [&long[0], &long[1]],
+                |row| row.get::<_, u32>(0),
+            )
+            .unwrap()
+    };
     assert!(
-        path.starts_with(home.path.join("core/results"))
-            || path.starts_with(
-                facade_base::files::real_path(&home.path)
-                    .unwrap()
-                    .join("core/results")
-            ),
-        "{}",
-        path.display()
+        wait_until(secs(10), || pending() == 2),
+        "both sends are waiting behind the managed agent's draft"
     );
-    // Only this user may read it: by its mode on Unix; on Windows by the home's permissions.
-    #[cfg(unix)]
-    assert_eq!(
-        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions())
-            & 0o777,
-        0o600
-    );
-    let messages: Value =
-        facade_scenarios::serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    let mut texts: Vec<&str> = messages
+
+    let first = receiver.call("read_messages", json!({}));
+    let first_page = first["data"]["messages"].as_array().expect("inline page");
+    assert_eq!(first["status"], "success", "{first}");
+    assert_eq!(first_page.len(), 1, "{first}");
+    assert!(first["data"].get("file").is_none(), "{first}");
+    assert_eq!(pending(), 1, "only the returned message was delivered");
+    let cursor = first["data"]["next_cursor"]
+        .as_str()
+        .expect("the second pending message needs another page");
+    let second = receiver.call("read_messages", json!({ "after": cursor }));
+    let second_page = second["data"]["messages"].as_array().expect("inline page");
+    assert_eq!(second["status"], "success", "{second}");
+    assert_eq!(second_page.len(), 1, "{second}");
+    assert!(second["data"].get("file").is_none(), "{second}");
+    assert!(second["data"].get("next_cursor").is_none(), "{second}");
+
+    let messages = [&first_page[0], &second_page[0]];
+    let mut texts = messages.map(|message| message["text"].as_str().unwrap());
+    texts.sort_unstable();
+    assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
+    let roster: Value = serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
+    let bob_address = &roster["agents"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|message| message["text"].as_str().unwrap())
-        .collect();
-    // The two sends ran at once, so either text may have the lower number.
-    texts.sort_unstable();
-    assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
-    assert_eq!(messages[0]["from"], "#a2");
-    assert!(messages[0]["address"].as_str().unwrap().contains("@id:"));
-    let inline = ada.call("read_messages", json!({ "after": messages[0]["address"] }));
-    assert_eq!(inline["status"], "success", "{inline}");
-    assert_eq!(inline["data"]["messages"], json!([messages[1]]), "{inline}");
+        .find(|row| row["name"] == "bob")
+        .expect("Bob is still running")["id"];
+    for message in messages {
+        assert_eq!(&message["from"], bob_address, "{message}");
+        let id = message["id"].as_str().expect("the inbox message number");
+        assert!(id.strip_prefix('m').is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        }));
+    }
+    for id in sends {
+        let receipt = sender.tool_answer(id);
+        assert_eq!(receipt["status"], "success", "{receipt}");
+        assert_eq!(
+            receipt["data"]["delivery"], "read_by_recipient",
+            "{receipt}"
+        );
+        let address = receipt["data"]["id"].as_str().expect("the send receipt");
+        let (number, _) = address.split_once('@').expect("a complete receipt address");
+        assert!(messages.iter().any(|message| message["id"] == number));
+    }
+    let unread = receiver.call("read_messages", json!({}));
+    assert_eq!(unread["data"]["messages"], json!([]), "{unread}");
+    assert!(home.submitted_messages().is_empty());
 }
 
-/// facade-mcp serves the agent Facade started it for; started outside a Facade run, it joins as a
-/// member. At the end of its input it answers the calls still under way, then exits.
+/// facade-mcp serves a managed run or joins as a Guest at the first tool call. At the end of its
+/// input it answers the calls still under way, then exits.
 #[test]
 fn facade_mcp_serves_its_agent_until_its_input_ends() {
     let home = TestHome::new("mcpends");
     home.start_facade_with(&[]);
-    // Started outside a Facade run and without --guest, it joins as a member at initialize.
+    // An external relay receives connection instructions before it joins.
     let mut unconfigured = home
         .command(&test_binaries().mcp)
         .stdin(Stdio::piped())
@@ -204,12 +210,9 @@ fn facade_mcp_serves_its_agent_until_its_input_ends() {
             .cloned()
             .unwrap_or(Value::Null)
     };
-    assert!(
-        answered(1)["result"]["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("#a1"),
-        "it is told who it is: {answers:?}"
+    assert_eq!(
+        answered(1)["result"]["instructions"],
+        facade_base::instructions::for_connection()
     );
     assert_eq!(
         answered(2)["result"]["tools"].as_array().map(Vec::len),
@@ -245,106 +248,98 @@ fn facade_mcp_serves_its_agent_until_its_input_ends() {
     );
 }
 
-/// A long read whose file cannot be written returns the messages whole: the read delivered them, so
-/// they must not be lost.
+/// Requested screen lines are complete and inline in both Shell and MCP, above the former file
+/// threshold. Read Screen can still read the saved screen after the agent has stopped.
 #[test]
-fn a_long_read_whose_file_cannot_be_written_returns_the_messages_whole() {
-    let home = TestHome::new("mcpnofile");
-    home.start_named_fake("ada", &[]);
-    home.start_named_fake("bob", &[]);
-    type_draft(&home, "ada", "hold");
-    let (inbox, watch) = follow_inbox(&home, "a1");
-    let mut bob = McpTestClient::open(&home, "a2");
-    let long = ["x".repeat(5000), "y".repeat(5000)];
-    for text in &long {
-        bob.send(
-            "tools/call",
-            json!({ "name": "send_message", "arguments": { "to": "#a1", "text": text } }),
-        );
-    }
-    assert!(wait_for_pending(&inbox, watch, 2));
-    // A file where the results folder goes: no result file can be written.
-    std::fs::write(home.path.join("core/results"), "").unwrap();
-    let read = McpTestClient::open(&home, "a1").call("read_messages", json!({}));
-    assert_eq!(
-        (&read["status"], read["data"].get("file")),
-        (&json!("success"), None),
-        "{read}"
-    );
-    let mut texts: Vec<&str> = read["data"]["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|message| message["text"].as_str())
-        .collect();
-    texts.sort_unstable();
-    assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
-}
-
-/// A long screen comes whole in a text file only this user can read. A file error tells the caller
-/// to ask for fewer lines.
-#[test]
-fn a_long_screen_comes_as_a_file() {
-    let home = TestHome::new("mcpscreenfile");
-    let mut wire = connect(&home);
-    let agent = start_script(
-        &mut wire,
-        &home,
+fn a_long_screen_is_complete_and_inline() {
+    let home = TestHome::new("mcp-screen-inline");
+    let screen_file = home.folder().join("initial-screen.txt");
+    let expected = (1..=120)
+        .map(|line| format!("line {line:03} [{}]", "x".repeat(62)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(expected.chars().count() > 8_000);
+    std::fs::write(&screen_file, &expected).unwrap();
+    home.start_named_fake(
         "long",
-        "for i in $(seq 1 120); do printf 'line %03d [%s]\\n' $i \
-         'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; done; echo READY; sleep 60",
+        &[("FAKECLI_SCREEN_FILE", screen_file.to_str().unwrap())],
     );
-    assert!(wait_for_screen_text(&home, &agent, "READY"));
-    let mut reader = McpTestClient::open(&home, &agent);
-    let arguments = json!({ "agent": agent, "lines": 200 });
-    let results = home.path.join("core/results");
-    std::fs::write(&results, "").unwrap();
-    let failed = reader.call("read_screen", arguments.clone());
-    assert_eq!(failed["status"], "failure", "{failed}");
-    assert_eq!(failed["reason"], "unavailable", "{failed}");
+    let observer = home.start_named_fake("observer", &[]);
+    let mut reader = McpTestClient::open_configured(&home, &observer.id);
+    let read = reader.call("read_screen", json!({ "agent": "long", "lines": 200 }));
+    assert_eq!(read["status"], "success", "{read}");
+    let data = &read["data"];
+    assert!(data.get("file").is_none() && data.get("next_cursor").is_none());
+    let text = data["text"].as_str().expect("inline screen text");
     assert!(
-        failed["message"]
-            .as_str()
-            .is_some_and(|message| message.ends_with("; set 'lines' to a smaller number")),
-        "{failed}"
+        facade_base::daemon::plain(text).contains(&expected),
+        "the screen must include all 120 output lines in order"
     );
-    std::fs::remove_file(results).unwrap();
-    let read = reader.call("read_screen", arguments);
+
+    let shorter = reader.call("read_screen", json!({ "agent": "long", "lines": 4 }));
+    assert_eq!(shorter["status"], "success", "{shorter}");
+    let tail = shorter["data"]["text"]
+        .as_str()
+        .expect("inline screen minimum");
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(tail, lines[lines.len() - 4..].join("\n"));
+    assert!(shorter["data"].get("next_cursor").is_none());
+
+    let stopped = reader.call("stop_agent", json!({ "agent": "long" }));
+    assert_eq!(stopped["status"], "success", "{stopped}");
+    let after = reader.call("read_screen", json!({ "agent": "long", "lines": 200 }));
+    assert_eq!(after["status"], "success", "{after}");
     assert!(
-        read["data"].get("text").is_none() && read["data"]["ended"] == false,
-        "{read}"
+        facade_base::daemon::plain(after["data"]["text"].as_str().unwrap()).contains(&expected),
+        "the stopped agent retains the output"
     );
-    let path = std::path::PathBuf::from(read["data"]["file"].as_str().expect("a file"));
-    // Only this user may read it: by its mode on Unix; on Windows by the home's permissions.
-    #[cfg(unix)]
-    assert_eq!(
-        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions())
-            & 0o777,
-        0o600
-    );
-    let screen = std::fs::read_to_string(&path).unwrap();
-    assert!(
-        screen.starts_with("line 001 \\[xxx") && screen.contains("line 120 \\["),
-        "{}",
-        &screen[..40]
-    );
+    let shell = home.run_facade_ok(&["screen", "long", "--lines", "200", "--json"]);
+    let shell: Value = serde_json::from_str(&shell).unwrap();
+    assert_eq!(shell["text"], after["data"]["text"]);
+
+    let address = after["data"]["address"].as_str().expect("an agent address");
+    for (tool, args) in [
+        ("stop_agent", json!({ "agent": address })),
+        (
+            "type_text",
+            json!({ "agent": address, "text": "late input" }),
+        ),
+        ("press_keys", json!({ "agent": address, "keys": ["Enter"] })),
+    ] {
+        let denied = reader.call(tool, args);
+        assert_eq!(denied["status"], "failure", "{tool}: {denied}");
+        assert_eq!(denied["reason"], "ended", "{tool}: {denied}");
+        assert!(denied["message"].as_str().unwrap().contains(address));
+    }
 }
 
 /// A stop whose exit is not seen within the daemon's stop wait says the termination is unconfirmed:
-/// the stop went out and goes on, so its effects are partial; the process state is unknown, and
-/// list_agents shows how it ended once it did.
+/// the stop went out and goes on. The final screen remains available after it leaves the roster.
 #[test]
 fn a_stop_that_runs_out_of_time_says_its_termination_is_unconfirmed() {
     let home = TestHome::new("mcpstopwait");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-exit-reaches-agent")]);
-    home.start_named_fake("ada", &[]);
+    let ada = home.start_named_fake("ada", &[]);
     home.start_named_fake("helper", &[]);
-    let mut ada = McpTestClient::open(&home, "a1");
+    let mut ada = McpTestClient::open_configured(&home, &ada.id);
     let stopped = ada.call("stop_agent", json!({ "agent": "helper" }));
-    assert_eq!(stopped["reason"], "stop_unconfirmed", "{stopped}");
+    assert_eq!(stopped["status"], "failure", "{stopped}");
+    assert_eq!(stopped["reason"], "unavailable", "{stopped}");
+    let message = stopped["message"].as_str().expect("a stop diagnostic");
+    assert!(
+        message.contains("did not end within the 10-second stop wait"),
+        "{stopped}"
+    );
+    assert!(!message.contains("list_agents"), "{stopped}");
     home.release_gate("before-exit-reaches-agent");
-    let ended = || ada.call("list_agents", json!({}))["data"]["agents"][1]["state"] == "ended";
+    let ended = || {
+        home.agent_from_watch("helper")
+            .is_some_and(|agent| agent["process"] == "ended")
+    };
     assert!(wait_until(secs(10), ended), "the stop went on");
+    let after = ada.call("read_screen", json!({ "agent": "helper" }));
+    assert_eq!(after["status"], "success", "{after}");
+    assert_eq!(after["data"]["process"], "ended", "{after}");
 }
 
 /// A daemon that starts deletes the result files no one can use any more: a file of messages once
@@ -415,29 +410,30 @@ fn a_starting_daemon_deletes_result_files_no_one_can_use() {
 #[test]
 fn a_cli_started_by_its_rule_gets_facade_s_tools_while_their_server_is_connected() {
     let home = TestHome::new("mcpwired");
-    home.start_named_fake("ada", &[]);
-    home.start_named_fake("bob", &[]);
-    let row = |home: &TestHome| home.agent_from_list_json("ada").unwrap();
+    std::fs::write(home.path.join("facade.json"), r#"{"yolo":true}"#).unwrap();
+    let ada = home.start_named_fake("ada", &[]);
+    let bob = home.start_named_fake("bob", &[]);
+    let row = || home.agent_record(&ada.id).unwrap();
     assert!(
-        wait_until(secs(10), || row(&home)["tools_state"] == "available"),
+        wait_until(secs(10), || row()["tools_state"] == "available"),
         "{}",
-        row(&home)
+        row()
     );
     assert_eq!(
-        std::fs::read_dir(home.path.join("core/runs/a1"))
+        std::fs::read_dir(home.path.join("core/runs").join(&ada.id))
             .unwrap()
             .count(),
         1,
         "a folder for the run"
     );
-    let mut bob = McpTestClient::open(&home, "a2");
+    let mut bob = McpTestClient::open_configured(&home, &bob.id);
     home.run_facade_ok(&["type", "ada", "/fake mcp stop", "--enter"]);
     assert!(
-        wait_until(secs(10), || row(&home)["tools_state"] == "unavailable"),
+        wait_until(secs(10), || row()["tools_state"] == "unavailable"),
         "{}",
-        row(&home)
+        row()
     );
-    let row = row(&home);
+    let row = row();
     assert_eq!(
         (&row["tools_reason"], &row["state"], &row["state_detail"]),
         (
@@ -446,10 +442,14 @@ fn a_cli_started_by_its_rule_gets_facade_s_tools_while_their_server_is_connected
             &json!({ "reason": "tools_unavailable" })
         )
     );
-    assert_eq!(
-        bob.call("list_agents", json!({}))["data"]["agents"][0]["state"],
-        "error"
-    );
+    let roster = bob.call("list_agents", json!({}));
+    let listed = roster["data"]["agents"]
+        .as_array()
+        .expect("the MCP roster")
+        .iter()
+        .find(|row| row["id"] == ada.address)
+        .expect("Ada remains listed while her process runs");
+    assert_eq!(listed["state"], "error", "{roster}");
 }
 
 /// A prompt given to `facade start claude` stays its prompt: Claude Code's `--mcp-config` and
@@ -513,7 +513,7 @@ fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     );
     std::thread::sleep(secs(25));
     assert_eq!(
-        home.agent_from_list_json("ada").unwrap()["tools_state"],
+        home.agent_from_watch("ada").unwrap()["tools_state"],
         "connecting"
     );
     assert_eq!(
@@ -528,27 +528,31 @@ fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from #human · #m1\nsay hi"]
+        ["📨 Message from the command line · m1\nsay hi"]
     );
     // What was said is recorded once the daemon has seen the CLI take the prompt, a moment after
     // the CLI logs it.
     let said = || {
-        home.agent_from_list_json("ada")
-            .is_some_and(|row| row["last_input"]["text"] == "say hi")
+        home.agent_from_watch("ada")
+            .is_some_and(|row| row["said"]["text"] == "say hi")
     };
     assert!(
         wait_until(secs(10), said),
         "{:?}",
-        home.agent_from_list_json("ada")
+        home.agent_from_watch("ada")
     );
-    let row = home.agent_from_list_json("ada").unwrap();
+    let row = home.agent_from_watch("ada").unwrap();
     assert_eq!(
         (
             &row["tools_state"],
-            &row["last_input"]["text"],
-            &row["last_input"]["from"]
+            &row["said"]["text"],
+            &row["said"]["from"]
         ),
-        (&json!("available"), &json!("say hi"), &json!("human")),
+        (
+            &json!("available"),
+            &json!("say hi"),
+            &json!("command_line")
+        ),
         "{row}"
     );
     assert!(
@@ -583,7 +587,7 @@ fn the_tools_connect_once_the_cli_has_asked_for_them() {
     );
     std::thread::sleep(secs(2));
     assert_eq!(
-        home.agent_from_list_json("ada").unwrap()["tools_state"],
+        home.agent_from_watch("ada").unwrap()["tools_state"],
         "connecting"
     );
     assert_eq!(
@@ -599,24 +603,19 @@ fn the_tools_connect_once_the_cli_has_asked_for_them() {
     );
     assert_eq!(
         home.submitted_messages(),
-        ["📨 Message from #human · #m1\nsay hi"]
+        ["📨 Message from the command line · m1\nsay hi"]
     );
     assert_eq!(
-        home.agent_from_list_json("ada").unwrap()["tools_state"],
+        home.agent_from_watch("ada").unwrap()["tools_state"],
         "available"
     );
 }
 
-/// A prompt given by `facade start` in an agent's terminal comes from that agent, as a
-/// `facade send` there does, named as that agent is named when the prompt goes, though its terminal
-/// ran the start before the agent was listed.
+/// A Shell start from an agent's terminal still records the command line as the creator and
+/// delivers the first prompt from the command line.
 #[test]
-fn a_start_prompt_from_an_agent_s_terminal_comes_from_that_agent() {
+fn a_start_prompt_from_an_agent_s_terminal_comes_from_the_command_line() {
     let home = TestHome::new("startpromptfrom");
-    home.start_facade_with(&[(
-        "FACADE_TEST_GATES",
-        "after-run-start-response,mcp-before-tools-list",
-    )]);
     let mut wire = connect(&home);
     let (facade, path, log) = (
         test_binaries().facade.display().to_string(),
@@ -627,24 +626,7 @@ fn a_start_prompt_from_an_agent_s_terminal_comes_from_that_agent() {
         "FAKECLI_LOG='{log}' PATH='{path}' '{facade}' start --prompt 'from the boss' --name child \
          fake </dev/null; sleep 60"
     );
-    let env = json!({ "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path });
-    let args = json!({
-        "command": [SH.as_str(), "-c", script], "name": "boss", "cwd": home.project, "env": env,
-        "cols": 80, "rows": 24,
-    });
-    let starting = wire.send("call", json!({ "op": "agent.start", "args": args }));
-    // The boss's start is held before it is listed, while its terminal starts the child, whose
-    // Facade server is held as it answers the child's CLI's `tools/list`.
-    home.wait_for_gate("after-run-start-response");
-    home.wait_for_gate("mcp-before-tools-list");
-    home.release_gate("after-run-start-response");
-    let boss = wire
-        .wait_for_response(starting, secs(30))
-        .expect("the boss started")["result"]["agent"]["agent_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    home.release_gate("mcp-before-tools-list");
+    let boss = start_script(&mut wire, &home, "boss", &script);
     assert!(
         wait_until(secs(30), || !home.submitted_messages().is_empty()),
         "{}",
@@ -652,35 +634,39 @@ fn a_start_prompt_from_an_agent_s_terminal_comes_from_that_agent() {
     );
     assert_eq!(
         home.submitted_messages(),
-        [format!(
-            "📨 Message from boss (#{boss}) · #m1\nfrom the boss"
-        )]
+        ["📨 Message from the command line · m1\nfrom the boss"]
+    );
+    let child = wire.call("agent.inspect", json!({ "agent": "child" }));
+    assert_eq!(
+        child["result"]["started_by"],
+        json!({ "kind": "command_line" }),
+        "{child}"
     );
 }
 
 /// A prompt that could not be sent is refused before anything starts: one a message could not
-/// carry, as one of more than 540 lines, whatever CLI it goes to, and one for a program that is no
-/// CLI of facade.json, whose input Facade cannot read.
+/// carry, as one of more than 540 lines, and one for a custom program whose input Facade cannot
+/// read.
 #[test]
 fn a_start_prompt_that_could_not_be_sent_starts_nothing() {
     let home = TestHome::new("startpromptrefused");
     let path = home.path_with_test_programs();
     let lines = vec!["a line"; 600].join("\n");
-    let not_a_cli = format!(
-        "only a CLI of facade.json takes a prompt, as Facade reads its input to send it; {} is not \
-         one",
-        SH.as_str()
-    );
+    home.add_custom_cli("script", std::path::Path::new(SH.as_str()));
     for (prompt, cli, said) in [
         (
             "  ",
             "fake",
             "the prompt cannot go as a message: text is blank",
         ),
-        ("hi", SH.as_str(), not_a_cli.as_str()),
+        (
+            "hi",
+            "script",
+            "script is a custom program and cannot receive a prompt",
+        ),
         (
             lines.as_str(),
-            "agy",
+            "fake",
             "the prompt cannot go as a message: text has 600 lines; a message carries at most 540",
         ),
     ] {
@@ -700,12 +686,15 @@ fn a_start_prompt_that_could_not_be_sent_starts_nothing() {
     assert_eq!(home.agents(), Vec::<Value>::new(), "nothing started");
 }
 
-/// A Facade server that says hello before its agent is listed is refused, and tries again: once the
-/// start lists the agent, its tools are there.
+/// A managed relay can initialize while the keeper's response is held. Once the run is installed
+/// and tools/list completes, the same run has working tools.
 #[test]
-fn a_server_refused_before_its_agent_is_listed_tries_again() {
+fn a_server_started_before_its_agent_is_listed_serves_the_installed_run() {
     let home = TestHome::new("mcpearly");
-    home.start_facade_with(&[("FACADE_TEST_GATES", "after-run-start-response")]);
+    home.start_facade_with(&[(
+        "FACADE_TEST_GATES",
+        "after-run-start-response,mcp-before-tools-list",
+    )]);
     let mut start = home
         .command(&test_binaries().facade)
         .env("PATH", home.path_with_test_programs())
@@ -715,12 +704,15 @@ fn a_server_refused_before_its_agent_is_listed_tries_again() {
         .spawn()
         .unwrap();
     home.wait_for_gate("after-run-start-response");
-    // The test CLI runs its server at once: it says hello while the start holds the agent's
-    // listing.
-    home.wait_for_gate("refused-mcp-hello");
+    home.wait_for_gate("mcp-before-tools-list");
     home.release_gate("after-run-start-response");
     assert!(start.wait().unwrap().success());
-    let tools = || home.agent_from_list_json("ada").unwrap()["tools_state"].clone();
+    assert_eq!(
+        home.agent_from_watch("ada").unwrap()["tools_state"],
+        "connecting"
+    );
+    home.release_gate("mcp-before-tools-list");
+    let tools = || home.agent_from_watch("ada").unwrap()["tools_state"].clone();
     assert!(
         wait_until(secs(10), || tools() == "available"),
         "{}",
@@ -790,10 +782,17 @@ fn a_muse_code_run_gets_its_server_by_c_unless_its_project_names_one() {
     };
     let ada = start("ada");
     let server = given(&ada, "mcpServers.facade").unwrap_or_else(|| panic!("{ada:?}"));
-    assert_eq!(
-        (&server["mode"], &server["env"]["FACADE_AGENT"]),
-        (&json!("optional"), &json!("${FACADE_AGENT}")),
-        "{server}"
+    assert_eq!(server["mode"], "optional", "{server}");
+    assert_eq!(server["env"], json!({ "FACADE_HOME": "${FACADE_HOME}" }));
+    let args = server["args"]
+        .as_array()
+        .expect("the managed relay arguments");
+    assert_eq!(args.len(), 2);
+    assert_eq!(args[0], facade_rules::RUN_CREDENTIAL_ARG);
+    assert!(
+        args[1]
+            .as_str()
+            .is_some_and(|credential| !credential.is_empty())
     );
     let hook = given(&ada, "hooks").unwrap();
     // On Windows the command is encoded PowerShell, its script `& '…' 'hook' 'instructions' 'muse'`.
@@ -808,7 +807,7 @@ fn a_muse_code_run_gets_its_server_by_c_unless_its_project_names_one() {
         "{hook}"
     );
     assert_eq!(
-        home.agent_from_list_json("ada").unwrap()["tools_state"],
+        home.agent_from_watch("ada").unwrap()["tools_state"],
         "connecting"
     );
 
@@ -832,7 +831,7 @@ fn a_muse_code_run_gets_its_server_by_c_unless_its_project_names_one() {
         command.contains(" hook session-start ") || command.contains(" 'hook' 'session-start' "),
         "{hooks}"
     );
-    let row = home.agent_from_list_json("bob").unwrap();
+    let row = home.agent_from_watch("bob").unwrap();
     assert_eq!(
         (&row["tools_state"], &row["tools_reason"]),
         (&json!("unavailable"), &json!("not_given")),
@@ -868,7 +867,7 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_whose_runs_ended_meanwhile() {
     assert!(started.status.success(), "{}", stderr(&started));
     let plugin = home.project.join(".agents/plugins/facade");
     assert!(plugin.join("mcp_config.json").exists());
-    let pid = home.agent_from_list_json("ada").unwrap()["pid"]
+    let pid = home.agent_from_watch("ada").unwrap()["pid"]
         .as_i64()
         .unwrap() as i32;
     let old = home.kill_daemon();
@@ -953,7 +952,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
             .unwrap();
         assert!(started.status.success(), "{}", stderr(&started));
     };
-    let row = |name: &str| home.agent_from_list_json(name).unwrap();
+    let row = |name: &str| home.agent_from_watch(name).unwrap();
     let plugin = home.project.join(".agents/plugins/facade");
     start("ada");
     let mut files: Vec<String> = std::fs::read_dir(&plugin)
@@ -967,7 +966,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     );
     assert_eq!(
         std::fs::read_to_string(plugin.join("skills/facade/SKILL.md")).unwrap(),
-        facade_base::skill::text(),
+        facade_base::skill::text_v3(),
         "and the skill"
     );
     let servers: Value =
@@ -980,11 +979,38 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
         .join(program_name("facade-mcp"))
         .display()
         .to_string();
-    assert_eq!(
-        servers["mcpServers"]["facade"]["command"],
-        launcher.as_str(),
-        "the plugin names the launcher"
-    );
+    let entry = &servers["mcpServers"]["facade"];
+    #[cfg(windows)]
+    {
+        assert_eq!(entry["command"], "powershell.exe");
+        let line = format!(
+            "powershell.exe {}",
+            entry["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|arg| arg.as_str().unwrap())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let script = powershell_script(&line).expect("the plugin's launcher script");
+        assert!(script.contains(&launcher), "the plugin names the launcher");
+        assert!(
+            script.contains(facade_rules::RUN_CREDENTIAL_ARG),
+            "{script}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        assert_eq!(entry["command"], "/bin/sh");
+        assert_eq!(entry["args"][3], launcher);
+        assert!(
+            entry["args"][1]
+                .as_str()
+                .unwrap()
+                .contains(facade_rules::RUN_CREDENTIAL_ARG)
+        );
+    }
     let hooks: Value =
         serde_json::from_str(&std::fs::read_to_string(plugin.join("hooks.json")).unwrap()).unwrap();
     let hook = hooks["facade"]["PreInvocation"][0]["command"]
@@ -1021,11 +1047,9 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
             .any(|message| message == "/mcp"),
         "the start opened the panel"
     );
-    let input = || {
-        serde_json::from_str::<Value>(&home.run_facade_ok(&["inspect", "ada", "--json"]))
-            .unwrap()["input"]
-            .clone()
-    };
+    let mut wire = connect(&home);
+    let mut input =
+        || wire.call("agent.inspect", json!({ "agent": "ada" }))["result"]["input"].clone();
     assert!(
         wait_until(secs(15), || input()["state"] == "usable"),
         "the panel closed: {} {}",
@@ -1034,10 +1058,11 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     );
     home.run_facade_ok(&["send", "ada", "hello"]);
     // The hook says where the agent works, as facade-mcp's instructions say it to the other CLIs.
+    let address = row("ada")["address"].as_str().unwrap().to_owned();
     let instructions = |messages: Vec<String>| {
         messages.iter().any(|message| {
             message.starts_with("PreInvocation ")
-                && message.contains("You are Facade agent #a1, working in ")
+                && message.contains(&format!("You are managed agent {address}, working in "))
         })
     };
     assert!(
@@ -1130,10 +1155,10 @@ fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
     assert!(
         wait_until(
             secs(10),
-            || home.agent_from_list_json("ada").unwrap()["tools_state"] == "available"
+            || home.agent_from_watch("ada").unwrap()["tools_state"] == "available"
         ),
         "{}",
-        home.agent_from_list_json("ada").unwrap()
+        home.agent_from_watch("ada").unwrap()
     );
 }
 
@@ -1161,7 +1186,7 @@ fn a_start_prompt_to_antigravity_goes_once_its_tools_are_ready() {
         .output()
         .unwrap();
     assert!(started.status.success(), "{}", stderr(&started));
-    let prompt = "📨 Message from #human · #m1\nsay hi";
+    let prompt = "📨 Message from the command line · m1\nsay hi";
     assert!(
         wait_until(secs(30), || home
             .submitted_messages()
@@ -1279,8 +1304,7 @@ fn the_instructions_hook_gives_the_run_s_own_session_its_agent_s_instructions() 
 
 /// The instructions Muse Code's and Antigravity's runs take from their hook, which their start
 /// wrote, say where the run's agent works, as facade-mcp's instructions say it to the other CLIs:
-/// its folder, its window by name and ID, and its location (Core Review's S15), then who started it
-/// and what its run's YOLO reaches.
+/// its folder, machine, creator and the reach of its YOLO setting.
 #[test]
 fn the_instructions_hook_says_where_the_run_s_agent_works() {
     let home = TestHome::new("instructionsplace");
@@ -1312,11 +1336,13 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
             .output()
             .unwrap();
         assert!(started.status.success(), "{cli}: {}", stderr(&started));
-        let record = home.agent_from_list_json(cli).expect("the agent is listed");
+        let record = home.agent_from_watch(cli).expect("the agent is listed");
         let id = record["agent_id"].as_str().unwrap();
+        let address = record["address"].as_str().unwrap();
+        let (_, machine) = address.split_once('@').expect("a complete address");
         let place = format!(
-            "You are Facade agent #{id}, working in {} in window \"Terminal\" (window terminal).",
-            record["folder"].as_str().unwrap(),
+            "You are managed agent {address}, working in {} on machine {machine}.",
+            record["cwd"].as_str().unwrap(),
         );
         let run = [("FACADE_AGENT", id), ("MUSE_SESSION_ID", "s1")];
         let given: Value = serde_json::from_str(&run_hook(
@@ -1331,10 +1357,11 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
             .as_str()
             .or(given["injectSteps"][0]["ephemeralMessage"].as_str())
             .unwrap_or_default();
-        let started_by = format!("{place} Your creator is the person (#human). These tools");
+        let started_by = format!("{place} You were started from the command line.");
         assert!(
             told.starts_with(&started_by)
-                && told.contains(" Your run has YOLO on, so they reach every agent. "),
+                && told
+                    .contains(" YOLO is on. Your tools reach agents on all reachable machines. "),
             "{cli}: {told}"
         );
     }
@@ -1395,7 +1422,7 @@ fn a_daemon_that_replaces_another_finds_the_tools_there_again() {
     let mut polls = Vec::new();
     let tools = |home: &TestHome, polls: &mut Vec<Value>, phase: &str| {
         let begin = reconnect_time(started);
-        let record = home.agent_from_list_json("ada").unwrap();
+        let record = home.agent_record(&agent.id).unwrap();
         let state = record["tools_state"].clone();
         polls.push(json!({ "phase": phase, "begin": begin,
             "end": reconnect_time(started), "record": record }));
@@ -1571,18 +1598,13 @@ fn reconnect_diagnostics(
 #[test]
 fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     let home = TestHome::new("mcpenv");
-    home.start_named_fake("boss", &[("FAKECLI_NAME", "named by the boss")]);
-    let mut boss = McpTestClient::open_stripped(&home, "a1");
+    let agent = home.start_named_fake("boss", &[("FAKECLI_NAME", "named by the boss")]);
+    let mut boss = McpTestClient::open_stripped(&home, &agent.id);
     let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
-    let start =
-        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd });
-    // A CLI calls its tools once it runs.
-    assert!(wait_until(secs(10), || home
-        .agent_from_list_json("boss")
-        .is_some_and(|boss| boss["process"] == "running")));
+    let start = |name: &str| json!({ "name": name, "cli": "fake", "folder": cwd });
     let started = boss.call("start_agent", start("helper"));
     assert_eq!(started["status"], "success", "{started}");
     assert!(
@@ -1594,30 +1616,14 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     );
     home.run_facade_ok(&["stop", "boss"]);
     let ended = boss.call("start_agent", start("late"));
+    assert_eq!(ended["status"], "failure", "{ended}");
+    assert_eq!(ended["reason"], "unavailable", "{ended}");
     assert!(
-        ended["message"].as_str().unwrap().contains(
-            "#a1's environment is unavailable: its CLI is not running; nothing was started"
-        ),
+        ended["message"].as_str().unwrap().contains("run has ended"),
         "{ended}"
     );
-    #[cfg(target_os = "macos")]
-    {
-        // Either report is right: whether macOS lets the environment of its own programs, such as
-        // the shell and `sleep`, be read depends on the machine (SIP).
-        let mut wire = connect(&home);
-        let shell = start_script(&mut wire, &home, "shell", "sleep 60");
-        let hidden =
-            McpTestClient::open_stripped(&home, &shell).call("start_agent", start("hidden"));
-        let message = hidden["message"].as_str().unwrap();
-        assert!(
-            message.contains("the environment read from its CLI has no FACADE_AGENT")
-                || message.contains("was not found on the PATH of a terminal"),
-            "{hidden}"
-        );
-    }
     assert!(
-        home.agent_from_list_json("late").is_none()
-            && home.agent_from_list_json("hidden").is_none(),
+        home.agent_from_watch("late").is_none(),
         "nothing more started"
     );
 }
@@ -1656,7 +1662,7 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             "FACADE_HOME": home.path, "FAKECLI_LOOK": "agy",
         });
         let args = json!({
-            "command": ["agy"], "name": "half", "cwd": home.project, "env": env, "cols": 80,
+            "cli": "agy", "name": "half", "folder": home.project, "env": env, "cols": 80,
             "rows": 24,
         });
         wire.send("call", json!({ "op": "agent.start", "args": args }));
@@ -1689,12 +1695,15 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
 }
 
 /// The calls whose responses a golden file records, each with its response. What differs from one
-/// run to the next is written as a placeholder: the test's folder, the location IDs of its project
-/// and its Facade home, the build's version, and each time in Facade's form.
+/// run to the next is written as a placeholder: the test's folders, machine IDs, build version,
+/// and timestamps.
 struct Golden {
     cases: serde_json::Map<String, Value>,
     /// Texts that differ from run to run, longest first, each with what stands for it.
     placeholders: Vec<(String, &'static str)>,
+    /// Whole values that differ from run to run, such as the name the Orchestrator picks for a
+    /// guest from its pool, each with what stands for it.
+    values: Vec<(String, &'static str)>,
 }
 
 impl Golden {
@@ -1707,22 +1716,13 @@ impl Golden {
         for folder in [home.folder().to_path_buf(), canonical(home.folder())] {
             placeholders.push((folder.to_string_lossy().into_owned(), "<test>"));
         }
-        for (folder, placeholder) in [
-            (&home.project, "<project location>"),
-            (&home.path, "<home location>"),
-        ] {
-            for path in [folder.clone(), canonical(folder)] {
-                let location = facade_base::daemon::location_id(&path.to_string_lossy());
-                placeholders.push((location, placeholder));
-            }
-        }
         placeholders.push((env!("CARGO_PKG_VERSION").to_string(), "<version>"));
         let hello = home.hello_result().expect("the golden test's daemon");
         let machine = hello["machine_id"].as_str().expect("the machine ID");
-        let selector = facade_base::address::exact_machine_selector(machine);
+        let selector = machine.replace('-', "");
         home.run_facade_ok(&["machine", "rename", &selector, "golden-host"]);
         placeholders.push((machine.to_string(), "<machine ID>"));
-        placeholders.push((selector, "id:<compact machine ID>"));
+        placeholders.push((selector, "<compact machine ID>"));
         placeholders.push((
             facade_base::address::short_machine_id(machine),
             "<short machine ID>",
@@ -1731,7 +1731,14 @@ impl Golden {
         Golden {
             cases: serde_json::Map::new(),
             placeholders,
+            values: Vec::new(),
         }
+    }
+
+    /// Records that a value equal to `varies`, such as a guest's picked name, is written as
+    /// `placeholder`.
+    fn value_varies(&mut self, varies: &str, placeholder: &'static str) {
+        self.values.push((varies.to_string(), placeholder));
     }
 
     /// Records `response` to `call` as case `case`.
@@ -1774,7 +1781,8 @@ impl Golden {
     }
 
     /// `value` with each placeholder in place of what it stands for, and each time in Facade's form
-    /// as `<time>`. A time in any other form stays as it is, so that a change to the form shows.
+    /// as `<time>`, also inside a text such as the model's copy of a result. A time in any other
+    /// form stays as it is, so that a change to the form shows.
     fn with_placeholders(&self, value: &Value) -> Value {
         match value {
             Value::Object(members) => Value::Object(
@@ -1790,14 +1798,17 @@ impl Golden {
                     .collect(),
             ),
             Value::String(text) if is_facade_time(text) => json!("<time>"),
-            Value::String(text) => Value::String(slashed_after_placeholders(
-                &self
-                    .placeholders
-                    .iter()
-                    .fold(text.clone(), |text, (varies, placeholder)| {
-                        text.replace(varies.as_str(), placeholder)
-                    }),
-            )),
+            Value::String(text) => match self.values.iter().find(|(varies, _)| varies == text) {
+                Some((_, placeholder)) => json!(placeholder),
+                None => Value::String(slashed_after_placeholders(&with_facade_times(
+                    &self
+                        .placeholders
+                        .iter()
+                        .fold(text.clone(), |text, (varies, placeholder)| {
+                            text.replace(varies.as_str(), placeholder)
+                        }),
+                ))),
+            },
             other => other.clone(),
         }
     }
@@ -1848,19 +1859,29 @@ impl Golden {
 #[test]
 fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
     let home = TestHome::new("relaycancel");
-    home.start_named_fake("worker", &[]);
-    home.start_named_fake("boss", &[]);
+    let worker = home.start_named_fake("worker", &[]);
+    let boss = home.start_named_fake("boss", &[]);
     type_draft(&home, "worker", "my draft");
-    let (inbox, watch) = follow_inbox(&home, "a1");
-    let mut boss = McpTestClient::relay(&home, &[], &[("FACADE_AGENT", "a2")]);
+    let mut boss = McpTestClient::relay_configured(&home, &boss.id);
     let held = boss.send(
         "tools/call",
-        json!({ "name": "send_message", "arguments": { "to": "#a1", "text": "held" } }),
+        json!({ "name": "send_message", "arguments": { "to": worker.address, "text": "held" } }),
     );
+    let store = rusqlite::Connection::open_with_flags(
+        home.path.join("core/facade.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    store.busy_timeout(secs(5)).unwrap();
     assert!(
-        wait_for_pending(&inbox, watch, 1),
-        "{:?}",
-        inbox.changes(watch)
+        wait_until(secs(10), || store
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE status = 'pending' AND text = 'held')",
+                [],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap()),
+        "the send is pending behind the draft"
     );
     let cancel = json!({
         "jsonrpc": "2.0", "method": "notifications/cancelled",
@@ -1882,6 +1903,11 @@ fn a_send_cancelled_over_a_relay_connection_is_withdrawn_and_answered() {
         "{}",
         home.daemon_log()
     );
+    let inbox = McpTestClient::open_configured(&home, &worker.id)
+        .call("read_messages", json!({ "last": 10 }));
+    assert_eq!(inbox["status"], "success", "{inbox}");
+    assert_eq!(inbox["data"]["messages"], json!([]), "{inbox}");
+    assert!(home.screen(&worker.address).contains("❯ my draft"));
 }
 
 /// The way a golden test reaches the MCP server: through the `facade-mcp` program, or straight to
@@ -1897,8 +1923,8 @@ impl Through {
     /// The MCP server of `agent`.
     fn open(self, home: &TestHome, agent: &str) -> McpTestClient {
         match self {
-            Through::Program => McpTestClient::open(home, agent),
-            Through::Relay => McpTestClient::relay(home, &[], &[("FACADE_AGENT", agent)]),
+            Through::Program => McpTestClient::open_configured(home, agent),
+            Through::Relay => McpTestClient::relay_configured(home, agent),
         }
     }
 
@@ -1917,10 +1943,10 @@ fn wait_for_tools(home: &TestHome, named: &[&str]) {
     for name in named {
         assert!(
             wait_until(secs(30), || home
-                .agent_from_list_json(name)
+                .agent_from_watch(name)
                 .is_some_and(|row| row["tools_state"] == "available")),
             "{name}'s tools: {:?}",
-            home.agent_from_list_json(name)
+            home.agent_from_watch(name)
         );
     }
 }
@@ -1944,6 +1970,26 @@ fn slashed_after_placeholders(text: &str) -> String {
             _ => {}
         }
         out.push(c);
+    }
+    out
+}
+
+/// `text` with each time in Facade's form inside it written as `<time>`.
+fn with_facade_times(text: &str) -> String {
+    const LENGTH: usize = "dddd-dd-ddTdd:dd:dd.dddZ".len();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(next) = rest.chars().next() {
+        if rest.is_char_boundary(LENGTH.min(rest.len()))
+            && rest.len() >= LENGTH
+            && is_facade_time(&rest[..LENGTH])
+        {
+            out.push_str("<time>");
+            rest = &rest[LENGTH..];
+        } else {
+            out.push(next);
+            rest = &rest[next.len_utf8()..];
+        }
     }
     out
 }
@@ -1980,12 +2026,14 @@ fn each_tool_responds_through_a_relay_connection_as_its_golden_file_records() {
 
 fn each_tool_responds_as_recorded(through: Through) {
     let home = TestHome::new("mcpgolden");
-    home.start_named_fake("ada", &[]);
-    home.start_named_fake("bob", &[]);
-    wait_for_tools(&home, &["ada", "bob"]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
-    let mut ada = through.open(&home, "a1");
+    home.start_facade_with(&[]);
     let mut golden = Golden::new(&home);
+    let ada = home.start_named_fake("ada", &[]);
+    let bob = home.start_named_fake("bob", &[]);
+    wait_for_tools(&home, &["ada", "bob"]);
+    let cwd = home.agent_from_watch("ada").unwrap()["cwd"].clone();
+    let mut ada = through.open(&home, &ada.id);
+    let mut bob = through.open(&home, &bob.id);
     golden.record(
         "initialize",
         json!({ "method": "initialize" }),
@@ -1999,7 +2047,7 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "start_agent",
         "start_agent",
-        json!({ "name": "helper", "cli": "fake", "window": "terminal", "folder": cwd }),
+        json!({ "name": "helper", "cli": "fake", "folder": cwd }),
     );
     golden.call(
         &mut ada,
@@ -2009,23 +2057,32 @@ fn each_tool_responds_as_recorded(through: Through) {
     );
     golden.call(
         &mut ada,
-        "start_agent with a string worktree",
+        "start_agent with the old worktree object",
         "start_agent",
-        json!({ "name": "other", "cli": "fake", "worktree": "review" }),
+        json!({ "name": "other", "cli": "fake", "worktree": { "branch": "review" } }),
+    );
+    golden.call(
+        &mut ada,
+        "start_agent with the old window argument",
+        "start_agent",
+        json!({ "name": "other", "cli": "fake", "window": "terminal" }),
     );
     golden.call(
         &mut ada,
         "start_agent of a CLI that is not configured",
         "start_agent",
-        json!({ "name": "other", "cli": "nope", "window": "terminal", "folder": cwd }),
+        json!({ "name": "other", "cli": "nope", "folder": cwd }),
     );
 
-    golden.call(
+    let sent = golden.call(
         &mut ada,
         "send_message",
         "send_message",
-        json!({ "to": "#a2", "text": "hello bob" }),
+        json!({ "to": "a2@golden-host", "text": "hello bob" }),
     );
+    assert_eq!(sent["status"], "success", "{sent}");
+    assert_eq!(sent["data"]["id"], "m1@golden-host", "{sent}");
+    assert!(sent["data"].get("next").is_none(), "{sent}");
     golden.call(
         &mut ada,
         "send_message without a recipient",
@@ -2036,11 +2093,11 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "send_message to an agent that does not exist",
         "send_message",
-        json!({ "to": "#a9", "text": "hello" }),
+        json!({ "to": "a99@golden-host", "text": "hello" }),
     );
     golden.call(
         &mut ada,
-        "send_message to the person from the terminal window",
+        "send_message to the retired human recipient",
         "send_message",
         json!({ "to": "#human", "text": "bob has the task" }),
     );
@@ -2050,30 +2107,35 @@ fn each_tool_responds_as_recorded(through: Through) {
         "read_messages",
         json!({}),
     );
-    // Bob's reply waits behind Ada's draft until Ada reads it; the CLI gets bob's response whole.
+    // Ada waits for Bob's reply while a draft holds terminal delivery.
     type_draft(&home, "ada", "my draft");
-    let (inbox, watch) = follow_inbox(&home, "a1");
-    let mut bob = through.open(&home, "a2");
+    let waiting = json!({
+        "name": "read_messages",
+        "arguments": { "wait": true, "reply_to": sent["data"]["id"] },
+    });
+    let awaiting = ada.send("tools/call", waiting.clone());
     let reply = json!({
-        "name": "send_message", "arguments": { "to": "@ada", "text": "hi ada", "reply_to": "#m1" },
+        "name": "send_message",
+        "arguments": { "to": "ada", "text": "hi ada", "reply_to": "m1" },
     });
     let replying = bob.send("tools/call", reply.clone());
-    assert!(
-        wait_for_pending(&inbox, watch, 1),
-        "{:?}",
-        inbox.changes(watch)
+    let read = ada
+        .answer(awaiting, secs(40))
+        .expect("Ada's read is answered");
+    assert_eq!(
+        read["result"]["structuredContent"]["data"]["messages"][0]["text"], "hi ada",
+        "{read}"
     );
-    golden.call(
-        &mut ada,
-        "read_messages of a message held back by a draft",
-        "read_messages",
-        json!({}),
+    golden.record(
+        "read_messages waiting for a reply",
+        json!({ "method": "tools/call", "params": waiting }),
+        &read,
     );
     let replied = bob
         .answer(replying, secs(40))
         .expect("bob's send is answered");
     golden.record(
-        "tools/call",
+        "send_message replying to a local inbox number",
         json!({ "method": "tools/call", "params": reply }),
         &replied,
     );
@@ -2082,7 +2144,7 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "read_messages after a message",
         "read_messages",
-        json!({ "after": "#m1" }),
+        json!({ "after": "m2" }),
     );
     golden.call(
         &mut ada,
@@ -2100,38 +2162,38 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "type_text",
         "type_text",
-        json!({ "agent": "@helper", "text": "hello there", "enter": true }),
+        json!({ "agent": "a3@golden-host", "text": "hello there", "enter": true }),
     );
     golden.call(
         &mut ada,
         "type_text to an agent that does not exist",
         "type_text",
-        json!({ "agent": "#a9", "text": "hello" }),
+        json!({ "agent": "a99@golden-host", "text": "hello" }),
     );
     golden.call(
         &mut ada,
         "type_text with empty text and enter",
         "type_text",
-        json!({ "agent": "@helper", "text": "", "enter": true }),
+        json!({ "agent": "helper", "text": "", "enter": true }),
     );
     golden.call(
         &mut ada,
         "type_text with a control character",
         "type_text",
-        json!({ "agent": "@helper", "text": "before\u{1b}after" }),
+        json!({ "agent": "helper", "text": "before\u{1b}after" }),
     );
     golden.call(
         &mut ada,
         "press_keys",
         "press_keys",
-        json!({ "agent": "@helper", "keys": ["h", "i", "Enter"] }),
+        json!({ "agent": "a3@golden-host", "keys": ["h", "i", "Enter"] }),
     );
     golden.call(
         &mut ada,
-        "press_keys with names from the v2 daemon",
+        "press_keys without keys",
         "press_keys",
         json!({
-            "agent": "@helper",
+            "agent": "helper",
             "keys": ["Escape", "Return", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"],
         }),
     );
@@ -2139,7 +2201,7 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "press_keys of a key it does not know",
         "press_keys",
-        json!({ "agent": "@helper", "keys": ["Hyper+Q"] }),
+        json!({ "agent": "helper", "keys": ["Hyper+Q"] }),
     );
     // The test CLI logs a submitted line before it draws it: the screen is read once it shows the
     // last one.
@@ -2152,66 +2214,88 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "read_screen",
         "read_screen",
-        json!({ "agent": "@helper" }),
+        json!({ "agent": "a3@golden-host" }),
     );
     golden.call(
         &mut ada,
         "press_keys of Esc",
         "press_keys",
-        json!({ "agent": "@helper", "keys": ["Esc"] }),
+        json!({ "agent": "helper", "keys": ["Esc"] }),
     );
     golden.call(
         &mut ada,
         "read_screen of lines that are not a number",
         "read_screen",
-        json!({ "agent": "@helper", "lines": "12" }),
+        json!({ "agent": "helper", "lines": "12" }),
     );
     golden.call(
         &mut ada,
         "read_screen with the old last argument",
         "read_screen",
-        json!({ "agent": "@helper", "last": 4 }),
+        json!({ "agent": "helper", "last": 4 }),
     );
     golden.call(
         &mut ada,
         "read_screen with both last and lines",
         "read_screen",
-        json!({ "agent": "@helper", "last": 4, "lines": 4 }),
+        json!({ "agent": "helper", "last": 4, "lines": 4 }),
     );
     let retried = golden.call(
         &mut ada,
         "read_screen retried with lines",
         "read_screen",
-        json!({ "agent": "@helper", "lines": 4 }),
+        json!({ "agent": "helper", "lines": 4 }),
     );
     assert_eq!(retried["status"], "success", "{retried}");
-    assert_eq!(retried["data"]["ended"], false);
+    assert_eq!(retried["data"]["process"], "running");
     assert_eq!(retried["data"]["text"].as_str().unwrap().lines().count(), 4);
     golden.call(
         &mut ada,
         "read_screen of an agent that does not exist",
         "read_screen",
-        json!({ "agent": "#a9" }),
+        json!({ "agent": "a99@golden-host" }),
     );
     golden.call(
         &mut ada,
         "stop_agent",
         "stop_agent",
-        json!({ "agent": "@helper" }),
+        json!({ "agent": "a3@golden-host" }),
     );
     golden.call(
         &mut ada,
         "stop_agent of an agent that does not exist",
         "stop_agent",
-        json!({ "agent": "#a9" }),
+        json!({ "agent": "a99@golden-host" }),
     );
+    for (tool, arguments) in [
+        ("stop_agent", json!({ "agent": "a3@golden-host" })),
+        (
+            "type_text",
+            json!({ "agent": "a3@golden-host", "text": "late" }),
+        ),
+        (
+            "press_keys",
+            json!({ "agent": "a3@golden-host", "keys": ["Enter"] }),
+        ),
+        (
+            "read_screen",
+            json!({ "agent": "a3@golden-host", "lines": 4 }),
+        ),
+    ] {
+        golden.call(
+            &mut ada,
+            &format!("{tool} of a stopped agent"),
+            tool,
+            arguments,
+        );
+    }
 
     golden.call(
         &mut ada,
         "start_agent with a prompt",
         "start_agent",
         json!({
-            "name": "twin", "cli": "fake", "window": "terminal", "folder": cwd,
+            "name": "twin", "cli": "fake", "folder": cwd,
             "prompt": "Read the README and summarize it.",
         }),
     );
@@ -2237,12 +2321,8 @@ fn each_tool_responds_as_recorded(through: Through) {
     golden.check("mcp-responses.json");
 }
 
-/// The server in each CLI's own settings serves that CLI's sessions, which join as guests, each
-/// session named as its CLI names it: in the server's environment as the server starts, or in each
-/// call's `_meta`. Each server responds as `core/tests/golden/mcp-guest-responses.json` records,
-/// with a run's tools: `initialize` and a `list_agents` for each CLI, and a message to a guest,
-/// which waits for its next turn. A Muse Code run's own entry serves the run; an Antigravity run's
-/// steps aside for the run's plugin.
+/// Each built-in CLI's user entry can open a Guest connection with the same eight tools. The
+/// fixture records discovery, the first tool call, and a complete conversation with a Guest.
 #[test]
 fn each_cli_s_guest_server_responds_as_its_golden_file_records() {
     each_cli_s_guest_server_responds_as_recorded(Through::Program);
@@ -2256,31 +2336,39 @@ fn each_cli_s_guest_server_responds_through_a_relay_connection_as_its_golden_fil
 }
 
 fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
-    let home = TestHome::new("mcpgoldguest");
-    // A guest takes a name at random from the suggested names, where the settings file names none;
-    // from a list of none it takes its ID, the same each time.
-    std::fs::write(home.path.join("facade.json"), "{ \"names\": [] }\n").unwrap();
-    home.start_named_fake("host", &[]);
-    wait_for_tools(&home, &["host"]);
-    let mut host = through.open(&home, "a1");
-    let tools = host.request("tools/list", json!({}))["result"].clone();
-    let mut golden = Golden::new(&home);
+    let mut recorded = Golden {
+        cases: serde_json::Map::new(),
+        placeholders: Vec::new(),
+        values: Vec::new(),
+    };
     // In each call's `_meta`, under the CLI's key, or else in the server's environment.
-    for (cli, meta_key) in [
-        ("claude", None),
-        ("codex", Some("sessionId")),
-        ("agy", Some("antigravity.google/root_conversation_id")),
-        ("muse", None),
-        ("opencode", Some("ai.opencode/sessionID")),
-        ("pi", None),
+    for (cli, variable, meta_key) in [
+        ("claude", Some("CLAUDE_CODE_SESSION_ID"), None),
+        ("codex", None, Some("sessionId")),
+        ("agy", None, Some("antigravity.google/root_conversation_id")),
+        ("muse", Some("MUSE_SESSION_ID"), None),
+        ("opencode", None, Some("ai.opencode/sessionID")),
+        ("pi", None, None),
     ] {
+        // Each direct relay case uses a fresh machine so the test process's PID does not
+        // reconnect a Guest from the preceding CLI's case.
+        let home = TestHome::new(&format!("mcpgold-{cli}"));
+        std::fs::write(home.path.join("facade.json"), "{ \"names\": [] }\n").unwrap();
+        let host = home.start_named_fake("host", &[]);
+        wait_for_tools(&home, &["host"]);
+        // The host's server is its own relay program. A direct connection comes from this test's
+        // process, which the daemon knows as the guest once the guest joins: each relay is a
+        // process of its own.
+        let mut host = Through::Program.open(&home, &host.id);
+        let tools = host.request("tools/list", json!({}))["result"].clone();
+        let mut golden = Golden::new(&home);
+
         let session = format!("{cli}-golden");
-        let variable = facade_rules::session_variable(cli).unwrap();
-        let named = meta_key.is_none().then_some((variable, session.as_str()));
+        let named = variable.map(|key| (key, session.as_str()));
         let mut server = through.open_guest(&home, cli, named.as_slice());
         let mut started = json!({ "method": "initialize", "server": ["--guest", cli] });
-        if named.is_some() {
-            started["environment"] = json!({ variable: session });
+        if let Some((key, value)) = named {
+            started["environment"] = json!({ key: value });
         }
         golden.record(
             &format!("initialize by {cli}'s guest server"),
@@ -2292,62 +2380,80 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
             tools,
             "{cli}'s guests get a run's tools"
         );
-        golden.call_in(
-            &mut server,
-            &format!("list_agents by {cli}'s guest"),
-            "list_agents",
-            json!({}),
-            meta_key.map_or(Value::Null, |key| json!({ key: session })),
+        let meta = meta_key.map_or(Value::Null, |key| json!({ key: session }));
+        assert_eq!(home.run_facade_ok(&["list", "-q"]).trim(), "a1@golden-host");
+        let listed = server.call_in("list_agents", json!({}), meta.clone());
+        assert_eq!(listed["status"], "success", "{listed}");
+        let rows = listed["data"]["agents"]
+            .as_array()
+            .expect("the active roster");
+        let guests: Vec<&Value> = rows.iter().filter(|row| row["type"] == "guest").collect();
+        assert_eq!(
+            guests.len(),
+            1,
+            "each user entry joins once when it calls a tool"
         );
-    }
-    golden.call(
-        &mut host,
-        "send_message to a guest",
-        "send_message",
-        json!({ "to": "#a3", "text": "hello guest" }),
-    );
-
-    let programs = home.project.parent().unwrap().join("programs");
-    stand_in(&programs, "muse", &programs.join("muse-arguments"));
-    install_program(&programs, "agy", &test_binaries().fakecli);
-    let path = format!(
-        "{}{PATH_SEPARATOR}{}",
-        programs.display(),
-        home.path_with_test_programs()
-    );
-    for (cli, name) in [("muse", "muser"), ("agy", "voyager")] {
-        let started = home
-            .facade_in_an_empty_home()
-            .env("PATH", &path)
-            .env("FAKECLI_LOOK", cli)
-            .args(["start", "--name", name, cli])
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert!(started.status.success(), "{}", stderr(&started));
-        let run = started_id(&stdout(&started));
-        let mut entry = through.open_guest(&home, cli, &[("FACADE_AGENT", &run)]);
-        let server = json!({ "method": "initialize", "server": ["--guest", cli], "environment": { "FACADE_AGENT": run } });
-        golden.record(
-            &format!("initialize by the {cli} run's own entry"),
-            server,
-            &entry.initialized(),
-        );
-        let listed = entry.request("tools/list", json!({}));
-        if cli == "muse" {
-            assert_eq!(
-                listed["result"], tools,
-                "a Muse Code run's entry serves the run"
-            );
-        } else {
-            golden.record(
-                "tools/list by the agy run's own entry",
-                json!({ "method": "tools/list", "server": ["--guest", cli] }),
-                &listed,
-            );
+        // The Orchestrator names a guest from its pool of names.
+        let name = guests[0]["name"].as_str().expect("the guest's name");
+        golden.value_varies(name, "<guest name>");
+        let mut call = json!({ "tool": "list_agents", "arguments": {} });
+        if !meta.is_null() {
+            call["_meta"] = meta.clone();
         }
+        golden.record(&format!("list_agents by {cli}'s guest"), call, &listed);
+        if cli == "codex" {
+            record_guest_exchange(&mut golden, &mut host, &mut server, &meta);
+        }
+        recorded.cases.append(&mut golden.cases);
     }
-    golden.check("mcp-guest-responses.json");
+    recorded.check("mcp-guest-responses.json");
+}
+
+fn record_guest_exchange(
+    golden: &mut Golden,
+    host: &mut McpTestClient,
+    guest: &mut McpTestClient,
+    meta: &Value,
+) {
+    let message = json!({ "to": "a2@golden-host", "text": "hello guest" });
+    let sent = host.send(
+        "tools/call",
+        json!({ "name": "send_message", "arguments": message }),
+    );
+    let read = golden.call_in(
+        guest,
+        "read_messages waiting as a guest",
+        "read_messages",
+        json!({ "wait": true }),
+        meta.clone(),
+    );
+    assert_eq!(read["data"]["messages"][0]["text"], "hello guest", "{read}");
+    let receipt = host.tool_answer(sent);
+    assert_eq!(
+        receipt["data"]["delivery"], "read_by_recipient",
+        "{receipt}"
+    );
+    golden.record(
+        "send_message to a guest",
+        json!({ "tool": "send_message", "arguments": message }),
+        &receipt,
+    );
+    let reply = golden.call_in(
+        guest,
+        "send_message from a guest",
+        "send_message",
+        json!({
+            "to": "a1@golden-host",
+            "text": "hello host",
+            "reply_to": read["data"]["messages"][0]["id"],
+        }),
+        meta.clone(),
+    );
+    assert_eq!(reply["status"], "success", "{reply}");
+    assert_eq!(
+        reply["data"]["next"],
+        json!({ "tool": "read_messages", "arguments": { "wait": true, "reply_to": reply["data"]["id"] } }),
+    );
 }
 
 /// A line of 1 MiB goes through the relay each way, and the connection goes on: a request whose

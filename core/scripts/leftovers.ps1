@@ -116,6 +116,7 @@ $homeVariables = 'FACADE_HOME=', 'HOME=', 'USERPROFILE='
 $pids = New-Object System.Collections.Generic.List[int]
 foreach ($process in [Diagnostics.Process]::GetProcesses()) {
 	if ($process.Id -eq $PID -or $process.Id -le 4) { continue }
+	if ($Since -and [FacadeLeftovers]::Created($process.Id) -lt $Since) { continue }
 	$info = [FacadeLeftovers]::Read($process.Id)
 	if (-not $info -or $info.Created -lt $Since) { continue }
 	$ours = Within $info.Folder $tmpForms

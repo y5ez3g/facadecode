@@ -170,13 +170,17 @@ fn the_services_exit_when_idle_and_the_records_survive() {
         !socket_exists(&home.daemon_socket()) && !socket_exists(&home.keeper_socket()),
         "the sockets are removed"
     );
-    assert_eq!(
-        home.list_state("brief").as_deref(),
-        Some("exited: code 4"),
-        "{:?}",
-        home.list_table()
+    let inspected = home.run_facade_ok(&["inspect", &agent]);
+    assert!(
+        inspected
+            .lines()
+            .any(|line| line.starts_with("State:") && line[6..].trim() == "exited: code 4"),
+        "{inspected}"
     );
-    assert_eq!(home.hello_result().unwrap()["agents"], 1);
+    assert_eq!(home.hello_result().unwrap()["agents"], 0);
+    let records = home.agents();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["agent_id"], agent, "{records:?}");
     assert!(home.screen(&agent).contains("LAST-WORDS"));
     assert_eq!(
         start_script(&mut connect(&home), &home, "next", "sleep 60"),
@@ -233,7 +237,7 @@ fn detach_reports_a_living_worker_still_recovering_as_starting() {
     let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success()
-            && stderr(&output).contains("facade: Facade is still starting; see "),
+            && stderr(&output).contains("facade: Orchestrator is still starting; see "),
         "{}",
         stderr(&output)
     );
@@ -256,7 +260,7 @@ fn detach_fails_when_no_daemon_started() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("the Facade daemon did not start within 10 seconds; see "),
+        stderr(&output).contains("the Orchestrator daemon did not start within 10 seconds; see "),
         "{}",
         stderr(&output)
     );

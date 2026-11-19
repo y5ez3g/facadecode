@@ -1,15 +1,19 @@
-Show Facade's status
+Show Orchestrator status
 
 Usage: facade status [OPTIONS]
 
-Check whether Facade responds and see its Facade home, where it keeps settings and logs. If it
-responds, you also see this command's version, Facade's services and the agent count. This command
-never starts Facade.
+Show the Orchestrator's version, Facade home, and settings file. When running, it also shows the
+daemon and keeper process IDs, active agent count and connected machines. Local status checks for a
+running service. '--machine' queries another machine and wakes it if needed.
 
 Options:
-      --json  Print the status as JSON
-  -h, --help  Print help
+      --json               Print the status as JSON
+      --machine <MACHINE>  Machine name or ID from 'facade machine list'
+  -h, --help               Print help
 
 Examples:
-  # Check whether Facade responds
+  # Check the local Orchestrator
   facade status
+
+  # Check the Orchestrator on gpu
+  facade status --machine gpu

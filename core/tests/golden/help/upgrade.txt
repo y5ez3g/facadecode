@@ -1,0 +1,13 @@
+Upgrade Facade Code
+
+Usage: facade upgrade
+
+Install the latest stable version of Facade Code. A compatible running Orchestrator hands over to
+the new version while its agents keep running.
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Install the latest stable version
+  facade upgrade

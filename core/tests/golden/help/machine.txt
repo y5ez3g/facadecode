@@ -1,12 +1,12 @@
-Connect to Facade on other machines
+Connect to other machines over SSH
 
 Usage: facade machine <COMMAND>
 
-Work with agents on other machines. Facade connects over SSH and opens no port. Once two machines
-are connected, you can list, start and message agents on both from either one.
+Work with agents on other machines. Orchestrators connect over SSH and open no port. Once two
+machines are connected, you can list, start and message agents on both from either one.
 
 Commands:
-  add      Connect to a machine and keep the connection
+  add      Connect to a machine and save its SSH arguments
   connect  Connect to a machine while this command runs
   list     List machines
   remove   Remove a saved connection

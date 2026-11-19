@@ -5,6 +5,24 @@
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
+/// Starts program `cli` of the test's settings with `args` as agent `name` through the protocol,
+/// with `path` as its `PATH`.
+fn start_program(
+    wire: &mut DaemonTestClient,
+    home: &TestHome,
+    cli: &str,
+    args: Value,
+    name: &str,
+    path: &str,
+) {
+    let args = json!({
+        "cli": cli, "args": args, "name": name, "folder": home.project,
+        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+    });
+    let started = wire.call("agent.start", args);
+    assert!(started["result"].is_object(), "{name}: {started}");
+}
+
 /// Starts a fake CLI that reports its status, with more environment variables.
 fn reporting(home: &TestHome, name: &str, more: &[(&str, &str)]) -> TestAgent {
     let mut env = vec![("FAKECLI_STATUS", "1")];
@@ -12,11 +30,11 @@ fn reporting(home: &TestHome, name: &str, more: &[(&str, &str)]) -> TestAgent {
     home.start_fake_with(name, &env)
 }
 
-/// The agent's record in `facade list --json` once its state is `state`.
+/// The agent's record, from the agents topic, once its state is `state`.
 fn reaches(home: &TestHome, name: &str, state: &str) -> Value {
     let mut agent = Value::Null;
     let reached = wait_until(secs(20), || {
-        agent = home.agent_from_list_json(name).unwrap_or_default();
+        agent = home.agent_from_watch(name).unwrap_or_default();
         agent["state"] == state
     });
     assert!(reached, "{name} did not become {state}: {agent}");
@@ -48,7 +66,7 @@ fn an_agent_is_starting_until_its_cli_shows_what_it_does() {
     let home = TestHome::new("starting");
     // Ready only after the test ends: the CLI shows nothing until it takes a message.
     reporting(&home, "w1", &[("FAKECLI_STATUS_DELAY_MS", "600000")]);
-    let agent = home.agent_from_list_json("w1").unwrap();
+    let agent = home.agent_from_watch("w1").unwrap();
     assert_eq!(
         (&agent["state"], agent.get("state_detail")),
         (&json!("starting"), None)
@@ -58,7 +76,7 @@ fn an_agent_is_starting_until_its_cli_shows_what_it_does() {
         "the daemon answers the CLI that asks whether it takes reports"
     );
     assert_eq!(
-        home.agent_from_list_json("w1").unwrap()["state"],
+        home.agent_from_watch("w1").unwrap()["state"],
         "starting",
         "a CLI that asked is still starting"
     );
@@ -72,33 +90,25 @@ fn a_turn_is_working_then_just_done_until_a_terminal_shows_the_agent() {
     reporting(&home, "w1", &[("FAKECLI_TURN_MS", "3000")]);
     reaches(&home, "w1", "idle");
     assert!(
-        home.agent_from_list_json("w1")
-            .unwrap()
-            .get("last_input")
-            .is_none(),
+        home.agent_from_watch("w1").unwrap().get("said").is_none(),
         "nothing was said yet"
     );
     submit(&home, "w1", "fix the\nbuild");
     let working = reaches(&home, "w1", "working");
     assert_eq!(
-        working["last_input"]["text"], "fix the build",
-        "last input is one line"
+        (&working["said"]["text"], &working["said"]["from"]),
+        (&json!("fix the build"), &json!("command_line")),
+        "what was said is one line, from the command line"
     );
     home.run_facade_ok(&["type", "w1", "half a thought"]);
     reaches(&home, "w1", "just_done");
     assert_eq!(
-        home.agent_from_list_json("w1").unwrap()["last_input"]["text"],
+        home.agent_from_watch("w1").unwrap()["said"]["text"],
         "fix the build",
         "text without Enter says nothing"
     );
-    assert_eq!(home.list_state("w1").as_deref(), Some("turn finished"));
-    let inspected = home.run_facade_ok(&["inspect", "w1"]);
-    assert!(
-        inspected.lines().any(|line| line.starts_with("Last input:")
-            && line.contains("human, ")
-            && line.ends_with(": fix the build")),
-        "{inspected}"
-    );
+    // The list's table says the states in the words of the protocol.
+    assert_eq!(home.list_state("w1").as_deref(), Some("just_done"));
     let _term = attach(&home, "w1");
     reaches(&home, "w1", "idle");
 }
@@ -125,19 +135,11 @@ fn waiting_for_you_says_what_for_an_error_says_the_cli_s_words_and_a_report_take
         waiting["state_detail"],
         json!({ "kind": "permission", "text": "Run npm test?" })
     );
-    assert_eq!(
-        home.list_state("w1").as_deref(),
-        Some("waiting for you: permission")
-    );
+    assert_eq!(home.list_state("w1").as_deref(), Some("waiting_for_you"));
     let inspected = home.run_facade_ok(&["inspect", "w1"]);
-    let state = inspected
-        .split_once("\nState:")
-        .map(|(_, rest)| rest.lines().take(2).collect::<Vec<_>>())
-        .unwrap_or_default();
     assert!(
-        state.len() == 2
-            && state[0].trim() == "waiting for you: permission"
-            && state[1].trim() == "Run npm test?",
+        inspected.lines().any(|line| line.starts_with("State:")
+            && line[6..].trim() == "waiting for you: permission (Run npm test?)"),
         "{inspected}"
     );
     submit(&home, "w1", "/fake error Out of credits");
@@ -153,11 +155,9 @@ fn waiting_for_you_says_what_for_an_error_says_the_cli_s_words_and_a_report_take
             .any(|line| line.starts_with("State:") && line[6..].trim_start().starts_with("unknown")),
         "{inspected}"
     );
-    assert!(
-        inspected.lines().any(|line| line.starts_with("Last input:")
-            && line.contains("human, ")
-            && line.ends_with(": /fake clear")),
-        "{inspected}"
+    assert_eq!(
+        (&unknown["said"]["text"], &unknown["said"]["from"]),
+        (&json!("/fake clear"), &json!("command_line"))
     );
 }
 
@@ -178,14 +178,21 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
         let ended = reaches(&home, name, "ended");
         assert_eq!(ended["state_detail"], json!({ "how": how }), "{name}");
     }
-    let table = home.list_table();
-    assert!(
-        ["normal", "crashed", "stopped"]
-            .iter()
-            .map(|name| table.cell(table.row("NAME", name).unwrap(), "STATE"))
-            .eq(["exited: code 0", "exited: code 3", "stopped"]),
-        "{table:?}"
-    );
+    // The list shows running agents alone; inspect says how each ended.
+    assert!(home.list_table().rows.is_empty(), "{:?}", home.list_table());
+    for (name, said) in [
+        ("normal", "exited: code 0"),
+        ("crashed", "exited: code 3"),
+        ("stopped", "stopped"),
+    ] {
+        let inspected = home.run_facade_ok(&["inspect", name]);
+        assert!(
+            inspected
+                .lines()
+                .any(|line| line.starts_with("State:") && line[6..].trim() == said),
+            "{name}: {inspected}"
+        );
+    }
 }
 
 #[test]
@@ -202,7 +209,7 @@ fn states_and_said_survive_a_killed_daemon() {
     reaches(&home, "stopped", "ended");
     let before: Vec<Value> = ["asking", "done", "stopped"]
         .iter()
-        .map(|name| home.agent_from_list_json(name).unwrap())
+        .map(|name| home.agent_from_watch(name).unwrap())
         .collect();
     // The facts are written beside each screen off the actor; wait until they landed.
     for (agent, fact) in
@@ -227,7 +234,7 @@ fn states_and_said_survive_a_killed_daemon() {
         .expect("a new daemon answers");
     for agent in before {
         let after = home
-            .agent_from_list_json(agent["name"].as_str().unwrap())
+            .agent_from_watch(agent["name"].as_str().unwrap())
             .unwrap();
         for field in ["state", "state_detail", "said"] {
             assert_eq!(
@@ -273,8 +280,8 @@ fn a_wait_for_the_person_is_published_at_once() {
 fn said(home: &TestHome, name: &str, text: &str) -> Value {
     let mut agent = Value::Null;
     let reached = wait_until(secs(10), || {
-        agent = home.agent_from_list_json(name).unwrap_or_default();
-        agent["last_input"]["text"] == text
+        agent = home.agent_from_watch(name).unwrap_or_default();
+        agent["said"]["text"] == text
     });
     assert!(reached, "{name} was not said {text:?}: {agent}");
     agent
@@ -321,10 +328,7 @@ fn the_person_s_enter_is_said_once_the_cli_takes_what_it_submits() {
     term.send(b"\r");
     let agent = said(&home, "w1", "fix the build");
     assert_eq!(
-        (
-            &agent["last_input"]["from"],
-            agent["last_input"].get("from_name")
-        ),
+        (&agent["said"]["from"], agent["said"].get("from_name")),
         (&json!("human"), None)
     );
     // Keys and their Enter in one write, which the CLI draws 300 ms later.
@@ -347,7 +351,7 @@ fn the_person_s_enter_is_said_once_the_cli_takes_what_it_submits() {
         "❯ draft [Pasted text #1 +1 lines]",
     );
     assert_eq!(
-        home.agent_from_list_json("w1").unwrap()["last_input"]["text"],
+        home.agent_from_watch("w1").unwrap()["said"]["text"],
         "ship it"
     );
 }
@@ -377,10 +381,7 @@ fn an_enter_whose_keys_are_not_drawn_in_time_says_nothing() {
         "{:?}",
         home.submitted_messages()
     );
-    assert_eq!(
-        home.agent_from_list_json("w1").unwrap().get("last_input"),
-        None
-    );
+    assert_eq!(home.agent_from_watch("w1").unwrap().get("said"), None);
 }
 
 /// A CLI that draws the keys before an Enter inside a synchronized update has its draft read once
@@ -419,11 +420,7 @@ done
         programs.display(),
         SYSTEM_PATH.as_str()
     );
-    let args = json!({
-        "command": ["fake"], "name": "sync", "cwd": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
-    });
-    assert!(wire.call("agent.start", args)["result"].is_object());
+    start_program(&mut wire, &home, "fake", json!([]), "sync", &path);
     let term = attach(&home, "sync");
     assert!(
         term.wait_for(secs(5), |text| text.contains("❯")),
@@ -521,11 +518,7 @@ exec sleep 600
         programs.display(),
         SYSTEM_PATH.as_str()
     );
-    let args = json!({
-        "command": ["muse"], "name": "muse", "cwd": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
-    });
-    assert!(wire.call("agent.start", args)["result"].is_object());
+    start_program(&mut wire, &home, "muse", json!([]), "muse", &path);
     let term = attach(&home, "muse");
     term.send(b"ship it");
     assert!(
@@ -565,22 +558,39 @@ fn an_enter_the_cli_does_not_take_says_nothing() {
     // no submission to its end.
     term.send(b"\r");
     home.wait_for_gate("submission-untaken");
-    assert!(
-        home.agent_from_list_json("w1")
-            .unwrap()
-            .get("last_input")
-            .is_none()
-    );
+    assert!(home.agent_from_watch("w1").unwrap().get("said").is_none());
 }
 
-/// Text typed with Enter by a command in an agent's terminal, and a message an agent sends, are
-/// said by that agent; a message from the person is the person's.
+/// Text an agent types with Enter, and a message it sends, through Facade's tools, are said by that
+/// agent. A `facade` command acts for no agent, also in an agent's terminal: what it types or
+/// sends is said by the command line.
 #[test]
 fn what_an_agent_types_or_sends_is_said_by_that_agent() {
     let home = TestHome::new("saidby");
     let ada = home.start_named_fake("ada", &[]);
     home.start_named_fake("bob", &[]);
-    let as_ada = |args: &[&str]| {
+    let mut tools = McpTestClient::open(&home, &ada.id);
+    let typed = tools.call(
+        "type_text",
+        json!({ "agent": "bob", "text": "from ada", "enter": true }),
+    );
+    assert_eq!(typed["status"], "success", "{typed}");
+    let typed = said(&home, "bob", "from ada");
+    assert_eq!(
+        (&typed["said"]["from"], &typed["said"]["from_name"]),
+        (&json!(ada.id), &json!("ada"))
+    );
+    let sent = tools.call(
+        "send_message",
+        json!({ "to": "bob", "text": "run the tests" }),
+    );
+    assert_eq!(sent["status"], "success", "{sent}");
+    let sent = said(&home, "bob", "run the tests");
+    assert_eq!(
+        (&sent["said"]["from"], &sent["said"]["from_name"]),
+        (&json!(ada.id), &json!("ada"))
+    );
+    let in_ada_s_terminal = |args: &[&str]| {
         let output = home
             .command(&test_binaries().facade)
             .args(args)
@@ -590,33 +600,21 @@ fn what_an_agent_types_or_sends_is_said_by_that_agent() {
             .unwrap();
         assert!(output.status.success(), "{args:?}: {}", stderr(&output));
     };
-    as_ada(&["type", "bob", "from ada", "--enter"]);
-    let typed = said(&home, "bob", "from ada");
-    assert_eq!(
+    for (args, text) in [
         (
-            &typed["last_input"]["from"],
-            &typed["last_input"]["from_name"]
+            ["type", "bob", "typed in a terminal", "--enter"].as_slice(),
+            "typed in a terminal",
         ),
-        (&json!(ada.id), &json!("ada"))
-    );
-    as_ada(&["send", "bob", "run the tests"]);
-    said(&home, "bob", "run the tests");
-    let inspected = home.run_facade_ok(&["inspect", "bob"]);
-    assert!(
-        inspected.lines().any(|line| line.starts_with("Last input:")
-            && line.contains(&format!(" {}, ", ada.id))
-            && line.ends_with(": run the tests")),
-        "{inspected}"
-    );
-    home.run_facade_ok(&["send", "bob", "hello"]);
-    let sent = said(&home, "bob", "hello");
-    assert_eq!(
-        (
-            &sent["last_input"]["from"],
-            sent["last_input"].get("from_name")
-        ),
-        (&json!("human"), None)
-    );
+        (["send", "bob", "hello"].as_slice(), "hello"),
+    ] {
+        in_ada_s_terminal(args);
+        let said = said(&home, "bob", text);
+        assert_eq!(
+            (&said["said"]["from"], said["said"].get("from_name")),
+            (&json!("command_line"), None),
+            "{text}"
+        );
+    }
 }
 
 /// An agent whose daemon ends while it stops it, before the exit is saved, is listed as ended by
@@ -646,6 +644,8 @@ fn an_agent_stopped_while_its_daemon_failed_is_listed_as_ended() {
         "the daemon did not stop before saving the exit"
     );
     kill_process(daemon);
+    // With no CLI left to hold, the keeper may end with the daemon: the next client starts Facade.
+    drop(connect(&home));
     reaches(&home, "w1", "ended");
 }
 
@@ -671,11 +671,7 @@ fn opencode_s_failed_model_call_is_an_error() {
         programs.display(),
         SYSTEM_PATH.as_str()
     );
-    let args = json!({
-        "command": ["opencode"], "name": "opencode", "cwd": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
-    });
-    assert!(wire.call("agent.start", args)["result"].is_object());
+    start_program(&mut wire, &home, "opencode", json!([]), "opencode", &path);
     let agent = reaches(&home, "opencode", "error");
     assert_eq!(
         agent["state_detail"]["text"], "stand-in model: recorded, not answered",
@@ -713,11 +709,7 @@ fn a_question_on_the_screen_waits_for_the_person_while_the_cli_starts() {
         programs.display(),
         SYSTEM_PATH.as_str()
     );
-    let args = json!({
-        "command": ["claude"], "name": "claude", "cwd": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
-    });
-    assert!(wire.call("agent.start", args)["result"].is_object());
+    start_program(&mut wire, &home, "claude", json!([]), "claude", &path);
     let agent = reaches(&home, "claude", "waiting_for_you");
     assert_eq!(
         (
@@ -754,11 +746,7 @@ fn an_enter_that_answers_the_cli_s_question_asks_for_nothing() {
         programs.display(),
         SYSTEM_PATH.as_str()
     );
-    let args = json!({
-        "command": ["claude"], "name": "claude", "cwd": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
-    });
-    assert!(wire.call("agent.start", args)["result"].is_object());
+    start_program(&mut wire, &home, "claude", json!([]), "claude", &path);
     reaches(&home, "claude", "waiting_for_you");
     home.run_facade_ok(&["type", "claude", "--key", "Enter"]);
     reaches(&home, "claude", "working");
@@ -787,15 +775,8 @@ fn muse_code_s_screen_shows_what_it_does() {
         programs.display(),
         SYSTEM_PATH.as_str()
     );
-    for (name, command) in [
-        ("muse", json!(["muse"])),
-        ("words", json!(["muse", "hello"])),
-    ] {
-        let args = json!({
-            "command": command, "name": name, "cwd": home.project,
-            "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
-        });
-        assert!(wire.call("agent.start", args)["result"].is_object());
+    for (name, args) in [("muse", json!([])), ("words", json!(["hello"]))] {
+        start_program(&mut wire, &home, "muse", args, name, &path);
     }
     reaches(&home, "muse", "working");
     reaches(&home, "words", "working");
@@ -816,18 +797,16 @@ fn work_no_one_asked_for_is_no_turn() {
     let script = "#!/bin/sh\nr() { printf '\\033]7501;state=%s\\033\\\\' \"$1\"; }\nr idle\n\
                   sleep 1\nr working\nsleep 1\nr idle\nread line\nr working\nsleep 1\nr idle\n\
                   exec sleep 600\n";
-    install_script(&programs, "starter", script);
+    // A program of the test's settings: a custom program runs without a rule.
+    let starter = install_script(&programs, "starter", script);
+    home.add_custom_cli("starter", &starter);
     let mut wire = connect(&home);
     let path = format!(
         "{}{PATH_SEPARATOR}{}",
         programs.display(),
         SYSTEM_PATH.as_str()
     );
-    let args = json!({
-        "command": ["starter"], "name": "starter", "cwd": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
-    });
-    assert!(wire.call("agent.start", args)["result"].is_object());
+    start_program(&mut wire, &home, "starter", json!([]), "starter", &path);
     reaches(&home, "starter", "working");
     reaches(&home, "starter", "idle");
     home.run_facade_ok(&["type", "starter", "--key", "Enter"]);
@@ -841,14 +820,15 @@ fn an_agent_waiting_for_the_person_for_20_seconds_is_told_to_its_creator_once() 
     let home = TestHome::new("waitingtold");
     // The agents boss starts report their status as boss does: they get boss's environment.
     let boss = home.start_named_fake("boss", &[("FAKECLI_STATUS", "1")]);
-    let cwd = home.agent_from_list_json("boss").unwrap()["folder"].clone();
+    let cwd = home.agent_from_watch("boss").unwrap()["cwd"].clone();
     let mut server = McpTestClient::open(&home, &boss.id);
     let started = server.call(
         "start_agent",
-        json!({ "name": "child", "cli": "fake", "window": "terminal", "folder": cwd }),
+        json!({ "name": "child", "cli": "fake", "folder": cwd }),
     );
     assert_eq!(started["status"], "success", "{started}");
-    let child = home.agent_from_list_json("child").unwrap()["agent_id"]
+    // Facade names an agent by its address, such as `a2@host`.
+    let child = home.agent_from_watch("child").unwrap()["address"]
         .as_str()
         .unwrap()
         .to_string();
@@ -858,7 +838,7 @@ fn an_agent_waiting_for_the_person_for_20_seconds_is_told_to_its_creator_once() 
     let told = || -> Vec<String> {
         home.submitted_messages()
             .into_iter()
-            .filter(|text| text.starts_with("🔔") && text.contains(&format!("#{child}")))
+            .filter(|text| text.starts_with("🔔") && text.contains(&format!("({child})")))
             .collect()
     };
     assert!(

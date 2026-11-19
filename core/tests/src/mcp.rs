@@ -2,15 +2,70 @@
 //! output. Or the daemon's own MCP server, reached as `facade-mcp` reaches it: a relay connection
 //! to the daemon's socket.
 
-use facade_base::paths::ClientSocket;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, ExitStatus, Stdio};
+use std::path::Path;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyhow::{Context, ensure};
+use facade_base::paths::ClientSocket;
 use serde_json::{Value, json};
 
 use crate::*;
+
+/// Builds the relay command from the Facade entry an isolated CLI was given.
+pub fn mcp_command(
+    config: &Value,
+    home: &Path,
+    command_for: impl FnOnce(&Path) -> Command,
+) -> anyhow::Result<Command> {
+    let entry = &config["mcpServers"]["facade"];
+    let program = entry["command"]
+        .as_str()
+        .context("the test MCP entry has no command")?;
+    let program = Path::new(program);
+    #[cfg(windows)]
+    let powershell = (program == Path::new("powershell.exe"))
+        .then(|| {
+            let system =
+                std::env::var_os("SystemRoot").context("the isolated Windows system root")?;
+            Ok::<_, anyhow::Error>(
+                std::path::PathBuf::from(system)
+                    .join("System32/WindowsPowerShell/v1.0/powershell.exe"),
+            )
+        })
+        .transpose()?;
+    #[cfg(windows)]
+    let program = powershell.as_deref().unwrap_or(program);
+    ensure!(
+        program.is_absolute(),
+        "the test MCP command must have an absolute path"
+    );
+    let mut command = command_for(program);
+    if let Some(args) = entry.get("args") {
+        let args: Vec<String> = serde_json::from_value(args.clone())
+            .map_err(|_| anyhow::anyhow!("the test MCP arguments must be an array of strings"))?;
+        command.args(args);
+    }
+    if let Some(env) = entry.get("env") {
+        let env: std::collections::BTreeMap<String, String> = serde_json::from_value(env.clone())
+            .map_err(|_| {
+            anyhow::anyhow!("the test MCP environment must contain string values")
+        })?;
+        if let Some(configured_home) = env.get("FACADE_HOME") {
+            let configured_home = Path::new(configured_home);
+            ensure!(
+                configured_home == home
+                    || configured_home == facade_base::files::real_path(home)?.as_path(),
+                "the test MCP configuration must stay in its Facade home"
+            );
+        }
+        command.envs(env);
+    }
+    command.env("FACADE_HOME", home);
+    Ok(command)
+}
 
 /// What a test's MCP client speaks to.
 enum Server {
@@ -31,37 +86,80 @@ pub struct McpTestClient {
 }
 
 impl McpTestClient {
-    /// Runs `facade-mcp` for `agent` in `home`, with the programs under test on its `PATH` as an
-    /// agent started by the `fake` rule has them, and completes MCP's handshake. It runs in the
-    /// Facade home rather than in the agent's folder, so a tool that uses the agent's folder cannot
-    /// pass by using its own.
+    /// Runs the relay with the command and identity that the active fake CLI was given.
+    pub fn open_configured(home: &TestHome, agent: &str) -> McpTestClient {
+        McpTestClient::spawn(home, Self::configured_command(home, agent))
+    }
+
+    /// Speaks the relay wire protocol with the same private configuration as a running CLI.
+    pub fn relay_configured(home: &TestHome, agent: &str) -> McpTestClient {
+        let command = Self::configured_command(home, agent);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        let env: Vec<_> = command
+            .get_envs()
+            .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
+            .collect();
+        Self::relay(home, &args, &env)
+    }
+
+    fn configured_command(home: &TestHome, agent: &str) -> Command {
+        let run = facade_rules::run_folder(&home.path.join("core/runs"), agent)
+            .expect("the fake CLI has one run directory");
+        let text = std::fs::read_to_string(run.join("mcp.json"))
+            .expect("the fake CLI has a generated MCP configuration");
+        let config: Value = serde_json::from_str(&text).expect("the run's MCP file is JSON");
+        let facade = &config["mcpServers"]["facade"];
+        assert!(
+            facade["env"]["FACADE_HOME"].is_string(),
+            "the run declares its isolated home in the relay configuration"
+        );
+        assert!(
+            facade["args"].as_array().is_some_and(|args| {
+                args.len() == 2
+                    && args[0] == "--run-credential"
+                    && args[1].as_str().is_some_and(|value| !value.is_empty())
+            }),
+            "the active run has a private credential in its relay arguments"
+        );
+        mcp_command(&config, &home.path, |program| home.command(program))
+            .expect("the run has an isolated relay command")
+    }
+
+    /// Runs the active agent's relay and completes MCP's handshake. The handshake uses the run
+    /// configuration in v3 and the v2 environment when running the v2 scenario harness.
     pub fn open(home: &TestHome, agent: &str) -> McpTestClient {
-        let mut command = home.command(&test_binaries().mcp);
-        command
-            .env("FACADE_AGENT", agent)
-            .env("PATH", home.path_with_test_programs());
-        McpTestClient::spawn(home, command)
+        Self::open_with(home, agent, &[])
     }
 
     /// Runs `facade-mcp` for `agent` as [`McpTestClient::open`] does, with `env` added, such as
     /// test gates.
     pub fn open_with(home: &TestHome, agent: &str, env: &[(&str, &str)]) -> McpTestClient {
-        let mut command = home.command(&test_binaries().mcp);
-        command
-            .env("FACADE_AGENT", agent)
-            .env("PATH", home.path_with_test_programs())
-            .envs(env.iter().copied());
+        let mut command = if DAEMON_RANGE[1] >= 3 {
+            Self::configured_command(home, agent)
+        } else {
+            let mut command = home.command(&test_binaries().mcp);
+            command.env("FACADE_AGENT", agent);
+            command
+        };
+        command.envs(env.iter().copied());
         McpTestClient::spawn(home, command)
     }
 
-    /// Runs `facade-mcp` for `agent` with nothing in its environment but `FACADE_HOME` and
-    /// `FACADE_AGENT`, as a CLI that passes its MCP servers little of its own environment runs it.
+    /// Runs the active agent's relay with only the wiring needed to select its home and identity.
     pub fn open_stripped(home: &TestHome, agent: &str) -> McpTestClient {
-        let mut command = std::process::Command::new(&test_binaries().mcp);
-        command
-            .env_clear()
-            .env("FACADE_HOME", &home.path)
-            .env("FACADE_AGENT", agent);
+        let mut command = if DAEMON_RANGE[1] >= 3 {
+            let mut command = Self::configured_command(home, agent);
+            command.env_clear();
+            command
+        } else {
+            let mut command = Command::new(&test_binaries().mcp);
+            command.env_clear().env("FACADE_AGENT", agent);
+            command
+        };
+        command.env("FACADE_HOME", &home.path);
         McpTestClient::spawn(home, command)
     }
 
@@ -226,7 +324,15 @@ impl McpTestClient {
         if !meta.is_null() {
             params["_meta"] = meta;
         }
-        let answer = self.request("tools/call", params);
+        let id = self.send("tools/call", params);
+        self.tool_answer(id)
+    }
+
+    /// Reads a tool call already sent by the test, with the same checks as a synchronous call.
+    pub fn tool_answer(&self, id: u64) -> Value {
+        let answer = self
+            .answer(id, secs(40))
+            .expect("the MCP tool call was answered");
         let result = &answer["result"];
         let text: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap_or_default())
