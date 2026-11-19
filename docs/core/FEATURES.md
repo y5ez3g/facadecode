@@ -1,280 +1,143 @@
 # Features
 
-What Facade core does today, and how to use it. Exact behavior lives in three places, and this page links to them
-instead of repeating them: the [daemon protocol](../../core/protocol/PROTOCOL.md) for every operation, the
-[MCP contract](../extension/engineering/MCP.md) for Facade's tools, and the [shared rules](../extension/RULES.md) that
-both follow.
+Facade core supplies the Orchestrator and its Shell and MCP entry points. The VS Code extension's Rust engine uses
+the same Orchestrator. The [product description](../facade-code.md) defines the user experience. The
+[daemon protocol](../../core/protocol/PROTOCOL.md) and [MCP contract](../extension/engineering/MCP.md) define the
+operations and their results.
 
-Core serves the computer it runs on. The editor extension uses core when its Rust engine is on. It runs on macOS and
-on Linux, each on x64 and arm64, and on Windows 11 or Windows Server 2022 and later on x64 and Windows 11 on arm64. On
-Windows it is a native program, and each CLI runs in a pseudo console.
+Core supports macOS and Linux on x64 and arm64, Windows 11 and Windows Server 2022 or later on x64, and Windows 11 on
+arm64. On Windows it uses native pseudo consoles.
 
 ## Agents
 
-An agent is a CLI that Facade runs in a terminal it keeps, or a session that joined from outside, a guest.
+A managed agent runs a CLI in a terminal the Orchestrator holds. A Guest is an external MCP client's connection and
+gets a name and inbox when it first calls a tool. From that point it can receive messages and appear in `list`.
 
-- **Start**: `facade start [OPTIONS] <PROGRAM> [ARGS]...`. Put Facade's options, such as `--name` and `--prompt`,
-  before PROGRAM. The arguments after it go to that program. A CLI of the settings file starts as its entry says:
-  the six built-ins, `claude`, `codex`, `agy` (Antigravity), `muse` (Muse Code), `opencode` and `pi`, and each entry
-  that the file's `clis` adds. Any other program, a path included, runs as given. In an interactive terminal, Facade
-  attaches to the agent. Use `-d` or `--detach` to start it in the background and print its ID. A start with
-  redirected input or output also runs in the background.
-- **Model and effort**: an entry's `model` and `effort`, unless the CLI's own words choose them.
-- **First prompt**: Use `--prompt` to give an agent its first prompt. The CLI must support Facade messages. Facade waits
-  until the CLI's tools have connected or will not connect before trying to deliver the prompt.
-- **Numbers and names**: every agent gets the next `#aN`, which its home never gives again. An agent without a name gets
-  one from the settings file's `names`, else from Facade's own. `facade rename` changes it. An editor window says at
-  `hello` the highest agent and message numbers its editor gave before, and core numbers above them from then on.
-- **List**: `facade list` or `facade ls` shows one row per visible agent, with its ID, name, CLI, state, age and
-  folder. Ended agents stay in the list until removed. A guest's CLI is marked `(guest)`. Use `-q` for one bare ID
-  per line or `--json` for the agent records and each machine's answer.
-- **States**: The table describes an agent's state in words such as `working`, `waiting for you: question`,
-  `turn finished`, `stopped` or `exited: code 0`. A state comes from what the CLI reports and what Facade reads
-  from its screen. JSON keeps the protocol values. See [States](../../core/protocol/PROTOCOL.md#states).
-- **A started agent that waits**: when an agent that another agent of the same window started waits 20 seconds in a row
-  on a permission, a question or a sign-in, its creator gets one message saying so. The person gets no message.
-- **Stop and remove**: `facade stop` ends the CLI and keeps the agent listed. On Unix it sends SIGHUP to its process
-  group, then SIGKILL 3 seconds later to anything left. On Windows its pseudo console closes, which sends
-  `CTRL_CLOSE_EVENT` to every program in it, and its job ends 3 seconds later. `facade remove` (alias `rm`) stops the
-  agent if it runs, then removes it and its saved screen and inbox. Both accept several IDs or names and handle them
-  in order. Each success prints the ID or name as you gave it. They continue after an individual failure and exit 1
-  if any failed.
-- **Resume**: `facade resume` starts an ended agent's CLI again, continuing the session the CLI reported. The agent
-  keeps its ID, name and screen. An agent can resume when Facade started it with a CLI that supports resuming and
-  saved a session. Use `-d` or `--detach` to resume in the background and print the same ID.
-  See [Resume](../../core/protocol/PROTOCOL.md#resume).
-- **Continue a session**: a start can continue a CLI's session as a new agent, with its own `#aN`, with the arguments
-  its rule gives to continue it: an editor does this to bring back a pinned or recent session. See `StartArgs.session` in
-  [PROTOCOL](../../core/protocol/PROTOCOL.md#startargs).
-- **Inspect**: `facade inspect` shows an agent's state, process, Facade tools, input box, last submitted text and saved
-  session. Its times include UTC. `--json` prints the full inspection.
+- `facade start [OPTIONS] <CLI> [ARGS]...` starts a built-in CLI or one the settings file adds. Put Facade options
+  such as `--machine`, `--folder`, `--worktree`, `--name`, `--prompt`, `--model` and `--effort` before the CLI name.
+  Words after the name are the CLI's arguments. Use `-d` to start in the background and receive the address.
+  An interactive foreground start attaches to the terminal.
+- `facade list` and `facade ls` show running managed agents and connected Guests, newest start or resume first.
+  `-q` prints one complete address per line. `--json` includes machine results. `--machine` queries one machine
+  and wakes it if needed.
+- `facade inspect` shows the agent's address, type, state, machine, CLI, folder, launch options, session, who
+  started it, viewers and YOLO setting. Use `--json` for the same facts in a script.
+- `facade stop` ends a managed agent and keeps its record, screen and inbox for 30 days. Its helpers keep running.
+  `facade remove` or `facade rm` stops a running agent before deleting the record, screen and inbox. Both commands
+  accept several references and report individual failures. Git owns the worktree.
+- `facade resume` lists stopped agents with sessions and sessions the CLI saved in the chosen folder. `--machine`
+  and `--folder` select a location. `--all` shows stopped agents across reachable, awake machines. The list gives
+  arguments for `facade resume <REFERENCE>`.
+- Resuming attaches in the foreground and keeps the agent's address, folder, session and effective launch options.
+  The machine supplies its current YOLO setting. A `<cli>:<session>` reference starts a new agent from a session
+  when it is available. A session already in use produces the address of the agent using it. Use `-d` to resume in
+  the background.
+- `facade rename` updates a managed agent's or Guest's name. A blank name lets the Orchestrator choose one from the
+  machine's name pool.
 
-The command line prints bare IDs such as `a3`, and an agent of another machine with its machine, as `a17@gpu`. It
-accepts those forms, a quoted `'#a3'` or `'#a17@gpu'`, a number or an agent name, alone or as `Pixel@gpu`.
-Message headers continue to use IDs such as `#a3` and `#m42`.
+Agent numbers are local to a Facade home and keep their identity after a rename. A command can take a name, a bare
+number such as `a3`, or an address such as `a3@devbox`. An unqualified reference searches awake and reachable
+machines for agents the caller can use. Multiple matches report their complete addresses. For a qualified reference,
+the machine selector can be a name or an ID and may cause that machine to wake.
 
 ## Terminals
 
-- **Show and type**: `facade attach <agent>` shows the agent's terminal for you to watch and use. Ctrl-] detaches and
-  leaves the agent running. An interactive `facade start` or `facade resume` attaches the same way. Attach to an ended
-  agent to see its saved screen. The command exits with the agent's exit code when the agent ends or after showing
-  its saved screen.
-- **One size**: every viewer of an agent sees the same terminal size, and the last resize wins. Each viewer then gets a
-  full redraw.
-- **Reconnect**: when the daemon goes away, an attachment reconnects by agent ID, and starts Facade if needed. Keys
-  typed meanwhile wait, up to 1 MiB, and go after the redraw.
-- **Type from a script**: `facade type <agent> "<text>" [--enter]` pastes text. Pass `"" --enter` to press Enter by
-  itself. `facade type <agent> --key Esc --key Enter` presses keys in order. A call takes 1 to 100 keys, using
-  one `--key` or `-k` per key. Run `facade type --help` for the key names.
-- **Read**: `facade screen [-n <lines>] <agent>` prints the last lines of the screen and its scrollback.
-- **Colors**: an agent in an editor window replies to its CLI's color queries (OSC 10, 11 and 12) with the colors the
-  window's terminals draw with, so a CLI that picks its colors by the background suits the editor's theme.
+- `facade attach a3@devbox` opens a running managed agent's terminal. Ctrl-] detaches with exit code 0 and leaves
+  the agent running. While attached, a CLI exit returns that CLI's exit code.
+- `facade screen [-n <lines>] [--json] <agent>` reads the last lines of the screen and scrollback. It also reads the
+  last screen of a stopped agent.
+- `facade type <agent> "<text>" [--enter]` types text. Use `--key Esc --key Enter` to press keys in order.
+  `facade type --help` lists the key names.
+- Viewers share the terminal's current size. The most recent resize wins, including when a viewer attaches. VS Code
+  can provide terminal colors with the resize. Shell uses its terminal size and leaves the current colors in place.
+- After a lost connection, Attach shows the recovered screen and the amount of input discarded before resuming
+  input. `facade inspect` shows the viewers currently attached.
 
-## Messages
+## Messages and tools
 
-- **Send**: `facade send <to> "<text>" [--reply-to <mN>]`, or the `send_message` tool. In an agent's terminal, the
-  message comes from that agent; elsewhere, from the person. Every message gets the next `#mN`.
-- **Delivery**: the recipient's typist waits until its input box is empty, pastes the message under a header that names
-  its sender and number, such as `📨 Message from Ada (#a1) · #m5`, and presses Enter. It never types over a draft. The
-  send responds within 30 seconds with what happened: typed, read, or failed and why.
-- **Withdrawal**: a message that could not be typed within its 30 seconds, none of it typed, goes back out of the
-  inbox, so that its sender can simply send it again. An agent's first prompt stays in its inbox even then. Cancelling
-  a send also withdraws its message while the paste has not begun.
-- **Inbox**: `facade messages` in an agent's terminal, or the `read_messages` tool, reads the messages waiting for that
-  agent and so delivers them.
-- **To the person**: a message to `human` from an agent goes to each of the agent's editor windows that shows Facade
-  messages, and the command reports each window. If an agent is also named human, quote `'#human'` for the human or use the agent's ID. The command line
-  says 'the human' for the person using Facade. The ID is `human`. Message headers show it as `#human`.
-- **Kept**: messages and their deliveries are kept 30 days, across daemon restarts. A delivery under way goes on after a
-  restart, within its 30 seconds. A send that repeats its request ID gets the first send's response, and nothing is sent
-  again.
+`facade send <to> "<text>"` sends as the command line. Managed agents and Guests use `send_message` with their own
+identity. The recipient's machine assigns each message a number such as `m17`. Across machines, use its complete
+address, such as `m17@devbox`. Use `reply_to` when replying to the sender of an inbox message.
 
-See [Agent messages](../../core/protocol/PROTOCOL.md#agent-messages) and section 1 of the
-[shared rules](../extension/RULES.md).
+For a managed agent, the Orchestrator waits for an empty input box, pastes the message and presses Enter. A Guest
+takes messages with `read_messages`. Both kinds of delivery have a 30-second deadline. An undelivered message is
+withdrawn and the sender gets the reason. The Orchestrator applies the same rule to a first prompt and to its results
+(🔔). It retains message history for 30 days.
 
-## Facade's tools
-
-Every CLI that runs by a built-in's rule gets Facade's MCP server for its run, `facade-mcp`, with a skill that explains
-it. It has eight tools:
-
-| Tool | What it does |
+| MCP tool | What it does |
 | --- | --- |
-| `list_agents` | Lists reachable agents, windows, and their available launch locations and CLI facts |
-| `start_agent` | Starts a CLI in a folder, with an optional new worktree and first prompt |
-| `stop_agent` | Stops an agent's CLI; the agents it started keep running |
-| `send_message` | Sends one message to an agent or to `#human`, and responds with its delivery |
-| `read_messages` | Reads the caller's own inbox |
-| `read_screen` | Reads the text on an agent's terminal |
-| `type_text` | Types text into an agent's terminal |
-| `press_keys` | Presses keys in an agent's terminal |
+| `list_agents` | Lists the same running agents and connected Guests as Shell, within the caller's reach |
+| `start_agent` | Starts a CLI with the same machine, folder, worktree, model, effort and first prompt options |
+| `stop_agent` | Stops one managed agent while its helpers keep running |
+| `send_message` | Sends one text message and reports its delivery with the complete message address |
+| `read_messages` | Reads the caller's inbox and can wait for a specific reply |
+| `read_screen` | Reads the text on a managed agent's terminal |
+| `type_text` | Types text into a running managed agent's terminal |
+| `press_keys` | Presses keys in a running managed agent's terminal |
 
-Tool results give `status` and any result `data`. A failure gives `reason` and `message`, and can include structured facts
-in `data`. In Rust MCP, agents, messages and windows have an `id` and an `address` that can be copied into a tool call.
-References to their roles, such as `from`, `reply_to` and member windows, are address strings.
+An external app can register the `facade-mcp` program as a stdio server. For an app that uses `mcpServers`, the
+local configuration looks like this.
 
-A Rust MCP send to the person returns `delivered_to_windows` when a window has taken it. The `data.window_delivery`
-array in a success or failure gives a window address and state for each observed outcome. A `not_delivered` row also
-gives its reason. An unconfirmed send can report the retained message's address with the known receipts.
+```json
+{"mcpServers": {"facade": {"command": "facade-mcp"}}}
+```
 
-Golden files in the scenario tests hold the tools' responses. An agent's record says whether its CLI can use the tools
-(`tools_state`). The [MCP contract](../extension/engineering/MCP.md) describes the arguments and responses.
+Pass `FACADE_HOME` in that server's environment to use a different home. A Guest sends first, then uses the
+`next` call returned by `send_message` to read the reply. That call sets `wait` and the complete message address
+in `reply_to`. A read with `wait` can wait up to 30 seconds. Use `after` and `last` for pages of inbox messages.
+Tool results include the requested content directly. See the [MCP contract](../extension/engineering/MCP.md).
 
-## YOLO and reach
+## Access and settings
 
-- **YOLO**: each start or resume reads `yolo` from the settings file, and keeps it for its run. With YOLO on, the
-  default, the CLI runs without asking: approvals bypassed, sandbox off, the folder trusted. With YOLO off, the CLI asks
-  as it natively does.
-- **Reach**: an agent whose run has YOLO on reaches every agent. With YOLO off, it reaches its creation tree, the agents
-  with its root. The person reaches every agent. A start can go anywhere, and the new agent joins its starter's tree.
-- **Across machines**: the machine that holds the target checks the caller, as its first machine filled it in. A tree
-  spans machines, and an agent with YOLO on reaches the agents of every machine it has a route to. A new agent's YOLO
-  comes from the settings file of the machine it runs on. Only the person adds, connects, removes or renames machines.
+`facade.json` in the Facade home holds YOLO, the name pool and CLI entries. Each managed agent reads its machine's
+settings at start or resume. A Guest reads YOLO from its machine's settings and appears in `list` at its first MCP
+tool call. With YOLO on, an agent can reach any agent the Orchestrator can reach. With YOLO off, it can act within
+its creation tree. Shell and VS Code have full reach for the actions they offer. Each CLI's rules describe how it
+handles tool approval, trust and sandbox settings. See the [product description](../facade-code.md) and
+[configuration](../extension/features/CONFIGURATION.md).
 
-See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-trees).
+## Folders and machines
 
-## Windows and folders
+- A start on this machine uses the caller's folder and environment. If no caller folder applies, the running machine
+  uses its login home. A start on another machine uses that machine's login environment.
+- `--worktree <BRANCH>` creates a worktree beside the repository from its current `HEAD`. The branch and path must
+  be available. In VS Code, the local location picker shows workspace folders and worktrees. The picker for another
+  machine offers its login home, recent folders and manual path entry.
+- `facade machine add [--home <PATH>] <SSH ARGS>...` connects and saves the SSH arguments. For example, use
+  `facade machine add -p 2222 aaron@devbox.lan`. `machine connect` uses the same arguments for a foreground
+  connection that lasts while the command runs. SSH prompts appear in that command's terminal.
+- A saved machine without running work can sleep. An operation that names it wakes it through the saved SSH route.
+  An unqualified operation sees the machines that are awake and reachable. The route may run through another machine.
+- The SSH connection uses the installed program at its fixed path. It installs or upgrades an older remote copy
+  as needed to match the local version. If a newer remote version is already installed, upgrade the local copy.
+- `facade machine list` reports machines that are awake, connecting, sleeping, unreachable or needing an SSH login.
+  It gives the saved `add` command when a person needs to sign in again. `facade machine rename` gives a machine a
+  new name, and `facade machine remove` forgets a saved connection.
+- A Remote SSH VS Code window uses the Orchestrator on its extension host machine. Connect other machines through
+  `facade machine add` on that host.
+- WSL and Dev Containers each act as machines. Inside them, Facade connects directly to the local Orchestrator. To
+  connect from another machine, start SSH inside the environment and add it from that machine.
 
-- Every agent is in one or more windows. The person's start from an editor window puts it in that window, and from a
-  terminal in the terminal window, `terminal`. An agent's start puts the new agent in every window its starter is in,
-  connected or not, or in the one window it names. Go to Agent adds windows; an agent stays in a window once it is
-  there.
-- Where an agent runs is apart from its windows: its folder, and the window that gave the folder, its location source,
-  where one did.
-- Go to Agent in an editor window adopts an agent of this machine that is running, is not a guest and is not in this
-  window yet: the window joins its windows, and every member editor window shows the same process.
-- An editor window's locations are its folders and every worktree of their repositories. A start that names a location
-  source window must use one of that window's locations or a folder inside one, and can make a new worktree from one
-  of its locations; a start without one runs in the folder it gives, or makes a worktree from that folder's repository
-  and runs there.
-- An editor window describes its terminals' environment, and core lists the CLIs a start there can run, each found on
-  that environment's `PATH` or not, and whether a built-in is not installed.
-- When an editor window's last connection closes, as when it is closed or reloaded, its agents go on running and the
-  window is listed as not connected. A reload gets its window back while that window is still bound to it: another
-  editor may have taken the window meanwhile. A window is kept once made, since an agent on another machine may name
-  it. Reopening a workspace takes back its earliest window that no editor holds, or else gets a new one; a second
-  editor window of the same workspace gets a window of its own.
-- A message to the person is handed to the current `messages` watch of each connected window the sending agent is in;
-  a watch that takes it counts as delivered, and the send says which windows took it and why the others did not. When
-  no window can take it, the send fails and keeps nothing.
-- An agent answers its CLI's color queries with the colors of the member editor window that resized it last; a resize
-  to the same size counts, and a terminal's `attach` changes only the size. Before any resize, the colors are those of
-  the window it was started from, its starter's, or a member editor window that has colors.
-- Each Facade home has a machine ID, made once and kept in its store.
-
-See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
-
-## Machines
-
-- Each Facade home is a machine, with an ID made once and a name made once from the host name: the part before the
-  first dot, lowercase, with every other character than `a-z`, `0-9` and `-` made `-`, runs of `-` made one, and `-`
-  at either end dropped; an empty result is `machine`. Names may repeat;
-  `facade machine rename <machine> <name>` renames a machine from any machine with a route to it.
-- `facade machine add <DESTINATION> [--home <PATH>]` connects this machine with another and keeps the connection:
-  the daemon reconnects every 10 seconds, and a computer that restarted connects back the next time Facade runs. The
-  first connection, and any repair, runs in the terminal, where SSH asks for passwords, MFA and host keys; running add
-  again for a saved machine repairs it. `facade machine connect` stays connected only while the command runs. No port
-  is opened: SSH runs `facade machine serve` on the other machine. Once connected, both machines find each other's
-  agents.
-- A saved connection that needs a person stops retrying; `facade machine list` shows `needs SSH login` and a
-  `warning:` with the command that repairs it. A failed connection says why: SSH's own error, `facade` not found
-  there, a startup file that writes to standard output, versions that do not match, or two homes with one machine ID
-  (a copied home: give the copy a new empty home).
-- A connection that succeeds warns when the other machine is Linux and systemd will end that login's processes when
-  SSH ends (`KillUserProcesses` or `KillOnlyUsers` applying to the user): an administrator lists the user in
-  `KillExcludeUsers` there. Facade changes no system settings.
-- The first connection to a machine says what it trusts: agents with YOLO on, on any machine with a route to this one,
-  can operate this machine's agents.
-- `facade machine list` shows a table of the machines this one connects to and those it saved but cannot connect to
-  now. Copy a machine's `id:` selector from the ID column. It gives the shortest unique prefix of at least eight
-  hexadecimal digits. The table also shows the name, version, route and SSH connection saved here. `--json` gives
-  the full build and includes `unreachable: true` when the machine has no route. A direct connection's state is
-  `connected`, `disconnected` or `ssh_interaction_required`. `facade machine remove <machine>` removes a saved connection only.
-- Calls go through other machines when no direct connection exists, by the route that passes the fewest machines.
-  When a connection ends, only the routes through it go, and a machine is unreachable only when no route is left.
-- An agent's address names its machine: `#a17@gpu`, or `#a17@id:3f9a2c1d` when names repeat; a message's is `#m42@gpu`.
-  Numbers without a machine mean this machine. A name alone, `@Pixel`, is looked up on every machine with a route from
-  here and every saved one, and only a single match among machines that all answered is used; otherwise the call says
-  which machines did not answer, or lists every match. `@Pixel@gpu` asks gpu only; when an agent here is literally named
-  `Pixel@gpu`, that meaning counts too, and finding both is an error that lists them.
-- `facade list` and Rust `list_agents` query every machine at once and finish when the queries settle or reach their
-  three-second deadline. Their machine rows in `facade list --json` and Rust MCP use `state` for the outcome. A
-  received reply gives the origin's receive time as `responded_at`. An unreachable machine gives `unreachable: true`.
-- `facade start --folder <FOLDER>` takes an absolute path or a path relative to the current folder on this machine.
-  Omit it to use the current folder, including when `--machine` selects this machine explicitly. With another machine,
-  give an absolute path there or omit `--folder` to use that user's login home. Remote starts from the command line
-  and New Agent use the other machine's login environment. In Rust MCP `start_agent`, `machine` names the running
-  machine. A local `folder` can be relative to the caller's launch folder. A remote `folder` must be absolute on the
-  running machine. Omit it to use the caller's recorded folder locally or the other machine's login folder remotely.
-  Send, screen, type, keys, stop, resume and `attach` work on agents of other machines.
-  A remote `attach` pauses input when the connection drops, and shows the screen again before it takes keys when it returns.
-- A message to an agent is kept, and numbered, on its recipient's machine; a sender on another machine is named with
-  `on <machine>`. A message to the person is kept on the sending agent's machine under one number and handed to the
-  windows the agent is in, on every machine; one window that took it is enough. A call that never
-  left says it was not run; one that left without an answer says its outcome is unknown. Nothing is kept to send later.
-- An editor window shows the agents of other machines that are in it, with a remote icon where the Pin would be; when
-  Facade cannot connect to their machine they stay, marked disconnected.
-- A Remote-SSH window connects this computer's Facade with the remote one by itself, through a bridge over the
-  editor's existing connection: no second SSH login and no open port. Reloading or closing one window leaves another's connection alone.
-
+On Linux, systemd settings that end a login's processes can end the services with the SSH login. The connection warns
+when `KillUserProcesses` or `KillOnlyUsers` applies. An administrator can configure `KillExcludeUsers` for that user.
 See [Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions).
 
-## Guests
+## Restarts and diagnostics
 
-- **Sessions you start yourself**: `facade integration add <cli>` writes Facade's entries into that CLI's user
-  settings: Facade's MCP server, the approval of its own tools, and the hooks that report each session. Every
-  session you then start with that CLI joins as a guest: it gets an ID, shows in `facade list` and takes its
-  messages at its next turn. `facade integration remove <cli>` takes the entries out, and a file nothing else changed
-  goes back byte for byte. `facade integration list` shows what is written. It works for `claude`, `codex`, `opencode`,
-  `pi`, `muse` and `agy`.
-- **Any MCP client**: an MCP client that Facade did not start joins with one line in its MCP settings, Facade's relay
-  as its server:
-
-  ```json
-  {"mcpServers": {"facade": {"command": "/Users/you/.facade/core/bin/facade-mcp"}}}
-  ```
-
-  The path is `core/bin/facade-mcp` in your Facade home, where Facade installs it the first time it runs; write it out
-  in full where the client does not expand `~`. For a home other than `~/.facade`, add
-  `"env": {"FACADE_HOME": "/path/to/home"}`. When the client sends `initialize`, it joins as a guest with its own `#aN`,
-  an inbox and all eight tools, and reads its messages with `read_messages`. It stays listed while its relay is
-  connected, and keeps its number and inbox across a daemon restart. If Facade is not running, the relay starts it.
-
-See [Guests](../../core/protocol/PROTOCOL.md#guests) and [Integrations](../../core/protocol/PROTOCOL.md#integrations).
-
-## The settings file
-
-`facade.json` in the Facade home holds `yolo`, `names`, and `clis`, the CLI entries: program, arguments, environment,
-model, effort, and whether each is enabled. A file that cannot be read stops every start and resume, with a message
-naming each problem and where it is. See [Configuration](../extension/features/CONFIGURATION.md).
-
-## Restarts and new builds
-
-- **Nothing runs at login.** A command starts the keeper, and the keeper starts the daemon. The daemon exits 5 seconds
-  after it has no running agent, client or unfinished work, and the keeper exits with it.
-- **Either service can restart.** The keeper holds every CLI's terminal, so when the daemon ends, the keeper starts
-  another, which takes the agents back with their screens. When the keeper ends, the daemon keeps every terminal and
-  starts another keeper. The CLIs run on throughout.
-- **A newer build takes over** while agents run: a `facade` command of a newer build asks the running daemon to hand
-  over. Every client gets `closing` and reconnects, and the new daemon serves the same agents.
-- **Screens survive a crash.** Each agent's screen is logged on disk, up to 64 MiB, with checkpoints. In memory, each
-  agent keeps 10,000 rows of scrollback in at most 2 MiB.
-
-See [Disconnections and recovery](../../core/protocol/PROTOCOL.md#disconnections-and-recovery).
-
-## Diagnostics
-
-- `facade --help` groups the commands. Use `facade <command> --help` for the options and examples of one command.
-- `facade status` makes one connection attempt. It shows the Facade home and, when the daemon responds, this
-  command's version, the services' process IDs and the agent count. Services using a different build show it beside
-  their PID. Status leaves the running services as it finds them.
-- `facade version` and `facade --version` show the version of the command.
-- `facade completion <shell>` prints completion for Bash, Zsh, Fish or PowerShell. See
-  [Shell completion](../../core/README.md#shell-completion) for setup.
-- The logs are `core/logs/daemon.log` and `keeper.log` in the Facade home. The daemon's log is also the agents' log:
-  which agents started and ended, and who sent whom a message. It is kept 30 days.
-- The person's clients, such as the editor, can read the daemon log's last lines, up to 200, with the protocol's
-  `daemon.log`. A client that acts for an agent cannot.
-- `list`, `inspect`, `status`, `version`, `machine list` and each `integration` subcommand accept `--json`. Data goes
-  to stdout and diagnostics go to stderr. CLI failures return 1, while usage errors return 2.
-- Agent records in `list --json` and `inspect --json` give the startup directory as `folder`. When Facade records a
-  submission, `last_input` gives its `text`, `from` and `at`, plus `from_name` when known.
+- The Orchestrator starts on demand. It exits after its idle interval when there are no running agents, local entry
+  points or unfinished calls. A forwarded operation keeps it active while the work is in progress.
+- The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
+  A newer build uses the same takeover to keep running CLIs and reconnect clients. For an agent already running
+  before an upgrade, the Orchestrator keeps recognizing its MCP connection the old way until that run ends. Later
+  starts and resumes use the new way.
+- `facade upgrade` runs the published installer for the latest stable version. Its build then takes over the running
+  Orchestrator while agents keep running, or says why it cannot.
+- `facade status` reports the home, settings file, build, daemon and keeper process IDs, number of active agents and
+  connected machines. It can inspect one other machine with `--machine`. When the local Orchestrator is sleeping,
+  status says so without starting it.
+- The logs are `core/logs/daemon.log` and `core/logs/keeper.log` inside the home. Each service keeps 30 days. VS Code
+  can read recent daemon log lines for diagnostics.
+- `facade --help` shows the command groups. `facade version` and `facade completion` report the version and generate
+  shell completion. See [Shell completion](../../core/README.md#shell-completion).
+- Query commands accept `--json`. Output goes to stdout and diagnostics go to stderr. Command failures return 1 and
+  usage errors return 2.
