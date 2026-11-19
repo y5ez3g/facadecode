@@ -12,7 +12,7 @@ use facade_base::address::short_machine_id;
 use facade_base::daemon::{display_name, methods};
 use facade_base::daemon_client::{DaemonClient, transient_transport};
 use facade_base::jsonrpc::{
-    ErrorBody, MAX_LINE_BYTES, RequestRead, ServerMessage, decode_arguments, read_request,
+    ErrorBody, MAX_LINE_BYTES, Reason, RequestRead, ServerMessage, decode_arguments, read_request,
     read_server_message,
 };
 use facade_base::machine::{
@@ -182,7 +182,7 @@ fn serve_stdio(
         return Ok(0);
     }
 
-    let input_result = copy_to_daemon(socket.try_clone()?, move |to_daemon| {
+    let input_result = copy_to_daemon(socket.try_clone()?, None, move |to_daemon| {
         copy_serve(input, to_daemon, true)
     });
     let result = copy_serve(from_daemon, stdout, false);
@@ -217,15 +217,24 @@ fn copy_stream(mut source: impl BufRead, mut destination: impl Write) -> io::Res
     }
 }
 
-/// Runs the input copy on its own thread. EOF in either direction ends this session.
+/// Runs the input copy on its own thread. During a foreground handshake, leave the read side
+/// open until it receives the daemon's outcome, even if SSH has already closed.
 fn copy_to_daemon(
     mut to_daemon: ClientSocket,
+    handshake_end: Option<mpsc::Receiver<()>>,
     copy: impl FnOnce(&mut ClientSocket) -> io::Result<()> + Send + 'static,
 ) -> mpsc::Receiver<io::Result<()>> {
     let (input_done, input_result) = mpsc::channel();
     std::thread::spawn(move || {
         let result = copy(&mut to_daemon);
         let _ = input_done.send(result);
+        if let Some(handshake_end) = handshake_end {
+            // A Unix socket can signal EOF without closing reads. A Windows named pipe
+            // has no half-close, so its handshake is bounded by the daemon's deadline.
+            #[cfg(unix)]
+            let _ = to_daemon.shutdown(Shutdown::Write);
+            let _ = handshake_end.recv();
+        }
         let _ = to_daemon.shutdown(Shutdown::Both);
     });
     input_result
@@ -603,11 +612,15 @@ fn foreground(
         output: from_ssh,
         stderr: ssh_said,
     } = session;
-    let input_result = copy_to_daemon(to_daemon, move |socket| copy_stream(from_ssh, socket));
+    let (handshake_end, handshake_pending) = mpsc::channel();
+    let input_result = copy_to_daemon(to_daemon, Some(handshake_pending), move |socket| {
+        copy_stream(from_ssh, socket)
+    });
 
     let result = (|| -> anyhow::Result<ForegroundEnd> {
-        let Some(connected) = forward_hello(&mut from_daemon, &mut to_ssh)
-            .map_err(|error| about_connection(&destination, error))?
+        let connected = forward_hello(&mut from_daemon, &mut to_ssh);
+        drop(handshake_end);
+        let Some(connected) = connected.map_err(|error| about_connection(&destination, error))?
         else {
             return Ok(ForegroundEnd::BeforeHandshake);
         };
@@ -638,7 +651,19 @@ fn foreground(
         let _ = child.kill();
     }
     let status = child.wait()?;
-    match result? {
+    let end = match result {
+        // If the peer disappeared without a specific protocol error, explain what SSH reported.
+        Err(error)
+            if ssh_closed
+                && error.downcast_ref::<ErrorBody>().is_some_and(|body| {
+                    body.data.reason == Reason::Unavailable && body.data.unavailable.is_none()
+                }) =>
+        {
+            ForegroundEnd::BeforeHandshake
+        }
+        result => result?,
+    };
+    match end {
         ForegroundEnd::Saved => Ok(0),
         ForegroundEnd::Disconnected(machine) => Err(Problem::ConnectionLost {
             machine,
@@ -675,10 +700,11 @@ fn pass_on_stderr(stderr: Option<std::process::ChildStderr>) -> std::thread::Joi
 
 /// Passes machine frames unchanged and handles the local daemon's handshake outcome.
 fn forward_hello(
-    from_daemon: &mut BufReader<ClientSocket>,
+    from_daemon: &mut impl BufRead,
     to_ssh: &mut impl Write,
 ) -> anyhow::Result<Option<ConnectedParams>> {
     let mut line = Vec::new();
+    let mut to_ssh = Some(to_ssh);
     while let Some(frame) = read_server_message(from_daemon, &mut line)? {
         if let ServerMessage::Notification(notification) = frame
             && let Some(outcome) = ConnectionOutcome::from_notification(notification)?
@@ -688,11 +714,13 @@ fn forward_hello(
                 ConnectionOutcome::Failed(failed) => Err(failed.error.into()),
             };
         }
-        if let Err(error) = to_ssh.write_all(&line) {
-            if transient_transport(&error) {
-                return Ok(None);
+        if let Some(writer) = to_ssh.as_mut()
+            && let Err(error) = writer.write_all(&line)
+        {
+            if !transient_transport(&error) {
+                return Err(error.into());
             }
-            return Err(error.into());
+            to_ssh = None;
         }
     }
     Ok(None)
@@ -849,8 +877,37 @@ fn saved_arguments(connection: &MachineConnection) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MachineListResult, machine_list_json};
+    use super::{MachineListResult, forward_hello, machine_list_json};
+    use facade_base::jsonrpc::{ErrorBody, Reason, encode_line};
+    use facade_base::machine::{ConnectFailedParams, ConnectionOutcome};
     use serde_json::json;
+    use std::io::{self, Write};
+
+    #[test]
+    fn ssh_closing_during_the_handshake_preserves_the_daemon_conflict() {
+        struct ClosedSsh;
+        impl Write for ClosedSsh {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let conflict = ConnectionOutcome::Failed(ConnectFailedParams {
+            error: ErrorBody::new(Reason::MachineIdConflict, "Conflicting machine ID."),
+        });
+        let mut frames = encode_line(&json!({ "jsonrpc": "2.0", "id": 1, "result": {} }));
+        frames.extend(encode_line(&conflict.into_notification()));
+
+        let error = forward_hello(&mut frames.as_slice(), &mut ClosedSsh).unwrap_err();
+        assert_eq!(
+            error.downcast::<ErrorBody>().unwrap().data.reason,
+            Reason::MachineIdConflict
+        );
+    }
 
     #[test]
     fn machine_list_json_preserves_routes_and_connection_details_from_the_same_v3_reply() {
