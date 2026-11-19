@@ -35,11 +35,7 @@ pub use input::{
     read_box_for_typing, read_draft, read_input, restored, settle_time, shape_of, space_taken,
     verdict_of, with_paste_text,
 };
-pub use sessions::{
-    Reported, SESSION_FILE, SESSION_VARIABLES, SessionFile, WriteFailure, is_session_variable,
-    parse_session_id, read_session_file, run_folder, session_from_hook, session_from_title,
-    session_variable, write_session_file,
-};
+pub use sessions::*;
 pub use state::{ScreenState, read_state};
 pub use wiring::{
     INSTRUCTIONS_FILE, PLUGIN_FOLDER, PLUGIN_MEMBERS, SKILL_FILE, Server, SessionReport, Tools,
@@ -124,6 +120,9 @@ pub struct McpRule {
     /// server's environment instead.
     #[serde(default)]
     pub session_meta_key: Option<String>,
+    /// A variable the CLI supplies to each of its stdio servers for the server's own session.
+    #[serde(default)]
+    pub session_env_key: Option<String>,
     /// The CLI's guests take Facade's instructions and skill from the MCP server alone, as its
     /// session-start hook gives them nothing. Every other CLI's hooks give both and its MCP server
     /// neither, so each guest's model is told once.

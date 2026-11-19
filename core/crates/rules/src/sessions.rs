@@ -13,12 +13,20 @@
 //! see half a file. Nothing here creates a run's folder: once a run's folder is removed, its late
 //! hooks have nowhere to write.
 
+mod history;
+
+pub use history::{SavedSession, list_sessions};
+
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use facade_base::files;
-use facade_base::system::{SYSTEM, System};
+use facade_base::system::{SYSTEM, System, env_var};
+use serde_json::Value;
+
+use crate::Rule;
 
 /// For each CLI, the variables it sets for the commands its model runs, and for MCP servers that
 /// inherit its environment, to name its session: the session itself first, then, for a CLI that
@@ -113,6 +121,34 @@ pub fn parse_session_id(text: &str) -> Option<String> {
         Some(tail) => is_opencode_tail(tail).then(|| text.to_string()),
         None => is_uuid(text).then(|| text.to_ascii_lowercase()),
     }
+}
+
+/// Whether this call carries the canonical session ID of the run in its CLI's native source.
+/// The caller verifies the relay's connection to the run before using this evidence.
+pub fn session_evidence(
+    rule: &Rule,
+    recorded: &str,
+    relay_env: &BTreeMap<String, String>,
+    call_meta: Option<&Value>,
+) -> bool {
+    if parse_session_id(recorded).as_deref() != Some(recorded) {
+        return false;
+    }
+    let metadata = || {
+        let key = rule.mcp.session_meta_key.as_deref()?;
+        call_meta?.get(key)?.as_str()
+    };
+    let reported = match rule.cli.as_str() {
+        "muse" if is_uuid(recorded) => rule
+            .mcp
+            .session_env_key
+            .as_deref()
+            .and_then(|key| env_var(relay_env, key)),
+        "agy" if is_uuid(recorded) => metadata(),
+        "opencode" if recorded.starts_with("ses_") => metadata(),
+        _ => None,
+    };
+    reported == Some(recorded)
 }
 
 fn is_opencode_tail(tail: &str) -> bool {
