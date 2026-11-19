@@ -389,8 +389,9 @@ suite('The agent panel in Chromium', function () {
 	test('PANEL-1.5: open details follow their card when a card above it closes up and goes', async () => {
 		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
 		await evaluate(`document.querySelectorAll('.agent')[1].querySelector('.details-button').click()`);
-		// Past their entrance, which slides them 10 px
-		await wait(450);
+	// Measure after Chromium finishes the details' entrance transition.
+	await frames();
+	await evaluate(`Promise.all(document.querySelector('.details').getAnimations().map(animation => animation.finished))`);
 		const gap = `(() => { const card = document.querySelector('[data-run="run-2"]').getBoundingClientRect(), details = document.querySelector('.details').getBoundingClientRect(); return Math.round(details.top - card.bottom); })()`;
 		const before = await evaluate(gap);
 		await evaluate(`agents.splice(0, 1); redraw({ revision: 3, exited: ['run-1'] })`);
