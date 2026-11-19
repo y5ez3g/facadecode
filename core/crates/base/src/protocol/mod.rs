@@ -11,3 +11,4 @@ pub mod jsonrpc;
 pub mod keeper;
 pub mod machine;
 pub mod operations;
+pub mod v3;

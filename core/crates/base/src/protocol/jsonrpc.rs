@@ -241,6 +241,9 @@ pub struct ErrorData {
     /// The original kept message, where its delivery outcome is unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_ref: Option<MessageRef>,
+    /// A confirmed reason the addressed agent record was removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_removal: Option<AgentRemoval>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub machine_id_conflict: Option<MachineIdConflict>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -254,6 +257,14 @@ pub struct ErrorData {
     pub protocol: Option<ProtocolMismatch>,
 }
 
+/// The recorded cause of an agent record's removal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRemoval {
+    Expired,
+    Removed,
+}
+
 /// Error reasons shared by both protocols.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -262,6 +273,8 @@ pub enum Reason {
     InvalidArgument,
     /// The agent, run, message, or watch does not exist.
     NotFound,
+    /// The selected machine confirmed that the requested CLI session does not exist.
+    SessionNotFound,
     /// A reference names more than one agent, or the person and an agent: select one by its ID.
     AmbiguousReference,
     /// The agent ended: it takes no more input or messages.
@@ -327,6 +340,7 @@ impl ErrorBody {
             windows: None,
             window_delivery: None,
             message_ref: None,
+            record_removal: None,
             machine_id_conflict: None,
             ssh_interaction: None,
             unavailable: None,
@@ -409,6 +423,7 @@ impl Reason {
         match self {
             Reason::InvalidArgument => "invalid_argument",
             Reason::NotFound => "not_found",
+            Reason::SessionNotFound => "session_not_found",
             Reason::AmbiguousReference => "ambiguous_reference",
             Reason::Ended => "ended",
             Reason::PartialInput => "partial_input",

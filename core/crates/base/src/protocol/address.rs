@@ -134,7 +134,7 @@ pub fn parse_message_address(input: &str) -> Result<MessageAddress<'_>, AddressE
     })
 }
 
-fn is_number(input: &str, prefix: char) -> bool {
+pub(super) fn is_number(input: &str, prefix: char) -> bool {
     input.strip_prefix(prefix).is_some_and(|number| {
         !number.is_empty() && number.bytes().all(|digit| digit.is_ascii_digit())
     })
@@ -255,6 +255,28 @@ mod tests {
             "id:3f9a2c1da1"
         );
         assert_eq!(display_machine_selector(&machines[2], &machines), "lab");
+
+        let numeric = "12345678-1234-4123-8123-123456789012";
+        let compact = "12345678123441238123123456789012";
+        let machines = [
+            (numeric, "gpu"),
+            ("12345678-2222-4222-8222-222222222222", "gpu"),
+            ("33333333-3333-4333-8333-333333333333", numeric),
+            ("44444444-4444-4444-8444-444444444444", compact),
+        ]
+        .map(|(machine_id, name)| MachineIdentity {
+            machine_id: machine_id.into(),
+            name: name.into(),
+        });
+        use crate::v3::address::{AddressError, display_machine_selector as display_v3_selector};
+        assert_eq!(
+            display_v3_selector(&machines[0], &machines[..3]),
+            Ok(compact.into())
+        );
+        assert_eq!(
+            display_v3_selector(&machines[0], &machines),
+            Err(AddressError::NoUniqueMachineSelector)
+        );
     }
 
     /// The command line prints a17@gpu and m42@gpu; with or without `#`, they are addresses.
@@ -293,6 +315,22 @@ mod tests {
         assert_eq!(
             parse_message_address("x@gpu"),
             Err(AddressError::InvalidMessage)
+        );
+
+        use crate::v3::address as v3;
+        assert_eq!(
+            v3::parse_agent_address("\u{feff}a17@gpu\u{feff}"),
+            Ok(v3::AgentAddress::Qualified {
+                agent: v3::AgentKey::Number("a17"),
+                machine: v3::parse_machine_selector("gpu").unwrap(),
+                literal_name: None,
+            })
+        );
+        assert_eq!(
+            v3::parse_agent_address("\u{85}a17\u{85}"),
+            Ok(v3::AgentAddress::Local(v3::AgentKey::Name(
+                "\u{85}a17\u{85}"
+            )))
         );
     }
 }

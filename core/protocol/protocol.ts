@@ -7,6 +7,8 @@ export const TOPICS = ["agents","screen","messages","windows","machines"] as con
 export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log","machine.connect","machine.add","machine.list","machine.remove","machine.rename","agent.list","cli.list","location.list","agent.start_preflight"] as const;
 export type Topic = typeof TOPICS[number];
 export type Operation = keyof Operations;
+export type V3Topic = keyof V3Topics;
+export type V3Operation = keyof V3Operations;
 
 /** A complete replacement for a directly connected machine's table. Every row has a route, build
  * and boot ID. */
@@ -18,6 +20,9 @@ export interface AdvertiseParams {
 export interface AgentArgs {
 	readonly agent: string;
 }
+
+/** The source of an agent's start, as displayed to the caller. */
+export type AgentCreator = { readonly kind: 'agent'; readonly address: string } | { readonly kind: 'command_line' } | { readonly kind: 'vs_code' };
 
 /** An agent record. */
 export interface AgentInfo {
@@ -52,9 +57,36 @@ export interface AgentInfo {
 	readonly guest?: boolean;
 }
 
+export type AgentKind = 'managed' | 'guest';
+
+/** A roster row and the exact reference to use for later operations. */
+export interface AgentListEntry {
+	readonly reference: AgentRef;
+	readonly id: string;
+	readonly name: string;
+	readonly type: AgentKind;
+	readonly state: V3AgentState;
+	readonly cli: string;
+	readonly title?: string;
+	readonly folder: string;
+	readonly started_at: string;
+}
+
 export interface AgentListResult {
 	readonly agents: AgentInfo[];
 	readonly machines: MachineQueryResult[];
+}
+
+/** A public roster row. The ID is the agent's copyable address. */
+export interface AgentListRow {
+	readonly id: string;
+	readonly name: string;
+	readonly type: AgentKind;
+	readonly state: V3AgentState;
+	readonly cli: string;
+	readonly title?: string;
+	readonly folder: string;
+	readonly started_at: string;
 }
 
 /** How complete the agent view is for one remote running machine. */
@@ -70,6 +102,9 @@ export interface AgentRef {
 	readonly agent_id: string;
 }
 
+/** The recorded cause of an agent record's removal. */
+export type AgentRemoval = 'expired' | 'removed';
+
 /** What an agent is doing, from its CLI's own status reports, from its screen where its CLI's rule
  * reads it, and from Facade's own facts. The first state that holds, in this order, is the
  * agent's: `waiting_for_you`, `error`, `just_done`, `working`, `idle`, `starting`, then `unknown`;
@@ -77,6 +112,8 @@ export interface AgentRef {
 export type AgentState = 'starting' | 'working' | 'waiting_for_you' | 'just_done' | 'idle' | 'error' | 'ended' | 'unknown';
 
 export type AgentSyncState = 'synced' | 'pending' | 'unreachable';
+
+export type AgentTarget = { readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef };
 
 /** A change to the `agents` topic. Skip unknown change kinds. */
 export type AgentsChange = { readonly kind: 'updated'; readonly agent: AgentInfo } | { readonly kind: 'removed'; readonly machine_id: string; readonly agent_id: string } | { readonly kind: 'machine_state'; readonly machine: AgentMachineState };
@@ -114,6 +151,13 @@ export interface CliInfo {
 	readonly overrides: Overrides;
 }
 
+/** Lists CLIs using the selected machine's launch environment and working folder. */
+export interface CliListArgs {
+	readonly machine?: string;
+	readonly folder?: string;
+	readonly env?: { readonly [key: string]: string };
+}
+
 export interface CliListResult {
 	readonly clis: CliInfo[];
 	readonly settings_problem?: string;
@@ -136,6 +180,8 @@ export interface ConnectedParams {
 export type ConnectionKind = 'saved' | 'temporary';
 
 export type ConnectionState = 'connected' | 'unavailable' | 'ssh_interaction_required';
+
+export type CreatorKind = 'agent' | 'command_line' | 'vs_code';
 
 /** Arguments for `daemon.log`. */
 export interface DaemonLogArgs {
@@ -204,6 +250,7 @@ export interface ErrorData {
 	readonly windows?: WindowDeliveryFailure[];
 	readonly window_delivery?: WindowDelivery;
 	readonly message_ref?: MessageRef;
+	readonly record_removal?: AgentRemoval;
 	readonly machine_id_conflict?: MachineIdConflict;
 	readonly ssh_interaction?: SshInteraction;
 	readonly unavailable?: Unavailable;
@@ -284,6 +331,15 @@ export interface HookSession {
 /** How an agent's process ended. */
 export type HowEnded = 'normal' | 'stopped' | 'crashed';
 
+/** A complete inbox message as the receiving MCP client reads it. */
+export interface InboxMessage {
+	readonly id: string;
+	readonly from: string;
+	readonly at: string;
+	readonly text: string;
+	readonly reply_to?: string;
+}
+
 /** An agent's message input as its screen shows it now. */
 export interface InputInfo {
 	readonly state: InputState;
@@ -349,6 +405,14 @@ export interface Kept {
 	readonly path?: string;
 }
 
+/** One legacy workspace selector from the specified machine. */
+export type LegacyWorkspaceArgs = { readonly machine_id: string; readonly workspace_key?: string; readonly window_id?: string; readonly instance_id?: string } & ({ readonly workspace_key: string; readonly window_id?: never; readonly instance_id?: never } | { readonly workspace_key?: never; readonly window_id: string; readonly instance_id?: never } | { readonly workspace_key?: never; readonly window_id?: never; readonly instance_id: string });
+
+export interface LegacyWorkspaceResult {
+	readonly agents: AgentRef[];
+	readonly machines: V3MachineQueryResult[];
+}
+
 /** A place an agent can work: a window's folder, or a checkout of a Git repository one of its
  * folders is in. */
 export interface LocationInfo {
@@ -360,6 +424,11 @@ export interface LocationInfo {
 
 /** What a location is. */
 export type LocationKind = 'folder' | 'main' | 'worktree';
+
+export interface LocationListArgs {
+	readonly machine?: string;
+	readonly folders?: string[];
+}
 
 export interface LocationListResult {
 	readonly locations: WindowLocation[];
@@ -478,6 +547,8 @@ export interface MachineRenameResult {
 	readonly name: string;
 }
 
+export type MachineState = 'online' | 'connecting' | 'sleeping' | 'unreachable' | 'ssh_interaction_required';
+
 /** The transport the local client will bridge to this machine session. */
 export type MachineTransport = { readonly kind: 'ssh'; readonly ssh_destination: string; readonly remote_home?: string } | { readonly kind: 'bridge' };
 
@@ -578,8 +649,26 @@ export interface ProtocolMismatch {
 	readonly remote_protocol: [number, number];
 }
 
+/** The public MCP inbox request. */
+export interface ReadMessagesArgs {
+	readonly after?: string;
+	readonly last?: number;
+	readonly wait?: boolean;
+	readonly reply_to?: string;
+}
+
+export interface ReadMessagesResult {
+	readonly messages: InboxMessage[];
+	readonly next_cursor?: string;
+}
+
 /** Error reasons shared by both protocols. */
-export type Reason = 'invalid_argument' | 'not_found' | 'ambiguous_reference' | 'ended' | 'partial_input' | 'unavailable' | 'protocol_incompatible' | 'machine_id_conflict' | 'ssh_interaction_required' | 'capacity_exceeded' | 'internal' | 'refused' | 'configuration_invalid' | 'cancelled' | 'worktree_failed' | 'upgrading' | 'unsupported';
+export type Reason = 'invalid_argument' | 'not_found' | 'session_not_found' | 'ambiguous_reference' | 'ended' | 'partial_input' | 'unavailable' | 'protocol_incompatible' | 'machine_id_conflict' | 'ssh_interaction_required' | 'capacity_exceeded' | 'internal' | 'refused' | 'configuration_invalid' | 'cancelled' | 'worktree_failed' | 'upgrading' | 'unsupported';
+
+export interface RemoveResult {
+	readonly reference: AgentRef;
+	readonly address: string;
+}
 
 /** Arguments for `agent.rename`. */
 export interface RenameArgs {
@@ -616,6 +705,39 @@ export interface ResumeArgs {
 	readonly env?: { readonly [key: string]: string };
 	readonly cols: number;
 	readonly rows: number;
+}
+
+export interface ResumeCandidate {
+	readonly target: ResumeTarget;
+	readonly cli: string;
+	readonly folder: string;
+	readonly machine_id: string;
+	readonly session: string;
+	readonly agent?: AgentRef;
+	readonly title?: string;
+	readonly at?: string;
+}
+
+export interface ResumeListArgs {
+	readonly machine?: string;
+	readonly folder?: string;
+	readonly all?: boolean;
+}
+
+export interface ResumeListResult {
+	readonly items: ResumeCandidate[];
+	readonly machines: V3MachineQueryResult[];
+}
+
+export interface ResumeResult {
+	readonly agent: V3AgentInfo;
+}
+
+/** The copyable agent address or the CLI session and its working location. */
+export interface ResumeTarget {
+	readonly reference: string;
+	readonly machine?: string;
+	readonly folder?: string;
 }
 
 /** What last went into an agent's message input with Enter: what the person submitted in its
@@ -777,6 +899,20 @@ export interface StateDetail {
 /** Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it. */
 export type StateReason = 'not_shown' | 'asked' | 'taken_back' | 'unrecognized' | 'not_ready' | 'tools_unavailable';
 
+export interface StatusArgs {
+	readonly machine?: string;
+}
+
+export interface StatusResult {
+	readonly home: string;
+	readonly settings_file: string;
+	readonly build: string;
+	readonly daemon_pid: number;
+	readonly keeper_pid?: number;
+	readonly agents: number;
+	readonly machines: V3MachineQueryResult[];
+}
+
 /** The result of `agent.stop`: the CLI's recorded exit, and whether it had ended before this stop. */
 export interface StopResult {
 	readonly code?: number;
@@ -840,6 +976,309 @@ export interface UpgradeResult {
 	readonly from: string;
 	readonly agents: number;
 }
+
+export interface V3AdvertiseParams {
+	readonly machines: V3MachineInfo[];
+}
+
+export type V3AgentArgs = { readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef };
+
+/** An agent's details. */
+export interface V3AgentInfo {
+	readonly agent_id: string;
+	readonly address: string;
+	readonly type: AgentKind;
+	readonly label?: string;
+	readonly unreachable?: boolean;
+	readonly name: string;
+	readonly cli: string;
+	readonly args: string[];
+	readonly model?: string;
+	readonly effort?: string;
+	readonly title?: string;
+	readonly cwd: string;
+	readonly machine_id: string;
+	readonly pid?: number;
+	readonly process: ProcessState;
+	readonly cols?: number;
+	readonly rows?: number;
+	readonly created_at: string;
+	readonly started_at: string;
+	readonly creator_kind?: CreatorKind;
+	readonly creator?: string;
+	readonly creator_machine_id?: string;
+	readonly root: string;
+	readonly root_machine_id?: string;
+	readonly yolo: boolean;
+	readonly exit?: ProcessExit;
+	readonly session?: string;
+	readonly state: V3AgentState;
+	readonly state_detail?: StateDetail;
+	readonly said?: Said;
+	readonly tools_state: ToolsState;
+	readonly tools_reason?: ToolsReason;
+}
+
+export interface V3AgentListResult {
+	readonly agents: AgentListEntry[];
+	readonly machines: V3MachineQueryResult[];
+}
+
+export interface V3AgentMachineState {
+	readonly machine_id: string;
+	readonly state: AgentSyncState;
+	readonly agents?: V3AgentInfo[];
+}
+
+/** The agent's current state. */
+export type V3AgentState = 'starting' | 'working' | 'waiting_for_you' | 'just_done' | 'idle' | 'error' | 'ended' | 'unknown' | 'online';
+
+export type V3AgentsChange = { readonly kind: 'updated'; readonly agent: V3AgentInfo } | { readonly kind: 'removed'; readonly machine_id: string; readonly agent_id: string; readonly cause: AgentRemoval } | { readonly kind: 'machine_state'; readonly machine: V3AgentMachineState };
+
+export interface V3AgentsSnapshot {
+	readonly agents: V3AgentInfo[];
+	readonly machines: V3AgentMachineState[];
+}
+
+export type V3CallParams = { readonly op: 'agent.list'; readonly args: MachineQueryArgs } | { readonly op: 'agent.inspect'; readonly args: V3AgentArgs } | { readonly op: 'agent.start'; readonly args: V3StartArgs } | { readonly op: 'agent.start_preflight'; readonly args: V3StartArgs } | { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } | { readonly op: 'agent.resume'; readonly args: V3ResumeArgs } | { readonly op: 'location.list'; readonly args: LocationListArgs } | { readonly op: 'cli.list'; readonly args: CliListArgs } | { readonly op: 'agent.stop'; readonly args: V3AgentArgs } | { readonly op: 'agent.remove'; readonly args: V3AgentArgs } | { readonly op: 'agent.rename'; readonly args: V3RenameArgs } | { readonly op: 'agent.type'; readonly args: V3TypeArgs } | { readonly op: 'agent.send'; readonly args: V3SendArgs } | { readonly op: 'agent.resize'; readonly args: V3ResizeArgs } | { readonly op: 'agent.screen'; readonly args: V3ScreenArgs } | { readonly op: 'daemon.status'; readonly args: StatusArgs } | { readonly op: 'workspace.import_legacy'; readonly args: LegacyWorkspaceArgs } | { readonly op: 'machine.list'; readonly args: NoArgs } | { readonly op: 'machine.add'; readonly args: V3MachineAddArgs } | { readonly op: 'machine.connect'; readonly args: V3MachineConnectArgs } | { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } | { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'agent.deliver_start_result'; readonly args: V3DeliverStartResultArgs };
+
+/** An identity verified by the daemon that accepted the original request. */
+export type V3Caller = { readonly kind: 'terminal'; readonly machine_id: string } | { readonly kind: 'ide'; readonly machine_id: string } | { readonly kind: 'agent'; readonly agent: AgentRef; readonly root: AgentRef; readonly yolo: boolean };
+
+/** A start outcome with the message number already reserved on the recipient's machine. */
+export interface V3DeliverStartResultArgs {
+	readonly recipient: AgentRef;
+	readonly message: V3Message;
+}
+
+/** A forwarded call and the facts verified by the originating machine. */
+export interface V3ForwardCall {
+	readonly call: V3CallParams;
+	readonly by_model: boolean;
+	readonly from_name?: string;
+	readonly recipient?: AgentRef;
+}
+
+/** Parameters of `forward`. The outer JSON-RPC ID identifies this hop. */
+export interface V3ForwardParams {
+	readonly route: string[];
+	readonly caller: V3Caller;
+	readonly time_left_ms?: number;
+	readonly request_id?: string;
+	readonly method: string;
+	readonly params: unknown;
+}
+
+/** Introduces a daemon client or a machine. Actor identity is supplied by the daemon. */
+export interface V3HelloParams {
+	readonly protocol: [number, number];
+	readonly build: string;
+	readonly kind: ClientKind;
+	readonly machine?: MachineHello;
+}
+
+export interface V3InspectResult {
+	readonly agent: V3AgentInfo;
+	readonly rule?: string;
+	readonly input: InputInfo;
+	readonly session_tracking: boolean;
+	readonly started_by?: AgentCreator;
+	readonly viewers: string[];
+}
+
+export interface V3LocationInfo {
+	readonly location_id: string;
+	readonly label: string;
+	readonly path: string;
+	readonly kind: LocationKind;
+	readonly source_folder?: string;
+}
+
+export interface V3LocationListResult {
+	readonly locations: V3LocationInfo[];
+}
+
+export interface V3MachineAddArgs {
+	readonly ssh_destination: string;
+	readonly ssh_args?: string[];
+	readonly remote_home?: string;
+	readonly machine_id: string;
+}
+
+export interface V3MachineConnectArgs {
+	readonly transport: V3MachineTransport;
+	readonly kind: ConnectionKind;
+}
+
+export interface V3MachineConnectResult {
+	readonly ssh_destination?: string;
+	readonly ssh_args?: string[];
+	readonly remote_home?: string;
+	readonly expected_machine_id?: string;
+}
+
+export interface V3MachineConnection {
+	readonly machine_id: string;
+	readonly initiator_machine_id: string;
+	readonly kind: ConnectionKind;
+	readonly ssh_destination?: string;
+	readonly ssh_args?: string[];
+	readonly remote_home?: string;
+	readonly state: ConnectionState;
+	readonly ssh_interaction?: SshInteraction;
+}
+
+export interface V3MachineInfo {
+	readonly machine_id: string;
+	readonly boot_id?: string;
+	readonly name: string;
+	readonly selector: string;
+	readonly state: MachineState;
+	readonly last_seen?: string;
+	readonly ssh_error?: string;
+	readonly build?: string;
+	readonly route?: string[];
+	readonly connections: V3MachineConnection[];
+}
+
+export interface V3MachineListResult {
+	readonly machines: V3MachineInfo[];
+}
+
+export interface V3MachineQueryResult {
+	readonly machine_id: string;
+	readonly short_id: string;
+	readonly name: string;
+	readonly selector: string;
+	readonly build?: string;
+	readonly state: MachineState;
+	readonly status: MachineQueryStatus;
+	readonly last_seen?: string;
+	readonly ssh_error?: string;
+}
+
+export type V3MachineTransport = { readonly kind: 'ssh'; readonly ssh_destination: string; readonly ssh_args?: string[]; readonly remote_home?: string } | { readonly kind: 'bridge' };
+
+export type V3MachinesChange = { readonly kind: 'updated'; readonly machine: V3MachineInfo } | { readonly kind: 'removed'; readonly machine_id: string };
+
+export interface V3Message {
+	readonly message_id: string;
+	readonly message_ref?: MessageRef;
+	readonly from: string;
+	readonly from_machine_id?: string;
+	readonly from_name?: string;
+	readonly to: string;
+	readonly text: string;
+	readonly reply_to?: string;
+	readonly reply_to_machine_id?: string;
+	readonly call_id?: string;
+	readonly result?: V3StartOutcome;
+	readonly at: string;
+	readonly delivery: Delivery;
+}
+
+export type V3RenameArgs = { readonly name: string } & ({ readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef });
+
+export type V3ResizeArgs = { readonly cols: number; readonly rows: number; readonly colors?: TerminalColors } & ({ readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef });
+
+/** The copyable agent address or the CLI session and its working location. */
+export type V3ResumeArgs = { readonly reference: string; readonly machine?: string; readonly folder?: string; readonly machine_id?: string; readonly env?: { readonly [key: string]: string }; readonly cols: number; readonly rows: number } & ({ readonly machine_id?: never } | { readonly machine?: never });
+
+export interface V3ScreenArgs {
+	readonly agent: string;
+	readonly lines?: number;
+}
+
+export interface V3ScreenSnapshot {
+	readonly agent_id: string;
+	readonly address: string;
+	readonly machine_id: string;
+	readonly cols: number;
+	readonly rows: number;
+	readonly redraw: string;
+	readonly exit?: ProcessExit;
+	readonly process?: ProcessState;
+}
+
+export interface V3ScreenText {
+	readonly agent_id: string;
+	readonly address: string;
+	readonly process: ProcessState;
+	readonly observed_at: string;
+	readonly buffer: ScreenBuffer;
+	readonly text: string;
+	readonly line_count: number;
+	readonly older_lines: boolean;
+	readonly trimmed: boolean;
+}
+
+export type V3ScreenWatchArgs = { readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string } & ({ readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef });
+
+export interface V3SendArgs {
+	readonly to: string;
+	readonly text: string;
+	readonly reply_to?: string;
+	readonly reply_to_machine_id?: string;
+	readonly request_id?: string;
+	readonly time_left_ms?: number;
+}
+
+/** The receipt of a send, with the address that can be used to wait for a reply. */
+export interface V3SendResult {
+	readonly id: string;
+	readonly message: V3Message;
+	readonly repeated?: boolean;
+	readonly withdrawn?: boolean;
+	readonly expected_reply_to?: MessageRef;
+}
+
+/** Shared arguments for start and preflight. */
+export interface V3StartArgs {
+	readonly cli: string;
+	readonly args?: string[];
+	readonly folder?: string;
+	readonly folder_is_default?: boolean;
+	readonly machine?: string;
+	readonly worktree?: string;
+	readonly model?: string;
+	readonly effort?: string;
+	readonly name?: string;
+	readonly prompt?: string;
+	readonly env?: { readonly [key: string]: string };
+	readonly cols: number;
+	readonly rows: number;
+	readonly call_id?: string;
+	readonly result_message_id?: string;
+	readonly result_message_machine_id?: string;
+	readonly request_id?: string;
+}
+
+export interface V3StartOutcome {
+	readonly agent: V3AgentInfo;
+	readonly prompt: PromptOutcome;
+}
+
+export interface V3StartResult {
+	readonly agent: V3AgentInfo;
+	readonly prompt?: V3Message;
+	readonly result_message_id?: string;
+	readonly result_message_machine_id?: string;
+	readonly repeated?: boolean;
+}
+
+/** A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as
+ * exit code zero. */
+export interface V3StopResult {
+	readonly reference: AgentRef;
+	readonly address: string;
+	readonly code?: number;
+	readonly signal?: string;
+	readonly reason?: EndReason;
+	readonly at: string;
+	readonly already_ended?: boolean;
+}
+
+export type V3TypeArgs = { readonly raw?: string; readonly text?: string; readonly enter?: boolean; readonly keys?: string[] } & ({ readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef });
 
 /** What a CLI waits for. */
 export type WaitKind = 'permission' | 'question' | 'auth' | 'unknown';
@@ -929,6 +1368,19 @@ export interface WorktreeCreateArgs {
 	readonly base_ref: string;
 }
 
+/** Protocol 2 types used by takeover diagnostics and legacy fixtures. */
+export type V2AgentInfo = AgentInfo;
+export type V2AgentListResult = AgentListResult;
+export type V2HelloParams = HelloParams;
+export type V2HelloResult = HelloResult;
+export type V2MachineConnection = MachineConnection;
+export type V2MachineInfo = MachineInfo;
+export type V2StartArgs = StartArgs;
+export type V2StartResult = StartResult;
+export type V2WatchResult = WatchResult;
+export type V2WindowInfo = WindowInfo;
+export type V2WindowRef = WindowRef;
+
 /** Argument and result types for each operation. */
 export interface Operations {
 	readonly "agent.start": { readonly args: StartArgs; readonly result: StartResult };
@@ -974,4 +1426,39 @@ export interface Topics {
 	readonly messages: { readonly args: MessagesWatchArgs; readonly snapshot: MessagesSnapshot; readonly change: MessagesChange };
 	readonly windows: { readonly args: NoArgs; readonly snapshot: WindowInfo[]; readonly change: WindowsChange };
 	readonly machines: { readonly args: NoArgs; readonly snapshot: MachineInfo[]; readonly change: MachinesChange };
+}
+
+/** Argument and result types for each operation. */
+export interface V3Operations {
+	readonly "agent.list": { readonly args: MachineQueryArgs; readonly result: V3AgentListResult };
+	readonly "agent.inspect": { readonly args: V3AgentArgs; readonly result: V3InspectResult };
+	readonly "agent.start": { readonly args: V3StartArgs; readonly result: V3StartResult };
+	readonly "agent.start_preflight": { readonly args: V3StartArgs; readonly result: EmptyResult };
+	readonly "agent.resume_list": { readonly args: ResumeListArgs; readonly result: ResumeListResult };
+	readonly "agent.resume": { readonly args: V3ResumeArgs; readonly result: ResumeResult };
+	readonly "location.list": { readonly args: LocationListArgs; readonly result: V3LocationListResult };
+	readonly "cli.list": { readonly args: CliListArgs; readonly result: CliListResult };
+	readonly "agent.stop": { readonly args: V3AgentArgs; readonly result: V3StopResult };
+	readonly "agent.remove": { readonly args: V3AgentArgs; readonly result: RemoveResult };
+	readonly "agent.rename": { readonly args: V3RenameArgs; readonly result: V3AgentInfo };
+	readonly "agent.type": { readonly args: V3TypeArgs; readonly result: EmptyResult };
+	readonly "agent.send": { readonly args: V3SendArgs; readonly result: V3SendResult };
+	readonly "agent.resize": { readonly args: V3ResizeArgs; readonly result: EmptyResult };
+	readonly "agent.screen": { readonly args: V3ScreenArgs; readonly result: V3ScreenText };
+	readonly "daemon.status": { readonly args: StatusArgs; readonly result: StatusResult };
+	readonly "workspace.import_legacy": { readonly args: LegacyWorkspaceArgs; readonly result: LegacyWorkspaceResult };
+	readonly "machine.list": { readonly args: NoArgs; readonly result: V3MachineListResult };
+	readonly "machine.add": { readonly args: V3MachineAddArgs; readonly result: MachineAddResult };
+	readonly "machine.connect": { readonly args: V3MachineConnectArgs; readonly result: V3MachineConnectResult };
+	readonly "machine.remove": { readonly args: MachineRemoveArgs; readonly result: MachineRemoveResult };
+	readonly "machine.rename": { readonly args: MachineRenameArgs; readonly result: MachineRenameResult };
+	readonly "daemon.log": { readonly args: DaemonLogArgs; readonly result: DaemonLogResult };
+	readonly "daemon.upgrade": { readonly args: UpgradeArgs; readonly result: UpgradeResult };
+}
+
+/** Argument, snapshot, and change types for each topic. Skip unknown change kinds. */
+export interface V3Topics {
+	readonly agents: { readonly args: NoArgs; readonly snapshot: V3AgentsSnapshot; readonly change: V3AgentsChange };
+	readonly screen: { readonly args: V3ScreenWatchArgs; readonly snapshot: V3ScreenSnapshot; readonly change: ScreenChange };
+	readonly machines: { readonly args: NoArgs; readonly snapshot: V3MachineInfo[]; readonly change: V3MachinesChange };
 }

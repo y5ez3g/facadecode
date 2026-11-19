@@ -16,6 +16,7 @@ mod line;
 mod platform;
 mod protocol;
 mod texts;
+mod whitespace;
 
 pub mod key_input;
 pub mod log;
@@ -30,6 +31,7 @@ pub use build::{
     version, version_of,
 };
 pub use platform::modules::*;
+pub use protocol::v3;
 pub use protocol::{address, base64, daemon, daemon_client, jsonrpc, keeper, machine, operations};
 pub use texts::{instructions, skill, tools};
 

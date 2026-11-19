@@ -12,15 +12,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::daemon::{
-    CancelParams, ChangedParams, ClientKind, DAEMON_PROTOCOL_VERSION, HANDOVER_TIME, HelloParams,
-    HelloResult, MIN_DAEMON_PROTOCOL_VERSION, UnwatchParams, WatchEndedParams, WatchParams,
-    WatchResult, methods,
+    CancelParams, ChangedParams, ClientKind, DAEMON_PROTOCOL_VERSION, DaemonUpgrade,
+    DaemonUpgradeArgs, DaemonUpgradeResult, HANDOVER_TIME, HelloParams, HelloResult,
+    MIN_DAEMON_PROTOCOL_VERSION, UnwatchParams, WatchEndedParams, WatchParams, WatchResult,
+    methods,
 };
 use super::jsonrpc::{
     ErrorBody, Notification, Reason, Request, Response, ServerMessage, encode_line,
     read_server_message,
 };
 use super::operations::{CallParams, Operation, Topic};
+use super::{address, keeper, machine, v3};
 
 /// The wait before a client that holds a connection to the daemon, such as an attached terminal or
 /// an agent's Facade server, tries again after an attempt that reached no daemon.
@@ -37,6 +39,8 @@ const TAKEOVER_POLL: Duration = Duration::from_millis(100);
 
 /// The ID of the hello request; calls take the IDs after it.
 const HELLO_ID: u64 = 1;
+const LEGACY_DAEMON_PROTOCOL_RANGE: [u32; 2] =
+    [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION];
 
 /// A call the daemon's end cut off before its answer: what it did is not known.
 #[derive(Debug)]
@@ -92,6 +96,7 @@ pub struct Identity {
 struct Origin {
     socket: PathBuf,
     identity: Identity,
+    protocol_range: [u32; 2],
 }
 
 /// One connection to the daemon, past its hello.
@@ -120,6 +125,50 @@ impl DaemonClient {
         until: Instant,
         opening: &mut dyn FnMut(&ClientSocket) -> bool,
     ) -> anyhow::Result<Option<Self>> {
+        Self::connect_in_range(
+            socket,
+            identity,
+            until,
+            opening,
+            LEGACY_DAEMON_PROTOCOL_RANGE,
+        )
+    }
+
+    /// Connects to the normal daemon service using protocol v3.
+    pub fn connect_v3(
+        socket: &Path,
+        identity: &Identity,
+        until: Instant,
+        opening: &mut dyn FnMut(&ClientSocket) -> bool,
+    ) -> anyhow::Result<Option<Self>> {
+        Self::connect_in_range(socket, identity, until, opening, v3::DAEMON_PROTOCOL_RANGE)
+    }
+
+    fn connect_in_range(
+        socket: &Path,
+        identity: &Identity,
+        until: Instant,
+        opening: &mut dyn FnMut(&ClientSocket) -> bool,
+        protocol_range: [u32; 2],
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(mut client) = Self::open(socket, identity, until, opening, protocol_range)? else {
+            return Ok(None);
+        };
+        client.origin = Some(Origin {
+            socket: socket.to_owned(),
+            identity: identity.clone(),
+            protocol_range,
+        });
+        Ok(Some(client))
+    }
+
+    fn open(
+        socket: &Path,
+        identity: &Identity,
+        until: Instant,
+        opening: &mut dyn FnMut(&ClientSocket) -> bool,
+        protocol_range: [u32; 2],
+    ) -> anyhow::Result<Option<Self>> {
         let stream = match ClientSocket::connect(socket) {
             Err(err) if transient_transport(&err) => return Ok(None),
             Err(err) => anyhow::bail!("cannot connect to {}: {err}", socket.display()),
@@ -128,14 +177,7 @@ impl DaemonClient {
         if !opening(&stream) {
             return Ok(None);
         }
-        let Some(mut client) = Self::hello_until(stream, identity, until)? else {
-            return Ok(None);
-        };
-        client.origin = Some(Origin {
-            socket: socket.to_owned(),
-            identity: identity.clone(),
-        });
-        Ok(Some(client))
+        Self::hello_until(stream, identity, until, protocol_range)
     }
 
     /// Says hello, waiting for the answer until `until`. None when what answered is no daemon to
@@ -145,6 +187,7 @@ impl DaemonClient {
         stream: ClientSocket,
         identity: &Identity,
         until: Instant,
+        protocol_range: [u32; 2],
     ) -> anyhow::Result<Option<Self>> {
         let wait = until
             .saturating_duration_since(Instant::now())
@@ -153,7 +196,7 @@ impl DaemonClient {
         if stream.set_read_timeout(Some(wait)).is_err() {
             return Ok(None);
         }
-        match Self::hello(stream, identity) {
+        match Self::hello_in_range(stream, identity, protocol_range) {
             Ok(client) if client.writer.set_read_timeout(None).is_ok() => Ok(Some(client)),
             Ok(_) => Ok(None),
             Err(err) if upgrading(&err) => Ok(None),
@@ -169,25 +212,52 @@ impl DaemonClient {
     }
 
     /// Completes hello on a connected stream before using any other method.
-    pub fn hello(mut writer: ClientSocket, identity: &Identity) -> anyhow::Result<Self> {
+    pub fn hello(writer: ClientSocket, identity: &Identity) -> anyhow::Result<Self> {
+        Self::hello_in_range(writer, identity, LEGACY_DAEMON_PROTOCOL_RANGE)
+    }
+
+    /// Completes the v3 hello without sending legacy identity or window fields.
+    pub fn hello_v3(writer: ClientSocket, identity: &Identity) -> anyhow::Result<Self> {
+        Self::hello_in_range(writer, identity, v3::DAEMON_PROTOCOL_RANGE)
+    }
+
+    fn hello_in_range(
+        mut writer: ClientSocket,
+        identity: &Identity,
+        protocol_range: [u32; 2],
+    ) -> anyhow::Result<Self> {
         let mut reader = BufReader::new(writer.try_clone()?);
         let mut line = Vec::new();
-        let params = HelloParams {
-            protocol_range: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
-            build: crate::build_id(),
-            kind: identity.kind,
-            agent: identity.agent.clone(),
-            sessions: identity.sessions.clone(),
-            window: None,
-            numbers_given: None,
-            machine: None,
+        let request = if protocol_range == LEGACY_DAEMON_PROTOCOL_RANGE {
+            Request::new(
+                Some(HELLO_ID),
+                methods::HELLO,
+                HelloParams {
+                    protocol_range,
+                    build: crate::build_id(),
+                    kind: identity.kind,
+                    agent: identity.agent.clone(),
+                    sessions: identity.sessions.clone(),
+                    window: None,
+                    numbers_given: None,
+                    machine: None,
+                },
+            )
+        } else {
+            Request::new(
+                Some(HELLO_ID),
+                methods::HELLO,
+                v3::HelloParams {
+                    protocol_range,
+                    build: crate::build_id(),
+                    kind: identity.kind,
+                    machine: None,
+                },
+            )
         };
-        writer.write_all(&encode_line(&Request::new(
-            Some(HELLO_ID),
-            methods::HELLO,
-            params,
-        )))?;
-        let hello_result = hello_answer(read_server_message(&mut reader, &mut line)?)?;
+        writer.write_all(&encode_line(&request))?;
+        let hello_result =
+            hello_answer(read_server_message(&mut reader, &mut line)?, protocol_range)?;
         Ok(DaemonClient {
             writer,
             hello_result,
@@ -311,19 +381,25 @@ impl DaemonClient {
     /// Connects again, to the daemon that took over, waiting up to [`takeover_timeout`] for one to
     /// answer.
     pub fn connect_again(&mut self) -> anyhow::Result<()> {
-        let Origin { socket, identity } = self
+        let Origin {
+            socket,
+            identity,
+            protocol_range,
+        } = self
             .origin
             .clone()
             .ok_or_else(|| anyhow::anyhow!("this connection cannot connect again"))?;
         let timeout = takeover_timeout();
         let until = Instant::now() + timeout;
         *self = loop {
-            if let Some(client) = Self::connect(&socket, &identity, until, &mut |_| true)? {
+            if let Some(client) =
+                Self::connect_in_range(&socket, &identity, until, &mut |_| true, protocol_range)?
+            {
                 break client;
             }
             anyhow::ensure!(
                 Instant::now() < until,
-                "Facade did not answer within {} seconds of a newer build taking over",
+                "the Orchestrator did not respond within {} seconds of a newer build taking over",
                 timeout.as_secs()
             );
             std::thread::sleep(TAKEOVER_POLL);
@@ -411,6 +487,69 @@ impl DaemonClient {
     }
 }
 
+/// A takeover connection, with only the upgrade request and its v2 refusal diagnostic.
+pub struct UpgradeClient {
+    client: DaemonClient,
+    legacy_upgrade_refused: bool,
+}
+
+impl UpgradeClient {
+    pub fn connect(
+        socket: &Path,
+        until: Instant,
+        opening: &mut dyn FnMut(&ClientSocket) -> bool,
+    ) -> anyhow::Result<Option<Self>> {
+        let identity = Identity {
+            kind: ClientKind::Terminal,
+            agent: None,
+            sessions: Vec::new(),
+        };
+        Ok(DaemonClient::open(
+            socket,
+            &identity,
+            until,
+            opening,
+            v3::TAKEOVER_DAEMON_PROTOCOL_RANGE,
+        )?
+        .map(|client| Self {
+            client,
+            legacy_upgrade_refused: false,
+        }))
+    }
+
+    pub fn hello_result(&self) -> &HelloResult {
+        &self.client.hello_result
+    }
+
+    pub fn upgrade(&mut self, mut args: DaemonUpgradeArgs) -> anyhow::Result<DaemonUpgradeResult> {
+        if !cfg!(debug_assertions) {
+            args.daemon_protocol_range = v3::TAKEOVER_DAEMON_PROTOCOL_RANGE;
+            args.keeper_protocol_range = [
+                keeper::MIN_KEEPER_PROTOCOL_VERSION,
+                keeper::KEEPER_PROTOCOL_VERSION,
+            ];
+        }
+        let result = self.client.call::<DaemonUpgrade>(args);
+        self.legacy_upgrade_refused = self.client.hello_result.protocol
+            == v3::TAKEOVER_DAEMON_PROTOCOL_RANGE[0]
+            && matches!(&result, Err(error) if error.is::<ErrorBody>() && !upgrading(error));
+        result
+    }
+
+    pub fn legacy_agents(&mut self) -> anyhow::Result<machine::AgentListResult> {
+        anyhow::ensure!(
+            self.legacy_upgrade_refused,
+            "the legacy agent list is only available after a v2 daemon refuses an upgrade"
+        );
+        self.client
+            .call::<machine::AgentList>(machine::MachineQueryArgs {
+                machine: Some(address::exact_machine_selector(
+                    &self.client.hello_result.machine_id,
+                )),
+            })
+    }
+}
+
 /// Whether `response` answers request `id`. A response with no ID answers the line the daemon
 /// could not read, which is the request waiting.
 fn answers(response: &Response, id: u64) -> bool {
@@ -440,16 +579,19 @@ fn call_params<O: Operation>(args: O::Args) -> anyhow::Result<CallParams> {
 }
 
 /// What the daemon answered to hello, read as this build's protocol.
-fn hello_answer(message: Option<ServerMessage>) -> anyhow::Result<HelloResult> {
+fn hello_answer(
+    message: Option<ServerMessage>,
+    [oldest, newest]: [u32; 2],
+) -> anyhow::Result<HelloResult> {
     let response = match message {
         Some(ServerMessage::Response(response)) => response,
         Some(ServerMessage::Notification(_)) => {
-            anyhow::bail!("the Facade daemon did not respond to hello")
+            anyhow::bail!("the Orchestrator did not respond to hello")
         }
         None => {
             let closed = io::Error::new(
                 ErrorKind::UnexpectedEof,
-                "the Facade daemon closed before hello",
+                "the Orchestrator closed before hello",
             );
             return Err(closed.into());
         }
@@ -458,16 +600,27 @@ fn hello_answer(message: Option<ServerMessage>) -> anyhow::Result<HelloResult> {
         return Err(error.into());
     }
     let result = response.result.unwrap_or_default();
-    let hello = HelloResult::deserialize(&result).map_err(|err| another_protocol(&result, err))?;
-    if !(MIN_DAEMON_PROTOCOL_VERSION..=DAEMON_PROTOCOL_VERSION).contains(&hello.protocol) {
-        return Err(another_protocol(&result, "selected version outside the offered range").into());
+    let versions = oldest..=newest;
+    let hello = HelloResult::deserialize(&result)
+        .map_err(|err| another_protocol(&result, &versions, err))?;
+    if !versions.contains(&hello.protocol) {
+        return Err(another_protocol(
+            &result,
+            &versions,
+            "selected version outside the offered range",
+        )
+        .into());
     }
     Ok(hello)
 }
 
 /// The error for a hello answer of another protocol: this build, and the build and protocol the
 /// daemon names, where it names them.
-fn another_protocol(result: &Value, problem: impl std::fmt::Display) -> ErrorBody {
+fn another_protocol(
+    result: &Value,
+    versions: &std::ops::RangeInclusive<u32>,
+    problem: impl std::fmt::Display,
+) -> ErrorBody {
     let said = |key: &str| match result.get(key) {
         Some(Value::String(text)) => text.clone(),
         Some(other) => other.to_string(),
@@ -475,13 +628,13 @@ fn another_protocol(result: &Value, problem: impl std::fmt::Display) -> ErrorBod
     };
     let ours = crate::build_id();
     let (build, protocol) = (said("build"), said("protocol"));
-    let versions = format!("{MIN_DAEMON_PROTOCOL_VERSION}-{DAEMON_PROTOCOL_VERSION}");
+    let versions = format!("{}-{}", versions.start(), versions.end());
     ErrorBody::new(
         Reason::IncompatibleProtocol,
         format!(
-            "the Facade daemon's answer to hello does not read as daemon protocol {versions} of \
-             this client, {ours}: {problem}; the daemon says build {build} and protocol {protocol}; \
-             update Facade"
+            "the Orchestrator's response to hello does not read as daemon protocol {versions} of \
+             this client, {ours}: {problem}; it says build {build} and protocol {protocol}; \
+             upgrade Facade"
         ),
     )
 }

@@ -843,6 +843,29 @@ including an empty list. A pending, unreachable or absent row keeps earlier reco
 disconnected. A window notification to `#human` carries its full `MessageRef`. Window receipts
 distinguish delivery, confirmed failure and an unknown outcome.
 
+## Protocol 3 types
+
+This reference advertises the version 2 operations and topics. It also contains the types for
+clients moving to protocol 3. TypeScript v3 clients use `V3Operations` and `V3Topics` to look up
+their argument and result types. A normal client or machine offers `[3, 3]`. A takeover client offers
+`[2, 3]` as a terminal, sends `daemon.upgrade`, and may read the old daemon's local `agent.list`
+after a version 2 refusal. When the upgrade is accepted, normal calls wait for a new version 3
+connection. The keeper and MCP relay still speak version 1 of their respective protocols.
+
+Protocol 3 terminal and editor hellos use `V3HelloParams`. The daemon supplies the verified actor
+on its private MCP connection. Public agent and message addresses use `a3@devbox` and
+`m42@devbox`. A machine name, an eight-digit ID, or a full UUID can be used in the machine part.
+Agent operations that accept a stored `AgentRef` require exactly one of `agent` or `reference`.
+Legacy workspace import requires exactly one of `workspace_key`, `window_id`, or `instance_id`.
+A resume request may supply a machine selector or an exact `machine_id` saved with a Pin.
+If none of a machine's public spellings is unique, address generation reports an ambiguous
+reference. Stored agent references continue to identify the original machine by its full ID.
+
+A machine's connection state and its query status are independent. A legacy workspace import
+can record an empty contribution when a source answers. A timed-out query is incomplete even
+when the machine is online. Authenticated machines forward `V3ForwardCall` with the exact
+recipient of a send so a retry continues to address the same agent.
+
 ## Methods
 
 | Name | Description |
@@ -921,6 +944,7 @@ The `data.reason` values of the daemon protocol.
 |---|---|
 | `invalid_argument` | An argument is missing, malformed, or out of range, or the request is unsupported. |
 | `not_found` | The agent, run, message, or watch does not exist. |
+| `session_not_found` | The selected machine confirmed that the requested CLI session does not exist. |
 | `ambiguous_reference` | A reference names more than one agent, or the person and an agent: select one by its ID. |
 | `ended` | The agent ended: it takes no more input or messages. |
 | `partial_input` | A text or keys call stopped partway: the agent ended, or its terminal stopped taking input, after part of the call reached the terminal. The error's data says what went in. |
@@ -954,6 +978,12 @@ Arguments for an operation on one agent.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `agent` | `string` | yes | An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by its ID, such as `@Pixel #a3`. |
+
+### AgentCreator
+
+The source of an agent's start, as displayed to the caller.
+
+`{ readonly kind: 'agent'; readonly address: string } \| { readonly kind: 'command_line' } \| { readonly kind: 'vs_code' }`
 
 ### AgentInfo
 
@@ -991,12 +1021,47 @@ An agent record.
 | `tools_reason` | `ToolsReason` | no | Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable. |
 | `guest` | `boolean` | no | A guest: a session of a CLI the person started outside Facade, which joined through the CLI's hooks. Its terminal is not Facade's: Facade cannot read its screen, type into it, resize, stop or resume it. Omitted for an agent Facade started. |
 
+### AgentKind
+
+`'managed' \| 'guest'`
+
+### AgentListEntry
+
+A roster row and the exact reference to use for later operations.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `AgentRef` | yes |  |
+| `id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+| `type` | `AgentKind` | yes |  |
+| `state` | `V3AgentState` | yes |  |
+| `cli` | `string` | yes |  |
+| `title` | `string` | no |  |
+| `folder` | `string` | yes |  |
+| `started_at` | `string` | yes |  |
+
 ### AgentListResult
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `agents` | `AgentInfo[]` | yes |  |
 | `machines` | `MachineQueryResult[]` | yes |  |
+
+### AgentListRow
+
+A public roster row. The ID is the agent's copyable address.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+| `type` | `AgentKind` | yes |  |
+| `state` | `V3AgentState` | yes |  |
+| `cli` | `string` | yes |  |
+| `title` | `string` | no |  |
+| `folder` | `string` | yes |  |
+| `started_at` | `string` | yes |  |
 
 ### AgentMachineState
 
@@ -1017,6 +1082,12 @@ An agent's durable identity, independently of names and routes.
 | `machine_id` | `string` | yes |  |
 | `agent_id` | `string` | yes |  |
 
+### AgentRemoval
+
+The recorded cause of an agent record's removal.
+
+`'expired' \| 'removed'`
+
 ### AgentState
 
 What an agent is doing, from its CLI's own status reports, from its screen where its CLI's rule reads it, and from Facade's own facts. The first state that holds, in this order, is the agent's: `waiting_for_you`, `error`, `just_done`, `working`, `idle`, `starting`, then `unknown`; `ended` once its process ended.
@@ -1026,6 +1097,10 @@ What an agent is doing, from its CLI's own status reports, from its screen where
 ### AgentSyncState
 
 `'synced' \| 'pending' \| 'unreachable'`
+
+### AgentTarget
+
+`{ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef }`
 
 ### AgentsChange
 
@@ -1084,6 +1159,16 @@ A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
 | `not_installed` | `boolean` | no | A built-in CLI whose entry has no problem and names no program of its own, and whose program is not found where the start would run: not installed. Only with `available` false. A client may leave it out of its list instead of showing it as one that cannot start. Omitted otherwise. |
 | `overrides` | `Overrides` | yes | Whether a start can choose its model and its effort (CLIS-1.4). |
 
+### CliListArgs
+
+Lists CLIs using the selected machine's launch environment and working folder.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | no |  |
+| `folder` | `string` | no |  |
+| `env` | `{ readonly [key: string]: string }` | no | The client's launch environment for a local query. |
+
 ### CliListResult
 
 | Field | Type | Required | Description |
@@ -1121,6 +1206,10 @@ Connection verified on the foreground stream.
 ### ConnectionState
 
 `'connected' \| 'unavailable' \| 'ssh_interaction_required'`
+
+### CreatorKind
+
+`'agent' \| 'command_line' \| 'vs_code'`
 
 ### DaemonLogArgs
 
@@ -1226,6 +1315,7 @@ Error details for clients to inspect.
 | `windows` | `WindowDeliveryFailure[]` | no | With `unavailable` when no member window took a message to `#human`: each window and why it could not take the message. |
 | `window_delivery` | `WindowDelivery` | no | The receipt for a send whose remote window outcomes could not be confirmed. |
 | `message_ref` | `MessageRef` | no | The original kept message, where its delivery outcome is unknown. |
+| `record_removal` | `AgentRemoval` | no | A confirmed reason the addressed agent record was removed. |
 | `machine_id_conflict` | `MachineIdConflict` | no |  |
 | `ssh_interaction` | `SshInteraction` | no |  |
 | `unavailable` | `Unavailable` | no |  |
@@ -1331,6 +1421,18 @@ How an agent's process ended.
 
 `'normal' \| 'stopped' \| 'crashed'`
 
+### InboxMessage
+
+A complete inbox message as the receiving MCP client reads it.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes |  |
+| `from` | `string` | yes |  |
+| `at` | `string` | yes |  |
+| `text` | `string` | yes |  |
+| `reply_to` | `string` | no |  |
+
 ### InputInfo
 
 An agent's message input as its screen shows it now.
@@ -1428,6 +1530,19 @@ What a worktree creation that failed partway made, which stays: its branch, its 
 | `branch` | `string` | no | The branch it made. |
 | `path` | `string` | no | The folder it made, an absolute path. |
 
+### LegacyWorkspaceArgs
+
+One legacy workspace selector from the specified machine.
+
+`{ readonly machine_id: string; readonly workspace_key?: string; readonly window_id?: string; readonly instance_id?: string } & ({ readonly workspace_key: string; readonly window_id?: never; readonly instance_id?: never } \| { readonly workspace_key?: never; readonly window_id: string; readonly instance_id?: never } \| { readonly workspace_key?: never; readonly window_id?: never; readonly instance_id: string })`
+
+### LegacyWorkspaceResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `AgentRef[]` | yes |  |
+| `machines` | `V3MachineQueryResult[]` | yes |  |
+
 ### LocationInfo
 
 A place an agent can work: a window's folder, or a checkout of a Git repository one of its folders is in.
@@ -1444,6 +1559,13 @@ A place an agent can work: a window's folder, or a checkout of a Git repository 
 What a location is.
 
 `'folder' \| 'main' \| 'worktree'`
+
+### LocationListArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | no |  |
+| `folders` | `string[]` | no |  |
 
 ### LocationListResult
 
@@ -1611,6 +1733,10 @@ The outcome of asking one machine for its reachable agents.
 | `machine_id` | `string` | yes |  |
 | `name` | `string` | yes |  |
 
+### MachineState
+
+`'online' \| 'connecting' \| 'sleeping' \| 'unreachable' \| 'ssh_interaction_required'`
+
 ### MachineTransport
 
 The transport the local client will bridge to this machine session.
@@ -1756,11 +1882,36 @@ A start prompt's message ID and what became of it.
 | `remote_build` | `string` | yes |  |
 | `remote_protocol` | `[number, number]` | yes |  |
 
+### ReadMessagesArgs
+
+The public MCP inbox request.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `after` | `string` | no |  |
+| `last` | `number` | no |  |
+| `wait` | `boolean` | no |  |
+| `reply_to` | `string` | no |  |
+
+### ReadMessagesResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `messages` | `InboxMessage[]` | yes |  |
+| `next_cursor` | `string` | no | Continue the page by passing this value as `after`. |
+
 ### Reason
 
 Error reasons shared by both protocols.
 
-`'invalid_argument' \| 'not_found' \| 'ambiguous_reference' \| 'ended' \| 'partial_input' \| 'unavailable' \| 'protocol_incompatible' \| 'machine_id_conflict' \| 'ssh_interaction_required' \| 'capacity_exceeded' \| 'internal' \| 'refused' \| 'configuration_invalid' \| 'cancelled' \| 'worktree_failed' \| 'upgrading' \| 'unsupported'`
+`'invalid_argument' \| 'not_found' \| 'session_not_found' \| 'ambiguous_reference' \| 'ended' \| 'partial_input' \| 'unavailable' \| 'protocol_incompatible' \| 'machine_id_conflict' \| 'ssh_interaction_required' \| 'capacity_exceeded' \| 'internal' \| 'refused' \| 'configuration_invalid' \| 'cancelled' \| 'worktree_failed' \| 'upgrading' \| 'unsupported'`
+
+### RemoveResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `AgentRef` | yes |  |
+| `address` | `string` | yes |  |
 
 ### RenameArgs
 
@@ -1813,6 +1964,50 @@ Arguments for `agent.resume`, supplied by the client.
 | `env` | `{ readonly [key: string]: string }` | no | The environment supplied by the client, filtered as for `agent.start`. The agent's earlier environment is not reused. |
 | `cols` | `number` | yes | The terminal width in columns, at least 2. |
 | `rows` | `number` | yes | The terminal height in rows, at least 1. |
+
+### ResumeCandidate
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target` | `ResumeTarget` | yes |  |
+| `cli` | `string` | yes |  |
+| `folder` | `string` | yes |  |
+| `machine_id` | `string` | yes |  |
+| `session` | `string` | yes |  |
+| `agent` | `AgentRef` | no |  |
+| `title` | `string` | no |  |
+| `at` | `string` | no |  |
+
+### ResumeListArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | no |  |
+| `folder` | `string` | no |  |
+| `all` | `boolean` | no |  |
+
+### ResumeListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `items` | `ResumeCandidate[]` | yes |  |
+| `machines` | `V3MachineQueryResult[]` | yes |  |
+
+### ResumeResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `V3AgentInfo` | yes |  |
+
+### ResumeTarget
+
+The copyable agent address or the CLI session and its working location.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `string` | yes |  |
+| `machine` | `string` | no |  |
+| `folder` | `string` | no |  |
 
 ### Said
 
@@ -2009,6 +2204,24 @@ Why nothing shows what an agent's CLI is doing, or what Facade found wrong with 
 
 `'not_shown' \| 'asked' \| 'taken_back' \| 'unrecognized' \| 'not_ready' \| 'tools_unavailable'`
 
+### StatusArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | no |  |
+
+### StatusResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `home` | `string` | yes |  |
+| `settings_file` | `string` | yes |  |
+| `build` | `string` | yes |  |
+| `daemon_pid` | `number` | yes |  |
+| `keeper_pid` | `number` | no |  |
+| `agents` | `number` | yes |  |
+| `machines` | `V3MachineQueryResult[]` | yes |  |
+
 ### StopResult
 
 The result of `agent.stop`: the CLI's recorded exit, and whether it had ended before this stop.
@@ -2098,6 +2311,401 @@ The result of `daemon.upgrade`.
 |---|---|---|---|
 | `from` | `string` | yes | The build that hands over. |
 | `agents` | `number` | yes | The agents that keep running through the takeover: those whose run runs. |
+
+### V3AdvertiseParams
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machines` | `V3MachineInfo[]` | yes |  |
+
+### V3AgentArgs
+
+`{ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef }`
+
+### V3AgentInfo
+
+An agent's details.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent_id` | `string` | yes | The stable ID is `a` followed by a number. It is unique within its Facade home while that home's SQLite database (`core/facade.db`) retains the agent number counter. |
+| `address` | `string` | yes | The copyable address, including a machine selector. The serving daemon fills client views. |
+| `type` | `AgentKind` | yes |  |
+| `label` | `string` | no | The label in the serving client's machine view. |
+| `unreachable` | `boolean` | no | The running machine is currently unreachable. |
+| `name` | `string` | yes | The display name. Names are nonempty but may repeat. |
+| `cli` | `string` | yes | The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a program started by its path or name. |
+| `args` | `string[]` | yes |  |
+| `model` | `string` | no |  |
+| `effort` | `string` | no |  |
+| `title` | `string` | no |  |
+| `cwd` | `string` | yes | The CLI's working folder at startup. |
+| `machine_id` | `string` | yes | The ID of the Facade machine that runs the agent. |
+| `pid` | `number` | no | The CLI's process ID. Omitted for a guest, whose process Facade does not know. |
+| `process` | `ProcessState` | yes | Whether the CLI is running or ended. |
+| `cols` | `number` | no | Terminal width in columns. Omitted for a guest, which has no terminal of Facade's. |
+| `rows` | `number` | no | Terminal height in rows. Omitted for a guest. |
+| `created_at` | `string` | yes | When the agent was first created, in UTC ISO 8601 format with milliseconds. |
+| `started_at` | `string` | yes | The latest start or resume time, in UTC ISO 8601 format with milliseconds. |
+| `creator_kind` | `CreatorKind` | no |  |
+| `creator` | `string` | no | The agent whose client started it. Omitted where the person started it, and for a guest. |
+| `creator_machine_id` | `string` | no | The creator's machine ID. Omitted when it is the record's own machine. |
+| `root` | `string` | yes | The first agent of its creation tree: itself where it has no creator, or else its creator's root. It stays when agents of the tree end or go. |
+| `root_machine_id` | `string` | no | The root agent's machine ID. Omitted when it is the record's own machine. |
+| `yolo` | `boolean` | yes | Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a guest as it joins. |
+| `exit` | `ProcessExit` | no | The recorded exit. Omitted while the agent is running. |
+| `session` | `string` | no | The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues. Omitted until one is reported. |
+| `state` | `V3AgentState` | yes | What the agent is doing. |
+| `state_detail` | `StateDetail` | no | More about the state: what the CLI waits for, its own words, how its process ended, or why the state is unknown. |
+| `said` | `Said` | no | The last thing that went into the agent's message input. Omitted until something has. |
+| `tools_state` | `ToolsState` | yes | Whether the agent's CLI can use Facade's tools. |
+| `tools_reason` | `ToolsReason` | no | Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable. |
+
+### V3AgentListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `AgentListEntry[]` | yes |  |
+| `machines` | `V3MachineQueryResult[]` | yes |  |
+
+### V3AgentMachineState
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `state` | `AgentSyncState` | yes |  |
+| `agents` | `V3AgentInfo[]` | no | For a synced machine, its complete records, including an empty list. |
+
+### V3AgentState
+
+The agent's current state.
+
+`'starting' \| 'working' \| 'waiting_for_you' \| 'just_done' \| 'idle' \| 'error' \| 'ended' \| 'unknown' \| 'online'`
+
+### V3AgentsChange
+
+`{ readonly kind: 'updated'; readonly agent: V3AgentInfo } \| { readonly kind: 'removed'; readonly machine_id: string; readonly agent_id: string; readonly cause: AgentRemoval } \| { readonly kind: 'machine_state'; readonly machine: V3AgentMachineState }`
+
+### V3AgentsSnapshot
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `V3AgentInfo[]` | yes | Records on the machine that serves this view. |
+| `machines` | `V3AgentMachineState[]` | yes |  |
+
+### V3CallParams
+
+`{ readonly op: 'agent.list'; readonly args: MachineQueryArgs } \| { readonly op: 'agent.inspect'; readonly args: V3AgentArgs } \| { readonly op: 'agent.start'; readonly args: V3StartArgs } \| { readonly op: 'agent.start_preflight'; readonly args: V3StartArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: V3ResumeArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'agent.stop'; readonly args: V3AgentArgs } \| { readonly op: 'agent.remove'; readonly args: V3AgentArgs } \| { readonly op: 'agent.rename'; readonly args: V3RenameArgs } \| { readonly op: 'agent.type'; readonly args: V3TypeArgs } \| { readonly op: 'agent.send'; readonly args: V3SendArgs } \| { readonly op: 'agent.resize'; readonly args: V3ResizeArgs } \| { readonly op: 'agent.screen'; readonly args: V3ScreenArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'workspace.import_legacy'; readonly args: LegacyWorkspaceArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.add'; readonly args: V3MachineAddArgs } \| { readonly op: 'machine.connect'; readonly args: V3MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'agent.deliver_start_result'; readonly args: V3DeliverStartResultArgs }`
+
+### V3Caller
+
+An identity verified by the daemon that accepted the original request.
+
+`{ readonly kind: 'terminal'; readonly machine_id: string } \| { readonly kind: 'ide'; readonly machine_id: string } \| { readonly kind: 'agent'; readonly agent: AgentRef; readonly root: AgentRef; readonly yolo: boolean }`
+
+### V3DeliverStartResultArgs
+
+A start outcome with the message number already reserved on the recipient's machine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `recipient` | `AgentRef` | yes |  |
+| `message` | `V3Message` | yes |  |
+
+### V3ForwardCall
+
+A forwarded call and the facts verified by the originating machine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `call` | `V3CallParams` | yes |  |
+| `by_model` | `boolean` | yes |  |
+| `from_name` | `string` | no |  |
+| `recipient` | `AgentRef` | no | The resolved destination of `agent.send`, used again on retry. |
+
+### V3ForwardParams
+
+Parameters of `forward`. The outer JSON-RPC ID identifies this hop.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `route` | `string[]` | yes | Remaining machine IDs, from this hop's receiver to the destination. |
+| `caller` | `V3Caller` | yes |  |
+| `time_left_ms` | `number` | no |  |
+| `request_id` | `string` | no |  |
+| `method` | `string` | yes |  |
+| `params` | `unknown` | yes |  |
+
+### V3HelloParams
+
+Introduces a daemon client or a machine. Actor identity is supplied by the daemon.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `protocol` | `[number, number]` | yes |  |
+| `build` | `string` | yes |  |
+| `kind` | `ClientKind` | yes |  |
+| `machine` | `MachineHello` | no |  |
+
+### V3InspectResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `V3AgentInfo` | yes |  |
+| `rule` | `string` | no | The CLI rule the agent was started by: its CLI's name, such as `claude`. Omitted for an agent started by a program path or a name without a rule. |
+| `input` | `InputInfo` | yes |  |
+| `session_tracking` | `boolean` | yes | Whether the running CLI reports its session to Facade. False for an ended agent. |
+| `started_by` | `AgentCreator` | no | The recorded startup source, where it is known. |
+| `viewers` | `string[]` | yes | The viewers currently attached to the terminal. |
+
+### V3LocationInfo
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `location_id` | `string` | yes | `loc-` followed by 16 hexadecimal digits of the SHA-256 of the location's path: the same in every window that lists it. |
+| `label` | `string` | yes | The checkout's branch, or else the folder's name. |
+| `path` | `string` | yes | The absolute path, with symbolic links resolved. |
+| `kind` | `LocationKind` | yes | What the location is: a folder, a repository's main checkout, or a linked worktree. |
+| `source_folder` | `string` | no | The requested workspace folder that produced this local result. |
+
+### V3LocationListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `locations` | `V3LocationInfo[]` | yes |  |
+
+### V3MachineAddArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ssh_destination` | `string` | yes |  |
+| `ssh_args` | `string[]` | no |  |
+| `remote_home` | `string` | no |  |
+| `machine_id` | `string` | yes |  |
+
+### V3MachineConnectArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `transport` | `V3MachineTransport` | yes |  |
+| `kind` | `ConnectionKind` | yes | A bridge is always temporary. |
+
+### V3MachineConnectResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ssh_destination` | `string` | no |  |
+| `ssh_args` | `string[]` | no |  |
+| `remote_home` | `string` | no |  |
+| `expected_machine_id` | `string` | no |  |
+
+### V3MachineConnection
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes | The other end of the connection. |
+| `initiator_machine_id` | `string` | yes |  |
+| `kind` | `ConnectionKind` | yes |  |
+| `ssh_destination` | `string` | no |  |
+| `ssh_args` | `string[]` | no |  |
+| `remote_home` | `string` | no |  |
+| `state` | `ConnectionState` | yes |  |
+| `ssh_interaction` | `SshInteraction` | no |  |
+
+### V3MachineInfo
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `boot_id` | `string` | no | The running daemon, where observed. Every advertised route carries it. |
+| `name` | `string` | yes |  |
+| `selector` | `string` | yes |  |
+| `state` | `MachineState` | yes |  |
+| `last_seen` | `string` | no |  |
+| `ssh_error` | `string` | no |  |
+| `build` | `string` | no |  |
+| `route` | `string[]` | no | The remaining hops, ending at this machine. Empty for the table's own machine. Absent for a saved destination without a route. |
+| `connections` | `V3MachineConnection[]` | yes |  |
+
+### V3MachineListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machines` | `V3MachineInfo[]` | yes |  |
+
+### V3MachineQueryResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `short_id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+| `selector` | `string` | yes |  |
+| `build` | `string` | no |  |
+| `state` | `MachineState` | yes |  |
+| `status` | `MachineQueryStatus` | yes | Whether this query obtained the machine's contribution. |
+| `last_seen` | `string` | no |  |
+| `ssh_error` | `string` | no |  |
+
+### V3MachineTransport
+
+`{ readonly kind: 'ssh'; readonly ssh_destination: string; readonly ssh_args?: string[]; readonly remote_home?: string } \| { readonly kind: 'bridge' }`
+
+### V3MachinesChange
+
+`{ readonly kind: 'updated'; readonly machine: V3MachineInfo } \| { readonly kind: 'removed'; readonly machine_id: string }`
+
+### V3Message
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `message_id` | `string` | yes | `m` followed by a number, unique within the Facade home. |
+| `message_ref` | `MessageRef` | no | The full reference, when a remote message receipt needs it. |
+| `from` | `string` | yes | The sender: an agent ID, `command_line` or `facade`. |
+| `from_machine_id` | `string` | no | The sender's machine, when different from the one that stored the message. |
+| `from_name` | `string` | no | The sender's name when it sent the message. Omitted for `command_line` and `facade`. |
+| `to` | `string` | yes | The recipient's agent ID. |
+| `text` | `string` | yes | The complete text as sent. |
+| `reply_to` | `string` | no | The message this one answers. |
+| `reply_to_machine_id` | `string` | no | The replied-to message's machine, when different from the one that stored this message. |
+| `call_id` | `string` | no | A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the call its result answers. |
+| `result` | `V3StartOutcome` | no | A result's facts, which its text words. Omitted for any other message. |
+| `at` | `string` | yes | When Facade received it, in UTC ISO 8601 format with milliseconds. |
+| `delivery` | `Delivery` | yes |  |
+
+### V3RenameArgs
+
+`{ readonly name: string } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
+
+### V3ResizeArgs
+
+`{ readonly cols: number; readonly rows: number; readonly colors?: TerminalColors } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
+
+### V3ResumeArgs
+
+The copyable agent address or the CLI session and its working location.
+
+`{ readonly reference: string; readonly machine?: string; readonly folder?: string; readonly machine_id?: string; readonly env?: { readonly [key: string]: string }; readonly cols: number; readonly rows: number } & ({ readonly machine_id?: never } \| { readonly machine?: never })`
+
+### V3ScreenArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `string` | yes | The agent's address or name. |
+| `lines` | `number` | no | The number of lines to return, from 1 to 2000. Defaults to 50. |
+
+### V3ScreenSnapshot
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent_id` | `string` | yes | The ID of the agent being viewed. |
+| `address` | `string` | yes |  |
+| `machine_id` | `string` | yes | The agent's running machine, for reconnecting to its exact reference. |
+| `cols` | `number` | yes | Terminal width required to apply the redraw. |
+| `rows` | `number` | yes | Terminal height required to apply the redraw. |
+| `redraw` | `string` | yes | Base64-encoded terminal bytes that redraw the screen at this size. Restores cursor state, charsets, and modes. On the main screen, up to 1,000 rows of agent scrollback come first unless `include_scrollback` is false. `keep_scrollback` controls whether the viewer's existing scrollback is cleared before the redraw. |
+| `exit` | `ProcessExit` | no | The recorded exit, if the agent has ended. |
+| `process` | `ProcessState` | no | The agent's process state captured with this snapshot. |
+
+### V3ScreenText
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent_id` | `string` | yes |  |
+| `address` | `string` | yes |  |
+| `process` | `ProcessState` | yes | Whether the agent's CLI is running. An ended agent's screen is the one it left. |
+| `observed_at` | `string` | yes | When the screen was read, in UTC ISO 8601 format with milliseconds; for an ended agent, when it ended, as its screen is the one it left. |
+| `buffer` | `ScreenBuffer` | yes |  |
+| `text` | `string` | yes | The lines, joined by line feeds, each wrapped row joined into its line. Inverse text is between `[[` and `]]` and dim text between `{{` and `}}`, inverse outside dim. Each backslash, bracket, and brace of the screen's own text is escaped with a backslash, so removing the marks and the escapes gives the text exactly; see [`crate::daemon::plain`]. |
+| `line_count` | `number` | yes | How many lines `text` holds. |
+| `older_lines` | `boolean` | yes | Whether output lies above the lines read. |
+| `trimmed` | `boolean` | yes | Whether the scrollback let go of its oldest lines. |
+
+### V3ScreenWatchArgs
+
+`{ readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
+
+### V3SendArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `to` | `string` | yes | The recipient's address or name. |
+| `text` | `string` | yes | The complete message: at most 8,000 characters and 540 lines of text, tabs, and line breaks, not blank. |
+| `reply_to` | `string` | no | The message this one answers, by ID or address such as `m4@gpu`. |
+| `reply_to_machine_id` | `string` | no | The storage machine of the reply's reference, after the originating daemon verified it. |
+| `request_id` | `string` | no | The caller's own ID of this send, 1 to 200 characters. A retry within an hour with the same sender, sender machine, target, and ID joins its ongoing delivery or returns its original result. A withdrawn message keeps only a private record of the outcome for retries. |
+| `time_left_ms` | `number` | no | What is left of the send's 30 seconds as it leaves the client, in milliseconds: its delivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500. |
+
+### V3SendResult
+
+The receipt of a send, with the address that can be used to wait for a reply.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes |  |
+| `message` | `V3Message` | yes |  |
+| `repeated` | `boolean` | no |  |
+| `withdrawn` | `boolean` | no |  |
+| `expected_reply_to` | `MessageRef` | no | The original message the Guest was waiting for this sender to answer. It can be included when a send without `reply_to` timed out and was withdrawn. |
+
+### V3StartArgs
+
+Shared arguments for start and preflight.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cli` | `string` | yes |  |
+| `args` | `string[]` | no |  |
+| `folder` | `string` | no |  |
+| `folder_is_default` | `boolean` | no | The entry's default folder, which is discarded when forwarding to another machine. |
+| `machine` | `string` | no |  |
+| `worktree` | `string` | no | A branch to create as a worktree from the repository's current HEAD. |
+| `model` | `string` | no |  |
+| `effort` | `string` | no |  |
+| `name` | `string` | no |  |
+| `prompt` | `string` | no |  |
+| `env` | `{ readonly [key: string]: string }` | no |  |
+| `cols` | `number` | yes |  |
+| `rows` | `number` | yes |  |
+| `call_id` | `string` | no |  |
+| `result_message_id` | `string` | no |  |
+| `result_message_machine_id` | `string` | no |  |
+| `request_id` | `string` | no |  |
+
+### V3StartOutcome
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `V3AgentInfo` | yes | The started agent as it was when its prompt was settled. |
+| `prompt` | `PromptOutcome` | yes |  |
+
+### V3StartResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `V3AgentInfo` | yes | The agent's record. |
+| `prompt` | `V3Message` | no | The prompt, kept and pending, where one was given. |
+| `result_message_id` | `string` | no | The ID of the result the prompt owes the agent the client acts for, a message from `facade` once the prompt is settled. Omitted where no result is owed. |
+| `result_message_machine_id` | `string` | no | The machine that assigned `result_message_id`, when a result is owed. |
+| `repeated` | `boolean` | no | The call repeated an earlier one by its request ID: the agent is that call's, as it stands now. Omitted otherwise. |
+
+### V3StopResult
+
+A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as exit code zero.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `AgentRef` | yes |  |
+| `address` | `string` | yes |  |
+| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
+| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
+| `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
+| `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
+| `already_ended` | `boolean` | no | The CLI had ended before this stop, so the stop signaled nothing. Omitted when false. |
+
+### V3TypeArgs
+
+`{ readonly raw?: string; readonly text?: string; readonly enter?: boolean; readonly keys?: string[] } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
 
 ### WaitKind
 

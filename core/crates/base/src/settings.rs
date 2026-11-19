@@ -15,6 +15,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
+pub use crate::whitespace::is_space;
+
 /// The settings file's name, in the Facade home.
 pub const SETTINGS_FILE: &str = "facade.json";
 
@@ -119,22 +121,6 @@ pub fn read_file(file: &Path) -> Result<Settings, String> {
         Err(err) => return Err(format!("{shown} could not be read: {err}")),
     };
     parse(&String::from_utf8_lossy(&bytes), &shown).map_err(|problems| problems.join("; "))
-}
-
-/// Whether `char` is a space as the editor reads and trims a name or a text: JavaScript's white
-/// space and line terminators.
-pub fn is_space(char: char) -> bool {
-    matches!(
-        char,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{feff}'
-    )
 }
 
 /// `file` as a problem names it: under the person's home folder as `~/…`, as the editor shows it,

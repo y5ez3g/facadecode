@@ -88,6 +88,51 @@
       ],
       "description": "Arguments for an operation on one agent."
     },
+    "AgentCreator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "address": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "address"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command_line"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "vs_code"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ],
+      "description": "The source of an agent's start, as displayed to the caller."
+    },
     "AgentInfo": {
       "type": "object",
       "properties": {
@@ -236,6 +281,56 @@
       ],
       "description": "An agent record."
     },
+    "AgentKind": {
+      "type": "string",
+      "enum": [
+        "managed",
+        "guest"
+      ]
+    },
+    "AgentListEntry": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "state": {
+          "$ref": "#/$defs/V3AgentState"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "id",
+        "name",
+        "type",
+        "state",
+        "cli",
+        "folder",
+        "started_at"
+      ],
+      "description": "A roster row and the exact reference to use for later operations."
+    },
     "AgentListResult": {
       "type": "object",
       "properties": {
@@ -256,6 +351,45 @@
         "agents",
         "machines"
       ]
+    },
+    "AgentListRow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "state": {
+          "$ref": "#/$defs/V3AgentState"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "type",
+        "state",
+        "cli",
+        "folder",
+        "started_at"
+      ],
+      "description": "A public roster row. The ID is the agent's copyable address."
     },
     "AgentMachineState": {
       "type": "object",
@@ -295,6 +429,14 @@
         "agent_id"
       ],
       "description": "An agent's durable identity, independently of names and routes."
+    },
+    "AgentRemoval": {
+      "type": "string",
+      "enum": [
+        "expired",
+        "removed"
+      ],
+      "description": "The recorded cause of an agent record's removal."
     },
     "AgentState": {
       "oneOf": [
@@ -347,6 +489,34 @@
         "synced",
         "pending",
         "unreachable"
+      ]
+    },
+    "AgentTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "reference": false
+          },
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent": false,
+            "reference": {
+              "$ref": "#/$defs/AgentRef"
+            }
+          },
+          "required": [
+            "reference"
+          ]
+        }
       ]
     },
     "AgentsChange": {
@@ -1089,6 +1259,25 @@
       ],
       "description": "A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1)."
     },
+    "CliListArgs": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The client's launch environment for a local query."
+        }
+      },
+      "description": "Lists CLIs using the selected machine's launch environment and working folder."
+    },
     "CliListResult": {
       "type": "object",
       "properties": {
@@ -1172,6 +1361,14 @@
         "connected",
         "unavailable",
         "ssh_interaction_required"
+      ]
+    },
+    "CreatorKind": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "command_line",
+        "vs_code"
       ]
     },
     "DaemonLogArgs": {
@@ -1440,6 +1637,10 @@
         "message_ref": {
           "description": "The original kept message, where its delivery outcome is unknown.",
           "$ref": "#/$defs/MessageRef"
+        },
+        "record_removal": {
+          "description": "A confirmed reason the addressed agent record was removed.",
+          "$ref": "#/$defs/AgentRemoval"
         },
         "machine_id_conflict": {
           "$ref": "#/$defs/MachineIdConflict"
@@ -1766,6 +1967,33 @@
       ],
       "description": "How an agent's process ended."
     },
+    "InboxMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "reply_to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "from",
+        "at",
+        "text"
+      ],
+      "description": "A complete inbox message as the receiving MCP client reads it."
+    },
     "InputInfo": {
       "type": "object",
       "properties": {
@@ -2004,6 +2232,89 @@
       },
       "description": "What a worktree creation that failed partway made, which stays: its branch, its folder, or both."
     },
+    "LegacyWorkspaceArgs": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "workspace_key": {
+          "type": "string"
+        },
+        "window_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id"
+      ],
+      "description": "One legacy workspace selector from the specified machine.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "workspace_key": {
+              "type": "string"
+            },
+            "window_id": false,
+            "instance_id": false
+          },
+          "required": [
+            "workspace_key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "workspace_key": false,
+            "window_id": {
+              "type": "string"
+            },
+            "instance_id": false
+          },
+          "required": [
+            "window_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "workspace_key": false,
+            "window_id": false,
+            "instance_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "instance_id"
+          ]
+        }
+      ]
+    },
+    "LegacyWorkspaceResult": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentRef"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineQueryResult"
+          }
+        }
+      },
+      "required": [
+        "agents",
+        "machines"
+      ]
+    },
     "LocationInfo": {
       "type": "object",
       "properties": {
@@ -2051,6 +2362,20 @@
         }
       ],
       "description": "What a location is."
+    },
+    "LocationListArgs": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
     "LocationListResult": {
       "type": "object",
@@ -2418,6 +2743,16 @@
       "required": [
         "machine_id",
         "name"
+      ]
+    },
+    "MachineState": {
+      "type": "string",
+      "enum": [
+        "online",
+        "connecting",
+        "sleeping",
+        "unreachable",
+        "ssh_interaction_required"
       ]
     },
     "MachineTransport": {
@@ -2854,6 +3189,45 @@
         "remote_protocol"
       ]
     },
+    "ReadMessagesArgs": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "last": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "wait": {
+          "type": "boolean"
+        },
+        "reply_to": {
+          "type": "string"
+        }
+      },
+      "description": "The public MCP inbox request."
+    },
+    "ReadMessagesResult": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InboxMessage"
+          }
+        },
+        "next_cursor": {
+          "type": "string",
+          "description": "Continue the page by passing this value as `after`."
+        }
+      },
+      "required": [
+        "messages"
+      ]
+    },
     "Reason": {
       "oneOf": [
         {
@@ -2865,6 +3239,11 @@
           "type": "string",
           "const": "not_found",
           "description": "The agent, run, message, or watch does not exist."
+        },
+        {
+          "type": "string",
+          "const": "session_not_found",
+          "description": "The selected machine confirmed that the requested CLI session does not exist."
         },
         {
           "type": "string",
@@ -2943,6 +3322,21 @@
         }
       ],
       "description": "Error reasons shared by both protocols."
+    },
+    "RemoveResult": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "address"
+      ]
     },
     "RenameArgs": {
       "type": "object",
@@ -3083,6 +3477,106 @@
         "rows"
       ],
       "description": "Arguments for `agent.resume`, supplied by the client."
+    },
+    "ResumeCandidate": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/ResumeTarget"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "machine_id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "title": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "cli",
+        "folder",
+        "machine_id",
+        "session"
+      ]
+    },
+    "ResumeListArgs": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "all": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ResumeListResult": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResumeCandidate"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineQueryResult"
+          }
+        }
+      },
+      "required": [
+        "items",
+        "machines"
+      ]
+    },
+    "ResumeResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/V3AgentInfo"
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "ResumeTarget": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "type": "string"
+        },
+        "machine": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference"
+      ],
+      "description": "The copyable agent address or the CLI session and its working location."
     },
     "Said": {
       "type": "object",
@@ -3723,6 +4217,57 @@
       ],
       "description": "Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it."
     },
+    "StatusArgs": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string"
+        }
+      }
+    },
+    "StatusResult": {
+      "type": "object",
+      "properties": {
+        "home": {
+          "type": "string"
+        },
+        "settings_file": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "daemon_pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "keeper_pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "agents": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineQueryResult"
+          }
+        }
+      },
+      "required": [
+        "home",
+        "settings_file",
+        "build",
+        "daemon_pid",
+        "agents",
+        "machines"
+      ]
+    },
     "StopResult": {
       "type": "object",
       "properties": {
@@ -3986,6 +4531,1934 @@
         "agents"
       ],
       "description": "The result of `daemon.upgrade`."
+    },
+    "V3AdvertiseParams": {
+      "type": "object",
+      "properties": {
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineInfo"
+          }
+        }
+      },
+      "required": [
+        "machines"
+      ]
+    },
+    "V3AgentArgs": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "reference": false
+          },
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent": false,
+            "reference": {
+              "$ref": "#/$defs/AgentRef"
+            }
+          },
+          "required": [
+            "reference"
+          ]
+        }
+      ]
+    },
+    "V3AgentInfo": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "The stable ID is `a` followed by a number. It is unique within its Facade home while\nthat home's SQLite database (`core/facade.db`) retains the agent number counter."
+        },
+        "address": {
+          "type": "string",
+          "description": "The copyable address, including a machine selector. The serving daemon fills client views."
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "label": {
+          "type": "string",
+          "description": "The label in the serving client's machine view."
+        },
+        "unreachable": {
+          "type": "boolean",
+          "description": "The running machine is currently unreachable."
+        },
+        "name": {
+          "type": "string",
+          "description": "The display name. Names are nonempty but may repeat."
+        },
+        "cli": {
+          "type": "string",
+          "description": "The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or\nan added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a\nprogram started by its path or name."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "The CLI's working folder at startup."
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "The ID of the Facade machine that runs the agent."
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The CLI's process ID. Omitted for a guest, whose process Facade does not know."
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState",
+          "description": "Whether the CLI is running or ended."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width in columns. Omitted for a guest, which has no terminal of Facade's."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height in rows. Omitted for a guest."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "When the agent was first created, in UTC ISO 8601 format with milliseconds."
+        },
+        "started_at": {
+          "type": "string",
+          "description": "The latest start or resume time, in UTC ISO 8601 format with milliseconds."
+        },
+        "creator_kind": {
+          "$ref": "#/$defs/CreatorKind"
+        },
+        "creator": {
+          "type": "string",
+          "description": "The agent whose client started it. Omitted where the person started it, and for a guest."
+        },
+        "creator_machine_id": {
+          "type": "string",
+          "description": "The creator's machine ID. Omitted when it is the record's own machine."
+        },
+        "root": {
+          "type": "string",
+          "description": "The first agent of its creation tree: itself where it has no creator, or else its creator's\nroot. It stays when agents of the tree end or go."
+        },
+        "root_machine_id": {
+          "type": "string",
+          "description": "The root agent's machine ID. Omitted when it is the record's own machine."
+        },
+        "yolo": {
+          "type": "boolean",
+          "description": "Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With\nYOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation\ntree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a\nguest as it joins."
+        },
+        "exit": {
+          "description": "The recorded exit. Omitted while the agent is running.",
+          "$ref": "#/$defs/ProcessExit"
+        },
+        "session": {
+          "type": "string",
+          "description": "The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues.\nOmitted until one is reported."
+        },
+        "state": {
+          "$ref": "#/$defs/V3AgentState",
+          "description": "What the agent is doing."
+        },
+        "state_detail": {
+          "description": "More about the state: what the CLI waits for, its own words, how its process ended, or why\nthe state is unknown.",
+          "$ref": "#/$defs/StateDetail"
+        },
+        "said": {
+          "description": "The last thing that went into the agent's message input. Omitted until something has.",
+          "$ref": "#/$defs/Said"
+        },
+        "tools_state": {
+          "$ref": "#/$defs/ToolsState",
+          "description": "Whether the agent's CLI can use Facade's tools."
+        },
+        "tools_reason": {
+          "description": "Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable.",
+          "$ref": "#/$defs/ToolsReason"
+        }
+      },
+      "required": [
+        "agent_id",
+        "address",
+        "type",
+        "name",
+        "cli",
+        "args",
+        "cwd",
+        "machine_id",
+        "process",
+        "created_at",
+        "started_at",
+        "root",
+        "yolo",
+        "state",
+        "tools_state"
+      ],
+      "description": "An agent's details."
+    },
+    "V3AgentListResult": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentListEntry"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineQueryResult"
+          }
+        }
+      },
+      "required": [
+        "agents",
+        "machines"
+      ]
+    },
+    "V3AgentMachineState": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentSyncState"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3AgentInfo"
+          },
+          "description": "For a synced machine, its complete records, including an empty list."
+        }
+      },
+      "required": [
+        "machine_id",
+        "state"
+      ]
+    },
+    "V3AgentState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "starting",
+          "description": "The CLI has not shown what it is doing yet, within 60 seconds of its start or resume."
+        },
+        {
+          "type": "string",
+          "const": "working",
+          "description": "The CLI is working, or stopped working less than a second ago."
+        },
+        {
+          "type": "string",
+          "const": "waiting_for_you",
+          "description": "The CLI waits for the person; `state_detail.kind` says for what. A menu or question it draws\nin place of its input counts, with `kind` `unknown` where it did not say, also while it\nstarts."
+        },
+        {
+          "type": "string",
+          "const": "just_done",
+          "description": "A turn ended while no terminal showed the agent. It stays so until one does. Work before the\nCLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a\nquestion the CLI shows. Words after the CLI's name at its start are the CLI's own and ask\nnothing."
+        },
+        {
+          "type": "string",
+          "const": "idle",
+          "description": "The CLI is not working and waits for nothing."
+        },
+        {
+          "type": "string",
+          "const": "error",
+          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 60 seconds of its\nstart or resume."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The CLI's process ended; `state_detail.how` says how, where that is known."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "Nothing shows what the CLI is doing; `state_detail.reason` says why."
+        },
+        {
+          "type": "string",
+          "const": "online",
+          "description": "A Guest is connected and can take messages."
+        }
+      ],
+      "description": "The agent's current state."
+    },
+    "V3AgentsChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "updated"
+            },
+            "agent": {
+              "$ref": "#/$defs/V3AgentInfo"
+            }
+          },
+          "required": [
+            "kind",
+            "agent"
+          ],
+          "description": "Insert or replace the whole agent record by machine and agent ID."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            },
+            "machine_id": {
+              "type": "string"
+            },
+            "agent_id": {
+              "type": "string"
+            },
+            "cause": {
+              "$ref": "#/$defs/AgentRemoval"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id",
+            "agent_id",
+            "cause"
+          ],
+          "description": "Remove the record with this machine and agent ID."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "machine_state"
+            },
+            "machine": {
+              "$ref": "#/$defs/V3AgentMachineState"
+            }
+          },
+          "required": [
+            "kind",
+            "machine"
+          ],
+          "description": "The state of this running machine's contribution to the view."
+        }
+      ]
+    },
+    "V3AgentsSnapshot": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3AgentInfo"
+          },
+          "description": "Records on the machine that serves this view."
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3AgentMachineState"
+          }
+        }
+      },
+      "required": [
+        "agents",
+        "machines"
+      ]
+    },
+    "V3CallParams": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.list"
+            },
+            "args": {
+              "$ref": "#/$defs/MachineQueryArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.inspect"
+            },
+            "args": {
+              "$ref": "#/$defs/V3AgentArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.start"
+            },
+            "args": {
+              "$ref": "#/$defs/V3StartArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.start_preflight"
+            },
+            "args": {
+              "$ref": "#/$defs/V3StartArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.resume_list"
+            },
+            "args": {
+              "$ref": "#/$defs/ResumeListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.resume"
+            },
+            "args": {
+              "$ref": "#/$defs/V3ResumeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "location.list"
+            },
+            "args": {
+              "$ref": "#/$defs/LocationListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "cli.list"
+            },
+            "args": {
+              "$ref": "#/$defs/CliListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.stop"
+            },
+            "args": {
+              "$ref": "#/$defs/V3AgentArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.remove"
+            },
+            "args": {
+              "$ref": "#/$defs/V3AgentArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.rename"
+            },
+            "args": {
+              "$ref": "#/$defs/V3RenameArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.type"
+            },
+            "args": {
+              "$ref": "#/$defs/V3TypeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.send"
+            },
+            "args": {
+              "$ref": "#/$defs/V3SendArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.resize"
+            },
+            "args": {
+              "$ref": "#/$defs/V3ResizeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.screen"
+            },
+            "args": {
+              "$ref": "#/$defs/V3ScreenArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "daemon.status"
+            },
+            "args": {
+              "$ref": "#/$defs/StatusArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "workspace.import_legacy"
+            },
+            "args": {
+              "$ref": "#/$defs/LegacyWorkspaceArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "machine.list"
+            },
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "machine.add"
+            },
+            "args": {
+              "$ref": "#/$defs/V3MachineAddArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "machine.connect"
+            },
+            "args": {
+              "$ref": "#/$defs/V3MachineConnectArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "machine.remove"
+            },
+            "args": {
+              "$ref": "#/$defs/MachineRemoveArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "machine.rename"
+            },
+            "args": {
+              "$ref": "#/$defs/MachineRenameArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "daemon.log"
+            },
+            "args": {
+              "$ref": "#/$defs/DaemonLogArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "daemon.upgrade"
+            },
+            "args": {
+              "$ref": "#/$defs/UpgradeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.deliver_start_result"
+            },
+            "args": {
+              "$ref": "#/$defs/V3DeliverStartResultArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        }
+      ]
+    },
+    "V3Caller": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "terminal"
+            },
+            "machine_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ide"
+            },
+            "machine_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "agent": {
+              "$ref": "#/$defs/AgentRef"
+            },
+            "root": {
+              "$ref": "#/$defs/AgentRef"
+            },
+            "yolo": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "agent",
+            "root",
+            "yolo"
+          ]
+        }
+      ],
+      "description": "An identity verified by the daemon that accepted the original request."
+    },
+    "V3DeliverStartResultArgs": {
+      "type": "object",
+      "properties": {
+        "recipient": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "message": {
+          "$ref": "#/$defs/V3Message"
+        }
+      },
+      "required": [
+        "recipient",
+        "message"
+      ],
+      "description": "A start outcome with the message number already reserved on the recipient's machine."
+    },
+    "V3ForwardCall": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/V3CallParams"
+        },
+        "by_model": {
+          "type": "boolean"
+        },
+        "from_name": {
+          "type": "string"
+        },
+        "recipient": {
+          "description": "The resolved destination of `agent.send`, used again on retry.",
+          "$ref": "#/$defs/AgentRef"
+        }
+      },
+      "required": [
+        "call",
+        "by_model"
+      ],
+      "description": "A forwarded call and the facts verified by the originating machine."
+    },
+    "V3ForwardParams": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Remaining machine IDs, from this hop's receiver to the destination."
+        },
+        "caller": {
+          "$ref": "#/$defs/V3Caller"
+        },
+        "time_left_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "route",
+        "caller",
+        "method",
+        "params"
+      ],
+      "description": "Parameters of `forward`. The outer JSON-RPC ID identifies this hop."
+    },
+    "V3HelloParams": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "build": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ClientKind"
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineHello"
+        }
+      },
+      "required": [
+        "protocol",
+        "build",
+        "kind"
+      ],
+      "description": "Introduces a daemon client or a machine. Actor identity is supplied by the daemon."
+    },
+    "V3InspectResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/V3AgentInfo"
+        },
+        "rule": {
+          "type": "string",
+          "description": "The CLI rule the agent was started by: its CLI's name, such as `claude`. Omitted for an\nagent started by a program path or a name without a rule."
+        },
+        "input": {
+          "$ref": "#/$defs/InputInfo"
+        },
+        "session_tracking": {
+          "type": "boolean",
+          "description": "Whether the running CLI reports its session to Facade. False for an ended agent."
+        },
+        "started_by": {
+          "description": "The recorded startup source, where it is known.",
+          "$ref": "#/$defs/AgentCreator"
+        },
+        "viewers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The viewers currently attached to the terminal."
+        }
+      },
+      "required": [
+        "agent",
+        "input",
+        "session_tracking",
+        "viewers"
+      ]
+    },
+    "V3LocationInfo": {
+      "type": "object",
+      "properties": {
+        "location_id": {
+          "type": "string",
+          "description": "`loc-` followed by 16 hexadecimal digits of the SHA-256 of the location's path: the same in\nevery window that lists it."
+        },
+        "label": {
+          "type": "string",
+          "description": "The checkout's branch, or else the folder's name."
+        },
+        "path": {
+          "type": "string",
+          "description": "The absolute path, with symbolic links resolved."
+        },
+        "kind": {
+          "$ref": "#/$defs/LocationKind",
+          "description": "What the location is: a folder, a repository's main checkout, or a linked worktree."
+        },
+        "source_folder": {
+          "type": "string",
+          "description": "The requested workspace folder that produced this local result."
+        }
+      },
+      "required": [
+        "location_id",
+        "label",
+        "path",
+        "kind"
+      ]
+    },
+    "V3LocationListResult": {
+      "type": "object",
+      "properties": {
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3LocationInfo"
+          }
+        }
+      },
+      "required": [
+        "locations"
+      ]
+    },
+    "V3MachineAddArgs": {
+      "type": "object",
+      "properties": {
+        "ssh_destination": {
+          "type": "string"
+        },
+        "ssh_args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_home": {
+          "type": "string"
+        },
+        "machine_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ssh_destination",
+        "machine_id"
+      ]
+    },
+    "V3MachineConnectArgs": {
+      "type": "object",
+      "properties": {
+        "transport": {
+          "$ref": "#/$defs/V3MachineTransport"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConnectionKind",
+          "description": "A bridge is always temporary."
+        }
+      },
+      "required": [
+        "transport",
+        "kind"
+      ]
+    },
+    "V3MachineConnectResult": {
+      "type": "object",
+      "properties": {
+        "ssh_destination": {
+          "type": "string"
+        },
+        "ssh_args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_home": {
+          "type": "string"
+        },
+        "expected_machine_id": {
+          "type": "string"
+        }
+      }
+    },
+    "V3MachineConnection": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string",
+          "description": "The other end of the connection."
+        },
+        "initiator_machine_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConnectionKind"
+        },
+        "ssh_destination": {
+          "type": "string"
+        },
+        "ssh_args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_home": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ConnectionState"
+        },
+        "ssh_interaction": {
+          "$ref": "#/$defs/SshInteraction"
+        }
+      },
+      "required": [
+        "machine_id",
+        "initiator_machine_id",
+        "kind",
+        "state"
+      ]
+    },
+    "V3MachineInfo": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "boot_id": {
+          "type": "string",
+          "description": "The running daemon, where observed. Every advertised route carries it."
+        },
+        "name": {
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/MachineState"
+        },
+        "last_seen": {
+          "type": "string"
+        },
+        "ssh_error": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "route": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The remaining hops, ending at this machine. Empty for the table's own machine.\nAbsent for a saved destination without a route."
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineConnection"
+          }
+        }
+      },
+      "required": [
+        "machine_id",
+        "name",
+        "selector",
+        "state",
+        "connections"
+      ]
+    },
+    "V3MachineListResult": {
+      "type": "object",
+      "properties": {
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineInfo"
+          }
+        }
+      },
+      "required": [
+        "machines"
+      ]
+    },
+    "V3MachineQueryResult": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "short_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/MachineState"
+        },
+        "status": {
+          "$ref": "#/$defs/MachineQueryStatus",
+          "description": "Whether this query obtained the machine's contribution."
+        },
+        "last_seen": {
+          "type": "string"
+        },
+        "ssh_error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "short_id",
+        "name",
+        "selector",
+        "state",
+        "status"
+      ]
+    },
+    "V3MachineTransport": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ssh"
+            },
+            "ssh_destination": {
+              "type": "string"
+            },
+            "ssh_args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "remote_home": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ssh_destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bridge"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "A temporary channel supplied by the client, such as an editor's existing SSH connection."
+        }
+      ]
+    },
+    "V3MachinesChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "updated"
+            },
+            "machine": {
+              "$ref": "#/$defs/V3MachineInfo"
+            }
+          },
+          "required": [
+            "kind",
+            "machine"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            },
+            "machine_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine_id"
+          ]
+        }
+      ]
+    },
+    "V3Message": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "description": "`m` followed by a number, unique within the Facade home."
+        },
+        "message_ref": {
+          "description": "The full reference, when a remote message receipt needs it.",
+          "$ref": "#/$defs/MessageRef"
+        },
+        "from": {
+          "type": "string",
+          "description": "The sender: an agent ID, `command_line` or `facade`."
+        },
+        "from_machine_id": {
+          "type": "string",
+          "description": "The sender's machine, when different from the one that stored the message."
+        },
+        "from_name": {
+          "type": "string",
+          "description": "The sender's name when it sent the message. Omitted for `command_line` and `facade`."
+        },
+        "to": {
+          "type": "string",
+          "description": "The recipient's agent ID."
+        },
+        "text": {
+          "type": "string",
+          "description": "The complete text as sent."
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "The message this one answers."
+        },
+        "reply_to_machine_id": {
+          "type": "string",
+          "description": "The replied-to message's machine, when different from the one that stored this message."
+        },
+        "call_id": {
+          "type": "string",
+          "description": "A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the\ncall its result answers."
+        },
+        "result": {
+          "description": "A result's facts, which its text words. Omitted for any other message.",
+          "$ref": "#/$defs/V3StartOutcome"
+        },
+        "at": {
+          "type": "string",
+          "description": "When Facade received it, in UTC ISO 8601 format with milliseconds."
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        }
+      },
+      "required": [
+        "message_id",
+        "from",
+        "to",
+        "text",
+        "at",
+        "delivery"
+      ]
+    },
+    "V3RenameArgs": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "reference": false
+          },
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent": false,
+            "reference": {
+              "$ref": "#/$defs/AgentRef"
+            }
+          },
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The new name, trimmed. An empty or blank name gets a default name chosen from the suggested\nnames: unused while one is available, otherwise reused. Names may repeat."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "V3ResizeArgs": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "reference": false
+          },
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent": false,
+            "reference": {
+              "$ref": "#/$defs/AgentRef"
+            }
+          },
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width in columns, at least 2."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height in rows, at least 1."
+        },
+        "colors": {
+          "$ref": "#/$defs/TerminalColors"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ]
+    },
+    "V3ResumeArgs": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "type": "string"
+        },
+        "machine": {
+          "type": "string"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "The exact machine saved with a Pin. Mutually exclusive with the public machine selector."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "reference",
+        "cols",
+        "rows"
+      ],
+      "description": "The copyable agent address or the CLI session and its working location.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "machine_id": false
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "machine": false
+          }
+        }
+      ]
+    },
+    "V3ScreenArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The agent's address or name."
+        },
+        "lines": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The number of lines to return, from 1 to 2000. Defaults to 50."
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "V3ScreenSnapshot": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "The ID of the agent being viewed."
+        },
+        "address": {
+          "type": "string"
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "The agent's running machine, for reconnecting to its exact reference."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width required to apply the redraw."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height required to apply the redraw."
+        },
+        "redraw": {
+          "type": "string",
+          "description": "Base64-encoded terminal bytes that redraw the screen at this size. Restores cursor state,\ncharsets, and modes. On the main screen, up to 1,000 rows of agent scrollback come first\nunless `include_scrollback` is false. `keep_scrollback` controls whether the viewer's\nexisting scrollback is cleared before the redraw."
+        },
+        "exit": {
+          "description": "The recorded exit, if the agent has ended.",
+          "$ref": "#/$defs/ProcessExit"
+        },
+        "process": {
+          "description": "The agent's process state captured with this snapshot.",
+          "$ref": "#/$defs/ProcessState"
+        }
+      },
+      "required": [
+        "agent_id",
+        "address",
+        "machine_id",
+        "cols",
+        "rows",
+        "redraw"
+      ]
+    },
+    "V3ScreenText": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState",
+          "description": "Whether the agent's CLI is running. An ended agent's screen is the one it left."
+        },
+        "observed_at": {
+          "type": "string",
+          "description": "When the screen was read, in UTC ISO 8601 format with milliseconds; for an ended agent, when\nit ended, as its screen is the one it left."
+        },
+        "buffer": {
+          "$ref": "#/$defs/ScreenBuffer"
+        },
+        "text": {
+          "type": "string",
+          "description": "The lines, joined by line feeds, each wrapped row joined into its line. Inverse text is\nbetween `[[` and `]]` and dim text between `{{` and `}}`, inverse outside dim. Each\nbackslash, bracket, and brace of the screen's own text is escaped with a backslash, so\nremoving the marks and the escapes gives the text exactly; see [`crate::daemon::plain`]."
+        },
+        "line_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many lines `text` holds."
+        },
+        "older_lines": {
+          "type": "boolean",
+          "description": "Whether output lies above the lines read."
+        },
+        "trimmed": {
+          "type": "boolean",
+          "description": "Whether the scrollback let go of its oldest lines."
+        }
+      },
+      "required": [
+        "agent_id",
+        "address",
+        "process",
+        "observed_at",
+        "buffer",
+        "text",
+        "line_count",
+        "older_lines",
+        "trimmed"
+      ]
+    },
+    "V3ScreenWatchArgs": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "reference": false
+          },
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent": false,
+            "reference": {
+              "$ref": "#/$defs/AgentRef"
+            }
+          },
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "properties": {
+        "keep_scrollback": {
+          "type": "boolean",
+          "description": "Keep the viewer's existing scrollback. Defaults to false: every snapshot and redraw clears\nit first. A main-screen snapshot then replays up to 1,000 rows of the agent's scrollback\nunless `include_scrollback` is false. Later redraws include only the visible screen.\n`facade attach` sets this option to true.",
+          "default": false
+        },
+        "include_scrollback": {
+          "type": "boolean",
+          "description": "Include up to 1,000 main-screen scrollback rows before the visible screen in the snapshot.\nDefaults to true. `facade attach` sets it to false on reconnect so the viewer does not\nreceive those rows twice.",
+          "default": true
+        },
+        "viewer": {
+          "type": "string"
+        }
+      }
+    },
+    "V3SendArgs": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "The recipient's address or name."
+        },
+        "text": {
+          "type": "string",
+          "description": "The complete message: at most 8,000 characters and 540 lines of text, tabs, and line breaks,\nnot blank."
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "The message this one answers, by ID or address such as `m4@gpu`."
+        },
+        "reply_to_machine_id": {
+          "type": "string",
+          "description": "The storage machine of the reply's reference, after the originating daemon verified it."
+        },
+        "request_id": {
+          "type": "string",
+          "description": "The caller's own ID of this send, 1 to 200 characters. A retry within an hour with the same\nsender, sender machine, target, and ID joins its ongoing delivery or returns its original\nresult. A withdrawn message keeps only a private record of the outcome for retries."
+        },
+        "time_left_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "What is left of the send's 30 seconds as it leaves the client, in milliseconds: its\ndelivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500."
+        }
+      },
+      "required": [
+        "to",
+        "text"
+      ]
+    },
+    "V3SendResult": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/V3Message"
+        },
+        "repeated": {
+          "type": "boolean"
+        },
+        "withdrawn": {
+          "type": "boolean"
+        },
+        "expected_reply_to": {
+          "description": "The original message the Guest was waiting for this sender to answer. It can be\nincluded when a send without `reply_to` timed out and was withdrawn.",
+          "$ref": "#/$defs/MessageRef"
+        }
+      },
+      "required": [
+        "id",
+        "message"
+      ],
+      "description": "The receipt of a send, with the address that can be used to wait for a reply."
+    },
+    "V3StartArgs": {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "folder": {
+          "type": "string"
+        },
+        "folder_is_default": {
+          "type": "boolean",
+          "description": "The entry's default folder, which is discarded when forwarding to another machine."
+        },
+        "machine": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string",
+          "description": "A branch to create as a worktree from the repository's current HEAD."
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "result_message_id": {
+          "type": "string"
+        },
+        "result_message_machine_id": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cli",
+        "cols",
+        "rows"
+      ],
+      "description": "Shared arguments for start and preflight."
+    },
+    "V3StartOutcome": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/V3AgentInfo",
+          "description": "The started agent as it was when its prompt was settled."
+        },
+        "prompt": {
+          "$ref": "#/$defs/PromptOutcome"
+        }
+      },
+      "required": [
+        "agent",
+        "prompt"
+      ]
+    },
+    "V3StartResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/V3AgentInfo",
+          "description": "The agent's record."
+        },
+        "prompt": {
+          "description": "The prompt, kept and pending, where one was given.",
+          "$ref": "#/$defs/V3Message"
+        },
+        "result_message_id": {
+          "type": "string",
+          "description": "The ID of the result the prompt owes the agent the client acts for, a message from `facade`\nonce the prompt is settled. Omitted where no result is owed."
+        },
+        "result_message_machine_id": {
+          "type": "string",
+          "description": "The machine that assigned `result_message_id`, when a result is owed."
+        },
+        "repeated": {
+          "type": "boolean",
+          "description": "The call repeated an earlier one by its request ID: the agent is that call's, as it stands\nnow. Omitted otherwise."
+        }
+      },
+      "required": [
+        "agent"
+      ]
+    },
+    "V3StopResult": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "code": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The exit code, if the CLI exited normally and its status is known. On Windows every exit\nhas one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is\n-1073741510."
+        },
+        "signal": {
+          "type": "string",
+          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on\nWindows."
+        },
+        "reason": {
+          "description": "Why no code or signal is available, if known. If all three fields are absent, the exit\nstatus is unavailable.",
+          "$ref": "#/$defs/EndReason"
+        },
+        "at": {
+          "type": "string",
+          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade noticed it."
+        },
+        "already_ended": {
+          "type": "boolean",
+          "description": "The CLI had ended before this stop, so the stop signaled nothing. Omitted when false."
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "at"
+      ],
+      "description": "A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as\nexit code zero."
+    },
+    "V3TypeArgs": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "reference": false
+          },
+          "required": [
+            "agent"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "agent": false,
+            "reference": {
+              "$ref": "#/$defs/AgentRef"
+            }
+          },
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "properties": {
+        "raw": {
+          "type": "string",
+          "description": "Bytes from an attached terminal, encoded as standard base64 with padding. They are queued as\nthey are, also between a typed text and its Enter."
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to paste as one input: printable characters, tabs, and line breaks. When the CLI turned\non bracketed paste, the text goes between the paste brackets with each line break as a\ncarriage return; otherwise it goes as given."
+        },
+        "enter": {
+          "type": "boolean",
+          "description": "Press Enter after `text`, in a write of its own 0.1 seconds and the CLI's settle time for\nthe text after the whole text reached the terminal. Empty text with `enter` presses Enter\nalone. Defaults to false."
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Keys to press in order: Enter (or Return), Escape (or Esc), Tab, Shift+Tab, Backspace,\nDelete, Up, Down, Left, Right (or ArrowUp, ArrowDown, ArrowLeft, ArrowRight), Home, End,\nPageUp, PageDown, Space, and Ctrl+A to Ctrl+Z, in any letter case, or any one character\nother than a control character, exactly as given. Each goes as a terminal sends it in the\nCLI's modes. After an Escape, the next key waits 50 ms."
+        }
+      }
     },
     "WaitKind": {
       "oneOf": [

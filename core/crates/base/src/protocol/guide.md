@@ -836,3 +836,26 @@ Agent views identify a record by machine and agent number. The `agents` snapshot
 including an empty list. A pending, unreachable or absent row keeps earlier records visible as
 disconnected. A window notification to `#human` carries its full `MessageRef`. Window receipts
 distinguish delivery, confirmed failure and an unknown outcome.
+
+## Protocol 3 types
+
+This reference advertises the version 2 operations and topics. It also contains the types for
+clients moving to protocol 3. TypeScript v3 clients use `V3Operations` and `V3Topics` to look up
+their argument and result types. A normal client or machine offers `[3, 3]`. A takeover client offers
+`[2, 3]` as a terminal, sends `daemon.upgrade`, and may read the old daemon's local `agent.list`
+after a version 2 refusal. When the upgrade is accepted, normal calls wait for a new version 3
+connection. The keeper and MCP relay still speak version 1 of their respective protocols.
+
+Protocol 3 terminal and editor hellos use `V3HelloParams`. The daemon supplies the verified actor
+on its private MCP connection. Public agent and message addresses use `a3@devbox` and
+`m42@devbox`. A machine name, an eight-digit ID, or a full UUID can be used in the machine part.
+Agent operations that accept a stored `AgentRef` require exactly one of `agent` or `reference`.
+Legacy workspace import requires exactly one of `workspace_key`, `window_id`, or `instance_id`.
+A resume request may supply a machine selector or an exact `machine_id` saved with a Pin.
+If none of a machine's public spellings is unique, address generation reports an ambiguous
+reference. Stored agent references continue to identify the original machine by its full ID.
+
+A machine's connection state and its query status are independent. A legacy workspace import
+can record an empty contribution when a source answers. A timed-out query is incomplete even
+when the machine is online. Authenticated machines forward `V3ForwardCall` with the exact
+recipient of a send so a retry continues to address the same agent.

@@ -72,43 +72,68 @@ async fn read_hello(connection: ServerSocket) -> BufReader<ServerSocket> {
 /// so, naming both builds, and panics at nothing a peer sends.
 #[test]
 fn an_answer_to_hello_this_build_cannot_read_is_another_protocol_s() {
-    let socket = TestSocket::new("hello-unread");
-    let daemon = stand_in(&socket.0, |connection| async move {
-        let mut connection = read_hello(connection).await;
-        let answer = serde_json::json!({
-            "jsonrpc": "2.0", "id": 1, "result": { "protocol": 9, "build": "9.9.9" },
+    for version in [DAEMON_PROTOCOL_VERSION, 3] {
+        let socket = TestSocket::new(&format!("hello-unread-{version}"));
+        let mut identity = terminal();
+        identity.agent = Some("a1".into());
+        identity.sessions = vec!["session-1".into()];
+        let daemon = stand_in(&socket.0, move |connection| async move {
+            let mut connection = BufReader::new(connection);
+            let mut line = String::new();
+            connection.read_line(&mut line).await.unwrap();
+            let request: Request = serde_json::from_str(&line).unwrap();
+            assert_eq!(request.method, "hello");
+            let mut expected = json!({ "protocol": [version, version], "build": facade_base::build_id(), "kind": "terminal" });
+            let result = if version == DAEMON_PROTOCOL_VERSION {
+                expected["agent"] = json!("a1");
+                expected["sessions"] = json!(["session-1"]);
+                json!({ "protocol": 9, "build": "9.9.9" })
+            } else {
+                json!({
+                    "protocol": DAEMON_PROTOCOL_VERSION, "build": "9.9.9", "pid": 1, "agents": 0,
+                    "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "topics": [], "ops": [],
+                })
+            };
+            assert_eq!(request.params, expected);
+            let answer = Response::ok(request.id.unwrap(), result);
+            connection.write_all(&encode_line(&answer)).await.unwrap();
+            // Hold the connection open until the client read the answer.
+            line.clear();
+            let _ = connection.read_line(&mut line).await;
         });
-        let answer = format!("{answer}\n");
-        connection.write_all(answer.as_bytes()).await.unwrap();
-        // Held open until the client read the answer.
-        let mut rest = String::new();
-        let _ = connection.read_line(&mut rest).await;
-    });
-    let connected = DaemonClient::connect(
-        &socket.0,
-        &terminal(),
-        Instant::now() + Duration::from_secs(5),
-        &mut |_| true,
-    );
-    let err = connected
-        .err()
-        .expect("an answer this build cannot read fails");
-    daemon.join().unwrap();
-    let body = err
-        .downcast_ref::<ErrorBody>()
-        .unwrap_or_else(|| panic!("not a protocol's error: {err:#}"));
-    assert_eq!(
-        body.data.reason,
-        Reason::IncompatibleProtocol,
-        "{}",
-        body.message
-    );
-    assert!(
-        body.message.contains("build 9.9.9 and protocol 9")
-            && body.message.contains(&facade_base::build_id()),
-        "{}",
-        body.message
-    );
+        let connect = if version == DAEMON_PROTOCOL_VERSION {
+            DaemonClient::connect
+        } else {
+            DaemonClient::connect_v3
+        };
+        let connected = connect(
+            &socket.0,
+            &identity,
+            Instant::now() + Duration::from_secs(5),
+            &mut |_| true,
+        );
+        let err = connected.err().expect("an incompatible hello must fail");
+        daemon.join().unwrap();
+        let body = err.downcast_ref::<ErrorBody>().unwrap();
+        let selected = if version == DAEMON_PROTOCOL_VERSION {
+            9
+        } else {
+            DAEMON_PROTOCOL_VERSION
+        };
+        assert_eq!(
+            body.data.reason,
+            Reason::IncompatibleProtocol,
+            "{}",
+            body.message
+        );
+        assert!(
+            body.message
+                .contains(&format!("build 9.9.9 and protocol {selected}"))
+                && body.message.contains(&facade_base::build_id()),
+            "{}",
+            body.message
+        );
+    }
 }
 
 /// A daemon that closes right after it answers hello, as one handing over does, is no daemon

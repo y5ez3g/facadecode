@@ -9,7 +9,7 @@ use facade_base::jsonrpc::{
 };
 use facade_base::operations::{CallParams, Operation, OperationVisitor, Topic, TopicVisitor};
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_base::{keeper, machine};
+use facade_base::{keeper, machine, v3};
 use schemars::{JsonSchema, SchemaGenerator};
 use serde_json::{Map, Value, json};
 
@@ -160,6 +160,19 @@ pub fn described(description: Option<Value>, mut schema: Value) -> Value {
     schema
 }
 
+fn call_schema<'a>(ops: impl IntoIterator<Item = &'a OperationDoc>) -> Value {
+    let calls: Vec<Value> = ops
+        .into_iter()
+        .map(|op| {
+            json!({
+                "type": "object", "properties": { "op": { "const": op.name }, "args": op.args },
+                "required": ["op", "args"],
+            })
+        })
+        .collect();
+    json!({ "oneOf": calls })
+}
+
 /// Specializes call arguments, watch arguments, snapshots, and changes for each operation or topic.
 pub fn specialize_operation_and_topic_schemas(
     definitions: &mut Map<String, Value>,
@@ -172,19 +185,7 @@ pub fn specialize_operation_and_topic_schemas(
             .and_then(|schema| schema.get("description"))
             .cloned()
     };
-    let calls: Vec<Value> = ops
-        .iter()
-        .map(|op| {
-            json!({
-                "type": "object", "properties": { "op": { "const": op.name }, "args": op.args },
-                "required": ["op", "args"],
-            })
-        })
-        .collect();
-    let call = described(
-        description(definitions, "CallParams"),
-        json!({ "oneOf": calls }),
-    );
+    let call = described(description(definitions, "CallParams"), call_schema(ops));
     definitions.insert("CallParams".into(), call);
     let watches: Vec<Value> = topics
         .iter()
@@ -232,6 +233,9 @@ pub fn specialize_operation_and_topic_schemas(
 /// Converts a schema to a TypeScript type. Unsupported schema syntax is an error. Only the schema
 /// `true`, which permits any JSON value, becomes `unknown`.
 pub fn typescript_type(schema: &Value) -> String {
+    if schema == &Value::Bool(false) {
+        return "never".into();
+    }
     if schema == &Value::Bool(true)
         || schema
             .as_object()
@@ -253,7 +257,16 @@ pub fn typescript_type(schema: &Value) -> String {
     {
         let mut parts: Vec<String> = choices.iter().map(typescript_type).collect();
         parts.dedup();
-        return parts.join(" | ");
+        let variants = parts.join(" | ");
+        return match schema.get("properties").and_then(Value::as_object) {
+            Some(properties) if !properties.is_empty() => {
+                format!(
+                    "{{ {} }} & ({variants})",
+                    typescript_fields(properties, schema).join("; ")
+                )
+            }
+            _ => variants,
+        };
     }
     if let Some(values) = schema.get("enum").and_then(Value::as_array) {
         return values
@@ -353,6 +366,8 @@ pub fn typescript_file(
     definitions: &Map<String, Value>,
     ops: &[OperationDoc],
     topics: &[TopicDoc],
+    v3_ops: &[OperationDoc],
+    v3_topics: &[TopicDoc],
 ) -> String {
     let mut out = String::from(
         "// Generated from core/crates/base/src by \
@@ -378,7 +393,8 @@ pub fn typescript_file(
         json!(operation_names)
     ));
     out.push_str(
-        "export type Topic = typeof TOPICS[number];\nexport type Operation = keyof Operations;\n",
+        "export type Topic = typeof TOPICS[number];\nexport type Operation = keyof Operations;\n\
+         export type V3Topic = keyof V3Topics;\nexport type V3Operation = keyof V3Operations;\n",
     );
     for (name, schema) in definitions {
         match schema.get("description").and_then(Value::as_str) {
@@ -388,7 +404,11 @@ pub fn typescript_file(
             )),
             None => out.push('\n'),
         }
-        match schema.get("properties").and_then(Value::as_object) {
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .filter(|_| schema.get("oneOf").is_none() && schema.get("anyOf").is_none());
+        match properties {
             Some(properties) => {
                 out.push_str(&format!("export interface {name} {{\n"));
                 for field in typescript_fields(properties, schema) {
@@ -402,9 +422,36 @@ pub fn typescript_file(
             )),
         }
     }
-    out.push_str(
-        "\n/** Argument and result types for each operation. */\nexport interface Operations {\n",
-    );
+    out.push_str("\n/** Protocol 2 types used by takeover diagnostics and legacy fixtures. */\n");
+    for name in [
+        "AgentInfo",
+        "AgentListResult",
+        "HelloParams",
+        "HelloResult",
+        "MachineConnection",
+        "MachineInfo",
+        "StartArgs",
+        "StartResult",
+        "WatchResult",
+        "WindowInfo",
+        "WindowRef",
+    ] {
+        out.push_str(&format!("export type V2{name} = {name};\n"));
+    }
+    write_typescript_maps(&mut out, "", ops, topics);
+    write_typescript_maps(&mut out, "V3", v3_ops, v3_topics);
+    out
+}
+
+fn write_typescript_maps(
+    out: &mut String,
+    prefix: &str,
+    ops: &[OperationDoc],
+    topics: &[TopicDoc],
+) {
+    out.push_str(&format!(
+        "\n/** Argument and result types for each operation. */\nexport interface {prefix}Operations {{\n",
+    ));
     for op in ops {
         out.push_str(&format!(
             "\treadonly \"{}\": {{ readonly args: {}; readonly result: {} }};\n",
@@ -413,10 +460,10 @@ pub fn typescript_file(
             typescript_type(&op.result)
         ));
     }
-    out.push_str(
-        "}\n\n/** Argument, snapshot, and change types for each topic. Skip unknown change kinds. \
-         */\nexport interface Topics {\n",
-    );
+    out.push_str(&format!(
+        "}}\n\n/** Argument, snapshot, and change types for each topic. Skip unknown change kinds. \
+         */\nexport interface {prefix}Topics {{\n",
+    ));
     for topic in topics {
         out.push_str(&format!(
             "\treadonly {}: {{ readonly args: {}; readonly snapshot: {}; readonly change: {} }};\n",
@@ -427,7 +474,6 @@ pub fn typescript_file(
         ));
     }
     out.push_str("}\n");
-    out
 }
 
 pub fn markdown_cell(text: &str) -> String {
@@ -468,7 +514,11 @@ pub fn type_tables(out: &mut String, definitions: &Map<String, Value>) {
         if let Some(description) = schema.get("description").and_then(Value::as_str) {
             out.push_str(&format!("{}\n\n", description.replace('\n', " ")));
         }
-        match schema.get("properties").and_then(Value::as_object) {
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .filter(|_| schema.get("oneOf").is_none() && schema.get("anyOf").is_none());
+        match properties {
             Some(properties) => {
                 let required: Vec<&str> = schema
                     .get("required")
@@ -598,8 +648,38 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
     daemon::visit_topics(&mut topics);
     machine::visit_topics(&mut topics);
     let topics = topics.1;
+    add!(
+        v3::HelloParams,
+        v3::AgentTarget,
+        v3::AgentListRow,
+        v3::AdvertiseParams,
+        v3::ForwardParams,
+        v3::ForwardCall,
+        v3::ReadMessagesArgs,
+        v3::ReadMessagesResult,
+    );
+    // Generate separate v3 TypeScript maps. The schema and advertised names still use v2.
+    let mut v3_ops = OperationDocs(&mut types, Vec::new());
+    v3::visit_operations(&mut v3_ops);
+    let v3_ops = v3_ops.1;
+    let mut v3_internal = OperationDocs(&mut types, Vec::new());
+    v3::visit_internal_operations(&mut v3_internal);
+    let v3_internal = v3_internal.1;
+    let mut v3_topics = TopicDocs(&mut types, Vec::new());
+    v3::visit_topics(&mut v3_topics);
+    let v3_topics = v3_topics.1;
     let mut definitions = types.definitions();
     specialize_operation_and_topic_schemas(&mut definitions, &ops, &topics);
+    definitions.insert(
+        "V3CallParams".into(),
+        call_schema(v3_ops.iter().chain(&v3_internal)),
+    );
+    definitions
+        .get_mut("V3ForwardCall")
+        .and_then(|schema| schema.pointer_mut("/properties/call"))
+        .expect("forwarded calls have a call field")
+        .clone_from(&json!({ "$ref": "#/$defs/V3CallParams" }));
+    definitions.sort_keys();
     let (topic_names, operation_names) = client_names();
     let schema = serde_json::to_string_pretty(&json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -637,7 +717,10 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
     );
     vec![
         ("protocol.schema.json", schema),
-        ("protocol.ts", typescript_file(&definitions, &ops, &topics)),
+        (
+            "protocol.ts",
+            typescript_file(&definitions, &ops, &topics, &v3_ops, &v3_topics),
+        ),
         ("PROTOCOL.md", md),
     ]
 }
