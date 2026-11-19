@@ -44,6 +44,17 @@ pub use wiring::{
 };
 pub use wrappers::direct_command;
 
+/// The argument that precedes the credential for a managed run's MCP relay.
+pub const RUN_CREDENTIAL_ARG: &str = "--run-credential";
+
+/// The MCP server for one managed run, with the relay's arguments kept separately
+/// from the CLI's arguments and environment.
+#[derive(Clone, Copy)]
+pub struct ManagedServer<'a> {
+    pub server: Server<'a>,
+    pub args: &'a [String],
+}
+
 /// The rule files of the CLIs Facade starts, by name, in the order `facade` lists them.
 const FILES: [(&str, &str); 6] = [
     ("claude", include_str!("../../../rules/claude.json")),

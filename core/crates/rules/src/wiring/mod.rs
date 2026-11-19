@@ -1,14 +1,12 @@
 //! Facade's way into each CLI: what a run's CLI is given to have Facade's tools and report its
-//! session, what `facade integration add` writes into a CLI's user configuration, and the formats
-//! of Facade's hooks. Each CLI takes them its own way, chosen by rule name. Facade only reads and
-//! changes entries it wrote itself; settings of the person's it cannot read are left to the CLI,
-//! and Facade then adds nothing to them.
+//! session, and the formats of Facade's hooks. Each CLI takes them its own way, chosen by rule
+//! name. The legacy integration module also describes the entries the old commands wrote.
 //!
 //! A run's CLI gets `facade-mcp`, Facade's MCP server, in its own configuration for the run alone,
 //! or for Antigravity in a plugin of the folder it starts in, shared by the runs there; with its
-//! tools approved in advance where the CLI can approve one server's. The server's entry names the
-//! run's `FACADE_AGENT` and `FACADE_HOME` for a CLI that passes it none of its environment, and is
-//! never required, so that a CLI whose server fails still starts.
+//! tools approved in advance where the CLI can approve one server's. A managed relay entry carries
+//! the run credential in its server arguments and uses `FACADE_HOME` to find the daemon. A relay
+//! without a credential can prove its session to the daemon where the CLI supplies that evidence.
 
 mod config_files;
 mod conflicts;
@@ -23,11 +21,15 @@ mod settings;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use facade_base::skill::text_v3;
 use serde_json::Value;
 
-use crate::Rule;
+use crate::{ManagedServer, RUN_CREDENTIAL_ARG, Rule};
 
-pub use plugin::{PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_version, uses_folder_plugin};
+pub use plugin::{
+    PLUGIN_FOLDER, PLUGIN_MEMBERS, plugin_files, plugin_files_v3, plugin_version,
+    uses_folder_plugin,
+};
 pub use session_report::SessionReport;
 pub(crate) use session_report::{Hooked, install_hook};
 
@@ -79,7 +81,7 @@ enum SessionSkill {
 }
 
 /// What giving a run's CLI the tools adds to its command line.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq)]
 pub(crate) struct Wiring {
     pub(crate) args: Vec<String>,
     pub(crate) env: Vec<(String, String)>,
@@ -103,6 +105,14 @@ pub(crate) struct Wiring {
     session_skill: SessionSkill,
 }
 
+/// The managed run's wiring and how it gets Facade's tools.
+pub(crate) struct ManagedWiring {
+    pub(crate) wiring: Wiring,
+    pub(crate) tools: Tools,
+    /// This wiring puts the current run's credential in a relay entry.
+    pub(crate) uses_run_credential: bool,
+}
+
 /// The arguments that carry the run's additions to the CLI's settings, merged with the person's
 /// own, the files in the run's folder they name, and the person's words without their own such
 /// arguments.
@@ -121,7 +131,7 @@ pub(crate) fn wire(
     server: &Server,
     environment: &BTreeMap<String, String>,
 ) -> Result<Option<Wiring>, String> {
-    if let Some(why) = conflicts::persons_server(cli, server.cwd, environment) {
+    if let Some(why) = conflicts::persons_server(cli, server.cwd, environment, false) {
         return Err(why);
     }
     let wiring = match cli {
@@ -135,6 +145,76 @@ pub(crate) fn wire(
         _ => return Ok(None),
     };
     Ok(Some(wiring))
+}
+
+/// Gives the run's CLI the managed relay entry, or keeps an existing entry where the CLI uses it.
+pub(crate) fn wire_managed(
+    cli: &str,
+    managed: &ManagedServer<'_>,
+    environment: &BTreeMap<String, String>,
+) -> Result<Option<ManagedWiring>, String> {
+    let server = &managed.server;
+    let pi_configured = cli == "pi" && conflicts::pi_has_server(server.cwd, environment)?;
+    if !pi_configured
+        && let Some(why) = conflicts::persons_server(cli, server.cwd, environment, true)
+    {
+        return Err(why);
+    }
+    let env: Vec<_> = server
+        .env
+        .iter()
+        .filter(|(name, _)| name == "FACADE_HOME")
+        .cloned()
+        .collect();
+    let entry = servers::Entry {
+        program: server.program,
+        args: managed.args.to_vec(),
+        env: &env,
+    };
+    let credential = match managed.args {
+        [flag, value] if flag == RUN_CREDENTIAL_ARG && !value.is_empty() => Some(value.as_str()),
+        _ => None,
+    };
+    let uses_credential = credential.is_some();
+    let (wiring, uses_run_credential) = match cli {
+        "claude" => (
+            run_tools::claude_run(server, &entry, text_v3()),
+            uses_credential,
+        ),
+        "codex" => (run_tools::codex_run(&entry, text_v3())?, uses_credential),
+        "opencode" => (
+            run_tools::opencode_run(server, &entry, environment, text_v3(), true)?,
+            uses_credential,
+        ),
+        "pi" => {
+            let name = if pi_configured {
+                conflicts::PI_MANAGED_SERVER
+            } else {
+                servers::SERVER
+            };
+            (
+                run_tools::pi_run(server, &entry, name, text_v3()),
+                uses_credential,
+            )
+        }
+        "muse" => {
+            let configured = conflicts::muse_config(server.cwd, environment, true)?;
+            let entry = (!configured).then_some(&entry);
+            (
+                run_tools::muse_run(server, entry, text_v3()),
+                uses_credential && !configured,
+            )
+        }
+        "agy" => (run_tools::agy_managed(server, credential), uses_credential),
+        #[cfg(debug_assertions)]
+        "fake" => (run_tools::fake_run(server, &entry), uses_credential),
+        _ => return Ok(None),
+    };
+    Ok(Some(ManagedWiring {
+        wiring,
+        tools: Tools::Injected,
+        uses_run_credential,
+    }))
 }
 
 /// Has `cli` report its session through the settings `wiring` merges with the person's: a

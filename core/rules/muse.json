@@ -21,6 +21,7 @@
 		]
 	},
 	"session": { "capture": "session_start", "resume": ["resume", "${session_id}"] },
+	"mcp": { "session_env_key": "MUSE_SESSION_ID" },
 	"status": {
 		"mechanism": "frame_transcript",
 		"footer": "^ {2}\\S.* · \\S.* · \\S.*$",

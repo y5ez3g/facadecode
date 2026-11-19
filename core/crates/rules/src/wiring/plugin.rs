@@ -3,9 +3,12 @@
 
 use serde_json::{Value, json};
 
+use facade_base::system::{SYSTEM, System};
+
 use super::SKILL_FILE;
 use super::servers::{Entry, SERVER, agy_entry};
-use crate::formats::{HookArg, facade_hook};
+use crate::RUN_CREDENTIAL_ARG;
+use crate::formats::{HookArg, encoded_powershell, facade_hook, powershell_word};
 
 /// Where Antigravity reads a folder's plugin of Facade's tools: the only file Facade writes into
 /// the person's project.
@@ -18,6 +21,9 @@ pub const PLUGIN_MEMBERS: &[&str] = &["plugin.json", "mcp_config.json", "hooks.j
 /// The permission rule that lets every tool of the plugin's server run without asking: Antigravity
 /// names a plugin's server `<plugin>_<server>`.
 pub(super) const ALLOW_TOOLS: &str = "mcp(facade_facade/*)";
+
+/// The managed CLI's launcher reads this variable and removes it from the relay environment.
+pub(super) const AGY_RUN_TOKEN: &str = "FACADE_RUN_TOKEN";
 
 /// How the description of a plugin Facade core wrote begins, before the version that wrote it and a
 /// colon. The Facade Code extension marks its own differently, so neither takes the other's plugin
@@ -50,10 +56,65 @@ pub fn plugin_files(program: &str, facade: &str) -> Vec<(String, String)> {
         args: Vec::new(),
         env: &[],
     };
+    plugin_files_with_entry(&entry, facade, facade_base::skill::text())
+}
+
+/// The shared managed plugin. Its launcher supplies the current run's relay arguments from
+/// the CLI's environment; its files can be shared by runs with different credentials.
+pub fn plugin_files_v3(program: &str, facade: &str) -> Vec<(String, String)> {
+    let (launcher, args) = match SYSTEM {
+        System::Windows => windows_launcher(program),
+        _ => {
+            let script = format!(
+                r#"token=${AGY_RUN_TOKEN}
+unset {AGY_RUN_TOKEN}
+if [ -n "$token" ]; then exec "$1" {RUN_CREDENTIAL_ARG} "$token"; fi
+exec "$1""#,
+            );
+            (
+                "/bin/sh".into(),
+                vec!["-c".into(), script, "facade-mcp".into(), program.into()],
+            )
+        }
+    };
+    let entry = Entry {
+        program: &launcher,
+        args,
+        env: &[],
+    };
+    plugin_files_with_entry(&entry, facade, facade_base::skill::text_v3())
+}
+
+/// Start the relay with inherited handles so PowerShell never handles its MCP bytes.
+fn windows_launcher(program: &str) -> (String, Vec<String>) {
+    let program = powershell_word(program);
+    let script = format!(
+        r#"$ErrorActionPreference = 'Stop'
+$token = $env:{AGY_RUN_TOKEN}
+$start = [System.Diagnostics.ProcessStartInfo]::new()
+$start.FileName = {program}
+$start.UseShellExecute = $false
+$start.EnvironmentVariables.Remove('{AGY_RUN_TOKEN}')
+if ($token) {{
+    if ($token -cnotmatch '^[0-9a-f]{{64}}$') {{ exit 1 }}
+    $start.Arguments = "{RUN_CREDENTIAL_ARG} $token"
+}}
+$child = [System.Diagnostics.Process]::Start($start)
+$child.WaitForExit()
+exit $child.ExitCode
+"#,
+    );
+    let command = encoded_powershell(&script);
+    let mut words = command.split_ascii_whitespace().map(str::to_owned);
+    let launcher = words.next().expect("encoded PowerShell names its program");
+    (launcher, words.collect())
+}
+
+fn plugin_files_with_entry(entry: &Entry, facade: &str, skill: String) -> Vec<(String, String)> {
     let instructions = facade_hook("agy", facade, "instructions", &[HookArg::Word("agy")], []);
     let manifest =
         json!({ "name": SERVER, "description": plugin_description(&facade_base::version()) });
-    let servers = json!({ "mcpServers": { SERVER: agy_entry(&entry) } });
+    let servers = json!({ "mcpServers": { SERVER: agy_entry(entry) } });
     let hooks = json!({
         SERVER: { "PreInvocation": [{ "type": "command", "command": instructions }] },
     });
@@ -62,7 +123,7 @@ pub fn plugin_files(program: &str, facade: &str) -> Vec<(String, String)> {
         ("plugin.json".into(), pretty(manifest)),
         ("mcp_config.json".into(), pretty(servers)),
         ("hooks.json".into(), pretty(hooks)),
-        (SKILL_FILE.into(), facade_base::skill::text()),
+        (SKILL_FILE.into(), skill),
     ]
 }
 

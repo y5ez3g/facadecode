@@ -79,10 +79,18 @@ pub(super) fn codex_entry(entry: &Entry) -> Result<Vec<(&'static str, String)>, 
 
 /// OpenCode's entry: its command a list, the program first.
 pub(super) fn opencode_entry(entry: &Entry) -> Value {
+    opencode_entry_with_status(entry, "enabled", true)
+}
+
+pub(super) fn opencode_native_entry(entry: &Entry) -> Value {
+    opencode_entry_with_status(entry, "disabled", false)
+}
+
+fn opencode_entry_with_status(entry: &Entry, key: &str, status: bool) -> Value {
     let mut command = vec![entry.program];
     command.extend(entry.args.iter().map(String::as_str));
     json!({
-        "type": "local", "command": command, "environment": env_object(entry), "enabled": true,
+        "type": "local", "command": command, "environment": env_object(entry), key: status,
         "timeout": CALL_SECONDS * 1000,
     })
 }
