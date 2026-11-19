@@ -623,6 +623,29 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([activeGroup().activeTab === (c.terminal.tab as unknown), groupAt(1).activeTab === (a.terminal.tab as unknown), mine.isActive, second.isActive, model!.made], [true, true, false, false, []]);
 	});
 
+	test('an Unpin asked while a restored tab takes its mark reaches that tab after its turn (LIFECYCLE-3.4, 3.5)', async () => {
+		const port = portOf();
+		await port.finishRestore();
+		groupsOf(1);
+		port.openPair(facts('run-a', { pinned: true }), { reveal: false, hidden: true });
+		const opening = port.openPinned('run-a');
+		const terminal = await until('the restored terminal', () => terminals[0]);
+		// VS Code has reported the pin on the tab before the restore's mark command finishes.
+		model!.during = command => {
+			if (command === 'workbench.action.pinEditor') {
+				assert.strictEqual(terminal.tab.isPinned, true);
+				port.pinTab('run-a', false);
+			}
+		};
+		opensIn(terminal, 1);
+		// The editor publishes the tab before its pseudoterminal opens.
+		await new Promise<void>(resolve => setImmediate(resolve));
+		open(terminal);
+		await opening;
+		await until('the restored tab to unpin', () => !terminal.tab.isPinned);
+		assert.deepStrictEqual(commands, ['workbench.action.pinEditor', 'workbench.action.unpinEditor']);
+	});
+
 	test('while a reload\'s or a restart\'s pinned tabs open in their turns no activation moves the panel\'s selection; once they are open it is on the last one opened, and where none opened it stays as it was (PANEL-2.1, LIFECYCLE-3.5)', async () => {
 		const port = portOf();
 		await port.finishRestore();

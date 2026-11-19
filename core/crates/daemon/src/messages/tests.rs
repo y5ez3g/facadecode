@@ -142,8 +142,8 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
     assert!(matches!(*settled.borrow(), Some(Settled::Cancelled)));
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, from, to })
-            if message_id == "m1" && from == "a1" && to == "a2"
+        Ok(Change::Removed { message_id, to })
+            if message_id == "m1" && to == "a2"
     ));
     assert!(
         post.message("m1").is_none() && !post.withdraw(1),
@@ -372,6 +372,21 @@ fn a_read_takes_ids_or_a_page_and_a_limit_from_1_to_200() {
         }),
         "next is not a cursor this inbox gave"
     );
+    assert!(
+        refused(MessagesWatchArgs {
+            last: Some(1),
+            limit: Some(5),
+            ..MessagesWatchArgs::default()
+        })
+        .starts_with("last selects messages itself")
+    );
+    assert_eq!(
+        refused(MessagesWatchArgs {
+            last: Some(0),
+            ..MessagesWatchArgs::default()
+        }),
+        "last must be between 1 and 200"
+    );
 }
 
 /// A read and a paste never both take a message: once its paste began, a read delivers it with
@@ -458,8 +473,8 @@ fn a_removed_inbox_takes_its_messages_and_tells_their_sends() {
     assert!(post.message("m1").is_none() && post.message("m2").is_some());
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, from, to })
-            if message_id == "m1" && from == "a1" && to == "a2"
+        Ok(Change::Removed { message_id, to })
+            if message_id == "m1" && to == "a2"
     ));
     assert!(
         changes.try_recv().is_err(),
@@ -499,8 +514,8 @@ fn messages_older_than_30_days_are_deleted_and_numbers_go_on() {
     );
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, from, to })
-            if message_id == "m1" && from == "a1" && to == "a2"
+        Ok(Change::Removed { message_id, to })
+            if message_id == "m1" && to == "a2"
     ));
     assert!(
         changes.try_recv().is_err(),
@@ -589,7 +604,11 @@ async fn a_send_whose_inbox_went_returns_at_once() {
 fn agent(id: &str) -> AgentInfo {
     serde_json::from_value(serde_json::json!({
         "agent_id": id, "name": "Nova", "cli": "claude", "cwd": "/w",
-        "window_id": "terminal", "location_id": "loc-1", "pid": 7, "process": "running",
+        "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+        "windows": [{
+            "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "window_id": "terminal"
+        }],
+        "location_id": "loc-1", "pid": 7, "process": "running",
         "cols": 80, "rows": 24, "created_at": "2026-11-11T00:00:00.000Z", "root": "a1",
         "yolo": true, "state": "idle", "tools_state": "available",
     }))
@@ -608,13 +627,17 @@ fn record(id: &str) -> AgentRecord {
         exit: None,
         rule: None,
         session: None,
-        window_id: "terminal".into(),
+        windows: vec![facade_base::daemon::WindowRef {
+            machine_id: "test-machine".into(),
+            window_id: "terminal".into(),
+        }],
+        location_source_window: None,
         creator: None,
         root: id.into(),
         yolo: false,
         request_id: None,
         prompt: None,
-        location_id: None,
+        location_id: facade_base::daemon::location_id("/w"),
     }
 }
 

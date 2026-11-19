@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { FacadeError, invalid } from '../../core/errors';
 import { labelOf, normalizeName } from '../../core/names';
-import type { Agents, ExecutionPort, HumanPort, RunId } from '../../core/ports';
+import type { Agents, ExecutionPort, HumanPort, RunFacts, RunId } from '../../core/ports';
 import { referenceOf } from '../../core/reach';
 import { COMMANDS } from '../catalog';
 import { PanelModel } from '../model';
@@ -73,8 +73,7 @@ export class AgentActions {
 	}
 
 	/** Copies `@name #aN`, with no toast: Go to Agent's item button (LIFECYCLE-2.1). */
-	async copyReference(run: RunId): Promise<void> {
-		const facts = this.deps.agents.get(run);
+	async copyReference(run: RunId, facts = this.deps.agents.get(run)): Promise<void> {
 		if (facts) {
 			await vscode.env.clipboard.writeText(referenceOf(facts));
 		}
@@ -84,13 +83,17 @@ export class AgentActions {
 	 * End Agent (LIFECYCLE-3.1): its card and terminal go at once and its process ends in the background. An actual failure to end it
 	 * goes to the person who asked; an unreachable process is not said to have ended.
 	 */
-	async close(run: RunId): Promise<void> {
-		const facts = this.deps.agents.get(run);
+	async close(run: RunId, outside?: { readonly facts: RunFacts; readonly stop: () => ReturnType<Agents['close']> }): Promise<void> {
+		const facts = outside?.facts ?? this.deps.agents.get(run);
 		if (!facts) {
 			return;
 		}
 		try {
-			if (await this.deps.agents.close(run) === 'failed') {
+			const outcome = await (outside ? outside.stop() : this.deps.agents.close(run));
+			if (outcome === 'failed') {
+				if (outside) {
+					throw new Error(vscode.l10n.t('Facade cannot do this right now'));
+				}
 				this.deps.notifyError(vscode.l10n.t("{0}'s card and terminal were closed, but its process could not be terminated.", labelOf(facts)), {});
 			}
 		} catch (err) {

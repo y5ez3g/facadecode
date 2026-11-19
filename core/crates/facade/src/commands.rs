@@ -12,7 +12,7 @@ use facade_base::daemon::{
     InspectResult, IntegrationAdd, IntegrationArgs, IntegrationInfo, IntegrationList,
     IntegrationRemove, IntegrationsArgs, Message, MessagesTopic, MessagesWatchArgs, PartState,
     RenameArgs, ResumeArgs, ScreenArgs, SendArgs, StartArgs, TextWritten, ToolsState, TypeArgs,
-    WaitKind,
+    WaitKind, WindowDeliveryFailure, WindowRef,
 };
 use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
@@ -59,7 +59,8 @@ pub(crate) fn start(
         command,
         name,
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
-        window_id: None,
+        window: None,
+        location_source_window: None,
         env: environment(),
         cols,
         rows,
@@ -107,7 +108,6 @@ pub(crate) fn resume(
             env: environment(),
             cols,
             rows,
-            window_id: None,
         })
         .map_err(|error| about_agent(&agent, error))?;
     let AgentInfo { agent_id, name, .. } = resumed;
@@ -205,11 +205,86 @@ pub(crate) fn send(
         request_id: Some(made_request_id()),
         time_left_ms: None,
     };
+    let here = client.hello_result.machine_id.clone();
     let (result, _) = client
         .call_with_request_id::<AgentSend>(args, false)
-        .map_err(|error| about_send(&to, error))?;
-    println_or_end!("{}", sent(&result.message)?);
+        .map_err(|error| match not_shown(&error, &here) {
+            Some(problem) => problem.into(),
+            None => about_send(&to, error),
+        })?;
+    let message = &result.message;
+    if message.to != "human" {
+        println_or_end!("{}", sent(message)?);
+        return Ok(());
+    }
+    let id = &message.message_id;
+    // Without the windows' outcome, the daemon ended before it saved them.
+    let Some(windows) = result
+        .windows
+        .filter(|windows| !windows.delivered.is_empty())
+    else {
+        return Err(Problem::HumanUnconfirmed {
+            message: id.clone(),
+        }
+        .into());
+    };
+    for window in &windows.delivered {
+        println_or_end!(
+            "{id} delivered to the human in {}",
+            window_name(window, &here)
+        );
+    }
+    for failure in &windows.not_delivered {
+        eprintln!(
+            "warning: {id} was not shown because {}",
+            window_failure(failure, &here)
+        );
+    }
     Ok(())
+}
+
+/// The refusal of a message to the human that none of the sender's windows showed.
+fn not_shown(error: &anyhow::Error, here: &str) -> Option<Problem> {
+    let windows = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ErrorBody>())?
+        .data
+        .windows
+        .as_deref()?;
+    if windows.is_empty() {
+        return Some(Problem::InNoWindow);
+    }
+    let why: Vec<String> = windows
+        .iter()
+        .map(|failure| window_failure(failure, here))
+        .collect();
+    Some(Problem::NotShown {
+        why: why.join("; "),
+    })
+}
+
+/// A window as the reader names it: `the terminal window` or `window w2`, with `@machine` where
+/// another machine owns it.
+fn window_name(window: &WindowRef, here: &str) -> String {
+    let id = &window.window_id;
+    let name = match id.as_str() {
+        "terminal" => "the terminal window".to_string(),
+        _ => format!("window {id}"),
+    };
+    match window.machine_id == here {
+        true => name,
+        false => format!("{name}@{}", window.machine_id),
+    }
+}
+
+/// Why a window did not show the message: `window w2 is closed`.
+fn window_failure(failure: &WindowDeliveryFailure, here: &str) -> String {
+    let why = match failure.reason.as_str() {
+        "window_disconnected" => "is closed",
+        "not_watching" => "is not showing Facade messages",
+        reason => reason,
+    };
+    format!("{} {why}", window_name(&failure.window, here))
 }
 
 /// Prints and delivers up to 100 inbox messages as the recipient's terminal would show them.
@@ -761,9 +836,6 @@ pub(crate) fn sent(message: &Message) -> Result<String, Problem> {
     match (delivery.status, delivery.delivered_via) {
         (DeliveryStatus::Pending, _) => Ok(format!("{id} waiting in {to}'s inbox")),
         (DeliveryStatus::Success, Some(DeliveredVia::Read)) => Ok(format!("{id} read by {to}")),
-        (DeliveryStatus::Success, Some(DeliveredVia::Notified)) => {
-            Ok(format!("{id} delivered to the human's editor window"))
-        }
         (DeliveryStatus::Success, _) => Ok(format!("{id} delivered to {to}")),
         _ if delivery.reason == Some(DeliveryFailure::SubmissionUnconfirmed) => {
             Err(Problem::Unconfirmed {

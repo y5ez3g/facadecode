@@ -15,7 +15,7 @@ const KEY = 'facade.lastLaunch';
 export class WorkspaceLaunchHistory implements LaunchHistoryPort {
 	private ignored = false;
 
-	constructor(private readonly state: vscode.Memento, private readonly log?: LogPort) { }
+	constructor(private readonly state: Pick<vscode.Memento, 'get' | 'update'>, private readonly log?: LogPort) { }
 
 	last(): { readonly location?: LocationId; readonly cli?: string } {
 		const value = this.state.get<unknown>(KEY);

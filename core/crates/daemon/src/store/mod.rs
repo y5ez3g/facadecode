@@ -1,18 +1,17 @@
 //! Keeps agent records, agent and message numbers, messages, guests, editor windows and the files of
 //! the CLIs' integrations in `$FACADE_HOME/core/facade.db`, with SQLite in WAL mode and
-//! `synchronous=FULL`. The schema only grows: a later build may add tables and columns, never
-//! rename, change or remove one.
+//! `synchronous=FULL`.
 //!
 //! The daemon alone holds the connection. Each part of the daemon gets the handle of its own table
-//! (`NumberTable`, `MessageTable`, `GuestTable`, `WindowTable`, `IntegrationTable`), with no
-//! transaction of its own. A write across tables is one transaction here: a record with its start's
-//! prompt, an agent or a guest with its inbox, a window's agents moving to the window that took it
-//! over, and a settlement that writes a result only for a caller still there.
+//! (`NumberTable`, `MessageTable`, `GuestTable`, `WindowTable`, `MembershipTable`,
+//! `IntegrationTable`), with no transaction of its own. A write across tables is one transaction
+//! here: a record with its members and its start's prompt, an agent or a guest with its inbox,
+//! and a settlement that writes a result only for a caller still there.
 //!
-//! The first open is one transaction: it creates the schema, imports `core/numbers`, starts the
-//! agent numbers above every agent the keeper holds, and writes an `initialized` row; without that
-//! row the next open tries again. A CLI the keeper holds without a record belongs to a start or a
-//! removal that was cut short, or to a store that was lost, and recovery stops it.
+//! The first open creates the schema, seeds the counters and records this machine's ID in one
+//! transaction. Agent numbers start above every agent the keeper holds. A CLI the keeper holds
+//! without a record belongs to a start or removal that was cut short, or to a store that was lost,
+//! and recovery stops it.
 //!
 //! An exit's reason is kept by name, and a name this build does not know reads as unknown. A rule
 //! or session this build cannot read leaves the agent without it and the row as it is. A row that
@@ -23,25 +22,28 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use facade_base::daemon::{Message, TERMINAL_WINDOW};
+use facade_base::daemon::{Message, WindowDescription, WindowRef};
 use facade_base::files;
 use facade_base::process::{EndReason, ProcessExit};
+use rusqlite::config::DbConfig;
 use rusqlite::{Connection, Row, params};
 
 mod guests;
 mod integrations;
+mod membership;
 mod messages;
 mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
 pub(crate) use integrations::{IntegrationFile, IntegrationTable};
+pub(crate) use membership::MembershipTable;
 pub(crate) use messages::{Gone, Kept, KeptMessage, MessageTable, RequestId, Settlement};
 pub(crate) use windows::WindowTable;
 
-/// The tables of the first schema. A transaction that failed before its commit runs them again.
 const SCHEMA: &str = "
-	CREATE TABLE IF NOT EXISTS numbers (next INTEGER NOT NULL);
-	CREATE TABLE IF NOT EXISTS agents (
+	CREATE TABLE numbers (next INTEGER NOT NULL);
+	CREATE TABLE message_numbers (next INTEGER NOT NULL);
+	CREATE TABLE agents (
 		agent_id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
 		cli TEXT NOT NULL,
@@ -51,27 +53,33 @@ const SCHEMA: &str = "
 		exit_code INTEGER,
 		exit_signal TEXT,
 		exit_at TEXT,
-		exit_reason TEXT
+		exit_reason TEXT,
+		rule TEXT,
+		session TEXT,
+		creator TEXT,
+		root TEXT NOT NULL,
+		yolo INTEGER NOT NULL,
+		request_id TEXT,
+		prompt INTEGER,
+		location_id TEXT NOT NULL,
+		location_machine_id TEXT,
+		location_window_id TEXT
 	);
-	CREATE TABLE IF NOT EXISTS initialized (at TEXT NOT NULL);
+	CREATE TABLE machine (
+		singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+		machine_id TEXT NOT NULL
+	);
 ";
-
-/// The columns `agents` gained after its first schema, with their types.
-const AGENT_COLUMNS: [(&str, &str); 10] = [
-    ("exit_reason", "TEXT"),
-    ("rule", "TEXT"),
-    ("session", "TEXT"),
-    ("window_id", "TEXT"),
-    ("creator", "TEXT"),
-    ("root", "TEXT"),
-    ("yolo", "INTEGER"),
-    ("request_id", "TEXT"),
-    ("prompt", "INTEGER"),
-    ("location_id", "TEXT"),
-];
 
 fn log(level: &str, message: &str) {
     facade_base::log::write("daemon", level, message);
+}
+
+/// A logical editor window, in allocation order, and the instance last bound to it.
+pub(crate) struct WindowRow {
+    pub(crate) window_id: String,
+    pub(crate) sequence: u64,
+    pub(crate) description: WindowDescription,
 }
 
 /// An agent's lasting record. Its checkpoint and screen log keep its title and terminal size.
@@ -89,13 +97,15 @@ pub(crate) struct AgentRecord {
     pub(crate) rule: Option<String>,
     /// The session its CLI last reported.
     pub(crate) session: Option<String>,
-    /// Its window: an editor window's ID, or `terminal`, as for a record from before windows.
-    pub(crate) window_id: String,
+    /// Its member windows, sorted by machine and logical ID.
+    pub(crate) windows: Vec<WindowRef>,
+    /// The window that supplied the run's location, when it started from an editor location.
+    pub(crate) location_source_window: Option<WindowRef>,
     /// The agent that started it, none where the person did.
     pub(crate) creator: Option<String>,
-    /// The first agent of its creation tree; a record from before creation trees is its own.
+    /// The first agent of its creation tree.
     pub(crate) root: String,
-    /// Its run's YOLO; off for a record from before, as core started every CLI then.
+    /// Its run's YOLO.
     pub(crate) yolo: bool,
     /// The creator's own ID of its start, where it gave one: the same ID within the hour answers
     /// this agent again.
@@ -104,13 +114,13 @@ pub(crate) struct AgentRecord {
     /// prompt owes, where it owes one, has the next number.
     pub(crate) prompt: Option<u64>,
     /// Its location's ID: the location its folder is, or the innermost one its folder is inside.
-    /// None in a record from before it, whose location is its folder's.
-    pub(crate) location_id: Option<String>,
+    pub(crate) location_id: String,
 }
 
 /// The store as the daemon's start reads it.
 pub(crate) struct OpenedStore {
     pub(crate) store: Arc<Store>,
+    pub(crate) machine_id: String,
     /// Every record this build can read.
     pub(crate) records: Vec<AgentRecord>,
     /// Every agent ID in the table, also of the rows this build cannot read.
@@ -133,6 +143,27 @@ impl Store {
             .map_err(|err| anyhow::anyhow!("could not open {}: {err}", path.display()))?;
         let unreadable =
             |err: rusqlite::Error| anyhow::anyhow!("could not read {}: {err}", path.display());
+        // Leave a rejected store's committed WAL in place when this connection closes.
+        connection
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .map_err(unreadable)?;
+        let (has_tables, has_machine): (bool, bool) = connection
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table'),
+                        EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'machine')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(unreadable)?;
+        anyhow::ensure!(
+            !has_tables || has_machine,
+            "{} belongs to an older development build. Remove {} before restarting Facade.",
+            path.display(),
+            core.display()
+        );
+        connection
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)
+            .map_err(unreadable)?;
         let mode: String = connection
             .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
             .map_err(unreadable)?;
@@ -144,26 +175,23 @@ impl Store {
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(unreadable)?;
-        let numbers_file = NumbersFile(core.join("numbers"));
-        if !is_initialized(&connection).map_err(unreadable)? {
-            initialize(&mut connection, numbers_file.read()?, held)
+        if !has_tables {
+            initialize(&mut connection, held)
                 .map_err(|err| anyhow::anyhow!("could not initialize {}: {err}", path.display()))?;
-            numbers_file.remove();
-        } else if let Some(next) = numbers_file.read()? {
-            // An import cut short after its commit: the larger counter wins, so that neither a
-            // second import nor the file's deletion hands a number out twice.
-            connection
-                .execute("UPDATE numbers SET next = max(next, ?1)", [next as i64])
-                .map_err(unreadable)?;
-            numbers_file.remove();
         }
-        grow(&mut connection)
-            .map_err(|err| anyhow::anyhow!("could not update {}: {err}", path.display()))?;
+        let machine_id = connection
+            .query_row(
+                "SELECT machine_id FROM machine WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(unreadable)?;
         let (records, agent_ids) = read_records(&connection).map_err(unreadable)?;
         Ok(OpenedStore {
             store: Arc::new(Store {
                 connection: Mutex::new(connection),
             }),
+            machine_id,
             records,
             agent_ids,
         })
@@ -208,9 +236,9 @@ impl Store {
         Ok(())
     }
 
-    /// Commits a new agent record. Blocks.
+    /// Commits a new agent record and its initial members together. Blocks.
     pub(crate) fn insert(&self, record: &AgentRecord) -> anyhow::Result<()> {
-        self.with(
+        self.transaction(
             || format!("save the record of {}", record.agent_id),
             |connection| insert_record(connection, record),
         )
@@ -289,12 +317,11 @@ impl Store {
         Ok(())
     }
 
-    /// Commits a resumed run in one statement: its process ID, window and YOLO, and no exit. Blocks.
+    /// Commits a resumed run in one statement: its process ID and YOLO, and no exit. Blocks.
     pub(crate) fn record_restart(
         &self,
         agent_id: &str,
         pid: u32,
-        window_id: &str,
         yolo: bool,
     ) -> anyhow::Result<()> {
         #[cfg(debug_assertions)]
@@ -305,9 +332,9 @@ impl Store {
             || format!("save the resumed run of {agent_id}"),
             |connection| {
                 connection.execute(
-                    "UPDATE agents SET pid = ?2, window_id = ?3, yolo = ?4, exit_code = NULL, \
+                    "UPDATE agents SET pid = ?2, yolo = ?3, exit_code = NULL, \
                      exit_signal = NULL, exit_at = NULL, exit_reason = NULL WHERE agent_id = ?1",
-                    params![agent_id, pid, window_id, yolo],
+                    params![agent_id, pid, yolo],
                 )
             },
         )?;
@@ -343,6 +370,7 @@ impl Store {
             || format!("delete the record of {agent_id}"),
             |transaction| {
                 transaction.execute("DELETE FROM agents WHERE agent_id = ?1", [agent_id])?;
+                transaction.execute("DELETE FROM agent_windows WHERE agent_id = ?1", [agent_id])?;
                 messages::delete_inbox(transaction, agent_id)
             },
         )
@@ -356,22 +384,6 @@ impl Store {
             |transaction| {
                 transaction.execute("DELETE FROM guests WHERE agent_id = ?1", [agent_id])?;
                 messages::delete_inbox(transaction, agent_id)
-            },
-        )
-    }
-
-    /// Moves every agent of window `from` to window `to` and deletes `from`'s row, in one
-    /// transaction. Blocks.
-    pub(crate) fn take_over(&self, from: &str, to: &str) -> anyhow::Result<()> {
-        self.transaction(
-            || format!("move the agents of window {from} to window {to}"),
-            |transaction| {
-                transaction.execute(
-                    "UPDATE agents SET window_id = ?2 WHERE window_id = ?1",
-                    [from, to],
-                )?;
-                transaction.execute("DELETE FROM windows WHERE window_id = ?1", [from])?;
-                Ok(())
             },
         )
     }
@@ -393,6 +405,10 @@ impl Store {
         WindowTable::new(self.clone())
     }
 
+    pub(crate) fn membership_table(self: &Arc<Self>) -> MembershipTable {
+        MembershipTable::new(self.clone())
+    }
+
     pub(crate) fn integration_table(self: &Arc<Self>) -> IntegrationTable {
         IntegrationTable::new(self.clone())
     }
@@ -412,8 +428,7 @@ impl Store {
     #[cfg(test)]
     pub(crate) fn in_memory() -> Arc<Store> {
         let mut connection = Connection::open_in_memory().unwrap();
-        initialize(&mut connection, None, &[]).unwrap();
-        grow(&mut connection).unwrap();
+        initialize(&mut connection, &[]).unwrap();
         Arc::new(Store {
             connection: Mutex::new(connection),
         })
@@ -490,45 +505,15 @@ fn reason_name(exit: &ProcessExit) -> Option<&'static str> {
         .map(EndReason::as_str)
 }
 
-/// Adds what a store from an earlier build lacks: the later columns of `agents`, then the later
-/// tables, each step in one transaction.
-fn grow(connection: &mut Connection) -> rusqlite::Result<()> {
-    let transaction = connection.transaction()?;
-    let columns = column_names(&transaction, "agents")?;
-    for (column, kind) in AGENT_COLUMNS {
-        if !columns.iter().any(|name| name == column) {
-            transaction.execute_batch(&format!("ALTER TABLE agents ADD COLUMN {column} {kind}"))?;
-        }
-    }
-    transaction.commit()?;
-    let transaction = connection.transaction()?;
-    transaction.execute_batch(
-        "CREATE TABLE IF NOT EXISTS message_numbers (next INTEGER NOT NULL);
-		INSERT INTO message_numbers (next) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM message_numbers);",
-    )?;
-    transaction.commit()?;
-    integrations::add_table(connection)?;
-    messages::add_table(connection)?;
-    windows::add_table(connection)?;
-    guests::add_table(connection)
-}
-
-/// The names of `table`'s columns.
-fn column_names(connection: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
-    connection
-        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect()
-}
-
 /// Writes `record` as a new row of `agents`.
 fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Result<()> {
     let exit = record.exit.as_ref();
+    let source = record.location_source_window.as_ref();
     connection.execute(
         "INSERT INTO agents (agent_id, name, cli, cwd, pid, created_at, exit_code, exit_signal, \
-         exit_at, exit_reason, rule, session, window_id, creator, root, yolo, request_id, prompt, \
-         location_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+         exit_at, exit_reason, rule, session, creator, root, yolo, request_id, prompt, location_id, \
+         location_machine_id, location_window_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             record.agent_id,
             record.name,
@@ -542,53 +527,53 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
             exit.and_then(reason_name),
             record.rule,
             record.session,
-            record.window_id,
             record.creator,
             record.root,
             record.yolo,
             record.request_id,
             record.prompt.map(|number| number as i64),
             record.location_id,
+            source.map(|window| &window.machine_id),
+            source.map(|window| &window.window_id),
         ],
     )?;
-    Ok(())
+    membership::insert(connection, &record.agent_id, &record.windows)
 }
 
-/// Whether the `initialized` row was committed.
-fn is_initialized(connection: &Connection) -> rusqlite::Result<bool> {
-    let has_table: bool = connection.query_row(
-        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'initialized')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !has_table {
-        return Ok(false);
-    }
-    connection.query_row("SELECT EXISTS (SELECT 1 FROM initialized)", [], |row| {
-        row.get(0)
-    })
-}
-
-/// Creates the first schema in one transaction: imports the counter, raises it above every agent
-/// in `held` so that no number the keeper still holds goes out again, and writes `initialized`.
-fn initialize(
-    connection: &mut Connection,
-    imported: Option<u64>,
-    held: &[String],
-) -> rusqlite::Result<()> {
+/// Creates the schema and counters in one transaction. No number the keeper holds goes out again.
+fn initialize(connection: &mut Connection, held: &[String]) -> rusqlite::Result<()> {
     let next = held
         .iter()
         .filter_map(|id| crate::records::agent_number(id).checked_add(1))
-        .fold(imported.unwrap_or(1).max(1), u64::max);
+        .max()
+        .unwrap_or(1);
     let transaction = connection.transaction()?;
     transaction.execute_batch(SCHEMA)?;
-    transaction.execute("DELETE FROM numbers", [])?;
+    integrations::add_table(&transaction)?;
+    messages::add_table(&transaction)?;
+    windows::add_table(&transaction)?;
+    guests::add_table(&transaction)?;
+    membership::add_table(&transaction)?;
     transaction.execute("INSERT INTO numbers (next) VALUES (?1)", [next as i64])?;
+    transaction.execute("INSERT INTO message_numbers (next) VALUES (1)", [])?;
     transaction.execute(
-        "INSERT INTO initialized (at) VALUES (?1)",
-        [facade_base::time::iso_now()],
+        "INSERT INTO machine (singleton, machine_id) VALUES (1, ?1)",
+        [machine_uuid()],
     )?;
     transaction.commit()
+}
+
+fn machine_uuid() -> String {
+    let first = facade_base::random_u64();
+    let second = facade_base::random_u64();
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        first >> 32,
+        (first >> 16) & 0xffff,
+        (first & 0x0fff) | 0x4000,
+        ((second >> 48) & 0x3fff) | 0x8000,
+        second & 0xffff_ffff_ffff,
+    )
 }
 
 /// Every record this build can read, and every agent ID in the table.
@@ -601,7 +586,7 @@ fn read_records(connection: &Connection) -> rusqlite::Result<(Vec<AgentRecord>, 
     let mut rows = statement.query([])?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
-        match read_record(row) {
+        match read_record(connection, row) {
             Ok(record) => records.push(record),
             Err(err) => {
                 let id: Option<String> = row.get(0).ok();
@@ -619,7 +604,7 @@ fn read_records(connection: &Connection) -> rusqlite::Result<(Vec<AgentRecord>, 
     Ok((records, agent_ids))
 }
 
-fn read_record(row: &Row) -> rusqlite::Result<AgentRecord> {
+fn read_record(connection: &Connection, row: &Row) -> rusqlite::Result<AgentRecord> {
     // A value this build cannot read leaves the agent without it; the row keeps it.
     fn optional<T: rusqlite::types::FromSql>(row: &Row, column: &str) -> Option<T> {
         row.get::<_, Option<T>>(column).ok().flatten()
@@ -628,6 +613,7 @@ fn read_record(row: &Row) -> rusqlite::Result<AgentRecord> {
     let exit_at: Option<String> = row.get("exit_at")?;
     let (code, signal) = (row.get("exit_code")?, row.get("exit_signal")?);
     let reason: Option<String> = row.get("exit_reason")?;
+    let source = optional(row, "location_machine_id").zip(optional(row, "location_window_id"));
     Ok(AgentRecord {
         name: row.get("name")?,
         cli: row.get("cli")?,
@@ -644,63 +630,24 @@ fn read_record(row: &Row) -> rusqlite::Result<AgentRecord> {
         session: optional::<String>(row, "session").filter(|session| {
             facade_rules::parse_session_id(session).is_some_and(|id| id == *session)
         }),
-        window_id: row
-            .get::<_, Option<String>>("window_id")?
-            .unwrap_or_else(|| TERMINAL_WINDOW.to_string()),
+        windows: membership::read(connection, &agent_id)?,
+        location_source_window: source.map(|(machine_id, window_id)| WindowRef {
+            machine_id,
+            window_id,
+        }),
         creator: optional(row, "creator"),
-        root: optional(row, "root").unwrap_or_else(|| agent_id.clone()),
-        yolo: optional(row, "yolo").unwrap_or(false),
+        root: row.get("root")?,
+        yolo: row.get("yolo")?,
         request_id: optional(row, "request_id"),
         prompt: optional::<i64>(row, "prompt").map(|number| number as u64),
-        location_id: optional(row, "location_id"),
+        location_id: row.get("location_id")?,
         agent_id,
     })
-}
-
-/// `core/numbers`: the next agent number from before the store, imported once.
-struct NumbersFile(PathBuf);
-
-impl NumbersFile {
-    /// The next number, or None without the file. A file that does not hold one is an error, never
-    /// a reset to 1.
-    fn read(&self) -> anyhow::Result<Option<u64>> {
-        let text = match std::fs::read_to_string(&self.0) {
-            Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => anyhow::bail!("could not read {}: {err}", self.0.display()),
-        };
-        match text.trim().parse::<u64>() {
-            Ok(next) if next >= 1 => Ok(Some(next)),
-            _ => anyhow::bail!(
-                "invalid agent counter in {}: {text:?}; set a valid next number before restarting \
-                 Facade",
-                self.0.display()
-            ),
-        }
-    }
-
-    /// Deletes the file once the store holds its number.
-    fn remove(&self) {
-        if let Err(err) = std::fs::remove_file(&self.0)
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            log(
-                "warn",
-                &format!(
-                    "could not delete {} after importing it: {err}",
-                    self.0.display()
-                ),
-            );
-        }
-    }
 }
 
 /// The table handles' methods on the store itself, so that the store's tests read as one.
 #[cfg(test)]
 impl Store {
-    pub(crate) fn allocate_number(self: &Arc<Self>) -> anyhow::Result<u64> {
-        self.number_table().allocate_number()
-    }
     pub(crate) fn insert_message(
         self: &Arc<Self>,
         message: &Message,
@@ -762,11 +709,6 @@ impl Store {
             |transaction| messages::delete_inbox(transaction, owner),
         )
     }
-    pub(crate) fn windows(
-        self: &Arc<Self>,
-    ) -> anyhow::Result<Vec<facade_base::daemon::WindowDescription>> {
-        self.window_table().windows()
-    }
     pub(crate) fn keep_integration_file(
         self: &Arc<Self>,
         cli: &str,
@@ -806,13 +748,17 @@ pub(crate) mod tests {
             exit: None,
             rule: Some("claude".into()),
             session: None,
-            window_id: "terminal".into(),
+            windows: vec![WindowRef {
+                machine_id: "test-machine".into(),
+                window_id: "terminal".into(),
+            }],
+            location_source_window: None,
             creator: None,
             root: id.into(),
             yolo: true,
             request_id: None,
             prompt: None,
-            location_id: None,
+            location_id: facade_base::daemon::location_id("/work"),
         }
     }
 
@@ -821,6 +767,7 @@ pub(crate) mod tests {
         let core = core("reopen");
         let opened = Store::open(&core, &[]).unwrap();
         assert!(opened.records.is_empty());
+        let machine_id = opened.machine_id;
         let store = opened.store;
         assert_eq!(store.number_table().allocate_number().unwrap(), 1);
         store.insert(&record("a1")).unwrap();
@@ -835,6 +782,7 @@ pub(crate) mod tests {
         store.record_exit("a1", &exit).unwrap();
         drop(store);
         let opened = Store::open(&core, &[]).unwrap();
+        assert_eq!(opened.machine_id, machine_id);
         assert_eq!(
             opened.records,
             vec![AgentRecord {
@@ -928,31 +876,45 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_old_counter_is_imported_once_and_an_invalid_one_stops_the_open() {
-        let core = core("import");
-        std::fs::write(core.join("numbers"), "7\n").unwrap();
-        let store = Store::open(&core, &[]).unwrap().store;
-        assert!(
-            !core.join("numbers").exists(),
-            "the counter file is deleted after the import commits"
-        );
-        assert_eq!(store.number_table().allocate_number().unwrap(), 7);
-        drop(store);
-        // Retry an import interrupted after commit but before the text file was deleted. The
-        // counter must not decrease.
-        std::fs::write(core.join("numbers"), "3\n").unwrap();
+    fn an_old_development_store_is_rejected_without_updating_it() {
+        let core = core("old-development");
+        let database = core.join("facade.db");
+        let wal = core.join("facade.db-wal");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode = WAL;
+                 CREATE TABLE numbers (next INTEGER NOT NULL);
+                 INSERT INTO numbers VALUES (3);
+                 PRAGMA wal_checkpoint(TRUNCATE);
+                 UPDATE numbers SET next = 7;",
+            )
+            .unwrap();
+        drop(connection);
+        let original = std::fs::read(&database).unwrap();
+        let original_wal = std::fs::read(&wal).unwrap();
+        assert!(!original_wal.is_empty());
+        let error = Store::open(&core, &[])
+            .err()
+            .expect("accepted an old store");
         assert_eq!(
-            Store::open(&core, &[])
-                .unwrap()
-                .store
-                .allocate_number()
-                .unwrap(),
-            8
+            error.to_string(),
+            format!(
+                "{} belongs to an older development build. Remove {} before restarting Facade.",
+                database.display(),
+                core.display()
+            )
         );
-        std::fs::write(core.join("numbers"), "seven\n").unwrap();
         assert!(
-            Store::open(&core, &[]).is_err(),
-            "an invalid counter must fail instead of resetting numbering"
+            std::fs::read(&database).unwrap() == original,
+            "the database changed"
+        );
+        assert!(
+            std::fs::read(&wal).unwrap() == original_wal,
+            "the WAL changed"
         );
     }
 
@@ -963,7 +925,7 @@ pub(crate) mod tests {
         // treating the empty schema as initialized.
         Connection::open(core.join("facade.db"))
             .unwrap()
-            .execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE numbers (next INTEGER NOT NULL);")
+            .execute_batch("PRAGMA journal_mode=WAL;")
             .unwrap();
         let opened = Store::open(&core, &["a4".into(), "a9".into()]).unwrap();
         assert!(opened.records.is_empty());
@@ -1055,82 +1017,6 @@ pub(crate) mod tests {
         assert_eq!(kept, "eaten_by_a_grue", "the stored name is not rewritten");
     }
 
-    #[test]
-    fn a_store_from_before_exit_reasons_rules_and_sessions_gains_the_columns_and_keeps_its_rows() {
-        let core = core("migrate");
-        let connection = Connection::open(core.join("facade.db")).unwrap();
-        connection
-            .execute_batch(
-                "PRAGMA journal_mode=WAL;
-				CREATE TABLE numbers (next INTEGER NOT NULL); INSERT INTO numbers VALUES (3);
-				CREATE TABLE agents (agent_id TEXT PRIMARY KEY, name TEXT NOT NULL, cli TEXT NOT NULL, cwd TEXT NOT NULL, pid INTEGER NOT NULL,
-					created_at TEXT NOT NULL, exit_code INTEGER, exit_signal TEXT, exit_at TEXT);
-				INSERT INTO agents VALUES ('a2', 'Pixel', 'claude', '/work', 42, 't', 0, NULL, 'u');
-				CREATE TABLE initialized (at TEXT NOT NULL); INSERT INTO initialized VALUES ('t');",
-            )
-            .unwrap();
-        drop(connection);
-        let opened = Store::open(&core, &[]).unwrap();
-        assert_eq!(opened.records.len(), 1);
-        assert_eq!(
-            opened.records[0]
-                .exit
-                .as_ref()
-                .map(|exit| (exit.code, exit.reason)),
-            Some((Some(0), None))
-        );
-        assert_eq!(
-            (
-                opened.records[0].rule.as_deref(),
-                opened.records[0].session.as_deref()
-            ),
-            (None, None),
-            "an earlier agent has no rule or session"
-        );
-        let tree = (
-            opened.records[0].creator.as_deref(),
-            opened.records[0].root.as_str(),
-            opened.records[0].yolo,
-        );
-        assert_eq!(
-            tree,
-            (None, "a2", false),
-            "an earlier agent is its own tree's first, launched with YOLO off as core launched \
-             every CLI then"
-        );
-        let connection = opened.store.connection.lock().unwrap();
-        let columns: Vec<String> = connection
-            .prepare("SELECT name FROM pragma_table_info('agents')")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        let added = [
-            "exit_reason",
-            "rule",
-            "session",
-            "window_id",
-            "creator",
-            "root",
-            "yolo",
-        ];
-        assert!(
-            added
-                .iter()
-                .all(|column| columns.iter().any(|name| name == column)),
-            "{columns:?}"
-        );
-        drop(connection);
-        assert_eq!(opened.store.number_table().allocate_number().unwrap(), 3);
-        drop(opened);
-        assert_eq!(
-            Store::open(&core, &[]).unwrap().records.len(),
-            1,
-            "opening again changes nothing"
-        );
-    }
-
     /// An agent's creator, the first agent of its tree and its run's YOLO survive a reopen as they
     /// were written.
     #[test]
@@ -1170,24 +1056,20 @@ pub(crate) mod tests {
         store
             .record_session("a1", Some("86da4482-2bae-4a45-b193-a5664c19826a"))
             .unwrap();
-        store.record_restart("a1", 77, "win-2", false).unwrap();
+        store.record_restart("a1", 77, false).unwrap();
         drop(store);
         let opened = Store::open(&core, &[]).unwrap();
         let session = Some("86da4482-2bae-4a45-b193-a5664c19826a".into());
         let resumed = AgentRecord {
             pid: 77,
             session,
-            window_id: "win-2".into(),
             yolo: false,
             ..record("a1")
         };
         assert_eq!(opened.records, [resumed]);
         opened.store.delete("a1").unwrap();
         opened.store.record_session("a1", None).unwrap();
-        opened
-            .store
-            .record_restart("a1", 78, "terminal", true)
-            .unwrap();
+        opened.store.record_restart("a1", 78, true).unwrap();
         assert!(
             Store::open(&core, &[]).unwrap().records.is_empty(),
             "a late write must not bring the record back"
@@ -1250,20 +1132,11 @@ pub(crate) mod tests {
         assert!(Store::open(&core, &["a1".into()]).is_err());
     }
 
-    /// Message numbers count on their own from 1 and continue after a reopen, also in a store
-    /// created before they existed. A new name survives a reopen.
+    /// Message numbers count on their own from 1 and continue after a reopen. A new name survives
+    /// a reopen.
     #[test]
     fn message_numbers_and_new_names_survive_a_reopen() {
         let core = core("messages");
-        // A store of an earlier build: initialized, without the message counter.
-        Store::open(&core, &[])
-            .unwrap()
-            .store
-            .connection
-            .lock()
-            .unwrap()
-            .execute_batch("DROP TABLE message_numbers")
-            .unwrap();
         let store = Store::open(&core, &[]).unwrap().store;
         let message = || crate::messages::tests::message(0, "a2");
         let numbered = |store: &Arc<Store>| {

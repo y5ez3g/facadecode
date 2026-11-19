@@ -16,7 +16,7 @@ use facade_base::service::{self, Candidate, Report, Service};
 
 use crate::errors::Problem;
 
-/// The longest one attempt to reach the daemon takes, starting it included.
+/// The wait for the initial connection, including time to start the daemon.
 const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The longest a daemon that already runs has to answer where nothing starts one.
 const RUNNING_TIMEOUT: Duration = Duration::from_secs(2);
@@ -26,7 +26,7 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(25);
 /// Why one attempt to reach the daemon failed.
 #[derive(Debug)]
 pub(crate) enum ConnectFailure {
-    /// No daemon said hello within the attempt's 10 seconds; another attempt may reach one.
+    /// The wait for a daemon to say hello expired. Another attempt may reach one.
     Timeout(anyhow::Error),
     /// Trying again does not help: a permission, protocol or settings error, or a daemon that
     /// could not start.
@@ -44,8 +44,9 @@ impl From<ConnectFailure> for anyhow::Error {
     }
 }
 
-/// One attempt to reach the daemon again, as [`attempt`] makes it: whether the caller has
-/// cancelled, and a look at each connection before hello. Blocks for at most 10 seconds.
+/// One attempt to reach the daemon again, as [`reconnect`] makes it: whether the caller has
+/// cancelled, and a look at each connection before hello. A takeover has its own deadline after
+/// the initial connection.
 pub(crate) type Reconnect = dyn Fn(
     &dyn Fn() -> bool,
     &mut dyn FnMut(&ClientSocket) -> bool,
@@ -80,22 +81,22 @@ fn identity_for(agent: Option<String>, with_sessions: bool) -> Identity {
     }
 }
 
-/// Says hello as `identity` to a daemon that already runs, without starting one; None when
-/// nothing answers within 2 seconds.
-fn hello_if_running(socket: &Path, identity: &Identity) -> Option<DaemonClient> {
-    let answered = DaemonClient::connect(
+/// Says hello to a daemon that already runs. None when nothing answers within 2 seconds.
+fn hello_if_running(socket: &Path, identity: &Identity) -> anyhow::Result<Option<DaemonClient>> {
+    DaemonClient::connect(
         socket,
         identity,
         Instant::now() + RUNNING_TIMEOUT,
         &mut |_| true,
-    );
-    answered.ok().flatten()
+    )
 }
 
 /// Connects, acting for `agent`, to a daemon that runs, for a hook, which never starts Facade.
 pub(super) fn connect_running(agent: Option<String>) -> Option<DaemonClient> {
     let socket = facade_base::paths::daemon_socket().ok()?;
     hello_if_running(&socket, &identity_for(agent, false))
+        .ok()
+        .flatten()
 }
 
 /// The agent of this command's terminal. A daemon that runs knows it by a CLI session the
@@ -106,20 +107,27 @@ pub(super) fn agent_of_terminal() -> anyhow::Result<Option<String>> {
     if identity.sessions.is_empty() {
         return Ok(identity.agent);
     }
-    let socket = facade_base::paths::daemon_socket()?;
-    let known = hello_if_running(&socket, &identity).map(|client| client.hello_result.agent);
+    let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
+    let known = hello_if_running(&socket, &identity)
+        .map_err(explicit)?
+        .map(|client| client.hello_result.agent);
     Ok(known.unwrap_or(identity.agent))
 }
 
 /// Connects to the daemon within one attempt, starting Facade where nothing answers.
 pub(super) fn connect_or_start() -> anyhow::Result<DaemonClient> {
-    attempt(&|| false, &mut |_| true).map_err(unreachable)
+    first_connection(&identity_for(terminal_agent(), true)).map_err(unreachable)
 }
 
 /// Connects as [`connect_or_start`] does, acting for `agent`.
 pub(super) fn connect_or_start_for(agent: &str) -> anyhow::Result<DaemonClient> {
     let identity = identity_for(Some(agent.to_string()), false);
-    attempt_as(&identity, &|| false, &mut |_| true, Notes::Public).map_err(unreachable)
+    first_connection(&identity).map_err(unreachable)
+}
+
+/// Makes a command's first connection with default callbacks.
+fn first_connection(identity: &Identity) -> Result<DaemonClient, ConnectFailure> {
+    attempt_as(identity, &|| false, &mut |_| true, Notes::Public)
 }
 
 /// The failure of a command's attempt to reach Facade, for the reader: why, and the log that says
@@ -137,26 +145,30 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
 /// a usable reply in time; an error for an explicit failure, such as an unusable home, a
 /// permission error or no shared protocol version.
 pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
-    let explicit = |error: anyhow::Error| -> anyhow::Error {
-        Problem::Unreachable {
-            why: crate::errors::cause(&error),
-            log: None,
-        }
-        .into()
-    };
     let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
     let identity = identity_for(terminal_agent(), true);
     let until = Instant::now() + RUNNING_TIMEOUT;
     DaemonClient::connect(&socket, &identity, until, &mut |_| true).map_err(explicit)
 }
 
-/// Facade did not start: why, the log that says more, and the words `facade daemon --detach` has
-/// always printed for it.
+/// An explicit failure to reach a daemon that runs, such as an unusable home, a permission error
+/// or no shared protocol version, as the catalog row.
+fn explicit(error: anyhow::Error) -> anyhow::Error {
+    Problem::Unreachable {
+        why: crate::errors::cause(&error),
+        log: None,
+    }
+    .into()
+}
+
+/// Facade did not start: why, the log that says more, the words `facade daemon --detach` has
+/// always printed for it, and whether a daemon holds the lock and is still starting.
 #[derive(Debug)]
 struct Unstarted {
     why: String,
     log: PathBuf,
     hidden: String,
+    starting: bool,
 }
 
 impl std::fmt::Display for Unstarted {
@@ -167,10 +179,9 @@ impl std::fmt::Display for Unstarted {
 
 impl std::error::Error for Unstarted {}
 
-/// One attempt to reach the daemon as this command's terminal, starting Facade when nothing
-/// answers and nothing holds the daemon lock. `cancelled` ends the attempt; `opening` sees each
+/// Reconnects an attached terminal. `cancelled` ends the attempt. `opening` sees each
 /// connection before hello and can close it.
-pub(super) fn attempt(
+pub(super) fn reconnect(
     cancelled: &dyn Fn() -> bool,
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure> {
@@ -190,21 +201,20 @@ enum Notes {
     Hidden,
 }
 
-/// One attempt as [`attempt`], with `identity`. A Facade of an older build that answers hands over
-/// to this one first.
+/// Reaches the daemon and asks an eligible older build to hand over before using the connection.
 fn attempt_as(
     identity: &Identity,
     cancelled: &dyn Fn() -> bool,
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
     notes: Notes,
 ) -> Result<DaemonClient, ConnectFailure> {
-    let mut client = reach(identity, cancelled, opening)?;
+    let mut client = reach(identity, cancelled, opening, DAEMON_CONNECT_TIMEOUT)?;
     let ours = facade_base::build_id();
     if facade_base::takes_over(&ours, &client.hello_result.build)
         && let Some(handed) = ask_to_take_over(&mut client, &ours, notes)?
     {
         drop(client);
-        client = follow_takeover(identity, cancelled, &ours, handed, notes)?;
+        client = follow_takeover(identity, cancelled, opening, &ours, handed, notes)?;
     }
     // A test can hold a command here, after its hello and before its call.
     service::gate_for_test("command-connected");
@@ -254,66 +264,59 @@ fn ask_to_take_over(
 }
 
 /// Waits, after a handover began, for the daemon of this build, and says on one line how it went.
-/// A daemon of the old build that answers again could not hand over and serves on: the command
-/// goes on with it.
+/// A command goes on with the older build if it answers again.
 fn follow_takeover(
     identity: &Identity,
     cancelled: &dyn Fn() -> bool,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
     ours: &str,
     (asked, handed): (Instant, UpgradeResult),
     notes: Notes,
 ) -> Result<DaemonClient, ConnectFailure> {
     let timeout = takeover_timeout();
-    let deadline = Instant::now() + timeout;
-    loop {
-        match reach(identity, cancelled, &mut |_| true) {
-            Ok(client) if client.hello_result.build == ours => {
-                if notes == Notes::Hidden {
-                    eprintln!(
-                        "facade: Facade {ours} took over from {}; {} kept running ({:.1} s)",
-                        handed.from,
-                        facade_base::daemon::agents_word(handed.agents),
-                        asked.elapsed().as_secs_f64()
-                    );
-                    return Ok(client);
-                }
+    match reach(identity, cancelled, opening, timeout) {
+        Ok(client) if client.hello_result.build == ours => {
+            if notes == Notes::Hidden {
                 eprintln!(
-                    "note: upgraded running Facade {} to {ours}; {} kept running",
+                    "facade: Facade {ours} took over from {}; {} kept running ({:.1} s)",
                     handed.from,
                     facade_base::daemon::agents_word(handed.agents),
+                    asked.elapsed().as_secs_f64()
                 );
                 return Ok(client);
             }
-            Ok(client) => {
-                let theirs = &client.hello_result.build;
-                let logs = logs_folder().map(|logs| logs.display().to_string());
-                if notes == Notes::Hidden {
-                    eprintln!(
-                        "facade: Facade {ours} could not take over from {theirs}, which runs on; see {}",
-                        logs.unwrap_or_default()
-                    );
-                    return Ok(client);
-                }
+            eprintln!(
+                "note: upgraded running Facade {} to {ours}; {} kept running",
+                handed.from,
+                facade_base::daemon::agents_word(handed.agents),
+            );
+            Ok(client)
+        }
+        Ok(client) => {
+            let theirs = &client.hello_result.build;
+            let logs = logs_folder().map(|logs| logs.display().to_string());
+            if notes == Notes::Hidden {
                 eprintln!(
-                    "warning: could not upgrade running Facade {theirs}: check '{}' for details; \
-                     continuing with {theirs}",
+                    "facade: Facade {ours} could not take over from {theirs}, which runs on; see {}",
                     logs.unwrap_or_default()
                 );
                 return Ok(client);
             }
-            // The old daemon ended and the new one is not up yet: the keeper starts it, or this
-            // command does where no keeper runs.
-            Err(ConnectFailure::Timeout(_)) if Instant::now() < deadline => {
-                std::thread::sleep(RETRY_INTERVAL)
-            }
-            Err(ConnectFailure::Timeout(_)) => {
-                return Err(ConnectFailure::Timeout(anyhow::anyhow!(
-                    "Facade {ours} did not answer within {} seconds of taking over",
-                    timeout.as_secs()
-                )));
-            }
-            Err(failure) => return Err(failure),
+            eprintln!(
+                "warning: could not upgrade running Facade {theirs}: check '{}' for details; \
+                 continuing with {theirs}",
+                logs.unwrap_or_default()
+            );
+            Ok(client)
         }
+        Err(ConnectFailure::Timeout(error)) => {
+            let error = error.context(format!(
+                "Facade {ours} did not answer within {} seconds of taking over",
+                timeout.as_secs()
+            ));
+            Err(ConnectFailure::Timeout(error))
+        }
+        Err(failure) => Err(failure),
     }
 }
 
@@ -367,6 +370,7 @@ impl StartedKeeper {
                 hidden: why.to_string(),
                 why: why.to_string(),
                 log: logs.join("keeper.log"),
+                starting: false,
             })),
             Some(Report::Silent) => Err(permanent(silent_keeper(logs))),
             Some(Report::Contention) => {
@@ -397,7 +401,12 @@ fn silent_keeper(logs: &Path) -> Unstarted {
         ),
     };
     let hidden = format!("{why}; see {}", seen.display());
-    Unstarted { why, log, hidden }
+    Unstarted {
+        why,
+        log,
+        hidden,
+        starting: false,
+    }
 }
 
 impl Drop for StartedKeeper {
@@ -409,18 +418,19 @@ impl Drop for StartedKeeper {
     }
 }
 
-/// Reaches the daemon within one 10-second attempt. While nothing answers, it starts a keeper,
+/// Reaches the daemon within `timeout`. While nothing answers, it starts a keeper,
 /// which starts the daemon, only where nothing holds the daemon lock and no keeper runs: a daemon
 /// that holds the lock may be recovering, and a keeper that runs starts its own daemon.
 fn reach(
     identity: &Identity,
     cancelled: &dyn Fn() -> bool,
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
+    timeout: Duration,
 ) -> Result<DaemonClient, ConnectFailure> {
     let home = service::create_private_home().map_err(permanent)?;
     let logs = home.join("logs");
     let socket = facade_base::paths::daemon_socket().map_err(permanent)?;
-    let deadline = Instant::now() + DAEMON_CONNECT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let mut keeper = StartedKeeper::default();
     loop {
         if cancelled() {
@@ -449,26 +459,44 @@ fn reach(
             } else {
                 format!(
                     "the Facade daemon did not start within {} seconds",
-                    DAEMON_CONNECT_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 )
             };
             let hidden = format!("{why}; see {}", logs.display());
             let log = logs.join("daemon.log");
+            let starting = daemon_runs;
             return Err(ConnectFailure::Timeout(
-                Unstarted { why, log, hidden }.into(),
+                Unstarted {
+                    why,
+                    log,
+                    hidden,
+                    starting,
+                }
+                .into(),
             ));
         }
         std::thread::sleep(RETRY_INTERVAL);
     }
 }
 
+/// Whether a daemon that holds the lock is still starting, as opposed to none having started.
+fn still_starting(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<Unstarted>())
+        .any(|unstarted| unstarted.starting)
+}
+
 /// `facade daemon --detach`: starts Facade in the background for an editor or another program, the
 /// way a command reaches it. A daemon still starting after 10 seconds counts as started, with its
-/// note on standard error; a failure to start is returned at once. The caller confirms with hello.
+/// note on standard error; one that did not start, or failed to, is returned. The caller confirms
+/// with hello.
 pub(super) fn detach() -> anyhow::Result<i32> {
     let identity = identity_for(terminal_agent(), true);
     match attempt_as(&identity, &|| false, &mut |_| true, Notes::Hidden) {
-        Err(ConnectFailure::Timeout(still)) => eprintln!("facade: {still:#}"),
+        Err(ConnectFailure::Timeout(still)) if still_starting(&still) => {
+            eprintln!("facade: {still:#}")
+        }
         Err(failure) => return Err(failure.into()),
         Ok(_) => {}
     }

@@ -111,8 +111,8 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		};
 	}
 
-	storeEnvironments(location: Location): StoreEnvironments {
-		const destination = this.destination(location);
+	storeEnvironments(location: Location | undefined, scope?: vscode.Uri): StoreEnvironments {
+		const destination = scope ? destinationEnvironment(scope) : this.destination(location);
 		return Object.fromEntries(this.catalog().entries.filter(entry => entry.enabled && !configurationProblems(entry, destination).length)
 			.map(entry => [entry.adapter.id, environmentOf(entry, destination)]));
 	}

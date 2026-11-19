@@ -19,6 +19,7 @@ impl DeliveryHandle {
     pub(crate) fn still_to_type(&self, number: u64) -> bool {
         self.0
             .lock()
+            .agents
             .get(&number)
             .is_some_and(|delivery| !delivery.pasted)
     }
@@ -31,7 +32,11 @@ impl DeliveryHandle {
         let granted: Vec<u64> = numbers
             .iter()
             .copied()
-            .filter(|number| open.get(number).is_some_and(|delivery| !delivery.pasted))
+            .filter(|number| {
+                open.agents
+                    .get(number)
+                    .is_some_and(|delivery| !delivery.pasted)
+            })
             .collect();
         if granted.is_empty() {
             return Some(granted);
@@ -42,7 +47,7 @@ impl DeliveryHandle {
         }
         pause_for_test("after-paste-commit");
         for number in &granted {
-            if let Some(delivery) = open.get_mut(number) {
+            if let Some(delivery) = open.agents.get_mut(number) {
                 delivery.pasted = true;
             }
         }

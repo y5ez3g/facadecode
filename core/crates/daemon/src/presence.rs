@@ -1,22 +1,22 @@
 //! Who comes and goes besides the agents Facade starts: guests, the sessions people start that
 //! join through a hook, and editor windows. Guests and windows keep their own registers; the
 //! daemon lists, publishes and removes the agents that go with them, in the orders
-//! docs/core/ARCHITECTURE.md gives for a window's takeover and a guest's join and end.
+//! docs/core/ARCHITECTURE.md gives for a window's binding and a guest's join and end.
 
 use std::sync::Arc;
 
 use facade_base::daemon::{
-    AgentState, AgentsChange, HookSession, LocationInfo, TERMINAL_WINDOW, TerminalColors,
-    WindowDescription, WorktreeCreateArgs,
+    AgentInfo, AgentState, AgentsChange, HookSession, LocationInfo, TERMINAL_WINDOW,
+    TerminalColors, WindowDescription, WindowRef, WorktreeCreateArgs,
 };
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::process::ProcessState;
 use tokio::sync::mpsc;
 
-use crate::agent::{AgentCommand, AgentHandle};
+use crate::agent::{AgentCommand, AgentHandle, WindowColors};
 use crate::guests::{GuestEvent, Guests, SessionMatch};
-use crate::windows::{LocationsRead, WindowConnection, WindowEvent};
-use crate::{Daemon, blocking_in_place, command_line, gate_for_test, log};
+use crate::windows::{LocationsRead, WindowConnection};
+use crate::{Daemon, WindowBinding, blocking_in_place, command_line, gate_for_test, log};
 
 /// What a hook reports on: a guest; a part of a guest's session, such as a subagent's, which acts
 /// for the guest but whose turns are not the guest's; or a session of the run Facade started that
@@ -88,11 +88,12 @@ impl Daemon {
         }
         let id = self.records.next_id().await?;
         let name = self.reserve_name(
-            TERMINAL_WINDOW,
+            &[self.local_window(TERMINAL_WINDOW)],
             &id,
             command_line::settings_names().as_deref(),
         );
         let (info, record) = Guests::info_of(&id, &name, session);
+        let info = self.project_guest(info);
         if let Err(error) = self.guests.keep(&record).await {
             self.records.release_name(&name);
             return Err(error);
@@ -182,9 +183,19 @@ impl Daemon {
         }
         let mut agents = self.agents.lock().unwrap();
         for info in restored.listed {
-            agents.insert(info.agent_id.clone(), AgentHandle::guest(info));
+            agents.insert(
+                info.agent_id.clone(),
+                AgentHandle::guest(self.project_guest(info)),
+            );
         }
         Ok(())
+    }
+
+    /// A guest belongs to this machine's terminal.
+    pub(crate) fn project_guest(&self, mut info: AgentInfo) -> AgentInfo {
+        info.machine_id = self.machine_id.clone();
+        info.windows = vec![self.local_window(TERMINAL_WINDOW)];
+        info
     }
 
     /// Ends the guests not heard from since `before`.
@@ -194,165 +205,150 @@ impl Daemon {
         }
     }
 
-    /// An editor window connected (`hello` of an `ide` client): its description is saved, a window
-    /// it takes over hands it its agents, and its locations are read. The connection counts until
-    /// it is dropped.
+    /// Saves an IDE hello's binding and keeps the connection until its guard goes.
     pub(crate) async fn window_connected(
         self: &Arc<Self>,
         description: WindowDescription,
     ) -> Result<WindowConnection, ErrorBody> {
-        crate::windows::Windows::check(&description)?;
         if let Some(colors) = &description.colors {
             terminal_colors(colors)?;
         }
-        self.describe_window(&description, true).await;
-        Ok(self.windows.connection(&description.id))
+        let (connection, before) = self.windows.bind(description).await?;
+        self.window_description_changed(connection.binding(), before)
+            .await;
+        Ok(connection)
     }
 
     /// A connected window described itself again (`window.update`).
     pub(crate) async fn window_updated(
         self: &Arc<Self>,
+        binding: &WindowBinding,
         description: WindowDescription,
     ) -> Result<(), ErrorBody> {
-        crate::windows::Windows::check(&description)?;
         if let Some(colors) = &description.colors {
             terminal_colors(colors)?;
         }
-        self.describe_window(&description, false).await;
+        let before = self.windows.update(binding, description).await?;
+        self.window_description_changed(binding, before).await;
         Ok(())
     }
 
-    async fn describe_window(self: &Arc<Self>, description: &WindowDescription, connecting: bool) {
-        let before = self.windows.folders(&description.id);
-        for from in self.windows.describe(description, connecting) {
-            self.take_over_window(&from, &description.id);
+    async fn window_description_changed(
+        self: &Arc<Self>,
+        binding: &WindowBinding,
+        before: Vec<String>,
+    ) {
+        if let Some(read) = self.windows.read_locations(binding, Some(before)).await {
+            self.stop_gone(&read);
         }
-        if let Some(read) = self
-            .windows
-            .read_locations(&description.id, Some(before))
-            .await
-        {
-            self.stop_gone(&description.id, &read);
-        }
-        self.push_colors(&description.id).await;
+        self.push_colors(binding).await;
     }
 
-    /// The colors window `id`'s terminals draw with, which its agents reply to color queries with.
-    pub(crate) fn window_colors(&self, id: &str) -> facade_screen::TerminalColors {
+    pub(crate) fn window_colors(
+        &self,
+        window: &WindowRef,
+    ) -> Option<facade_screen::TerminalColors> {
         self.windows
-            .colors(id)
+            .colors(window)
             .and_then(|colors| terminal_colors(&colors).ok())
-            .unwrap_or_default()
     }
 
-    /// Gives every agent of window `id` the window's colors, those it took over included.
-    async fn push_colors(&self, id: &str) {
-        let colors = self.window_colors(id);
-        for agent in self.agents() {
-            if agent.info().window_id == id && !agent.is_guest() {
-                agent.send(AgentCommand::SetColors(colors)).await;
-            }
-        }
-    }
-
-    /// Moves the agents of window `from`, which has no connection left, to window `to` that took
-    /// it over: in one transaction, then in the list.
-    fn take_over_window(&self, from: &str, to: &str) {
-        if let Err(err) = blocking_in_place(|| self.store.take_over(from, to)) {
-            log("warn", &format!("{err:#}"));
-        }
-        for agent in self.agents() {
-            if let Some(info) = agent.move_window(from, to) {
-                self.publish(info);
-            }
-        }
-        log(
-            "info",
-            &format!(
-                "window {to} took over the agents of window {from}, which had no connection left"
-            ),
-        );
-        self.windows.taken_over(from);
-    }
-
-    /// Whether any listed agent, running or ended, is window `id`'s.
-    fn window_holds_agents(&self, id: &str) -> bool {
-        self.agent_infos().iter().any(|info| info.window_id == id)
-    }
-
-    /// The running agents of window `id`.
-    fn running_in(&self, id: &str) -> Vec<AgentHandle> {
-        self.agents()
-            .into_iter()
-            .filter(|agent| {
-                let info = agent.info();
-                info.window_id == id && info.process == ProcessState::Running
+    /// The first member with known colors. Descriptions keep the last colors across disconnects.
+    pub(crate) fn first_member_colors(&self, members: &[WindowRef]) -> Option<WindowColors> {
+        members.iter().find_map(|window| {
+            self.window_colors(window).map(|colors| WindowColors {
+                window: window.clone(),
+                colors,
             })
-            .collect()
+        })
     }
 
-    /// Stops the running agents of window `id` whose location `read` says is gone.
-    fn stop_gone(self: &Arc<Self>, id: &str, read: &LocationsRead) {
-        for agent in self.running_in(id) {
-            let cwd = agent.info().cwd;
-            if !read.is_gone(&cwd) {
+    async fn push_colors(&self, binding: &WindowBinding) {
+        let window = &binding.window;
+        for agent in self.agents() {
+            if !self.windows.is_current(binding) {
+                break;
+            }
+            let info = agent.info();
+            if info.guest || !info.windows.contains(window) {
                 continue;
             }
-            log(
-                "info",
-                &format!(
-                    "#{} ends: its location {cwd} is gone from window {id}",
-                    agent.id()
-                ),
-            );
+            let command = match agent.color_source() {
+                Some(source) if source == *window => Some(AgentCommand::WindowColorsChanged {
+                    colors: WindowColors {
+                        window: source,
+                        colors: self.window_colors(window).unwrap_or_default(),
+                    },
+                    allow_initial: false,
+                }),
+                None => self.first_member_colors(&info.windows).map(|colors| {
+                    AgentCommand::WindowColorsChanged {
+                        colors,
+                        allow_initial: true,
+                    }
+                }),
+                Some(_) => None,
+            };
+            if let Some(command) = command {
+                agent.send(command).await;
+            }
+        }
+    }
+
+    /// Stops only the same run whose source binding reported that its location went away.
+    fn stop_gone(self: &Arc<Self>, read: &LocationsRead) {
+        let binding = read.binding();
+        if !self.windows.is_current(binding) {
+            return;
+        }
+        for agent in self.agents() {
+            let (run, info) = agent.installed_record();
+            if info.process != ProcessState::Running
+                || info.location_source_window.as_ref() != Some(&binding.window)
+                || !read.is_gone(&info.cwd)
+            {
+                continue;
+            }
             let daemon = self.clone();
+            let binding = binding.clone();
             tokio::spawn(async move {
-                let _ = daemon.stop(&agent).await;
+                let _changing = agent.lock_run_change().await;
+                let (installed, current) = agent.installed_record();
+                if installed == run
+                    && current.process == ProcessState::Running
+                    && daemon.windows.is_current(&binding)
+                {
+                    log(
+                        "info",
+                        &format!(
+                            "#{} ends: its location {} is gone from window {}",
+                            agent.id(),
+                            current.cwd,
+                            binding.window.window_id
+                        ),
+                    );
+                    let _ = daemon.stop_run(&agent).await;
+                }
             });
         }
     }
 
-    /// Makes a worktree in a window's location and answers with the new location
-    /// (`worktree.create`); an agent whose folder is gone from the window's locations ends.
+    /// Makes a worktree at the requested logical window's location or in the terminal.
     pub(crate) async fn create_worktree(
         self: &Arc<Self>,
         args: WorktreeCreateArgs,
     ) -> Result<LocationInfo, ErrorBody> {
-        let window = args.window_id.clone();
         let (location, read) = self.windows.create_worktree(args).await?;
         if let Some(read) = read {
-            self.stop_gone(&window, &read);
+            self.stop_gone(&read);
         }
         Ok(location)
     }
 
-    /// Lists the windows of recovered running agents as disconnected.
-    pub(crate) fn restore_windows(&self) {
-        let infos = self.agent_infos();
-        let running: Vec<String> = infos
-            .iter()
-            .filter(|info| info.process == ProcessState::Running)
-            .map(|info| info.window_id.clone())
-            .collect();
-        let agents: Vec<String> = infos.into_iter().map(|info| info.window_id).collect();
-        self.windows.restore(&running, &agents);
-    }
-}
-
-/// Removes a window from the list when its last connection closes and it has no running agents.
-pub(crate) async fn follow_windows(
-    daemon: Arc<Daemon>,
-    mut events: mpsc::UnboundedReceiver<WindowEvent>,
-) {
-    while let Some(WindowEvent::Left {
-        window_id,
-        departure,
-    }) = events.recv().await
-    {
-        if daemon.running_in(&window_id).is_empty() {
-            let has_agents = daemon.window_holds_agents(&window_id);
-            daemon.windows.remove(&window_id, departure, has_agents);
-        }
+    /// Restores the logical windows before accepting clients.
+    pub(crate) fn restore_windows(&self) -> Result<(), ErrorBody> {
+        self.windows
+            .restore(|window| self.store.delete_empty_window(window))
     }
 }
 

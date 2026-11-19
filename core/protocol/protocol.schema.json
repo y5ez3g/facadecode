@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Facade daemon protocol",
   "description": "The daemon protocol uses JSON-RPC 2.0, one message per line: hello, call, watch, unwatch, and changed notifications. Clients skip unknown change kinds.",
-  "protocol": 1,
-  "oldest_protocol": 1,
+  "protocol": 2,
+  "oldest_protocol": 2,
   "methods": [
     "hello",
     "call",
@@ -22,6 +22,7 @@
   "ops": [
     "agent.start",
     "agent.resume",
+    "agent.adopt",
     "agent.stop",
     "agent.remove",
     "agent.inspect",
@@ -76,13 +77,24 @@
           "type": "string",
           "description": "The CLI's working folder at startup."
         },
-        "window_id": {
+        "machine_id": {
           "type": "string",
-          "description": "The window the agent is in: the editor window it was started in, or `terminal` for an agent\nstarted from a terminal."
+          "description": "The ID of the Facade machine that runs the agent."
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowRef"
+          },
+          "description": "One or more member windows, unique and sorted by machine ID and window ID."
         },
         "location_id": {
           "type": "string",
-          "description": "The ID of its location, as its window lists it: the location `cwd` is, or the innermost one\n`cwd` is inside."
+          "description": "The ID of its location: the location `cwd` is, or the innermost one that contains `cwd`."
+        },
+        "location_source_window": {
+          "description": "The window that provided the agent's running location, where a window supplied it.",
+          "$ref": "#/$defs/WindowRef"
         },
         "pid": {
           "type": "integer",
@@ -116,9 +128,17 @@
           "type": "string",
           "description": "The agent whose client started it. Omitted where the person started it, and for a guest."
         },
+        "creator_machine_id": {
+          "type": "string",
+          "description": "The creator's machine ID. Omitted when it is the record's own machine."
+        },
         "root": {
           "type": "string",
           "description": "The first agent of its creation tree: itself where it has no creator, or else its creator's\nroot. It stays when agents of the tree end or go."
+        },
+        "root_machine_id": {
+          "type": "string",
+          "description": "The root agent's machine ID. Omitted when it is the record's own machine."
         },
         "yolo": {
           "type": "boolean",
@@ -162,7 +182,8 @@
         "name",
         "cli",
         "cwd",
-        "window_id",
+        "machine_id",
+        "windows",
         "location_id",
         "process",
         "created_at",
@@ -282,6 +303,21 @@
             },
             "args": {
               "$ref": "#/$defs/ResumeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.adopt"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentArgs"
             }
           },
           "required": [
@@ -724,7 +760,7 @@
         {
           "type": "string",
           "const": "notified",
-          "description": "A message to the person: handed to the sender's editor window, which shows it."
+          "description": "A message to the person: delivered to one or more member windows' subscriptions."
         }
       ],
       "description": "How a message was delivered."
@@ -893,6 +929,13 @@
         "entry": {
           "type": "string",
           "description": "With a refused start or resume that an entry of the settings file caused - its program not\nfound, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot\ntake - the entry's name, such as `claude`. A client offers to open the settings file."
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowDeliveryFailure"
+          },
+          "description": "With `unavailable` when no member window took a message to `#human`: each window and why\nit could not take the message."
         }
       },
       "required": [
@@ -978,6 +1021,14 @@
           "type": "string",
           "description": "The daemon's build."
         },
+        "machine_id": {
+          "type": "string",
+          "description": "The daemon's Facade machine ID."
+        },
+        "window": {
+          "description": "For an `ide` client, the logical window bound to this connection.",
+          "$ref": "#/$defs/WindowRef"
+        },
         "pid": {
           "type": "integer",
           "format": "uint32",
@@ -1016,6 +1067,7 @@
       "required": [
         "protocol",
         "build",
+        "machine_id",
         "pid",
         "agents",
         "topics",
@@ -1423,7 +1475,7 @@
         },
         "from_window": {
           "type": "string",
-          "description": "The name of the sender's window when it sent the message, where that was not the recipient's\nwindow. Omitted otherwise."
+          "description": "The sender's window name if it had a single member window and the recipient did not belong\nto that window."
         },
         "call_id": {
           "type": "string",
@@ -1541,6 +1593,13 @@
           "minimum": 0,
           "maximum": 65535,
           "description": "The most messages in a page, 1 to 200. Defaults to 100."
+        },
+        "last": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The newest messages of the selection, this many, 1 to 200, in one page. Excludes `ids`,\n`cursor` and `limit`."
         }
       },
       "description": "Arguments for the `messages` topic: which messages of the inbox to read. Without `ids` or `all`,\nthe messages not yet delivered."
@@ -1893,10 +1952,6 @@
           "minimum": 0,
           "maximum": 65535,
           "description": "The terminal height in rows, at least 1."
-        },
-        "window_id": {
-          "type": "string",
-          "description": "The window the agent runs in again, as for `agent.start`: an editor window that is there now\nand has the agent's folder among its locations, by its ID, or `terminal`. Omitted,\n`terminal`."
         }
       },
       "required": [
@@ -2173,7 +2228,7 @@
       "properties": {
         "to": {
           "type": "string",
-          "description": "The recipient: an agent ID (`a3`, `#a3`, or `3`), a unique name of a running agent with or\nwithout `@`, or a name followed by its ID, such as `@Pixel #a3`."
+          "description": "The recipient: an agent ID (`a3`, `#a3`, or `3`), a unique name of a running agent with or\nwithout `@`, a name followed by its ID such as `@Pixel #a3`, or `#human` for the person."
         },
         "text": {
           "type": "string",
@@ -2229,7 +2284,7 @@
         },
         "from_window": {
           "type": "string",
-          "description": "The name of the sender's window when it sent the message, where that was not the recipient's\nwindow. Omitted otherwise."
+          "description": "The sender's window name if it had a single member window and the recipient did not belong\nto that window."
         },
         "call_id": {
           "type": "string",
@@ -2253,6 +2308,10 @@
         "withdrawn": {
           "type": "boolean",
           "description": "Its delivery failed with nothing of it typed, and it was taken out of its recipient's inbox,\nso it can be sent again. Omitted otherwise."
+        },
+        "windows": {
+          "description": "Which windows' subscriptions took the message for `#human`. Omitted for messages to\nagents and for a `pending` result whose daemon ended before saving the window outcomes.",
+          "$ref": "#/$defs/WindowDelivery"
         }
       },
       "required": [
@@ -2302,15 +2361,19 @@
         },
         "name": {
           "type": "string",
-          "description": "The display name, trimmed. A missing, empty, or blank name gets a name from the settings\nfile's `names`, else from the built-in names: one no agent of the window has, ignoring case\nand surrounding spaces, or, where every one is taken or the list is empty, the agent's ID,\nsuch as `#a7` (LIFECYCLE-2.1). Given names may repeat."
+          "description": "The display name, trimmed. A missing, empty, or blank name gets a name from the settings\nfile's `names`, else from the built-in names: one unused in any of the initial member\nwindows, ignoring case and surrounding spaces. If every name is taken or the list is empty,\nuses the agent's ID, such as `#a7` (LIFECYCLE-2.1). Given names may repeat."
         },
         "cwd": {
           "type": "string",
-          "description": "The CLI's working folder, an absolute path. In an editor window it must be one of the\nwindow's locations, which `worktree.create` adds to, or a folder inside one."
+          "description": "The CLI's absolute working folder. If `location_source_window` is set, `cwd` must be that\nwindow's location or a folder inside one."
         },
-        "window_id": {
-          "type": "string",
-          "description": "The window the agent goes in: an editor window that is there now, by its ID, or `terminal`,\nwhere any folder will do. Omitted, `terminal`."
+        "window": {
+          "description": "The one initial member window, when supplied. Omitted to use the caller's default.",
+          "$ref": "#/$defs/WindowRef"
+        },
+        "location_source_window": {
+          "description": "The connected local window that supplies the running location for `cwd`, if selected.",
+          "$ref": "#/$defs/WindowRef"
         },
         "env": {
           "type": "object",
@@ -2347,7 +2410,7 @@
           "description": "The caller's own ID of this start, 1 to 200 characters. The same ID again from the same\ncreator within an hour of the agent's start answers that agent as it stands now, and starts\nnothing. A start that failed keeps none, and the ID goes with its agent's record."
         },
         "worktree": {
-          "description": "A worktree to make from `cwd`, a checkout of the window, with a new branch, as\n`worktree.create` makes one, and to start in. It is made after the request ID is looked for,\nso a repeat makes none.",
+          "description": "A worktree with a new branch to make and start in. With a location source window, uses\nthe supplied location. Otherwise, uses the repository of `cwd`. The daemon checks the\nrequest ID before it makes the worktree, so a repeat makes none.",
           "$ref": "#/$defs/Worktree"
         },
         "model": {
@@ -2662,7 +2725,7 @@
           },
           "minItems": 2,
           "maxItems": 2,
-          "description": "The daemon protocol versions it speaks, lowest and highest."
+          "description": "The daemon protocol range accepted for this takeover, lowest and highest."
         },
         "keeper_protocol": {
           "type": "array",
@@ -2831,12 +2894,53 @@
       ],
       "description": "The result of `watch`, sent before any changes for that watch."
     },
+    "WindowDelivery": {
+      "type": "object",
+      "properties": {
+        "delivered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowRef"
+          },
+          "description": "Windows whose `messages` subscriptions took the notification."
+        },
+        "not_delivered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WindowDeliveryFailure"
+          },
+          "description": "Windows whose subscriptions did not take the notification."
+        }
+      },
+      "required": [
+        "delivered",
+        "not_delivered"
+      ],
+      "description": "The member windows' outcomes for one message to the person."
+    },
+    "WindowDeliveryFailure": {
+      "type": "object",
+      "properties": {
+        "window": {
+          "$ref": "#/$defs/WindowRef"
+        },
+        "reason": {
+          "type": "string",
+          "description": "`window_disconnected` if the window has no connection, or `not_watching` if no current\nsubscription took the notification."
+        }
+      },
+      "required": [
+        "window",
+        "reason"
+      ],
+      "description": "Why a member window did not take a notification."
+    },
     "WindowDescription": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "The window's ID, which stays the same across its reloads. `terminal` is not an editor\nwindow's."
+          "description": "The editor window instance's ID. It survives reloads and changes when the window reopens.\nThe daemon returns the logical window in `HelloResult.window`."
         },
         "label": {
           "type": "string",
@@ -2848,7 +2952,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "The key the window's agents are kept under across its reloads: a window that connects with\nthe same key takes over every agent, running or ended, of an earlier window with that key\nthat has no connection left. Omitted for a window with no folder."
+          "description": "A workspace the daemon can use to bind a reopened window to an earlier logical window.\nOmitted for a window with no workspace."
         },
         "folders": {
           "type": "array",
@@ -2863,7 +2967,7 @@
           "description": "The window's Git branch prefix, which a new worktree's folder name leaves out. Omitted where\nnone is set."
         },
         "colors": {
-          "description": "The colors the window's terminals draw with, which its agents reply to color queries with.\n`window.update` sends them again when the editor's theme changes. Omitted, no color query\ngets a reply.",
+          "description": "The colors the window supplies for its agents' terminal color queries. `window.update`\nsends them again when the editor's theme changes. An omitted color gets no reply.",
           "$ref": "#/$defs/TerminalColors"
         },
         "env": {
@@ -2884,9 +2988,13 @@
     "WindowInfo": {
       "type": "object",
       "properties": {
+        "machine_id": {
+          "type": "string",
+          "description": "The ID of the Facade machine that owns the window."
+        },
         "window_id": {
           "type": "string",
-          "description": "The window's ID: an editor window's own, or `terminal`."
+          "description": "The logical window's ID, or `terminal`."
         },
         "label": {
           "type": "string",
@@ -2898,7 +3006,7 @@
         },
         "connected": {
           "type": "boolean",
-          "description": "Whether the window is there now. An editor window with no connection left is not, until it\nconnects again or its agents end; the terminal window always is."
+          "description": "Whether the logical window has a current connection. The terminal window always reports\nconnected."
         },
         "folders": {
           "type": "array",
@@ -2938,6 +3046,7 @@
         }
       },
       "required": [
+        "machine_id",
         "window_id",
         "label",
         "environment",
@@ -2946,6 +3055,24 @@
         "locations"
       ],
       "description": "A window: an editor window, or the terminal window, `terminal`, which holds the agents started\nfrom a terminal."
+    },
+    "WindowRef": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string",
+          "description": "The Facade machine's ID, a lowercase UUID version 4."
+        },
+        "window_id": {
+          "type": "string",
+          "description": "The logical window's ID, or `terminal` for that machine's terminal window."
+        }
+      },
+      "required": [
+        "machine_id",
+        "window_id"
+      ],
+      "description": "A logical window on a Facade machine."
     },
     "WindowsChange": {
       "oneOf": [
@@ -2964,7 +3091,7 @@
             "kind",
             "window"
           ],
-          "description": "Insert or replace this window by `window_id`."
+          "description": "Insert or replace the window by its machine ID and logical window ID."
         },
         {
           "type": "object",
@@ -2973,15 +3100,19 @@
               "type": "string",
               "const": "removed"
             },
+            "machine_id": {
+              "type": "string"
+            },
             "window_id": {
               "type": "string"
             }
           },
           "required": [
             "kind",
+            "machine_id",
             "window_id"
           ],
-          "description": "The window is gone: its last connection closed and it holds no agents, or a window of its\nworkspace took its agents."
+          "description": "Remove the logical window identified by both fields."
         }
       ],
       "description": "A change to the windows."
@@ -3009,7 +3140,7 @@
       "properties": {
         "window_id": {
           "type": "string",
-          "description": "The window to add the worktree to."
+          "description": "A logical window ID on this machine, including `terminal`."
         },
         "cwd": {
           "type": "string",

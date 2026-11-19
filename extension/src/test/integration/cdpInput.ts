@@ -9,6 +9,7 @@
 
 import * as crypto from 'crypto';
 import * as http from 'http';
+import * as net from 'net';
 
 /** One DevTools target, as `/json/list` gives it. */
 export interface CdpTarget {
@@ -20,6 +21,18 @@ export interface CdpTarget {
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+export function freePort(): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const server = net.createServer();
+		server.unref();
+		server.on('error', reject);
+		server.listen(0, '127.0.0.1', () => {
+			const { port } = server.address() as net.AddressInfo;
+			server.close(() => resolve(port));
+		});
+	});
+}
 
 /** The targets of the DevTools endpoint at `port`, on this computer's loopback alone. */
 export function listTargets(port: number): Promise<CdpTarget[]> {

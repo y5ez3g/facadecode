@@ -560,7 +560,7 @@ impl TestHome {
         let mut reader = BufReader::new(stream);
         let hello = json!({
             "jsonrpc": "2.0", "id": 1, "method": "hello",
-            "params": { "protocol": [1, 1], "build": "test", "kind": "terminal" },
+            "params": { "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" },
         });
         writer.write_all(format!("{hello}\n").as_bytes()).ok()?;
         let mut line = String::new();
@@ -579,7 +579,7 @@ impl TestHome {
     /// The complete agent list from the `agents` topic.
     pub fn agents(&self) -> Vec<Value> {
         let mut wire = DaemonTestClient::open(self);
-        wire.hello("terminal", [1, 1], json!({}));
+        wire.hello("terminal", DAEMON_RANGE, json!({}));
         let watching = wire.request("watch", json!({ "topic": "agents" }));
         watching["result"]["snapshot"]
             .as_array()

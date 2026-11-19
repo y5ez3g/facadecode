@@ -19,6 +19,7 @@ import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, seedLegacyPin, windowLifetime } from './windowLifetime';
+import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -724,6 +725,50 @@ async function main(): Promise<void> {
 			await endRust(facade);
 		}
 	};
+	const rustWindows = async () => {
+		const runName = 'multi';
+		const driver = path.join(root, `driver-${runName}`);
+		const facade = path.join(home, runName);
+		const peer = path.join(root, 'multi-peer');
+		const shared = path.join(root, 'multi-shared');
+		newRepository(peer);
+		newRepository(shared);
+		fs.mkdirSync(driver);
+		for (const [name, contents] of Object.entries(multiWindowDriverFiles())) {
+			fs.writeFileSync(path.join(driver, name), contents);
+		}
+		facadeSettings(facade, alone('claude'));
+		const files = {
+			prefix: path.join(root, runName),
+			read: (file: string) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '',
+			write: (file: string, text: string) => {
+				const temporary = `${file}.new`;
+				fs.writeFileSync(temporary, text);
+				fs.renameSync(temporary, file);
+			}
+		};
+		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, CLAUDE_CONFIG_DIR: claudeConfig };
+		const start = (folder: string, profile: string, control: string, port: number) => {
+			const user = path.join(root, `u-${runName}-${profile}`);
+			const userSettings = path.join(user, 'User', 'settings.json');
+			if (!fs.existsSync(userSettings)) {
+				fs.mkdirSync(path.dirname(userSettings), { recursive: true });
+				fs.writeFileSync(userSettings, JSON.stringify({ ...settings, 'window.dialogStyle': 'custom' }));
+			}
+			return spawn(executable, [folder, '--new-window', '--disable-extensions', '--user-data-dir', user,
+				'--extensions-dir', path.join(root, `x-${runName}-${profile}`), '--shared-data-dir', path.join(root, `s-${runName}-${profile}`),
+				`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`,
+				`--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
+				{ env: { ...env, FACADE_IT_WINDOW_CONTROL: control }, stdio: ['ignore', 'pipe', 'pipe'] });
+		};
+		try {
+			await withRustWindows(files, start, open => rustMultiWindow(open, {
+				folder: repo, peer, shared, home: facade, remote: null, files, windows: () => windowsInCore(facade)
+			}));
+		} finally {
+			await endRust(facade);
+		}
+	};
 	/**
 	 * Switching engines (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the old engine; both ended,
 	 * a new agent is not started there; reload: the window is on the Rust engine, and Recent continues both by their sessions. The
@@ -834,7 +879,7 @@ async function main(): Promise<void> {
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
-		if ((only === 'engine' || only === 'switch' || only === 'lifetime') && engine !== 'rust') {
+		if ((only === 'engine' || only === 'switch' || only === 'lifetime' || only === 'multi-window') && engine !== 'rust') {
 			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
 		}
 		if (only === 'engine' || (!only && engine === 'rust')) {
@@ -842,6 +887,9 @@ async function main(): Promise<void> {
 		}
 		if (engine === 'rust' && (!only || only === 'lifetime' || only === 'reopen' || only === 'expiry')) {
 			await rustWindowLifetime();
+		}
+		if (engine === 'rust' && (!only || only === 'multi-window')) {
+			await rustWindows();
 		}
 		if (only === 'switch' || (!only && engine === 'rust')) {
 			await engineSwitch();

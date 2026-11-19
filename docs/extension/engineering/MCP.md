@@ -1,6 +1,7 @@
 # MCP contract
 
-Layer 4. Tool interface **2** defines the contract. [Rules](../RULES.md) owns effects and
+Layer 4. The old engine uses tool interface **2**. Rust uses interface **3** as defined by the
+[core tool descriptions](../../../core/crates/base/src/texts/tools.json). [Rules](../RULES.md) owns effects and
 [Collaboration](../features/COLLABORATION.md) owns message experience.
 
 | Group | Decides |
@@ -133,7 +134,11 @@ when a new choice is needed. Defaults and already specified values require no ex
 
 ### 2.2 start_agent arguments
 
-**CLI, window and path are required; name, model, effort, prompt and worktree are optional.**
+**Start an agent with its CLI and path. The old engine also requires its destination window.**
+
+On Rust, `window` and `location_source_window` are optional local window IDs. They supply the selected member and
+the window providing the path independently (RULES-2.4, RULES-4.1). The result includes the machine ID and member
+window references. The table and examples below give the old-engine contract.
 
 | Field | Type / meaning |
 | --- | --- |
@@ -207,7 +212,11 @@ or automatic creator progress report.
 
 ### 3.1 list_agents
 
-**One query returns connected windows, their folders and CLIs, and agents within the caller's reach.**
+**One query returns window discovery and agents within the caller's reach.**
+
+On Rust, window rows include `machine_id` and `connected`. Disconnected windows remain listed with no folders or
+CLIs. An agent row has its `machine_id` and a `windows` array of references containing `machine_id` and `window_id`.
+The rest of this rule describes the old-engine result and its connected-window scope.
 
 No arguments. There are no filters, details mode or pagination. Ended agents are included, oldest first.
 YOLO permits every agent; otherwise only the creation tree is visible. Window/folder/CLI discovery is not restricted
@@ -254,8 +263,8 @@ separately.
 
 Required `to:string`, `text:string`; optional `reply_to:string` naming a message in the caller's inbox - another is
 `invalid_argument`. Resolve an exact ID or unique eligible name; an ended agent is no candidate for a name, and an
-ambiguous name fails and requires an ID. `#human` addresses the person in the caller's editor window; RULES-2.3 decides
-when `@human` does. No array, request ID or merged recipient result.
+ambiguous name fails and requires an ID. `#human` addresses the person under COLLABORATION-2.3. RULES-2.3 decides
+when `@human` does. The caller supplies one recipient and no request ID.
 Text is nonblank, at most 8,000 Unicode code points and 540 lines. Preserve Unicode, line breaks and tabs as content;
 control characters other than tab, line feed and carriage return - DEL, C1 controls and lone surrogates included -
 would act outside the message paste, so they are refused as `invalid_argument` instead of transforming the body.
@@ -263,7 +272,10 @@ Raw terminal control is a separate tool. Never replace the body with a pointer a
 Text beginning with `[Earlier output truncated]` lost its beginning on its way: send_message, start_agent's prompt
 and type_text refuse it as invalid_argument before any effect, asking for shorter parts.
 
-Within thirty seconds (1.3), return only the message's `id` and `delivery` in data:
+Within thirty seconds (1.3), return the message's `id` and `delivery` in data for agent delivery and old-engine human
+contact, as below. Rust `#human` success uses `delivered_to_windows` and the delivered and undelivered windows under
+`data.windows`. A zero-delivery failure includes the reasons for each window. Delivery counts handoff to the window's
+subscription under COLLABORATION-2.3.
 
 | Delivery | Meaning |
 | --- | --- |
@@ -277,8 +289,8 @@ If delivery cannot start in time because of a draft, menu, unknown input box or 
 recipient's inbox and fail, saying it is safe to send again later. Pasted input whose submission is unconfirmed cannot
 be withdrawn; the failure says to inspect the recipient's screen before sending again. A disconnected call may have
 sent its message, as its failure says. There is no public cancel tool or later send result.
-Human contact means notification handoff in the sender's editor window; a terminal-window caller cannot notify #human.
-No migration to another window on closure. Delivery/reply/system-result errors remain with agents or end if nobody
+On the old engine human contact means notification handoff in the sender's editor window. A terminal-window caller
+cannot notify `#human` on that engine. Delivery/reply/system-result errors remain with agents or end if nobody
 can receive them. Success is delivery, not a reply or task completion. The recipient's reply is another send.
 
 The golden send to bob answers:
@@ -320,10 +332,11 @@ A send to a guest answers:
 **Read only the calling agent's incoming messages, never its sent messages or another inbox; reading delivers.**
 
 Arguments: `after?:string` naming a message ID, or `last?:integer` (1–100). Giving both is `invalid_argument`.
-With neither, return messages not yet delivered. after returns every retained message after that ID; last returns
-the newest messages up to that count. There are no ids, all, cursor or limit arguments. Selection stays inside the
-caller's inbox, including with YOLO. Every returned message is delivered, including unread messages selected by
-after or last. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
+With neither, return messages not yet delivered. after returns the retained messages after that ID; last returns
+the newest messages up to that count. One read returns at most 100 messages; where more follow, `data.next_cursor` is
+the after that reads them. There are no ids, all, cursor or limit arguments. Selection stays inside the caller's inbox,
+including with YOLO. Every returned message is delivered, including unread messages selected by after or last, and
+no other message is. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
 
 Return `data.messages`, oldest first. Each record has `id`, `from`, `at` and the complete body as `text`, plus
 `reply_to` when given. from is the sender's `@name #aN`, its ID alone when unnamed, `#human` for the person, or
@@ -467,8 +480,8 @@ within a byte budget, which every turn of every agent pays for.
 **Use one schema source for tools, descriptions and wire validation, and report incompatible protocols plainly.**
 
 Text/structured results express the same facts. No incompatible old call is silently translated into another action.
-Parsing the text as JSON yields exactly the structured object. Tool interface v2 is separate from the MCP date
-versions in 6.1 and the internal relay contract. An incompatible relay contract fails as protocol_incompatible before
+Parsing the text as JSON yields exactly the structured object. The tool interface version is separate from the MCP
+date versions in 6.1 and the internal relay contract. An incompatible relay contract fails as protocol_incompatible before
 effects and says to restart the CLI; there is no recovery object or automatic downgrade. Old argument names fail
 validation rather than being translated into another action.
 A system result is a plain-text Facade message under its own ID (4.2). It is not parsed or guessed into structured

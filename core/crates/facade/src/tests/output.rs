@@ -363,7 +363,7 @@ fn inspect_names_the_kind_creator_process_and_session_where_they_differ() {
 
 fn hello(daemon_build: &str, keeper: Option<(u32, &str)>) -> HelloResult {
     let mut hello = json!({
-        "protocol": 1, "build": daemon_build, "pid": 16968, "agents": 12,
+        "protocol": 2, "build": daemon_build, "machine_id": "m-1", "pid": 16968, "agents": 12,
         "topics": [], "ops": [],
     });
     if let Some((pid, build)) = keeper {
@@ -423,10 +423,6 @@ fn a_send_says_where_the_message_went_or_why_it_did_not() {
         Ok("m42 delivered to a3")
     );
     assert_eq!(delivered("a3", "read").as_deref(), Ok("m42 read by a3"));
-    assert_eq!(
-        delivered("human", "notified").as_deref(),
-        Ok("m42 delivered to the human's editor window")
-    );
     let waiting = sent(&message(
         "a6",
         json!({ "status": "pending", "text_written": "none" }),

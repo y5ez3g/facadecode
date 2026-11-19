@@ -199,6 +199,7 @@
 	"End Agent": "エージェントを終了",
 	"Go to Agent": "エージェントに移動",
 	"Search by name, CLI, title, location, or ID": "名前、CLI、タイトル、作業場所、ID で検索",
+	"Window disconnected": "ウィンドウ未接続",
 	"Select a folder": "フォルダーを選択",
 	"Select a working location": "作業場所を選択",
 	"Show Agent Launch": "Agent の起動構成を表示",

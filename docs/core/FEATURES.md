@@ -80,8 +80,8 @@ Message headers continue to use IDs such as `#a3` and `#m42`.
   a send also withdraws its message while the paste has not begun.
 - **Inbox**: `facade messages` in an agent's terminal, or the `read_messages` tool, reads the messages waiting for that
   agent and so delivers them.
-- **To the person**: a message to `human` from an agent in an editor window that shows Facade messages goes to that
-  window. If an agent is also named human, quote `'#human'` for the human or use the agent's ID. The command line
+- **To the person**: a message to `human` from an agent goes to each of the agent's editor windows that shows Facade
+  messages, and the command reports each window. If an agent is also named human, quote `'#human'` for the human or use the agent's ID. The command line
   says 'the human' for the person using Facade. The ID is `human`. Message headers show it as `#human`.
 - **Kept**: messages and their deliveries are kept 30 days, across daemon restarts. A delivery under way goes on after a
   restart, within its 30 seconds. A send that repeats its request ID gets the first send's response, and nothing is sent
@@ -122,15 +122,32 @@ See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-
 
 ## Windows and folders
 
-- Every agent is in a window: the editor window it was started in, or the terminal window, `terminal`, for agents
-  started from a terminal.
-- An editor window's locations are its folders and every worktree of their repositories. A start in a window must use
-  one of them, and can make a new worktree to start in.
+- Every agent is in one or more windows. The person's start from an editor window puts it in that window, and from a
+  terminal in the terminal window, `terminal`. An agent's start puts the new agent in every window its starter is in,
+  connected or not, or in the one window it names. Go to Agent adds windows; an agent stays in a window once it is
+  there.
+- Where an agent runs is apart from its windows: its folder, and the window that gave the folder, its location source,
+  where one did.
+- Go to Agent in an editor window adopts an agent of this machine that is running, is not a guest and is not in this
+  window yet: the window joins its windows, and every member editor window shows the same process.
+- An editor window's locations are its folders and every worktree of their repositories. A start that names a location
+  source window must use one of that window's locations or a folder inside one, and can make a new worktree from one
+  of its locations; a start without one runs in the folder it gives, or makes a worktree from that folder's repository
+  and runs there.
 - An editor window describes its terminals' environment, and core lists the CLIs a start there can run, each found on
   that environment's `PATH` or not, and whether a built-in is not installed.
 - When an editor window's last connection closes, as when it is closed or reloaded, its agents go on running and the
-  window is listed as not connected. The same window, or a window of the same workspace, has them again when it
-  connects.
+  window is listed as not connected. A reload gets its window back while that window is still bound to it: another
+  editor may have taken the window meanwhile, and an empty window that no agent record names is removed when the daemon
+  starts. Reopening a workspace takes back its earliest window that no editor holds, or else gets a new one; a second
+  editor window of the same workspace gets a window of its own.
+- A message to the person is handed to the current `messages` watch of each connected window the sending agent is in;
+  a watch that takes it counts as delivered, and the send says which windows took it and why the others did not. When
+  no window can take it, the send fails and keeps nothing.
+- An agent answers its CLI's color queries with the colors of the member editor window that resized it last; a resize
+  to the same size counts, and a terminal's `attach` changes only the size. Before any resize, the colors are those of
+  the window it was started from, its starter's, or a member editor window that has colors.
+- Each Facade home has a machine ID, made once and kept in its store.
 
 See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
 

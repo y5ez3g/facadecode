@@ -1,25 +1,24 @@
-//! The `windows` table keeps each editor window's last description for daemon recovery and
-//! workspace takeover. A window writes its row whenever it describes itself. The row is deleted
-//! when the window is removed and holds no agent records, or in `Store::take_over` when another
-//! window takes its agents. The daemon lists the terminal window separately.
+//! The `windows` table keeps each logical editor window's last instance and description for
+//! recovery and workspace rebinding. The daemon lists the terminal window separately.
 
 use std::sync::Arc;
 
 use facade_base::daemon::WindowDescription;
 use rusqlite::{Connection, params};
 
-use super::{Store, log};
+use super::{Store, WindowRow, log};
 
-/// Creates the table where it is missing.
-pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
+pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS windows (
+        "CREATE TABLE windows (
 			window_id TEXT PRIMARY KEY,
 			label TEXT NOT NULL,
 			environment TEXT NOT NULL,
 			workspace TEXT,
 			folders TEXT NOT NULL,
-			branch_prefix TEXT
+			branch_prefix TEXT,
+			sequence INTEGER NOT NULL,
+			instance TEXT NOT NULL
 		);",
     )
 }
@@ -33,23 +32,27 @@ impl WindowTable {
         WindowTable(store)
     }
 
-    /// Writes `window`'s description in place of the one before.
-    pub(crate) fn save_window(&self, window: &WindowDescription) -> anyhow::Result<()> {
+    /// Writes the logical window and its binding. Environment variables and colors live in memory.
+    pub(crate) fn save_logical_window(&self, row: &WindowRow) -> anyhow::Result<()> {
+        let window = &row.description;
         let folders = serde_json::to_string(&window.folders)?;
+        let sequence = i64::try_from(row.sequence)?;
         self.0.with(
-            || format!("save window {}", window.id),
+            || format!("save window {}", row.window_id),
             |connection| {
                 connection.execute(
                     "INSERT OR REPLACE INTO windows \
-                     (window_id, label, environment, workspace, folders, branch_prefix) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                     (window_id, label, environment, workspace, folders, branch_prefix, sequence, instance) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
-                        window.id,
+                        row.window_id,
                         window.label,
                         window.environment,
                         window.workspace,
                         folders,
                         window.branch_prefix,
+                        sequence,
+                        window.id,
                     ],
                 )
             },
@@ -57,33 +60,25 @@ impl WindowTable {
         Ok(())
     }
 
-    /// Deletes window `id`'s row.
-    pub(crate) fn delete_window(&self, id: &str) -> anyhow::Result<()> {
-        self.0.with(
-            || format!("delete window {id}"),
-            |connection| connection.execute("DELETE FROM windows WHERE window_id = ?1", [id]),
-        )?;
-        Ok(())
-    }
-
-    /// The windows as they last described themselves. A row this build cannot read is logged,
-    /// skipped and left as it is.
-    pub(crate) fn windows(&self) -> anyhow::Result<Vec<WindowDescription>> {
+    /// Saved logical windows, in allocation order, with the last instance of each binding.
+    pub(crate) fn logical_windows(&self) -> anyhow::Result<Vec<WindowRow>> {
         let rows = self.0.with(
             || "read the windows".to_string(),
             |connection| {
                 let mut statement = connection.prepare(
-                    "SELECT window_id, label, environment, workspace, folders, branch_prefix \
-                     FROM windows",
+                    "SELECT window_id, sequence, instance, label, environment, workspace, folders, \
+                     branch_prefix FROM windows ORDER BY sequence, window_id",
                 )?;
                 let rows = statement.query_map([], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 })?;
                 Ok(rows.collect::<Vec<_>>())
@@ -92,16 +87,29 @@ impl WindowTable {
         let mut windows = Vec::new();
         for row in rows {
             let read = row.map_err(anyhow::Error::from).and_then(
-                |(id, label, environment, workspace, folders, branch_prefix)| {
-                    Ok(WindowDescription {
-                        id,
-                        label,
-                        environment,
-                        workspace,
-                        folders: serde_json::from_str(&folders)?,
-                        branch_prefix,
-                        colors: None,
-                        env: None,
+                |(
+                    window_id,
+                    sequence,
+                    id,
+                    label,
+                    environment,
+                    workspace,
+                    folders,
+                    branch_prefix,
+                )| {
+                    Ok(WindowRow {
+                        window_id,
+                        sequence: u64::try_from(sequence)?,
+                        description: WindowDescription {
+                            id,
+                            label,
+                            environment,
+                            workspace,
+                            folders: serde_json::from_str(&folders)?,
+                            branch_prefix,
+                            colors: None,
+                            env: None,
+                        },
                     })
                 },
             );
@@ -122,6 +130,7 @@ mod tests {
     use super::*;
     use crate::store::AgentRecord;
     use crate::store::tests::record;
+    use facade_base::daemon::WindowRef;
 
     fn window(id: &str, workspace: &str) -> WindowDescription {
         WindowDescription {
@@ -136,78 +145,88 @@ mod tests {
         }
     }
 
-    /// A window's description survives a reopen as it was last written, and goes once deleted.
+    /// A logical window keeps its allocation order and description across reopening.
     #[test]
-    fn a_window_is_kept_as_it_last_described_itself_until_it_is_deleted() {
+    fn a_window_keeps_its_logical_id_and_latest_instance() {
         let core = crate::test_folder::TestFolder::new("windowsreopen");
         let store = Store::open(&core, &[]).unwrap().store;
-        store
-            .window_table()
-            .save_window(&window("win-1", "k1"))
-            .unwrap();
-        let renamed = WindowDescription {
-            label: "renamed".into(),
-            colors: None,
-            env: None,
-            folders: vec!["/work/app".into()],
-            ..window("win-1", "k1")
+        let mut kept = WindowRow {
+            window_id: "win-1".into(),
+            sequence: 1,
+            description: window("first-instance", "workspace"),
         };
-        store.window_table().save_window(&renamed).unwrap();
-        store
-            .window_table()
-            .save_window(&window("win-2", "k2"))
-            .unwrap();
-        store.window_table().delete_window("win-2").unwrap();
+        let windows = store.window_table();
+        windows.save_logical_window(&kept).unwrap();
+        kept.description = WindowDescription {
+            id: "later-instance".into(),
+            label: "renamed".into(),
+            folders: vec!["/work/app".into()],
+            env: Some(std::collections::BTreeMap::from([(
+                "PATH".into(),
+                "/custom".into(),
+            )])),
+            ..kept.description
+        };
+        windows.save_logical_window(&kept).unwrap();
+        drop(windows);
         drop(store);
+
         let store = Store::open(&core, &[]).unwrap().store;
-        assert_eq!(store.window_table().windows().unwrap(), [renamed]);
+        let rows = store.window_table().logical_windows().unwrap();
+        let [row] = rows.as_slice() else {
+            panic!("expected one logical window");
+        };
+        assert_eq!(row.window_id, kept.window_id);
+        assert_eq!(row.sequence, kept.sequence);
+        kept.description.env = None;
+        assert_eq!(row.description, kept.description);
     }
 
-    /// A takeover moves the agents of one window to another, and deletes the first window,
-    /// together. Other agents stay.
     #[test]
-    fn a_takeover_moves_a_window_s_agents_and_deletes_the_window_together() {
+    fn an_unreferenced_window_can_be_deleted_after_its_last_agent_is_removed() {
         let store = Store::in_memory();
-        store
-            .window_table()
-            .save_window(&window("win-old", "k"))
+        let member = WindowRef {
+            machine_id: "test-machine".into(),
+            window_id: "win-1".into(),
+        };
+        let row = WindowRow {
+            window_id: member.window_id.clone(),
+            sequence: 1,
+            description: window("instance-1", "workspace"),
+        };
+        let source = WindowRef {
+            window_id: "win-source".into(),
+            ..member.clone()
+        };
+        let windows = store.window_table();
+        windows.save_logical_window(&row).unwrap();
+        windows
+            .save_logical_window(&WindowRow {
+                window_id: source.window_id.clone(),
+                sequence: 2,
+                description: window("source-instance", "workspace"),
+            })
             .unwrap();
         store
-            .window_table()
-            .save_window(&window("win-new", "k"))
+            .insert(&AgentRecord {
+                windows: vec![member.clone()],
+                location_source_window: Some(source.clone()),
+                ..record("a1")
+            })
             .unwrap();
-        for (id, window) in [("a1", "win-old"), ("a2", "win-old"), ("a3", "terminal")] {
-            store
-                .insert(&AgentRecord {
-                    window_id: window.into(),
-                    ..record(id)
-                })
-                .unwrap();
-        }
-        store.take_over("win-old", "win-new").unwrap();
-        let windows: Vec<String> = store
-            .windows()
-            .unwrap()
-            .into_iter()
-            .map(|window| window.id)
-            .collect();
-        assert_eq!(windows, ["win-new"]);
-        let connection = store.connection.lock().unwrap();
-        let mut placed: Vec<(String, String)> = connection
-            .prepare("SELECT agent_id, window_id FROM agents ORDER BY agent_id")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        placed.sort();
+        let members = store.membership_table();
         assert_eq!(
-            placed,
-            [
-                ("a1".into(), "win-new".into()),
-                ("a2".into(), "win-new".into()),
-                ("a3".into(), "terminal".into())
-            ]
+            members.add("a1", &member).unwrap(),
+            Some(vec![member.clone()])
         );
+        assert!(!store.delete_empty_window(&member).unwrap());
+        assert!(!store.delete_empty_window(&source).unwrap());
+        assert_eq!(windows.logical_windows().unwrap().len(), 2);
+
+        store.delete("a1").unwrap();
+        assert!(store.delete_empty_window(&member).unwrap());
+        assert!(store.delete_empty_window(&source).unwrap());
+        assert!(windows.logical_windows().unwrap().is_empty());
+        assert_eq!(members.add("a1", &member).unwrap(), None);
     }
 }

@@ -9,12 +9,33 @@
 //! the socket goes, and the daemon exits still holding its lock. The keeper, which holds no CLI by
 //! then, exits once it sees the daemon end.
 
+mod log_file;
+mod takeover;
+
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::sync::Notify;
+use facade_base::daemon::UpgradeResult;
+use tokio::sync::{Notify, oneshot, watch};
 
-use crate::{Daemon, log};
+use crate::log;
+
+pub(crate) use log_file::{MAX_LOG_LINES, last_lines, prune};
+pub(crate) use takeover::{handed_over_cleanly, take_clean_end};
+
+/// Work and terminal actions provided by the daemon's layer.
+pub(crate) trait LifecycleActivity: Send + Sync + 'static {
+    fn holds_agents(&self) -> bool;
+    fn runs_busy(&self) -> Option<String>;
+    fn guest_listed(&self) -> bool;
+    fn screen_writes(&self) -> usize;
+    fn running_count(&self) -> usize;
+    fn keeper_protocol(&self) -> Option<[u32; 2]>;
+    fn keeper_build(&self) -> Option<String>;
+    fn settle_pastes(&self) -> impl Future<Output = Vec<oneshot::Receiver<()>>> + Send;
+    fn quiet_agents(&self, deadline: tokio::time::Instant) -> impl Future<Output = bool> + Send;
+}
 
 /// How long the daemon stays idle before it exits.
 const IDLE_EXIT_DELAY: Duration = Duration::from_secs(5);
@@ -76,10 +97,15 @@ impl Counts {
     }
 }
 
-/// The work under way. Accepting work and deciding to exit both take its lock.
+/// The work under way, idle exit and takeover. Accepting work and deciding to exit
+/// both take the counts lock.
 pub(crate) struct Lifecycle {
     counts: Mutex<Counts>,
     changed: Notify,
+    idle_delay: IdleDelayLog,
+    takeover: tokio::sync::Mutex<Option<UpgradeResult>>,
+    draining: AtomicBool,
+    closing_to: watch::Sender<Option<String>>,
 }
 
 /// One piece of work, counted until it is dropped.
@@ -100,6 +126,10 @@ impl Lifecycle {
         Arc::new(Lifecycle {
             counts: Mutex::default(),
             changed: Notify::new(),
+            idle_delay: IdleDelayLog::new(),
+            takeover: tokio::sync::Mutex::default(),
+            draining: AtomicBool::new(false),
+            closing_to: watch::channel(None).0,
         })
     }
 
@@ -162,127 +192,124 @@ impl Lifecycle {
         let counts = self.counts.lock().unwrap();
         Work::ALL.into_iter().find(|work| counts.of(*work) > 0)
     }
-}
 
-impl Daemon {
-    /// Whether a listed agent runs, or a guest is listed: the daemon then stays, whatever else.
-    fn holds_agents(&self) -> bool {
-        self.agents
-            .lock()
-            .unwrap()
-            .values()
-            .any(|agent| agent.is_guest() || agent.exit().borrow().is_none())
+    pub(crate) fn delay_exit(&self, detail: &str) {
+        self.idle_delay.delayed(detail);
+    }
+
+    pub(crate) fn clear_exit_delay(&self) {
+        self.idle_delay.cleared();
     }
 
     /// Why the daemon cannot exit now, or None where it is idle.
-    fn busy_with(&self) -> Option<String> {
+    fn busy_with(&self, activity: &impl LifecycleActivity) -> Option<String> {
         #[cfg(debug_assertions)]
-        if self.lifecycle.count(Work::ExitCommit) > 0 && crate::agent::screen_writes() > 0 {
+        if self.count(Work::ExitCommit) > 0 && activity.screen_writes() > 0 {
             facade_base::service::mark_for_test("exit-drain-and-writer-counted");
         }
-        if let Some(work) = self.lifecycle.first_under_way() {
+        if let Some(work) = self.first_under_way() {
             return Some(work.doing().to_string());
         }
-        if let Some(why) = self.runs.busy() {
+        if let Some(why) = activity.runs_busy() {
             return Some(why);
         }
         // A guest is an agent like any other: while one is listed, working or not, the daemon
         // stays.
-        if self.guests.any_guest() {
+        if activity.guest_listed() {
             return Some("a guest is listed".to_string());
         }
-        if crate::agent::screen_writes() > 0 {
+        if activity.screen_writes() > 0 {
             return Some("a screen checkpoint is being written".to_string());
         }
         None
     }
-}
 
-/// Exits the daemon once it was idle for five seconds in a row. `closing` asks the server to stop
-/// accepting clients, which `paused` confirms.
-pub(crate) async fn exit_when_idle(
-    daemon: Arc<Daemon>,
-    closing: tokio::sync::watch::Sender<bool>,
-    mut paused: tokio::sync::watch::Receiver<bool>,
-) {
-    let lifecycle = daemon.lifecycle.clone();
-    let mut idle_since: Option<Instant> = None;
-    loop {
-        // Made before the look, so that no change in between goes unheard.
-        let changed = lifecycle.changed.notified();
-        tokio::pin!(changed);
-        changed.as_mut().enable();
-        let busy = daemon.busy_with();
-        if let Some(why) = &busy {
-            // Only an error keeps an exit from being saved: the log says it once.
-            if why.contains("cannot be saved") {
-                daemon.idle_delay.delayed(why);
-            }
-            idle_since = None;
-        }
-        if daemon.holds_agents() {
-            // Only an agent's exit, saved as counted work, or a guest's end, which notes a change,
-            // can make the daemon idle: nothing else wakes this while agents are listed.
-            idle_since = None;
-            changed.await;
-            continue;
-        }
-        if busy.is_some() {
-            // Work that is not counted, such as the keeper being started, is looked at again soon.
-            let _ = tokio::time::timeout(BUSY_RECHECK, changed).await;
-            continue;
-        }
-        let since = *idle_since.get_or_insert_with(Instant::now);
-        if since.elapsed() < IDLE_EXIT_DELAY {
-            let _ = tokio::time::timeout_at((since + IDLE_EXIT_DELAY).into(), changed).await;
-            continue;
-        }
-        // Decided under the lock that accepts work: whatever starts, joins or connects is counted
-        // as work first, so work accepted since the look above cancels the exit.
-        {
-            let mut counts = lifecycle.counts.lock().unwrap();
-            if Work::ALL.iter().any(|work| counts.of(*work) > 0) {
+    /// Exits the daemon once it was idle for five seconds in a row. `closing` asks the server to
+    /// stop accepting clients, which `paused` confirms.
+    pub(crate) async fn exit_when_idle(
+        self: Arc<Self>,
+        activity: Arc<impl LifecycleActivity>,
+        closing: watch::Sender<bool>,
+        mut paused: watch::Receiver<bool>,
+    ) {
+        let mut idle_since: Option<Instant> = None;
+        loop {
+            // Made before the look, so that no change in between goes unheard.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let busy = self.busy_with(activity.as_ref());
+            if let Some(why) = &busy {
+                // Only an error keeps an exit from being saved: the log says it once.
+                if why.contains("cannot be saved") {
+                    self.delay_exit(why);
+                }
                 idle_since = None;
+            }
+            if activity.holds_agents() {
+                // Only an agent's exit, saved as counted work, or a guest's end, which notes a
+                // change, can make the daemon idle: nothing else wakes this while agents are listed.
+                idle_since = None;
+                changed.await;
                 continue;
             }
-            counts.exiting = true;
+            if busy.is_some() {
+                // Work that is not counted, such as the keeper being started, is looked at again soon.
+                let _ = tokio::time::timeout(BUSY_RECHECK, changed).await;
+                continue;
+            }
+            let since = *idle_since.get_or_insert_with(Instant::now);
+            if since.elapsed() < IDLE_EXIT_DELAY {
+                let _ = tokio::time::timeout_at((since + IDLE_EXIT_DELAY).into(), changed).await;
+                continue;
+            }
+            // Decided under the lock that accepts work: whatever starts, joins or connects is
+            // counted as work first, so work accepted since the look above cancels the exit.
+            {
+                let mut counts = self.counts.lock().unwrap();
+                if Work::ALL.iter().any(|work| counts.of(*work) > 0) {
+                    idle_since = None;
+                    continue;
+                }
+                counts.exiting = true;
+            }
+            crate::pause_for_test("after-idle-decision");
+            log(
+                "info",
+                "idle for 5 seconds with no agent running and no client connected; exiting",
+            );
+            closing.send_replace(true);
+            facade_base::service::mark_for_test("acceptance-pause-requested");
+            if paused.wait_for(|paused| *paused).await.is_err() {
+                return;
+            }
+            // The keeper holds no CLI either, so it exits once it sees this daemon end.
+            self.finish_and_exit(activity.as_ref()).await;
         }
-        crate::pause_for_test("after-idle-decision");
-        log(
-            "info",
-            "idle for 5 seconds with no agent running and no client connected; exiting",
-        );
-        closing.send_replace(true);
-        facade_base::service::mark_for_test("acceptance-pause-requested");
-        if paused.wait_for(|paused| *paused).await.is_err() {
-            return;
-        }
-        // The keeper holds no CLI either, so it exits once it sees this daemon end.
-        finish_and_exit(&daemon).await;
     }
-}
 
-/// Waits for screen writers and exit drains, removes the daemon socket, and exits the process.
-pub(crate) async fn finish_and_exit(daemon: &Arc<Daemon>) -> ! {
-    while crate::agent::screen_writes() > 0 || daemon.lifecycle.count(Work::ExitCommit) > 0 {
-        tokio::time::sleep(WRITERS_INTERVAL).await;
+    /// Waits for screen writers and exit drains, removes the daemon socket, and exits the process.
+    async fn finish_and_exit(&self, activity: &impl LifecycleActivity) -> ! {
+        while activity.screen_writes() > 0 || self.count(Work::ExitCommit) > 0 {
+            tokio::time::sleep(WRITERS_INTERVAL).await;
+        }
+        if let Ok(socket) = facade_base::paths::daemon_socket() {
+            let _ = std::fs::remove_file(socket);
+        }
+        std::process::exit(0)
     }
-    if let Ok(socket) = facade_base::paths::daemon_socket() {
-        let _ = std::fs::remove_file(socket);
-    }
-    std::process::exit(0)
 }
 
 /// Says once per episode why the daemon cannot exit yet.
-pub(crate) struct IdleDelayLog(Mutex<Option<String>>);
+struct IdleDelayLog(Mutex<Option<String>>);
 
 impl IdleDelayLog {
-    pub(crate) fn new() -> IdleDelayLog {
+    fn new() -> IdleDelayLog {
         IdleDelayLog(Mutex::new(None))
     }
 
     /// Logs `detail` unless this episode said it already.
-    pub(crate) fn delayed(&self, detail: &str) {
+    fn delayed(&self, detail: &str) {
         let mut said = self.0.lock().unwrap();
         if said.as_deref() != Some(detail) {
             log("warn", &format!("idle exit delayed: {detail}"));
@@ -291,7 +318,7 @@ impl IdleDelayLog {
     }
 
     /// Ends the episode.
-    pub(crate) fn cleared(&self) {
+    fn cleared(&self) {
         *self.0.lock().unwrap() = None;
     }
 }

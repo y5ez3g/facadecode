@@ -6,14 +6,16 @@ use facade_base::daemon::{DeliveryFailure, Message, TextWritten};
 use tokio::sync::watch;
 
 use super::{Deliveries, Messages, Outcome, OwedResult, Settled, delivery_limit};
-use crate::blocking_in_place;
 use crate::store::KeptMessage;
+use crate::{HUMAN, blocking_in_place};
 
 impl Messages {
-    /// The messages the daemon before this one left pending, oldest first, each with the paste it
-    /// went in.
+    /// The agent messages the daemon before this one left pending, oldest first, each with the
+    /// paste it went in. A pending message to the person still answers its request ID as it stands.
     pub(crate) fn pending(&self) -> anyhow::Result<Vec<KeptMessage>> {
-        blocking_in_place(|| self.deliveries.table.pending_messages())
+        let mut pending = blocking_in_place(|| self.deliveries.table.pending_messages())?;
+        pending.retain(|kept| kept.message.to != HUMAN);
+        Ok(pending)
     }
 
     /// Every message that went in paste `paste`, however each ended, in the order they were pasted.
@@ -30,7 +32,7 @@ impl Messages {
         owes: Option<OwedResult>,
     ) -> watch::Receiver<Option<Settled>> {
         let mut open = self.deliveries.lock();
-        Deliveries::open(&mut open, message, pasted, false, owes)
+        Deliveries::open(&mut open.agents, message, pasted, false, owes)
     }
 }
 

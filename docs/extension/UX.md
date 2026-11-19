@@ -36,8 +36,8 @@ agent-to-person messages use native information notifications, even while that a
 news/warning/progress toasts. CONFIGURATION-6.3 adds one migration notice with an Open action after file creation.
 Facade home changes offer Reload Window under ARCHITECTURE-3.1; another spelling of the home in use offers nothing.
 Agent-operation errors return to the caller; no message-delivery or result-handoff failure
-creates a human popup. Show a permitted human notification only in its related window. There is no durable
-notification-recovery protocol. Example: `Could not start Ada: {CLI error}.` Show opens the exact source run or final
+creates a human popup. Show a permitted notification in its related window, with Rust `#human` handoff following
+COLLABORATION-2.3. Example: `Could not start Ada: {CLI error}.` Show opens the exact source run or final
 screen; a launch refused by its CLI entry or a program that cannot start also offers Edit in facade.json. A Pin
 restore offers it for a file error before any card
 or a restored card's launch failure, including an entry refusal or a program that cannot start. Other restore
@@ -91,7 +91,8 @@ language's natural grammar while preserving placeholders, product names and the 
 | Corners/inset | 4 px rows/buttons, 2 px fields, 4 px list side inset |
 
 No contributed color palette. CLI images and robot colors follow CONFIGURATION-2.4; they carry no status meaning.
-Terminal logo glyphs use the theme's text color; robots retain their own gradients. PANEL-1.3 owns robot eye motion.
+Terminal logo glyphs use the theme's text color; robots retain their own gradients. The Rust CLI's color replies follow
+the shared terminal source in LIFECYCLE-2.2. PANEL-1.3 owns robot eye motion.
 High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never
 over keyboard focus. Do not fade high-contrast text. Other secondary selection text uses 80% opacity only where it
 keeps 4.5:1 on the theme's selection, the page measuring it as the theme draws it, and full opacity otherwise; a card's

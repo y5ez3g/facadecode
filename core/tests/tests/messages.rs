@@ -33,7 +33,7 @@ fn send_in_background(home: &TestHome, args: &[&str]) -> Child {
 /// and its snapshot.
 fn watch_inbox(home: &TestHome, agent: &str, args: Value) -> (DaemonTestClient, u64, Value) {
     let mut wire = DaemonTestClient::open(home);
-    let welcome = wire.hello("terminal", [1, 1], json!({ "agent": agent }));
+    let welcome = wire.hello("terminal", DAEMON_RANGE, json!({ "agent": agent }));
     assert!(welcome["result"].is_object(), "{welcome}");
     let watching = wire.request("watch", json!({ "topic": "messages", "args": args }));
     let watch = watching["result"]["watch"]
@@ -127,9 +127,11 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
             "{person}"
         );
     }
-    let terminal = "#a1 runs in the terminal window, not in an editor window, where Facade could \
-                    tell the person";
-    assert!(refused(facade_as(&home, "a1", &["send", "#human", "x"])).contains(terminal));
+    assert_eq!(
+        refused(facade_as(&home, "a1", &["send", "#human", "x"])),
+        "error: the message was not delivered to the human: the terminal window is not showing \
+         Facade messages\n  tip: open the agent in an editor window that shows Facade messages\n"
+    );
     assert!(
         refused(facade_as(&home, "a9", &["send", "ada", "x"]))
             .contains("#a9, the agent this message would come from, is not listed")
@@ -321,7 +323,7 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     home.start_named_fake("worker", &[]);
     home.start_named_fake("other", &[]);
     let mut agents = DaemonTestClient::open(&home);
-    agents.hello("terminal", [1, 1], json!({}));
+    agents.hello("terminal", DAEMON_RANGE, json!({}));
     let watch = agents.request("watch", json!({ "topic": "agents" }))["result"]["watch"]
         .as_u64()
         .unwrap();
@@ -414,7 +416,7 @@ fn a_client_acts_for_the_agent_its_hello_names() {
     );
 
     let mut mcp = DaemonTestClient::open(&home);
-    let nameless = mcp.hello("mcp", [1, 1], json!({}));
+    let nameless = mcp.hello("mcp", DAEMON_RANGE, json!({}));
     assert_eq!(error_reason(&nameless), "invalid_argument", "{nameless}");
     let nobody = wire.request("watch", json!({ "topic": "messages" }));
     assert!(
@@ -424,7 +426,8 @@ fn a_client_acts_for_the_agent_its_hello_names() {
             .contains("this client acts for none"),
         "{nobody}"
     );
-    let unlisted = DaemonTestClient::open(&home).hello("mcp", [1, 1], json!({ "agent": "#a9" }));
+    let unlisted =
+        DaemonTestClient::open(&home).hello("mcp", DAEMON_RANGE, json!({ "agent": "#a9" }));
     assert_eq!(error_reason(&unlisted), "not_found", "{unlisted}");
     assert!(
         unlisted["error"]["message"]
@@ -434,7 +437,7 @@ fn a_client_acts_for_the_agent_its_hello_names() {
         "{unlisted}"
     );
     let mut gone = DaemonTestClient::open(&home);
-    gone.hello("terminal", [1, 1], json!({ "agent": "#a9" }));
+    gone.hello("terminal", DAEMON_RANGE, json!({ "agent": "#a9" }));
     let refused = gone.request("watch", json!({ "topic": "messages" }));
     assert_eq!(error_reason(&refused), "not_found", "{refused}");
     assert!(
@@ -1123,7 +1126,7 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     let send = send_in_background(&home, &["worker", "read me"]);
     assert!(wait_for_delivery(&inbox, watch, "m1", "pending"));
     let mut reader = DaemonTestClient::open(&home);
-    reader.hello("terminal", [1, 1], json!({ "agent": "a1" }));
+    reader.hello("terminal", DAEMON_RANGE, json!({ "agent": "a1" }));
     reader.send("watch", json!({ "topic": "messages", "args": {} }));
     crash_at(&home, "after-read-commit");
     cut_off(send);

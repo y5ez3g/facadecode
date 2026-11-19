@@ -7,24 +7,29 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Start an agent: a CLI in a folder of a window. list_agents lists the windows, their folders, and the CLIs each can start. It answers once the new agent's CLI runs; with a prompt, a 🔔 result tells you once the prompt reached it. The new agent joins your creation tree.",
+    "description": "Start a CLI in your creation tree. Returns the running agent's id, name, path, machine_id and windows. A prompt gets a later 🔔 result.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "cli": {
           "type": "string",
           "minLength": 1,
-          "description": "A CLI that list_agents lists for the window, such as claude."
+          "description": "A CLI entry from list_agents."
         },
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "The folder to start in: one of the folders list_agents lists for the window, or any folder in the terminal window. A relative path starts from your own folder."
+          "description": "The run's folder, relative to yours or absolute. With location_source_window, use a listed location or a folder inside it."
         },
         "window": {
           "type": "string",
           "minLength": 1,
-          "description": "The window to start in, such as win-2, or terminal."
+          "description": "Optional local member window ID, such as win-2 or terminal. Omit to inherit your windows."
+        },
+        "location_source_window": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional connected local window ID that supplies the location for path and any worktree."
         },
         "name": {
           "type": "string",
@@ -52,8 +57,7 @@
       },
       "required": [
         "cli",
-        "path",
-        "window"
+        "path"
       ],
       "additionalProperties": false
     }
@@ -64,7 +68,7 @@
       "readOnlyHint": true,
       "openWorldHint": false
     },
-    "description": "List the windows on this computer, each with the folders its agents can work in and the CLIs it can start, and the agents you can reach, with what each is doing. Ended agents are listed too. A list too long to return here comes as a file.",
+    "description": "List reachable agents, including ended ones, and local windows. Agent rows give machine_id and windows [{machine_id, window_id}]. Window rows give id, machine_id, name and connected. Connected windows list CLIs and editor folders. Long lists return data.file.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -104,7 +108,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Send one complete message to one agent, or to the person as #human. It waits up to 30 seconds for the message to be typed into the recipient's input and submitted. `delivery` says how it reached them: typed_into_input; read_by_recipient, where they read it themselves first; shown_to_person, for #human; or waiting_in_inbox, for a guest, which takes its messages at its next turn. A message that could not be typed in time is withdrawn and the call fails, saying why: send it again later. Success is delivery, not a reply or a finished task.",
+    "description": "Send to an agent or #human. If an agent's paste cannot begin within 30 seconds, the send is withdrawn. Agent delivery is typed_into_input, read_by_recipient or waiting_in_inbox. For #human, delivered_to_windows confirms delivery to window subscriptions. data.windows gives delivered and not_delivered names with reasons for misses. If none accept, unavailable lists reasons in data.windows. outcome_unknown gives the original data.id. Replies arrive separately.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -139,7 +143,7 @@
       "idempotentHint": false,
       "openWorldHint": false
     },
-    "description": "Read your own inbox; this does not wait. Given neither after nor last, it returns the messages not yet delivered to you, and reading delivers them. after gives every message after the one it names; last gives the newest ones. New messages arrive by themselves, even after your turn ends: do not poll. Messages from facade are its 🔔 results. A list too long to return here comes as a file.",
+    "description": "Read your own inbox; this does not wait. Given neither after nor last, it returns the messages not yet delivered to you, and reading delivers them. after gives the messages after the one it names; last gives the newest ones. One read returns at most 100: next_cursor, where given, is the after that reads the next ones. New messages arrive by themselves, even after your turn ends: do not poll. Messages from facade are its 🔔 results. A list too long to return here comes as a file.",
     "inputSchema": {
       "type": "object",
       "properties": {

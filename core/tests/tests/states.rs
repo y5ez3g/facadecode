@@ -249,7 +249,7 @@ fn a_wait_for_the_person_is_published_at_once() {
     home.start_facade_with(&[("FACADE_TEST_PUBLISH_AFTER_MS", "60000")]);
     reporting(&home, "w1", &[]);
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let watch = wire.request("watch", json!({ "topic": "agents", "args": {} }))["result"]["watch"]
         .as_u64()
         .unwrap();

@@ -252,10 +252,7 @@ impl Daemon {
         }
         let info = AgentInfo {
             agent_id: id.clone(),
-            location_id: record
-                .location_id
-                .clone()
-                .unwrap_or_else(|| facade_base::daemon::location_id(&record.cwd)),
+            location_id: record.location_id,
             pid: Some(run.as_ref().map_or(record.pid, |run| run.pid)),
             process,
             cols: Some(cols),
@@ -271,10 +268,14 @@ impl Daemon {
             name: record.name,
             cli: record.cli,
             cwd: record.cwd,
-            window_id: record.window_id,
+            machine_id: self.machine_id.clone(),
+            windows: record.windows,
+            location_source_window: record.location_source_window,
             created_at: record.created_at,
             creator: record.creator,
+            creator_machine_id: None,
             root: record.root,
+            root_machine_id: None,
             yolo: record.yolo,
             session: record.session,
         };
@@ -300,17 +301,14 @@ impl Daemon {
     }
 
     /// A resume the daemon before started and never committed: the keeper's run is the agent's
-    /// now. Commits its process; the record's window and YOLO stand, as the resume's were not kept.
+    /// now. Commits its process with the last committed YOLO setting.
     fn commit_uncommitted_resume(
         &self,
         record: &mut AgentRecord,
         run: &HeldAgent,
     ) -> anyhow::Result<()> {
         let id = &record.agent_id;
-        blocking_in_place(|| {
-            self.store
-                .record_restart(id, run.pid, &record.window_id, record.yolo)
-        })?;
+        blocking_in_place(|| self.store.record_restart(id, run.pid, record.yolo))?;
         log(
             "info",
             &format!("committed the resumed run of {id}, process {}", run.pid),
@@ -337,7 +335,7 @@ impl Daemon {
             return Ok((ScreenStart::Released, cols, rows));
         }
         // After a clean handover the log is whole, and output goes on in it.
-        let handed_over_cleanly = crate::takeover::handed_over_cleanly();
+        let handed_over_cleanly = crate::lifecycle::handed_over_cleanly();
         let (agent_id, steps) = (id.to_owned(), steps.clone());
         let recovered = tokio::task::spawn_blocking(move || {
             let step = || {
@@ -427,6 +425,7 @@ impl Daemon {
             message,
             paste,
             result_owed,
+            ..
         }: KeptMessage,
         now: SystemTime,
         started: Instant,

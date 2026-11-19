@@ -18,12 +18,13 @@
 
 use std::sync::Arc;
 
-use facade_base::daemon::{Delivery, Message};
+use facade_base::daemon::{Delivery, Message, WindowDelivery, WindowRef};
 use rusqlite::{Connection, Row, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use super::{Store, column_names, log};
+use super::{Store, log};
+use crate::HUMAN;
 
 /// What a message not yet delivered satisfies. `messages_undelivered` holds the messages it
 /// selects, and a query that repeats it uses that index.
@@ -32,15 +33,13 @@ const UNDELIVERED: &str = "status != 'success'";
 /// The columns a message is read from and written to, in order.
 const COLUMNS: &str = "number, \"from\", from_name, \"to\", text, reply_to, at, status, reason, \
                        text_written, enter_written, deadline, delivered_via, delivered_at, paste, \
-                       from_window, call_id, result_owed, result";
+                       from_window, call_id, result_owed, result, human_windows";
 
-/// Creates the table, its later columns and its indexes where they are missing, in one
-/// transaction. `messages_undelivered` keeps a read of what waits as long as what waits, not as
-/// 30 days of an inbox.
-pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
-    let transaction = connection.transaction()?;
-    transaction.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS messages (
+/// Creates the table and its indexes. `messages_undelivered` lets reads scan only messages that
+/// are still waiting.
+pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(&format!(
+        "CREATE TABLE messages (
 			number INTEGER PRIMARY KEY,
 			\"from\" TEXT NOT NULL,
 			from_name TEXT,
@@ -55,29 +54,18 @@ pub(super) fn add_table(connection: &mut Connection) -> rusqlite::Result<()> {
 			deadline TEXT,
 			delivered_via TEXT,
 			delivered_at TEXT,
-			paste INTEGER
+			paste INTEGER,
+			from_window TEXT,
+			call_id TEXT,
+			result_owed INTEGER,
+			result TEXT,
+			request_id TEXT,
+			human_windows TEXT
 		);
-		CREATE INDEX IF NOT EXISTS messages_inbox ON messages (\"to\", number);
-		CREATE INDEX IF NOT EXISTS messages_undelivered ON messages (\"to\", number) WHERE {UNDELIVERED};"
-    ))?;
-    let columns = column_names(&transaction, "messages")?;
-    for (column, kind) in [
-        ("from_window", "TEXT"),
-        ("call_id", "TEXT"),
-        ("result_owed", "INTEGER"),
-        ("result", "TEXT"),
-        ("request_id", "TEXT"),
-    ] {
-        if !columns.iter().any(|known| known == column) {
-            transaction
-                .execute_batch(&format!("ALTER TABLE messages ADD COLUMN {column} {kind}"))?;
-        }
-    }
-    transaction.execute_batch(
-        "CREATE INDEX IF NOT EXISTS messages_request ON messages (\"from\", request_id) \
-         WHERE request_id IS NOT NULL;",
-    )?;
-    transaction.commit()
+		CREATE INDEX messages_inbox ON messages (\"to\", number);
+		CREATE INDEX messages_undelivered ON messages (\"to\", number) WHERE {UNDELIVERED};
+		CREATE INDEX messages_request ON messages (\"from\", request_id) WHERE request_id IS NOT NULL;"
+    ))
 }
 
 /// A send's own ID as its sender gave it, and the earliest time at which a message it kept still
@@ -114,13 +102,14 @@ pub(crate) struct KeptMessage {
     pub(crate) message: Message,
     pub(crate) paste: Option<u64>,
     pub(crate) result_owed: Option<u64>,
+    /// The window subscriptions that took or refused a message to the person.
+    pub(crate) human_windows: Option<WindowDelivery>,
 }
 
-/// A message deleted from the store: its number, sender and recipient.
+/// A message deleted from the store: its number and recipient.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Gone {
     pub(crate) number: u64,
-    pub(crate) from: String,
     pub(crate) to: String,
 }
 
@@ -161,6 +150,19 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
     let result_owed: Option<i64> = row.get("result_owed")?;
     // Facts this build cannot read leave a result its words.
     let result: Option<String> = row.get("result")?;
+    let human_column = row.as_ref().column_index("human_windows")?;
+    let human_windows = row
+        .get::<_, Option<String>>(human_column)?
+        .map(|windows| {
+            serde_json::from_str(&windows).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    human_column,
+                    rusqlite::types::Type::Text,
+                    err.into(),
+                )
+            })
+        })
+        .transpose()?;
     let delivery = Delivery {
         status: named(row.get("status")?)?,
         reason: reason.map(named).transpose()?,
@@ -186,6 +188,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
         },
         paste: paste.map(|paste| paste as u64),
         result_owed: result_owed.map(|number| number as u64),
+        human_windows,
     })
 }
 
@@ -217,7 +220,7 @@ fn write(
     connection.execute(
         &format!(
             "INSERT INTO messages ({COLUMNS}, request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, \
-             ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16, NULL, ?17, ?18)"
+             ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16, NULL, ?17, NULL, ?18)"
         ),
         params![
             number,
@@ -291,13 +294,12 @@ fn delete_returning(
     value: &str,
 ) -> rusqlite::Result<Vec<Gone>> {
     let mut statement = connection.prepare(&format!(
-        "DELETE FROM messages WHERE {filter} RETURNING number, \"from\", \"to\""
+        "DELETE FROM messages WHERE {filter} RETURNING number, \"to\""
     ))?;
     let gone = statement.query_map([value], |row| {
         Ok(Gone {
             number: row.get::<_, i64>(0)? as u64,
-            from: row.get(1)?,
-            to: row.get(2)?,
+            to: row.get(1)?,
         })
     })?;
     gone.collect()
@@ -440,6 +442,50 @@ impl MessageTable {
             },
         )?;
         Ok(deleted == 1)
+    }
+
+    /// Commits that the pending message to the person reached at least one window subscription.
+    pub(crate) fn settle_human(
+        &self,
+        number: u64,
+        windows: &WindowDelivery,
+    ) -> anyhow::Result<Message> {
+        let windows = serde_json::to_string(windows)?;
+        let now = facade_base::time::iso_now();
+        self.0.transaction(
+            || format!("save the window delivery of #m{number}"),
+            |transaction| {
+                transaction.query_row(
+                    &format!(
+                        "UPDATE messages SET status = 'success', reason = NULL, text_written = 'none',
+                         enter_written = 0, deadline = NULL, delivered_via = 'notified',
+                         delivered_at = ?2, human_windows = ?3
+                         WHERE number = ?1 AND \"to\" = ?4 AND status = 'pending'
+                         RETURNING {COLUMNS}"
+                    ),
+                    params![number as i64, now, windows, HUMAN],
+                    |row| Ok(read_message(row)?.message),
+                )
+            },
+        )
+    }
+
+    /// The settled messages that reached this window's subscription, in message number order.
+    pub(crate) fn human_inbox(&self, window: &WindowRef) -> anyhow::Result<Vec<Message>> {
+        let kept = self.select(
+            "\"to\" = ?1 AND status = 'success' AND human_windows IS NOT NULL",
+            None,
+            [HUMAN],
+        )?;
+        Ok(kept
+            .into_iter()
+            .filter(|kept| {
+                kept.human_windows
+                    .as_ref()
+                    .is_some_and(|windows| windows.delivered.contains(window))
+            })
+            .map(|kept| kept.message)
+            .collect())
     }
 
     /// Begins the delivery of prompt `number`, kept with no deadline while its CLI's tools connect:
@@ -616,6 +662,25 @@ impl MessageTable {
         self.select_messages(&filter, Some(limit), params![owner, after as i64])
     }
 
+    /// The newest `last` messages of `owner`'s inbox, by number: of every message where `all`,
+    /// else of those not yet delivered.
+    pub(crate) fn inbox_last(
+        &self,
+        owner: &str,
+        all: bool,
+        last: usize,
+    ) -> anyhow::Result<Vec<Message>> {
+        let undelivered = match all {
+            true => String::new(),
+            false => format!(" AND {UNDELIVERED}"),
+        };
+        let filter = format!(
+            "number IN (SELECT number FROM messages WHERE \"to\" = ?1{undelivered} \
+             ORDER BY number DESC LIMIT {last})"
+        );
+        self.select_messages(&filter, None, [owner])
+    }
+
     /// Every kept message of `owner`'s inbox, by number.
     pub(crate) fn inbox(&self, owner: &str) -> anyhow::Result<Vec<Message>> {
         self.select_messages("\"to\" = ?1", None, [owner])
@@ -659,7 +724,9 @@ impl MessageTable {
 mod tests {
     use std::path::PathBuf;
 
-    use facade_base::daemon::{DeliveredVia, DeliveryFailure, DeliveryStatus, TextWritten};
+    use facade_base::daemon::{
+        DeliveredVia, DeliveryFailure, DeliveryStatus, TextWritten, WindowDeliveryFailure,
+    };
 
     use super::*;
     use crate::messages::tests::message;
@@ -736,48 +803,50 @@ mod tests {
         }
     }
 
-    /// A store from before messages were kept gains the table and its indexes as it opens, keeps
-    /// its rows, and its message numbers go on.
     #[test]
-    fn a_store_from_before_messages_were_kept_gains_them_and_its_numbers_go_on() {
-        let core = Core::new("migrate");
-        let store = core.open();
-        store.insert(&crate::store::tests::record("a1")).unwrap();
-        {
-            let connection = store.connection.lock().unwrap();
-            connection
-                .execute_batch("DROP TABLE messages; UPDATE message_numbers SET next = 7;")
-                .unwrap();
-        }
-        drop(store);
-        let opened = Store::open(&core.0, &[]).unwrap();
-        assert_eq!(opened.records.len(), 1, "the agent's row stays");
-        let indexes: Vec<String> = {
-            let connection = opened.store.connection.lock().unwrap();
-            let mut statement = connection
-                .prepare(
-                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages' \
-                     ORDER BY name",
-                )
-                .unwrap();
-            statement
-                .query_map([], |row| row.get(0))
-                .unwrap()
-                .map(Result::unwrap)
-                .collect()
+    fn human_receipts_survive_reopening_and_appear_only_for_the_delivered_window() {
+        let core = Core::new("human-receipts");
+        let window = WindowRef {
+            machine_id: "here".into(),
+            window_id: "win-1".into(),
         };
+        let other = WindowRef {
+            machine_id: "elsewhere".into(),
+            ..window.clone()
+        };
+        let receipt = WindowDelivery {
+            delivered: vec![window.clone()],
+            not_delivered: vec![WindowDeliveryFailure {
+                window: other.clone(),
+                reason: "window_disconnected".into(),
+            }],
+        };
+        let request = RequestId {
+            id: "to-person",
+            since: "2026-11-09T00:00:00.000Z",
+        };
+        let pending = message(0, HUMAN);
+        let store = core.open();
+        store.insert_message(&pending, Some(request)).unwrap();
+        store.insert_message(&pending, None).unwrap();
+        let settled = store.message_table().settle_human(1, &receipt).unwrap();
+        assert_eq!(settled.delivery.status, DeliveryStatus::Success);
+        drop(store);
+
+        let store = core.open();
+        let kept = store.find_request("a1", request).unwrap().unwrap();
+        assert_eq!(kept.message, settled);
+        assert_eq!(kept.human_windows, Some(receipt));
         assert_eq!(
-            indexes,
-            ["messages_inbox", "messages_request", "messages_undelivered"]
+            store.message_table().human_inbox(&window).unwrap(),
+            [settled]
         );
-        assert_eq!(
-            opened
-                .store
-                .insert_message(&message(0, "a1"), None)
+        assert!(
+            store
+                .message_table()
+                .human_inbox(&other)
                 .unwrap()
-                .into_message()
-                .message_id,
-            "m7"
+                .is_empty()
         );
     }
 
@@ -956,12 +1025,14 @@ mod tests {
                 KeptMessage {
                     message: kept[0].clone(),
                     paste: Some(1),
-                    result_owed: None
+                    result_owed: None,
+                    human_windows: None,
                 },
                 KeptMessage {
                     message: kept[2].clone(),
                     paste: None,
-                    result_owed: None
+                    result_owed: None,
+                    human_windows: None,
                 }
             ]
         );
@@ -1054,7 +1125,11 @@ mod tests {
     /// The result #a2's prompt `prompt` owes #a1, under `number`, its prompt settled as `delivery`.
     fn result(number: u64, prompt: &Message, delivery: &Delivery) -> Message {
         let agent = serde_json::from_value(serde_json::json!({
-            "agent_id": "a2", "name": "Nova", "cli": "claude", "cwd": "/w", "window_id": "terminal",
+            "agent_id": "a2", "name": "Nova", "cli": "claude", "cwd": "/w",
+            "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+            "windows": [{
+                "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "window_id": "terminal"
+            }],
             "location_id": "loc-1", "pid": 7, "process": "running", "cols": 80, "rows": 24,
             "created_at": "2026-11-11T00:00:00.000Z", "root": "a1", "yolo": true, "state": "idle",
             "tools_state": "available",
@@ -1107,7 +1182,8 @@ mod tests {
             [KeptMessage {
                 message: kept.clone(),
                 paste: None,
-                result_owed: Some(2)
+                result_owed: Some(2),
+                human_windows: None,
             }]
         );
         assert!(
@@ -1392,7 +1468,6 @@ mod tests {
                 .unwrap(),
             [Gone {
                 number: 1,
-                from: "a1".into(),
                 to: "a2".into()
             }]
         );

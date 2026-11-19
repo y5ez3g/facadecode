@@ -11,7 +11,7 @@ fn agents_watch_delivers_snapshot_and_changes_until_unwatch() {
     let home = TestHome::new("watchagents");
     home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let watching = wire.request("watch", json!({ "topic": "agents" }));
     let watch = watching["result"]["watch"]
         .as_u64()
@@ -62,7 +62,7 @@ fn agents_watch_observes_immediate_start_then_remove() {
     let home = TestHome::new("quickwatch");
     home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let watch = wire.request("watch", json!({ "topic": "agents" }))["result"]["watch"]
         .as_u64()
         .expect("expected a watch ID");
@@ -101,7 +101,7 @@ fn screen_watch_delivers_snapshot_then_output() {
     let home = TestHome::new("watchscreen");
     let worker = home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let watching = wire.request(
         "watch",
         json!({ "topic": "screen", "args": { "agent": "w1" } }),
@@ -153,7 +153,7 @@ fn a_screen_read_marks_the_screen_s_styles() {
     let home = TestHome::new("read");
     let worker = home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", [1, 1], json!({}));
+    wire.hello("terminal", DAEMON_RANGE, json!({}));
     let read = wire.call("agent.screen", json!({ "agent": worker.id, "lines": 40 }));
     let screen = &read["result"];
     assert!(

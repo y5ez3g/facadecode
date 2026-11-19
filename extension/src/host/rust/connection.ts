@@ -13,15 +13,16 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { timeout } from '../../base/async';
-import { connectWithin } from '../../base/connect';
+import { connectWithin, type Reached } from '../../base/connect';
 import { messageOf } from '../../base/errors';
 import { lineReader } from '../../base/lines';
-import { OLDEST_PROTOCOL, PROTOCOL } from '../../base/coreProtocol';
-import type { ChangedParams, EmptyResult, ErrorBody, HelloParams, HelloResult, NumbersGiven, Operation, ScreenChange, Topic, UpgradeArgs, WatchResult, WindowDescription } from '../../base/coreProtocol';
-import type { Disposable } from '../../core/ports';
+import type { ChangedParams, EmptyResult, ErrorBody, HelloParams, HelloResult, NumbersGiven, Operation, ScreenChange, Topic, UpgradeArgs, WatchResult, WindowDescription, WindowRef } from '../../base/coreProtocol';
+import type { Disposable, Event } from '../../core/ports';
 import { DaemonError } from './types';
 import type { DaemonLink, TerminalNotificationArgs } from './types';
 
+/** Ordinary connections require the protocol with logical window bindings. */
+const DAEMON_PROTOCOL = 2;
 /** The keeper protocol versions the packaged program speaks (its oldest and newest), which `daemon.upgrade` tells the daemon (KEEPER.md). */
 const KEEPER_PROTOCOL: readonly [number, number] = [1, 1];
 /** How long one connection to the socket may take. */
@@ -36,6 +37,7 @@ const RETRY_MS = 500;
 const RECONNECT_WAIT_MS = 30_000;
 /** How long the first connection waits for the new daemon after a handover. */
 const HANDOVER_WAIT_MS = 30_000;
+const MACHINE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export interface ConnectOptions {
 	/** The Facade home: where the daemon's socket is named from, and `FACADE_HOME` for the program. */
@@ -95,9 +97,13 @@ export function takesOver(newer: string, running: string): boolean {
 }
 
 /** The three numbers of a build such as `0.2.1+4f2a`, none unless it has exactly three. */
-function versionOf(build: string): number[] | undefined {
+function versionOf(build: string): bigint[] | undefined {
 	const parts = build.split('+', 1)[0].split('.');
-	return parts.length === 3 && parts.every(part => /^\d+$/.test(part)) ? parts.map(Number) : undefined;
+	if (parts.length !== 3 || parts.some(part => !/^\d+$/.test(part))) {
+		return undefined;
+	}
+	const numbers = parts.map(BigInt);
+	return numbers.every(number => number <= 0xffff_ffff_ffff_ffffn) ? numbers : undefined;
 }
 
 function unavailable(message: string): DaemonError {
@@ -107,6 +113,31 @@ function unavailable(message: string): DaemonError {
 function errorOf(body: ErrorBody | undefined): DaemonError {
 	const data = body?.data && typeof body.data.reason === 'string' ? body.data : { reason: 'internal' as const };
 	return new DaemonError(body?.message ?? 'Facade core answered with an error.', data.reason, data);
+}
+
+function incompatible(message: string): DaemonError {
+	return new DaemonError(message, 'protocol_incompatible', { reason: 'protocol_incompatible' });
+}
+
+interface BoundHello {
+	readonly build: string;
+	readonly window: WindowRef;
+}
+
+function verifyHello(result: unknown): BoundHello {
+	const hello = result as HelloResult | null | undefined;
+	if (hello?.protocol !== DAEMON_PROTOCOL) {
+		throw incompatible(`Facade core did not select daemon protocol ${DAEMON_PROTOCOL}.`);
+	}
+	const { build, machine_id, window } = hello;
+	if (typeof build !== 'string' || !build.trim()) {
+		throw incompatible('Facade core did not identify its build.');
+	}
+	if (typeof machine_id !== 'string' || !MACHINE_ID.test(machine_id) || window?.machine_id !== machine_id ||
+		typeof window.window_id !== 'string' || !window.window_id.trim() || window.window_id === 'terminal') {
+		throw incompatible('Facade core did not bind this editor to a logical window on its machine.');
+	}
+	return { build, window: Object.freeze({ machine_id, window_id: window.window_id }) };
 }
 
 /** Runs `facade daemon --detach` for `home`: where Facade starts, or already runs, it answers with code 0. */
@@ -131,7 +162,7 @@ function startDaemon(options: ConnectOptions): Promise<void> {
 }
 
 /** How one attempt to reach the daemon went: connected and greeted, or why not, where the next attempt may do better. */
-type Attempt = { readonly connection: Connection; readonly hello: HelloResult } | { readonly connection?: undefined; readonly absent: boolean; readonly reason: string };
+type Attempt = { readonly connection: Connection; readonly hello: BoundHello } | { readonly connection?: undefined; readonly absent: boolean; readonly reason: string };
 
 /** What a response settles a request with. */
 type Outcome = { readonly result: unknown; readonly error?: undefined } | { readonly error: DaemonError };
@@ -140,7 +171,6 @@ type Outcome = { readonly result: unknown; readonly error?: undefined } | { read
 class Connection {
 	private readonly pending = new Map<number, (outcome: Outcome) => void>();
 	private nextId = 1;
-	private ended = false;
 
 	constructor(private readonly socket: net.Socket, private readonly on: {
 		changed(params: ChangedParams): void;
@@ -150,23 +180,26 @@ class Connection {
 	}) {
 		socket.on('data', lineReader(line => this.line(line), err => {
 			this.on.log(`Facade core sent a line that is too long: ${err.message}`);
-			socket.destroy();
+			this.close();
 		}));
 		socket.on('error', err => this.on.log(`The connection to Facade core failed: ${err.message}`));
 		socket.on('close', () => {
-			this.ended = true;
+			this.on.closed();
 			const waiting = [...this.pending.values()];
 			this.pending.clear();
 			for (const settle of waiting) {
 				settle({ error: unavailable('The connection to Facade core closed: the call may or may not have run.') });
 			}
-			this.on.closed();
 		});
+	}
+
+	get active(): boolean {
+		return !this.socket.destroyed && !this.socket.readableEnded;
 	}
 
 	/** Sends a request and answers with its response: `settle` runs as the response is read, before any later line is. */
 	send(method: string, params: object, settle: (outcome: Outcome) => void): void {
-		if (this.ended) {
+		if (!this.active) {
 			settle({ error: unavailable('The connection to Facade core is closed.') });
 			return;
 		}
@@ -175,13 +208,18 @@ class Connection {
 		this.write({ jsonrpc: '2.0', id, method, params });
 	}
 
-	ask(method: string, params: object): Promise<unknown> {
-		return new Promise((resolve, reject) => this.send(method, params, outcome => outcome.error ? reject(outcome.error) : resolve(outcome.result)));
+	ask(method: string, params: object, waitMs?: number): Promise<unknown> {
+		const answer = new Promise((resolve, reject) => this.send(method, params, outcome => outcome.error ? reject(outcome.error) : resolve(outcome.result)));
+		if (waitMs === undefined) {
+			return answer;
+		}
+		const timer = setTimeout(() => this.close(), waitMs);
+		return answer.finally(() => clearTimeout(timer));
 	}
 
 	/** Sends a notification: no response comes. */
 	notify(method: string, params?: object): void {
-		if (!this.ended) {
+		if (this.active) {
 			this.write({ jsonrpc: '2.0', method, params });
 		}
 	}
@@ -195,18 +233,25 @@ class Connection {
 	}
 
 	private line(line: string): void {
-		let message: { id?: number | null; method?: string; params?: unknown; result?: unknown; error?: ErrorBody };
+		if (!this.active) {
+			return;
+		}
+		let message: { jsonrpc?: string; id?: number | null; method?: string; params?: unknown; result?: unknown; error?: ErrorBody } | null;
 		try {
 			message = JSON.parse(line);
 		} catch {
 			this.on.log(`Facade core sent a line that is not JSON: ${line.slice(0, 200)}`);
 			return;
 		}
+		if (message?.jsonrpc !== '2.0') {
+			this.on.log('Facade core sent an invalid JSON-RPC message.');
+			return;
+		}
 		if (message.method === 'changed') {
 			this.on.changed(message.params as ChangedParams);
 		} else if (message.method === 'closing') {
 			this.on.closing();
-		} else if (typeof message.id === 'number') {
+		} else if (message.method === undefined && typeof message.id === 'number') {
 			const settle = this.pending.get(message.id);
 			this.pending.delete(message.id);
 			settle?.(message.error ? { error: errorOf(message.error) } : { result: message.result });
@@ -242,57 +287,93 @@ export async function connectDaemon(options: ConnectOptions): Promise<DaemonLink
 }
 
 class Link implements DaemonLink {
-	readonly windowId: string;
-	private window: WindowDescription;
+	private description: WindowDescription;
+	/** Set before connectDaemon returns. Keep the reference across reconnects to the same logical window. */
+	private binding!: WindowRef;
 	private connection: Connection | undefined;
-	/** Counts the connections made: a call refused as `upgrading` waits for a later one. */
+	/** Counts installed connections: a call refused as `upgrading` waits for a later one. */
 	private generation = 0;
+	private publishingBinding = false;
 	private afterClosing = false;
 	private reconnecting = false;
 	/** Why the link is over: disposed, or core refused it for good. */
 	private lost: DaemonError | undefined;
+	private readonly bindListeners = new Set<(window: WindowRef) => void>();
 	private readonly watching = new Set<Watching>();
 	private readonly byNumber = new Map<number, Watching>();
 	private readonly waiters = new Set<() => void>();
 	private readonly stop = new AbortController();
 
+	readonly onDidBind: Event<WindowRef> = listener => {
+		this.bindListeners.add(listener);
+		return { dispose: () => this.bindListeners.delete(listener) };
+	};
+
 	constructor(private readonly options: ConnectOptions) {
-		this.windowId = options.window.id;
-		this.window = options.window;
+		this.description = options.window;
+	}
+
+	get machineId(): string {
+		return this.binding.machine_id;
+	}
+
+	get window(): WindowRef {
+		return this.binding;
+	}
+
+	get windowId(): string {
+		return this.binding.window_id;
+	}
+
+	get connected(): boolean {
+		return this.connection?.active === true;
 	}
 
 	/** The first connection: starts Facade where none answers, then hands an older daemon over. */
 	async open(): Promise<void> {
-		const running = await this.reach({ start: true, limited: true });
+		const running = await this.reach({ start: true, waitMs: START_WAIT_MS });
 		this.options.log(`Connected to Facade core ${running.build}.`);
 		if (!takesOver(this.options.build, running.build)) {
 			return;
 		}
 		const generation = this.generation;
-		const upgrade: UpgradeArgs = { program: this.options.program, build: this.options.build, daemon_protocol: [OLDEST_PROTOCOL, PROTOCOL], keeper_protocol: [...KEEPER_PROTOCOL] };
+		const args: UpgradeArgs = {
+			program: this.options.program,
+			build: this.options.build,
+			daemon_protocol: [DAEMON_PROTOCOL, DAEMON_PROTOCOL],
+			keeper_protocol: [...KEEPER_PROTOCOL],
+		};
 		try {
-			await this.call('daemon.upgrade', upgrade);
+			await this.call('daemon.upgrade', args);
 		} catch (err) {
 			// An older daemon that refuses serves on, as for the `facade` commands
 			this.options.log(`Facade ${this.options.build} could not take over from ${running.build}: ${messageOf(err)}`);
 			return;
 		}
-		await this.until(() => this.connection !== undefined && this.generation > generation, HANDOVER_WAIT_MS);
+		await this.until(() => this.connected && this.generation > generation, HANDOVER_WAIT_MS);
 	}
 
 	async call<R>(op: Operation, args: object): Promise<R> {
+		const binding = this.binding;
+		let afterGeneration = 0;
 		for (; ;) {
-			await this.until(() => this.connection !== undefined);
+			await this.until(() => this.connected && this.generation > afterGeneration);
+			if (this.binding !== binding) {
+				throw unavailable('The Facade window binding changed before the call could be sent.');
+			}
+			const connection = this.connection;
+			if (!connection?.active) {
+				continue;
+			}
 			const generation = this.generation;
 			try {
-				return await this.connection!.ask('call', { op, args }) as R;
+				return await connection.ask('call', { op, args }) as R;
 			} catch (err) {
-				if (err instanceof DaemonError && err.reason === 'upgrading') {
-					// Nothing ran: the new daemon is coming, which this connection hears of as `closing`
-					await this.until(() => this.connection !== undefined && this.generation > generation);
-					continue;
+				if (!(err instanceof DaemonError && err.reason === 'upgrading')) {
+					throw err;
 				}
-				throw err;
+				// Nothing ran. Wait for a later connection to the same logical window before sending again.
+				afterGeneration = generation;
 			}
 		}
 	}
@@ -304,7 +385,7 @@ class Link implements DaemonLink {
 	watch<S, C>(topic: Topic, args: object, on: { snapshot(snapshot: S): void; change(change: C): void }): Disposable {
 		const watching: Watching = { topic, args, on: on as Watching['on'], disposed: false };
 		this.watching.add(watching);
-		if (this.connection) {
+		if (this.connection && !this.publishingBinding) {
 			this.startWatch(this.connection, watching);
 		}
 		return {
@@ -323,60 +404,86 @@ class Link implements DaemonLink {
 	}
 
 	async update(window: WindowDescription): Promise<void> {
-		this.window = window;
+		this.description = window;
 		await this.call<EmptyResult>('window.update', window);
 	}
 
 	dispose(): void {
-		if (this.lost) {
-			return;
-		}
-		this.lost = unavailable('The connection to Facade core was closed.');
+		this.lost ??= unavailable('The connection to Facade core was closed.');
 		this.stop.abort();
 		this.connection?.close();
+		this.connection = undefined;
+		this.byNumber.clear();
+		this.watching.clear();
+		this.bindListeners.clear();
 		this.wake();
 	}
 
-	/**
-	 * Connects and says `hello` until a daemon answers, then installs the connection and asks its watches again. With `start`, a
-	 * socket nothing answers on gets `facade daemon --detach` once; `limited` ends the tries after 10 seconds (the first connection's),
-	 * else they go on. Answers the daemon's `hello`.
-	 */
-	private async reach(how: { start: boolean; limited: boolean }): Promise<HelloResult> {
+	/** Installs a verified v2 connection. With `start`, starts Facade once if the socket is absent. */
+	private async reach(how: { start: boolean; waitMs?: number }): Promise<BoundHello> {
 		let started = false;
-		let deadline = how.limited ? Date.now() + START_WAIT_MS : undefined;
+		const waitMs = how.waitMs ?? Infinity;
+		let deadline = Date.now() + waitMs;
 		for (; ;) {
-			const attempt = await this.attempt();
-			if (attempt.connection) {
-				this.install(attempt.connection);
-				return attempt.hello;
-			}
 			if (this.lost) {
 				throw this.lost;
 			}
-			if (how.start && !started && attempt.absent) {
+			const attempt = await this.attempt(deadline);
+			if (this.lost) {
+				attempt.connection?.close();
+				throw this.lost;
+			}
+			if (attempt.connection?.active) {
+				this.install(attempt.connection, attempt.hello.window);
+				return attempt.hello;
+			}
+			attempt.connection?.close();
+			if (how.start && !this.afterClosing && !started && !attempt.connection && attempt.absent) {
 				started = true;
 				await startDaemon(this.options);
-				deadline = how.limited ? Date.now() + START_WAIT_MS : undefined;
+				deadline = Date.now() + waitMs;
 			}
-			if (deadline !== undefined && Date.now() > deadline) {
-				throw new Error(`Facade core did not answer within ${START_WAIT_MS / 1000} seconds: ${attempt.reason}`);
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				const reason = attempt.connection ? 'the socket closed during hello' : attempt.reason;
+				throw unavailable(`Facade core did not answer within ${waitMs / 1000} seconds: ${reason}`);
 			}
-			await timeout(RETRY_MS, this.stop.signal).catch(() => undefined);
+			await timeout(Math.min(RETRY_MS, remaining), this.stop.signal).catch(() => undefined);
 		}
 	}
 
-	/** One try: a decoded refusal other than `upgrading` is thrown; anything else that fails is for the next try. */
-	private async attempt(): Promise<Attempt> {
+	private async connect(deadline: number): Promise<Reached> {
 		const socket = daemonSocketPath(this.options.home);
 		// On Windows this `ide` client relies on the daemon pipe's DACL alone (ARCHITECTURE-1.4,
 		// PROTOCOL "Connect to the daemon"); the folder check is Unix's.
 		if (process.platform !== 'win32' && !socketFolderIsOurs(path.dirname(socket))) {
 			return { absent: true, reason: 'the socket folder does not exist yet' };
 		}
-		const reached = await connectWithin(socket, CONNECT_WAIT_MS);
+		return connectWithin(socket, Math.min(CONNECT_WAIT_MS, Math.max(0, deadline - Date.now())));
+	}
+
+	private async helloV2(connection: Connection, waitMs: number): Promise<unknown> {
+		const hello: HelloParams = {
+			protocol: [DAEMON_PROTOCOL, DAEMON_PROTOCOL],
+			build: this.options.build,
+			kind: 'ide',
+			window: this.description,
+			numbers_given: this.options.numbersGiven,
+		};
+		const abort = () => connection.close();
+		this.stop.signal.addEventListener('abort', abort, { once: true });
+		try {
+			return await connection.ask('hello', hello, waitMs);
+		} finally {
+			this.stop.signal.removeEventListener('abort', abort);
+		}
+	}
+
+	/** Tries one v2 hello. */
+	private async attempt(deadline: number): Promise<Attempt> {
+		const reached = await this.connect(deadline);
 		if (!reached.socket) {
-			return { absent: reached.absent, reason: reached.reason };
+			return reached;
 		}
 		const connection = new Connection(reached.socket, {
 			changed: params => this.changed(connection, params),
@@ -384,25 +491,39 @@ class Link implements DaemonLink {
 			closed: () => this.closed(connection),
 			log: line => this.options.log(line),
 		});
-		const hello: HelloParams = { protocol: [OLDEST_PROTOCOL, PROTOCOL], build: this.options.build, kind: 'ide', window: this.window, numbers_given: this.options.numbersGiven };
-		const timer = setTimeout(() => connection.close(), HELLO_WAIT_MS);
+		let accepted = false;
 		try {
-			return { connection, hello: await connection.ask('hello', hello) as HelloResult };
+			if (this.lost) {
+				throw this.lost;
+			}
+			const result = await this.helloV2(connection, Math.min(HELLO_WAIT_MS, Math.max(0, deadline - Date.now())));
+			const hello = verifyHello(result);
+			accepted = true;
+			return { connection, hello };
 		} catch (err) {
-			connection.close();
 			if (err instanceof DaemonError && err.reason !== 'unavailable' && err.reason !== 'upgrading') {
 				throw err;
 			}
 			return { absent: false, reason: messageOf(err) };
 		} finally {
-			clearTimeout(timer);
+			if (!accepted) {
+				connection.close();
+			}
 		}
 	}
 
-	private install(connection: Connection): void {
+	private install(connection: Connection, window: WindowRef): void {
 		this.connection = connection;
 		this.afterClosing = false;
 		this.generation++;
+		if (this.binding?.machine_id !== window.machine_id || this.binding.window_id !== window.window_id) {
+			this.binding = window;
+		}
+		this.publishingBinding = true;
+		for (const listener of [...this.bindListeners]) {
+			this.tell(() => listener(this.binding));
+		}
+		this.publishingBinding = false;
 		for (const watching of this.watching) {
 			this.startWatch(connection, watching);
 		}
@@ -410,7 +531,13 @@ class Link implements DaemonLink {
 	}
 
 	private startWatch(connection: Connection, watching: Watching): void {
+		if (connection !== this.connection || !connection.active) {
+			return;
+		}
 		connection.send('watch', { topic: watching.topic, args: watching.args }, outcome => {
+			if (connection !== this.connection || !connection.active) {
+				return;
+			}
 			if (outcome.error) {
 				this.watchRefused(watching, outcome.error);
 				return;
@@ -427,7 +554,7 @@ class Link implements DaemonLink {
 	}
 
 	private watchRefused(watching: Watching, err: DaemonError): void {
-		if (watching.disposed || err.reason === 'upgrading' || this.connection === undefined) {
+		if (watching.disposed || err.reason === 'upgrading') {
 			// The next connection asks again
 			return;
 		}
@@ -441,7 +568,7 @@ class Link implements DaemonLink {
 	}
 
 	private changed(connection: Connection, params: ChangedParams): void {
-		if (connection === this.connection) {
+		if (connection === this.connection && connection.active) {
 			const watching = this.byNumber.get(params.watch);
 			if (watching && !watching.disposed) {
 				this.tell(() => watching.on.change(params.change as never));
@@ -451,13 +578,11 @@ class Link implements DaemonLink {
 
 	/** A newer Facade takes over: answers, sends nothing more, and connects again once the new daemon answers. */
 	private closing(connection: Connection): void {
-		if (connection === this.connection) {
-			this.options.log('A newer Facade core is taking over.');
-			this.afterClosing = true;
-			connection.notify('closing');
-			this.lose(connection);
-			connection.close();
-		}
+		this.options.log('A newer Facade core is taking over.');
+		this.afterClosing = true;
+		connection.notify('closing');
+		connection.close();
+		this.lose(connection);
 	}
 
 	private closed(connection: Connection): void {
@@ -486,7 +611,7 @@ class Link implements DaemonLink {
 		}
 		this.reconnecting = true;
 		try {
-			await this.reach({ start: !this.afterClosing, limited: false });
+			await this.reach({ start: !this.afterClosing });
 			this.options.log('Connected to Facade core again.');
 		} catch (err) {
 			if (!this.lost) {
@@ -496,6 +621,9 @@ class Link implements DaemonLink {
 			}
 		} finally {
 			this.reconnecting = false;
+			if (!this.connected && !this.lost) {
+				void this.reconnect();
+			}
 		}
 	}
 

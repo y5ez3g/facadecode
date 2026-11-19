@@ -25,10 +25,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::{AgentInfo, AgentState, AgentsChange, InputInfo};
+use facade_base::daemon::{AgentInfo, AgentState, AgentsChange, InputInfo, WindowRef};
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
-use facade_screen::Screen;
+use facade_screen::{Screen, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
@@ -115,6 +115,12 @@ pub(crate) enum InputRejection {
     Backpressured(Input),
 }
 
+/// A member editor window and the colors it supplies to an agent's terminal.
+pub(crate) struct WindowColors {
+    pub(crate) window: WindowRef,
+    pub(crate) colors: TerminalColors,
+}
+
 /// What the actor is asked to do.
 pub(crate) enum AgentCommand {
     /// Takes input for run `run`, at most [`MAX_INPUT_BYTES`]. Input for any other run is refused
@@ -125,8 +131,17 @@ pub(crate) enum AgentCommand {
         reply: InputReply,
     },
     Resize(u16, u16),
-    /// The colors its screen replies to color queries with, from the next output on.
-    SetColors(facade_screen::TerminalColors),
+    /// Takes colors from the verified member editor window requesting this size.
+    ResizeFromWindow {
+        cols: u16,
+        rows: u16,
+        colors: WindowColors,
+    },
+    /// Updates colors from the current source, or supplies an initial source if allowed.
+    WindowColorsChanged {
+        colors: WindowColors,
+        allow_initial: bool,
+    },
     /// Adds a viewer: its snapshot goes through `reply` before any change.
     AddViewer {
         viewer: u64,
@@ -211,6 +226,11 @@ pub(crate) enum AgentCommand {
         name: String,
         reply: oneshot::Sender<AgentInfo>,
     },
+    /// Applies the committed membership list, publishes a change, and replies with the record.
+    UpdateWindows {
+        windows: Vec<WindowRef>,
+        reply: oneshot::Sender<AgentInfo>,
+    },
 }
 
 /// What an actor starts from.
@@ -222,7 +242,7 @@ pub(crate) struct ActorStart {
     /// A new session whose input cannot contain a draft from an earlier session.
     pub(crate) untouched_input: bool,
     /// The colors its screen replies to color queries with, from the first output on.
-    pub(crate) colors: facade_screen::TerminalColors,
+    pub(crate) colors: TerminalColors,
     /// The name of the CLI rule the agent was started by.
     pub(crate) rule: Option<String>,
     /// Whether the running CLI reports its session.
@@ -266,11 +286,18 @@ pub(crate) fn spawn(
     tx: mpsc::Sender<AgentCommand>,
     changes: broadcast::Sender<AgentsChange>,
 ) -> anyhow::Result<AgentHandle> {
-    let shared = Shared {
-        info: Mutex::new(start.info.clone()),
-        run: AtomicU64::new(FIRST_RUN),
-    };
-    let shared = Arc::new(shared);
+    spawn_with_color_source(start, rx, tx, changes, None)
+}
+
+/// Starts the actor with the window that supplied its initial terminal colors, if any.
+pub(crate) fn spawn_with_color_source(
+    start: ActorStart,
+    rx: mpsc::Receiver<AgentCommand>,
+    tx: mpsc::Sender<AgentCommand>,
+    changes: broadcast::Sender<AgentsChange>,
+    color_source: Option<WindowRef>,
+) -> anyhow::Result<AgentHandle> {
+    let shared = Arc::new(Shared::new(start.info.clone(), color_source));
     let room = Arc::new(Notify::new());
     let (exit_tx, exit) = watch::channel(start.info.exit.clone());
     let (settled_tx, settled) = watch::channel(false);
@@ -304,11 +331,31 @@ pub(crate) fn spawn(
     Ok(handle)
 }
 
-/// What the actor and its handles share: the record and the run input is for.
+/// What the actor and its handles share about the agent and its runs.
 struct Shared {
-    /// A leaf lock: held only for a copy or a few fields, never across a call or an await.
-    info: Mutex<AgentInfo>,
+    /// A leaf lock: held only for a copy or a field update.
+    record: Mutex<Record>,
+    /// The run that newly admitted input is for, advanced before its terminal is installed.
     run: AtomicU64,
+}
+
+struct Record {
+    info: AgentInfo,
+    installed_run: u64,
+    color_source: Option<WindowRef>,
+}
+
+impl Shared {
+    fn new(info: AgentInfo, color_source: Option<WindowRef>) -> Self {
+        Self {
+            record: Mutex::new(Record {
+                info,
+                installed_run: FIRST_RUN,
+                color_source,
+            }),
+            run: AtomicU64::new(FIRST_RUN),
+        }
+    }
 }
 
 /// The way to an agent's actor. A guest's handle has no actor behind it.
@@ -334,10 +381,7 @@ impl AgentHandle {
         AgentHandle {
             id: info.agent_id.clone(),
             commands,
-            shared: Arc::new(Shared {
-                info: Mutex::new(info),
-                run: AtomicU64::new(FIRST_RUN),
-            }),
+            shared: Arc::new(Shared::new(info, None)),
             room: Arc::new(Notify::new()),
             exit: watch::channel(None).1,
             settled: watch::channel(false).1,
@@ -354,11 +398,22 @@ impl AgentHandle {
 
     /// A copy of the agent's record.
     pub(crate) fn info(&self) -> AgentInfo {
-        self.shared.info.lock().unwrap().clone()
+        self.shared.record.lock().unwrap().info.clone()
+    }
+
+    /// The installed run number and record as they stand under the same lock.
+    pub(crate) fn installed_record(&self) -> (u64, AgentInfo) {
+        let record = self.shared.record.lock().unwrap();
+        (record.installed_run, record.info.clone())
+    }
+
+    /// The member window supplying the screen's terminal colors, if any.
+    pub(crate) fn color_source(&self) -> Option<WindowRef> {
+        self.shared.record.lock().unwrap().color_source.clone()
     }
 
     pub(crate) fn is_guest(&self) -> bool {
-        self.shared.info.lock().unwrap().guest
+        self.shared.record.lock().unwrap().info.guest
     }
 
     /// The name of the CLI rule the agent was started by.
@@ -392,14 +447,9 @@ impl AgentHandle {
         self.room.clone()
     }
 
-    /// Waits for the agent's run change lock: stop, remove and resume never overlap.
+    /// Waits for the lock that serializes adoption, stop, removal and resume.
     pub(crate) async fn lock_run_change(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.run_change.clone().lock_owned().await
-    }
-
-    /// The run change lock if it is free now: a resume does not wait for a stop or a removal.
-    pub(crate) fn try_lock_run_change(&self) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-        self.run_change.clone().try_lock_owned().ok()
     }
 
     /// Whether no actor takes commands any more.
@@ -424,24 +474,15 @@ impl AgentHandle {
         self.commands.send(command).await.is_ok()
     }
 
-    /// Moves the agent from window `from` to window `to`: the new record where it moved.
-    pub(crate) fn move_window(&self, from: &str, to: &str) -> Option<AgentInfo> {
-        let mut info = self.shared.info.lock().unwrap();
-        (info.window_id == from).then(|| {
-            info.window_id = to.to_string();
-            info.clone()
-        })
-    }
-
-    /// Records the window and YOLO of a resumed run, once committed.
-    pub(crate) fn set_window_and_yolo(&self, window: &str, yolo: bool) {
-        let mut info = self.shared.info.lock().unwrap();
-        (info.window_id, info.yolo) = (window.to_string(), yolo);
+    /// Records the committed YOLO setting for a resumed run.
+    pub(crate) fn set_yolo(&self, yolo: bool) {
+        self.shared.record.lock().unwrap().info.yolo = yolo;
     }
 
     /// A guest's turn began or ended: the new record where its state changed.
     pub(crate) fn set_guest_state(&self, state: AgentState) -> Option<AgentInfo> {
-        let mut info = self.shared.info.lock().unwrap();
+        let mut record = self.shared.record.lock().unwrap();
+        let info = &mut record.info;
         if info.state == state && info.state_detail.is_none() {
             return None;
         }
@@ -451,7 +492,7 @@ impl AgentHandle {
 
     /// A guest ended.
     pub(crate) fn mark_ended(&self) {
-        self.shared.info.lock().unwrap().process = ProcessState::Ended;
+        self.shared.record.lock().unwrap().info.process = ProcessState::Ended;
     }
 }
 

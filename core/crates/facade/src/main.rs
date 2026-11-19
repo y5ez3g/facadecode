@@ -34,7 +34,7 @@ use facade_base::process::{EndReason, ProcessExit};
 
 use cli::{Command, Integration, Target, Targets};
 use commands::{Format, IntegrationAction, Listing};
-use daemon_client::{attempt, connect_or_start};
+use daemon_client::{connect_or_start, reconnect};
 use errors::Problem;
 
 /// How an attachment began, for the line before the agent's screen.
@@ -173,7 +173,7 @@ fn shown_terminal(detach: bool) -> Option<(u16, u16)> {
 /// there is none to show.
 fn show(client: DaemonClient, shown: Option<Shown>) -> anyhow::Result<i32> {
     match shown {
-        Some(Shown { agent, opening }) => attach::attach(client, &agent, opening, &attempt),
+        Some(Shown { agent, opening }) => attach::attach(client, &agent, opening, &reconnect),
         None => Ok(0),
     }
 }
@@ -217,7 +217,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             if !interactive() {
                 return Err(Problem::NotInteractive { given: agent }.into());
             }
-            attach::attach(connect_or_start()?, &agent, Opening::Attached, &attempt)
+            attach::attach(connect_or_start()?, &agent, Opening::Attached, &reconnect)
         }
         Command::Messages => {
             let Some(agent) = daemon_client::agent_of_terminal()? else {

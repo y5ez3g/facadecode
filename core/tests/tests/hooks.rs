@@ -230,7 +230,7 @@ fn a_session_joins_as_a_guest_works_ends_its_turns_and_leaves() {
         "{prompted:?}"
     );
     let mut reader = DaemonTestClient::open(&home);
-    reader.hello("terminal", [1, 1], json!({ "agent": "a1" }));
+    reader.hello("terminal", DAEMON_RANGE, json!({ "agent": "a1" }));
     let kept = reader.request(
         "watch",
         json!({ "topic": "messages", "args": { "all": true } }),
@@ -569,7 +569,11 @@ fn a_subagent_s_session_acts_for_its_parent_s_guest() {
         "a tool call of the child acts for the parent's guest: {joined}"
     );
     let mut command_of_child = DaemonTestClient::open(&home);
-    let hello = command_of_child.hello("terminal", [1, 1], json!({ "sessions": ["ses_child"] }));
+    let hello = command_of_child.hello(
+        "terminal",
+        DAEMON_RANGE,
+        json!({ "sessions": ["ses_child"] }),
+    );
     assert_eq!(hello["result"]["agent"], "a1", "{hello}");
     hook(
         &home,
@@ -629,7 +633,11 @@ fn a_subagent_s_session_acts_for_its_parent_s_guest() {
         "the child is no guest of its own: {agents}"
     );
     let mut command_of_ended = DaemonTestClient::open(&home);
-    let hello = command_of_ended.hello("terminal", [1, 1], json!({ "sessions": ["ses_child"] }));
+    let hello = command_of_ended.hello(
+        "terminal",
+        DAEMON_RANGE,
+        json!({ "sessions": ["ses_child"] }),
+    );
     assert!(
         hello["result"].get("agent").is_none(),
         "an ended child acts for no one: {hello}"
@@ -948,7 +956,7 @@ fn a_command_acts_for_the_session_its_cli_names() {
     // The host's CLI reads no input, so the message stays in its inbox, which says who sent it.
     in_session(&["send", &host, "from the guest"]);
     let mut reader = DaemonTestClient::open(&home);
-    reader.hello("terminal", [1, 1], json!({ "agent": host }));
+    reader.hello("terminal", DAEMON_RANGE, json!({ "agent": host }));
     let inbox = reader.request("watch", json!({ "topic": "messages" }));
     assert_eq!(
         inbox["result"]["snapshot"]["messages"][0]["from"], guest,
@@ -993,7 +1001,7 @@ fn hooks_do_nothing_in_a_run_facade_started_of_the_same_cli() {
         "the run's session joined as a guest"
     );
     let mut reader = DaemonTestClient::open(&home);
-    reader.hello("terminal", [1, 1], json!({ "agent": agent }));
+    reader.hello("terminal", DAEMON_RANGE, json!({ "agent": agent }));
     let left = reader.request("watch", json!({ "topic": "messages" }));
     assert_eq!(
         left["result"]["snapshot"]["messages"][0]["message_id"], "m1",

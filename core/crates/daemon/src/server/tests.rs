@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use facade_base::daemon::HelloResult;
+use facade_base::daemon::{DAEMON_PROTOCOL_VERSION, HelloResult, MIN_DAEMON_PROTOCOL_VERSION};
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::Reason;
 use facade_base::paths::ClientSocket;
@@ -26,8 +26,10 @@ impl Service for Hellos {
         _: Option<u32>,
     ) -> Result<(HelloResult, Client, ()), ErrorBody> {
         let result = HelloResult {
-            protocol: 1,
+            protocol: DAEMON_PROTOCOL_VERSION,
             build: "test".into(),
+            machine_id: String::new(),
+            window: None,
             pid: std::process::id(),
             agent: None,
             agents: 0,
@@ -114,7 +116,10 @@ fn open(service: &Arc<Hellos>) -> (BufReader<ClientSocket>, ClientSocket) {
 fn hello() -> Value {
     json!({
         "jsonrpc": "2.0", "id": 1, "method": "hello",
-        "params": { "protocol": [1, 1], "build": "test", "kind": "terminal" },
+        "params": {
+            "protocol": [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            "build": "test", "kind": "terminal"
+        },
     })
 }
 

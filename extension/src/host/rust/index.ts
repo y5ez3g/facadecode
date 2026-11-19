@@ -7,6 +7,7 @@
 // Pins, order, filters and where tabs are.
 
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
@@ -14,7 +15,7 @@ import { disposeAll } from '../../base/lifecycle';
 import { WINDOW_ALLOCATE_COMMAND, isAllocation } from '../../base/windowNetwork';
 import { WINDOW_TERMINALS_COMMAND, type WindowIdentity } from '../../base/windowIdentity';
 import type { OwnerClaim } from '../../base/ownership';
-import type { CliInfo, DaemonLogResult, NumbersGiven, TerminalColors, WindowDescription, WindowInfo, WindowsChange } from '../../base/coreProtocol';
+import type { CliInfo, DaemonLogResult, NumbersGiven, TerminalColors, WindowDescription, WindowInfo, WindowRef, WindowsChange } from '../../base/coreProtocol';
 import { VendorHistory } from '../../clis/history';
 import type { LogPort, TabPlace, WorkspaceFolderInfo } from '../../core/ports';
 import { ConversationFile } from '../../record/conversations';
@@ -22,15 +23,18 @@ import { environmentFloor } from '../../record/windowRegistry';
 import { COMMANDS } from '../../ui/catalog';
 import { registerUi } from '../../ui/commands/index';
 import { registerWorktreeCommands } from '../../ui/commands/worktree';
+import { reasonText } from '../../ui/presentation';
 import { HostClis } from '../clis';
 import { WindowContact } from '../contact';
 import { WindowColours } from '../execution/terminalColours';
-import { FacadeSettings } from '../facadeSettings';
+import type { FacadeSettings } from '../facadeSettings';
 import { WorkspaceLaunchHistory } from '../history';
 import { WindowHuman } from '../human';
+import { editorUriOf } from '../locations/workspaceFolders';
 import { WorkspacePins } from '../pins';
 import type { KeptWorkspaceState } from '../workspaceState';
 import { namesOf } from '../settings';
+import { editorFacadeSettings } from '../settingsNotice';
 import { watchSettingsFile } from '../showLaunch';
 import { windowAddress } from '../windowNetwork';
 import { RustAgents } from './agents';
@@ -76,7 +80,12 @@ export interface RustDeps {
 	 * The window's workspace state, kept beside its workspace's record so that Pins, order and choices follow a folder window that
 	 * becomes a workspace, and the key core keeps its agents under across reloads (ARCHITECTURE-2.2, 3.1).
 	 */
-	readonly keep: (log: LogPort) => { readonly state: KeptWorkspaceState; readonly key: string; readonly claim: OwnerClaim; readonly handedOver: boolean };
+	readonly keep: (log: LogPort) => {
+		readonly key: string;
+		readonly claim: OwnerClaim;
+		readonly handedOver: boolean;
+		bind(window: WindowRef): KeptWorkspaceState;
+	};
 	/** Opens the editor's Settings at Facade Code's section (CONFIGURATION-1.2). */
 	readonly openSettings: () => Promise<void>;
 	/** The command that opens Facade's settings file, made first where there is none (CONFIGURATION-1.2). */
@@ -148,6 +157,14 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	const { root, home, identity } = deps;
 	const output = vscode.window.createOutputChannel('Facade Code', { log: true });
 	const log: LogPort = { event: text => output.info(text) };
+	// Make the settings file before connecting to core (CONFIGURATION-1.3, 6.3). Core uses defaults, including YOLO on, for a missing file.
+	const settings = editorFacadeSettings(line => log.event(line));
+	const firstRead = settings.snapshot();
+	if (firstRead.problems.length && !fs.existsSync(settings.file)) {
+		// Fall back to the old engine, which reports the settings problem and blocks launches (CONFIGURATION-1.3, 6.2).
+		output.dispose();
+		throw new Error(firstRead.problems.map(problem => reasonText(problem.said, problem.text)).join('; '));
+	}
 	const kept = deps.keep(log);
 	// The window component takes this activation's terminals as the window's, retiring those an earlier one left (ARCHITECTURE-2.2)
 	const terminalOwner = { session: identity.session, claim: kept.claim };
@@ -173,6 +190,7 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		};
 	};
 	let link: DaemonLink;
+	let workspaceState: KeptWorkspaceState | undefined;
 	try {
 		link = await connectDaemon({
 			home: root,
@@ -182,6 +200,12 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 			numbersGiven: await numbersGiven(home, identity.session, line => log.event(line)),
 			log: line => log.event(line)
 		});
+		try {
+			workspaceState = kept.bind(link.window);
+		} catch (err) {
+			link.dispose();
+			throw err;
+		}
 	} catch (err) {
 		colours.dispose();
 		output.dispose();
@@ -191,26 +215,76 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	facadeInTerminals(context.environmentVariableCollection, root);
 	const update = (): void => { void link.update(description()).catch(err => log.event(`Could not describe this window to Facade again: ${messageOf(err)}`)); };
 
-	// This window as core lists it: its locations and the CLIs a start can run here (root freeze 2.3)
-	let windowInfo: WindowInfo | undefined;
+	// The machine's windows describe Go to Agent candidates. Only the bound window supplies editor locations and CLIs.
+	const windowInfos = new Map<string, WindowInfo>();
 	const windowChanged = new vscode.EventEmitter<void>();
+	const windowRebound = new vscode.EventEmitter<Promise<unknown>>();
+	const windowInfo = () => windowInfos.get(link.window.window_id);
+	let bound = link.window;
+	let rebinding = false;
+	let disposed = false;
+	let storageError: unknown;
+	const state = () => {
+		if (!workspaceState) { throw storageError; }
+		return workspaceState;
+	};
+	const shared = {
+		get: <T>(key: string) => workspaceState?.get<T>(key),
+		mutate: <T>(key: string, edit: (current: T | undefined) => T | undefined) => state().mutate(key, edit),
+		update: (key: string, value: unknown) => state().update(key, value)
+	};
+	const presentationKey = (key: string) => `facade.rust.window.${bound.machine_id}/${bound.window_id}.${key}`;
+	const presentation = {
+		get: <T>(key: string) => shared.get<T>(presentationKey(key)),
+		update: (key: string, value: unknown) => rebinding ? Promise.resolve() : shared.update(presentationKey(key), value)
+	};
+	const binding = link.onDidBind(window => {
+		const changed = bound.machine_id !== window.machine_id || bound.window_id !== window.window_id;
+		if (changed || !workspaceState) {
+			workspaceState?.flush();
+			bound = window;
+			try {
+				workspaceState = kept.bind(window);
+			} catch (err) {
+				workspaceState = undefined;
+				storageError = err;
+				log.event(`Could not keep the rebound window's workspace state: ${messageOf(err)}`);
+			}
+		}
+		if (!changed) { return; }
+		windowInfos.clear();
+		rebinding = true;
+		// The agents listener removes the previous projection synchronously. That is not a change to either window's layout.
+		queueMicrotask(() => {
+			if (disposed) { return; }
+			rebinding = false;
+			windowRebound.fire(agents.ready);
+			windowChanged.fire();
+			restorePins();
+		});
+	});
 	const windows = link.watch<readonly WindowInfo[], WindowsChange>('windows', {}, {
-		snapshot: list => { windowInfo = list.find(each => each.window_id === link.windowId); windowChanged.fire(); },
+		snapshot: list => {
+			windowInfos.clear();
+			for (const each of list) {
+				if (each.machine_id === link.machineId) { windowInfos.set(each.window_id, each); }
+			}
+			windowChanged.fire();
+		},
 		change: change => {
-			if (change.kind === 'updated' && change.window.window_id === link.windowId) {
-				windowInfo = change.window;
+			if (change.kind === 'updated' && change.window.machine_id === link.machineId) {
+				windowInfos.set(change.window.window_id, change.window);
 				windowChanged.fire();
-			} else if (change.kind === 'removed' && change.window_id === link.windowId) {
-				windowInfo = undefined;
+			} else if (change.kind === 'removed' && change.machine_id === link.machineId) {
+				windowInfos.delete(change.window_id);
 				windowChanged.fire();
 			}
 		}
 	});
 
-	const settings = new FacadeSettings({ log: line => log.event(line) });
 	const hostClis = new HostClis({ settings, log: line => log.event(line), home, version: String(context.extension.packageJSON.version) });
-	const locations = new RustLocations(() => windowInfo, windowChanged.event, foldersOf, identity.remote, () => link.update(description()));
-	const clis = new RustClis(() => windowInfo, () => hostClis.icons());
+	const locations = new RustLocations(windowInfo, windowChanged.event, foldersOf, identity.remote, () => link.update(description()));
+	const clis = new RustClis(windowInfo, () => hostClis.icons());
 	const worktrees = new RustWorktrees(link, locations, update);
 	const terminals = new DaemonTerminals(link, { media: vscode.Uri.joinPath(context.extensionUri, 'media'), icon: cli => hostClis.icons()(cli), log: line => log.event(line), colours, terminalOwner: { ...terminalOwner, remote: identity.remote !== undefined } });
 	const conversations = new ConversationFile(home);
@@ -219,22 +293,33 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		knownCwd: key => conversations.get(key)?.cwd,
 		arguments: () => hostClis.storeArguments(),
 		builtIns: () => hostClis.storeBuiltIns(),
-		environment: cwd => { const location = locations.conversationLocation?.(cwd); return location ? hostClis.storeEnvironments(location) : {}; },
+		environment: cwd => {
+			const location = locations.conversationLocation(cwd);
+			if (location) { return hostClis.storeEnvironments(location); }
+			// Go to Agent can read the title of a known session outside this window's folders (LIFECYCLE-2.3).
+			if (!path.isAbsolute(cwd)) { return {}; }
+			const windowUri = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.workspace.workspaceFile;
+			const scope = windowUri && windowUri.scheme !== 'untitled'
+				? vscode.Uri.parse(editorUriOf(windowUri.toString(), cwd))
+				: identity.remote === undefined ? vscode.Uri.file(cwd) : undefined;
+			return hostClis.storeEnvironments(undefined, scope);
+		},
 		associated: (environment, store, sessionId) => conversations.associated(environment, store, sessionId),
 		unavailable: (cli, cwd, store) => { const location = locations.conversationLocation?.(cwd); return location ? hostClis.resumeProblem(cli, location, store) : 'The original working directory is unavailable.'; }
 	});
 	const human = new WindowHuman(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
 	const contact = new WindowContact(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
-	const history = new WorkspaceLaunchHistory(kept.state, log);
+	const history = new WorkspaceLaunchHistory(shared, log);
 	const agents = new RustAgents({
 		link,
 		terminals,
 		locations,
-		clis: (): readonly CliInfo[] => windowInfo?.clis ?? [],
+		clis: (): readonly CliInfo[] => windowInfo()?.clis ?? [],
+		windows: () => [...windowInfos.values()],
+		onDidChangeWindows: windowChanged.event,
 		environment: location => startEnvironment(location, root),
-		pins: new WorkspacePins(kept.state, log),
-		home: root,
-		dismissed: new WorkspaceDismissedAgents(kept.state, root, log),
+		pins: new WorkspacePins(shared, log),
+		dismissed: new WorkspaceDismissedAgents(shared, () => link.machineId),
 		conversations,
 		titles: vendorHistory,
 		history,
@@ -244,11 +329,11 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 		names: namesOf(settings),
 		// Where each agent's tab is, by its ID, for a reload to put it back (LIFECYCLE-3.5)
 		places: {
-			get: agent => kept.state.get<Record<string, TabPlace>>(TAB_PLACES)?.[agent],
+			get: agent => presentation.get<Record<string, TabPlace>>(TAB_PLACES)?.[agent],
 			set: (agent, place) => {
-				const places = { ...kept.state.get<Record<string, TabPlace>>(TAB_PLACES) ?? {} };
+				const places = { ...presentation.get<Record<string, TabPlace>>(TAB_PLACES) };
 				if (place === undefined) { delete places[agent]; } else { places[agent] = place; }
-				void Promise.resolve(kept.state.update(TAB_PLACES, places)).catch(err => log.event(`Could not keep where the agents' tabs are: ${messageOf(err)}`));
+				void Promise.resolve(presentation.update(TAB_PLACES, places)).catch(err => log.event(`Could not keep where the agents' tabs are: ${messageOf(err)}`));
 			}
 		},
 		log,
@@ -256,13 +341,20 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	});
 	// Pins are verified and restored once this window's agents are known (LIFECYCLE-3.4, 3.5); then the tabs an
 	// earlier activation left are retired, also where no Pin opened one
-	void agents.restorePins().catch(err => log.event(`Could not restore pinned agents: ${messageOf(err)}`))
-		.then(() => terminals.pinnedSequenceOver()).catch(err => log.event(`Could not retire an earlier activation's tabs: ${messageOf(err)}`));
+	const restorePins = () => {
+		const window = bound;
+		void agents.restorePins().catch(err => log.event(`Could not restore pinned agents: ${messageOf(err)}`))
+			.then(() => !disposed && bound === window ? terminals.pinnedSequenceOver() : undefined)
+			.catch(err => log.event(`Could not retire an earlier activation's tabs: ${messageOf(err)}`));
+	};
+	restorePins();
 	const settingsChanged = new vscode.EventEmitter<void>();
 	const disposables: vscode.Disposable[] = [
 		output,
 		colours,
+		binding,
 		windowChanged,
+		windowRebound,
 		settingsChanged,
 		human,
 		contact,
@@ -289,7 +381,21 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 			history,
 			execution: terminals,
 			worktrees,
-			workspaceState: kept.state,
+			workspaceState: presentation,
+			rust: {
+				window: () => link.window,
+				ready: () => agents.ready,
+				onDidChangeWindow: windowRebound.event,
+				otherAgents: () => agents.otherAgents(),
+				onDidChangeOtherAgents: agents.onDidChangeOtherAgents,
+				adoptAgent: agent => agents.adoptAgent(agent),
+				closeOtherAgent: agent => agents.closeOtherAgent(agent),
+				retainedConversations: () => agents.retainedConversations(),
+				resumeRetained: (agent, options) => agents.resumeRetained(agent, options),
+				worktreeAgents: path => agents.worktreeAgents(path),
+				closeWorktreeAgents: path => agents.closeWorktreeAgents(path),
+				describeError: err => err instanceof DaemonError ? describeDaemonError(err) : messageOf(err)
+			},
 			extensionUri: context.extensionUri,
 			log,
 			notifyError: (text, options) => human.error(text, options),
@@ -304,8 +410,9 @@ export async function activateRust(context: vscode.ExtensionContext, deps: RustD
 	];
 	context.subscriptions.push(...disposables);
 	return async () => {
+		disposed = true;
 		// Its state's changes waiting to be written together are written now, while this activation may own them
-		kept.state.flush();
+		workspaceState?.flush();
 		agents.dispose();
 		windows.dispose();
 		locations.dispose();

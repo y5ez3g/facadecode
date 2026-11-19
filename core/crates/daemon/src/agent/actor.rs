@@ -3,8 +3,8 @@
 //! another.
 //!
 //! The record is shared with the handles under a leaf lock. Only the actor changes it once it runs,
-//! and only here are changes published: at once for a start, an exit, a rename and a CLI that waits
-//! for the person or reports an error, otherwise batched.
+//! and only here are changes published: at once for a start, an exit, a rename, a membership change
+//! and a CLI that waits for the person or reports an error, otherwise batched.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -13,7 +13,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    AgentState, AgentsChange, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
+    AgentInfo, AgentState, AgentsChange, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
+    WindowRef,
 };
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_rules::{BoxReading, InputRule, Rule};
@@ -31,7 +32,7 @@ use super::typist::{Modes, Typing, Typist};
 use super::viewers::{ViewerRequest, Viewers};
 use super::{
     ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
-    ScreenStart, Shared, Submission,
+    ScreenStart, Shared, Submission, WindowColors,
 };
 use crate::{Sender, gate_for_test, pause_for_test};
 
@@ -281,7 +282,11 @@ impl Actor {
     }
 
     fn publish(&self) {
-        let agent = self.links.shared.info.lock().unwrap().clone();
+        let agent = self.links.shared.record.lock().unwrap().info.clone();
+        self.publish_record(agent);
+    }
+
+    fn publish_record(&self, agent: AgentInfo) {
         let _ = self.links.changes.send(AgentsChange::Updated {
             agent: Box::new(agent),
         });
@@ -385,7 +390,7 @@ impl Actor {
             }
         }
         if self.prompt_ready.is_some()
-            && self.links.shared.info.lock().unwrap().tools_state != ToolsState::Connecting
+            && self.links.shared.record.lock().unwrap().info.tools_state != ToolsState::Connecting
             && let Some(ready) = self.prompt_ready.take()
         {
             let _ = ready.send(());
@@ -398,10 +403,10 @@ impl Actor {
     /// Sets the screen up, starts keeping the state's facts, and takes up a run that is under way.
     async fn begin(&mut self, recovered: bool, yolo: bool, colors: TerminalColors) {
         let (cols, rows) = {
-            let info = self.links.shared.info.lock().unwrap();
+            let record = self.links.shared.record.lock().unwrap();
             (
-                info.cols.unwrap_or(DEFAULT_TERMINAL_SIZE.0),
-                info.rows.unwrap_or(DEFAULT_TERMINAL_SIZE.1),
+                record.info.cols.unwrap_or(DEFAULT_TERMINAL_SIZE.0),
+                record.info.rows.unwrap_or(DEFAULT_TERMINAL_SIZE.1),
             )
         };
         let folder = self.facts.parent().map(PathBuf::from).unwrap_or_default();
@@ -489,8 +494,14 @@ impl Actor {
             AgentCommand::WriteInput { input, run, reply } => {
                 let _ = reply.send(self.take_input(input, run));
             }
-            AgentCommand::Resize(cols, rows) => self.take_size(cols, rows),
-            AgentCommand::SetColors(colors) => self.screen_mut().set_colors(colors),
+            AgentCommand::Resize(cols, rows) => self.take_size(cols, rows, None),
+            AgentCommand::ResizeFromWindow { cols, rows, colors } => {
+                self.take_size(cols, rows, Some(colors));
+            }
+            AgentCommand::WindowColorsChanged {
+                colors,
+                allow_initial,
+            } => self.change_window_colors(colors, allow_initial),
             AgentCommand::AddViewer {
                 viewer,
                 tx,
@@ -520,7 +531,7 @@ impl Actor {
             }
             AgentCommand::Inspect { reply } => {
                 let _ = reply.send(Inspection {
-                    agent: self.links.shared.info.lock().unwrap().clone(),
+                    agent: self.links.shared.record.lock().unwrap().info.clone(),
                     input: self.read_screen_input().info,
                     session_tracking: self.captures && !self.ended(),
                 });
@@ -535,8 +546,8 @@ impl Actor {
             }
             AgentCommand::RecordSession(session) => {
                 let changed = {
-                    let mut info = self.links.shared.info.lock().unwrap();
-                    std::mem::replace(&mut info.session, session.clone()) != session
+                    let mut record = self.links.shared.record.lock().unwrap();
+                    std::mem::replace(&mut record.info.session, session.clone()) != session
                 };
                 if changed {
                     self.publish();
@@ -580,17 +591,18 @@ impl Actor {
                 self.typist.clear_probes();
                 self.untouched_input = false;
                 self.holds_input_for_probe = false;
-                let yolo = self.links.shared.info.lock().unwrap().yolo;
+                let yolo = self.links.shared.record.lock().unwrap().info.yolo;
                 self.ready_at =
                     self.readiness
                         .begin(self.state.started(), self.state.tools_given(), yolo);
                 self.record_state();
                 let record = {
-                    let mut info = self.links.shared.info.lock().unwrap();
-                    info.pid = Some(pid);
-                    info.process = ProcessState::Running;
-                    info.exit = None;
-                    info.clone()
+                    let mut record = self.links.shared.record.lock().unwrap();
+                    record.installed_run = run;
+                    record.info.pid = Some(pid);
+                    record.info.process = ProcessState::Running;
+                    record.info.exit = None;
+                    record.info.clone()
                 };
                 self.publish_now();
                 let _ = reply.send(record);
@@ -643,10 +655,11 @@ impl Actor {
                 self.settling = Some(reply);
             }
             AgentCommand::Rename { name, reply } => {
-                self.links.shared.info.lock().unwrap().name = name;
+                self.links.shared.record.lock().unwrap().info.name = name;
                 self.publish();
-                let _ = reply.send(self.links.shared.info.lock().unwrap().clone());
+                let _ = reply.send(self.links.shared.record.lock().unwrap().info.clone());
             }
+            AgentCommand::UpdateWindows { windows, reply } => self.update_windows(windows, reply),
             // A run that ended takes no prompt: dropping `ready` says so.
             AgentCommand::AwaitPrompt { ready } => {
                 if !self.ended() {
@@ -666,6 +679,23 @@ impl Actor {
             }
         }
         true
+    }
+
+    /// Publishes the committed membership change before replying with that same record.
+    fn update_windows(&mut self, windows: Vec<WindowRef>, reply: oneshot::Sender<AgentInfo>) {
+        let (changed, agent) = {
+            let mut record = self.links.shared.record.lock().unwrap();
+            let changed = record.info.windows != windows;
+            if changed {
+                record.info.windows = windows;
+            }
+            (changed, record.info.clone())
+        };
+        if changed {
+            self.publish_at = None;
+            self.publish_record(agent.clone());
+        }
+        let _ = reply.send(agent);
     }
 
     /// Takes input for run `run`, or says why not.
@@ -738,9 +768,13 @@ impl Actor {
     }
 
     /// Size requested by a client. An agent without a terminal keeps its last screen.
-    fn take_size(&mut self, cols: u16, rows: u16) {
+    fn take_size(&mut self, cols: u16, rows: u16, colors: Option<WindowColors>) {
         if !self.terminal.is_open() {
             return;
+        }
+        if let Some(WindowColors { window, colors }) = colors {
+            self.links.shared.record.lock().unwrap().color_source = Some(window);
+            self.screen_mut().set_colors(colors);
         }
         if self.screen().is_full() {
             // The size waits for the checkpoint writer; the terminal leaves any nudge meanwhile.
@@ -758,6 +792,25 @@ impl Actor {
         }
     }
 
+    /// Rechecks the color source when applying a window's theme from the mailbox.
+    fn change_window_colors(
+        &mut self,
+        WindowColors { window, colors }: WindowColors,
+        allow_initial: bool,
+    ) {
+        {
+            let mut record = self.links.shared.record.lock().unwrap();
+            match &record.color_source {
+                Some(source) if source == &window => {}
+                None if allow_initial && record.info.windows.contains(&window) => {
+                    record.color_source = Some(window);
+                }
+                _ => return,
+            }
+        }
+        self.screen_mut().set_colors(colors);
+    }
+
     /// Logs and applies a size to the screen, then to the terminal. Answers whether the record's
     /// size changed, which redraws viewers.
     fn resize(&mut self, cols: u16, rows: u16) -> bool {
@@ -767,7 +820,8 @@ impl Actor {
         self.screen_mut().resize(cols, rows);
         self.terminal.set_size(cols, rows);
         {
-            let mut info = self.links.shared.info.lock().unwrap();
+            let mut record = self.links.shared.record.lock().unwrap();
+            let info = &mut record.info;
             if (info.cols, info.rows) == (Some(cols), Some(rows)) {
                 return false;
             }
@@ -968,7 +1022,8 @@ impl Actor {
         self.state.ended(&exit, stopped);
         // Whatever waits on the run reads its end from the record, so the record goes first.
         {
-            let mut info = self.links.shared.info.lock().unwrap();
+            let mut record = self.links.shared.record.lock().unwrap();
+            let info = &mut record.info;
             info.process = ProcessState::Ended;
             info.exit = Some(exit.clone());
         }
@@ -1420,7 +1475,8 @@ impl Actor {
             });
         }
         let said = self.state.said_line().cloned();
-        let mut info = self.links.shared.info.lock().unwrap();
+        let mut record = self.links.shared.record.lock().unwrap();
+        let info = &mut record.info;
         let same = info.state == reading.state
             && info.state_detail == reading.detail
             && info.said == said

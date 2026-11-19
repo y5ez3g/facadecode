@@ -335,8 +335,7 @@ mod tests {
                 .clone();
         use facade_base::instructions::{Place, Run, for_agent, for_guest};
         let place = || Place {
-            window: "app (Workspace)",
-            window_id: "win-2",
+            window: Some(("app (Workspace)", "win-2")),
             location_id: "loc-7",
             folder: "/work/app",
         };

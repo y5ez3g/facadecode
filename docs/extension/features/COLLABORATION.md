@@ -15,14 +15,14 @@ surfaces.
 
 ### 1.1 One connected network
 
-**Agents can operate across local/remote windows within their YOLO/creation-tree reach; human UI stays in its own window.**
+**Agents operate within their YOLO or creation-tree reach. Human actions and presentation use the current editor window.**
 
-The network is every Facade window open on this client computer, whatever execution environment each one uses.
-Startup discovery (MCP-3.1) includes open windows, valid locations and actual CLI choices, including empty-agent
-windows. RULES-4.3 owns run YOLO and reach. The caller's window answers each call; an effect on another window's agent
-or location - a start, a stop, a screen read, direct input or a message's delivery - is made by that window. A new child
-joins its creator's tree even when placed in another window. Startup arguments follow MCP-2.2. Agent-created runs
-appear in the destination without changing human focus.
+RULES-2.1 and RULES-4.3 define scope and reach. On Rust, core owns operations on its machine and member windows show
+their agents under RULES-4.1. The person can adopt another running agent on that machine through Go to Agent
+(LIFECYCLE-2.3). On the old engine, the caller's window answers each call and the destination window performs its
+effect. Startup discovery (MCP-3.1) includes open windows, valid locations and actual CLI choices, including
+empty-agent windows. A new child joins its creator's tree even when displayed in different windows. Startup arguments
+follow MCP-2.2. Agent-created runs appear in their windows without changing human focus.
 A disconnected window is not an absent agent. A cross-window failure states whether the request never reached the
 execution path or whether its answer is missing; only the latter leaves an earlier effect uncertain.
 No automatic child-idle, completion or exit reports are generated; RULES-1.8's notice of a waiting child is the one
@@ -115,14 +115,23 @@ task result, child completion report or replay of a creation prompt.
 
 ### 2.3 Contacting the person
 
-**An explicit send to the person notifies only the sender's window.**
+**An explicit send to the person offers a native notification in each eligible member window on the Rust engine. The old engine uses the sender's window.**
 
 Use a native information notification that names the source agent with its short ID and shows the message's first
 line, with Open Message, which opens the complete saved message (3.2), and Show Agent, which opens the agent's terminal
 (UX-1.2). Existing terminal visibility does not suppress an explicit call. Distinct calls remain distinct records.
-Success means handoff to the editor, not human reading or action. A closed source window does not redirect the
-notification elsewhere or replay it on a later opening. Return a reachable calling agent's error when delivery fails;
-otherwise end the report. No inferred urgency, inactivity or failed agent-to-agent delivery automatically uses this path.
+
+On Rust, one message ID identifies the send in the sender's running machine. Use the member windows present at send
+time. Only a connected window with a current message subscription can receive it. Success means at least one
+subscription accepted the notification. The response gives the windows that accepted it and the reasons for each
+missed window. Zero accepted subscriptions return an error to the sending agent and leave no notification record.
+A repeated request ID returns the same settled outcome, waits for it while in flight, or returns an unknown outcome
+if core stopped before settling it. A repeated ID never sends another notification.
+
+The window displays new notices from its subscription. Snapshot records support deduplication. A newly added window
+does not replay previous notices. Opening, dismissing or replying to a notice leaves other windows' notices alone.
+The old engine sends only to the sender's window and returns a delivery failure when it cannot hand off there.
+Eligibility comes from explicit contact, without automatic escalation from an agent-to-agent error or inactivity.
 
 ### 2.4 Errors shown to the person
 
@@ -158,7 +167,7 @@ submission. No understanding or completion claim is inferred from reading.
 
 ### 3.2 Message records
 
-**Facade keeps a read-only record of the messages involving this window's agents; the person opens one from its notification.**
+**The person opens a saved Facade message as a read-only record from its notification.**
 
 A message to the person opens from its notification's Open Message (2.3) as a read-only document of its saved record,
 read as it is when opened: its ID and time, source, recipient, reply relation, its delivery outcome labeled `Delivery`,
@@ -171,6 +180,8 @@ content as text; do not execute links or commands embedded in it.
 A start or stop result records its operation and execution window explicitly, with the target's recorded short
 identity, never inferred from its prose. A reserved receipt ID is not a fabricated record. Missing/expired original
 messages keep their references without invented content.
+On Rust, the person can reply through `facade send --reply-to`. Core checks the original message in the person's
+inbox. Viewing the record in another member window does not change its identity or outcomes.
 
 ### 3.3 History retention
 

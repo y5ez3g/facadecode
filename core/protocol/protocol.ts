@@ -1,12 +1,12 @@
 // Generated from core/crates/base/src by core/crates/base/tests/protocol_files.rs: do not edit.
 
-export const PROTOCOL = 1;
-export const OLDEST_PROTOCOL = 1;
+export const PROTOCOL = 2;
+export const OLDEST_PROTOCOL = 2;
 export const METHODS = ["hello","call","watch","unwatch","cancel","changed","closing"] as const;
 export const TOPICS = ["agents","screen","messages","windows"] as const;
-export const OPS = ["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"] as const;
+export const OPS = ["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"] as const;
 export type Topic = typeof TOPICS[number];
-export type Operation = typeof OPS[number];
+export type Operation = keyof Operations;
 
 /** Arguments for an operation on one agent. */
 export interface AgentArgs {
@@ -19,15 +19,19 @@ export interface AgentInfo {
 	readonly name: string;
 	readonly cli: string;
 	readonly cwd: string;
-	readonly window_id: string;
+	readonly machine_id: string;
+	readonly windows: WindowRef[];
 	readonly location_id: string;
+	readonly location_source_window?: WindowRef;
 	readonly pid?: number;
 	readonly process: ProcessState;
 	readonly cols?: number;
 	readonly rows?: number;
 	readonly created_at: string;
 	readonly creator?: string;
+	readonly creator_machine_id?: string;
 	readonly root: string;
+	readonly root_machine_id?: string;
 	readonly yolo: boolean;
 	readonly exit?: ProcessExit;
 	readonly session?: string;
@@ -49,7 +53,7 @@ export type AgentState = 'starting' | 'working' | 'waiting_for_you' | 'just_done
 export type AgentsChange = { readonly kind: 'updated'; readonly agent: AgentInfo } | { readonly kind: 'removed'; readonly agent_id: string };
 
 /** Parameters for `call`. */
-export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs };
+export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.adopt'; readonly args: AgentArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs };
 
 /** A `changed` notification for one watch. */
 export interface ChangedParams {
@@ -121,6 +125,7 @@ export interface ErrorData {
 	readonly keys_sent?: number;
 	readonly kept?: Kept;
 	readonly entry?: string;
+	readonly windows?: WindowDeliveryFailure[];
 }
 
 /** The messages `hook.prompt` and `hook.turn-end` take for a guest's model, at its next turn. */
@@ -143,6 +148,8 @@ export interface HelloParams {
 export interface HelloResult {
 	readonly protocol: number;
 	readonly build: string;
+	readonly machine_id: string;
+	readonly window?: WindowRef;
 	readonly pid: number;
 	readonly agent?: string;
 	readonly agents: number;
@@ -280,6 +287,7 @@ export interface MessagesWatchArgs {
 	readonly all?: boolean;
 	readonly cursor?: string;
 	readonly limit?: number;
+	readonly last?: number;
 }
 
 /** Empty arguments: `{}`. May be omitted for topics that take no arguments. */
@@ -363,7 +371,6 @@ export interface ResumeArgs {
 	readonly env?: { readonly [key: string]: string };
 	readonly cols: number;
 	readonly rows: number;
-	readonly window_id?: string;
 }
 
 /** What last went into an agent's message input with Enter: what the person submitted in its
@@ -453,6 +460,7 @@ export interface SendResult {
 	readonly delivery: Delivery;
 	readonly repeated?: boolean;
 	readonly withdrawn?: boolean;
+	readonly windows?: WindowDelivery;
 }
 
 /** A response or notification received from a server. */
@@ -469,7 +477,8 @@ export interface StartArgs {
 	readonly command: string[];
 	readonly name?: string;
 	readonly cwd: string;
-	readonly window_id?: string;
+	readonly window?: WindowRef;
+	readonly location_source_window?: WindowRef;
 	readonly env?: { readonly [key: string]: string };
 	readonly cols: number;
 	readonly rows: number;
@@ -575,6 +584,18 @@ export interface WatchResult {
 	readonly snapshot: AgentInfo[] | ScreenSnapshot | MessagesSnapshot | WindowInfo[];
 }
 
+/** The member windows' outcomes for one message to the person. */
+export interface WindowDelivery {
+	readonly delivered: WindowRef[];
+	readonly not_delivered: WindowDeliveryFailure[];
+}
+
+/** Why a member window did not take a notification. */
+export interface WindowDeliveryFailure {
+	readonly window: WindowRef;
+	readonly reason: string;
+}
+
 /** An editor window as it describes itself, in `hello` and again with `window.update` whenever any
  * of it changes. */
 export interface WindowDescription {
@@ -591,6 +612,7 @@ export interface WindowDescription {
 /** A window: an editor window, or the terminal window, `terminal`, which holds the agents started
  * from a terminal. */
 export interface WindowInfo {
+	readonly machine_id: string;
 	readonly window_id: string;
 	readonly label: string;
 	readonly environment: string;
@@ -603,8 +625,14 @@ export interface WindowInfo {
 	readonly settings_problem?: string;
 }
 
+/** A logical window on a Facade machine. */
+export interface WindowRef {
+	readonly machine_id: string;
+	readonly window_id: string;
+}
+
 /** A change to the windows. */
-export type WindowsChange = { readonly kind: 'updated'; readonly window: WindowInfo } | { readonly kind: 'removed'; readonly window_id: string };
+export type WindowsChange = { readonly kind: 'updated'; readonly window: WindowInfo } | { readonly kind: 'removed'; readonly machine_id: string; readonly window_id: string };
 
 /** A new worktree: its branch and where the branch starts. */
 export interface Worktree {
@@ -624,6 +652,7 @@ export interface WorktreeCreateArgs {
 export interface Operations {
 	readonly "agent.start": { readonly args: StartArgs; readonly result: StartResult };
 	readonly "agent.resume": { readonly args: ResumeArgs; readonly result: AgentInfo };
+	readonly "agent.adopt": { readonly args: AgentArgs; readonly result: AgentInfo };
 	readonly "agent.stop": { readonly args: AgentArgs; readonly result: StopResult };
 	readonly "agent.remove": { readonly args: AgentArgs; readonly result: EmptyResult };
 	readonly "agent.inspect": { readonly args: AgentArgs; readonly result: InspectResult };

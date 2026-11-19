@@ -24,8 +24,8 @@ use super::operations::{EmptyResult, NoArgs, Operation, OperationVisitor, Topic,
 use crate::process::{ProcessExit, ProcessState};
 
 /// The supported daemon protocol version. `hello` selects the highest version shared by both peers.
-pub const DAEMON_PROTOCOL_VERSION: u32 = 1;
-pub const MIN_DAEMON_PROTOCOL_VERSION: u32 = 1;
+pub const DAEMON_PROTOCOL_VERSION: u32 = 2;
+pub const MIN_DAEMON_PROTOCOL_VERSION: u32 = 2;
 
 /// The default number of lines returned by `agent.screen`.
 pub const DEFAULT_SCREEN_LINES: u16 = 50;
@@ -212,17 +212,16 @@ pub struct NumbersGiven {
 /// of it changes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WindowDescription {
-    /// The window's ID, which stays the same across its reloads. `terminal` is not an editor
-    /// window's.
+    /// The editor window instance's ID. It survives reloads and changes when the window reopens.
+    /// The daemon returns the logical window in `HelloResult.window`.
     pub id: String,
     /// The window's name.
     pub label: String,
     /// `local`, or the remote authority, such as `ssh-remote+devbox`, of a window whose user
     /// interface is on another computer.
     pub environment: String,
-    /// The key the window's agents are kept under across its reloads: a window that connects with
-    /// the same key takes over every agent, running or ended, of an earlier window with that key
-    /// that has no connection left. Omitted for a window with no folder.
+    /// A workspace the daemon can use to bind a reopened window to an earlier logical window.
+    /// Omitted for a window with no workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// The window's folders, as absolute paths, in the editor's order. Each is a location, and so
@@ -233,9 +232,8 @@ pub struct WindowDescription {
     /// none is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_prefix: Option<String>,
-    /// The colors the window's terminals draw with, which its agents reply to color queries with.
-    /// `window.update` sends them again when the editor's theme changes. Omitted, no color query
-    /// gets a reply.
+    /// The colors the window supplies for its agents' terminal color queries. `window.update`
+    /// sends them again when the editor's theme changes. An omitted color gets no reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colors: Option<TerminalColors>,
     /// The environment the window's agents start with, as the editor works it out for its first
@@ -300,19 +298,32 @@ pub enum LocationKind {
     Unknown,
 }
 
+/// A logical window on a Facade machine.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+pub struct WindowRef {
+    /// The Facade machine's ID, a lowercase UUID version 4.
+    pub machine_id: String,
+    /// The logical window's ID, or `terminal` for that machine's terminal window.
+    pub window_id: String,
+}
+
 /// A window: an editor window, or the terminal window, `terminal`, which holds the agents started
 /// from a terminal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WindowInfo {
-    /// The window's ID: an editor window's own, or `terminal`.
+    /// The ID of the Facade machine that owns the window.
+    pub machine_id: String,
+    /// The logical window's ID, or `terminal`.
     pub window_id: String,
     /// The window's name.
     pub label: String,
     /// `local`, or the remote authority of an editor window whose user interface is on another
     /// computer.
     pub environment: String,
-    /// Whether the window is there now. An editor window with no connection left is not, until it
-    /// connects again or its agents end; the terminal window always is.
+    /// Whether the logical window has a current connection. The terminal window always reports
+    /// connected.
     pub connected: bool,
     /// The window's folders, in its order. The terminal window has none.
     pub folders: Vec<String>,
@@ -376,11 +387,13 @@ pub struct Overrides {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WindowsChange {
-    /// Insert or replace this window by `window_id`.
+    /// Insert or replace the window by its machine ID and logical window ID.
     Updated { window: Box<WindowInfo> },
-    /// The window is gone: its last connection closed and it holds no agents, or a window of its
-    /// workspace took its agents.
-    Removed { window_id: String },
+    /// Remove the logical window identified by both fields.
+    Removed {
+        machine_id: String,
+        window_id: String,
+    },
     /// A change this build does not recognize. Skip it.
     #[serde(other)]
     #[schemars(skip)]
@@ -390,7 +403,7 @@ pub enum WindowsChange {
 /// Arguments for `worktree.create`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WorktreeCreateArgs {
-    /// The window to add the worktree to.
+    /// A logical window ID on this machine, including `terminal`.
     pub window_id: String,
     /// A location of that window: the checkout the worktree branches from.
     pub cwd: String,
@@ -425,6 +438,11 @@ pub struct HelloResult {
     pub protocol: u32,
     /// The daemon's build.
     pub build: String,
+    /// The daemon's Facade machine ID.
+    pub machine_id: String,
+    /// For an `ide` client, the logical window bound to this connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowRef>,
     /// The daemon's process ID.
     pub pid: u32,
     /// The agent this client acts for, as `agent` and `sessions` decided. Omitted where it acts for
@@ -500,7 +518,7 @@ pub struct UpgradeArgs {
     pub program: String,
     /// Its build, as its `hello` says it.
     pub build: String,
-    /// The daemon protocol versions it speaks, lowest and highest.
+    /// The daemon protocol range accepted for this takeover, lowest and highest.
     pub daemon_protocol: [u32; 2],
     /// The keeper protocol versions it speaks, lowest and highest.
     pub keeper_protocol: [u32; 2],
@@ -563,12 +581,15 @@ pub struct AgentInfo {
     pub cli: String,
     /// The CLI's working folder at startup.
     pub cwd: String,
-    /// The window the agent is in: the editor window it was started in, or `terminal` for an agent
-    /// started from a terminal.
-    pub window_id: String,
-    /// The ID of its location, as its window lists it: the location `cwd` is, or the innermost one
-    /// `cwd` is inside.
+    /// The ID of the Facade machine that runs the agent.
+    pub machine_id: String,
+    /// One or more member windows, unique and sorted by machine ID and window ID.
+    pub windows: Vec<WindowRef>,
+    /// The ID of its location: the location `cwd` is, or the innermost one that contains `cwd`.
     pub location_id: String,
+    /// The window that provided the agent's running location, where a window supplied it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_source_window: Option<WindowRef>,
     /// The CLI's process ID. Omitted for a guest, whose process Facade does not know.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
@@ -585,9 +606,15 @@ pub struct AgentInfo {
     /// The agent whose client started it. Omitted where the person started it, and for a guest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creator: Option<String>,
+    /// The creator's machine ID. Omitted when it is the record's own machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_machine_id: Option<String>,
     /// The first agent of its creation tree: itself where it has no creator, or else its creator's
     /// root. It stays when agents of the tree end or go.
     pub root: String,
+    /// The root agent's machine ID. Omitted when it is the record's own machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_machine_id: Option<String>,
     /// Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With
     /// YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation
     /// tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a
@@ -919,18 +946,20 @@ pub struct StartArgs {
     /// starts with `not_found`, saying so by its setting.
     pub command: Vec<String>,
     /// The display name, trimmed. A missing, empty, or blank name gets a name from the settings
-    /// file's `names`, else from the built-in names: one no agent of the window has, ignoring case
-    /// and surrounding spaces, or, where every one is taken or the list is empty, the agent's ID,
-    /// such as `#a7` (LIFECYCLE-2.1). Given names may repeat.
+    /// file's `names`, else from the built-in names: one unused in any of the initial member
+    /// windows, ignoring case and surrounding spaces. If every name is taken or the list is empty,
+    /// uses the agent's ID, such as `#a7` (LIFECYCLE-2.1). Given names may repeat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// The CLI's working folder, an absolute path. In an editor window it must be one of the
-    /// window's locations, which `worktree.create` adds to, or a folder inside one.
+    /// The CLI's absolute working folder. If `location_source_window` is set, `cwd` must be that
+    /// window's location or a folder inside one.
     pub cwd: String,
-    /// The window the agent goes in: an editor window that is there now, by its ID, or `terminal`,
-    /// where any folder will do. Omitted, `terminal`.
+    /// The one initial member window, when supplied. Omitted to use the caller's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub window_id: Option<String>,
+    pub window: Option<WindowRef>,
+    /// The connected local window that supplies the running location for `cwd`, if selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_source_window: Option<WindowRef>,
     /// The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`,
     /// and `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor,
     /// and CLI session variables, but keeps `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`, which tell
@@ -966,9 +995,9 @@ pub struct StartArgs {
     /// nothing. A start that failed keeps none, and the ID goes with its agent's record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
-    /// A worktree to make from `cwd`, a checkout of the window, with a new branch, as
-    /// `worktree.create` makes one, and to start in. It is made after the request ID is looked for,
-    /// so a repeat makes none.
+    /// A worktree with a new branch to make and start in. With a location source window, uses
+    /// the supplied location. Otherwise, uses the repository of `cwd`. The daemon checks the
+    /// request ID before it makes the worktree, so a repeat makes none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<Worktree>,
     /// The model this start chooses, over its entry's `model` (CONFIGURATION-3.3, CLIS-1.4). A CLI
@@ -1021,11 +1050,6 @@ pub struct ResumeArgs {
     pub cols: u16,
     /// The terminal height in rows, at least 1.
     pub rows: u16,
-    /// The window the agent runs in again, as for `agent.start`: an editor window that is there now
-    /// and has the agent's folder among its locations, by its ID, or `terminal`. Omitted,
-    /// `terminal`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub window_id: Option<String>,
 }
 
 /// Arguments for an operation on one agent.
@@ -1136,7 +1160,7 @@ pub struct RenameArgs {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SendArgs {
     /// The recipient: an agent ID (`a3`, `#a3`, or `3`), a unique name of a running agent with or
-    /// without `@`, or a name followed by its ID, such as `@Pixel #a3`.
+    /// without `@`, a name followed by its ID such as `@Pixel #a3`, or `#human` for the person.
     pub to: String,
     /// The complete message: at most 8,000 characters and 540 lines of text, tabs, and line breaks,
     /// not blank.
@@ -1169,6 +1193,28 @@ pub struct SendResult {
     /// so it can be sent again. Omitted otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub withdrawn: bool,
+    /// Which windows' subscriptions took the message for `#human`. Omitted for messages to
+    /// agents and for a `pending` result whose daemon ended before saving the window outcomes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<WindowDelivery>,
+}
+
+/// The member windows' outcomes for one message to the person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WindowDelivery {
+    /// Windows whose `messages` subscriptions took the notification.
+    pub delivered: Vec<WindowRef>,
+    /// Windows whose subscriptions did not take the notification.
+    pub not_delivered: Vec<WindowDeliveryFailure>,
+}
+
+/// Why a member window did not take a notification.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WindowDeliveryFailure {
+    pub window: WindowRef,
+    /// `window_disconnected` if the window has no connection, or `not_watching` if no current
+    /// subscription took the notification.
+    pub reason: String,
 }
 
 /// The sender of Facade's own results.
@@ -1192,8 +1238,8 @@ pub struct Message {
     /// The message this one answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
-    /// The name of the sender's window when it sent the message, where that was not the recipient's
-    /// window. Omitted otherwise.
+    /// The sender's window name if it had a single member window and the recipient did not belong
+    /// to that window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_window: Option<String>,
     /// A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the
@@ -1496,7 +1542,7 @@ pub enum DeliveredVia {
     Terminal,
     /// Returned by a snapshot of the recipient's `messages` topic.
     Read,
-    /// A message to the person: handed to the sender's editor window, which shows it.
+    /// A message to the person: delivered to one or more member windows' subscriptions.
     Notified,
     /// A way this build does not recognize.
     #[serde(other)]
@@ -1711,6 +1757,10 @@ pub struct MessagesWatchArgs {
     /// The most messages in a page, 1 to 200. Defaults to 100.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
+    /// The newest messages of the selection, this many, 1 to 200, in one page. Excludes `ids`,
+    /// `cursor` and `limit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<u16>,
 }
 
 /// The inbox at the start of a `messages` watch.
@@ -1964,14 +2014,20 @@ pub struct AgentStart;
 impl Operation for AgentStart {
     const NAME: &'static str = "agent.start";
     const DOC: &'static str = "Starts an agent by running the CLI in a terminal of the requested \
-                               size. A CLI rule's name starts that CLI as its rule says. A \
-                               `prompt` is refused before anything starts where a message could \
+                               size. A CLI rule's name starts that CLI as its rule says. The \
+                               optional `window` selects the only initial member. Otherwise an \
+                               agent's start inherits its members when listed. An editor start \
+                               joins its bound window. A person's terminal start or a start from \
+                               an agent not yet listed joins `terminal`. \
+                               The optional `location_source_window` selects a connected local \
+                               window that supplies `cwd`. Without it, `cwd` follows the terminal \
+                               rules. A `prompt` is refused before anything starts where a message could \
                                not carry it. It is kept with the agent's record and answered \
                                pending, then delivered as the agent's first message once the CLI's \
                                tools connected or will not. A prompt from an agent owes it one \
                                result, under `result_message_id`, once the prompt is settled. A \
                                program or folder that cannot be used returns `unavailable`. With \
-                               `worktree`, the start makes that worktree from `cwd` first, as \
+                               `worktree`, the start makes that worktree first, as \
                                `worktree.create` does, and starts in it: Git's failure answers \
                                `worktree_failed` with what it made in `data.kept`, and a start \
                                that fails after making the worktree keeps it, its error's `kept` \
@@ -2075,23 +2131,26 @@ impl Operation for AgentSend {
                                reached the terminal. Its delivery has what is left of the 30 \
                                seconds as the call reaches the daemon, `time_left_ms`, at most \
                                29.5 seconds, the rest kept for the answer's way back. A message to \
-                               the person, `#human`, from an agent in an editor window goes to \
-                               that window's `ide` clients that watch `messages`, and is delivered \
-                               as it reaches them, `delivered_via: notified`. A message to a guest \
+                               `#human` is delivered once a member window's current `messages` \
+                               subscription takes it. The response reports the outcomes in \
+                               `windows`. If none take it, `unavailable` lists their reasons in \
+                               `data.windows` and the send keeps no message. A message to a guest \
                                waits for the guest's next turn: the send answers at once with its \
                                delivery `pending` and no deadline, and the guest's prompt or \
                                turn-end hook delivers it, through `read`. Refusals before the \
                                message exists are errors: invalid text, longer than 8,000 \
                                characters or 540 lines included, a sender or recipient not found, \
-                               a recipient that ended, a message to the person from an agent whose \
-                               window has no client watching its messages now, from an agent in \
-                               the terminal window, or from the person, or a reply to a message \
+                               a recipient that ended, a message to the person from the person, \
+                               or a reply to a message \
                                not in the sender's inbox. A recipient removed before the answer \
                                took the message with it: the call fails with `ended`. A daemon \
-                               that ends before answering answers nothing; the next one goes on \
-                               delivering the message within the same 30 seconds and never pastes \
-                               again a message whose paste began. A `request_id` of the sender's \
-                               own is looked for before anything else: the same ID within the hour \
+                               that ends before responding closes the connection. The next one \
+                               goes on delivering a message to an agent within the same 30 \
+                               seconds and never pastes again a message whose paste began. If \
+                               the daemon ended after storing a `#human` message and before saving the \
+                               window outcomes, a repeat returns the original message, still \
+                               `pending` with no `windows`. Its outcome is unknown. A `request_id` \
+                               of the sender's own is looked for before anything else: the same ID within the hour \
                                of the message it kept answers that message as it stands, \
                                `repeated`, joining its delivery while it lasts, and sends nothing \
                                again, across daemon restarts too. A refused or withdrawn send \
@@ -2144,17 +2203,32 @@ pub struct AgentResume;
 impl Operation for AgentResume {
     const NAME: &'static str = "agent.resume";
     const DOC: &'static str = "Starts an ended agent's CLI again in its terminal, continuing its \
-                               recorded session in its folder, in the window `window_id` names, \
-                               the terminal window where it names none. The agent keeps its ID, \
-                               name, record, and screen; the screen gets a fresh terminal's modes. \
-                               Uses the caller's environment and terminal size, and the CLI's \
-                               current rule. Refuses a window as `agent.start` does, before \
-                               anything starts. Returns `unavailable` for a running agent, one \
-                               already resuming, an agent without a CLI rule that resumes \
+                               recorded session in its original folder. The agent keeps its ID, \
+                               name, members, record, and screen. The screen gets a fresh \
+                               terminal's modes. Uses the caller's environment and terminal size, and the CLI's \
+                               current rule. An overlapping resume waits for the first. If the \
+                               run number changed while it waited, it returns the current record, \
+                               even if the new run has already ended. Otherwise it tries to \
+                               resume. Returns `not_found` if the agent \
+                               was removed, or `unavailable` if the agent was already running at \
+                               entry, for an agent without a CLI rule that resumes \
                                sessions, one without a recorded session, or a CLI or folder that \
                                cannot be used. Waits for the keeper like `agent.start`. If the CLI \
                                cannot start, the agent stays ended with its earlier exit.";
     type Args = ResumeArgs;
+    type Result = AgentInfo;
+}
+
+/// Adds the caller's editor window to an agent's members.
+pub struct AgentAdopt;
+impl Operation for AgentAdopt {
+    const NAME: &'static str = "agent.adopt";
+    const DOC: &'static str = "Adds a bound `ide` client's logical window \
+                               to the agent's members and returns the record. Works for running and \
+                               ended agents. An existing member is returned unchanged. Refuses \
+                               a guest or a client without a bound editor window, and returns \
+                               `not_found` for a missing record.";
+    type Args = AgentArgs;
     type Result = AgentInfo;
 }
 
@@ -2264,12 +2338,12 @@ impl Operation for IntegrationList {
 pub struct WindowUpdate;
 impl Operation for WindowUpdate {
     const NAME: &'static str = "window.update";
-    const DOC: &'static str = "For an `ide` client: replaces its window's description with this \
-                               one, which keeps the window's ID, and reads the window's locations \
+    const DOC: &'static str = "For a bound `ide` client, replaces its window's description, \
+                               keeping the same window instance ID, and reads its locations \
                                again, which the client asks for when a repository of the window \
-                               changes. Answers once they are read. An agent whose location was in \
-                               a folder the window no longer has, and in none it still has, ends \
-                               as `agent.stop` ends it.";
+                               changes. Responds once they are read. If the window stops offering \
+                               an agent's location and is the agent's location source, the agent \
+                               ends as `agent.stop` ends it.";
     type Args = WindowDescription;
     type Result = EmptyResult;
 }
@@ -2329,6 +2403,7 @@ impl Operation for WorktreeCreate {
 pub fn visit_operations(visitor: &mut impl OperationVisitor) {
     visitor.operation::<AgentStart>();
     visitor.operation::<AgentResume>();
+    visitor.operation::<AgentAdopt>();
     visitor.operation::<AgentStop>();
     visitor.operation::<AgentRemove>();
     visitor.operation::<AgentInspect>();
@@ -2388,11 +2463,10 @@ impl Topic for MessagesTopic {
                                paste it began, and its sender learns that it was read. A change \
                                delivers nothing, so a client that hands messages to a model \
                                takes them through a snapshot. For an `ide` client it reads the \
-                               person's inbox, `human`, and its changes are the messages the \
-                               agents of its own window send the person: this watch is how the \
-                               window tells the person, and a message to the person is delivered \
-                               as it reaches one. Messages and what became of them are kept 30 \
-                               days, across daemon restarts.";
+                               person's inbox, `human`. Its snapshot includes the messages \
+                               delivered to that logical window. Its changes carry new \
+                               notifications sent to that window's subscription. Messages and \
+                               what became of them are kept 30 days, across daemon restarts.";
     type Args = MessagesWatchArgs;
     type Snapshot = MessagesSnapshot;
     type Change = MessagesChange;
@@ -2401,10 +2475,10 @@ impl Topic for MessagesTopic {
 pub struct WindowsTopic;
 impl Topic for WindowsTopic {
     const NAME: &'static str = "windows";
-    const DOC: &'static str = "Lists the windows: each editor window that is there or still \
-                               holds agents, and the terminal window while it holds running \
-                               agents, with their locations. Then sends `updated` to insert or \
-                               replace a window by `window_id` and `removed` to remove it. For a \
+    const DOC: &'static str = "Lists logical editor windows, including disconnected windows \
+                               retained for reopening, and the terminal window while it holds \
+                               running agents. Then sends `updated` to insert or replace a \
+                               window and `removed` to remove it, by machine ID and window ID. For a \
                                client that acts for an agent, each window lists the CLIs a start \
                                by that agent can run.";
     type Args = NoArgs;
@@ -2559,7 +2633,11 @@ mod tests {
     fn a_result_shows_under_a_bell_and_words_what_became_of_the_prompt() {
         let agent: AgentInfo = serde_json::from_value(serde_json::json!({
             "agent_id": "a5", "name": "helper", "cli": "claude", "cwd": "/w",
-            "window_id": "terminal", "location_id": "loc-1", "pid": 7, "process": "running",
+            "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+            "windows": [{
+                "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "window_id": "terminal"
+            }],
+            "location_id": "loc-1", "pid": 7, "process": "running",
             "cols": 80, "rows": 24, "created_at": "2026-11-11T00:00:00.000Z", "root": "a5",
             "yolo": true, "state": "idle", "tools_state": "available",
         }))
@@ -2803,7 +2881,8 @@ mod tests {
             command: vec!["claude".into()],
             name: None,
             cwd: "/".into(),
-            window_id: None,
+            window: None,
+            location_source_window: None,
             env: BTreeMap::new(),
             cols: 80,
             rows: 24,

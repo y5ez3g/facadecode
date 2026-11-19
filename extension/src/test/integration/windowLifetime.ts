@@ -6,7 +6,6 @@ import * as assert from 'assert';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { DatabaseSync } from 'node:sqlite';
 import { endEditors, until } from './editors';
 import type { windowsInCore } from './editors';
 import type { LegacyPinFixture, ListedAgent, Step } from './rustWindowDriver';
@@ -38,15 +37,6 @@ export function seedLegacyPin(fixture: LegacyPinFixture): void {
 		return JSON.stringify({ ...state, [key]: state[key].map(pin => pin.id === fixture.pin.id ? fixture.pin : pin) });
 	};
 	fs.writeFileSync(fixture.mirror, `${withLegacy(fs.readFileSync(fixture.mirror, 'utf8'))}\n`);
-	const db = new DatabaseSync(fixture.database);
-	try {
-		const id = 'facade.facadecode';
-		const row = db.prepare('SELECT value FROM ItemTable WHERE key = ?').get(id);
-		assert.strictEqual(typeof row?.value, 'string', 'the editor saved the extension’s workspace state');
-		db.prepare('UPDATE ItemTable SET value = ? WHERE key = ?').run(withLegacy(row!.value as string), id);
-	} finally {
-		db.close();
-	}
 }
 
 /** The former daemon started its 90-second or five-minute timer at the last connection's departure. */

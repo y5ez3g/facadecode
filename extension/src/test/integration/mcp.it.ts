@@ -12,7 +12,7 @@ import { OLDEST_PROTOCOL, PROTOCOL } from '../../base/coreProtocol';
 import type { HelloParams, InspectResult, Response, ScreenText } from '../../base/coreProtocol';
 import { lineReader } from '../../base/lines';
 import { linesOf as cardLines } from '../detailLines';
-import { coreSocket } from './editors';
+import { coreSocket, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
 
@@ -490,12 +490,18 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 
 		if (RUST) {
 			// Core's results: a send answers how it went in, a refused one why (MCP-1.2, RULES-1.4, 1.5)
-			const [first, held, human] = [0, 1, 2].map(nth => sending.content('send_message', nth));
-			assert.deepStrictEqual([first?.status, first?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(first));
+			const recipientWindow = first.content('list_agents')?.data.windows.find((entry: { name: string }) => entry.name === window);
+			assert.ok(recipientWindow, `the sender's window ${window} is listed`);
+			const [delivered, held, human] = [0, 1, 2].map(nth => sending.content('send_message', nth));
+			assert.deepStrictEqual([delivered?.status, delivered?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(delivered));
 			assert.ok(received(childAlias).some(each => each.includes('Hello from your creator.\nTwo lines, one message.')), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
 			assert.ok(JSON.stringify(sending.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
 			assert.deepStrictEqual([held?.status, held?.reason], ['failure', 'input_draft'], JSON.stringify(held));
-			assert.deepStrictEqual([human?.status, human?.data.delivery], ['success', 'shown_to_person'], JSON.stringify(human));
+			assert.deepStrictEqual([human?.status, human?.data.delivery], ['success', 'delivered_to_windows'], JSON.stringify(human));
+			assert.deepStrictEqual(human?.data.windows, {
+				delivered: [{ machine_id: recipientWindow.machine_id, window_id: recipientWindow.id, name: window }],
+				not_delivered: []
+			}, JSON.stringify(human));
 			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
 			await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
 			await new Promise(resolve => setTimeout(resolve, 8_000));
@@ -611,10 +617,11 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		this.timeout(120_000);
 		const { alias } = await personAgent();
 		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"name":${JSON.stringify(PEER)}`, wait: 30_000 }]);
-		const peer = (found.content('list_agents')?.data.windows as { id: string; name: string; folders: string[]; clis: string[] }[]).find(each => each.name === PEER);
-		assert.ok(peer && peer.clis.includes('claude'), `the other window is listed with its CLIs: ${JSON.stringify(found.content('list_agents'))}`);
+		const peer = (found.content('list_agents')?.data.windows as { id: string; name: string; machine_id: string; connected: boolean; folders?: string[]; clis?: string[] }[]).find(each => each.name === PEER);
+		const folder = peer?.folders?.[0];
+		assert.ok(peer?.connected && peer.machine_id && folder && peer.clis?.includes('claude'), `the other window is listed with its CLIs: ${JSON.stringify(found.content('list_agents'))}`);
 		const ran = await script(alias, [
-			{ tool: 'start_agent', arguments: { name: 'Remote helper', window: peer.id, path: peer.folders[0], cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.id' } },
+			{ tool: 'start_agent', arguments: { name: 'Remote helper', window: peer.id, location_source_window: peer.id, path: folder, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.id' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
@@ -624,13 +631,16 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		], 90_000);
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		assert.strictEqual(started.data.window, peer.id, 'it started in the other window');
+		const membership = [{ machine_id: peer.machine_id, window_id: peer.id }];
+		assert.deepStrictEqual(started.data.windows, membership, 'it started in the other window');
+		assert.strictEqual(started.data.machine_id, peer.machine_id);
 		const child = started.data.id as string;
 		assert.deepStrictEqual([ran.content('send_message')?.status, ran.content('send_message')?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(ran.content('send_message')));
 		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('Hello across windows.'), 'its screen shows the message');
 		assert.ok(!(await state()).cards.some(each => each.alias === child), 'its card is in its own window, not this one');
-		const listed = ran.content('list_agents')?.data.agents as { id: string; window: string; path: string }[];
-		assert.deepStrictEqual(listed.filter(each => each.id === child).map(each => [each.window, each.path]), [[peer.id, peer.folders[0]]], 'its CLI runs in the other window\'s folder');
+		const listed = ran.content('list_agents')?.data.agents as { id: string; machine_id: string; windows: unknown; path: string }[];
+		assert.deepStrictEqual(listed.filter(each => each.id === child).map(each => [each.machine_id, each.windows, normalizeDriveLetter(each.path)]),
+			[[peer.machine_id, membership, normalizeDriveLetter(folder)]], 'its CLI runs in the other window\'s folder');
 		assert.strictEqual(ran.content('stop_agent')?.status, 'success', JSON.stringify(ran.content('stop_agent')));
 		// Core keeps a stopped agent's record, ended, until its window records its conversation and removes it, a moment later
 		const after = (ran.content('list_agents', 1)?.data.agents as { id: string; state?: string }[]).filter(each => each.id === child);

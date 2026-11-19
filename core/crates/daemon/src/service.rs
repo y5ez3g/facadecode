@@ -3,12 +3,11 @@
 //! windows. Topics are in `topics.rs`, relays in `relays.rs`.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    self, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume, AgentScreen,
-    AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsChange, ClientKind,
+    self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
+    AgentScreen, AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsChange, ClientKind,
     DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog, DaemonLogArgs, DaemonLogResult,
     DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle, HookPrompt, HookSession,
     HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState, InspectResult,
@@ -24,7 +23,9 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{oneshot, watch};
 
-use crate::agent::{AgentCommand, AgentHandle, Input, MAX_INPUT_BYTES, ToolsConnection};
+use crate::agent::{
+    AgentCommand, AgentHandle, Input, MAX_INPUT_BYTES, ToolsConnection, WindowColors,
+};
 use crate::agent::{Typing, TypingAnswer};
 use crate::delivery::InputWait;
 use crate::lifecycle::{Work, WorkGuard};
@@ -88,9 +89,9 @@ impl server::Service for Daemon {
                 return Err(ErrorBody::invalid_argument(message));
             }
             (ClientKind::Ide, Some(description)) => {
-                let id = description.id.clone();
-                presence._window = Some(self.window_connected(description).await?);
-                window = Some(id);
+                let connection = self.window_connected(description).await?;
+                window = Some(connection.binding().clone());
+                presence._window = Some(connection);
             }
             (ClientKind::Ide, None) => {
                 return Err(ErrorBody::invalid_argument(
@@ -119,6 +120,8 @@ impl server::Service for Daemon {
         let result = HelloResult {
             protocol: hello.protocol[1].min(DAEMON_PROTOCOL_VERSION),
             build: facade_base::build_id(),
+            machine_id: self.machine_id.clone(),
+            window: window.as_ref().map(|binding| binding.window.clone()),
             pid: std::process::id(),
             agent: agent.clone(),
             agents: self.agents().len(),
@@ -183,13 +186,11 @@ impl server::Service for Daemon {
     }
 
     fn closing(&self) -> watch::Receiver<Option<String>> {
-        self.closing_to.subscribe()
+        self.lifecycle.closing()
     }
 
     fn draining(&self) -> Option<ErrorBody> {
-        self.draining
-            .load(Ordering::SeqCst)
-            .then(crate::takeover::upgrading)
+        self.lifecycle.draining()
     }
 
     fn work(&self) -> Option<WorkGuard> {
@@ -214,8 +215,36 @@ impl Daemon {
                 let args: StartArgs = decode_arguments(args)?;
                 let by_model = client.identity.kind == ClientKind::Mcp;
                 let args = self.checked_start(args, acting, by_model).await?;
-                let started = self.start(args, self.sender_of(acting), by_model).await?;
+                let window = client
+                    .window
+                    .as_ref()
+                    .map(|binding| {
+                        if self.windows.is_current(binding) {
+                            Ok(binding.window.clone())
+                        } else {
+                            Err(ErrorBody::new(
+                                Reason::Refused,
+                                "this editor window is no longer bound",
+                            ))
+                        }
+                    })
+                    .transpose()?;
+                let started = self
+                    .start(args, self.sender_of(acting), by_model, window)
+                    .await?;
                 Ok(value_of(started))
+            }
+            AgentAdopt::NAME => {
+                let AgentArgs { agent } = decode_arguments(args)?;
+                let binding = client
+                    .window
+                    .as_ref()
+                    .filter(|_| client.identity.kind == ClientKind::Ide && acting.is_none())
+                    .ok_or_else(|| {
+                        ErrorBody::refused("only a bound editor window can adopt an agent")
+                    })?;
+                let agent = self.reached_agent(&agent, acting)?;
+                Ok(value_of(self.adopt(&agent, binding).await?))
             }
             AgentResume::NAME => {
                 let args: ResumeArgs = decode_arguments(args)?;
@@ -252,7 +281,21 @@ impl Daemon {
                 let args: ResizeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let agent = self.terminal_agent(&args.agent, acting)?;
-                if !agent.send(AgentCommand::Resize(args.cols, args.rows)).await {
+                let info = agent.info();
+                let command = match client.window.as_ref().filter(|binding| {
+                    info.windows.contains(&binding.window) && self.windows.is_current(binding)
+                }) {
+                    Some(binding) => AgentCommand::ResizeFromWindow {
+                        cols: args.cols,
+                        rows: args.rows,
+                        colors: WindowColors {
+                            window: binding.window.clone(),
+                            colors: self.window_colors(&binding.window).unwrap_or_default(),
+                        },
+                    },
+                    None => AgentCommand::Resize(args.cols, args.rows),
+                };
+                if !agent.send(command).await {
                     return Err(actor_stopped(&agent));
                 }
                 Ok(value_of(EmptyResult {}))
@@ -330,31 +373,29 @@ impl Daemon {
             }
             WindowUpdate::NAME => {
                 let description: WindowDescription = decode_arguments(args)?;
-                let Some(window) = client.window.as_deref() else {
+                let Some(binding) = client.window.as_ref() else {
                     let message = "only an ide client describes a window";
                     return Err(ErrorBody::invalid_argument(message));
                 };
-                if description.id != window {
-                    return Err(ErrorBody::invalid_argument(format!(
-                        "this client is window {window}'s; it cannot describe window {}",
-                        description.id
-                    )));
-                }
-                self.window_updated(description).await?;
+                self.window_updated(binding, description).await?;
                 Ok(value_of(EmptyResult {}))
             }
             WorktreeCreate::NAME => {
                 let args: WorktreeCreateArgs = decode_arguments(args)?;
                 Ok(value_of(self.create_worktree(args).await?))
             }
-            DaemonUpgrade::NAME => Ok(value_of(self.take_over(decode_arguments(args)?).await?)),
+            DaemonUpgrade::NAME => Ok(value_of(
+                self.lifecycle
+                    .take_over(decode_arguments(args)?, self.clone())
+                    .await?,
+            )),
             DaemonLog::NAME => {
                 if client.agent.is_some() {
                     return Err(ErrorBody::refused("daemon.log is for the person's clients"));
                 }
                 let args: DaemonLogArgs = decode_or_default(args)?;
-                let lines = args.lines.unwrap_or(crate::log_file::MAX_LOG_LINES);
-                let lines = crate::blocking_in_place(|| crate::log_file::last_lines(lines))?;
+                let lines = args.lines.unwrap_or(crate::lifecycle::MAX_LOG_LINES);
+                let lines = crate::blocking_in_place(|| crate::lifecycle::last_lines(lines))?;
                 Ok(value_of(DaemonLogResult { lines }))
             }
             other => Err(ErrorBody::invalid_argument(format!(

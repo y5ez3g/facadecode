@@ -9,6 +9,7 @@ import * as path from 'path';
 import { refusedArguments, takeChoices } from '../clis/args';
 import { BUILT_IN_NAMES } from '../base/names';
 import { ROBOT_ICONS } from '../base/robot';
+import { WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { BUILT_IN_ADAPTERS, BUILT_IN_FACTS, iconOf } from '../clis/catalog';
 import { entrySetting, readEntries, readEntry } from '../clis/entries';
 import { Migration, migrationOf, settingsText } from '../clis/migration';
@@ -17,7 +18,7 @@ import { parseSettings } from '../clis/settingsFile';
 import { FacadeSettings, shownFile } from '../host/facadeSettings';
 import { catalogFrom, runSettingsOf, TEST_SETTINGS_FILE } from './settingsFixtures';
 import { tempDir } from './util';
-import { withModules } from './withModules';
+import { TestEmitter, withModules } from './withModules';
 
 const FILE = TEST_SETTINGS_FILE;
 
@@ -873,5 +874,96 @@ suite('What the person is told of a migration (CONFIGURATION-6.2, 6.3)', () => {
 			'facade.claude.launch.trust has no place in facade.json; fix it or remove it, or write facade.json yourself',
 			'facade.custom.odd has no place in facade.json; fix it or remove it, or write facade.json yourself'
 		]);
+	});
+});
+
+suite('A window on the Rust engine makes the settings file from the old settings, as the old engine does (CONFIGURATION-1.3, 6.3)', () => {
+	const claude = '/opt/claude/bin/claude';
+	const stop = new Error('Stopped at connectDaemon');
+	const none = { dispose: () => undefined };
+	let temp: ReturnType<typeof tempDir>;
+	let previousHome: string | undefined;
+	let root: string;
+	let file: string;
+	let atConnect: (string | undefined)[];
+	let notices: { text: string; items: string[] }[];
+
+	setup(() => {
+		temp = tempDir('fd-rust-settings-');
+		previousHome = process.env.FACADE_HOME;
+		root = path.join(temp.dir, '.facade');
+		file = path.join(root, 'facade.json');
+		process.env.FACADE_HOME = root;
+		atConnect = [];
+		notices = [];
+	});
+
+	teardown(() => {
+		if (previousHome === undefined) { delete process.env.FACADE_HOME; } else { process.env.FACADE_HOME = previousHome; }
+		temp.remove();
+	});
+
+	function activate(old: Record<string, unknown>, linkSync = fs.linkSync): Promise<() => Promise<void>> {
+		const vscode = {
+			Uri: { from: (parts: object) => parts },
+			EventEmitter: TestEmitter,
+			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, at: string) => String(args[Number(at)])) },
+			window: {
+				createOutputChannel: () => ({ ...none, info: () => undefined }),
+				activeColorTheme: { kind: 2 },
+				onDidChangeActiveColorTheme: () => none,
+				showInformationMessage: async (text: string, ...items: string[]) => { notices.push({ text, items }); return undefined; }
+			},
+			workspace: { getConfiguration: () => ({
+				get: () => undefined,
+				inspect: (name: string) => Object.hasOwn(old, name) ? { globalValue: old[name] } : undefined
+			}) },
+			commands: { executeCommand: async (id: string) => id === WINDOW_TERMINALS_COMMAND }
+		};
+		const hostFs = new Proxy(fs, { get: (target, key) => key === 'linkSync' ? linkSync : Reflect.get(target, key) });
+		const { activateRust } = withModules({ vscode, fs: hostFs, './connection': {
+			connectDaemon: async ({ home }: { home: string }) => {
+				const settingsFile = path.join(home, 'facade.json');
+				atConnect.push(fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, 'utf8') : undefined);
+				throw stop;
+			}
+		} })<typeof import('../host/rust/index')>(require.resolve('../host/rust/index'));
+		const context = { extensionPath: temp.dir, extension: { packageJSON: { version: '1.0.0' } } };
+		return activateRust(context as Parameters<typeof activateRust>[0], {
+			root, home: path.join(root, 'extension'), identity: { version: 1, session: 'session', token: 'token' },
+			keep: () => ({ key: 'key', claim: { owner: 'key', generation: 1, token: 'claim' }, handedOver: false,
+				bind: () => assert.fail('Core did not return a window') }),
+			openSettings: async () => undefined, openSettingsFile: () => none
+		});
+	}
+
+	test('before connecting to core, it writes the old YOLO choice and Claude path and offers Open once, including after reload', async () => {
+		const old = { 'facade.yolo': false, 'facade.claude.path': claude };
+		await assert.rejects(activate(old), error => error === stop);
+		const [text] = atConnect;
+		assert.ok(text, 'facade.json is present when core is reached');
+		const made = parseSettings(text, file);
+		assert.deepStrictEqual(made.problems, []);
+		assert.strictEqual(made.yolo, false);
+		assert.strictEqual(catalogFrom(text).entries.find(each => each.entry.name === 'claude')?.entry.command, claude);
+		await assert.rejects(activate(old), error => error === stop);
+		assert.deepStrictEqual(atConnect, [text, text]);
+		assert.deepStrictEqual(notices, [{
+			text: `Facade's settings moved to ${shownFile(file)}. Your earlier settings are in it; the editor's Facade settings are no longer read.`,
+			items: ['Open']
+		}]);
+	});
+
+	test('a migration conflict leaves no file and stops activation before core can apply defaults (CONFIGURATION-6.2)', async () => {
+		await assert.rejects(activate({ 'facade.yolo': false, 'facade.custom': [] }), /facade\.custom has no place in facade\.json/);
+		assert.strictEqual(fs.existsSync(file), false);
+		assert.deepStrictEqual([atConnect, notices], [[], []]);
+	});
+
+	test('a settings write failure stops activation before core can apply defaults (CONFIGURATION-1.3)', async () => {
+		const denied = () => { throw Object.assign(new Error('Link denied'), { code: 'EACCES' }); };
+		await assert.rejects(activate({ 'facade.yolo': false }, denied), /facade\.json could not be created: Link denied/);
+		assert.deepStrictEqual(fs.readdirSync(root), []);
+		assert.deepStrictEqual([atConnect, notices], [[], []]);
 	});
 });

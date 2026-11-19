@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { messageOf } from '../base/errors';
-import type { LogPort } from '../core/ports';
+import type { LogPort, RunFacts } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 
 /** What the panel keeps in workspace storage (ARCHITECTURE-3.1): `vscode.Memento`'s shape. */
@@ -14,9 +14,11 @@ export interface Storage {
 
 const ORDER = 'facade.panel.order';
 const FILTER = 'facade.panel.filter';
+const SELECTION = 'facade.panel.selection';
 
 /** Run IDs as RULES-2.2 makes them. */
 const RUN_ID = /^run-[0-9a-f]{32}$/;
+const AGENT_ID = /^a\d+$/;
 
 /**
  * The panel's preferences in this workspace: the manual card order by run ID (PANEL-2.1), and the display filter by its
@@ -27,14 +29,20 @@ export class PanelPrefs {
 	/** The keys whose stored value was ignored already: each is logged once. */
 	private readonly ignored = new Set<string>();
 
-	constructor(private readonly storage: Storage, private readonly log?: LogPort) { }
+	constructor(private readonly storage: Storage, private readonly log?: LogPort, private readonly logicalWindow = false) { }
+
+	/** Rust's displayed run ID can be provisional. Its core number survives reopening (RULES-2.2). */
+	keyOf(run: RunFacts): string {
+		return this.logicalWindow && run.alias ? run.alias.slice(1) : run.id;
+	}
 
 	order(): string[] {
 		const value = this.storage.get<unknown>(ORDER);
 		if (value === undefined) {
 			return [];
 		}
-		const runs = Array.isArray(value) ? value.filter((run): run is string => typeof run === 'string' && RUN_ID.test(run)) : [];
+		const pattern = this.logicalWindow ? AGENT_ID : RUN_ID;
+		const runs = Array.isArray(value) ? value.filter((run): run is string => typeof run === 'string' && pattern.test(run)) : [];
 		if (!Array.isArray(value) || runs.length !== value.length) {
 			this.ignore(ORDER, 'card order');
 		}
@@ -43,7 +51,19 @@ export class PanelPrefs {
 
 	setOrder(order: readonly string[]): void {
 		// The current panel order remains usable when workspace storage cannot persist it.
-		this.save(ORDER, [...order], 'card order');
+		this.save(ORDER, this.logicalWindow ? order.filter(run => AGENT_ID.test(run)) : [...order], 'card order');
+	}
+
+	selection(): string | undefined {
+		if (!this.logicalWindow) { return undefined; }
+		const value = this.storage.get<unknown>(SELECTION);
+		return typeof value === 'string' && AGENT_ID.test(value) ? value : undefined;
+	}
+
+	setSelection(run: string | undefined): void {
+		if (this.logicalWindow) {
+			this.save(SELECTION, run && AGENT_ID.test(run) ? run : undefined, 'card selection');
+		}
 	}
 
 	filter(): PanelFilter | undefined {

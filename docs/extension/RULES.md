@@ -52,6 +52,8 @@ an MCP cancellation reaches no Facade window, and only a repeat with its request
 when the result is known. A creation prompt a start sends after its process starts (COLLABORATION-2.2) is no send of the caller's: its
 outcome goes into the start's own result (MCP-2.3). B's answer is a separate ordinary message.
 
+A Rust-engine send to `#human` answers the outcomes at its member windows' subscriptions under COLLABORATION-2.3.
+
 ### 1.3 Delivery means the recipient has the complete message
 
 **A message is delivered when the target CLI accepted the complete instruction or read_messages handed the complete record to its recipient.**
@@ -179,13 +181,13 @@ drop the undeliverable report. There is no chain of receipts about receipts.
 | B sends a reply to A | B |
 | Facade cannot return a message result | End the result handoff; no human fallback |
 | Known runtime/infrastructure failure requiring human handling, with no responsible agent | Person in the affected window |
-| Agent explicitly sends to `#human` | Person in that agent's window; this is deliberate contact |
+| Agent explicitly sends to `#human` | Person through the window or windows specified by COLLABORATION-2.3 |
 
 A retained red card is not permission to duplicate an agent's operation error as a human popup. Do not automatically
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
-to contact a person. One fact does go to an agent: an agent another agent of the same window started, whose CLI has
-waited twenty seconds on its own permission, question or sign-in, is reported to that creator - while the creator still
-runs, never a creator in another window or one that ended - once each time it starts waiting, as a Facade result naming
+to contact a person. One fact does go to an agent: a child whose CLI has waited twenty seconds on its own permission,
+question or sign-in is reported to its running creator once each time it starts waiting. They must share at least one
+member window on the Rust engine or belong to the same window on the old engine. The Facade result names
 who can answer - the person's permission and sign-in are theirs - because a child waiting on an unseen question can
 stall its creator's work. A person is never told by it. The notice reports the blocker without asking its creator to
 contact the person, forward the notice or escalate it. Whether an agent contacts the person follows the person's task
@@ -197,20 +199,20 @@ another window.
 
 **Message delivery follows the agent's lifetime under 4.1 and keeps its original deadline.**
 
-On the Rust engine, agents keep running after their window closes (4.1), and core continues delivering their messages.
+On the Rust engine, agents keep running after their windows close (4.1), and core continues delivering their messages.
+Explicit contact to the person needs an eligible member window at send time (COLLABORATION-2.3).
 On the old engine, a window's runs end under 4.1. If the recipient ends before submission, fail to the current sender if
 reachable. A different still-open window continues its own work. If only A's window closes, already handed-off delivery at B may
 continue within its deadline; work still owned by the closing side can end with it. Do not add durable handover or
 recovery solely to guarantee this edge case, and do not cancel B's independent work just to enforce a global rule.
 
 Reload or temporary disconnect is not closure. Reuse an existing in-flight operation only while its original run and
-deadline still apply; an expired operation does not get a fresh budget. A delivery under way when its window reloads
-goes on once the window shows its recipient again, within its original deadline: a text that may already be in the
-input is never pasted again, and only its own draft gets Enter (1.6). One whose recipient is not shown yet waits for a
-later restoration within that deadline; one whose recipient ended, or whose deadline passed, ends - an ordinary
-message's sender asking again with its request ID where it gave one (1.2), a prompt's told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries. A newly
-started agent receives only messages
-addressed to its new run. On the old engine, closing every window naturally ends the remaining volatile delivery work.
+deadline still apply; an expired operation does not get a fresh budget. On the old engine, a delivery under way when
+its window reloads goes on once the window shows its recipient again, within its original deadline. Use 1.6's
+draft and paste rules. A recipient that is unavailable can return within that deadline. If it ends or the deadline
+passes, end the delivery under 1.2 or 1.7. The old window relinquishes those deliveries when another window takes
+over its workspace. Closing every old-engine window ends remaining volatile delivery work. A newly started agent
+receives only messages addressed to its new run.
 No notification or message is scheduled for replay on the next opening.
 
 ### 1.10 Concurrent sends share the terminal without interleaving
@@ -228,11 +230,14 @@ no agent workflow or general-purpose scheduler is added.
 
 ### 2.1 A client network is distinct from an execution environment
 
-**The client network joins one user's Facade windows on one client computer, including their local and remote execution environments.**
+**A window's connected scope and its execution environment have separate identities.**
 
-The window components maintain addresses and routes. Each workspace runtime owns paths, CLI accounts, Git and process
-execution in its environment. Remote paths are not local paths. An open window with no folder can be discovered but
-has no usable launch location. Distinguish a known empty catalog from an unavailable runtime.
+On the Rust engine, the core that serves a Facade home gives it one machine ID. A window's local machine is the core it
+connects to, including from a remote execution environment. On the old engine, the window components route between
+one user's windows on one client computer, including their local and remote execution environments.
+Each workspace runtime owns paths, CLI accounts, Git and process execution in its environment. Interpret a path in its
+owning environment. An open window with no folder can be discovered with an empty location catalog. Distinguish a known
+empty catalog from an unavailable runtime.
 There is no multi-user discovery, hosted service or assumption of shared home directories.
 
 ### 2.2 Window, workspace, agent and creation tree have different identities
@@ -241,14 +246,16 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 
 | Identity | Meaning |
 | --- | --- |
-| Client network | This user's connected editor windows on one client computer |
+| Client network | This user's connected editor windows on one client computer on the old engine |
+| Facade machine | A Rust core's persistent ID for the home where agents and their records run |
 | Execution environment | Where files, CLIs and processes exist |
-| Window | One current editor window; reload reconnects it under the same routing ID while its handover record lasts (ARCHITECTURE-2.2); true reopening is a new window |
+| Window instance | One editor window through reload, identified by its local handover record (ARCHITECTURE-2.2). True reopening is a new instance. The old engine routes by this identity. |
+| Window reference | A Rust machine ID and logical window ID. Core binds an instance to it and can reuse it when the workspace reopens (4.1). |
 | Workspace | Saved editor workspace/folder context for preferences and Pin intent |
 | Conversation key | Execution environment, CLI and exact vendor session ID |
-| Pin | Saved intent to restore an exact conversation |
-| Agent ID | One agent, from its accepted start until its record is removed; unique across the client network and never reassigned |
-| Agent alias `#aN` | The agent's short reference, numbered by the client network's counter: never given twice, also across an update from an earlier build |
+| Pin | Saved intent to restore an exact conversation. A Rust Pin identifies the original agent on its machine (4.2). |
+| Agent ID | One agent from start until removal, unique on its Rust machine or across its old-engine client network and never reassigned there |
+| Agent alias `#aN` | The agent's short reference, numbered by its Rust machine or the old-engine client network |
 | Run | One start or Resume of the agent's CLI, until that CLI ends |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
 
@@ -264,12 +271,12 @@ issuance or anti-impersonation system is required.
 
 **Use an exact ID, or a name that identifies one eligible agent; an ambiguous name requires an ID.**
 
-Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. An exact
-ID of an agent in the caller's window needs no other window; a name is resolved among the agents of every window, so a
-name used in two windows is ambiguous as it is in one. While a window cannot be listed, a reference that is not the
-exact ID of a listed agent fails as unavailable rather than resolving among the windows that answered. Once resolved,
-the operation stays with that run through rename. An optional display name accompanying an ID is descriptive; the ID
-decides the target. A missing or ended ID is an error, not a request to find another same-named agent. `#human` is the
+Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. Rust
+resolves against the machine's records, counting each agent once across its member windows. On the old engine an exact
+ID of an agent in the caller's window needs no other window, and a name resolves among agents of every window. While
+an old-engine window cannot be listed, only the exact ID of a listed agent can resolve. Once resolved, the operation
+stays with that target through rename. An optional display name accompanying an ID is descriptive. Return the error
+for a missing record or a live-only operation on an ended agent. `#human` is the
 person's reference and never names an agent. Because `human` is an allowed agent name (LIFECYCLE-2.1), `@human` names
 the person only when no agent in the caller's reach, in any window, is named `human`; otherwise it is ambiguous like any
 other repeated name, and `#human` or the agent's ID decides. While a window cannot be checked, `@human` fails as
@@ -282,9 +289,12 @@ whatever their case; any other name without `@` resolves as `@name` does.
 
 A plain folder is sufficient. Preserve the opened path for display and defaults; compare path components and canonical
 paths in the owning environment. Nested folders use the matching workspace association; related worktrees can be outside
-the folder. A successful Git read can discover worktrees made by any tool. Removing a workspace folder or actually
-deleting a worktree closes the agents belonging to that removed location; finding a Resume cwd recorded within a location
-gone (WORKTREES-1.2, 3.3) ends only the agents working in it, the location staying. A failed Git read or temporary remote disconnect is not proof of deletion.
+the folder. A successful Git read can discover worktrees made by any tool. For Rust, core records the window that
+provided the selected location (4.1). Only a removal confirmed for that source window can stop the agent for location
+loss. A member window can present the running agent without providing its location. In the old engine, removing a
+workspace folder or deleting a worktree closes the agents belonging to that removed location. Finding a Resume cwd
+recorded within a location gone (WORKTREES-1.2, 3.3) ends the agents working in it while the location stays.
+Location loss requires confirmation in the owning execution environment.
 
 ## 3 State and feedback
 
@@ -340,13 +350,14 @@ never prove idle.
 Normal means exit 0, a completed explicit stop, or a verified native exit/interrupt outcome such as the adapter's
 Ctrl+C handling. An unexplained nonzero/signal exit is abnormal. Record its actual code/signal; do not guess a cause
 or show an unknown-cause popup. A real known error follows 1.8's ownership. Connection loss alone proves neither exit.
-Launch failure retains the accepted pair even when no CLI process was created.
+New Agent launch failure retains the accepted pair even when no CLI process was created. Resume failure follows LIFECYCLE-3.3.
 
 ### 3.4 Notifications without an attention queue
 
 **Use native notifications, their Show action and Go to Agent; maintain no separate human-attention queue.**
 
-Human notifications follow 1.8 and remain in the relevant window. The one-time settings migration notice follows
+Human notifications follow 1.8. A Rust-engine notification to `#human` is shown independently in each eligible member
+window under COLLABORATION-2.3. The one-time settings migration notice follows
 CONFIGURATION-6.3 and appears only in the window that created the file. There is no universal exactly-once-per-error popup
 guarantee or durable notification claim/recovery protocol. This does not introduce repeated reminder popups. There is no
 unseen/seen attention state, attention ordering or Next Agent Needing Attention command. Opening a source does not erase
@@ -358,16 +369,27 @@ transition.
 
 ### 4.1 Ownership, reload and closure
 
-**A window owns its agents; creation relationships do not couple process lifetimes.**
+**On the Rust engine each member window presents the same agent, whose process and record core owns. The old engine keeps one owning window.**
 
 Closing a creator leaves its children running in their own windows.
 
-On the Rust engine, Facade core keeps a window's agents running when the window closes, reloads or loses its extension
-host. Their processes also survive a compatible daemon restart or replacement. The window reconnects to its original
-agents, or a reopened window of the same workspace takes them over, with their numbers, processes and screens. End Agent
-immediately removes the card and terminal tab and asks core to stop a running agent in the background. The record,
-saved conversation and Pin stay. `facade remove` explicitly deletes the agent record. A stop failure goes to the initiator
-(LIFECYCLE-3.1). A still-running agent can reattach at the next opening or reload.
+Core keeps Rust agents running through window close, reload or host loss and a compatible daemon restart or replacement.
+A reload reconnects by window instance. A reopened workspace can reuse its available logical window reference. Two
+active editor windows of that workspace have distinct references (ARCHITECTURE-2.2). When the last effective connection
+for a window leaves, its membership and agents continue and the window becomes disconnected.
+
+An editor start adds its current window. An ordinary terminal start adds the machine's terminal window. An agent-created
+child inherits the parent's member windows at creation, including disconnected members, or uses the one explicitly
+selected member. Core records the source separately when a window provides the working location (2.4). A human can add
+their window to a non-guest agent through Go to Agent (LIFECYCLE-2.3), or through restoration of their workspace Pin
+(4.2). Membership stays until the agent record is removed. Closing a tab only affects the current window's presentation
+and its workspace's Pin under 4.2.
+
+End Agent hides the initiating pair under LIFECYCLE-3.1. Successful stop from any member or `facade stop` hides the
+card and tab in every connected member window. The number, membership, saved conversation and each workspace's Pin
+stay, and open windows wait for a later restoration. `facade remove` deletes the record and its membership and
+invalidates its Pins (4.2). A stop failure goes to the initiator. A still-running agent can reattach at the next
+opening or reload.
 
 The old engine uses the following policy until 0.2.0. Closing a window ends all its runs and removes their UI, preserving
 Pin intent. No public editor signal tells a close from a reload, so a window's runs end a grace period
@@ -388,16 +410,16 @@ cleanup remain distinct facts in the operation record. The grace timer is cleanu
 the window: no other timer ends a process. Telling a close from a reload is a platform limitation; VERIFICATION G2
 verifies this policy.
 
-Until a person closes it, it ends normally or its location is removed (2.4), every agent a window started stays shown:
-its card in the window's panel and its terminal, in an editor tab or hidden until the person opens it (LIFECYCLE-2.2),
+Until a person closes it, it ends normally or its location is removed (2.4), every owned or member agent stays shown
+by its card, with the terminal in an editor tab or hidden until the person opens it (LIFECYCLE-2.2),
 across a reload, an extension host restart, an update and a lost connection alike; an agent started before an update
 keeps working through the execution supervisor that holds it (ARCHITECTURE-2.4). Where Facade cannot reach an agent's
 process, the card is red and says why (3.2); unknown activity alone shows no dot. Facade never leaves the agent out. The
 one exception is a window that cannot know its own identity, so cannot tell its agents from another window's: one whose
 identity record is damaged, where Facade does not start (ARCHITECTURE-2.2), and one without its window component, which
 is what reads that identity. It shows and starts no agents. Its running agents on the Rust engine stay with core. On
-the old engine they go on for the grace period above (ARCHITECTURE-4.3). A window that another
-window of the same workspace took over shows none of its agents; that other window shows them.
+the old engine they go on for the grace period above (ARCHITECTURE-4.3). On the old engine, a window that takes over
+that workspace shows its agents in place of the old window.
 
 ### 4.2 Restoration preserves conversation and location
 
@@ -413,20 +435,28 @@ Existing processes keep their actual plan.
 
 A person's close of an agent's editor tab showing its pin mark (LIFECYCLE-3.4) unpins it. Whole-window close and a tab
 hidden any other way preserve Pin. Unpin alone does not stop. Manual Resume does not silently re-pin a deliberately
-unpinned conversation. If the exact conversation already runs in Facade, later windows skip launching it. Human UX stays
-local. Facade does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
+unpinned conversation. If the exact conversation already runs in Facade, a second agent does not launch it.
+Facade does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
 
-On the Rust engine, a Pin also stores the agent's original Facade home and number. Reopening or reloading the workspace
-verifies that record in its home. It reattaches a running agent that belongs to this window. It resumes the same number
-after a normal exit or an actual abnormal exit whose card the person dismissed in this workspace. An abnormal exit keeps
-its red card and Pin until the person dismisses the card. A failed restoration call shows its reason on a red card, with
-one attempt per opening or reload. The error lasts for the current activation. End Agent and normal exit preserve the
-Pin. Facade's Delete Worktree command unpins the agents it ends for deletion. Other location removal keeps the Pin.
-A complete snapshot of the original home clears a Pin whose agent record is gone. An unavailable or different home leaves
-the Pin stored for later verification. When `facade.rustEngine` is `auto` and the window uses the old engine, Pins with
-Rust identities wait for a Rust activation. The Rust engine leaves preexisting Pins
-without an original home and number available to the old engine. The person can pin an existing agent again to record its
-identity. Manual Resume can restore a saved conversation under its retained agent number even after the card is dismissed.
+On the Rust engine, each workspace's Pin stores the original machine ID and agent number. A session-only Pin remains
+available to the old engine or can be replaced by pinning the original agent explicitly. With `facade.rustEngine` set
+to `auto`, a window using the old engine skips Pins identified by machine ID and agent number. Explicit `off` uses the
+old-engine Pin rules.
+
+Reopening or reloading the workspace verifies the original record, adds the current window if needed, and reattaches the
+running agent. A normal exit or an actual abnormal exit dismissed in that workspace is eligible for restoration by
+the original number. An undismissed abnormal exit keeps its red card and Pin. A failed automatic restoration shows its
+reason on a red card for that activation, with one attempt per opening or reload. If core already reports the same
+agent running in the window, the window reattaches it. An active agent with another number holding that session prevents
+automatic restoration under the pinned number. The Pin stays for later verification.
+
+Clearing a Pin because its record is gone requires its original machine's complete snapshot without the number, its
+record-removal event, or a `not_found` response to adopting that number. Loss of connection, an unknown outcome or any
+Resume error preserves the Pin. End Agent and normal exit preserve all Pins. Facade's Delete Worktree command unpins its
+affected agents in the initiating workspace (WORKTREES-3.2). Other location removal keeps the Pin.
+
+Manual Resume in any member window can restore the original number, including after its card was dismissed.
+Concurrent successful restoration requests for that number share one process and appear in the connected member windows.
 
 On the old engine, a Pin can initially have no conversation key (LIFECYCLE-3.4). Explicit agent close, normal exit or
 actual location removal unpins. Abnormal exit preserves Pin. Each activation,
@@ -436,10 +466,11 @@ background, and their tabs then open in front by LIFECYCLE-3.5's tab procedure.
 
 ### 4.3 Reach is client-wide and permissions remain explicit
 
-**YOLO reaches the client network; non-YOLO reads and writes only within the caller's whole creation tree.**
+**YOLO reaches the connected scope under 2.1; non-YOLO reads and writes only within the caller's whole creation tree.**
 
 The tree includes ancestors, descendants, siblings and other branches under the same root. Unrelated roots are outside
-normal non-YOLO reach. The caller's own run YOLO decides reach.
+normal non-YOLO reach. The caller's own run YOLO decides reach. Membership controls presentation. In the Rust engine the
+person can reach agents on the current machine, including when their window is disconnected.
 
 Every launch reads `yolo` from the destination execution environment's current Facade settings file (default true)
 when accepted and keeps that value for the run. This includes human starts, agent-created children, Resume and Pin

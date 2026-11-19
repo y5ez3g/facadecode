@@ -31,19 +31,19 @@ type_text and press_keys. Each answers with `status`: success, with `data` where
 
 ## Agents
 
-`start_agent({cli: \"codex\", window: \"win-2\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser
-test.\"})` starts Codex there; the answer's `data.id`, such as \"#a7\", addresses it from then on. Its run takes YOLO from
-`facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person set it up. Either way it can
-use these tools too, which no CLI asks about. `list_agents({})` shows the windows, each with its folders and the CLIs it
-can start, and the agents you reach, ended ones too: with YOLO off, those of your creation tree, any other refused as
-`out_of_reach`. A name that more than one agent has is refused: use the ID.
+`start_agent({cli: \"codex\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`
+starts Codex in that folder with your window membership. Its `data.id`, such as \"#a7\", addresses it from then on.
+Its run takes YOLO from `facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person
+set it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows, with folders
+and CLIs for connected windows. It lists the agents you reach, including ended agents. With YOLO off you can reach agents
+in your creation tree. Use an ID when a name matches more than one agent.
 
 ## Messages
 
 `send_message({to: \"#a7\", text: \"Run the tests again.\"})` types the message into #a7's terminal under a header that
 names you, such as `📨 Message from Max (#a3) · #m42`, then its text. A reply names what it answers, `reply_to: \"#m42\"`,
-and its header adds `· Reply to #m42`. Messages the person sends come from #human; yours to #human reach them only
-through an editor window that shows your messages.
+and its header adds `· Reply to #m42`. Messages from the person come from #human. Use #human to notify the person
+through the subscriptions of your connected member windows.
 A start's prompt is answered later by Facade, not by the agent: `🔔 Ada (#a7) has started. · #m43`, under its own number,
 says whether the prompt was passed on, and asks for no reply.
 Delivery is finite: a message the recipient's CLI does not take in time fails, and no one tries it again; one to a guest,

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use facade_base::daemon::ClientKind;
+use facade_base::daemon::{ClientKind, DAEMON_PROTOCOL_VERSION};
 use facade_base::daemon_client::{DaemonClient, Identity};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::sockets::{DaemonListener, ServerSocket};
@@ -121,7 +121,8 @@ fn a_daemon_that_closes_right_after_its_hello_is_no_daemon_yet() {
         let answer = serde_json::json!({
             "jsonrpc": "2.0", "id": 1,
             "result": {
-                "protocol": 1, "build": "0.2.0", "pid": 1, "agents": 0, "topics": [], "ops": [],
+                "protocol": DAEMON_PROTOCOL_VERSION, "build": "0.2.0", "pid": 1, "agents": 0,
+                "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "topics": [], "ops": [],
             },
         });
         let answer = format!("{answer}\n");

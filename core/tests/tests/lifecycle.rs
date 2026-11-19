@@ -242,6 +242,26 @@ fn detach_reports_a_living_worker_still_recovering_as_starting() {
     home.wait_for_idle_exit();
 }
 
+/// A daemon that never starts, as one that cannot open its store, fails `daemon --detach` with
+/// exit code 1 once its 10 seconds pass.
+#[test]
+fn detach_fails_when_no_daemon_started() {
+    let home = TestHome::new("unstarted");
+    std::fs::create_dir_all(home.path.join("core")).unwrap();
+    std::fs::write(home.path.join("core/facade.db"), "not a database").unwrap();
+    let output = home
+        .command(&test_binaries().facade)
+        .args(["daemon", "--detach"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("the Facade daemon did not start within 10 seconds; see "),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_writable_home_is_used_as_it_is_and_a_lock_keeps_its_inode_when_made_private() {

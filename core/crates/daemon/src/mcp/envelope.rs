@@ -33,7 +33,11 @@ pub(super) fn refusal(error: &ErrorBody) -> Value {
         Reason::Upgrading => "unavailable",
         other => other.as_str(),
     };
-    failure(reason, error.message.clone())
+    let mut refused = failure(reason, error.message.clone());
+    if let Some(windows) = &error.data.windows {
+        refused["data"] = json!({ "windows": windows });
+    }
+    refused
 }
 
 #[cfg(test)]

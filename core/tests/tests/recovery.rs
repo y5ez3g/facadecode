@@ -11,7 +11,7 @@ use facade_scenarios::*;
 /// Opens a daemon protocol connection, without starting Facade.
 fn open(home: &TestHome) -> DaemonTestClient {
     let mut wire = DaemonTestClient::open(home);
-    assert!(wire.hello("terminal", [1, 1], json!({}))["result"].is_object());
+    assert!(wire.hello("terminal", DAEMON_RANGE, json!({}))["result"].is_object());
     wire
 }
 

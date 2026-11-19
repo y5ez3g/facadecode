@@ -201,7 +201,7 @@ fn an_entry_wrong_or_turned_off_refuses_its_own_starts_alone() {
 /// `start_agent` starts a CLI of the settings file by its name, its own model and effort over its
 /// entry's, each on its own; a CLI that takes no effort refuses one as `unsupported`, in the tool's
 /// words. `list_agents` lists the built-ins, then the added CLIs, each with what a start can
-/// choose; one turned off is left out, and one that is wrong is listed with what is wrong.
+/// choose. A turned-off CLI is left out, and requesting a malformed entry explains its problem.
 #[test]
 fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
     let home = TestHome::new("configmcp");
@@ -250,19 +250,18 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
         "{oc}"
     );
     let bad = ada.call("start_agent", start("bad", json!({})));
+    assert_eq!(bad["reason"], "configuration_invalid", "{bad}");
     assert!(
         bad["message"]
             .as_str()
             .unwrap()
-            .starts_with("bad cannot start in window terminal: clis.bad.icon must be one of"),
+            .starts_with("clis.bad.icon must be one of"),
         "{bad}"
     );
     let off = ada.call("start_agent", start("off", json!({})));
-    assert!(
-        off["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("window terminal starts no CLI off;"),
+    assert_eq!(off["reason"], "unavailable", "{off}");
+    assert_eq!(
+        off["message"], "off is turned off by clis.off.enabled",
         "{off}"
     );
 }
@@ -473,9 +472,8 @@ fn an_entry_s_args_are_merged_as_their_cli_reads_them() {
     assert_eq!(prompt, Some("--settings={\"a\": 1}"), "{claude:?}");
 }
 
-/// An entry's program that cannot run where it starts is said by its setting, the same in
-/// `list_agents` and in a start, which it refuses as `not_found` (CONFIGURATION-2.2, 4.1): a
-/// built-in's not on the `PATH`, a name not on it, and a path to no program.
+/// The MCP and CLI starts both diagnose an entry's executable by its setting (CONFIGURATION-2.2,
+/// 4.1): a built-in missing from `PATH`, a name missing from `PATH`, and a path to no program.
 #[test]
 fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     let home = TestHome::new("configprogram");
@@ -524,11 +522,8 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     for (cli, problem) in said {
         let start = json!({ "name": "w", "cli": cli, "window": "terminal", "path": folder });
         let mcp = ada.call("start_agent", start);
-        assert_eq!(
-            mcp["message"],
-            format!("{cli} cannot start in window terminal: {problem}; nothing was started"),
-            "{mcp}"
-        );
+        assert_eq!(mcp["reason"], "invalid_argument", "{mcp}");
+        assert_eq!(mcp["message"], problem, "{mcp}");
         let refused = refused(&home, cli);
         assert!(
             refused.contains(&problem) && !refused.contains("(not_found)"),
@@ -559,11 +554,8 @@ fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     );
     let said = "clis[\"off reads\"].env.A reads ${env:NOT_SET_FOR_THIS}, but NOT_SET_FOR_THIS is \
                 not in the environment it starts with; set it there, or write the value";
-    assert_eq!(
-        refused["message"],
-        format!("off reads cannot start in window terminal: {said}; nothing was started"),
-        "{refused}"
-    );
+    assert_eq!(refused["reason"], "configuration_invalid", "{refused}");
+    assert_eq!(refused["message"], said, "{refused}");
 }
 
 /// A settings file wrong as a whole lists no CLI: its problems, which stand for every start, are
@@ -712,7 +704,7 @@ fn a_name_from_names_is_one_no_agent_of_its_window_has() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    let mut window = ide(
+    let (mut window, window_ref) = ide_binding(
         &home,
         &json!({
             "id": "win-1", "label": "win-1 window", "environment": "local", "workspace": null,
@@ -721,7 +713,7 @@ fn a_name_from_names_is_one_no_agent_of_its_window_has() {
     );
     let env = json!({ "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path });
     let start = json!({
-        "command": ["fake"], "cwd": folder, "window_id": "win-1", "env": env, "cols": 80,
+        "command": ["fake"], "cwd": folder, "location_source_window": window_ref, "env": env, "cols": 80,
         "rows": 24,
     });
     assert_eq!(
@@ -740,7 +732,7 @@ fn a_name_from_names_is_one_no_agent_of_its_window_has() {
         .iter()
         .map(|agent| {
             (
-                agent["window_id"].as_str().unwrap().into(),
+                agent["windows"][0]["window_id"].as_str().unwrap().into(),
                 agent["name"].as_str().unwrap().into(),
             )
         })
@@ -846,7 +838,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
     );
     let repo = facade_base::files::real_path(&repo).unwrap();
     let folder = repo.to_string_lossy().into_owned();
-    let mut window = ide(
+    let (mut window, reference) = ide_binding(
         &home,
         &json!({
             "id": "win-1", "label": "win-1 window", "environment": "local", "workspace": "k1",
@@ -857,7 +849,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
     let boss = window.call(
         "agent.start",
         json!({
-            "command": ["fake"], "name": "boss", "cwd": folder, "window_id": "win-1", "env": env,
+            "command": ["fake"], "name": "boss", "cwd": folder, "location_source_window": reference, "env": env,
             "cols": 80, "rows": 24,
         }),
     );
@@ -865,7 +857,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
         McpTestClient::open(&home, boss["result"]["agent"]["agent_id"].as_str().unwrap());
     let mut start = |cli: &str, more: Value| {
         let mut call = json!({
-            "name": "w", "cli": cli, "window": "win-1", "path": folder,
+            "name": "w", "cli": cli, "window": reference.window_id, "location_source_window": reference.window_id, "path": folder,
             "worktree": format!("{cli}-branch"),
         });
         call.as_object_mut()
@@ -873,8 +865,10 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
             .extend(more.as_object().unwrap().clone());
         boss.call("start_agent", call)
     };
-    assert_eq!(start("nope", json!({}))["reason"], "invalid_argument");
-    assert_eq!(start("off", json!({}))["reason"], "invalid_argument");
+    for (cli, reason) in [("nope", "invalid_argument"), ("off", "unavailable")] {
+        let refused = start(cli, json!({}));
+        assert_eq!(refused["reason"], reason, "{refused}");
+    }
     assert_eq!(
         start("oc", json!({ "effort": "high" }))["status"],
         "failure"
@@ -1003,8 +997,8 @@ fn an_editor_window_s_environment_lists_the_clis_it_can_start() {
     };
     let mut described = window("win-env");
     described["env"] = json!({ "PATH": home.path_with_test_programs() });
-    let mut editor = ide(&home, &described);
-    let _bare = ide(&home, &window("win-bare"));
+    let (mut editor, environment) = ide_binding(&home, &described);
+    let (_bare, empty) = ide_binding(&home, &window("win-bare"));
     let watching = editor.request("watch", json!({ "topic": "windows" }));
     let listed = |id: &str| {
         watching["result"]["snapshot"]
@@ -1015,7 +1009,7 @@ fn an_editor_window_s_environment_lists_the_clis_it_can_start() {
             .cloned()
             .unwrap_or_else(|| panic!("no window {id}: {watching}"))
     };
-    let clis = listed("win-env")["clis"].clone();
+    let clis = listed(&environment.window_id)["clis"].clone();
     let cli = |name: &str| {
         clis.as_array()
             .unwrap_or_else(|| panic!("{clis}"))
@@ -1027,9 +1021,9 @@ fn an_editor_window_s_environment_lists_the_clis_it_can_start() {
     assert_eq!(cli("fake")["available"], true, "{clis}");
     assert_eq!(cli("gone")["available"], false, "{clis}");
     assert!(
-        listed("win-bare").get("clis").is_none(),
+        listed(&empty.window_id).get("clis").is_none(),
         "{}",
-        listed("win-bare")
+        listed(&empty.window_id)
     );
 }
 

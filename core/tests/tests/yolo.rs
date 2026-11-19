@@ -6,6 +6,8 @@
 //! and an agent whose run has YOLO off reaches only its creation tree.
 
 use std::path::Path;
+
+use facade_base::daemon::WindowRef;
 use std::process::Stdio;
 
 use facade_scenarios::serde_json::{Value, json};
@@ -41,13 +43,13 @@ fn record(home: &TestHome, name: &str) -> Value {
 fn start_in_window(
     wire: &mut DaemonTestClient,
     home: &TestHome,
-    window: &str,
+    window: &WindowRef,
     cwd: &str,
     name: &str,
 ) -> Value {
     let env = json!({ "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path });
     let started = wire.call("agent.start", json!({
-        "command": ["fake"], "name": name, "cwd": cwd, "window_id": window, "env": env, "cols": 80,
+        "command": ["fake"], "name": name, "cwd": cwd, "location_source_window": window, "env": env, "cols": 80,
         "rows": 24,
     }));
     started["result"]["agent"].clone()
@@ -72,9 +74,10 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
     settings(&home, r#"{"yolo": false}"#);
     home.start_named_fake("off", &[]);
     assert_eq!(record(&home, "off")["yolo"], false);
-    let mut editor = ide(&home, &window("win-1", std::slice::from_ref(&folder)));
+    let (mut editor, reference) =
+        ide_binding(&home, &window("win-1", std::slice::from_ref(&folder)));
     assert_eq!(
-        start_in_window(&mut editor, &home, "win-1", &folder, "into-the-window")["yolo"],
+        start_in_window(&mut editor, &home, &reference, &folder, "into-the-window")["yolo"],
         false,
         "a window's start reads the same file"
     );
@@ -240,16 +243,16 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
 fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     let home = TestHome::new("yoloreach");
     let folder = real(&home.project);
-    let _editor = ide(&home, &window("win-1", std::slice::from_ref(&folder)));
+    let (_editor, reference) = ide_binding(&home, &window("win-1", std::slice::from_ref(&folder)));
     settings(&home, r#"{"yolo": false}"#);
     home.start_named_fake("ada", &[]);
     home.start_named_fake("bob", &[]);
     let mut ada = McpTestClient::open(&home, "a1");
     let started = ada.call(
         "start_agent",
-        json!({ "name": "cy", "cli": "fake", "window": "win-1", "path": folder }),
+        json!({ "name": "cy", "cli": "fake", "window": reference.window_id, "path": folder }),
     );
-    assert_eq!(started["data"]["window"], "win-1", "{started}");
+    assert_eq!(started["data"]["windows"], json!([reference]), "{started}");
     assert_eq!(record(&home, "cy")["root"], "a1");
     let listed = ada.call("list_agents", json!({}));
     let ids: Vec<&Value> = listed["data"]["agents"]
@@ -295,7 +298,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     );
     let launched = ada.call(
         "start_agent",
-        json!({ "name": "eve", "cli": "fake", "window": "win-1", "path": folder }),
+        json!({ "name": "eve", "cli": "fake", "window": reference.window_id, "path": folder }),
     );
     assert_eq!(launched["status"], "success", "{launched}");
     assert_eq!(

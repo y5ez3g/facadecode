@@ -58,30 +58,39 @@ pub fn for_mcp_client(agent: &str, name: &str, waiting: usize) -> String {
 }
 
 /// An agent's whereabouts, which its instructions give so that it can start another agent next to
-/// itself without asking: the window's name and ID, and the location's ID and folder.
+/// itself without asking.
 pub struct Place<'a> {
-    pub window: &'a str,
-    pub window_id: &'a str,
+    /// The name and logical ID of the agent's window, if it has one member window.
+    pub window: Option<(&'a str, &'a str)>,
     pub location_id: &'a str,
     pub folder: &'a str,
 }
 
-/// The place of `agent`, its window called by the name `windows` give it.
+/// The place of `agent`, with the name that `windows` give its sole member window.
 pub fn place_of<'a>(agent: &'a AgentInfo, windows: &'a [WindowInfo]) -> Place<'a> {
+    let window = match agent.windows.as_slice() {
+        [window] => Some((
+            window_name(&window.machine_id, &window.window_id, windows),
+            window.window_id.as_str(),
+        )),
+        _ => None,
+    };
     Place {
         folder: &agent.cwd,
         location_id: &agent.location_id,
-        window_id: &agent.window_id,
-        window: window_name(&agent.window_id, windows),
+        window,
     }
 }
 
-/// The name of window `id`: the terminal window's label, a listed window's label, or else the ID.
-fn window_name<'a>(id: &'a str, windows: &'a [WindowInfo]) -> &'a str {
+/// The name of window `id` on `machine_id`, or its own ID if it is unlisted.
+fn window_name<'a>(machine_id: &str, id: &'a str, windows: &'a [WindowInfo]) -> &'a str {
     if id == TERMINAL_WINDOW {
         return TERMINAL_WINDOW_LABEL;
     }
-    match windows.iter().find(|listed| listed.window_id == id) {
+    match windows
+        .iter()
+        .find(|listed| listed.machine_id == machine_id && listed.window_id == id)
+    {
         Some(listed) => &listed.label,
         None => id,
     }
@@ -103,10 +112,13 @@ pub struct Run<'a> {
 pub fn for_agent(agent: &str, run: Option<&Run>) -> String {
     let whereabouts = run.map_or_else(String::new, |run| {
         let place = &run.place;
-        format!(
-            ", working in {} in window {:?} (window {})",
-            place.folder, place.window, place.window_id
-        )
+        match place.window {
+            Some((name, id)) => format!(
+                ", working in {} in window {name:?} (window {id})",
+                place.folder
+            ),
+            None => format!(", working in {}", place.folder),
+        }
     });
     let started_by = run.map_or_else(String::new, |run| {
         format!(" Your creator is {}.", creator_name(run.creator))
@@ -148,8 +160,7 @@ mod tests {
     fn run(creator: Option<(&'static str, Option<&'static str>)>, yolo: bool) -> Run<'static> {
         Run {
             place: Place {
-                window: "app (Workspace)",
-                window_id: "win-2",
+                window: Some(("app (Workspace)", "win-2")),
                 location_id: "loc-7",
                 folder: "/work/app",
             },

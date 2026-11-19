@@ -199,6 +199,7 @@
 	"End Agent": "Aracıyı Sonlandır",
 	"Go to Agent": "Aracıya Git",
 	"Search by name, CLI, title, location, or ID": "Ad, CLI, başlık, konum veya kimliğe göre arayın",
+	"Window disconnected": "Pencere bağlı değil",
 	"Select a folder": "Bir klasör seçin",
 	"Select a working location": "Bir çalışma konumu seçin",
 	"Show Agent Launch": "Aracı Başlatma Yapılandırmasını Göster",

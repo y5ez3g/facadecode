@@ -19,14 +19,14 @@ use facade_base::sockets::{DaemonListener, ServerSocket};
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
-use crate::Cancel;
+use crate::{Cancel, WindowBinding};
 
 /// Who a connection is, as its hello settled it.
 pub(crate) struct Client {
     /// What the client said of itself in its hello.
     pub(crate) identity: Identity,
-    /// The editor window the client is part of, by ID: only an `ide` client has one.
-    pub(crate) window: Option<String>,
+    /// The editor window and generation bound to this `ide` connection.
+    pub(crate) window: Option<WindowBinding>,
     /// The agent the client acts for, by ID: the one its hello named, or the one its sessions name.
     pub(crate) agent: Option<String>,
 }

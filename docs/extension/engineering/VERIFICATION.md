@@ -90,6 +90,11 @@ host, `hosts` between two - and with a container of the local Docker attached as
 window lifetime test (`ssh-lifetime`) runs in a Remote-SSH workspace against a real SSH host. WSL and installation from the
 Marketplace are checked by hand.
 
+The Rust multi-window journeys (`multi-window` and `ssh-multi-window`) use two isolated editor profiles against the same
+Facade home. They check Go to Agent, shared notifications, Stop and Pin restoration, both Pin changes in one workspace,
+per-window presentation, and deletion of a worktree whose agent appears in another window. The SSH windows share one
+remote execution host.
+
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be
 solved in the available environment, complete independent work and record the exact missing evidence and required next

@@ -9,7 +9,7 @@ import type { Agents, Catalog, CliCatalogPort, CliChoice, CliChoices, HumanPort,
 import { locationLabel, onePlaceOf } from '../cardView';
 import { COMMANDS } from '../catalog';
 import { cliIcon, launchFailureText, openSettingsLabel, plainText, reasonOf, reasonText } from '../presentation';
-import { chooseLocation, Destination, environmentLabel, worktreeSourceLabel } from './location';
+import { chooseLocation, Destination, environmentLabel, type LocationDeps, worktreeSourceLabel } from './location';
 import { BACK, Flow } from './stepping';
 
 export interface NewAgentDeps {
@@ -18,6 +18,7 @@ export interface NewAgentDeps {
 	readonly locations: Pick<LocationPort, 'snapshot' | 'refresh' | 'onDidChange'>;
 	readonly clis: CliCatalogPort;
 	readonly worktrees: WorktreePort;
+	readonly worktreeAgents?: LocationDeps['worktreeAgents'];
 	readonly history: LaunchHistoryPort;
 	/** Selects the new card: a person's own launch comes to the front (PANEL-2.1, LIFECYCLE-2.2). */
 	readonly select: (run: RunId) => void;

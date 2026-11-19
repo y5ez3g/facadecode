@@ -1,5 +1,5 @@
-//! One fact an agent is told without asking (RULES-1.8): an agent that another agent of the same
-//! window started, whose CLI has waited twenty seconds in a row on its own permission, question or
+//! One fact an agent is told without asking (RULES-1.8): an agent that shares a member window with
+//! its creator, whose CLI has waited twenty seconds on its own permission, question or
 //! sign-in, is reported to that creator once each time it starts waiting, while the creator still
 //! runs. The person is never told by it. Agent states come from the `agents` topic's changes.
 
@@ -130,7 +130,12 @@ impl Daemon {
             return;
         };
         let theirs = creator.info();
-        if theirs.window_id != info.window_id || theirs.process != ProcessState::Running {
+        if theirs.process != ProcessState::Running
+            || !info
+                .windows
+                .iter()
+                .any(|window| theirs.windows.contains(window))
+        {
             return;
         }
         let due = Due::now();

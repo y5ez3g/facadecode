@@ -336,6 +336,7 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 		} finally {
 			pair.turn = false;
+			this.applyPin(pair);
 		}
 	}
 

@@ -249,7 +249,7 @@ fn a_prompt_whose_agent_ends_before_its_tools_settle_fails_as_ended() {
 fn guest(home: &TestHome) -> DaemonTestClient {
     connect(home);
     let mut hooks = DaemonTestClient::open(home);
-    hooks.hello("terminal", [1, 1], json!({}));
+    hooks.hello("terminal", DAEMON_RANGE, json!({}));
     assert_eq!(
         hooks.call(
             "hook.session-start",
@@ -435,7 +435,7 @@ fn a_guest_s_start_prompt_that_outlives_its_daemon_still_owes_it_its_result() {
         Some(("facade".into(), "a1".into(), "pending".into()))
     );
     let mut hooks = DaemonTestClient::open(&home);
-    hooks.hello("terminal", [1, 1], json!({}));
+    hooks.hello("terminal", DAEMON_RANGE, json!({}));
     let ended = hooks.call("hook.turn-end", json!({ "cli": "claude", "session": "s1" }));
     let taken = &ended["result"]["messages"];
     assert_eq!(

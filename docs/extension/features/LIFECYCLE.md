@@ -167,8 +167,7 @@ which also decides `#human` and `@human`. Stale display text never redirects a r
 
 ### 2.2 Terminal placement and focus
 
-**Each agent has one terminal, shown in at most one editor tab, open wherever the person opened it until they close it
-or the agent goes - a reload or an extension-host restart aside (3.5); closing a tab hides it.**
+**Each window shows an agent's terminal in at most one tab. Closing the tab hides its view.**
 
 An agent's card is the agent; its terminal's editor tab is a view of it, opened where the person wants to see it, and
 the panel is where the person switches between agents. The person's New Agent and Resume open the new agent's tab in the
@@ -205,8 +204,10 @@ group never goes empty; the editor draws the copy before Facade hears of it, so 
 extension can prevent. The agent stays as it was throughout. A reload or an extension-host restart is the one exception to
 a tab staying open (3.5): every agent's process and card survive it, but only the pinned agents' tabs open again; every other agent's
 tab stays hidden until the person opens it from its card, and once the pinned tabs are open the last one opened
-successfully is in front, its group the active one, and its card selected. Every open agent tab draws its agent's screen, while ptyd keeps every agent's process and screen
-(ARCHITECTURE-2.3).
+successfully is in front, its group the active one, and its card selected. Rust member windows can show the same
+agent's screen at once. The last resize determines its dimensions, including a resize from a terminal attach. Core uses
+the last resizing member editor for the CLI's colors and follows its theme updates (ARCHITECTURE-2.3). Each window
+keeps its own tab position and focus. The old engine keeps the process and screen in ptyd.
 
 The tab shows only the agent name beside the entry's icon from CONFIGURATION-2.4: a built-in logo glyph
 (`facade-cli-<id>`) or a robot glyph (`facade-robot-<color>`). It shows
@@ -246,20 +247,27 @@ terminal in the editor area; an extension cannot change that.
 
 ### 2.3 Finding an agent
 
-**Go to Agent searches and opens agents in the current window only.**
+**Go to Agent opens this window's agents and, on the Rust engine, lets the person adopt running agents on its local machine.**
 
 Match name, CLI, title, working location and run ID. Accept the existing short ID and a copied agent reference as
 search input; an ID in a copied reference matches that run even if its descriptive name is stale. Use one native picker
 line: CLI icon, prominent name, then quieter short ID, working location - none where every agent works in the window's
 one place to work (1.3), which search still matches - and its conversation's title (CLIS-2.4), in that order, joined
-with ` · `. It says no state: the card's dot and second line do (PANEL-1.4). An empty name uses the short ID as the
+with ` · `. The card's dot and second line carry agent status (PANEL-1.4). An empty name uses the short ID as the
 prominent identifier, with location/title after it. The icon
 identifies the CLI; its name stays searchable without being repeated in the row. Keep name and title even when equal;
 omit only missing fields. Native width clipping never changes the stored or searchable text. Include starting/running
 and retained-error cards in panel order, whatever the panel's filter shows; rows follow changes while the picker is
 open. Choosing a row closes the picker and reveals that terminal. Each row's buttons copy its reference (2.1) and end
-that exact run with End Agent (3.1), both keeping the picker open. No cross-window picker, focus transfer or proxy card is provided. The
-person switches editor windows to manage another window; agents can use MCP across windows.
+that exact agent with End Agent (3.1), both keeping the picker open.
+
+Rust adds one row per other running non-guest agent on the current machine, including ordinary terminal starts and
+agents of disconnected windows. Each of these rows appends the member window names in window-reference order and adds
+`Window disconnected` after each disconnected member. Window names and the status label are display fields. The search
+fields above and exact short-ID match are unchanged. Selecting an outside row adds the current window under RULES-4.1,
+then opens its card and terminal here using the normal reveal path. Its other windows keep presenting it. Copy and End
+act on the row's exact numbered agent without adding this window. On the old engine the picker stays within the
+current window. For ended Rust agents, Resume uses the records of this window under 3.2.
 
 ## 3 End and continuity
 
@@ -267,13 +275,13 @@ person switches editor windows to manage another window; agents can use MCP acro
 
 **End Agent is the single human action for ending a starting, live or retained-ended agent.**
 
-Card menus, Go to Agent and the Command Palette use RULES-4.1's immediate removal of the card and terminal tab, with
-process cleanup in the background where a process exists. Resume Agent (3.2) uses the CLI's native history for saved,
-resumable conversations. It can continue a Rust agent under its retained number after End Agent or normal exit, including
-when its card is gone. MCP keeps `stop_agent` under MCP-3.2.
+Card menus, Go to Agent and the Command Palette use RULES-4.1's lifetime rules. A local card and terminal tab close
+immediately, with cleanup in the background where a process exists. Resume Agent (3.2) can continue a Rust agent under
+its retained number after End Agent or normal exit, including when its card is gone. MCP keeps `stop_agent` under MCP-3.2.
 
 On the Rust engine, End Agent calls `agent.stop` for a running agent, including one whose number arrives after the card
-is closed. The record and Pin stay. For an ended agent, End Agent dismisses the card. The workspace remembers that
+is closed. A successful stop closes the pairs in its connected member windows under RULES-4.1. For an ended agent,
+End Agent dismisses the card. The workspace remembers that
 dismissal for an actual abnormal exit recorded by core. A card for a failed restoration call is dismissed for the current
 activation. A running agent whose stop failed can reattach at the next opening or reload. On the old engine, End Agent
 also unpins. If that save fails, Facade keeps the pair and tells the person `Could not end {0}: {1}`. A close ptyd has
@@ -291,10 +299,13 @@ location removal and window closure follow RULES-3.3, 2.4 and 4.1. Messages name
 
 ### 3.2 Resume picker
 
-**Resume searches vendor histories for this window's folders, subfolders and all associated worktrees.**
+**Resume searches the window's CLI histories and, on the Rust engine, eligible records of its member agents.**
 
 Open from panel, empty state or Command Palette; the picker shows at once, busy while the window's locations and running
-conversations are read. With no folder open, its one item `Open Folder...`, detail `Open a folder to resume its
+conversations are read. The CLI history covers the window's folders, subfolders and associated worktrees. Rust also lists
+ended core records with a saved session for which this window is a member, including after a stop. When both sources
+give the same environment, CLI and session ID, use the core record and its original numbered agent. With neither a
+folder nor a Rust member conversation, its one item `Open Folder...`, detail `Open a folder to resume its
 conversations.`, runs the editor's Open Folder as PANEL-1.2's does. With a folder open, check facade.json before
 reading histories. A file-level problem shows one row per problem: the file as label, its reason as detail and a
 gear icon and an Open Settings gear button, as in New Agent. Choosing the row or its button runs Open Settings.
@@ -316,18 +327,19 @@ equals the title. The icon names the CLI, so no CLI name is repeated as text; se
 location, including beyond the first page. Use the vendor's saved display title and conversation activity time,
 including native renames; file maintenance does not make an old conversation recently active. Ordering remains correct
 across page boundaries. Omit a history segment whose vendor continuation points to an existing resumable conversation.
-With nothing to list, the placeholder says `No saved conversations in this window's folders`; where the histories or the
-window's state cannot be read, a notification says `Could not read the saved conversations: {0}`. A conversation that
-cannot be resumed now - its working directory gone, or its CLI turned off or not installed in this environment - is not
-listed, nor is one an agent already holds, in this window or another (CLIS-2.4). Do not list unrelated projects, or
+With nothing to list, the placeholder says `No saved conversations in this window's folders`. If the histories or the
+window's state cannot be read, a notification says `Could not read the saved conversations: {0}`. Omit a CLI history
+entry whose working directory is gone, whose CLI is turned off or unavailable in this environment, or whose
+conversation a running agent already holds (CLIS-2.4). Do not list unrelated projects, or
 provide delete, hide or show-hidden controls. The panel's display filter does not change this history scope. When a
 vendor records a set of workspace folders without identifying the original cwd, use Facade's recorded cwd if known.
 Otherwise, choosing that conversation opens a native working-location picker for its folders in this window, each
 with its full path. Each choice must find the conversation's store with that folder's launch settings
 (CONFIGURATION-3.4). Do not infer the original cwd from directory order. Cancellation starts nothing. If that exact
 conversation already runs in Facade, do not start it again; reveal it only when it belongs to this window, otherwise say
-`{0} is already running in another window.` Do not build cross-window navigation. External activity is not a gate: call
-vendor resume and return its result. No external-writer scan, lease or concurrency guarantee is required.
+`{0} is already running in another window.` For a Rust member agent the same running record is already in this window's
+scope. External activity is not a gate: call vendor resume and return its result. No external-writer scan, lease or
+concurrency guarantee is required.
 
 ### 3.3 Resume execution
 
@@ -341,10 +353,14 @@ or the new agent's ID when no name is free. Save the chosen name with the conver
 agent's ID. Never derive it from the conversation title or CLI ID. Existing saved names, including long ones, remain
 unchanged. An ordinary reload preserves the running agent's name. Automatic Pin restoration keeps a recorded
 nonempty name; a blank one follows 2.1.
-Missing original session/location/configuration fails honestly without selecting another session or folder; a Resume
-refused before acceptance says `Could not resume {0}: {1}` with the conversation's title.
-For a vendor's ambiguous workspace-folder set under 3.2, the person's explicit location choice supplies the missing cwd.
-An accepted Resume creates its pair immediately and retains actual launch failure. Do not acquire an external
+Missing original session, location or configuration fails with its actual reason. For a vendor's ambiguous workspace-folder
+set under 3.2, the person's explicit location choice supplies the missing cwd. On the Rust engine core uses a retained
+agent's original cwd with the restoring window's execution environment and current startup settings, even when that
+window does not list the location. Resume waits for core to confirm success before opening the card and terminal.
+Concurrent resumes of the same retained number share a process under RULES-4.2. If a Resume call errors and core
+already reports the same member running, the window reattaches to it. Other manual failures say
+`Could not resume {0}: {1}` with the conversation's title. On the old engine a refused Resume uses that notification,
+and an accepted one creates its pair immediately and retains actual launch failure. Do not acquire an external
 conversation-writer lease or replay the original creation prompt.
 On process start, register the successful cwd under WORKTREES-1.2 and update human launch history under 1.2.
 
@@ -404,25 +420,18 @@ saved is undone on the tab, and the person is told `Could not pin {0}: {1}` or `
 of an agent that cannot be pinned is undone. The adapter must identify and resume the exact session. Pin and Unpin are
 acknowledged only after durable storage succeeds.
 
-The Rust engine creates a Pin once core identifies the agent's saved session. It stores the original home and agent
-number with RULES-4.2's context. Updates to the name or session keep that identity. A preexisting Pin without that identity
-stays in storage for the old engine. When the person pins a Rust agent, a preexisting Pin for the same conversation
-key without an agent number takes the new identity and keeps its position in the Pin order. An opening with skipped
-old Pins logs their number and saved conversations.
+The Rust engine creates a Pin once core identifies the agent's saved session. It uses the machine and number
+under RULES-4.2. One workspace has one Pin for that identity. Actively pinning an agent with an existing Pin keeps
+its saved position. A preexisting session-only Pin for the same conversation takes the new identity in place when
+the person pins the agent. Metadata refresh updates the existing entry and preserves an Unpin committed by another
+window (ARCHITECTURE-3.1).
 
-**Rust Pin restoration** starts from the first complete `agents` snapshot of the current home. A matching running agent
-in this window carries its Pin. A running agent in another window keeps its Pin in storage. Facade clears Pins whose
-records are absent from their verified home and leaves Pins for a different or unavailable home stored. For an agent
-eligible under RULES-4.2, `agent.resume` restores the original number. A separate agent already running the same CLI and
-session postpones restoration until another opening or reload. The Pin keeps its original identity. Core supplies the
-reason when the call fails, including when the record lacks a saved session. The red card keeps its Pin and shows the
-reason. Facade attempts a given Pin once per opening or reload. End Agent on a restoration failure dismisses the card
-and keeps the Pin. For an
-actual abnormal exit, Facade remembers dismissal in this workspace until the agent runs again or the record is removed.
-An abnormal exit the person has yet to dismiss keeps its red card and its Pin. Simultaneous restoration in another
-window leaves the Pin stored there while the winning window shows the agent.
-If `facade.rustEngine` is `auto` and the old engine is used, stored Rust Pins wait for a later Rust activation. With the
-setting `off`, the old engine uses the shared Pin storage by conversation.
+**Rust Pin restoration** starts from the first complete `agents` snapshot of the bound machine under RULES-4.2.
+If needed, add this window to the agent before reattaching or calling `agent.resume` for the original number. Pin
+restoration keeps the saved order and opens pinned tabs after the runs are reconciled (3.5). A failed restoration's
+red card gives the actual reason, including a missing saved session. End Agent dismisses that card for this activation.
+For an actual abnormal exit, the workspace remembers its dismissal until the agent runs again or the record is removed.
+The workspace's Pin intent stays independent of Pin intent in another workspace.
 
 On the old engine, a run whose CLI can identify and resume an exact session can be pinned from its start and across
 a reload. A conversation Facade resumed is saved already, and a new one
@@ -458,8 +467,9 @@ End Agent and a normal exit remove the Pin; whole-window close preserves it.
 
 **Reload and temporary disconnection reuse existing runs. Reopening can restore ended agents through saved Pins.**
 
-On the Rust engine, reconnect to core after a reload, window closure or extension-host restart. The window reattaches
-running agents by their original numbers and screens. A complete `agents` snapshot drives Pin restoration under 3.4.
+On the Rust engine, reconnect to core after a reload, window closure or extension-host restart. The logical reference
+selects this window's agents (RULES-4.1), which reattach by their original numbers and screens. A complete `agents`
+snapshot drives Pin restoration under 3.4.
 The core record keeps an actual abnormal exit across activation. The workspace keeps the user's dismissal of that exit.
 A failed restoration call keeps the red card for the current activation. A later opening or reload can attempt that
 Pin once again. Normal exit or a successful stop in an open window does not trigger automatic restoration there.
@@ -481,7 +491,7 @@ of these brought each run back:
    engine, reattach every run the window's ptyds hold. Pin restoration then starts its new runs (3.4), once
    the tabs ahead of the first saved Pin no run holds have opened. Those need no listing of the conversations; every tab
    after that Pin, and the final selection, wait for it, a ptyd that does not answer delaying them as it delays the Pins.
-2. Choose the eligible Pins in their global saved order (PANEL-2.1), each pinned agent's tab once - a reattached run's,
+2. Choose the eligible Pins in their workspace's saved order (PANEL-2.1), each pinned agent's tab once - a reattached run's,
    a retained failure's with a Pin, a restored Pin's once its process has started; a run no longer eligible when its turn
    comes drops out (3.4).
 3. Open and mark each in its group, one at a time: the group its record names - the last group where theirs is gone, so
@@ -495,10 +505,10 @@ of these brought each run back:
 5. Finalize the selection once: it does not move while they open; once they are open it is on the last one opened, and
    where none opened it stays as it was (PANEL-2.1).
 
-A run keeps whether its tab is open and in which group, with its process (ARCHITECTURE-3.1) - the placement this
-procedure needs - told as the person changes them - Facade's own showing of a tab for its mark changes none - and a
-pinned agent's tab opens in that group at the next reload; a retained failure and a start waiting its turn keep them
-with their records.
+Each logical Rust window keeps its own tab placement (ARCHITECTURE-3.1). The old engine keeps it with the run.
+The record follows the person's changes, including for retained failures and starts waiting their turn.
+Facade's own showing of a tab for its mark leaves the recorded placement alone. A pinned agent's tab opens in its
+remembered group on reload.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
 silence or a remote disconnect. Reconcile actual process state before restoring a run. On the old engine, RULES-4.1's
@@ -508,9 +518,8 @@ it restores Pins. A run whose end is not confirmed stays listed as uncertain, ho
 restored beside it, and shows a red card whose second line says `Stop unconfirmed · check process`, where End Agent
 ends it again; once its exit is heard the card goes and its Pin is restored as an ended run's. On the old engine, proven
 folder or worktree removal closes and unpins affected agents, including when removal is found on restart. On the Rust
-engine, Facade's Delete Worktree command unpins the agents it ends before asking Git to delete the worktree. A worktree
-deletion waits for the required stops to be confirmed. Location loss discovered elsewhere keeps the Pin. If restoration
-fails because the location is gone, the person can unpin from the red card.
+engine, Delete Worktree follows WORKTREES-3.2's source-window and stop checks. Location loss discovered elsewhere
+keeps the Pin. If restoration fails because the location is gone, the person can unpin from the red card.
 
 ## 4 Technical design
 

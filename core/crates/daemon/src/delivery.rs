@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use facade_base::daemon::{
-    DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, Message, SendArgs, SendResult,
-    TERMINAL_WINDOW, TextWritten,
+    Delivery, DeliveryFailure, DeliveryStatus, Message, MessagesChange, SendArgs, SendResult,
+    TextWritten, WindowDelivery,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_rules::Rule;
@@ -16,10 +16,20 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::agent::{
     self, AgentCommand, AgentHandle, Input, InputRejection, MessageTyping, Submission,
 };
-use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedResult, Settled};
+use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedHuman, PostedResult, Settled};
 use crate::operations::{check_request_id, request_words};
 use crate::records;
 use crate::{Cancel, Daemon, HUMAN, Sender, gate_for_test, log};
+
+fn log_repeat(message: &Message, request_id: &str) {
+    log(
+        "info",
+        &format!(
+            "{}, #{}'s to #{}, answers its request {request_id} again",
+            message.message_id, message.from, message.to
+        ),
+    );
+}
 
 /// How input waits where its agent has no room for it now, or a resize waits to take effect.
 pub(crate) enum InputWait {
@@ -224,7 +234,7 @@ impl Daemon {
         };
         let reach = self.reach_of(from.as_ref().map(AgentHandle::id));
         let Some(to) = self.resolve_named(&args.to, &reach, true)? else {
-            return self.tell_person(from.as_ref(), args);
+            return self.tell_person(from.as_ref(), args, cancel).await;
         };
         if to.exit().borrow().is_some() {
             return Err(ErrorBody::new(
@@ -242,7 +252,7 @@ impl Daemon {
             ));
         }
         let from_info = from.as_ref().map(AgentHandle::info);
-        let to_window = to.info().window_id;
+        let to_windows = to.info().windows;
         let sender = Sender {
             from: inbox.clone(),
             from_name: from_info.as_ref().map(|info| info.name.clone()),
@@ -253,10 +263,12 @@ impl Daemon {
         // A guest has no typist: its next turn's hook takes its messages.
         let deadline = (!to.is_guest()).then(|| due.at.clone());
         let message = Message {
-            from_window: from_info
-                .map(|info| info.window_id)
-                .filter(|window| *window != to_window)
-                .map(|window| self.windows.label(&window)),
+            from_window: from_info.as_ref().and_then(|info| {
+                let [window] = info.windows.as_slice() else {
+                    return None;
+                };
+                (!to_windows.contains(window)).then(|| self.windows.label(window))
+            }),
             ..pending_message(sender, to.id(), args.text, reply_to, deadline)
         };
         if !to.is_guest() {
@@ -293,6 +305,7 @@ impl Daemon {
                 message,
                 repeated: false,
                 withdrawn: false,
+                windows: None,
             });
         }
         let number = messages::number(&message);
@@ -333,6 +346,7 @@ impl Daemon {
             message,
             repeated: false,
             withdrawn,
+            windows: None,
         })
     }
 
@@ -345,21 +359,31 @@ impl Daemon {
         request_id: &str,
         mut cancel: Cancel,
     ) -> Result<SendResult, ErrorBody> {
-        let (Earlier::Settled(message) | Earlier::Delivering(message, _)) = &earlier;
-        log(
-            "info",
-            &format!(
-                "{}, #{}'s to #{}, answers its request {request_id} again",
-                message.message_id, message.from, message.to
-            ),
-        );
-        let (message, withdrawn) = match earlier {
-            Earlier::Settled(message) => (message, false),
-            // A guest's message waits with no deadline for its next turn: it answers as it stands.
-            Earlier::Delivering(message, _) if message.delivery.deadline.is_none() => {
-                (message, false)
+        let (message, settled) = match earlier {
+            Earlier::HumanReady(result) => {
+                log_repeat(&result.message, request_id);
+                return Ok(result);
             }
-            Earlier::Delivering(message, mut settled) => {
+            Earlier::HumanInFlight(mut settled) => {
+                let result = settled.wait_for(Option::is_some).await.map_err(|_| {
+                    ErrorBody::new(
+                        Reason::Unavailable,
+                        "the original delivery ended without a result",
+                    )
+                })?;
+                let result = result.as_ref().expect("a settled person message").clone();
+                if let Ok(sent) = &result {
+                    log_repeat(&sent.message, request_id);
+                }
+                return result;
+            }
+            Earlier::Settled(message) => (message, None),
+            Earlier::Delivering(message, settled) => (message, Some(settled)),
+        };
+        log_repeat(&message, request_id);
+        let (message, withdrawn) = match settled {
+            // A guest's message waits with no deadline for its next turn.
+            Some(mut settled) if message.delivery.deadline.is_some() => {
                 let number = messages::number(&message);
                 {
                     let settling = async {
@@ -387,11 +411,13 @@ impl Daemon {
                 let answer = settled.borrow().clone();
                 settled_answer(answer, &message.to, &message.message_id)?
             }
+            _ => (message, false),
         };
         Ok(SendResult {
             message,
             repeated: true,
             withdrawn,
+            windows: None,
         })
     }
 
@@ -475,14 +501,12 @@ impl Daemon {
         }
     }
 
-    /// Tells the person a message from agent `from`: delivered as the `ide` clients of `from`'s
-    /// window that watch its messages are handed it (RULES-1.8). Refused before it is kept where
-    /// no such client is there, where `from` is in the terminal window, or where the person sends
-    /// it. It is never kept for later or sent to another window.
-    fn tell_person(
+    /// Tries the sender's current member subscriptions, then commits the outcome under one number.
+    async fn tell_person(
         &self,
         from: Option<&AgentHandle>,
         args: SendArgs,
+        cancel: Cancel,
     ) -> Result<SendResult, ErrorBody> {
         let Some(from) = from else {
             return Err(ErrorBody::invalid_argument(
@@ -490,25 +514,31 @@ impl Daemon {
             ));
         };
         let info = from.info();
-        if info.window_id == TERMINAL_WINDOW {
-            return Err(ErrorBody::new(
-                Reason::Unavailable,
-                format!(
-                    "#{} runs in the terminal window, not in an editor window, where Facade \
-                     could tell the person",
-                    from.id()
-                ),
-            ));
+        let mut targets = Vec::new();
+        let mut outcomes = WindowDelivery {
+            delivered: Vec::new(),
+            not_delivered: Vec::new(),
+        };
+        for window in info.windows {
+            match self.windows.person_target(&window) {
+                Ok(target) => targets.push((window, target)),
+                Err(failure) => outcomes.not_delivered.push(failure),
+            }
         }
-        if !self.windows.tells_person(&info.window_id) {
-            return Err(ErrorBody::new(
+        let request = args.request_id.as_deref();
+        if targets.is_empty() {
+            // The first request lookup may have raced an insert while the watches changed.
+            if let Some(request) = request
+                && let Some(earlier) = self.messages.find_request(from.id(), request)?
+            {
+                return self.repeat_send(earlier, request, cancel).await;
+            }
+            let mut error = ErrorBody::new(
                 Reason::Unavailable,
-                format!(
-                    "no editor shows #{}'s window, {}, now: the person cannot be told",
-                    from.id(),
-                    self.windows.label(&info.window_id)
-                ),
-            ));
+                "no member window could tell the person",
+            );
+            error.data.windows = Some(outcomes.not_delivered);
+            return Err(error);
         }
         if let Some(reply) = args.reply_to.as_deref()
             && !self.messages.in_inbox(from.id(), reply)
@@ -518,52 +548,45 @@ impl Daemon {
                 format!("no message {reply} is in the sender's inbox"),
             ));
         }
-        let now = facade_base::time::iso_now();
-        let message = Message {
-            message_id: String::new(),
-            from: from.id().to_string(),
+        let sender = Sender {
+            from: from.id().to_owned(),
             from_name: Some(info.name),
-            to: HUMAN.into(),
-            text: args.text,
-            reply_to: args
-                .reply_to
-                .map(|reply| reply.trim_start_matches('#').to_string()),
-            from_window: None,
-            call_id: None,
-            result: None,
-            at: now.clone(),
-            delivery: Delivery {
-                status: DeliveryStatus::Success,
-                reason: None,
-                text_written: TextWritten::None,
-                enter_written: Some(false),
-                deadline: None,
-                delivered_via: Some(DeliveredVia::Notified),
-                delivered_at: Some(now),
-            },
         };
-        let (message, repeated) = self.messages.notify(message, args.request_id.as_deref())?;
-        let line = if repeated {
-            format!(
-                "{}, #{}'s to #human, answers its request {} again",
-                message.message_id,
-                message.from,
-                args.request_id.as_deref().unwrap_or_default()
-            )
-        } else {
-            format!(
+        let reply = args
+            .reply_to
+            .map(|reply| reply.trim_start_matches('#').to_owned());
+        let message = pending_message(sender, HUMAN, args.text, reply, None);
+        let message = match self.messages.begin_human(message, request)? {
+            PostedHuman::New(message) => message,
+            PostedHuman::Earlier(earlier) => {
+                return self
+                    .repeat_send(earlier, request.unwrap_or_default(), cancel)
+                    .await;
+            }
+        };
+        let change = crate::service::value_of(&MessagesChange::Updated {
+            message: Box::new(message.clone()),
+        });
+        for (window, target) in targets {
+            match self.windows.deliver_to_person(&target, &change) {
+                Ok(()) => outcomes.delivered.push(window),
+                Err(failure) => outcomes.not_delivered.push(failure),
+            }
+        }
+        outcomes
+            .not_delivered
+            .sort_by(|a, b| a.window.cmp(&b.window));
+        let result = self.messages.finish_human(&message, outcomes)?;
+        log(
+            "info",
+            &format!(
                 "#{} sent {} to #human{}",
                 message.from,
                 message.message_id,
-                request_words(args.request_id.as_deref())
-            )
-        };
-        log("info", &line);
-        Ok(SendResult {
-            message,
-            repeated,
-            withdrawn: false,
-        })
+                request_words(request)
+            ),
+        );
+        Ok(result)
     }
 
     /// Hands a pending message to `to`'s typist, which settles it. False where the typist could

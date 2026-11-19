@@ -73,7 +73,8 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			assert.strictEqual(path.basename(path.dirname(path.dirname(fs.readFileSync(`${out}.which`, 'utf8').trim()))), 'core', `the terminal runs core's own facade: ${fs.readFileSync(`${out}.which`, 'utf8')}`);
 			const seen = (JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as ReturnType<typeof listed>).find(agent => `#${agent.agent_id}` === alias);
 			assert.ok(seen, `the terminal lists ${alias}: ${fs.readFileSync(`${out}.json`, 'utf8')}`);
-			assert.notStrictEqual(seen.window_id, 'terminal', 'it is the editor window\'s agent');
+			assert.ok(seen.machine_id && seen.windows?.length === 1 && seen.windows[0].machine_id === seen.machine_id
+				&& seen.windows[0].window_id !== 'terminal', 'it is the editor window\'s agent on this machine');
 		} finally {
 			shell.dispose();
 			await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId }).then(undefined, () => undefined);
