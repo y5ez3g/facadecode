@@ -109,11 +109,18 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 }
 
 async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {
-	await until(`${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}`, async () => {
-		const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
-		return cards.length === 1 && cards[0].id === id && cards[0].pinned === pinned && cards[0].column !== null
-			&& terminals === 1 && cards[0].running || undefined;
-	});
+	let last: WindowView | undefined;
+	try {
+		await until(`${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}`, async () => {
+			last = await window.act<WindowView>({ kind: 'snapshot' });
+			const { cards, terminals } = last;
+			return cards.length === 1 && cards[0].id === id && cards[0].pinned === pinned && cards[0].column !== null
+				&& terminals === 1 && cards[0].running || undefined;
+		});
+	} catch (error) {
+		console.error(`Last window state in ${window.ready.folder}:`, JSON.stringify(last));
+		throw error;
+	}
 }
 
 /** Go to Agent attaches to a Shell run that survives closing the VS Code window. */

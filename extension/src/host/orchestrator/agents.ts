@@ -298,7 +298,17 @@ export class OrchestratorAgents implements vscode.Disposable {
 					throw error;
 				}
 			},
-			resumeExisting: agent => this.restoreOn(agent.machine_id, { reference: agent.agent_id }, agent.cwd),
+			resumeExisting: async agent => {
+				try {
+					return await this.restoreOn(agent.machine_id, { reference: agent.agent_id }, agent.cwd);
+				} catch (error) {
+					if (!(error instanceof DaemonError) || error.reason !== 'unavailable') { throw error; }
+					// A different workspace can resume this Agent between our lookup and resume.
+					const current = await this.inspect(referenceOf(agent)).catch(() => undefined);
+					if (current?.process === 'running') { return current; }
+					throw error;
+				}
+			},
 			resumeSession: pin => {
 				if (!pin.conversation.sessionId) {
 					throw new Error(vscode.l10n.t('This Pin has no saved session.'));
