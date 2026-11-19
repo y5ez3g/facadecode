@@ -13,7 +13,7 @@ import { WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { BUILT_IN_ADAPTERS, BUILT_IN_FACTS, iconOf } from '../clis/catalog';
 import { entrySetting, readEntries, readEntry } from '../clis/entries';
 import { Migration, migrationOf, settingsText } from '../clis/migration';
-import { planLaunch } from '../clis/plan';
+import { discoverEntry, planLaunch } from '../clis/plan';
 import { parseSettings } from '../clis/settingsFile';
 import { FacadeSettings, shownFile } from '../host/facadeSettings';
 import { catalogFrom, runSettingsOf, TEST_SETTINGS_FILE } from './settingsFixtures';
@@ -134,8 +134,8 @@ suite('The settings file: its CLIs (CONFIGURATION-2.1, 2.2, 2.3)', () => {
 		assert.deepStrictEqual(['codex', 'my-cli', '_x1', 'my cli', '2', 'a.b', 'Ünïcode'].map(entrySetting), ['clis.codex', 'clis.my-cli', 'clis._x1', 'clis["my cli"]', 'clis["2"]', 'clis["a.b"]', 'clis["Ünïcode"]']);
 	});
 
-	test('an entry\'s fields as written: its command, literal args in order, env with null removing, model, effort and enabled', () => {
-		const [entry] = catalogFrom({ clis: { codex: { command: '/opt/codex', args: ['--search', '-c', 'model_provider="qwen"'], env: { CODEX_HOME: '/q', OPENAI_API_KEY: null }, model: 'qwen3', effort: 'high', enabled: false } } })
+	test('an entry\'s fields as written: its program, literal args in order, env with null removing, model, effort and enabled', () => {
+		const [entry] = catalogFrom({ clis: { codex: { program: '/opt/codex', args: ['--search', '-c', 'model_provider="qwen"'], env: { CODEX_HOME: '/q', OPENAI_API_KEY: null }, model: 'qwen3', effort: 'high', enabled: false } } })
 			.entries.filter(each => each.adapter.id === 'codex');
 		assert.deepStrictEqual(plain([entry.path, entry.extra, entry.extraSetting, entry.environment, entry.model, entry.effort, entry.enabled, entry.problems]), [
 			'/opt/codex', ['--search', '-c', 'model_provider="qwen"'], 'clis.codex.args', { CODEX_HOME: '/q', OPENAI_API_KEY: null }, 'qwen3', 'high', false, []
@@ -164,6 +164,19 @@ suite('The settings file: its CLIs (CONFIGURATION-2.1, 2.2, 2.3)', () => {
 		]);
 	});
 
+	test('CONFIGURATION-2.2: reads either program key and reports conflicting keys without choosing a value', () => {
+		for (const value of [{ program: 'aider' }, { command: 'aider' }]) {
+			const entry = readEntry('tool', { type: 'custom', ...value }, BUILT_IN_FACTS);
+			assert.strictEqual(entry.program, 'aider');
+			assert.deepStrictEqual(entry.problems, []);
+		}
+		for (const value of [{ command: 'same', program: 'same' }, { program: null, command: 'old' }]) {
+			const entry = readEntry('tool', { type: 'custom', ...value }, BUILT_IN_FACTS);
+			assert.strictEqual(entry.program, '');
+			assert.deepStrictEqual(saidOf(entry.problems), [['entry_program_conflict', 'clis.tool.program']]);
+			assert.strictEqual(entry.problems[0].text, 'clis.tool.program conflicts with command. Keep program.');
+		}
+	});
 
 	test('CONFIGURATION-1.2, 2.1: the editor underlines, as it is typed, the name of an entry the reader refuses for its name, and no other: the schema\'s rule for names is the reader\'s', () => {
 		const rule = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'media', 'settings.schema.json'), 'utf8')).properties.clis.propertyNames;
@@ -188,7 +201,7 @@ suite('The settings file: its CLIs (CONFIGURATION-2.1, 2.2, 2.3)', () => {
 			['a', [['entry_type_missing', 'clis.a.type', 'claude, codex, agy, muse, opencode, pi, custom']]],
 			['b', [['entry_type_unknown', 'clis.b.type', 'claude, codex, agy, muse, opencode, pi, custom', 'string']]],
 			['c', [['entry_type_unknown', 'clis.c.type', 'claude, codex, agy, muse, opencode, pi, custom', 'number']]],
-			['d', [['entry_command_missing', 'clis.d.command']]]
+			['d', [['entry_command_missing', 'clis.d.program']]]
 		]);
 	});
 
@@ -203,7 +216,7 @@ suite('The settings file: its CLIs (CONFIGURATION-2.1, 2.2, 2.3)', () => {
 			model: 7, effort: '', enabled: 'yes', trust: true
 		}, BUILT_IN_FACTS);
 		assert.deepStrictEqual(saidOf(entry.problems), [
-			['entry_field', 'clis.pi', 'trust', 'type, icon, command, args, env, model, effort, enabled'],
+			['entry_field', 'clis.pi', 'trust', 'type, icon, program, args, env, model, effort, enabled'],
 			['entry_text_empty', 'clis.pi.command'],
 			['argument_type', 'clis.pi.args', '1', 'number'],
 			['argument_nul', 'clis.pi.args', '2'],
@@ -215,7 +228,7 @@ suite('The settings file: its CLIs (CONFIGURATION-2.1, 2.2, 2.3)', () => {
 			['entry_text_empty', 'clis.pi.effort'],
 			['entry_enabled_type', 'clis.pi.enabled', 'string']
 		]);
-		assert.deepStrictEqual([entry.command, entry.args, plain(entry.env), entry.model, entry.effort, entry.enabled], ['', [], {}, undefined, undefined, true]);
+		assert.deepStrictEqual([entry.program, entry.args, plain(entry.env), entry.model, entry.effort, entry.enabled], ['', [], {}, undefined, undefined, true]);
 		assert.ok(!/sk-live/.test(JSON.stringify(entry.problems)));
 		assert.deepStrictEqual([
 			saidOf(readEntry('codex', [], BUILT_IN_FACTS).problems),
@@ -282,6 +295,41 @@ suite('The settings file: its CLIs (CONFIGURATION-2.1, 2.2, 2.3)', () => {
 			assert.ok(kinds.has(kind), `${kind} is among the problems compared`);
 		}
 		assert.deepStrictEqual(problems.filter(problem => reasonText(problem.said, '') !== problem.text).map(problem => [problem.said?.kind, problem.text, reasonText(problem.said, '')]), []);
+	});
+
+	test('discovery names the written program key, including in localized diagnostics (CONFIGURATION-4.1)', () => {
+		const bundle: Record<string, string> = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'l10n', 'bundle.l10n.zh-cn.json'), 'utf8'));
+		const vscode = {
+			l10n: { t: (text: string, ...args: unknown[]) => {
+				assert.ok(bundle[text], text);
+				return bundle[text].replace(/\{(\d+)\}/g, (_, at: string) => String(args[Number(at)]));
+			} },
+			ThemeIcon: class { }, ThemeColor: class { }, Uri: { joinPath: () => ({}) }, env: { language: 'zh-cn' }
+		};
+		const { reasonText } = withModules({ vscode })<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+		const temp = tempDir('facade-program-source-');
+		try {
+			const destination = { host: { PATH: temp.dir }, platform: process.platform };
+			const cases = [
+				['no-such-cli', 'path_not_on_path'],
+				[path.join(temp.dir, 'missing', 'tool'), 'not_runnable']
+			] as const;
+			for (const field of ['command', 'program']) {
+				for (const [value, kind] of cases) {
+					const catalog = catalogFrom({ clis: { 'my tool': { type: 'custom', [field]: value } } });
+					const entry = catalog.entries.find(each => each.adapter.id === 'my tool')!;
+					const found = discoverEntry(entry, destination, temp.dir);
+					const setting = `clis["my tool"].${field}`;
+					assert.strictEqual(found.available, false);
+					assert.strictEqual(found.said?.kind, kind);
+					assert.ok(found.problem?.startsWith(`${setting} is ${JSON.stringify(value)},`), found.problem);
+					const localized = reasonText(found.said, found.problem!);
+					assert.ok(localized.startsWith(`${setting} 为 ${JSON.stringify(value)}`), localized);
+				}
+			}
+		} finally {
+			temp.remove();
+		}
 	});
 
 	test('one entry wrong leaves it alone unavailable: every other CLI reads as it would without it', () => {
@@ -478,7 +526,7 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 				'-c', 'model_providers.provider.base_url=YOUR_PROVIDER_URL',
 				'-c', 'model_providers.provider.wire_api=responses', '-c', 'model_providers.provider.env_key=PROVIDER_API_KEY'
 			], env: { PROVIDER_API_KEY: 'YOUR_API_KEY' } } },
-			{ name: 'Aider', value: { type: 'custom', icon: 'facade-pink', command: 'aider', args: ['--model', 'sonnet'] } }
+			{ name: 'Aider', value: { type: 'custom', icon: 'facade-pink', program: 'aider', args: ['--model', 'sonnet'] } }
 		];
 		for (const chosen of [[0], [1], [2], [0, 1], [0, 2], [1, 2], [0, 1, 2]].map(each => each.map(index => examples[index]))) {
 			const names = chosen.map(each => each.name);
@@ -513,7 +561,7 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 		}
 	});
 
-	test('CONFIGURATION-1.3: each built-in\'s entry shows its eight fields; command, model and effort commented out with a value it takes, which removing the // sets, and OpenCode a line saying where its are set', () => {
+	test('CONFIGURATION-1.3: each built-in\'s entry shows its eight fields; program, model and effort commented out with a value it takes, which removing the // sets, and OpenCode a line saying where its are set', () => {
 		const text = settingsText(undefined, []);
 		const entry = (id: string) => {
 			const start = text.indexOf(`\t\t"${id}": {\n`);
@@ -523,22 +571,22 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 		const iconLine = text.split('\n').findIndex(line => line.startsWith('\t// - icon:')) + 1;
 		assert.ok(iconLine > 0 && text.split('\n')[iconLine].includes('claude, codex, agy, muse, opencode, or pi'));
 		assert.strictEqual(entry('claude'), [
-			'\t\t"claude": {', '\t\t\t"type": "claude",', `\t\t\t"icon": "claude", // or values on line ${iconLine}`, '\t\t\t// "command": "/path/to/claude",', '\t\t\t"args": [],',
+			'\t\t"claude": {', '\t\t\t"type": "claude",', `\t\t\t"icon": "claude", // or values on line ${iconLine}`, '\t\t\t// "program": "/path/to/claude",', '\t\t\t"args": [],',
 			'\t\t\t"env": {},', '\t\t\t// "model": "opus",', '\t\t\t// "effort": "high",', '\t\t\t"enabled": true,', '\t\t},'
 		].join('\n'));
 		assert.deepStrictEqual(text.match(/"icon": "facade-\w+", \/\/ or values on line \d+/g)?.map(each => each.endsWith(` ${iconLine}`)), [true, true, true]);
 		assert.ok(entry('opencode').includes('\t\t\t// Model and effort are set in OpenCode\'s own configuration, not in this file.\n') && !/"model"|"effort"/.test(entry('opencode')));
 		// Taken out of their //, the samples are values each entry takes
-		const samples = text.replace(/^(\t\t\t)\/\/ ("(?:command|model|effort)": .*)$/gm, '$1$2');
+		const samples = text.replace(/^(\t\t\t)\/\/ ("(?:program|model|effort)": .*)$/gm, '$1$2');
 		const entries = readEntries(parseSettings(samples, FILE).clis, BUILT_IN_FACTS);
-		assert.deepStrictEqual(entries.map(each => [each.name, each.command, each.model, each.effort, saidOf(each.problems)]), [
+		assert.deepStrictEqual(entries.map(each => [each.name, each.program, each.model, each.effort, saidOf(each.problems)]), [
 			['claude', '/path/to/claude', 'opus', 'high', []], ['codex', '/path/to/codex', 'gpt-6-astra', 'high', []], ['agy', '/path/to/agy', 'gemini-4-argon', 'high', []],
 			['muse', '/path/to/muse', 'muse-spark-1.3', 'high', []], ['opencode', '/path/to/opencode', undefined, undefined, []], ['pi', '/path/to/pi', 'anthropic/claude-opus-5-5', 'high', []]
 		]);
 		// What the editor's old settings set is written out over a sample, as it was
-		const moved = settingsText(undefined, [['codex', { command: '/opt/codex', model: 'gpt-x' }], ['opencode', { model: 'm' }]]);
+		const moved = settingsText(undefined, [['codex', { program: '/opt/codex', model: 'gpt-x' }], ['opencode', { model: 'm' }]]);
 		assert.deepStrictEqual(plain(parseSettings(moved, FILE).clis.slice(1, 2).concat(parseSettings(moved, FILE).clis.slice(4, 5))), [
-			{ name: 'codex', value: { type: 'codex', command: '/opt/codex', args: [], env: {}, model: 'gpt-x', enabled: true, icon: 'codex' } },
+			{ name: 'codex', value: { type: 'codex', program: '/opt/codex', args: [], env: {}, model: 'gpt-x', enabled: true, icon: 'codex' } },
 			{ name: 'opencode', value: { type: 'opencode', args: [], env: {}, model: 'm', enabled: true, icon: 'opencode' } }
 		]);
 		assert.ok(!moved.includes('// "model": "gpt-6-astra"') && moved.includes('// "effort": "high"'));
@@ -548,14 +596,14 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 		const odd = ['a$$b', '--sep=$&', 'p$`q', 'x$\'y', '{{codex}}', '{{added}}', '{{yolo}}'];
 		const text = settingsText(odd[3], [
 			['claude', { env: { A: odd[0], B: odd[2], C: odd[4] } }],
-			['my cli', { type: 'custom', command: 'my-cli', args: odd }]
+			['my cli', { type: 'custom', program: 'my-cli', args: odd }]
 		]);
 		const errors: ParseError[] = [];
 		const raw = parseJsonc(text, errors, { allowTrailingComma: true }) as { yolo: unknown; clis: { [name: string]: unknown } };
 		assert.deepStrictEqual([errors, raw.yolo, Object.keys(raw.clis), raw.clis], [[], odd[3], ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi', 'my cli'], {
 			claude: { type: 'claude', args: [], env: { A: odd[0], B: odd[2], C: odd[4] }, enabled: true, icon: 'claude' },
 			...Object.fromEntries(['codex', 'agy', 'muse', 'opencode', 'pi'].map(name => [name, { type: name, args: [], env: {}, enabled: true, icon: name }])),
-			'my cli': { type: 'custom', command: 'my-cli', args: odd }
+			'my cli': { type: 'custom', program: 'my-cli', args: odd }
 		}]);
 	});
 
@@ -572,9 +620,9 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 		const text = (migration as { text: string }).text;
 		assert.deepStrictEqual(written(text), { problems: [], yolo: false, clis: builtInsWith({
 			claude: { args: ['--verbose'], env: { ANTHROPIC_BASE_URL: 'https://example.com', DROP: null } },
-			agy: { command: '/opt/agy' },
+			agy: { program: '/opt/agy' },
 			pi: { enabled: false }
-		}, [{ name: 'my cli', value: { type: 'custom', command: 'my-cli', args: ['--fast'], env: { X: '1' } } }]) });
+		}, [{ name: 'my cli', value: { type: 'custom', program: 'my-cli', args: ['--fast'], env: { X: '1' } } }]) });
 		assert.ok(text.split('\n').every(line => !line.startsWith(' ')), 'written with tabs');
 	});
 
@@ -656,8 +704,8 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 		const kept = migrationOf(read({ 'facade.codex.launch': { arguments: ['--yolo', 7] }, 'facade.pi.path': '   ', 'facade.custom': { codex2: { path: '' } } }));
 		assert.deepStrictEqual((written((kept as { text: string }).text) as { clis: unknown }).clis, builtInsWith({
 			codex: { args: ['--yolo', 7] },
-			pi: { command: '   ' }
-		}, [{ name: 'codex2', value: { type: 'custom', command: '' } }]));
+			pi: { program: '   ' }
+		}, [{ name: 'codex2', value: { type: 'custom', program: '' } }]));
 		const conflict = migrationOf(read({
 			'facade.codex.enabled': false,
 			'facade.pi.launch': ['--x'],
@@ -678,7 +726,7 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 		assert.deepStrictEqual(saidOf(readEntry('codex', codex?.value, BUILT_IN_FACTS).problems).map(([kind]) => kind).sort(), ['arguments_type', 'entry_enabled_type', 'environment_type']);
 		// A custom CLI under a built-in's ID alone - which earlier builds refused - is kept as it was, for the file's rules to say
 		const alone = migrationOf(read({ 'facade.custom': { codex: { path: 'x' } } }));
-		assert.deepStrictEqual((written((alone as { text: string }).text) as { clis: unknown }).clis, builtInsWith({ codex: { type: 'custom', command: 'x' } }));
+		assert.deepStrictEqual((written((alone as { text: string }).text) as { clis: unknown }).clis, builtInsWith({ codex: { type: 'custom', program: 'x' } }));
 		assert.deepStrictEqual(saidOf(problemsOf(migrationOf(read({ 'facade.custom': [] })))), [['migration_shape', 'facade.custom']]);
 	});
 });
@@ -725,8 +773,14 @@ suite('The settings file on disk (CONFIGURATION-1.1, 1.3, 6.3)', () => {
 			// A file the person made first is theirs
 			const mine = path.join(temp.dir, 'mine');
 			fs.mkdirSync(mine);
-			fs.writeFileSync(path.join(mine, 'facade.json'), '{ "yolo": true }');
-			assert.deepStrictEqual([new FacadeSettings({ root: mine, legacy }).ensure(), fs.readFileSync(path.join(mine, 'facade.json'), 'utf8')], [{ kind: 'exists' }, '{ "yolo": true }']);
+			const existing = '{ // kept comment\n "yolo": true, "clis": { "tool": { "type": "custom", "command": "aider" } } }';
+			const settings = new FacadeSettings({ root: mine, legacy });
+			fs.writeFileSync(settings.file, existing);
+			assert.deepStrictEqual(settings.ensure(), { kind: 'exists' });
+			const snapshot = settings.snapshot();
+			assert.strictEqual(snapshot.yolo, true);
+			assert.strictEqual(readEntries(snapshot.clis, BUILT_IN_FACTS).find(entry => entry.name === 'tool')?.program, 'aider');
+			assert.strictEqual(fs.readFileSync(settings.file, 'utf8'), existing);
 		} finally {
 			temp.remove();
 		}
@@ -945,7 +999,7 @@ suite('A window on the Rust engine makes the settings file from the old settings
 		const made = parseSettings(text, file);
 		assert.deepStrictEqual(made.problems, []);
 		assert.strictEqual(made.yolo, false);
-		assert.strictEqual(catalogFrom(text).entries.find(each => each.entry.name === 'claude')?.entry.command, claude);
+		assert.strictEqual(catalogFrom(text).entries.find(each => each.entry.name === 'claude')?.entry.program, claude);
 		await assert.rejects(activate(old), error => error === stop);
 		assert.deepStrictEqual(atConnect, [text, text]);
 		assert.deepStrictEqual(notices, [{

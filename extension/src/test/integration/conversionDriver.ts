@@ -29,7 +29,7 @@ const RUST = process.env.FACADE_IT_ENGINE === 'rust';
 function coreAgents(): string[] {
 	const { FACADE_AGENT: _agent, ...env } = process.env;
 	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
-	try { return (JSON.parse(run.stdout) as { agent_id: string }[]).map(agent => agent.agent_id); } catch { return [`unreadable: ${run.stdout}${run.stderr}`]; }
+	try { return (JSON.parse(run.stdout) as { agents: { agent_id: string }[] }).agents.map(agent => agent.agent_id); } catch { return [`unreadable: ${run.stdout}${run.stderr}`]; }
 }
 
 /**
@@ -46,7 +46,7 @@ function sessionOf(runId: string, alias: string): string | undefined {
 	const { FACADE_AGENT: _agent, ...env } = process.env;
 	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
 	try {
-		return (JSON.parse(run.stdout) as { agent_id: string; session?: string }[]).find(agent => `#${agent.agent_id}` === alias)?.session || undefined;
+		return (JSON.parse(run.stdout) as { agents: { agent_id: string; session?: string }[] }).agents.find(agent => `#${agent.agent_id}` === alias)?.session || undefined;
 	} catch { return undefined; }
 }
 /** Agents started beside the journey's own before it reloads, so that each reload's claim is timed in a busy window (VERIFICATION G2). */

@@ -14,7 +14,7 @@ import { folderKeyOf, realFolderOf } from '../../base/files';
 import { isWithin } from '../../core/locations/catalog';
 import { plannedDestination, whyNotFolderName } from '../../core/locations/destination';
 import { WorktreeProblem, WorktreeProblemError } from '../../core/locations/problems';
-import { Catalog, CliCatalogPort, CliChoices, Disposable, Event, Location, LocationId, LocationPort, LocationRemoval, WorkspaceFolderInfo, WorktreeError, WorktreePlan, WorktreePort } from '../../core/ports';
+import { Catalog, CliCatalogPort, CliChoice, CliChoices, Disposable, Event, Location, LocationId, LocationPort, LocationRemoval, WorkspaceFolderInfo, WorktreeError, WorktreePlan, WorktreePort } from '../../core/ports';
 import { SETTINGS_FILE } from '../../clis/settingsFile';
 import { facadeRoot } from '../../record/paths';
 import { shownFile } from '../facadeSettings';
@@ -192,9 +192,16 @@ function isDirectory(folder: string): boolean {
 // ---------------------------------------------------------------------------------------------------------------------------
 // CLIs
 
-/** Whether a built-in is only not installed here (CLIS-1.1): New Agent does not list it, as it lists one that is wrong. */
-function notInstalled(cli: CliInfo): boolean {
-	return cli.not_installed === true;
+/** One CLI catalog, as the picker shows it whether it came from a window or a machine (CLIS-1.1). */
+export function cliChoicesOf(clis: readonly CliInfo[], icon: (cli: string) => string): CliChoice[] {
+	return clis.map(each => ({
+		id: each.cli,
+		displayName: each.display_name,
+		icon: icon(each.cli),
+		available: each.available,
+		...each.problem !== undefined ? { problem: each.problem } : {},
+		...each.not_installed === true ? { notInstalled: true } : {}
+	}));
 }
 
 /** The CLIs core finds for the window (CONFIGURATION-4.1), from the environment the window described: one for the whole window. */
@@ -202,15 +209,7 @@ export class RustClis implements CliCatalogPort {
 	constructor(private readonly windowInfo: () => WindowInfo | undefined, private readonly icons: () => (cli: string) => string) { }
 
 	async list(_location: Location): Promise<CliChoices> {
-		const icon = this.icons();
-		const clis = (this.windowInfo()?.clis ?? []).map(each => ({
-			id: each.cli,
-			displayName: each.display_name,
-			icon: icon(each.cli),
-			available: each.available,
-			...each.problem !== undefined ? { problem: each.problem } : {},
-			...notInstalled(each) ? { notInstalled: true } : {}
-		}));
+		const clis = cliChoicesOf(this.windowInfo()?.clis ?? [], this.icons());
 		return { clis, problems: this.problems() };
 	}
 

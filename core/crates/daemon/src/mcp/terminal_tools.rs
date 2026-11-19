@@ -1,82 +1,60 @@
 //! The terminal tools: `read_screen`, `type_text` and `press_keys`. Text and keys go in without
 //! draft protection: they can edit a draft or answer a menu.
 
-use facade_base::daemon::{AgentScreen, AgentType, CUT_MARK, ScreenArgs, TypeArgs};
+use facade_base::daemon::{
+    AgentScreen, AgentScreenArgs, AgentType, AgentTypeArgs, CUT_MARK, first_control,
+};
 use facade_base::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::key_input::{KeyProblem, NAMED_KEYS, key_problems};
 use facade_base::process::ProcessState;
 use serde_json::{Map, Value, json};
 
-use super::daemon_calls::failed;
+use super::daemon_calls::{CONNECT_TIMEOUT, agent_failed};
 use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
-use super::schema::Problems;
-use super::tool_calls::text;
+use super::{Problems, text};
 
-/// The keys `press_keys` takes by name, in lower case, besides Ctrl+A to Ctrl+Z and any one
-/// printable character.
-const NAMED_KEYS: [&str; 15] = [
-    "enter",
-    "escape",
-    "tab",
-    "shift+tab",
-    "backspace",
-    "delete",
-    "up",
-    "down",
-    "left",
-    "right",
-    "home",
-    "end",
-    "pageup",
-    "pagedown",
-    "space",
-];
-
-/// Refuses text whose beginning a CLI cut off on its way, before any of it is typed.
+/// Refuses cut-off text and control characters before any text is typed.
 pub(super) fn check_text(arguments: &Map<String, Value>, problems: &mut Problems) {
-    let cut = arguments
-        .get("text")
-        .and_then(Value::as_str)
-        .is_some_and(|text| text.starts_with(CUT_MARK));
-    if cut {
+    let Some(text) = arguments.get("text").and_then(Value::as_str) else {
+        return;
+    };
+    if text.starts_with(CUT_MARK) {
         problems.add(format!(
             "text starts with {CUT_MARK:?}: its beginning was cut on its way; type it in shorter \
              parts"
         ));
-    }
-}
-
-/// Whether `press_keys` takes `key`: a named key, Ctrl and a letter, or one printable character.
-/// A key the daemon knows by another name, such as Return for Enter, is not taken.
-fn is_known_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    if NAMED_KEYS.contains(&lower.as_str()) {
-        return true;
-    }
-    if let Some(letter) = lower.strip_prefix("ctrl+") {
-        return letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase();
-    }
-    let mut characters = key.chars();
-    matches!(
-        (characters.next(), characters.next()),
-        (Some(character), None) if !character.is_control()
-    )
-}
-
-/// Refuses each key `press_keys` does not take.
-pub(super) fn check_keys(arguments: &Map<String, Value>, problems: &mut Problems) {
-    for key in keys(arguments).iter().filter(|key| !is_known_key(key)) {
+    } else if let Some(problem) = first_control(text) {
         problems.add(format!(
-            "unknown key {key:?}; the keys are Enter, Escape, Tab, Shift+Tab, Backspace, Delete, \
-             Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z, and any \
-             one printable character"
+            "{problem}. Use press_keys with Esc or another key name"
         ));
     }
 }
 
+/// Refuses all problems in the key batch the schema read.
+pub(super) fn check_keys(arguments: &Map<String, Value>, problems: &mut Problems) {
+    if !arguments.contains_key("keys") {
+        return;
+    }
+    for problem in key_problems(&key_strings(arguments)) {
+        let words = match &problem {
+            KeyProblem::Count(_) => problem.to_string(),
+            KeyProblem::Unknown {
+                replacement: Some(name),
+                ..
+            } => format!("{problem}. Use {name:?}"),
+            KeyProblem::Unknown { .. } => format!(
+                "{problem}. Use {}, Ctrl+A to Ctrl+Z or one non-control Unicode code point",
+                NAMED_KEYS.join(", ")
+            ),
+        };
+        problems.add(words);
+    }
+}
+
 /// The keys argument's strings, in order.
-fn keys(arguments: &Map<String, Value>) -> Vec<String> {
+fn key_strings(arguments: &Map<String, Value>) -> Vec<String> {
     let Some(keys) = arguments.get("keys").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -86,17 +64,28 @@ fn keys(arguments: &Map<String, Value>) -> Vec<String> {
         .collect()
 }
 
-/// Reads an agent's screen, its last lines as `last` asks. A reading longer than a result carries
+/// Reads an agent's screen, its last lines as `lines` asks. A reading longer than a result carries
 /// goes to a text file, which the result names in place of the text.
 pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
     let lines = arguments
-        .get("last")
+        .get("lines")
         .and_then(Value::as_u64)
-        .and_then(|last| u16::try_from(last).ok());
+        .and_then(|lines| u16::try_from(lines).ok());
     let agent = text(arguments, "agent");
-    let screen = match client.call::<AgentScreen>(ScreenArgs { agent, lines }) {
+    let screen = match client.call::<AgentScreen>(AgentScreenArgs {
+        agent: agent.clone(),
+        lines,
+    }) {
         Ok(screen) => screen,
-        Err(err) => return failed(&err, "nothing was changed"),
+        Err(err) => {
+            return agent_failed(
+                client,
+                &err,
+                &agent,
+                "nothing was changed",
+                Some(CONNECT_TIMEOUT),
+            );
+        }
     };
     let ended = screen.process == ProcessState::Ended;
     if screen.text.chars().count() <= MAX_INLINE_CHARS {
@@ -108,7 +97,7 @@ pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Val
             "unavailable",
             format!(
                 "the screen is too long to return here, and its file could not be written: \
-                 {err:#}; read fewer lines with last"
+                 {err:#}; set 'lines' to a smaller number"
             ),
         ),
     }
@@ -116,7 +105,7 @@ pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Val
 
 /// Types text, then Enter where asked, and answers once all of it reached the terminal.
 pub(super) fn type_text(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let input = TypeArgs {
+    let input = AgentTypeArgs {
         agent: text(arguments, "agent"),
         raw: None,
         text: Some(text(arguments, "text")),
@@ -128,37 +117,41 @@ pub(super) fn type_text(client: &mut DaemonClient, arguments: &Map<String, Value
 
 /// Presses keys in order and answers once all of them reached the terminal.
 pub(super) fn press_keys(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let input = TypeArgs {
+    let input = AgentTypeArgs {
         agent: text(arguments, "agent"),
         raw: None,
         text: None,
         enter: false,
-        keys: Some(keys(arguments)),
+        keys: Some(key_strings(arguments)),
     };
     type_into(client, input)
 }
 
 /// Writes `input` into its agent's terminal. Input that did not all go in was cut off partway, or
 /// refused with nothing typed.
-fn type_into(client: &mut DaemonClient, input: TypeArgs) -> Value {
+fn type_into(client: &mut DaemonClient, input: AgentTypeArgs) -> Value {
     let agent = input.agent.clone();
     let err = match client.call::<AgentType>(input) {
         Ok(_) => return envelope::success(json!({})),
         Err(err) => err,
     };
     match err.downcast_ref::<ErrorBody>() {
-        Some(error) if error.data.reason == Reason::PartialInput => envelope::failure(
-            "partial_input",
-            format!(
+        Some(error) if error.data.reason == Reason::PartialInput => {
+            let mut refusal = envelope::refusal(error);
+            refusal["message"] = json!(format!(
                 "{}; only part of the input reached {agent}; read its screen before typing again",
                 error.message
-            ),
-        ),
-        _ => failed(
+            ));
+            refusal
+        }
+        _ => agent_failed(
+            client,
             &err,
+            &agent,
             &format!(
                 "whether the input reached {agent} is not known; read its screen before typing again"
             ),
+            Some(CONNECT_TIMEOUT),
         ),
     }
 }

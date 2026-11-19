@@ -13,7 +13,8 @@ use serde_json::Value;
 
 use super::daemon::{
     CancelParams, ChangedParams, ClientKind, DAEMON_PROTOCOL_VERSION, HANDOVER_TIME, HelloParams,
-    HelloResult, MIN_DAEMON_PROTOCOL_VERSION, UnwatchParams, WatchParams, WatchResult, methods,
+    HelloResult, MIN_DAEMON_PROTOCOL_VERSION, UnwatchParams, WatchEndedParams, WatchParams,
+    WatchResult, methods,
 };
 use super::jsonrpc::{
     ErrorBody, Notification, Reason, Request, Response, ServerMessage, encode_line,
@@ -105,8 +106,7 @@ pub struct DaemonClient {
     /// Notifications read while a call waited for its own response; `next_change` reads them
     /// first.
     unread: VecDeque<Notification>,
-    /// None when the stream came from elsewhere, through [`DaemonClient::hello`]: such a client
-    /// cannot connect again.
+    /// The socket and identity available for reconnecting.
     origin: Option<Origin>,
 }
 
@@ -173,13 +173,14 @@ impl DaemonClient {
         let mut reader = BufReader::new(writer.try_clone()?);
         let mut line = Vec::new();
         let params = HelloParams {
-            protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            protocol_range: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
             build: crate::build_id(),
             kind: identity.kind,
             agent: identity.agent.clone(),
             sessions: identity.sessions.clone(),
             window: None,
             numbers_given: None,
+            machine: None,
         };
         writer.write_all(&encode_line(&Request::new(
             Some(HELLO_ID),
@@ -277,6 +278,13 @@ impl DaemonClient {
                     return Ok(None);
                 }
                 methods::CHANGED => {}
+                methods::WATCH_ENDED => {
+                    let ended: WatchEndedParams = serde_json::from_value(notification.params)?;
+                    if ended.watch == watch {
+                        return Err(ended.error.into());
+                    }
+                    continue;
+                }
                 _ => continue,
             }
             match serde_json::from_value::<ChangedParams>(notification.params) {
@@ -287,6 +295,17 @@ impl DaemonClient {
             }
         }
         Ok(None)
+    }
+
+    /// Gives the authorized machine connection its original buffered reader and writer.
+    pub fn into_stream(self) -> (BufReader<ClientSocket>, ClientSocket) {
+        (self.reader, self.writer)
+    }
+
+    /// Gives the caller control of reconnection while keeping this stream and its buffered input.
+    /// Requests return the daemon's `upgrading` refusal to the caller.
+    pub fn disable_auto_reconnect(&mut self) {
+        self.origin = None;
     }
 
     /// Connects again, to the daemon that took over, waiting up to [`takeover_timeout`] for one to
@@ -320,8 +339,8 @@ impl DaemonClient {
         let _ = self.tell(methods::CLOSING, serde_json::json!({}));
     }
 
-    /// Sends a request and reads its answer. A refusal as `upgrading` means the daemon did
-    /// nothing: the request goes again once the daemon that takes over answers.
+    /// Sends a request and reads its answer. When the client can reconnect, an `upgrading`
+    /// refusal is retried on the replacement daemon.
     fn exchange<T: DeserializeOwned>(
         &mut self,
         method: &str,
@@ -458,7 +477,7 @@ fn another_protocol(result: &Value, problem: impl std::fmt::Display) -> ErrorBod
     let (build, protocol) = (said("build"), said("protocol"));
     let versions = format!("{MIN_DAEMON_PROTOCOL_VERSION}-{DAEMON_PROTOCOL_VERSION}");
     ErrorBody::new(
-        Reason::ProtocolIncompatible,
+        Reason::IncompatibleProtocol,
         format!(
             "the Facade daemon's answer to hello does not read as daemon protocol {versions} of \
              this client, {ours}: {problem}; the daemon says build {build} and protocol {protocol}; \

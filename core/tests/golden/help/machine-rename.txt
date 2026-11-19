@@ -1,0 +1,17 @@
+Rename a machine
+
+Usage: facade machine rename <MACHINE> <NAME>
+
+Give a machine a new name, from any machine with a route to it. Addresses with the old name, such as
+'a17@gpu', stop working.
+
+Arguments:
+  <MACHINE>  Machine name or 'id:' followed by 8 to 32 hex digits from 'facade machine list'
+  <NAME>     New name
+
+Options:
+  -h, --help  Print help
+
+Examples:
+  # Rename machine gpu to lab
+  facade machine rename gpu lab

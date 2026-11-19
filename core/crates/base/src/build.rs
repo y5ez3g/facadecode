@@ -21,8 +21,7 @@ pub fn takes_over(newer: &str, running: &str) -> bool {
 /// The version `build` names, its three numbers before any `+` (`[0, 2, 1]` for `0.2.1+4f2a`).
 /// None unless there are exactly three numbers.
 pub fn version_of(build: &str) -> Option<[u64; 3]> {
-    let (version, _commit) = build.split_once('+').unwrap_or((build, ""));
-    let numbers: Vec<u64> = version
+    let numbers: Vec<u64> = build_version(build)
         .split('.')
         .map(str::parse)
         .collect::<Result<_, _>>()
@@ -44,13 +43,14 @@ pub fn build_id() -> String {
     }
 }
 
+/// The version text in a build ID, including any pre-release suffix.
+pub fn build_version(build: &str) -> &str {
+    build.split_once('+').map_or(build, |(version, _)| version)
+}
+
 /// This build's version without its commit.
 pub fn version() -> String {
-    let build = build_id();
-    match build.split_once('+') {
-        Some((version, _commit)) => version.to_string(),
-        None => build,
-    }
+    build_version(&build_id()).to_owned()
 }
 
 /// The program a service installs to run as this one: this program, or in a test, the test's

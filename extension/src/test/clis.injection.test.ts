@@ -633,11 +633,11 @@ suite('CLIs: through cmd.exe, the tools never stop a CLI that can start (MCP-6.1
 			...claudeAdapter, id: 'toy', displayName: 'Toy', setting: 'facade.toy', command: 'toy', trustTarget: undefined,
 			groups: { connect: ['--mcp', '${mcpConfig}', '--config', '{"x": 1}'], yoloOn: ['--yolo'] }, values: () => ({})
 		};
-		const entry = { name: 'toy', setting: 'facade.toy', builtIn: true, type: 'claude', command: '', args: [], env: {}, enabled: true, icon: 'claude', problems: [] };
+		const entry = { name: 'toy', setting: 'facade.toy', builtIn: true, type: 'claude', program: '', programSetting: 'facade.toy.program', args: [], env: {}, enabled: true, icon: 'claude', problems: [] };
 		const catalog: Catalog = { entries: [{ adapter: toy, path: '', problems: [], enabled: true, extra: [], extraSetting: 'facade.toy.args', environment: {}, entry }], problems: [], file: 'settings.json' };
 		const planned = planLaunch(catalog, { cli: 'toy', alias: '#a1', cwd, yolo: true, tools: tools() }, windows);
 		assert.deepStrictEqual([planned.args, planned.injection, planned.tools.state], [['--yolo'], undefined, 'unavailable']);
-		assert.match(planned.tools.reason!, /runs through cmd\.exe, which cannot be given the Facade tools' arguments safely; set facade\.toy\.command/);
+		assert.match(planned.tools.reason!, /runs through cmd\.exe, which cannot be given the Facade tools' arguments safely; set facade\.toy\.program/);
 		// With no tools asked there is nothing to fall back from
 		assert.deepStrictEqual(planLaunch(catalog, { cli: 'toy', alias: '#a1', cwd, yolo: true }, windows).tools, { state: 'not_injected' });
 	});

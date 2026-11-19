@@ -44,6 +44,61 @@ fn type_draft(home: &TestHome, agent: &str, draft: &str) {
     );
 }
 
+/// Both accepted argument shorthands use the public limit and reject invalid batches before typing.
+#[test]
+fn press_keys_checks_normalized_batches_before_typing() {
+    let home = TestHome::new("mcpkeys");
+    let pressed = home.project.join("pressed");
+    let agent = home.start_named_fake("ada", &[("FAKECLI_KEYS", pressed.to_str().unwrap())]);
+    assert!(wait_for_screen_text(&home, &agent.id, "❯"));
+    let mut client = McpTestClient::open(&home, &agent.id);
+
+    let mut keys = vec!["界"];
+    keys.extend(std::iter::repeat_n("A", 99));
+    let arguments = json!({ "agent": agent.id, "keys": json!(keys).to_string() });
+    let result = client.call("press_keys", arguments);
+    assert_eq!(result["status"], "success", "{result}");
+
+    let result = client.call("press_keys", json!({ "agent": agent.id, "keys": [] }));
+    assert_eq!(result["reason"], "invalid_argument", "{result}");
+
+    let too_many = json!(vec!["z"; 101]).to_string();
+    let result = client.call("press_keys", json!({ "agent": agent.id, "keys": too_many }));
+    assert_eq!(result["reason"], "invalid_argument", "{result}");
+    assert!(
+        result["message"].as_str().unwrap().contains("at most 100"),
+        "{result}"
+    );
+
+    let result = client.call(
+        "press_keys",
+        json!({ "agent": agent.id, "keys": ["z", "eScApE"] }),
+    );
+    assert_eq!(result["reason"], "invalid_argument", "{result}");
+    assert!(
+        result["message"].as_str().unwrap().contains(r#"Use "Esc""#),
+        "{result}"
+    );
+
+    let result = client.call("press_keys", json!({ "agent": agent.id, "keys": "eSc" }));
+    assert_eq!(result["status"], "success", "{result}");
+    let result = client.call(
+        "press_keys",
+        json!({ "agent": agent.id, "keys": ["ENTER"] }),
+    );
+    assert_eq!(result["status"], "success", "{result}");
+
+    let mut expected = Vec::from("界".as_bytes());
+    expected.extend_from_slice(&[b'A'; 99]);
+    expected.extend_from_slice(b"\x1b\r");
+    assert!(
+        wait_until(secs(10), || std::fs::read(&pressed)
+            .is_ok_and(|bytes| bytes == expected)),
+        "{:?}",
+        std::fs::read(&pressed)
+    );
+}
+
 /// Messages whose text adds up to more than 8,000 characters are returned without it; their text is
 /// in a file only this user can read, each message whole between lines naming it.
 #[test]
@@ -93,7 +148,11 @@ fn a_long_read_puts_the_messages_in_a_file() {
     // The two sends ran at once, so either text may have the lower number.
     texts.sort_unstable();
     assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
-    assert_eq!(messages[0]["from"], "@bob #a2");
+    assert_eq!(messages[0]["from"], "#a2");
+    assert!(messages[0]["address"].as_str().unwrap().contains("@id:"));
+    let inline = ada.call("read_messages", json!({ "after": messages[0]["address"] }));
+    assert_eq!(inline["status"], "success", "{inline}");
+    assert_eq!(inline["data"]["messages"], json!([messages[1]]), "{inline}");
 }
 
 /// facade-mcp serves the agent Facade started it for; started outside a Facade run, it joins as a
@@ -222,8 +281,8 @@ fn a_long_read_whose_file_cannot_be_written_returns_the_messages_whole() {
     assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
 }
 
-/// A screen longer than 8,000 characters as JSON comes whole in a file only this user can read, and
-/// the result names it.
+/// A long screen comes whole in a text file only this user can read. A file error tells the caller
+/// to ask for fewer lines.
 #[test]
 fn a_long_screen_comes_as_a_file() {
     let home = TestHome::new("mcpscreenfile");
@@ -237,7 +296,20 @@ fn a_long_screen_comes_as_a_file() {
     );
     assert!(wait_for_screen_text(&home, &agent, "READY"));
     let mut reader = McpTestClient::open(&home, &agent);
-    let read = reader.call("read_screen", json!({ "agent": agent, "last": 200 }));
+    let arguments = json!({ "agent": agent, "lines": 200 });
+    let results = home.path.join("core/results");
+    std::fs::write(&results, "").unwrap();
+    let failed = reader.call("read_screen", arguments.clone());
+    assert_eq!(failed["status"], "failure", "{failed}");
+    assert_eq!(failed["reason"], "unavailable", "{failed}");
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|message| message.ends_with("; set 'lines' to a smaller number")),
+        "{failed}"
+    );
+    std::fs::remove_file(results).unwrap();
+    let read = reader.call("read_screen", arguments);
     assert!(
         read["data"].get("text").is_none() && read["data"]["ended"] == false,
         "{read}"
@@ -462,7 +534,7 @@ fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     // the CLI logs it.
     let said = || {
         home.agent_from_list_json("ada")
-            .is_some_and(|row| row["said"]["text"] == "say hi")
+            .is_some_and(|row| row["last_input"]["text"] == "say hi")
     };
     assert!(
         wait_until(secs(10), said),
@@ -473,8 +545,8 @@ fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     assert_eq!(
         (
             &row["tools_state"],
-            &row["said"]["text"],
-            &row["said"]["from"]
+            &row["last_input"]["text"],
+            &row["last_input"]["from"]
         ),
         (&json!("available"), &json!("say hi"), &json!("human")),
         "{row}"
@@ -1244,7 +1316,7 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
         let id = record["agent_id"].as_str().unwrap();
         let place = format!(
             "You are Facade agent #{id}, working in {} in window \"Terminal\" (window terminal).",
-            record["cwd"].as_str().unwrap(),
+            record["folder"].as_str().unwrap(),
         );
         let run = [("FACADE_AGENT", id), ("MUSE_SESSION_ID", "s1")];
         let given: Value = serde_json::from_str(&run_hook(
@@ -1501,12 +1573,12 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     let home = TestHome::new("mcpenv");
     home.start_named_fake("boss", &[("FAKECLI_NAME", "named by the boss")]);
     let mut boss = McpTestClient::open_stripped(&home, "a1");
-    let cwd = home.agent_from_list_json("boss").unwrap()["cwd"]
+    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
     let start =
-        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "path": cwd });
+        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd });
     // A CLI calls its tools once it runs.
     assert!(wait_until(secs(10), || home
         .agent_from_list_json("boss")
@@ -1645,14 +1717,16 @@ impl Golden {
             }
         }
         placeholders.push((env!("CARGO_PKG_VERSION").to_string(), "<version>"));
-        if let Some(machine) = home
-            .hello_result()
-            .as_ref()
-            .and_then(|hello| hello["machine_id"].as_str())
-            .filter(|id| !id.is_empty())
-        {
-            placeholders.push((machine.to_string(), "<machine ID>"));
-        }
+        let hello = home.hello_result().expect("the golden test's daemon");
+        let machine = hello["machine_id"].as_str().expect("the machine ID");
+        let selector = facade_base::address::exact_machine_selector(machine);
+        home.run_facade_ok(&["machine", "rename", &selector, "golden-host"]);
+        placeholders.push((machine.to_string(), "<machine ID>"));
+        placeholders.push((selector, "id:<compact machine ID>"));
+        placeholders.push((
+            facade_base::address::short_machine_id(machine),
+            "<short machine ID>",
+        ));
         placeholders.sort_by_key(|(text, _)| std::cmp::Reverse(text.len()));
         Golden {
             cases: serde_json::Map::new(),
@@ -1909,7 +1983,7 @@ fn each_tool_responds_as_recorded(through: Through) {
     home.start_named_fake("ada", &[]);
     home.start_named_fake("bob", &[]);
     wait_for_tools(&home, &["ada", "bob"]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = through.open(&home, "a1");
     let mut golden = Golden::new(&home);
     golden.record(
@@ -1925,19 +1999,25 @@ fn each_tool_responds_as_recorded(through: Through) {
         &mut ada,
         "start_agent",
         "start_agent",
-        json!({ "name": "helper", "cli": "fake", "window": "terminal", "path": cwd }),
+        json!({ "name": "helper", "cli": "fake", "window": "terminal", "folder": cwd }),
     );
     golden.call(
         &mut ada,
-        "start_agent without a path",
+        "start_agent with the old path argument",
         "start_agent",
-        json!({ "name": "other", "cli": "fake", "window": "terminal" }),
+        json!({ "name": "other", "cli": "fake", "path": cwd }),
+    );
+    golden.call(
+        &mut ada,
+        "start_agent with a string worktree",
+        "start_agent",
+        json!({ "name": "other", "cli": "fake", "worktree": "review" }),
     );
     golden.call(
         &mut ada,
         "start_agent of a CLI that is not configured",
         "start_agent",
-        json!({ "name": "other", "cli": "nope", "window": "terminal", "path": cwd }),
+        json!({ "name": "other", "cli": "nope", "window": "terminal", "folder": cwd }),
     );
 
     golden.call(
@@ -2030,9 +2110,30 @@ fn each_tool_responds_as_recorded(through: Through) {
     );
     golden.call(
         &mut ada,
+        "type_text with empty text and enter",
+        "type_text",
+        json!({ "agent": "@helper", "text": "", "enter": true }),
+    );
+    golden.call(
+        &mut ada,
+        "type_text with a control character",
+        "type_text",
+        json!({ "agent": "@helper", "text": "before\u{1b}after" }),
+    );
+    golden.call(
+        &mut ada,
         "press_keys",
         "press_keys",
         json!({ "agent": "@helper", "keys": ["h", "i", "Enter"] }),
+    );
+    golden.call(
+        &mut ada,
+        "press_keys with names from the v2 daemon",
+        "press_keys",
+        json!({
+            "agent": "@helper",
+            "keys": ["Escape", "Return", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"],
+        }),
     );
     golden.call(
         &mut ada,
@@ -2055,10 +2156,37 @@ fn each_tool_responds_as_recorded(through: Through) {
     );
     golden.call(
         &mut ada,
+        "press_keys of Esc",
+        "press_keys",
+        json!({ "agent": "@helper", "keys": ["Esc"] }),
+    );
+    golden.call(
+        &mut ada,
         "read_screen of lines that are not a number",
         "read_screen",
-        json!({ "agent": "@helper", "last": "12" }),
+        json!({ "agent": "@helper", "lines": "12" }),
     );
+    golden.call(
+        &mut ada,
+        "read_screen with the old last argument",
+        "read_screen",
+        json!({ "agent": "@helper", "last": 4 }),
+    );
+    golden.call(
+        &mut ada,
+        "read_screen with both last and lines",
+        "read_screen",
+        json!({ "agent": "@helper", "last": 4, "lines": 4 }),
+    );
+    let retried = golden.call(
+        &mut ada,
+        "read_screen retried with lines",
+        "read_screen",
+        json!({ "agent": "@helper", "lines": 4 }),
+    );
+    assert_eq!(retried["status"], "success", "{retried}");
+    assert_eq!(retried["data"]["ended"], false);
+    assert_eq!(retried["data"]["text"].as_str().unwrap().lines().count(), 4);
     golden.call(
         &mut ada,
         "read_screen of an agent that does not exist",
@@ -2083,10 +2211,29 @@ fn each_tool_responds_as_recorded(through: Through) {
         "start_agent with a prompt",
         "start_agent",
         json!({
-            "name": "twin", "cli": "fake", "window": "terminal", "path": cwd,
+            "name": "twin", "cli": "fake", "window": "terminal", "folder": cwd,
             "prompt": "Read the README and summarize it.",
         }),
     );
+    let defaulted = golden.call(
+        &mut ada,
+        "start_agent without a folder",
+        "start_agent",
+        json!({ "name": "defaulted", "cli": "fake" }),
+    );
+    assert_eq!(defaulted["status"], "success", "{defaulted}");
+    assert_eq!(defaulted["data"]["folder"], cwd);
+    let subfolder = home.project.join("inside");
+    std::fs::create_dir(&subfolder).unwrap();
+    let relative = golden.call(
+        &mut ada,
+        "start_agent in a relative folder",
+        "start_agent",
+        json!({ "name": "relative", "cli": "fake", "folder": "inside" }),
+    );
+    assert_eq!(relative["status"], "success", "{relative}");
+    let subfolder = facade_base::files::real_path(&subfolder).unwrap();
+    assert_eq!(relative["data"]["folder"], json!(subfolder));
     golden.check("mcp-responses.json");
 }
 

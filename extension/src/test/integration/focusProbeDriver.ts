@@ -1055,7 +1055,7 @@ async function activateFacade(): Promise<void> {
 /** No agent and no editor left from a case before. */
 async function resetFacade(): Promise<void> {
 	for (const card of (await state()).cards) {
-		await cmd('facade.closeAgent', { run_id: card.runId });
+		await cmd('facade.stopAgent', { run_id: card.runId });
 	}
 	await until('no agents', async () => (await state()).cards.length === 0 || undefined, 15_000).catch(() => notes.push('agents were left from a case before'));
 	await reset();

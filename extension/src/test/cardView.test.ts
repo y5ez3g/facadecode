@@ -22,25 +22,28 @@ const WORDS: CardWords = {
 	path: value => `Path: ${value}`,
 	untitledPending: 'No title yet',
 	untitledUnreadable: 'Title unavailable',
+	runningOn: machine => `Running on ${machine}`,
+	connectionLost: 'Connection lost · reconnecting',
 
 	starting: 'Starting',
 	startingCli: cli => `Starting ${cli}...`,
 	creatingWorktree: 'Creating worktree...',
-	started: 'New conversation started',
-	resumed: 'Conversation resumed',
+	started: 'New session started',
+	resumed: 'Agent resumed',
+	continued: 'Session continued',
 	working: 'Working',
 	notWorking: 'Idle',
 	error: reason => `Error · ${reason}`,
-	activityUnavailable: 'Status unavailable · check terminal',
-	activityUnknown: why => `Status ${why} · check terminal`,
-	needsAttention: 'Attention needed', toolsConnecting: 'Collaboration not connected yet',
+	activityUnavailable: 'State unavailable · check terminal',
+	activityUnknown: why => `State ${why} · check terminal`,
+	needsAttention: 'Attention needed', toolsConnecting: 'Facade tools not connected yet',
 	needsPermission: 'Permission needed',
 	needsSignIn: 'Sign-in needed',
 	hasQuestion: 'Answer needed',
 	exitedWithCode: code => `Beendet mit Code ${code}`,
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
-	toolsUnavailable: problem => `Collaboration off · ${problem}`,
-	saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
+	toolsUnavailable: problem => problem === 'disconnected' ? 'Facade tools disconnected' : `Facade tools unavailable · ${problem}`,
+	saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
 	exitUnknown: 'Getrennt: Exit-Ursache unbekannt',
 	startFailed: reason => `Start failed · ${reason}`,
 	worktreeFailed: reason => `Worktree failed · ${reason}`
@@ -51,7 +54,7 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 		id: 'run-00000000000000000000000000000001', alias: '#a1', name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude',
 		location: 'loc-1', cwd: '/app', environment: 'local', yolo: true, createdAt: 1000,
 		lifecycle: 'running', phase: 'running', pid: 42, startedAt: 2000, activity: 'working', reporting: true,
-		root: 'run-00000000000000000000000000000001', origin: 'human', tools: 'not_injected', ...more
+		root: 'run-00000000000000000000000000000001', origin: 'human', tools: 'not_injected', sessionOpening: 'started', ...more
 	};
 }
 
@@ -59,6 +62,19 @@ const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', 
 const menu = { moveUp: false, moveDown: true };
 
 suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', () => {
+
+	test('PANEL-1.3: the remote icon exposes the running machine in the accessible label', () => {
+		const card = cardOf(run({ alias: '#a1@gpu', remoteMachine: 'gpu (3f9a2c1d)' }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(card.runningOn, 'Running on gpu (3f9a2c1d)');
+		assert.ok(card.label.includes(card.runningOn));
+		assert.strictEqual(card.pinned, undefined);
+		const local = cardOf(run({ pinnable: true, pin: 'pin-1' }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(local.pinned, true);
+		assert.strictEqual(local.runningOn, undefined);
+		const disconnected = statusOf(run({ remoteMachine: 'gpu', disconnected: true }), WORDS);
+		assert.strictEqual(disconnected.dot, 'none');
+		assert.strictEqual(disconnected.stateText, WORDS.connectionLost);
+	});
 
 	test('all CLIs retain a blocker without a recognized kind, its full reason on its second line and in its label', () => {
 		const message = `Please review ${'a long explanation '.repeat(30)}👨‍👩‍👧‍👦`;
@@ -96,11 +112,11 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			['working', 'Starting', 'Starting Claude Code...', true],
 			['working', 'Working', '🧑‍💻 fix the login bug', true],
 			['none', 'Idle', '🧑‍💻 fix the login bug', true],
-			['none', 'Status unavailable · check terminal', '🧑‍💻 fix the login bug', true],
+			['none', 'State unavailable · check terminal', '🧑‍💻 fix the login bug', true],
 			['none', 'Permission needed', 'Permission needed · Run npm test?', true],
-			['error', 'Collaboration not connected yet', 'Collaboration not connected yet', true],
+			['error', 'Facade tools not connected yet', 'Facade tools not connected yet', true],
 			['error', 'CLI has not reported activity', 'CLI has not reported activity', true],
-			['error', 'Collaboration off · conflict', 'Collaboration off · conflict', true],
+			['error', 'Facade tools unavailable · conflict', 'Facade tools unavailable · conflict', true],
 			['error', 'Error · Failed', 'Failed', true]
 		]);
 	});
@@ -112,13 +128,15 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			line({ title: 'Fixing the login bug', said: '/clear' }),
 			line({ title: 'Fixing the login bug', promptLine: 'Implement the parser' }),
 			line({ title: 'Fixing the login bug', promptLine: 'Implement the parser', said: 'and the tests' }),
-			line({ title: 'Fixing the login bug', resumed: true }),
-			line({ resumed: true, said: 'go on' }),
-			line({})
-		], ['New conversation started', '🧑‍💻 /clear', '📨 Implement the parser', '🧑‍💻 and the tests', 'Conversation resumed', '🧑‍💻 go on', 'New conversation started']);
+			line({ title: 'Fixing the login bug', sessionOpening: 'resumed' }),
+			line({ sessionOpening: 'continued' }),
+			line({ sessionOpening: 'resumed', said: 'go on' }),
+			line({ sessionOpening: undefined }),
+			line({ sessionOpening: undefined, said: 'go on' })
+		], ['New session started', '🧑‍💻 /clear', '📨 Implement the parser', '🧑‍💻 and the tests', 'Agent resumed', 'Session continued', '🧑‍💻 go on', '', '🧑‍💻 go on']);
 	});
 
-	test('PANEL-1.4: the second line is one of three kinds - the person\'s input after 🧑‍💻 and a space, another agent\'s message after 📨 and a space, Facade\'s own with no mark: a result without the 🔔 it is typed to its agent with, a notable state while it lasts and then the last message again, or how its run began - never a title, Working, Idle or Status unavailable · check terminal', () => {
+	test('PANEL-1.4: the second line is one of three kinds - the person\'s input after 🧑‍💻 and a space, another agent\'s message after 📨 and a space, Facade\'s own with no mark: a result without the 🔔 it is typed to its agent with, a notable state while it lasts and then the last message again, or how its run began - never a title, Working, Idle or State unavailable · check terminal', () => {
 		const typed = { said: 'fix the login bug' };
 		const sent = { said: 'Review the parser', saidSource: { kind: 'agent', name: 'Lead', alias: '#a2' } } as const;
 		const task = { promptLine: 'Implement the parser', origin: 'agent', creatorLabel: 'Lead #a2' } as const;
@@ -139,18 +157,18 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			[{ ...typed, blocker: { kind: 'unknown', text: 'Check the terminal' } }, 'Attention needed · Check the terminal'],
 			// Why it is red, without `Error · `: the red dot says that
 			[{ ...typed, error: { reason: 'Rate limited', source: 'cli', at: 1 } }, 'Rate limited'],
-			[{ ...typed, tools: 'unavailable', toolsProblem: 'conflict', toolsFile: 'SKILL.md' }, 'Collaboration off · conflict'],
-			[{ ...typed, tools: 'connecting', notReady: true }, 'Collaboration not connected yet'],
+			[{ ...typed, tools: 'unavailable', toolsProblem: 'conflict', toolsFile: 'SKILL.md' }, 'Facade tools unavailable · conflict'],
+			[{ ...typed, tools: 'connecting', notReady: true }, 'Facade tools not connected yet'],
 			[{ ...typed, ...red, activity: 'unknown' }, 'CLI has not reported activity'],
 			// None any more: its last message again; before any, how its run began
 			[{ ...typed, activity: 'working' }, '🧑‍💻 fix the login bug'],
-			[{ activity: 'working' }, 'New conversation started'],
-			[{ activity: 'unknown', reporting: false }, 'New conversation started'],
-			[{ activity: 'not_working', resumed: true }, 'Conversation resumed']
+			[{ activity: 'working' }, 'New session started'],
+			[{ activity: 'unknown', reporting: false }, 'New session started'],
+			[{ activity: 'not_working', sessionOpening: 'resumed' }, 'Agent resumed']
 		];
 		const lines = cases.map(([facts]) => statusOf(run({ activity: 'not_working', title: 'Secret title', ...facts }), WORDS).line);
 		assert.deepStrictEqual(lines, cases.map(([, line]) => line));
-		assert.deepStrictEqual(lines.filter(line => /^\u{1F514}/u.test(line) || /Secret title|Working|Idle|Status unavailable · check terminal/.test(line)), []);
+		assert.deepStrictEqual(lines.filter(line => /^\u{1F514}/u.test(line) || /Secret title|Working|Idle|State unavailable · check terminal/.test(line)), []);
 	});
 
 	test('PANEL-1.4, 1.5: another agent\'s message is marked 📨 by who its record says sent it - never by its text - its sender and source in words for a screen reader; the person\'s input and a Facade result name none', () => {
@@ -161,7 +179,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const away = cardWith({ said: 'Fix it', saidSource: { kind: 'agent', alias: '#a7', window: 'Design' } });
 		assert.ok(away.label.endsWith('Last message from agent #a7, Design: Fix it'), away.label);
 		const person = cardWith({ said: '📨 a person typed this' });
-		assert.deepStrictEqual([person.line, person.label.endsWith('Your last input: 📨 a person typed this')], ['🧑‍💻 📨 a person typed this', true]);
+		assert.deepStrictEqual([person.line, person.label.endsWith('Last input: 📨 a person typed this')], ['🧑‍💻 📨 a person typed this', true]);
 		const result = cardWith({ said: '🔔 Your message #m42 has been passed on.', saidSource: { kind: 'facade' } });
 		assert.deepStrictEqual([result.line, result.label.endsWith('Facade result: Your message #m42 has been passed on.')], ['Your message #m42 has been passed on.', true]);
 		// A creation prompt is its creator's message, on either path; the details say who started it (PANEL-1.5)
@@ -177,11 +195,11 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			const facts = run({ activity, title: 'Checking tests', tools: 'connecting' });
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
 			assert.strictEqual(card.dot, activity === 'working' ? 'working' : 'none');
-			assert.strictEqual(card.line, 'New conversation started');
+			assert.strictEqual(card.line, 'New session started');
 			const late = statusOf({ ...facts, notReady: true }, WORDS);
 			assert.deepStrictEqual([late.dot, late.line], ['error', `${WORDS.toolsConnecting}`]);
 			assert.ok(linesOf(card).includes(WORDS.title('Checking tests')));
-			assert.strictEqual(statusOf({ ...facts, tools: 'available' }, WORDS).line, 'New conversation started');
+			assert.strictEqual(statusOf({ ...facts, tools: 'available' }, WORDS).line, 'New session started');
 			assert.strictEqual(statusOf({ ...facts, blocker: { kind: 'unknown' } }, WORDS).line, `${WORDS.needsAttention}`);
 			assert.strictEqual(statusOf({ ...facts, error: { source: 'cli', reason: 'Failed', at: 1 } }, WORDS).line, 'Failed');
 			const ended = cardOf({ ...facts, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 } }, { place, selected: false, menu, words: WORDS });
@@ -194,7 +212,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 	test('the details keep its conversation\'s title whole, as Resume Agent lists it - its symbols and multi-code-point emoji included - and never on its second line (CLIS-2.4, PANEL-1.4, 1.5)', () => {
 		const title = `✳ ${'a'.repeat(100)}👨‍👩‍👧‍👦 | workspace`;
 		const card = cardOf(run({ title }), { place, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual([card.line, card.details.summary, card.label.includes(title)], ['New conversation started', { id: 'title', label: 'Title: ', value: title }, false]);
+		assert.deepStrictEqual([card.line, card.details.summary, card.label.includes(title)], ['New session started', { id: 'title', label: 'Title: ', value: title }, false]);
 	});
 
 	test('PANEL-1.4: a native blocker leads the second line over another red condition - unusable tools, a start not ready - though not over an error', () => {
@@ -225,13 +243,13 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			label({ tools: 'connecting', lifecycle: 'ended', end: { kind: 'abnormal', code: 1, at: 3 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } })
 		];
 		assert.deepStrictEqual(labels, [
-			'Ada, #a1, Status unavailable · check terminal, shop · main, Claude Code, New conversation started, Status screen_reset · check terminal',
-			'Ada, #a1, Status unavailable · check terminal, shop · main, Claude Code, New conversation started, Status waiting · check terminal',
-			'Ada, #a1, Starting, shop · main, Claude Code, Starting Claude Code..., Collaboration not connected yet',
-			'Ada, #a1, Working, shop · main, Claude Code, New conversation started, Collaboration not connected yet',
-			'Ada, #a1, Collaboration not connected yet, shop · main, Claude Code',
-			'Ada, #a1, Working, shop · main, Claude Code, New conversation started',
-			'Ada, #a1, Status unavailable · check terminal, shop · main, Claude Code, New conversation started, Status screen_reset · check terminal, Collaboration not connected yet',
+			'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started, State screen_reset · check terminal',
+			'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started, State waiting · check terminal',
+			'Ada, #a1, Starting, shop · main, Claude Code, Starting Claude Code..., Facade tools not connected yet',
+			'Ada, #a1, Working, shop · main, Claude Code, New session started, Facade tools not connected yet',
+			'Ada, #a1, Facade tools not connected yet, shop · main, Claude Code',
+			'Ada, #a1, Working, shop · main, Claude Code, New session started',
+			'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started, State screen_reset · check terminal, Facade tools not connected yet',
 			'Ada, #a1, Error · Beendet mit Code 1, shop · main, Claude Code'
 		]);
 		assert.ok(labels.every(each => each.split(', ').length === new Set(each.split(', ')).size), 'no part twice');
@@ -266,7 +284,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const ended = cardOf(run({ ...lost, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
 		const live = cardOf(run({ ...lost, activity: 'not_working', reporting: true }), { place, selected: false, menu, words: WORDS });
 		const never = cardOf(run({ tools: 'unavailable', toolsProblem: 'conflict', lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
-		const said = (card: Pick<Card, 'line' | 'label'>) => card.line.startsWith('Collaboration off') && card.label.includes(card.line);
+		const said = (card: Pick<Card, 'line' | 'label'>) => card.line === 'Facade tools disconnected' && card.label.includes(card.line);
 		assert.deepStrictEqual([said(ended), said(live), said(never), ended.line, never.line], [false, true, false, 'Beendet mit Code 1', 'Beendet mit Code 1']);
 	});
 
@@ -306,7 +324,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const card = cardOf(facts, { place, selected: false, menu, words });
 		assert.deepStrictEqual([card.line, card.stateText, card.label.includes('CLI has not reported activity')], ['CLI 未返回状态 · 请查看终端', 'CLI 未返回状态 · 请查看终端', false]);
 		const quiet = statusOf(run({ activity: 'unknown', reporting: false, activityReason: 'The terminal was reset; waiting for activity', activityUnknown: 'screen_reset' }), WORDS);
-		assert.strictEqual(quiet.reason, 'Status screen_reset · check terminal');
+		assert.strictEqual(quiet.reason, 'State screen_reset · check terminal');
 	});
 
 	test('J05: an unresolved error is red with its reason first, whatever else is known - its state `Error · {reason}`, its second line the reason alone; unknown activity has no dot, its second line saying how its run began where it has nothing else to say (RULES-3.2, PANEL-1.4)', () => {
@@ -315,10 +333,10 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			[{ lifecycle: 'ended', end: { kind: 'abnormal', code: 2, at: 3 }, error: { reason: 'Exited with code 2', source: 'exit', at: 3 } }, 'error', 'Error · Beendet mit Code 2', 'Beendet mit Code 2'],
 			[{ activity: 'working', error: { reason: 'Rate limited', source: 'cli', at: 3 }, title: 'Fix login' }, 'error', 'Error · Rate limited', 'Rate limited'],
 			[{ lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false, error: { reason: 'Spawn failed', source: 'launch', at: 3 } }, 'error', 'Error · Start failed · Spawn failed', 'Start failed · Spawn failed'],
-			[{ activity: 'unknown', reporting: false }, 'none', 'Status unavailable · check terminal', 'New conversation started'],
-			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity' }, 'none', 'Status unavailable · check terminal', 'New conversation started'],
-			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity', title: 'Fix login' }, 'none', 'Status unavailable · check terminal', 'New conversation started'],
-			[{ activity: 'working', reporting: false, title: 'Fix login', resumed: true }, 'none', 'Status unavailable · check terminal', 'Conversation resumed']
+			[{ activity: 'unknown', reporting: false }, 'none', 'State unavailable · check terminal', 'New session started'],
+			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity' }, 'none', 'State unavailable · check terminal', 'New session started'],
+			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity', title: 'Fix login' }, 'none', 'State unavailable · check terminal', 'New session started'],
+			[{ activity: 'working', reporting: false, title: 'Fix login', sessionOpening: 'resumed' }, 'none', 'State unavailable · check terminal', 'Agent resumed']
 		];
 		for (const [facts, dot, stateText, notice] of cases) {
 			assert.deepStrictEqual(statusOf(run(facts), WORDS), { dot, stateText, line: `${notice}`, notice, ...(facts.activityReason && !facts.error ? { reason: facts.activityReason } : {}) }, JSON.stringify(facts));
@@ -349,7 +367,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: true, awaitingActivity: true }), WORDS),
-			statusOf(run({ activity: 'unknown', reporting: true, awaitingActivity: true, said: 'fix the login', resumed: true }), WORDS),
+			statusOf(run({ activity: 'unknown', reporting: true, awaitingActivity: true, said: 'fix the login', sessionOpening: 'resumed' }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, error: connection }), WORDS).dot,
 			statusOf(run({ activity: 'unknown', reporting: false, activityReason: "CLI has not reported activity" }), WORDS).dot
 		], [stage, stage, stage, 'error', 'none']);
@@ -372,13 +390,13 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			statusOf(run({ activity: 'working', title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'working' }), WORDS),
 			statusOf(run({ activity: 'not_working', title: 'Fix login' }), WORDS),
-			statusOf(run({ activity: 'not_working', resumed: true }), WORDS)
+			statusOf(run({ activity: 'not_working', sessionOpening: 'resumed' }), WORDS)
 		];
 		assert.deepStrictEqual(lines, [
-			{ dot: 'working', stateText: 'Working', line: 'New conversation started', notice: 'New conversation started' },
-			{ dot: 'working', stateText: 'Working', line: 'New conversation started', notice: 'New conversation started' },
-			{ dot: 'none', stateText: 'Idle', line: 'New conversation started', notice: 'New conversation started' },
-			{ dot: 'none', stateText: 'Idle', line: 'Conversation resumed', notice: 'Conversation resumed' }
+			{ dot: 'working', stateText: 'Working', line: 'New session started', notice: 'New session started' },
+			{ dot: 'working', stateText: 'Working', line: 'New session started', notice: 'New session started' },
+			{ dot: 'none', stateText: 'Idle', line: 'New session started', notice: 'New session started' },
+			{ dot: 'none', stateText: 'Idle', line: 'Agent resumed', notice: 'Agent resumed' }
 		]);
 		assert.ok(lines.every(each => !/done/i.test(JSON.stringify(each))));
 		assert.deepStrictEqual([
@@ -393,16 +411,16 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const unknown = cardOf(run({ activity: 'unknown', reporting: false }), { place, selected: false, menu, words: WORDS });
 		assert.deepStrictEqual([linesOf(working), working.label, working.selected, working.startedAt, placeOf(working), working.details.location.kind, working.menu], [
 			['Agent: Ada · #a1', 'Title: Fix the login flow'],
-			'Ada, #a1, Working, shop · main, Claude Code, New conversation started',
+			'Ada, #a1, Working, shop · main, Claude Code, New session started',
 			true, 2000, 'Location: shop · main\nPath: /app', 'repo', menu
 		]);
 		// The second line saying no more than the state is not said twice
 		assert.deepStrictEqual([linesOf(blocked), blocked.label], [['Agent: Ada · #a1', 'Title: Fix the login flow'], 'Ada, #a1, Answer needed, shop · main, Claude Code']);
 		// With no title, the details have none
-		assert.deepStrictEqual([linesOf(unknown), unknown.label, unknown.dot], [['Agent: Ada · #a1'], 'Ada, #a1, Status unavailable · check terminal, shop · main, Claude Code, New conversation started', 'none']);
+		assert.deepStrictEqual([linesOf(unknown), unknown.label, unknown.dot], [['Agent: Ada · #a1'], 'Ada, #a1, State unavailable · check terminal, shop · main, Claude Code, New session started', 'none']);
 		// An empty name is left out of both, never said as an empty part; the card carries its #aN for what the page says of it
 		const unnamed = cardOf(run({ name: '' }), { place, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual([linesOf(unnamed)[0], unnamed.label, unnamed.alias], ['Agent: #a1', '#a1, Working, shop · main, Claude Code, New conversation started', '#a1']);
+		assert.deepStrictEqual([linesOf(unnamed)[0], unnamed.label, unnamed.alias], ['Agent: #a1', '#a1, Working, shop · main, Claude Code, New session started', '#a1']);
 		// The details' screen-reader words, in their order: what the label does not say - here its title, then its path; the page puts when
 		// it started between them
 		assert.deepStrictEqual([working.details.description, unknown.details.description], [{ title: 'Title: Fix the login flow', place: 'Path: /app' }, { title: 'Title: No title yet', place: 'Path: /app' }]);

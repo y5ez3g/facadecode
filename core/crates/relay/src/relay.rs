@@ -19,7 +19,7 @@ use crate::windows::{Events, Input};
 #[cfg(unix)]
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
-use crate::daemon::{self, DaemonLink, Hello};
+use crate::daemon::{self, DaemonLink, RelayHelloParams};
 use crate::jsonrpc::{self, Message};
 use crate::lines::Lines;
 
@@ -34,7 +34,7 @@ pub(crate) fn log(level: &str, fact: &str) {
 
 /// Relays between standard input and output and the daemon at `socket`, saying `hello`, until
 /// the CLI's input ends and every request has its response, or no daemon is connected then.
-pub(crate) fn run(socket: PathBuf, hello: Hello) -> ExitCode {
+pub(crate) fn run(socket: PathBuf, hello: RelayHelloParams) -> ExitCode {
     #[cfg(unix)]
     let input = match io::stdin().as_fd().try_clone_to_owned() {
         Ok(input) => File::from(input),
@@ -130,7 +130,7 @@ struct Pending {
 
 struct Relay {
     socket: PathBuf,
-    hello: Hello,
+    hello: RelayHelloParams,
     /// The CLI's input, until it ends.
     #[cfg(unix)]
     input: Option<File>,

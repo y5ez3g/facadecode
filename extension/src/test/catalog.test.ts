@@ -21,16 +21,18 @@ const english = (value: string) => value.replace(/^%(.+)%$/, (_, key) => nls[key
 const PUBLIC: readonly [string, string, string?][] = [
 	// Facade's own copy of codicons' `new-session`, which VS Code before 1.111 has not (PANEL-1.1)
 	['facade.newAgent', 'New Agent...', '$(facade-new-agent)'],
-	['facade.history', 'Resume Agent...', '$(history)'],
+	['facade.resumeAgent', 'Resume Agent...', '$(history)'],
+	['facade.continueSession', 'Continue Session...', '$(history)'],
 	['facade.pinAgent', 'Pin Agent'],
 	['facade.unpinAgent', 'Unpin Agent'],
-	['facade.showActiveAgents', 'Go to Agent...'],
+	['facade.goToAgent', 'Go to Agent...'],
 	['facade.renameAgent', 'Rename Agent...'],
-	['facade.closeAgent', 'End Agent'],
+	['facade.stopAgent', 'Stop Agent'],
+	['facade.dismissAgent', 'Dismiss Agent'],
 	['facade.showAgentDetails', 'Show Agent Details'],
 	['facade.filter', 'Filter by Working Location...', '$(filter)'],
 	['facade.openSettings', 'Open Settings'],
-	['facade.showAgentLaunch', 'Show Agent Launch...'],
+	['facade.showAgentLaunch', 'Show Agent Command Line...'],
 	['facade.showAgentsLog', 'Show Agents Log']
 ];
 /** The moved notice where VS Code cannot show a link (CONFIGURATION-6.3). */
@@ -46,7 +48,7 @@ const HIDDEN: readonly [string, string, string?][] = [
 	['facade.openSettingsFile', 'Open facade.json']
 ];
 /**
- * Registered by the host itself rather than the panel: New Worktree, Show Agent Launch and Show Agents Log beside the CLIs and the log,
+ * Registered by the host itself rather than the panel: New Worktree, Show Agent Command Line and Show Agents Log beside the CLIs and the log,
  * and Open Settings File beside the settings file.
  */
 const HOST_COMMANDS = ['facade.newWorktree', 'facade.showAgentLaunch', 'facade.showAgentsLog', 'facade.openSettingsFile'];
@@ -73,20 +75,21 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		assert.ok(contributes.commands.every((each: { category: string }) => english(each.category) === 'Facade Code'));
 		const text = JSON.stringify(manifest);
 		// Gone in this step too: Refresh, New Agent Here, the working-location commands and their context keys
-		for (const retired of ['facadeDots', 'facade.stopAgent', 'facade.nextAgent', 'facade.startAgent', 'ChatRoom', 'deleteWorktree', 'facade.refresh', 'facade.newAgentHere', 'webviewHere',
+		for (const retired of ['facadeDots', 'facade.closeAgent', 'facade.history', 'facade.showActiveAgents', 'facade.nextAgent', 'facade.startAgent', 'ChatRoom', 'deleteWorktree', 'facade.refresh', 'facade.newAgentHere', 'webviewHere',
 			'facade.customize', 'facade.openInNewWindow', 'facade.revealIn', 'facade.openContainingFolder', 'facade.revealRemote', 'facade.copyPath', 'facade.openTerminalHere', 'canManageWorktrees', 'facade.remote']) {
 			assert.ok(!text.includes(retired), retired);
 		}
 	});
 
-	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, End Agent for every card; the palette by availability, context-only commands hidden', () => {
+	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, Stop Agent or Dismiss Agent based on lifecycle; the palette by availability, context-only commands hidden', () => {
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
 				// Not offered where every agent works in the window's one place to work, unless a filter is on (PANEL-2.3)
 				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered && !facade.onePlace', group: 'navigation@1' },
 				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered', group: 'navigation@1' },
-				{ command: 'facade.history', when: 'view == facade.agents', group: 'navigation@2' },
+				{ command: 'facade.resumeAgent', when: 'view == facade.agents && facade.engine == rust', group: 'navigation@2' },
+				{ command: 'facade.continueSession', when: 'view == facade.agents && facade.engine != rust', group: 'navigation@2' },
 				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@3' },
 				// The More Actions menu (PANEL-1.1): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
@@ -97,12 +100,15 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
 				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
 				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' },
-				{ command: 'facade.closeAgent', when: card, group: '4_close@1' }
+				{ command: 'facade.stopAgent', when: `${card} && !webviewAgentEnded`, group: '4_close@1' },
+				{ command: 'facade.dismissAgent', when: `${card} && webviewAgentEnded`, group: '4_close@1' }
 			],
 			commandPalette: [
+				{ command: 'facade.resumeAgent', when: 'facade.engine == rust' },
 				{ command: 'facade.showAgentLaunch', when: 'facade.engine != rust' },
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
-				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
+				{ command: 'facade.stopAgent', when: 'facade.agentSelected && !facade.agentSelectedEnded' },
+				{ command: 'facade.dismissAgent', when: 'facade.agentSelected && facade.agentSelectedEnded' },
 				{ command: 'facade.showAgentDetails', when: 'facade.agentSelected && facade.agentSelectedVisible' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
 				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedPinnable && !facade.agentSelectedPinned' },
@@ -120,9 +126,9 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
 		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.openSettings']);
 		// These commands are in the Command Palette alone (PANEL-1.1); Open Settings is in it too.
-		const palette = ['facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
+		const palette = ['facade.goToAgent', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
-		// Show Agent Launch is hidden from the palette only on the Rust engine, which has no launch view
+		// Show Agent Command Line is hidden from the palette only on the Rust engine, which has no launch view
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette.filter(command => command !== 'facade.showAgentLaunch'), 'facade.openSettings'].includes(each.command)));
 	});
 
@@ -192,7 +198,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				const disposables = registerUi({
 					savedName: () => undefined,
 					agents: { requested: () => undefined, started: async () => ({ state: 'closed' }), warmedUp: async () => undefined, list: () => [], get: () => undefined, onDidChange: emitter.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: () => {}, unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
-			launch: () => '', close: async () => 'already_ended', rename: () => undefined },
+			launch: () => '', stop: async () => 'already_ended', dismiss: async () => undefined, close: async () => 'already_ended', rename: () => undefined },
 					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
 					clis: { list: async () => ({ clis: [], problems: [] }) },
@@ -212,8 +218,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Show Agent Launch, Show Agents Log and Open Settings File (UX-3.2, E03)', () => {
-			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id));
+		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Show Agent Command Line, Show Agents Log and Open Settings File (UX-3.2, E03)', () => {
+			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id) && id !== 'facade.resumeAgent');
 			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
 		});
 

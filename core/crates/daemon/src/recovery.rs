@@ -31,9 +31,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use facade_base::daemon::{
-    AgentInfo, AgentState, DeliveryFailure, Message, TextWritten, ToolsState, typed_text,
+    AgentInfo, AgentState, DeliveryFailure, Message, TextWritten, ToolsState,
 };
-use facade_base::keeper::HeldAgent;
+use facade_base::keeper::KeeperHeldAgent;
 use facade_base::process::{EndReason, ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
 use tokio::sync::{Semaphore, mpsc, watch};
@@ -116,12 +116,12 @@ impl Daemon {
     /// Fails where a terminal cannot be taken back from the keeper.
     pub(crate) async fn recover(
         self: &Arc<Self>,
-        held: Vec<HeldAgent>,
+        held: Vec<KeeperHeldAgent>,
         records: Vec<AgentRecord>,
         agent_ids: &HashSet<String>,
         progress: &RecoveryProgress,
     ) -> anyhow::Result<()> {
-        let mut held: HashMap<String, HeldAgent> =
+        let mut held: HashMap<String, KeeperHeldAgent> =
             held.into_iter().map(|run| (run.id.clone(), run)).collect();
         let slots = Arc::new(Semaphore::new(MAX_RECOVERIES_IN_FLIGHT));
         let mut recoveries = JoinSet::new();
@@ -212,7 +212,7 @@ impl Daemon {
     async fn recover_agent(
         self: Arc<Self>,
         mut record: AgentRecord,
-        run: Option<HeldAgent>,
+        run: Option<KeeperHeldAgent>,
         steps: Arc<AtomicU64>,
     ) -> anyhow::Result<Recovered> {
         let id = record.agent_id.clone();
@@ -251,6 +251,9 @@ impl Daemon {
             self.catch_up_on_session(&mut record).await;
         }
         let info = AgentInfo {
+            address: None,
+            label: None,
+            unreachable: false,
             agent_id: id.clone(),
             location_id: record.location_id,
             pid: Some(run.as_ref().map_or(record.pid, |run| run.pid)),
@@ -273,9 +276,9 @@ impl Daemon {
             location_source_window: record.location_source_window,
             created_at: record.created_at,
             creator: record.creator,
-            creator_machine_id: None,
+            creator_machine_id: record.creator_machine_id,
             root: record.root,
-            root_machine_id: None,
+            root_machine_id: Some(record.root_machine_id),
             yolo: record.yolo,
             session: record.session,
         };
@@ -305,7 +308,7 @@ impl Daemon {
     fn commit_uncommitted_resume(
         &self,
         record: &mut AgentRecord,
-        run: &HeldAgent,
+        run: &KeeperHeldAgent,
     ) -> anyhow::Result<()> {
         let id = &record.agent_id;
         blocking_in_place(|| self.store.record_restart(id, run.pid, record.yolo))?;
@@ -380,7 +383,7 @@ impl Daemon {
         &self,
         id: &str,
         info: &AgentInfo,
-        run: Option<&HeldAgent>,
+        run: Option<&KeeperHeldAgent>,
     ) -> anyhow::Result<StateStart> {
         let file = agent::state_file(&self.screens.folder(id));
         let mut kept = tokio::task::spawn_blocking({
@@ -446,7 +449,7 @@ impl Daemon {
         let owes = result_owed
             .zip(recipient)
             .map(|(number, agent)| OwedResult {
-                number,
+                reference: number,
                 agent: Arc::new(move || agent.info()),
             });
         let number = messages::number(&message);
@@ -526,7 +529,7 @@ impl Daemon {
                     },
                 };
                 MessageTyping::new(
-                    typed_text(message),
+                    self.message_text(message),
                     messages::number(message),
                     deadline,
                     said,

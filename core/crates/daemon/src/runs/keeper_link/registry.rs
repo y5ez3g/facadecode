@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::time::Instant;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{HeldAgent, SyncArgs};
+use facade_base::keeper::{KeeperHeldAgent, KeeperSyncArgs};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::terminal::PtyMaster;
 use tokio::sync::Notify;
@@ -45,7 +45,7 @@ pub(super) struct RunRegistry {
 
 pub(super) struct Reconciliation {
     pub stops: Vec<String>,
-    pub unrecorded: Vec<HeldAgent>,
+    pub unrecorded: Vec<KeeperHeldAgent>,
 }
 
 impl RunRegistry {
@@ -279,7 +279,7 @@ impl RunRegistry {
     pub fn reconcile(
         &self,
         keeper: u32,
-        inventory: &[HeldAgent],
+        inventory: &[KeeperHeldAgent],
     ) -> Result<Reconciliation, ErrorBody> {
         let runs = self.runs.lock().unwrap();
         let mut plan = Reconciliation {
@@ -311,8 +311,8 @@ impl RunRegistry {
 
     pub fn missing(
         &self,
-        inventory: &[HeldAgent],
-    ) -> Result<Vec<(SyncArgs, PtyMaster, bool)>, ErrorBody> {
+        inventory: &[KeeperHeldAgent],
+    ) -> Result<Vec<(KeeperSyncArgs, PtyMaster, bool)>, ErrorBody> {
         let runs = self.runs.lock().unwrap();
         let mut terminals = Vec::new();
         let present: HashSet<_> = inventory.iter().map(|held| held.id.as_str()).collect();
@@ -327,7 +327,7 @@ impl RunRegistry {
                 )
             })?;
             terminals.push((
-                SyncArgs {
+                KeeperSyncArgs {
                     agent: id.clone(),
                     pid: run.identity.pid,
                     birth: run.identity.birth.clone(),

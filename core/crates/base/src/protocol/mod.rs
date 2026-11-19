@@ -3,9 +3,11 @@
 //! ([`jsonrpc`]) whose calls are typed operations and topics ([`operations`]); terminal bytes
 //! travel as [`base64`].
 
+pub mod address;
 pub mod base64;
 pub mod daemon;
 pub mod daemon_client;
 pub mod jsonrpc;
 pub mod keeper;
+pub mod machine;
 pub mod operations;

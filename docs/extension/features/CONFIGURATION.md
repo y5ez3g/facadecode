@@ -58,7 +58,7 @@ that is the remote editor settings JSON at `facade.home`.
 | Open Settings (`facade.openSettings`) | The panel's `…` menu and Command Palette |
 | Open Settings gear | Each Unavailable row in New Agent |
 | Open Settings item | New Agent when configuration fails or no usable CLI is available |
-| File-problem row, choosing Open Settings | Resume Agent when the file is wrong as a whole |
+| File-problem row, choosing Open Settings | Resume Agent or Continue Session when the file is wrong as a whole |
 | Edit in facade.json | Facade: Home's description and notifications about file errors |
 
 The Settings page has one section, **Facade Code**, with **Facade: Home** (`facade.home`, machine scope), whose box
@@ -93,7 +93,7 @@ The first read, Open facade.json, and any later read that finds the file missing
 listing the eight entry fields and explaining why Facade adds options, then `clis`.
 
 Each of the six built-ins shows `type` and `icon` set to its ID, `args: []`, `env: {}` and `enabled: true`.
-`command`, `model` and `effort` are commented out with sample values; OpenCode has one comment saying model and effort
+`program`, `model` and `effort` are commented out with sample values; OpenCode has one comment saying model and effort
 belong in its own configuration instead. Each `icon` has `// or values on line N`, where N is the field list's icon
 line. A migrated value is written out over its sample. An explicit `null` stays `null`, including in `args`, `env` and
 `enabled`; only an absent field takes its default.
@@ -106,7 +106,7 @@ Three commented examples follow the built-ins:
 | --- | --- |
 | `Claude · Other` | Another Anthropic-compatible provider through `env`, with `icon: facade-blue` |
 | `Codex · Other` | Another Responses provider defined and selected through `args`, with its key in `env` and `icon: facade-lime` (5.2) |
-| `Aider` | `type: custom`, `icon: facade-pink`, `command: aider` and `args: ["--model", "sonnet"]` |
+| `Aider` | `type: custom`, `icon: facade-pink`, `program: aider` and `args: ["--model", "sonnet"]` |
 
 The provider examples use `YOUR_PROVIDER_URL` and `YOUR_API_KEY`, give OpenRouter and Qwen Cloud samples in comments,
 and use DeepSeek V4.1 Flash as the sample model. To use one, remove its outer `//`, replace both placeholders and
@@ -151,7 +151,7 @@ YOLO is one setting for the execution environment, with no per-entry or per-call
 approvals and sandbox where it has them. Pi has neither, so it runs the same either way.
 The exact native mappings live in CLIS-1.3. There is no tools or collaboration switch (RULES-4.4).
 
-Facade uses the same words in this file, its APIs and documentation: `cli`, `command`, `args`, `env`, `model`,
+The settings file and its documentation use `cli`, `program`, `args`, `env`, `model`,
 `effort`, `icon`, `names` and `yolo`. Facade-owned field names use snake_case; these fields each happen to be one word.
 Native CLI keys keep their native spelling.
 
@@ -175,12 +175,12 @@ name without regard to case: the six IDs above, Claude Code, Codex, Antigravity,
 `claude` itself changes the built-in; `Claude`, `CLAUDE` and `Claude Code` cannot name a new entry.
 The editor schema enforces the same name rules as the reader (1.2).
 
-New Agent, Resume Agent, `list_agents`, `start_agent.cli` and launch inspection use this ID. It is separate from an
+New Agent, Resume Agent, Continue Session, `list_agents`, `start_agent.cli` and launch inspection use this ID. It is separate from an
 agent's display name. Built-ins appear in CLIS-1.1 order, then added entries in file order; New Agent can put the
 last successful choice first under LIFECYCLE-1.1.
 
 For example, `"Codex · work": {"type": "codex"}` adds a second Codex setup. It inherits nothing from the `codex`
-entry, including its command, arguments or disabled state. `"CODEX"` is not an available name for a new entry.
+entry, including its program, arguments or disabled state. `"CODEX"` is not an available name for a new entry.
 
 ### 2.2 Entry fields
 
@@ -190,18 +190,22 @@ entry, including its command, arguments or disabled state. `"CODEX"` is not an a
 | --- | --- | --- |
 | `type` | `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, `custom` | Built-in name: that type, and no other; added name: required |
 | `icon` | One built-in ID or robot value in 2.4 | The type's icon; `facade-pearl` for `custom` or a missing/unknown type |
-| `command` | One nonblank program name or path | The type's command on PATH; required for `custom` |
+| `program` | One nonblank program name or path | The type's command on PATH; required for `custom` |
 | `args` | Array of literal strings, including empty strings | `[]` |
 | `env` | Object mapping variable names to strings or `null` | `{}` |
 | `model` | Nonblank string; an error for `opencode` and `custom` | No Facade override |
 | `effort` | Nonblank string; an error for `opencode` and `custom` | No Facade override |
 | `enabled` | Boolean | `true` |
 
-`command` is one executable, not a shell command line. A name without a path separator is searched on PATH.
+`program` names one executable. A name without a path separator is searched on PATH.
 An absolute path is exact; `~/` uses the execution environment's home; a relative path starts at the agent's working
-folder. CLIS-1.2 owns executable checks and Windows launchers. An empty or whitespace-only command is an error.
+folder. CLIS-1.2 owns executable checks and Windows launchers. An empty or whitespace-only program is an error.
 
-Command, argument, model, effort and environment strings contain no NUL: these values go into a process's arguments
+An existing entry can use `command` in place of `program`. Facade reads its value as the program and preserves the
+file, including its comments. If an entry gives both keys, that entry reports a conflict and asks the user to keep
+`program`. New files and examples use `program`.
+
+Program, argument, model, effort and environment strings contain no NUL: these values go into a process's arguments
 or environment. An environment name is not empty and contains neither `=` nor NUL. On Windows, two names in the
 same `env` object that differ only in case are an error.
 `null` is accepted only as an environment value. Unknown fields are errors, including `tools`, `baseUrl` and
@@ -219,7 +223,7 @@ For example:
 ```json
 {
   "clis": {
-    "codex": { "command": "/opt/homebrew/bin/codex" },
+    "codex": { "program": "/opt/homebrew/bin/codex" },
     "pi": { "enabled": false }
   }
 }
@@ -231,7 +235,7 @@ For example:
 
 | Capability | Built-in type | `custom` |
 | --- | --- | --- |
-| Startup | Adapter invocation using this entry's settings | `command` and `args` with the shared environment handling |
+| Startup | Adapter invocation using this entry's settings | `program` and `args` with the shared environment handling |
 | Facade tools and skill | Injection on every start; actual failures are reported under CLIS-2.2 | No injection |
 | Trust and YOLO | The adapter's native mappings | No mapping or trust change |
 | Messages and first task | The adapter's supported input path | Fail as `unsupported`; the program still starts |
@@ -248,7 +252,7 @@ activity or tools to finish startup.
 For example, this starts Aider with its own arguments. Facade does not interpret `--model` for a custom program:
 
 ```json
-{"clis": {"aider": {"type": "custom", "command": "aider", "args": ["--model", "sonnet"]}}}
+{"clis": {"aider": {"type": "custom", "program": "aider", "args": ["--model", "sonnet"]}}}
 ```
 
 ### 2.4 Entry icons
@@ -262,7 +266,7 @@ The built-in values are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`. T
 
 | Surface | How it draws the icon |
 | --- | --- |
-| New Agent, Resume Agent, Go to Agent | A built-in logo image or `media/agents/robot-<color>.svg` |
+| New Agent, Resume Agent, Continue Session, Go to Agent | A built-in logo image or `media/agents/robot-<color>.svg` |
 | Terminal tab | A contributed `facade-cli-<id>` glyph in the theme's text color, or `facade-robot-<color>` from `media/robots.woff` |
 | Panel card | A built-in's maker avatar or `robot-<color>-face.svg` with `robot-eyes.svg` over it (PANEL-1.3) |
 
@@ -355,7 +359,7 @@ For example, `"codex": {"model": "my-model", "effort": "high"}` supplies both ch
 
 Saving the file does not change the arguments, environment or YOLO of a running agent. New Agent, MCP starts,
 Resume and Pin restoration share the current configuration path. Resume and Pin start the original entry with its
-current command, arguments and environment, and the destination's current YOLO. Model and effort follow 3.3.
+current program, arguments and environment, and the destination's current YOLO. Model and effort follow 3.3.
 
 Facade records the entry name and type with the run and its conversation association. It keeps requested model,
 effort and YOLO for diagnostics, without environment values or their expansions. Those historical requests do not
@@ -389,7 +393,7 @@ and Pin behavior.
 | Scope | Errors | Example |
 | --- | --- | --- |
 | Whole file | Unreadable file; invalid JSONC; duplicate keys at any depth; root is not an object; unknown top-level key; wrong type for `yolo`, `names`, `clis` or `$schema`; non-string or blank `names` member | `{"yolo": "false"}` blocks all starts |
-| One entry | Invalid name; non-object entry; unknown field; wrong type or invalid value; missing or mismatched type; missing custom command; reserved argument; unsupported model/effort; missing reference in the entry's own `env`; unavailable program | `{"clis": {"codex": {"args": [42]}}}` leaves other entries usable |
+| One entry | Invalid name; non-object entry; unknown field; wrong type or invalid value; missing or mismatched type; missing custom program; reserved argument; unsupported model/effort; missing reference in the entry's own `env`; unavailable program | `{"clis": {"codex": {"args": [42]}}}` leaves other entries usable |
 
 Do not guess a correction, use stale settings or replace a bad value with a default. Only a missing file enters
 creation or migration. A file that is empty or has only spaces or comments follows 1.1. Running processes are
@@ -397,16 +401,16 @@ unaffected by these errors.
 
 New Agent, Resume, Pin restoration and `start_agent` use the same validation and reason. Configuration errors come
 before the disabled check. New Agent lists invalid entries under Unavailable, even when `enabled` is false, and
-offers Open Settings. With a file-level problem, Resume Agent reads no conversations: it shows one row per problem,
+offers Open Settings. With a file-level problem, Resume Agent and Continue Session each show one row per problem,
 labeled by the file, with the reason as detail, a gear icon and an Open Settings gear button as in New Agent.
 Choosing the row or its button runs Open Settings. It does not show
-"No saved conversations in this window's folders" for a bad file. An entry's own error leaves its conversations out
+"No saved sessions in this window's folders" for a bad file. An entry's own error leaves its conversations out
 of the list. A valid disabled entry is hidden. LIFECYCLE-1.1 owns how missing
 installations and valid disabled entries are displayed. File errors give the file path, and line and column when
 known. An I/O error gives its real reason instead of invented line numbers.
 
 Entry errors name the path, expected type and correction, never the supplied value. The “is not a field of an entry”
-and “must be an object of” errors list fields in file order: `type`, `icon`, `command`, `args`, `env`, `model`,
+and “must be an object of” errors list fields in file order: `type`, `icon`, `program`, `args`, `env`, `model`,
 `effort`, `enabled`. For example:
 `clis["Codex · work"].args[2] must be a string.` Discovery and final launch validation use the actual destination
 folder and environment; new worktree paths follow CLIS-4.2's staged checks.
@@ -416,7 +420,7 @@ folder and environment; new worktree paths follow CLIS-4.2's staged checks.
 **Facade shows the names and sources of the person's environment variables, never their values; the fixed values Facade itself sets are shown.**
 
 The person's values come from the execution host environment, `terminal.integrated.env`, the terminal profile's
-`env`, or the entry's `env`. Errors, logs, diagnostics, API listings and Show Agent Launch show only their names and
+`env`, or the entry's `env`. Errors, logs, diagnostics, API listings and Show Agent Command Line show only their names and
 sources. This includes their values embedded in generated arguments or files: redact the structured values before
 serialization. Facade's own constant values are shown, such as `TERM_PROGRAM=vscode`, `COLORTERM=truecolor` and
 `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`. Values Facade generates for each run, such as its run ID, launch context and
@@ -430,7 +434,7 @@ A secret option also hides its next argument when that value starts with one das
 `--api-key=abc`, `-c service_token=abc` and `--token -abc` all hide their values.
 This is not a promise to recognize every secret format an arbitrary custom program accepts.
 
-When a launch passes a per-run settings file, Show Agent Launch also shows its JSON. This applies to Claude and
+When a launch passes a per-run settings file, Show Agent Command Line also shows its JSON. This applies to Claude and
 Antigravity. Hide the person's environment values and other secret values inside it, and use placeholders for
 per-run values, just as in the arguments. The preview does not write the file (CLIS-4.1).
 
@@ -618,11 +622,11 @@ different product and its settings are not migrated.
 | --- | --- |
 | `facade.yolo` | `yolo` |
 | `facade.<cli>.enabled` | `clis.<cli>.enabled` |
-| `facade.<cli>.path` | `clis.<cli>.command`; omit an empty string |
+| `facade.<cli>.path` | `clis.<cli>.program`; omit an empty string |
 | `facade.<cli>.launch.arguments` | `clis.<cli>.args`, with model/effort extraction under 6.2 |
 | `facade.<cli>.launch.environment` | `clis.<cli>.env` |
 | `facade.antigravity.*` | The matching fields under `clis.agy` |
-| `facade.custom.<name>.path` | `clis.<name>.command`, with `type: "custom"` |
+| `facade.custom.<name>.path` | `clis.<name>.program`, with `type: "custom"` |
 | `facade.custom.<name>.launch.start` | `clis.<name>.args` |
 | `facade.custom.<name>.launch.environment` | `clis.<name>.env` |
 | `facade.custom.<name>.launch.resume` | Removed |
@@ -631,7 +635,7 @@ different product and its settings are not migrated.
 Here `<cli>` is `claude`, `codex`, `muse`, `opencode` or `pi`; Antigravity has the separate row above.
 Migration trims surrounding whitespace from a nonblank old path, as 0.1.2 did at launch. An empty built-in path means
 the default command, so it is omitted. A path made only of spaces is kept unchanged for validation to report.
-For example, `facade.codex.path: " /opt/bin/codex "` becomes `clis.codex.command: "/opt/bin/codex"`; an empty path
+For example, `facade.codex.path: " /opt/bin/codex "` becomes `clis.codex.program: "/opt/bin/codex"`; an empty path
 leaves Codex to be found on PATH. Model and effort extraction follows the native spellings and end marker in 6.2.
 
 ### 6.2 Preserve values and report conflicts

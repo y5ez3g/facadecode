@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::programs::Held;
+use facade_base::start::StartCommand;
 use facade_base::system::env_var;
 use facade_rules::{CommandLine, Rule};
 use tokio::sync::mpsc;
@@ -64,11 +65,14 @@ impl Preparation {
         let home = facade_base::paths::facade_home().map_err(ErrorBody::internal)?;
         let mut env = environment::build(request.inherited.clone(), request.cwd, &home, request.id);
         let Some(rule) = request.rule else {
-            let mut command = vec![request.program.unwrap_or(request.plain_program).to_owned()];
-            command.extend_from_slice(request.words);
-            let command = started_directly(None, command, &env, request.cwd).await;
+            let launch = StartCommand {
+                program: request.program.unwrap_or(request.plain_program).to_owned(),
+                args: request.words.to_vec(),
+                folder: request.cwd.to_owned(),
+            };
+            let launch = started_directly(None, launch, &env).await;
             return Ok(PreparedRun {
-                command,
+                launch,
                 env,
                 captures: false,
                 version: None,
@@ -76,7 +80,6 @@ impl Preparation {
                 plugin: None,
                 files: RunFiles::default(),
                 rule: None,
-                cwd: request.cwd.to_owned(),
                 kind: request.kind,
             });
         };
@@ -172,7 +175,7 @@ impl Preparation {
             }
         };
         let CommandLine {
-            mut command,
+            command,
             env: added,
             captures,
             files: contents,
@@ -180,8 +183,9 @@ impl Preparation {
             ..
         } = command_line;
         env.extend(added);
+        let mut launch = StartCommand::from_words(command, request.cwd.to_owned());
         if let Some(program) = request.program {
-            command[0] = program.to_owned();
+            launch.program = program.to_owned();
         }
         // Only a resume's file starts with its session saved; a start's, even one that continues a
         // session, starts as for a new session, so the session the CLI reports is committed.
@@ -195,8 +199,8 @@ impl Preparation {
             let created = files.clone();
             file_work(move || created.create()).await?;
         }
-        let version = installed_version(rule, &command[0], &env, request.cwd).await;
-        let command = started_directly(Some(rule), command, &env, request.cwd).await;
+        let version = installed_version(rule, &launch.program, &env, request.cwd).await;
+        let launch = started_directly(Some(rule), launch, &env).await;
         let tools = match tools {
             facade_rules::Tools::Injected => ToolsGiven::Injected,
             facade_rules::Tools::NotInjected => ToolsGiven::NotInjected,
@@ -210,7 +214,7 @@ impl Preparation {
             }
         };
         Ok(PreparedRun {
-            command,
+            launch,
             env,
             captures,
             version,
@@ -218,7 +222,6 @@ impl Preparation {
             plugin,
             files,
             rule: Some(rule),
-            cwd: request.cwd.to_owned(),
             kind: request.kind,
         })
     }
@@ -379,16 +382,16 @@ async fn installed_version(
     .flatten()
 }
 
-/// `command` with its program started directly where that program is a wrapper, such as npm's
-/// shim of a Node script (`facade_rules::direct_command`), found on the run's `PATH` from `cwd`
-/// as its version is. A program started as it is, or not found, stays as the command names it.
+/// Starts a wrapper's program directly where possible, such as npm's shim of a Node script
+/// (`facade_rules::direct_command`), found on the run's `PATH` from the launch folder.
 async fn started_directly(
     rule: Option<&'static Rule>,
-    mut command: Vec<String>,
+    mut launch: StartCommand<String>,
     env: &BTreeMap<String, String>,
-    cwd: &str,
-) -> Vec<String> {
-    let (program, env, cwd) = (command[0].clone(), env.clone(), PathBuf::from(cwd));
+) -> StartCommand<String> {
+    let program = launch.program.clone();
+    let env = env.clone();
+    let cwd = PathBuf::from(&launch.folder);
     let direct = tokio::task::spawn_blocking(move || {
         let path = env_var(&env, "PATH");
         let file = facade_base::programs::on_path(&program, path, &cwd)?;
@@ -399,7 +402,9 @@ async fn started_directly(
     .ok()
     .flatten();
     if let Some(direct) = direct {
-        command.splice(..1, direct);
+        let mut words = direct.into_iter();
+        launch.program = words.next().expect("a direct command has a program");
+        launch.args.splice(..0, words);
     }
-    command
+    launch
 }

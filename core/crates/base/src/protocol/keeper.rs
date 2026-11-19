@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize};
 
 use super::operations::{EmptyResult, NoArgs, Operation, OperationVisitor};
 use crate::process::ProcessExit;
+use crate::start::StartCommand;
 
 pub const KEEPER_PROTOCOL_VERSION: u32 = 1;
 pub const MIN_KEEPER_PROTOCOL_VERSION: u32 = 1;
@@ -88,26 +89,32 @@ pub const METHODS: &[(&str, &str)] = &[
 
 /// Parameters for `hello`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct HelloParams {
+#[schemars(rename = "HelloParams")]
+pub struct KeeperHelloParams {
     /// The oldest and newest keeper protocol versions the daemon speaks.
-    pub protocol: [u32; 2],
+    #[serde(rename = "protocol")]
+    pub protocol_range: [u32; 2],
 }
 
 /// The result of `hello`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct HelloResult {
+#[schemars(rename = "HelloResult")]
+pub struct KeeperHelloResult {
     /// The oldest and newest keeper protocol versions the keeper speaks. Each side speaks the
     /// highest version both ranges share.
-    pub protocol: [u32; 2],
+    #[serde(rename = "protocol")]
+    pub protocol_range: [u32; 2],
     /// The keeper's build.
     pub build: String,
     /// The CLIs the keeper holds, in no particular order: every one that has not ended.
-    pub agents: Vec<HeldAgent>,
+    #[serde(rename = "agents")]
+    pub held_agents: Vec<KeeperHeldAgent>,
 }
 
 /// A CLI the keeper holds, as `hello` reports it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct HeldAgent {
+#[schemars(rename = "HeldAgent")]
+pub struct KeeperHeldAgent {
     /// The agent's ID, an opaque string.
     pub id: String,
     /// The CLI's process ID.
@@ -124,7 +131,8 @@ pub struct HeldAgent {
 
 /// Arguments for `agent.start`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct StartArgs {
+#[schemars(rename = "StartArgs")]
+pub struct KeeperStartWireArgs {
     /// The agent's ID, an opaque string.
     pub agent: String,
     /// The program followed by its arguments; not empty. The program is an absolute path, or a
@@ -140,18 +148,56 @@ pub struct StartArgs {
     pub rows: u16,
 }
 
+/// The resolved start the keeper executes. It travels in the v1 `StartArgs` object.
+pub struct KeeperStartArgs {
+    pub agent: String,
+    pub launch: StartCommand<String>,
+    pub env: BTreeMap<String, String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl From<KeeperStartWireArgs> for KeeperStartArgs {
+    fn from(args: KeeperStartWireArgs) -> Self {
+        Self {
+            agent: args.agent,
+            launch: StartCommand::from_words(args.command, args.path),
+            env: args.env,
+            cols: args.cols,
+            rows: args.rows,
+        }
+    }
+}
+
+impl From<KeeperStartArgs> for KeeperStartWireArgs {
+    fn from(args: KeeperStartArgs) -> Self {
+        let (command, path) = args.launch.into_words();
+        Self {
+            agent: args.agent,
+            command,
+            env: args.env,
+            path,
+            cols: args.cols,
+            rows: args.rows,
+        }
+    }
+}
+
 /// The result of `agent.start`. Its response carries the terminal.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct StartResult {
+#[schemars(rename = "StartResult")]
+pub struct KeeperStartResult {
     /// The CLI's process ID.
     pub pid: u32,
-    /// The CLI's birth, as [`HeldAgent::birth`].
+    /// The CLI's birth, as [`KeeperHeldAgent::birth`].
+    #[schemars(description = "The CLI's birth, as [`HeldAgent::birth`].")]
     pub birth: String,
 }
 
 /// Arguments for an operation on one agent's CLI.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct AgentArgs {
+#[schemars(rename = "AgentArgs")]
+pub struct KeeperAgentArgs {
     /// The agent's ID.
     pub agent: String,
 }
@@ -159,19 +205,22 @@ pub struct AgentArgs {
 /// Arguments for `agent.sync`: the CLI the daemon knows for the agent. The request carries the
 /// daemon's terminal where it has one.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct SyncArgs {
+#[schemars(rename = "SyncArgs")]
+pub struct KeeperSyncArgs {
     /// The agent's ID.
     pub agent: String,
     /// The CLI's process ID.
     pub pid: u32,
-    /// The CLI's birth, as [`HeldAgent::birth`].
+    /// The CLI's birth, as [`KeeperHeldAgent::birth`].
+    #[schemars(description = "The CLI's birth, as [`HeldAgent::birth`].")]
     pub birth: String,
 }
 
 /// A change the keeper reports. The daemon skips kinds it does not know.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AgentChange {
+#[schemars(rename = "AgentChange")]
+pub enum KeeperAgentChange {
     /// An agent's CLI ended. An exit with neither a code nor a signal says nothing of how; it is
     /// never exit code 0.
     Exit { agent: String, exit: ProcessExit },
@@ -191,8 +240,8 @@ impl Operation for AgentStart {
                                empty command or an agent it holds, and `unavailable` where the \
                                terminal, the program, the folder or the CLI's birth cannot be \
                                had.";
-    type Args = StartArgs;
-    type Result = StartResult;
+    type Args = KeeperStartWireArgs;
+    type Result = KeeperStartResult;
 }
 
 pub struct AgentStop;
@@ -206,7 +255,7 @@ impl Operation for AgentStop {
                                keeper's copy of the signal pipe, after the daemon let go of its \
                                own, then calls `TerminateJobObject` on the CLI's job. Fails with \
                                `not_found` for an agent it does not hold.";
-    type Args = AgentArgs;
+    type Args = KeeperAgentArgs;
     type Result = EmptyResult;
 }
 
@@ -220,7 +269,7 @@ impl Operation for AgentSync {
                                reported ended at once. Both sides holding one, the process ID and \
                                birth must match (`invalid_argument` otherwise); neither, \
                                `not_found`.";
-    type Args = SyncArgs;
+    type Args = KeeperSyncArgs;
     type Result = EmptyResult;
 }
 
@@ -274,20 +323,23 @@ mod tests {
             (1, 1, "hello", "call", "changed")
         );
         assert_eq!(
-            serde_json::to_value(HelloParams { protocol: [1, 1] }).unwrap(),
+            serde_json::to_value(KeeperHelloParams {
+                protocol_range: [1, 1]
+            })
+            .unwrap(),
             json!({ "protocol": [1, 1] })
         );
-        let welcome = HelloResult {
-            protocol: [1, 1],
+        let welcome = KeeperHelloResult {
+            protocol_range: [1, 1],
             build: "b".into(),
-            agents: vec![
-                HeldAgent {
+            held_agents: vec![
+                KeeperHeldAgent {
                     id: "a1".into(),
                     pid: 4,
                     birth: "1762737725.123456".into(),
                     stopping: false,
                 },
-                HeldAgent {
+                KeeperHeldAgent {
                     id: "a2".into(),
                     pid: 5,
                     birth: "7".into(),
@@ -305,23 +357,22 @@ mod tests {
                 ],
             })
         );
+        let start = json!({
+            "agent": "a1", "command": ["f", "", "a b"], "env": { "K": "V" }, "path": "/",
+            "cols": 80, "rows": 24,
+        });
+        let decoded = KeeperStartArgs::from(
+            serde_json::from_value::<KeeperStartWireArgs>(start.clone()).unwrap(),
+        );
+        assert_eq!(decoded.launch.program, "f");
+        assert_eq!(decoded.launch.args, ["", "a b"]);
+        assert_eq!(decoded.launch.folder, "/");
         assert_eq!(
-            serde_json::to_value(StartArgs {
-                agent: "a1".into(),
-                command: vec!["f".into(), "a".into()],
-                env: BTreeMap::from([("K".into(), "V".into())]),
-                path: "/".into(),
-                cols: 80,
-                rows: 24,
-            })
-            .unwrap(),
-            json!({
-                "agent": "a1", "command": ["f", "a"], "env": { "K": "V" }, "path": "/",
-                "cols": 80, "rows": 24,
-            })
+            serde_json::to_value(KeeperStartWireArgs::from(decoded)).unwrap(),
+            start
         );
         assert_eq!(
-            serde_json::to_value(StartResult {
+            serde_json::to_value(KeeperStartResult {
                 pid: 4,
                 birth: "b".into()
             })
@@ -329,11 +380,11 @@ mod tests {
             json!({ "pid": 4, "birth": "b" })
         );
         assert_eq!(
-            serde_json::to_value(AgentArgs { agent: "a1".into() }).unwrap(),
+            serde_json::to_value(KeeperAgentArgs { agent: "a1".into() }).unwrap(),
             json!({ "agent": "a1" })
         );
         assert_eq!(
-            serde_json::to_value(SyncArgs {
+            serde_json::to_value(KeeperSyncArgs {
                 agent: "a1".into(),
                 pid: 4,
                 birth: "b".into()
@@ -341,7 +392,7 @@ mod tests {
             .unwrap(),
             json!({ "agent": "a1", "pid": 4, "birth": "b" })
         );
-        let change = AgentChange::Exit {
+        let change = KeeperAgentChange::Exit {
             agent: "a1".into(),
             exit: ProcessExit {
                 code: None,
@@ -361,16 +412,20 @@ mod tests {
 
     #[test]
     fn unknown_kinds_and_fields_are_skipped() {
-        let change: AgentChange =
+        let change: KeeperAgentChange =
             serde_json::from_value(json!({ "kind": "renamed", "agent": "a1", "name": "x" }))
                 .unwrap();
-        assert_eq!(change, AgentChange::Unknown);
-        let newer: HelloResult = serde_json::from_value(
+        assert_eq!(change, KeeperAgentChange::Unknown);
+        let newer: KeeperHelloResult = serde_json::from_value(
             json!({ "protocol": [1, 2], "build": "b", "agents": [], "quantum": 1 }),
         )
         .unwrap();
-        assert_eq!(newer.protocol, [1, 2], "unknown keeper fields are ignored");
-        let held: HeldAgent =
+        assert_eq!(
+            newer.protocol_range,
+            [1, 2],
+            "unknown keeper fields are ignored"
+        );
+        let held: KeeperHeldAgent =
             serde_json::from_value(json!({ "id": "a1", "pid": 4, "birth": "b" })).unwrap();
         assert!(!held.stopping, "an absent stopping is false");
     }

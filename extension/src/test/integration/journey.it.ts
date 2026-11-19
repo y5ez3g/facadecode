@@ -227,8 +227,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name) ? true : undefined);
 		}
 
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
-		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'End Agent removes the card at once');
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Stop Agent removes the card at once');
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
@@ -264,7 +264,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.strictEqual(fs.existsSync(`${RECORD}.received.${alias}`), false, 'the draft was never submitted');
 		} finally {
 			watching?.dispose();
-			await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 		}
 	});
 
@@ -316,7 +316,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			shell.dispose();
 		} finally {
 			for (const run of cards) {
-				await vscode.commands.executeCommand('facade.closeAgent', { run_id: run }).then(undefined, () => undefined);
+				await vscode.commands.executeCommand('facade.stopAgent', { run_id: run }).then(undefined, () => undefined);
 			}
 			await vscode.commands.executeCommand('workbench.action.closeAllGroups');
 		}
@@ -350,14 +350,14 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 	});
 
-	test('Resume uses the saved cwd and exact ID; Pin and Unpin synchronize with the native tab', async function () {
+	test('Continue Session uses the saved cwd and exact session ID; Pin and Unpin synchronize with the native tab', async function () {
 		if (CUSTOM) { this.skip(); }
 		const cwd = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'nested');
 		fs.mkdirSync(cwd, { recursive: true });
 		const fixture = resumeFixture(cwd);
 		const before = new Set((await state()).cards.map(each => each.runId));
 		const started = async () => (await state()).cards.filter(each => !before.has(each.runId));
-		const history = vscode.commands.executeCommand('facade.history');
+		const history = vscode.commands.executeCommand('facade.continueSession');
 		void history.then(undefined, () => undefined);
 		try {
 			await until('the Resume fixture ' + fixture.title + ' to be selected', async () => {
@@ -414,7 +414,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} finally {
 			await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
 			await history.then(undefined, () => undefined);
-			await Promise.all((await started()).map(card => vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId })));
+			await Promise.all((await started()).map(card => vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId })));
 			await until('the resumed cards to close', async () => (await started()).length === 0 || undefined);
 		}
 	});
@@ -441,7 +441,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			await new Promise(resolve => setTimeout(resolve, 500));
 			return (await state()).filter ? await state() : undefined;
 		}, 60_000);
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
 		const said = await until('the page to say so', async () => {
 			const text = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '#empty p' });
@@ -454,13 +454,13 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		]);
 	});
 
-	test('CLIS-4.1, ARCHITECTURE-3.3: Show Agent Launch shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log', async function () {
+	test('CLIS-4.1, ARCHITECTURE-3.3: Show Agent Command Line shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log', async function () {
 		// Once, with the first built-in: the documents are the window's, whatever the CLI
 		if (CLI !== 'claude') {
 			this.skip();
 		}
 		const before = (await state()).cardCount;
-		// The Rust engine has no Show Agent Launch (the specification takes it away); its log is core's own
+		// The Rust engine has no Show Agent Command Line (the specification takes it away); its log is core's own
 		if (RUST) {
 			await vscode.commands.executeCommand('facade.showAgentsLog');
 			const log = await until('the log document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-agents-log'));
@@ -477,11 +477,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			return undefined;
 		});
 		await showing;
+		assert.strictEqual(launch.uri.path, '/Agent Command Line');
 		const text = launch.getText();
-		assert.match(text, /^Agent launch in /);
+		assert.match(text, /^Agent command line in /);
 		assert.match(text, /^YOLO: on, from yolo in .*facade\.json; applies to newly started agents$/m);
 		for (const name of ['Claude Code (claude, clis.claude)', 'Codex (codex, clis.codex)', 'Pi (pi, clis.pi)']) {
-			assert.ok(text.includes(`\n${name}\n  Status: available\n`), `${name} available in:\n${text}`);
+			assert.ok(text.includes(`\n${name}\n  State: available\n`), `${name} available in:\n${text}`);
 		}
 		assert.ok(text.includes('\n    --dangerously-skip-permissions\n'), text);
 		assert.strictEqual((await state()).cardCount, before, 'no agent was started');

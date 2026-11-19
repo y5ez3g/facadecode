@@ -21,14 +21,14 @@ can show its own card and terminal for the same running agent. Go to Agent can s
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
-card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), Resume Agent
-(`history`), New Agent, so New Agent is rightmost. New Agent's icon is Facade's own copy of the `new-session` codicon,
+card loading. Filter by Working Location (`filter`, filled when active) comes first. Resume Agent (`resumeAgent`)
+on Rust or Continue Session (`continueSession`) on the old engine comes next, followed by New Agent. New Agent's icon is Facade's own copy of the `new-session` codicon,
 shipped with the extension and shown in every editor: VS Code has that codicon only from 1.111, later than the
 supported minimum. The view's native `Views and More Actions...` (`…`) menu holds Add Folder to Workspace... (the
 editor's command), then New Worktree... when a workspace folder is open, followed by Open Settings in a separate
 group. Open Settings follows CONFIGURATION-1.2: Facade Code's Settings section and its Edit in facade.json link, or
 facade.json directly for a remote window whose Settings open as JSON, including file creation and migration conflicts.
-Go to Agent..., Show Agent Launch... and Show Agents Log are Command Palette entries, not view-menu items.
+Go to Agent..., Show Agent Command Line... and Show Agents Log are Command Palette entries, not view-menu items.
 Facade commands use the titles and flows in UX-3.1. The badge counts this window's cards, including starting,
 retained-error and temporarily disconnected records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does
 not change the underlying card count.
@@ -38,7 +38,7 @@ not change the underlying card count.
 **The empty state explains the current condition and offers the next relevant action.**
 
 No folder: `Open a folder to start agents.` with Open Folder. No agents:
-`Start an agent in this workspace.` with New Agent (primary) and Resume Agent (secondary). No matching cards with a filter:
+`Start an agent in this workspace.` with New Agent (primary) and Continue Session (secondary). No matching cards with a filter:
 `No agents found in "{location}".`, then `{n} other agents are in this workspace.` (`1 other agent is in this
 workspace.`; omitted when no other card exists), Clear Filter (primary) and New Agent (secondary), which starts at the
 filtered location (LIFECYCLE-1.2). Empty-state buttons have no ellipsis, as VS Code's
@@ -54,12 +54,13 @@ commands repeat that reason. A window without its window component shows ARCHITE
 button that shows the component in the Extensions view, themed as the empty states' buttons are (UX-2.1).
 
 Invoking New Agent with no folder opens a native Quick Pick titled `New Agent`, with placeholder
-`Open a folder to continue` and one item: `Open Folder...`, detail
+`Open a folder to continue` and the item `Open Folder...`, detail
 `A workspace folder is required to run agents.` The placeholder identifies the next action and the detail explains
-the prerequisite. Cancel changes nothing. Opening a folder uses the editor's normal behavior as above; it does not
+the prerequisite. LIFECYCLE-1.1 also offers Change Working Location here when another Facade machine is listed.
+Cancel changes nothing. Opening a folder uses the editor's normal behavior as above; it does not
 automatically launch an agent. This prerequisite step does not ask the person to select a CLI.
 
-Once a folder is available, New Agent uses LIFECYCLE-1.1's CLI picker. Configuration errors come before the disabled
+Once a folder is available for a local launch, New Agent uses LIFECYCLE-1.1's CLI picker. Configuration errors come before the disabled
 check: an invalid entry with `enabled: false` appears under Unavailable with its error and Open Settings. A valid
 disabled entry is not listed (CONFIGURATION-4.1).
 
@@ -137,6 +138,12 @@ agent with no tab open keeping it hidden, and a Pin that cannot be saved opening
 follows the quieter text, including the selected foreground at 80% opacity; high-contrast selections use full opacity.
 The icon's internal space keeps its visible shape smaller than the name's letters.
 
+For an agent whose running machine ID differs from the window's Facade machine ID, show VS Code's `globe` codicon at
+14 px in the Pin position and place the details and menu buttons to its left. The icon has no action or Tab stop and
+stays visible while the buttons show. Its tooltip and the card's accessible label say `Running on {0}`, using the
+running machine's name with its short ID when names repeat. Remote agents have no Pin. A loss of connection keeps
+the card and shows the connection status until the running machine can be reached again.
+
 ### 1.4 Second line and dot
 
 **The second line says one of three kinds of thing: the person's input, another agent's message, or Facade's own.**
@@ -155,11 +162,12 @@ The icon's internal space keeps its visible shape smaller than the name's letter
    could not be made as `Worktree failed · {reason}`, the reason without its closing `.` or `。`, such as `Start failed ·
    claude was not found on PATH`, while their notifications keep their own sentences (UX-1.2, WORKTREES-2.2); an end
    Facade could not confirm, `Stop unconfirmed · check process` (LIFECYCLE-3.5); the Facade tools it cannot use; its
-   tools not connected past CLIS-2.3's bound, `Collaboration not connected yet`; or a start that did not become ready,
-   with why its activity is unknown, such as `No initial status · check terminal`. Before any message, with no notable
-   state, it says how the run began: `New conversation started` for a new conversation, `Conversation resumed` for one
-   it resumed - by Resume Agent, or a restored Pin resuming its conversation, never a Pin that begins a new one
-   (LIFECYCLE-3.4).
+   tools not connected past CLIS-2.3's bound, `Facade tools not connected yet`; or a start that did not become ready,
+   with why its activity is unknown, such as `No initial state · check terminal`. Before any message, with no notable
+   state, it says the known opening: `New session started` for a new session, `Agent resumed` when the same numbered
+   agent returns, or `Session continued` when a new agent starts a saved session. Pin restoration follows the same
+   numbering distinction (LIFECYCLE-3.3, 3.4). A Rust window that reconnects to or adopts a running agent whose opening
+   it did not observe leaves this line blank until it has another item to show.
 
 What the second line says is the first of these that holds, in this order of precedence:
 
@@ -169,7 +177,7 @@ What the second line says is the first of these that holds, in this order of pre
    ready by it (RULES-3.2);
 4. its start's stage, while it starts (LIFECYCLE-1.5);
 5. the last item sent to it: the person's input, another agent's message or a Facade result;
-6. how its run began.
+6. the run's known opening.
 
 The last item sent comes back as soon as none of 1-4 holds any longer; the words of each are those above.
 
@@ -177,23 +185,24 @@ The `🧑‍💻` and the `📨` are the editor's color emoji, at the second lin
 was sent to the agent, and by whom, shows at a glance; Facade's own words carry no emoji or other mark. The `📨` and the
 `🧑‍💻` come from who sent the item as its record keeps it, never from a name, the destination or an emoji the text
 begins with. It says where that item came from, not what the agent works on now or
-whether it read it. The last message, and whether the run resumed a conversation, are kept across a reload. A CLI
-without its Facade tools says so in plain words, for example `Collaboration off · move or rename {0}`, or
-`Collaboration stopped · end and resume` once its tools went away, and stays usable. The second line never says a
-title - its conversation's is the details' (1.5), and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
-or, without a red dot, `Status unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
+whether it read it. The accessible label says `Last input: {0}` for the person's input. The card keeps the last item
+across a reload. The old engine also restores the opening from its saved run metadata. When tool injection fails, the
+second line says why, such as `Facade tools unavailable · move or rename {0}`. A run that loses its tool connection
+says `Facade tools disconnected`. The second line never says a title - its conversation's is the details' (1.5),
+and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
+or, without a red dot, `State unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
 the dot's and the accessible label's, the label also saying why activity is unavailable. Idle alone proves neither an
 empty composer nor usable input; there is no separate first-message readiness claim. Never `Done, waiting for you`
 from a turn end. No popup solely for a native blocker.
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
-dot or notification rules. Tools injected but not yet connected say `Collaboration not connected yet` in the accessible
+dot or notification rules. Tools injected but not yet connected say `Facade tools not connected yet` in the accessible
 label; startup waits for them, and once CLIS-2.3's bound passed without them the dot is red and the second line says so. An
 actual tool connection removes the message; known injection failures or a lost existing connection keep their specific
 explanation. Ended cards do not claim a pending tool connection. The green dot, starting or working, breathes every 1.8 s using
 opacity only (0–65% overlay of row background); reduced motion is static. The accessible label says the state in words: `Starting`,
-`Working`, `Idle`, the native blocker's kind, `Attention needed`, `Error · {reason}` or `Status unavailable · check
-terminal`, and for a red dot without an error why it is red: the tools explanation, `Collaboration not connected yet` or why its
+`Working`, `Idle`, the native blocker's kind, `Attention needed`, `Error · {reason}` or `State unavailable · check
+terminal`, and for a red dot without an error why it is red: the tools explanation, `Facade tools not connected yet` or why its
 activity is unavailable. No unread dot, completed check, bold-name state or extra error badge.
 
 ### 1.5 Details and accessible content
@@ -204,8 +213,8 @@ opens with a click.**
 A card's details open from its ⓘ, as Fluent's info button opens its popover, or from Show Agent Details for the
 keyboard (UX-2.3, 3.1), and close on Escape, a press elsewhere, the ⓘ again, the focus leaving them - Tab and Shift+Tab
 leave them - a scroll of the card list, the view losing the focus or the card going; a scroll within the details keeps
-them open. Nothing in the panel opens on hover and no element has a native tooltip:
-everything a card offers is one click (2.2). The details are as wide as the card, in the editor's hover colors, border
+them open. The remote status icon has the tooltip from 1.3. Each card action takes one click (2.2). The details are as
+wide as the card, in the editor's hover colors, border
 and corners, with Fluent's popover shadow, 12 px in, their arrow at the ⓘ; they open below the card, or above it where
 they do not fit below and there is more room above, stay on the side they opened on while they fit there, and scroll within themselves where neither side has
 room. They enter as Fluent's popover does, fading in as they slide 10 px in from the ⓘ's side over 400 ms, slowing to
@@ -294,9 +303,9 @@ the card the pointer was on stays as under it - its buttons and, unless selected
 closes high contrast's dashed edge (UX-2.1) - until the page hears of the pointer again, on that card or elsewhere, or
 until 1000 ms after the menu is gone, closed or never shown, with nothing heard. A click on the card that closes its menu,
 its press reaching the editor's menu and only its release the page, so leaves the card as it was. Groups: Rename; Move
-Up/Down; End Agent for starting, live and retained-ended records. It has no other entries: no Pin or Unpin, which the card's Pin
+Up/Down; Stop Agent for a starting or live process, and Dismiss Agent for an ended pair. It has no other entries: no Pin or Unpin, which the card's Pin
 button and the palette do (1.3, UX-3.1), no worktree deletion or bulk selection action. Enable actions by actual
-availability; name editing need not wait for CLI readiness. LIFECYCLE-3.1 owns End Agent. No menu outside a card, not even the webview's
+availability; name editing need not wait for CLI readiness. LIFECYCLE-3.1 owns both lifecycle actions. No menu outside a card, not even the webview's
 default Cut/Copy/Paste. Context targets its stable run ID, revalidated against current host state under 3.1, never the
 selected row by fallback. Palette targeting follows UX-3.1.
 

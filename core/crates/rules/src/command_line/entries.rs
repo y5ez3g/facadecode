@@ -1,5 +1,5 @@
 //! The `clis` table of `facade.json` (CONFIGURATION-2). Its keys name CLIs and its values say how
-//! to run them, with the fields `type`, `icon`, `command`, `args`, `env`, `model`, `effort` and
+//! to run them, with the fields `type`, `icon`, `program`, `args`, `env`, `model`, `effort` and
 //! `enabled`. The key of a built-in edits that built-in; whatever it leaves out keeps the
 //! built-in's default. Any other key adds a CLI, which runs either like the built-in named by its
 //! `type` or, with type `custom`, as a bare program in a terminal with nothing from Facade.
@@ -25,7 +25,7 @@ pub const PROGRAM_TYPE: &str = "custom";
 /// Every field an entry may have. Problems with an entry come in this order
 /// (CONFIGURATION-2.2, 4.1).
 const FIELDS: [&str; 8] = [
-    "type", "icon", "command", "args", "env", "model", "effort", "enabled",
+    "type", "icon", "program", "args", "env", "model", "effort", "enabled",
 ];
 
 /// The robot icons an entry can pick by name (CONFIGURATION-2.4).
@@ -119,8 +119,9 @@ pub struct Entry {
     /// The icon on its card (CONFIGURATION-2.4): its own pick, or else its type's. Terminal
     /// commands of Facade show no icon.
     pub icon: String,
-    /// `command` as written. None means the type's program, looked up on `PATH`.
-    pub command: Option<String>,
+    /// The program as written in `program` or legacy `command`. None means the type's program, looked up on `PATH`.
+    pub program: Option<String>,
+    program_key: &'static str,
     /// `args`, literally and in order.
     pub args: Vec<String>,
     /// `env` in file order: a value to set, or None to unset.
@@ -167,6 +168,11 @@ fn same_variable(one: &str, other: &str) -> bool {
 }
 
 impl Entry {
+    /// Where the program was set, or where to set it when the entry has none.
+    pub fn program_setting(&self) -> String {
+        format!("{}.{}", self.setting, self.program_key)
+    }
+
     /// What lists show: the product name for a built-in's own entry (`Claude Code`), the key for
     /// every other.
     pub fn display_name(&self) -> &str {
@@ -288,7 +294,8 @@ impl Entry {
             built_in: built_in.is_some(),
             kind: built_in.map(Kind::BuiltIn),
             icon: String::new(),
-            command: None,
+            program: None,
+            program_key: "program",
             args: Vec::new(),
             env: Vec::new(),
             model: None,
@@ -299,7 +306,7 @@ impl Entry {
         match value {
             Json::Object(fields) => reader.fill(&mut entry, fields, built_in, built_ins),
             other => reader.say(format!(
-                "{} must be an object of type, icon, command, args, env, model, effort and \
+                "{} must be an object of type, icon, program, args, env, model, effort and \
                  enabled; received {}",
                 reader.setting,
                 other.kind()
@@ -384,7 +391,7 @@ impl Reader {
     ) {
         for unknown in fields
             .iter()
-            .filter(|field| !FIELDS.contains(&field.key.as_str()))
+            .filter(|field| field.key != "command" && !FIELDS.contains(&field.key.as_str()))
         {
             let known = FIELDS.join(", ");
             self.say_at(format!(
@@ -403,9 +410,19 @@ impl Reader {
             }
             None => self.added_type(get("type"), built_ins),
         };
-        entry.command = self.text("command", get("command"));
-        if matches!(entry.kind, Some(Kind::Program)) && get("command").is_none() {
-            self.say_at("command is missing; set it to the program to run".into());
+        match (get("program"), get("command")) {
+            (Some(_), Some(_)) => {
+                self.say_at("program conflicts with command. Keep program.".into())
+            }
+            (Some(value), None) => entry.program = self.text("program", Some(value)),
+            (None, Some(value)) => {
+                entry.program_key = "command";
+                entry.program = self.text("command", Some(value));
+            }
+            (None, None) if matches!(entry.kind, Some(Kind::Program)) => {
+                self.say_at("program is missing; set it to the program to run".into());
+            }
+            (None, None) => {}
         }
         entry.args = self.args(get("args"));
         if let Some(Kind::BuiltIn(rule)) = entry.kind {
@@ -721,9 +738,9 @@ mod tests {
     fn an_entry_s_fields_as_written() {
         let codex = entry(
             "codex",
-            r#"{"codex": {"command": "/opt/codex", "args": ["--search", "-c", "model_provider=\"qwen\""], "env": {"CODEX_HOME": "/q", "OPENAI_API_KEY": null}, "model": "qwen3", "effort": "high", "enabled": false}}"#,
+            r#"{"codex": {"program": "/opt/codex", "args": ["--search", "-c", "model_provider=\"qwen\""], "env": {"CODEX_HOME": "/q", "OPENAI_API_KEY": null}, "model": "qwen3", "effort": "high", "enabled": false}}"#,
         );
-        assert_eq!(codex.command.as_deref(), Some("/opt/codex"));
+        assert_eq!(codex.program.as_deref(), Some("/opt/codex"));
         assert_eq!(codex.args, ["--search", "-c", "model_provider=\"qwen\""]);
         assert_eq!(
             codex.env,
@@ -743,6 +760,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reads_legacy_programs_and_reports_conflicting_keys() {
+        let legacy = entry("tool", r#"{"tool":{"type":"custom","command":"my tool"}}"#);
+        assert_eq!(legacy.program.as_deref(), Some("my tool"));
+        assert_eq!(legacy.program_setting(), "clis.tool.command");
+        assert!(legacy.problems.is_empty());
+
+        for clis in [
+            r#"{"tool":{"type":"custom","command":"same","program":"same"}}"#,
+            r#"{"tool":{"type":"custom","program":null,"command":"old"}}"#,
+        ] {
+            let conflict = entry("tool", clis);
+            assert!(conflict.program.is_none());
+            assert_eq!(
+                conflict.problems,
+                ["clis.tool.program conflicts with command. Keep program."]
+            );
+        }
+    }
+
     /// An added CLI stands alone: it takes nothing from its type's own entry, which stays as it is.
     #[test]
     fn an_added_cli_stands_alone() {
@@ -750,7 +787,7 @@ mod tests {
         let added = entry("qwen codex", clis);
         assert_eq!(
             (
-                added.command.as_deref(),
+                added.program.as_deref(),
                 added.args.len(),
                 added.env.len(),
                 added.model.as_deref(),
@@ -835,7 +872,7 @@ mod tests {
                 ("a", &[format!("clis.a.type is missing; set it to the CLI it runs: {types}")][..]),
                 ("b", &[format!("clis.b.type must be one of {types}; received string")][..]),
                 ("c", &[format!("clis.c.type must be one of {types}; received number")][..]),
-                ("d", &["clis.d.command is missing; set it to the program to run".to_string()][..]),
+                ("d", &["clis.d.program is missing; set it to the program to run".to_string()][..]),
             ]
         );
     }
@@ -851,7 +888,7 @@ mod tests {
         assert_eq!(
             pi.problems,
             [
-                "clis.pi.trust is not a field of an entry, which takes type, icon, command, args, \
+                "clis.pi.trust is not a field of an entry, which takes type, icon, program, args, \
                  env, model, effort, enabled",
                 "clis.pi.command is empty; set it, or leave it out",
                 "clis.pi.args[1] must be a string; received number",
@@ -868,7 +905,7 @@ mod tests {
         );
         assert_eq!(
             (
-                pi.command,
+                pi.program,
                 pi.args.len(),
                 pi.env.len(),
                 pi.model,
@@ -881,7 +918,7 @@ mod tests {
         assert_eq!(
             problems("codex", "[]"),
             [
-                "clis.codex must be an object of type, icon, command, args, env, model, effort and \
+                "clis.codex must be an object of type, icon, program, args, env, model, effort and \
                  enabled; received array"
             ]
         );

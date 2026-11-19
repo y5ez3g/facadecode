@@ -2,25 +2,32 @@
 //! The server reads, decodes and answers; here each call meets the agents, the messages and the
 //! windows. Topics are in `topics.rs`, relays in `relays.rs`.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    self, AgentAdopt, AgentArgs, AgentInspect, AgentRemove, AgentRename, AgentResize, AgentResume,
-    AgentScreen, AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsChange, ClientKind,
-    DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLog, DaemonLogArgs, DaemonLogResult,
-    DaemonUpgrade, HandOver, HelloParams, HelloResult, HookIdle, HookPrompt, HookSession,
-    HookSessionEnd, HookSessionStart, HookTurnEnd, InputInfo, InputState, InspectResult,
-    IntegrationAdd, IntegrationList, IntegrationRemove, MAX_SCREEN_LINES, RenameArgs, ResizeArgs,
-    ResumeArgs, ScreenArgs, ScreenBuffer, ScreenText, SendArgs, SessionStartResult, StartArgs,
-    TypeArgs, WindowDescription, WindowUpdate, WorktreeCreate, WorktreeCreateArgs,
+    self, AgentAdopt, AgentInspect, AgentInspectResult, AgentRemove, AgentRename, AgentRenameArgs,
+    AgentResize, AgentResizeArgs, AgentResume, AgentResumeArgs, AgentScreen, AgentScreenArgs,
+    AgentSelectorArgs, AgentSend, AgentSendArgs, AgentSendResult, AgentStart, AgentStartArgs,
+    AgentStartWireArgs, AgentState, AgentStop, AgentType, AgentTypeArgs, AgentsUpdate, ClientKind,
+    DAEMON_PROTOCOL_VERSION, DEFAULT_SCREEN_LINES, DaemonLogArgs, DaemonLogResult, DaemonUpgrade,
+    HandOver, HelloParams, HelloResult, HookIdle, HookPrompt, HookSession, HookSessionEnd,
+    HookSessionStart, HookTurnEnd, InputInfo, InputState, IntegrationAdd, IntegrationList,
+    IntegrationRemove, LogRead, MAX_SCREEN_LINES, ScreenBuffer, ScreenText, SessionStartResult,
+    WindowDelivery, WindowDescription, WindowUpdate, WorktreeCreate, WorktreeCreateArgs,
 };
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
+use facade_base::machine::{
+    AgentCheckStart, AgentDeliverStartResult, Caller, ForwardCall, WindowDeliver,
+};
 use facade_base::operations::{EmptyResult, Operation};
 use facade_base::process::ProcessState;
+use facade_base::sockets::{ServerReader, ServerWriter};
 use serde::Serialize;
 use serde_json::Value;
+use tokio::io::BufReader;
 use tokio::sync::{oneshot, watch};
 
 use crate::agent::{
@@ -29,8 +36,9 @@ use crate::agent::{
 use crate::agent::{Typing, TypingAnswer};
 use crate::delivery::InputWait;
 use crate::lifecycle::{Work, WorkGuard};
+use crate::machine_service::MachineStream;
 use crate::presence::HookTarget;
-use crate::records;
+use crate::records::{self, Reach};
 use crate::server::{self, Client, RelayLines, WhenFull};
 use crate::windows::WindowConnection;
 use crate::{Cancel, Daemon, Sender};
@@ -50,19 +58,46 @@ const MAX_NUMBER_GIVEN: u64 = (1 << 53) - 1;
 impl server::Service for Daemon {
     type Hold = Presence;
     type Work = WorkGuard;
+    type Machine = MachineStream;
+
+    async fn machine_hello(
+        self: &Arc<Self>,
+        hello: HelloParams,
+        peer_pid: Option<u32>,
+    ) -> Result<(HelloResult, Self::Machine), ErrorBody> {
+        if hello.agent.is_some() || self.agent_of_hello(&hello, peer_pid).is_some() {
+            return Err(ErrorBody::refused(
+                "a local agent cannot open a trusted machine session",
+            ));
+        }
+        self.machine_hello_plan(hello)
+    }
+
+    async fn machine_connect(
+        self: &Arc<Self>,
+        client: &Client,
+        args: Value,
+    ) -> Result<(Value, Self::Machine), ErrorBody> {
+        self.machine_connect_plan(client, args)
+    }
+
+    async fn serve_machine(
+        self: &Arc<Self>,
+        machine: Self::Machine,
+        read: BufReader<ServerReader>,
+        write: ServerWriter,
+    ) -> anyhow::Result<()> {
+        self.serve_machine_stream(machine, read, write).await
+    }
 
     async fn hello(
         self: &Arc<Self>,
         hello: HelloParams,
-        _peer_pid: Option<u32>,
+        peer_pid: Option<u32>,
     ) -> Result<(HelloResult, Client, Presence), ErrorBody> {
         // The session the client's CLI names decides first: a command a guest's model runs acts
         // for the guest.
-        let named = hello
-            .agent
-            .as_deref()
-            .map(records::normalize_agent_reference);
-        let agent = self.agent_of_sessions(&hello.sessions).or(named);
+        let agent = self.agent_of_hello(&hello, peer_pid);
         let mut presence = Presence {
             _window: None,
             _tools: None,
@@ -118,16 +153,17 @@ impl server::Service for Daemon {
             presence._tools = Some(listed.tools_connected());
         }
         let result = HelloResult {
-            protocol: hello.protocol[1].min(DAEMON_PROTOCOL_VERSION),
+            machine: None,
+            protocol: hello.protocol_range[1].min(DAEMON_PROTOCOL_VERSION),
             build: facade_base::build_id(),
             machine_id: self.machine_id.clone(),
             window: window.as_ref().map(|binding| binding.window.clone()),
             pid: std::process::id(),
             agent: agent.clone(),
-            agents: self.agents().len(),
+            agent_count: self.agents().len(),
             keeper: self.runs.keeper_info(),
-            topics: daemon::topic_names(),
-            ops: daemon::operation_names(),
+            topics: crate::topics::topic_names(),
+            ops: operation_names(),
         };
         let client = Client {
             identity: Identity {
@@ -145,7 +181,7 @@ impl server::Service for Daemon {
         self: &Arc<Self>,
         client: &Client,
         operation: &str,
-        args: Value,
+        mut args: Value,
         when_full: WhenFull,
         cancel: Cancel,
     ) -> Result<Value, ErrorBody> {
@@ -159,8 +195,23 @@ impl server::Service for Daemon {
         let Some(_working) = self.lifecycle.begin(work) else {
             return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
         };
-        self.run_operation(client, operation, args, when_full, cancel)
+        let caller = self.local_caller(client)?;
+        if let Some(answer) = self
+            .machine_operation(&caller, operation, args.clone(), false)
             .await
+        {
+            return answer;
+        }
+        let response = if let Some(answer) = self
+            .route_agent_operation(client, &caller, operation, &mut args, cancel.clone())
+            .await?
+        {
+            answer
+        } else {
+            self.run_operation(client, operation, args, when_full, cancel)
+                .await?
+        };
+        self.project_agent_response(operation, response)
     }
 
     async fn watch(
@@ -211,31 +262,13 @@ impl Daemon {
     ) -> Result<Value, ErrorBody> {
         let acting = client.agent.as_deref();
         match operation {
-            AgentStart::NAME => {
-                let args: StartArgs = decode_arguments(args)?;
-                let by_model = client.identity.kind == ClientKind::Mcp;
-                let args = self.checked_start(args, acting, by_model).await?;
-                let window = client
-                    .window
-                    .as_ref()
-                    .map(|binding| {
-                        if self.windows.is_current(binding) {
-                            Ok(binding.window.clone())
-                        } else {
-                            Err(ErrorBody::new(
-                                Reason::Refused,
-                                "this editor window is no longer bound",
-                            ))
-                        }
-                    })
-                    .transpose()?;
-                let started = self
-                    .start(args, self.sender_of(acting), by_model, window)
-                    .await?;
-                Ok(value_of(started))
+            AgentStart::NAME | AgentCheckStart::NAME => {
+                let args: AgentStartWireArgs = decode_arguments(args)?;
+                self.start_from_client(client, args, operation == AgentCheckStart::NAME, cancel)
+                    .await
             }
             AgentAdopt::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let binding = client
                     .window
                     .as_ref()
@@ -244,41 +277,43 @@ impl Daemon {
                         ErrorBody::refused("only a bound editor window can adopt an agent")
                     })?;
                 let agent = self.reached_agent(&agent, acting)?;
-                Ok(value_of(self.adopt(&agent, binding).await?))
+                Ok(value_of(
+                    self.adopt(&agent, &binding.window, Some(binding)).await?,
+                ))
             }
             AgentResume::NAME => {
-                let args: ResumeArgs = decode_arguments(args)?;
+                let args: AgentResumeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let agent = self.terminal_agent(&args.agent, acting)?;
                 Ok(value_of(self.resume(&agent, args).await?))
             }
             AgentInspect::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let agent = self.reached_agent(&agent, acting)?;
                 Ok(value_of(self.inspect(&agent).await?))
             }
             AgentStop::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let agent = self.terminal_agent(&agent, acting)?;
                 Ok(value_of(self.stop(&agent).await?))
             }
             AgentRemove::NAME => {
-                let AgentArgs { agent } = decode_arguments(args)?;
+                let AgentSelectorArgs { agent } = decode_arguments(args)?;
                 let agent = self.terminal_agent(&agent, acting)?;
                 self.remove(&agent).await?;
                 Ok(value_of(EmptyResult {}))
             }
             AgentScreen::NAME => {
-                let args: ScreenArgs = decode_arguments(args)?;
+                let args: AgentScreenArgs = decode_arguments(args)?;
                 Ok(value_of(self.read_screen(args, acting).await?))
             }
             AgentType::NAME => {
-                let args: TypeArgs = decode_arguments(args)?;
+                let args: AgentTypeArgs = decode_arguments(args)?;
                 self.type_into(args, acting, when_full, cancel).await?;
                 Ok(value_of(EmptyResult {}))
             }
             AgentResize::NAME => {
-                let args: ResizeArgs = decode_arguments(args)?;
+                let args: AgentResizeArgs = decode_arguments(args)?;
                 check_size(args.cols, args.rows)?;
                 let agent = self.terminal_agent(&args.agent, acting)?;
                 let info = agent.info();
@@ -301,13 +336,15 @@ impl Daemon {
                 Ok(value_of(EmptyResult {}))
             }
             AgentRename::NAME => {
-                let args: RenameArgs = decode_arguments(args)?;
+                let args: AgentRenameArgs = decode_arguments(args)?;
                 let agent = self.reached_agent(&args.agent, acting)?;
                 Ok(value_of(self.rename(&agent, &args.name).await?))
             }
             AgentSend::NAME => {
-                let args: SendArgs = decode_arguments(args)?;
-                Ok(value_of(self.send(acting, args, cancel).await?))
+                let args: AgentSendArgs = decode_arguments(args)?;
+                Ok(value_of(AgentSendResult::from(
+                    self.send(&self.local_caller(client)?, args, cancel).await?,
+                )))
             }
             HookSessionStart::NAME => {
                 let session: HookSession = decode_arguments(args)?;
@@ -389,7 +426,7 @@ impl Daemon {
                     .take_over(decode_arguments(args)?, self.clone())
                     .await?,
             )),
-            DaemonLog::NAME => {
+            LogRead::NAME => {
                 if client.agent.is_some() {
                     return Err(ErrorBody::refused("daemon.log is for the person's clients"));
                 }
@@ -400,8 +437,332 @@ impl Daemon {
             }
             other => Err(ErrorBody::invalid_argument(format!(
                 "unknown operation {other}; supported operations: {}",
-                daemon::operation_names().join(", ")
+                operation_names().join(", ")
             ))),
+        }
+    }
+
+    async fn start_from_client(
+        self: &Arc<Self>,
+        client: &Client,
+        mut args: AgentStartWireArgs,
+        preflight: bool,
+        mut cancel: Cancel,
+    ) -> Result<Value, ErrorBody> {
+        let caller = self.local_caller(client)?;
+        if args.initial_windows.is_some()
+            || args.result_message_id.is_some()
+            || args.result_message_machine_id.is_some()
+        {
+            return Err(ErrorBody::invalid_argument(
+                "the originating machine sets initial_windows and the reserved result reference",
+            ));
+        }
+        let target = args
+            .machine
+            .take()
+            .map(|machine| {
+                self.select_machine(crate::network_operations::machine_selector(&machine)?)
+                    .map(|info| info.machine_id)
+            })
+            .transpose()?
+            .unwrap_or_else(|| self.machine_id.clone());
+        let by_model = client.identity.kind == ClientKind::Mcp;
+        if target == self.machine_id {
+            let mut args = args.into_start(false);
+            let folder = self
+                .check_start(&mut args, client.agent.as_deref(), by_model, None)
+                .await?;
+            args.launch.folder = Some(folder);
+            let origin = crate::operations::StartOrigin {
+                sender: self.sender_of(client.agent.as_deref()),
+                caller,
+                by_model,
+                from_window: None,
+                colors: None,
+            };
+            return self.finish_start(args, origin, preflight).await;
+        }
+        let terminal = || facade_base::daemon::WindowRef {
+            machine_id: target.clone(),
+            window_id: facade_base::daemon::TERMINAL_WINDOW.to_string(),
+        };
+        let members = if let Some(window) = args.window.take() {
+            if window.machine_id == self.machine_id {
+                self.windows.check_member(&window)?;
+            }
+            vec![window]
+        } else {
+            match &caller {
+                Caller::Ide { window } => vec![window.clone()],
+                Caller::Agent { agent, .. } => self
+                    .get_agent(&agent.agent_id)
+                    .map_or_else(|| vec![terminal()], |parent| parent.info().windows),
+                Caller::Terminal { .. } => vec![terminal()],
+            }
+        };
+        args.initial_windows = Some(members);
+        args.env.clear();
+        if !preflight && matches!(caller, Caller::Agent { .. }) && args.prompt.is_some() {
+            let reserved = self.messages.reserve_result()?;
+            args.result_message_id = Some(reserved.message_id);
+            args.result_message_machine_id = Some(reserved.machine_id);
+        }
+        let operation = if preflight {
+            AgentCheckStart::NAME
+        } else {
+            AgentStart::NAME
+        };
+        let request_id = (!preflight).then(|| args.request_id.clone()).flatten();
+        let forwarded = self.forwarded_call(client, operation, value_of(args.for_forwarding()))?;
+        if cancel.is_requested() {
+            return Err(ErrorBody::new(
+                Reason::Cancelled,
+                "the start was cancelled before forwarding",
+            ));
+        }
+        let request = self.network.call(
+            &target,
+            caller,
+            "call".to_string(),
+            value_of(forwarded),
+            None,
+            request_id,
+        );
+        tokio::select! {
+            biased;
+            response = request => response,
+            () = cancel.requested() => Err(self.forwarded_outcome_unknown(&target)),
+        }
+    }
+
+    async fn accept_forwarded_start(
+        self: &Arc<Self>,
+        caller: &Caller,
+        forwarded: ForwardCall,
+        request_id: Option<String>,
+        preflight: bool,
+    ) -> Result<Value, ErrorBody> {
+        let mut args: AgentStartWireArgs = decode_arguments(forwarded.call.args)?;
+        if args.initial_windows.as_ref().is_none_or(Vec::is_empty) {
+            return Err(ErrorBody::invalid_argument(
+                "the forwarded start is missing its verified member windows",
+            ));
+        }
+        let owes_result =
+            !preflight && matches!(caller, Caller::Agent { .. }) && args.prompt.is_some();
+        if (owes_result
+            && (args.result_message_machine_id.as_deref() != Some(caller.machine_id())
+                || args.result_message_id.is_none()))
+            || (!owes_result
+                && (args.result_message_machine_id.is_some() || args.result_message_id.is_some()))
+        {
+            return Err(ErrorBody::invalid_argument(
+                "the forwarded start's reserved result reference does not match the caller",
+            ));
+        }
+        args.request_id = request_id;
+        let origin = crate::operations::StartOrigin {
+            caller: caller.clone(),
+            sender: sender_from(caller, forwarded.from_name),
+            by_model: forwarded.by_model,
+            from_window: forwarded.from_window,
+            colors: forwarded.window_colors,
+        };
+        self.finish_start(args.into_start(true), origin, preflight)
+            .await
+    }
+
+    /// Takes the checked local folder, or resolves and checks a forwarded start on the
+    /// running machine. An actual forwarded start calls this after claiming its request key.
+    pub(crate) async fn prepare_start(
+        &self,
+        args: &mut AgentStartArgs,
+        by_model: bool,
+    ) -> Result<String, ErrorBody> {
+        if args.initial_windows.is_none() {
+            return Ok(args
+                .launch
+                .folder
+                .take()
+                .expect("the local folder was checked"));
+        }
+        let (environment, home) = self.login_environment().await?;
+        args.env = environment;
+        self.check_start(args, None, by_model, Some(home)).await
+    }
+
+    async fn finish_start(
+        self: &Arc<Self>,
+        args: AgentStartArgs,
+        origin: crate::operations::StartOrigin,
+        preflight: bool,
+    ) -> Result<Value, ErrorBody> {
+        if preflight {
+            self.preflight_start(args, &origin).await?;
+            Ok(value_of(EmptyResult {}))
+        } else {
+            Ok(value_of(self.start(args, origin).await?))
+        }
+    }
+
+    /// Presents any returned agent from the client connection's machine.
+    fn project_agent_response(
+        &self,
+        operation: &str,
+        mut response: Value,
+    ) -> Result<Value, ErrorBody> {
+        let record = match operation {
+            AgentStart::NAME | AgentInspect::NAME => response.get_mut("agent"),
+            AgentAdopt::NAME | AgentRename::NAME | AgentResume::NAME => Some(&mut response),
+            _ => None,
+        };
+        if let Some(record) = record {
+            let mut agent = decode_arguments(std::mem::take(record))?;
+            let machines = self
+                .machine_table()
+                .unwrap_or_else(|_| self.network.machines());
+            self.project_agent(&mut agent, &machines);
+            *record = value_of(agent);
+        }
+        Ok(response)
+    }
+
+    pub(crate) async fn run_forwarded_operation(
+        self: &Arc<Self>,
+        caller: Caller,
+        call: ForwardCall,
+        request_id: Option<String>,
+        remaining: Option<Duration>,
+        cancel: Cancel,
+    ) -> Result<Value, ErrorBody> {
+        let operation = call.call.op.clone();
+        let args = call.call.args.clone();
+        let work = if operation == AgentSend::NAME {
+            Work::Send
+        } else {
+            Work::Call
+        };
+        let Some(_active) = self.lifecycle.begin(work) else {
+            return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
+        };
+        let agent = |name: &str| self.resolve_agent(name, &Reach::from(&caller));
+        let terminal = |name: &str| {
+            let agent = agent(name)?;
+            crate::operations::refuse_guest_terminal(&agent)?;
+            Ok::<_, ErrorBody>(agent)
+        };
+        match operation.as_str() {
+            AgentStart::NAME | AgentCheckStart::NAME => {
+                self.accept_forwarded_start(
+                    &caller,
+                    call,
+                    request_id,
+                    operation == AgentCheckStart::NAME,
+                )
+                .await
+            }
+            AgentSend::NAME => {
+                self.accept_forwarded_send(&caller, call, request_id, remaining, cancel)
+                    .await
+            }
+            crate::delivery::VERIFY_HUMAN_REPLY => {
+                self.verify_human_reply_at_store(&caller, decode_arguments(args)?)
+            }
+            WindowDeliver::NAME => Ok(value_of(WindowDelivery::from(
+                self.deliver_forwarded_human(&caller, decode_arguments(args)?)?,
+            ))),
+            AgentDeliverStartResult::NAME => {
+                self.deliver_forwarded_result(&caller, decode_arguments(args)?, remaining)
+                    .await?;
+                Ok(value_of(EmptyResult {}))
+            }
+            crate::presence::MACHINE_WINDOW_COLORS => {
+                self.accept_window_colors(&caller, call.window_colors)
+                    .await?;
+                Ok(value_of(EmptyResult {}))
+            }
+            AgentAdopt::NAME => {
+                let Caller::Ide { window } = &caller else {
+                    return Err(ErrorBody::refused(
+                        "only an editor window can adopt an agent",
+                    ));
+                };
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
+                Ok(value_of(self.adopt(&agent(&target)?, window, None).await?))
+            }
+            AgentInspect::NAME => {
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
+                Ok(value_of(self.inspect(&agent(&target)?).await?))
+            }
+            AgentResume::NAME => {
+                let mut args: AgentResumeArgs = decode_arguments(args)?;
+                check_size(args.cols, args.rows)?;
+                let target = terminal(&args.agent)?;
+                args.env = self.login_environment().await?.0;
+                Ok(value_of(self.resume(&target, args).await?))
+            }
+            AgentStop::NAME => {
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
+                Ok(value_of(self.stop(&terminal(&target)?).await?))
+            }
+            AgentRemove::NAME => {
+                let AgentSelectorArgs { agent: target } = decode_arguments(args)?;
+                self.remove(&terminal(&target)?).await?;
+                Ok(value_of(EmptyResult {}))
+            }
+            AgentRename::NAME => {
+                let args: AgentRenameArgs = decode_arguments(args)?;
+                Ok(value_of(
+                    self.rename(&agent(&args.agent)?, &args.name).await?,
+                ))
+            }
+            AgentScreen::NAME => {
+                let args: AgentScreenArgs = decode_arguments(args)?;
+                let target = terminal(&args.agent)?;
+                Ok(value_of(self.read_screen_of(&target, args.lines).await?))
+            }
+            AgentType::NAME => {
+                let args: AgentTypeArgs = decode_arguments(args)?;
+                let target = terminal(&args.agent)?;
+                self.type_into_agent(
+                    &target,
+                    args,
+                    sender_from(&caller, call.from_name),
+                    WhenFull::Refuse,
+                    cancel,
+                )
+                .await?;
+                Ok(value_of(EmptyResult {}))
+            }
+            AgentResize::NAME => {
+                let args: AgentResizeArgs = decode_arguments(args)?;
+                check_size(args.cols, args.rows)?;
+                let target = terminal(&args.agent)?;
+                let command = match &caller {
+                    Caller::Ide { window } if target.info().windows.contains(window) => {
+                        let colors = call
+                            .window_colors
+                            .as_ref()
+                            .and_then(|colors| crate::presence::terminal_colors(colors).ok())
+                            .unwrap_or_default();
+                        AgentCommand::ResizeFromWindow {
+                            cols: args.cols,
+                            rows: args.rows,
+                            colors: WindowColors {
+                                window: window.clone(),
+                                colors,
+                            },
+                        }
+                    }
+                    _ => AgentCommand::Resize(args.cols, args.rows),
+                };
+                if !target.send(command).await {
+                    return Err(actor_stopped(&target));
+                }
+                Ok(value_of(EmptyResult {}))
+            }
+            _ => Err(ErrorBody::refused("this operation cannot be forwarded")),
         }
     }
 
@@ -420,7 +781,7 @@ impl Daemon {
         };
         // The environment a session-start hook gives is its CLI's own, not a subagent's: an agent
         // it starts runs with it.
-        if session.parent.is_none() {
+        if session.part_of_session.is_none() {
             self.guests
                 .keep_environment(guest.id(), session.env.as_ref());
         }
@@ -439,37 +800,38 @@ impl Daemon {
     /// A guest's state as its hooks tell it, shown to the agents' watchers where it changed.
     fn set_guest_state(&self, guest: &AgentHandle, state: AgentState) {
         if let Some(info) = guest.set_guest_state(state) {
-            let _ = self.changes.send(AgentsChange::Updated {
+            let _ = self.changes.send(AgentsUpdate::Updated {
                 agent: Box::new(info),
             });
         }
     }
 
-    /// The arguments of a start, checked. A start from facade-mcp names one CLI of Facade's
-    /// settings file and nothing more, and runs with its agent's own environment, as a CLI chooses
-    /// what it gives its MCP server.
-    async fn checked_start(
+    /// Resolves the folder on this machine and checks the arguments of a start or preflight.
+    /// Local facade-mcp starts take the acting agent's environment and resolve folders from its
+    /// record. A forwarded start already has this machine's login environment.
+    async fn check_start(
         &self,
-        mut args: StartArgs,
+        args: &mut AgentStartArgs,
         acting: Option<&str>,
         by_model: bool,
-    ) -> Result<StartArgs, ErrorBody> {
-        if args
-            .command
-            .first()
-            .is_none_or(|program| program.is_empty())
-        {
+        login_folder: Option<String>,
+    ) -> Result<String, ErrorBody> {
+        if args.launch.program.is_empty() {
             return Err(ErrorBody::invalid_argument(
                 "command must start with the CLI program",
             ));
         }
-        if !std::path::Path::new(&args.cwd).is_absolute() {
-            let message = format!("cwd must be an absolute path, not {}", args.cwd);
-            return Err(ErrorBody::invalid_argument(message));
-        }
+        let caller_folder = if by_model {
+            acting
+                .and_then(|id| self.get_agent(id))
+                .map(|parent| parent.info().cwd)
+        } else {
+            None
+        };
+        let folder = start_folder(args.launch.folder.take(), caller_folder, login_folder)?;
         check_size(args.cols, args.rows)?;
         if by_model {
-            if args.command.len() > 1 {
+            if !args.launch.args.is_empty() {
                 return Err(ErrorBody::invalid_argument(
                     "a start from facade-mcp names one CLI of Facade's settings file, and \
                      nothing more",
@@ -484,13 +846,13 @@ impl Daemon {
                 args.env = self.environment_of(agent).await?;
             }
         }
-        Ok(args)
+        Ok(folder)
     }
 
     /// What `agent` shows: a guest's input cannot be read, as its terminal is its own.
-    async fn inspect(&self, agent: &AgentHandle) -> Result<InspectResult, ErrorBody> {
+    async fn inspect(&self, agent: &AgentHandle) -> Result<AgentInspectResult, ErrorBody> {
         if agent.is_guest() {
-            return Ok(InspectResult {
+            return Ok(AgentInspectResult {
                 agent: agent.info(),
                 rule: None,
                 input: InputInfo {
@@ -517,7 +879,7 @@ impl Daemon {
                 return Err(ErrorBody::new(Reason::Unavailable, message));
             }
         };
-        Ok(InspectResult {
+        Ok(AgentInspectResult {
             agent: inspection.agent,
             rule: agent.rule().map(str::to_string),
             input: inspection.input,
@@ -528,24 +890,32 @@ impl Daemon {
     /// The last `args.lines` lines of an agent's screen, as text.
     async fn read_screen(
         &self,
-        args: ScreenArgs,
+        args: AgentScreenArgs,
         acting: Option<&str>,
     ) -> Result<ScreenText, ErrorBody> {
-        let lines = args.lines.unwrap_or(DEFAULT_SCREEN_LINES);
+        let agent = self.terminal_agent(&args.agent, acting)?;
+        self.read_screen_of(&agent, args.lines).await
+    }
+
+    async fn read_screen_of(
+        &self,
+        agent: &AgentHandle,
+        lines: Option<u16>,
+    ) -> Result<ScreenText, ErrorBody> {
+        let lines = lines.unwrap_or(DEFAULT_SCREEN_LINES);
         if !(1..=MAX_SCREEN_LINES).contains(&lines) {
             let message = format!("lines must be between 1 and {MAX_SCREEN_LINES}");
             return Err(ErrorBody::invalid_argument(message));
         }
-        let agent = self.terminal_agent(&args.agent, acting)?;
         let (reply, read) = oneshot::channel();
         let command = AgentCommand::ReadScreen {
             lines: lines as usize,
             reply,
         };
         if !agent.send(command).await {
-            return Err(actor_stopped(&agent));
+            return Err(actor_stopped(agent));
         }
-        let read = read.await.map_err(|_| actor_stopped(&agent))?;
+        let read = read.await.map_err(|_| actor_stopped(agent))?;
         // An ended agent's screen is as its exit left it.
         let observed_at = agent
             .exit()
@@ -572,20 +942,33 @@ impl Daemon {
     /// reached the terminal, or with what was typed before typing stopped.
     async fn type_into(
         &self,
-        args: TypeArgs,
+        args: AgentTypeArgs,
         acting: Option<&str>,
         when_full: WhenFull,
         cancel: Cancel,
     ) -> Result<(), ErrorBody> {
+        let agent = self.terminal_agent(&args.agent, acting)?;
+        self.type_into_agent(&agent, args, self.sender_of(acting), when_full, cancel)
+            .await
+    }
+
+    async fn type_into_agent(
+        &self,
+        agent: &AgentHandle,
+        args: AgentTypeArgs,
+        sender: Sender,
+        when_full: WhenFull,
+        cancel: Cancel,
+    ) -> Result<(), ErrorBody> {
         crate::gate_for_test("before-type-input");
-        let TypeArgs {
-            agent,
+        let AgentTypeArgs {
+            agent: _,
             raw,
             text,
             enter,
             keys,
         } = args;
-        let (input, typed) = input_of(raw, text, enter, keys, self.sender_of(acting))?;
+        let (input, typed) = input_of(raw, text, enter, keys, sender)?;
         if input.most_bytes() > MAX_INPUT_BYTES {
             let message = format!(
                 "agent.type accepts at most {} KiB of input as written, a paste counted with its \
@@ -594,12 +977,11 @@ impl Daemon {
             );
             return Err(ErrorBody::new(Reason::CapacityExceeded, message));
         }
-        let agent = self.terminal_agent(&agent, acting)?;
         let wait = match when_full {
             WhenFull::Refuse => InputWait::Refuse,
             WhenFull::Wait => InputWait::UntilCancelled(cancel),
         };
-        let handed = self.hand_input(&agent, input, wait).await;
+        let handed = self.hand_input(agent, input, wait).await;
         let Some(typed) = typed else {
             return handed;
         };
@@ -609,7 +991,7 @@ impl Daemon {
             }
             refused
         })?;
-        typed.await.map_err(|_| actor_stopped(&agent))?
+        typed.await.map_err(|_| actor_stopped(agent))?
     }
 
     /// Who a client acting for `agent` speaks as: that agent, with its name now, or else the
@@ -665,6 +1047,61 @@ impl Daemon {
             })
             .map(|info| info.agent_id)
     }
+
+    /// Identifies local callers before any RPC stream can be promoted to a machine session.
+    fn agent_of_hello(&self, hello: &HelloParams, peer_pid: Option<u32>) -> Option<String> {
+        self.agent_of_sessions(&hello.sessions)
+            .or_else(|| {
+                hello
+                    .agent
+                    .as_deref()
+                    .map(records::normalize_agent_reference)
+            })
+            .or_else(|| {
+                peer_pid.and_then(|pid| crate::blocking_in_place(|| self.agent_of_process(pid)))
+            })
+    }
+
+    fn agent_of_process(&self, pid: u32) -> Option<String> {
+        use facade_base::unix_process;
+
+        if let Some(env) = unix_process::birth(pid).ok().flatten().and_then(|birth| {
+            unix_process::environment(&facade_base::process::ProcessIdentity { pid, birth })
+                .ok()
+                .flatten()
+        }) {
+            let sessions: Vec<_> = facade_rules::SESSION_VARIABLES
+                .iter()
+                .filter_map(|(_, variables)| env.get(variables[0]).cloned())
+                .collect();
+            if let Some(agent) = self.agent_of_sessions(&sessions) {
+                return Some(agent);
+            }
+            if let Some(id) = env
+                .get("FACADE_AGENT")
+                .map(|id| records::normalize_agent_reference(id))
+                && self.get_agent(&id).is_some()
+            {
+                return Some(id);
+            }
+        }
+        let ancestors = unix_process::ancestors(pid);
+        self.agent_infos()
+            .into_iter()
+            .find(|agent| {
+                agent.process == ProcessState::Running
+                    && agent
+                        .pid
+                        .is_some_and(|owner| owner == pid || ancestors.contains(&owner))
+            })
+            .map(|agent| agent.agent_id)
+    }
+}
+
+fn operation_names() -> Vec<String> {
+    let mut names = daemon::operation_names();
+    names.extend(facade_base::machine::operation_names());
+    names
 }
 
 /// Reads the input of an `agent.type` call: exactly one of raw bytes, text from `sender`, or keys.
@@ -701,12 +1138,68 @@ fn input_of(
     Ok((Input::Typed(typing), Some(typed)))
 }
 
-fn check_size(cols: u16, rows: u16) -> Result<(), ErrorBody> {
+pub(crate) fn sender_from(caller: &Caller, from_name: Option<String>) -> Sender {
+    match caller {
+        Caller::Agent { agent, .. } => Sender {
+            from: agent.agent_id.clone(),
+            from_name,
+        },
+        _ => Sender::person(),
+    }
+}
+
+pub(crate) fn check_size(cols: u16, rows: u16) -> Result<(), ErrorBody> {
     if cols < 2 || rows < 1 {
         let message = "terminal size must be at least 2 columns and 1 row";
         return Err(ErrorBody::invalid_argument(message));
     }
     Ok(())
+}
+
+fn start_folder(
+    supplied: Option<String>,
+    caller_folder: Option<String>,
+    login_folder: Option<String>,
+) -> Result<String, ErrorBody> {
+    let folder = match (supplied, caller_folder) {
+        (Some(folder), Some(caller)) if !folder.is_empty() && Path::new(&folder).is_relative() => {
+            Path::new(&caller)
+                .join(folder)
+                .to_string_lossy()
+                .into_owned()
+        }
+        (Some(folder), _) => folder,
+        (None, caller) => caller.or(login_folder).unwrap_or_default(),
+    };
+    if !Path::new(&folder).is_absolute() {
+        return Err(ErrorBody::invalid_argument(format!(
+            "cwd must be an absolute path, not {folder}"
+        )));
+    }
+    Ok(folder)
+}
+
+#[cfg(test)]
+#[test]
+fn start_folders_default_only_when_omitted() {
+    let (caller, login) = if cfg!(windows) {
+        (r"C:\caller", r"D:\login")
+    } else {
+        ("/caller", "/login")
+    };
+    let from_caller = |folder| start_folder(folder, Some(caller.into()), None);
+    let on_remote = |folder| start_folder(folder, None, Some(login.into()));
+    assert_eq!(from_caller(None).unwrap(), caller);
+    assert_eq!(
+        Path::new(&from_caller(Some("inside".into())).unwrap()),
+        Path::new(caller).join("inside")
+    );
+    assert_eq!(on_remote(None).unwrap(), login);
+    assert_eq!(on_remote(Some(caller.into())).unwrap(), caller);
+    assert!(on_remote(Some("inside".into())).is_err());
+    assert!(on_remote(Some(String::new())).is_err());
+    assert!(from_caller(Some(String::new())).is_err());
+    assert!(start_folder(None, None, None).is_err());
 }
 
 pub(crate) fn not_listed(id: &str) -> ErrorBody {

@@ -13,9 +13,9 @@ import { REQUEST_MS } from './requests';
 import { dotOf } from './status';
 import {
 	ConversationEntry, ConversationKey, ConversationStore, ConversationTitlePort, Pin, PinStore, conversationId, LocationId,
-	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
+	ActivityReport, AgentCloseResult, Agents, AliasPort, canDismiss, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
 	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError, SaidSource, TabPlace,
-	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
+	RetainedRun, RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
 
 export interface AgentServiceDeps {
@@ -290,7 +290,7 @@ export class AgentService implements Agents, Disposable {
 	private rememberRequest(facts: RunFacts, required = false): boolean {
 		if (facts.requestId !== undefined && facts.createdAt > this.deps.clock.now() - REQUEST_MS) {
 			try {
-				this.deps.retained.put({ ...facts, requestOnly: true });
+				this.deps.retained.put({ ...retainedRun(facts), requestOnly: true });
 				return true;
 			} catch (err) {
 				if (required) {
@@ -543,7 +543,7 @@ export class AgentService implements Agents, Disposable {
 
 	/**
 	 * A run its grace ended without that end confirmed (LIFECYCLE-3.5): a red card that says so, holding its conversation and Pin -
-	 * its Pin is not restored beside it - and never reattached. End Agent ends it again.
+	 * its Pin is not restored beside it - and never reattached. Stop Agent retries the stop.
 	 */
 	private showUncertain(each: LiveRun): void {
 		const english = 'Could not confirm that it stopped';
@@ -858,8 +858,7 @@ export class AgentService implements Agents, Disposable {
 		}
 		run.exactResume = plan.exactResume;
 		const sessionId = plan.sessionId ?? run.facts.sessionId;
-		// Its launch resumes the conversation it was asked to by its ID - Resume Agent's, or a restored Pin's: its card says so before any
-		// message (PANEL-1.4), also where its CLI could not be given what keeps naming its conversation
+		// The old engine continues a saved session in a new run, for Continue Session or a restored Pin (PANEL-1.4).
 		const resuming = !!options.resume && sessionId === options.resume.key.sessionId;
 		// A conversation it resumes is saved already: it can be pinned from the start, its Pin following its CLI should that name
 		// another (LIFECYCLE-3.4). A new one, an ID given it or not, waits for its CLI to name it.
@@ -874,7 +873,7 @@ export class AgentService implements Agents, Disposable {
 			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: resumed,
 			...plan.builtIn !== undefined ? { builtIn: plan.builtIn } : {},
 			...titleStore !== undefined ? { titleStore } : {},
-			...resuming ? { resumed: true as const } : {},
+			sessionOpening: resuming ? 'continued' : 'started',
 			...(plan.version !== undefined ? { version: plan.version } : {}),
 			tools: plan.tools.state === 'injected' ? 'connecting' : plan.tools.state === 'unavailable' ? 'unavailable' : 'not_injected',
 			...(plan.tools.state === 'unavailable' && plan.tools.reason ? { toolsReason: plan.tools.reason } : {}),
@@ -980,13 +979,23 @@ export class AgentService implements Agents, Disposable {
 	/** Keeps a failed start's pair for a reload; one that cannot be written stays red in this window alone, said in the log. */
 	private retain(run: Run): void {
 		try {
-			this.deps.retained.put(run.facts);
+			this.deps.retained.put(retainedRun(run.facts));
 		} catch (err) {
 			this.deps.log.event(`Could not keep the failed start of ${run.facts.alias} for a reload: ${messageOf(err)}`);
 		}
 	}
 
-	async close(id: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'> {
+	async stop(id: RunId): Promise<AgentCloseResult> {
+		const run = this.runs.get(id);
+		return run && canDismiss(run.facts) ? 'already_ended' : this.close(id);
+	}
+
+	async dismiss(id: RunId): Promise<void> {
+		const run = this.runs.get(id);
+		if (run && canDismiss(run.facts)) { await this.close(id); }
+	}
+
+	async close(id: RunId): Promise<AgentCloseResult> {
 		const run = this.runs.get(id);
 		if (!run) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
@@ -996,7 +1005,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	/** Removes `run`'s pair at once and ends its process in the background (LIFECYCLE-3.1), its Pin already seen to. */
-	private async closeRun(run: Run): Promise<CleanupResult | 'already_ended' | 'not_started'> {
+	private async closeRun(run: Run): Promise<AgentCloseResult> {
 		const id = run.facts.id;
 		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
@@ -1123,13 +1132,13 @@ export class AgentService implements Agents, Disposable {
 			throw new FacadeError('INVALID', 'unsupported', entry.unavailable);
 		}
 		if (this.ownershipLost) { throw invalid('ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST); }
-		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact conversation ID is required.'); }
+		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact session ID is required.'); }
 		const meta = this.deps.conversations?.get(entry.key);
-		if (entry.cwdChoices?.length && !meta?.cwd) { throw invalid('invalid_argument', 'Choose a working location before resuming this conversation.'); }
+		if (entry.cwdChoices?.length && !meta?.cwd) { throw invalid('invalid_argument', 'Choose a working location before continuing this session.'); }
 		const location = this.locationFor(meta?.location, meta?.cwd ?? entry.cwd);
 		if (!location || location.environment !== entry.key.environment) {
 			const cwd = meta?.cwd ?? entry.cwd;
-			throw new FacadeError('INVALID', 'not_found', `The conversation's working location ${cwd} is not available in this window.`, locationNotHere(cwd));
+			throw new FacadeError('INVALID', 'not_found', `The session's working location ${cwd} is not available in this window.`, locationNotHere(cwd));
 		}
 		// Manual Resume names an unnamed conversation only now, as a blank name is filled in, without turning its title into an agent
 		// name (LIFECYCLE-2.1, 2.3)
@@ -1164,7 +1173,7 @@ export class AgentService implements Agents, Disposable {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
 		if (!run.facts.pinnable) {
-			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI cannot resume this exact conversation, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
+			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI cannot resume this exact session, so it cannot be pinned.`, { kind: 'pin_unsupported', values: [] });
 		}
 		if (run.facts.pin) {
 			return;
@@ -1347,7 +1356,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	/**
-	 * A Pin that cannot start here keeps its own red card, holding the Pin, so the person sees why and can end it with End Agent, which
+	 * A Pin that cannot start here keeps its own red card, holding the Pin, so the person sees why and can dismiss it with Dismiss Agent, which
 	 * Unpins (LIFECYCLE-3.4: failures retain their individual entries).
 	 */
 	private unrestorable(pin: Pin, reason: string, english = reason): RunId {
@@ -1429,7 +1438,7 @@ export class AgentService implements Agents, Disposable {
 			} else if (run.facts.pinnable) {
 				this.pin(id);
 			} else {
-				this.deps.log.event(`${run.facts.alias}'s tab was pinned, but its CLI cannot resume this exact conversation; no restoration intent was saved`);
+				this.deps.log.event(`${run.facts.alias}'s tab was pinned, but its CLI cannot resume this exact session; no restoration intent was saved`);
 				this.deps.execution.pinTab?.(id, !!run.facts.pin);
 			}
 		} catch (err) {
@@ -1730,17 +1739,23 @@ function isRequestRun(value: unknown): value is RunFacts & { readonly requestOnl
 		typeof value.root === 'string' && !!value.root;
 }
 
+/** Keep the old engine's `resumed` field for any saved session started under a new agent number. */
+function retainedRun(facts: RunFacts): RetainedRun {
+	const { sessionOpening, ...record } = facts;
+	return sessionOpening === 'continued' ? { ...record, resumed: true } : record;
+}
+
 /** A retained record as this build keeps runs: one an earlier build wrote is a root of its own, without tools (ARCHITECTURE-4.2). */
 function retainedFacts(kept: RunFacts): RunFacts {
 	const record = kept as RunFacts & { readonly [key: string]: unknown };
 	// Ended, it can be pinned where its conversation is saved (LIFECYCLE-3.4). Its title only where it is proven its conversation's: an
 	// earlier build kept a CLI report's title as well, which is no conversation title (CLIS-2.4)
-	const { pinnable: _pinnable, resumed: _resumed, title, titleSource: _titleSource, ...facts } = kept;
+	const { pinnable: _pinnable, resumed: legacyResumed, sessionOpening, title, titleSource: _titleSource, ...facts } = record;
 	return {
 		...facts,
 		...title && record.titleSource === 'conversation' ? { title, titleSource: 'conversation' as const } : {},
 		...kept.resumable ? { pinnable: true } : {},
-		...record.resumed === true ? { resumed: true as const } : {},
+		sessionOpening: legacyResumed === true || sessionOpening === 'continued' ? 'continued' : 'started',
 		root: typeof record.root === 'string' && record.root ? record.root : kept.id,
 		origin: record.origin === 'agent' ? 'agent' : 'human',
 		tools: record.tools === 'connecting' || record.tools === 'available' || record.tools === 'unavailable' ? record.tools : 'not_injected'
@@ -1803,7 +1818,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		// A title proven to be its conversation's; an earlier build's, which may be a CLI report's, is dropped and read again (CLIS-2.4)
 		...(typeof meta.title === 'string' && meta.title && meta.titleSource === 'conversation' ? { title: meta.title, titleSource: 'conversation' as const } : {}),
 		...(typeof meta.titleStore === 'string' && meta.titleStore ? { titleStore: meta.titleStore } : {}),
-		...(meta.resumed === true ? { resumed: true as const } : {}),
+		sessionOpening: meta.resumed === true ? 'continued' : 'started',
 		...(typeof meta.said === 'string' && meta.said ? { said: meta.said } : {}),
 		...(isSaidSource(meta.saidSource) ? { saidSource: meta.saidSource } : {}),
 		...(isTabPlace(meta.tab) ? { tab: tabOf(meta.tab) } : {}),
@@ -1847,7 +1862,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
 		...(facts.title !== undefined && facts.titleSource === 'conversation' ? { title: facts.title, titleSource: 'conversation' as const } : {}),
 		...(facts.titleStore !== undefined ? { titleStore: facts.titleStore } : {}),
-		...(facts.resumed ? { resumed: true as const } : {}),
+		...(facts.sessionOpening === 'continued' ? { resumed: true as const } : {}),
 		...(facts.said !== undefined ? { said: facts.said } : {}),
 		...(facts.saidSource !== undefined ? { saidSource: facts.saidSource } : {}),
 		...(facts.tab !== undefined ? { tab: facts.tab } : {}),

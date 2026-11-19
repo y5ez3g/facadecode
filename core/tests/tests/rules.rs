@@ -79,7 +79,7 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
         missing["error"]["message"]
             .as_str()
             .is_some_and(|message| message.starts_with(said)
-                && message.ends_with(", and clis.fake.command does not name its location")),
+                && message.ends_with(", and clis.fake.program does not name its location")),
         "{missing}"
     );
     assert_eq!(

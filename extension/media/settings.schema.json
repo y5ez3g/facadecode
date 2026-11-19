@@ -62,16 +62,25 @@
 				},
 				{
 					"label": "Another program",
-					"body": { "${1:my-cli}": { "type": "custom", "command": "${2:my-cli}", "args": [] } }
+					"body": { "${1:my-cli}": { "type": "custom", "program": "${2:my-cli}", "args": [] } }
 				}
 			]
 		}
 	},
 	"definitions": {
-		"command": {
+		"program": {
 			"type": "string",
 			"pattern": "\\S",
 			"markdownDescription": "One program, not a shell command line: a name without a slash is found on PATH; otherwise an absolute path, `~/...`, or a path from the agent's folder. Left out, the type's own command on PATH."
+		},
+		"legacyCommand": {
+			"allOf": [{ "$ref": "#/definitions/program" }],
+			"deprecationMessage": "Use program for this executable.",
+			"doNotSuggest": true
+		},
+		"programFields": {
+			"not": { "required": ["program", "command"] },
+			"errorMessage": "program conflicts with command. Keep program."
 		},
 		"args": {
 			"type": "array",
@@ -125,10 +134,12 @@
 		},
 		"claude": {
 			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
 			"additionalProperties": false,
 			"properties": {
 				"type": { "const": "claude", "markdownDescription": "This entry is Claude Code's. Its type can only be \"claude\"; omitting it changes nothing." },
-				"command": { "$ref": "#/definitions/command" },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
 				"args": { "$ref": "#/definitions/args" },
 				"env": { "$ref": "#/definitions/env" },
 				"model": { "$ref": "#/definitions/model" },
@@ -139,10 +150,12 @@
 		},
 		"codex": {
 			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
 			"additionalProperties": false,
 			"properties": {
 				"type": { "const": "codex", "markdownDescription": "This entry is Codex's. Its type can only be \"codex\"; omitting it changes nothing." },
-				"command": { "$ref": "#/definitions/command" },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
 				"args": { "$ref": "#/definitions/args" },
 				"env": { "$ref": "#/definitions/env" },
 				"model": { "$ref": "#/definitions/model" },
@@ -153,10 +166,12 @@
 		},
 		"agy": {
 			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
 			"additionalProperties": false,
 			"properties": {
 				"type": { "const": "agy", "markdownDescription": "This entry is Antigravity's. Its type can only be \"agy\"; omitting it changes nothing." },
-				"command": { "$ref": "#/definitions/command" },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
 				"args": { "$ref": "#/definitions/args" },
 				"env": { "$ref": "#/definitions/env" },
 				"model": { "$ref": "#/definitions/model" },
@@ -167,10 +182,12 @@
 		},
 		"muse": {
 			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
 			"additionalProperties": false,
 			"properties": {
 				"type": { "const": "muse", "markdownDescription": "This entry is Muse Code's. Its type can only be \"muse\"; omitting it changes nothing." },
-				"command": { "$ref": "#/definitions/command" },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
 				"args": { "$ref": "#/definitions/args" },
 				"env": { "$ref": "#/definitions/env" },
 				"model": { "$ref": "#/definitions/model" },
@@ -181,10 +198,12 @@
 		},
 		"opencode": {
 			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
 			"additionalProperties": false,
 			"properties": {
 				"type": { "const": "opencode", "markdownDescription": "This entry is OpenCode's. Its type can only be \"opencode\"; omitting it changes nothing." },
-				"command": { "$ref": "#/definitions/command" },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
 				"args": { "$ref": "#/definitions/args" },
 				"env": { "$ref": "#/definitions/env" },
 				"enabled": { "$ref": "#/definitions/enabled" },
@@ -193,10 +212,12 @@
 		},
 		"pi": {
 			"type": "object",
+			"allOf": [{ "$ref": "#/definitions/programFields" }],
 			"additionalProperties": false,
 			"properties": {
 				"type": { "const": "pi", "markdownDescription": "This entry is Pi's. Its type can only be \"pi\"; omitting it changes nothing." },
-				"command": { "$ref": "#/definitions/command" },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
 				"args": { "$ref": "#/definitions/args" },
 				"env": { "$ref": "#/definitions/env" },
 				"model": { "type": "string", "pattern": "\\S", "markdownDescription": "The model new agents use where a start names none; `provider/model` names its provider too." },
@@ -224,6 +245,7 @@
 				}
 			},
 			"allOf": [
+				{ "$ref": "#/definitions/programFields" },
 				{ "if": { "properties": { "type": { "const": "claude" } } }, "then": { "$ref": "#/definitions/addedClaude" } },
 				{ "if": { "properties": { "type": { "const": "codex" } } }, "then": { "$ref": "#/definitions/addedCodex" } },
 				{ "if": { "properties": { "type": { "const": "agy" } } }, "then": { "$ref": "#/definitions/addedAgy" } },
@@ -233,17 +255,18 @@
 				{ "if": { "properties": { "type": { "const": "custom" } } }, "then": { "$ref": "#/definitions/addedCustom" } }
 			]
 		},
-		"addedClaude": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/claude/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
-		"addedCodex": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/codex/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
-		"addedAgy": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/agy/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
-		"addedMuse": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/muse/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
-		"addedOpencode": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
-		"addedPi": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/pi/properties/model" }, "effort": { "$ref": "#/definitions/pi/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedClaude": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/claude/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedCodex": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/codex/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedAgy": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/agy/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedMuse": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/muse/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedOpencode": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedPi": { "properties": { "type": {}, "program": { "$ref": "#/definitions/program" }, "command": { "$ref": "#/definitions/legacyCommand" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/pi/properties/model" }, "effort": { "$ref": "#/definitions/pi/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
 		"addedCustom": {
-			"required": ["command"],
+			"anyOf": [{ "required": ["program"] }, { "required": ["command"] }],
 			"properties": {
 				"type": {},
-				"command": { "$ref": "#/definitions/command" },
+				"program": { "$ref": "#/definitions/program" },
+				"command": { "$ref": "#/definitions/legacyCommand" },
 				"args": { "type": "array", "items": { "type": "string" }, "default": [], "markdownDescription": "The program's arguments, passed exactly as written and in order: no shell, nothing expanded." },
 				"env": { "$ref": "#/definitions/env" },
 				"enabled": { "$ref": "#/definitions/enabled" },

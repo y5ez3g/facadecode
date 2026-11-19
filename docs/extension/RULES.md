@@ -233,7 +233,9 @@ no agent workflow or general-purpose scheduler is added.
 **A window's connected scope and its execution environment have separate identities.**
 
 On the Rust engine, the core that serves a Facade home gives it one machine ID. A window's local machine is the core it
-connects to, including from a remote execution environment. On the old engine, the window components route between
+connects to, including from a remote execution environment. Connected Rust machines can reach each other's agents under
+4.3. A Rust Remote-SSH window automatically connects its remote Facade home to the local core while that window is open
+(ARCHITECTURE-1.4). On the old engine, the window components route between
 one user's windows on one client computer, including their local and remote execution environments.
 Each workspace runtime owns paths, CLI accounts, Git and process execution in its environment. Interpret a path in its
 owning environment. An open window with no folder can be discovered with an empty location catalog. Distinguish a known
@@ -255,6 +257,7 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | Conversation key | Execution environment, CLI and exact vendor session ID |
 | Pin | Saved intent to restore an exact conversation. A Rust Pin identifies the original agent on its machine (4.2). |
 | Agent ID | One agent from start until removal, unique on its Rust machine or across its old-engine client network and never reassigned there |
+| Agent reference | The Rust running machine ID and agent ID identify one record across the network |
 | Agent alias `#aN` | The agent's short reference, numbered by its Rust machine or the old-engine client network |
 | Run | One start or Resume of the agent's CLI, until that CLI ends |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
@@ -272,7 +275,7 @@ issuance or anti-impersonation system is required.
 **Use an exact ID, or a name that identifies one eligible agent; an ambiguous name requires an ID.**
 
 Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. Rust
-resolves against the machine's records, counting each agent once across its member windows. On the old engine an exact
+uses the full running-machine reference for a record and counts it once across its member windows. On the old engine an exact
 ID of an agent in the caller's window needs no other window, and a name resolves among agents of every window. While
 an old-engine window cannot be listed, only the exact ID of a listed agent can resolve. Once resolved, the operation
 stays with that target through rename. An optional display name accompanying an ID is descriptive. Return the error
@@ -345,7 +348,7 @@ never prove idle.
 
 ### 3.3 Exit classification is independent of who caused it
 
-**Normal CLI exit removes the pair; abnormal exit retains a red pair until the person ends it with End Agent.**
+**Normal CLI exit removes the pair; abnormal exit retains a red pair until the person uses Dismiss Agent.**
 
 Normal means exit 0, a completed explicit stop, or a verified native exit/interrupt outcome such as the adapter's
 Ctrl+C handling. An unexplained nonzero/signal exit is abnormal. Record its actual code/signal; do not guess a cause
@@ -385,7 +388,7 @@ their window to a non-guest agent through Go to Agent (LIFECYCLE-2.3), or throug
 (4.2). Membership stays until the agent record is removed. Closing a tab only affects the current window's presentation
 and its workspace's Pin under 4.2.
 
-End Agent hides the initiating pair under LIFECYCLE-3.1. Successful stop from any member or `facade stop` hides the
+Stop Agent handles the initiating pair under LIFECYCLE-3.1. Successful stop from any member or `facade stop` hides the
 card and tab in every connected member window. The number, membership, saved conversation and each workspace's Pin
 stay, and open windows wait for a later restoration. `facade remove` deletes the record and its membership and
 invalidates its Pins (4.2). A stop failure goes to the initiator. A still-running agent can reattach at the next
@@ -438,7 +441,8 @@ hidden any other way preserve Pin. Unpin alone does not stop. Manual Resume does
 unpinned conversation. If the exact conversation already runs in Facade, a second agent does not launch it.
 Facade does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
 
-On the Rust engine, each workspace's Pin stores the original machine ID and agent number. A session-only Pin remains
+On the Rust engine, each workspace's Pin stores the original machine ID and agent number. A window can pin agents
+running on its own Facade machine. A session-only Pin remains
 available to the old engine or can be replaced by pinning the original agent explicitly. With `facade.rustEngine` set
 to `auto`, a window using the old engine skips Pins identified by machine ID and agent number. Explicit `off` uses the
 old-engine Pin rules.
@@ -452,7 +456,7 @@ automatic restoration under the pinned number. The Pin stays for later verificat
 
 Clearing a Pin because its record is gone requires its original machine's complete snapshot without the number, its
 record-removal event, or a `not_found` response to adopting that number. Loss of connection, an unknown outcome or any
-Resume error preserves the Pin. End Agent and normal exit preserve all Pins. Facade's Delete Worktree command unpins its
+Resume error preserves the Pin. Stop Agent, Dismiss Agent and normal exit preserve all Rust Pins. Facade's Delete Worktree command unpins its
 affected agents in the initiating workspace (WORKTREES-3.2). Other location removal keeps the Pin.
 
 Manual Resume in any member window can restore the original number, including after its card was dismissed.
@@ -470,7 +474,7 @@ background, and their tabs then open in front by LIFECYCLE-3.5's tab procedure.
 
 The tree includes ancestors, descendants, siblings and other branches under the same root. Unrelated roots are outside
 normal non-YOLO reach. The caller's own run YOLO decides reach. Membership controls presentation. In the Rust engine the
-person can reach agents on the current machine, including when their window is disconnected.
+person can reach agents on connected Facade machines, including when an agent's window is disconnected.
 
 Every launch reads `yolo` from the destination execution environment's current Facade settings file (default true)
 when accepted and keeps that value for the run. This includes human starts, agent-created children, Resume and Pin
@@ -517,8 +521,8 @@ own operations without turning them into a public feature.
 
 **Cancellation ends unstarted work and does not undo files or submitted input.**
 
-Canceling a picker has no effects. Closing an accepted launch - End Agent or stop_agent; hiding its tab is no close
-(LIFECYCLE-2.2) - prevents later spawn and ends its own pending input; created worktrees/branches remain. Native
+Canceling a picker has no effects. Stopping an accepted launch with Stop Agent or stop_agent
+(LIFECYCLE-3.1) prevents later spawn and ends its own pending input. Created worktrees and branches remain. Native
 post-create environment preparation is not a Facade-managed job. There is no message-recall tool, worktree-delete API or
 stop-with-delete option; a person deletes a clean linked worktree only by WORKTREES-3.2's confirmed picker action,
 otherwise with their usual Git tools. Facade observes actual location loss under 2.4.

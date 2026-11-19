@@ -46,13 +46,13 @@ impl WindowTable {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
                         row.window_id,
-                        window.label,
+                        window.name,
                         window.environment,
                         window.workspace,
                         folders,
                         window.branch_prefix,
                         sequence,
-                        window.id,
+                        window.instance_id,
                     ],
                 )
             },
@@ -90,8 +90,8 @@ impl WindowTable {
                 |(
                     window_id,
                     sequence,
-                    id,
-                    label,
+                    instance_id,
+                    name,
                     environment,
                     workspace,
                     folders,
@@ -101,8 +101,8 @@ impl WindowTable {
                         window_id,
                         sequence: u64::try_from(sequence)?,
                         description: WindowDescription {
-                            id,
-                            label,
+                            instance_id,
+                            name,
                             environment,
                             workspace,
                             folders: serde_json::from_str(&folders)?,
@@ -128,14 +128,11 @@ impl WindowTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::AgentRecord;
-    use crate::store::tests::record;
-    use facade_base::daemon::WindowRef;
 
-    fn window(id: &str, workspace: &str) -> WindowDescription {
+    fn window(instance_id: &str, workspace: &str) -> WindowDescription {
         WindowDescription {
-            id: id.into(),
-            label: format!("{id} (Workspace)"),
+            instance_id: instance_id.into(),
+            name: format!("{instance_id} (Workspace)"),
             environment: "ssh-remote+devbox".into(),
             workspace: Some(workspace.into()),
             folders: vec!["/work/app".into(), "/work/lib".into()],
@@ -158,8 +155,8 @@ mod tests {
         let windows = store.window_table();
         windows.save_logical_window(&kept).unwrap();
         kept.description = WindowDescription {
-            id: "later-instance".into(),
-            label: "renamed".into(),
+            instance_id: "later-instance".into(),
+            name: "renamed".into(),
             folders: vec!["/work/app".into()],
             env: Some(std::collections::BTreeMap::from([(
                 "PATH".into(),
@@ -180,53 +177,5 @@ mod tests {
         assert_eq!(row.sequence, kept.sequence);
         kept.description.env = None;
         assert_eq!(row.description, kept.description);
-    }
-
-    #[test]
-    fn an_unreferenced_window_can_be_deleted_after_its_last_agent_is_removed() {
-        let store = Store::in_memory();
-        let member = WindowRef {
-            machine_id: "test-machine".into(),
-            window_id: "win-1".into(),
-        };
-        let row = WindowRow {
-            window_id: member.window_id.clone(),
-            sequence: 1,
-            description: window("instance-1", "workspace"),
-        };
-        let source = WindowRef {
-            window_id: "win-source".into(),
-            ..member.clone()
-        };
-        let windows = store.window_table();
-        windows.save_logical_window(&row).unwrap();
-        windows
-            .save_logical_window(&WindowRow {
-                window_id: source.window_id.clone(),
-                sequence: 2,
-                description: window("source-instance", "workspace"),
-            })
-            .unwrap();
-        store
-            .insert(&AgentRecord {
-                windows: vec![member.clone()],
-                location_source_window: Some(source.clone()),
-                ..record("a1")
-            })
-            .unwrap();
-        let members = store.membership_table();
-        assert_eq!(
-            members.add("a1", &member).unwrap(),
-            Some(vec![member.clone()])
-        );
-        assert!(!store.delete_empty_window(&member).unwrap());
-        assert!(!store.delete_empty_window(&source).unwrap());
-        assert_eq!(windows.logical_windows().unwrap().len(), 2);
-
-        store.delete("a1").unwrap();
-        assert!(store.delete_empty_window(&member).unwrap());
-        assert!(store.delete_empty_window(&source).unwrap());
-        assert!(windows.logical_windows().unwrap().is_empty());
-        assert_eq!(members.add("a1", &member).unwrap(), None);
     }
 }

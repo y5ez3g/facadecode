@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use facade_base::daemon::UpgradeResult;
+use facade_base::daemon::DaemonUpgradeResult;
 use tokio::sync::{Notify, oneshot, watch};
 
 use crate::log;
@@ -31,7 +31,7 @@ pub(crate) trait LifecycleActivity: Send + Sync + 'static {
     fn guest_listed(&self) -> bool;
     fn screen_writes(&self) -> usize;
     fn running_count(&self) -> usize;
-    fn keeper_protocol(&self) -> Option<[u32; 2]>;
+    fn keeper_protocol_range(&self) -> Option<[u32; 2]>;
     fn keeper_build(&self) -> Option<String>;
     fn settle_pastes(&self) -> impl Future<Output = Vec<oneshot::Receiver<()>>> + Send;
     fn quiet_agents(&self, deadline: tokio::time::Instant) -> impl Future<Output = bool> + Send;
@@ -103,7 +103,7 @@ pub(crate) struct Lifecycle {
     counts: Mutex<Counts>,
     changed: Notify,
     idle_delay: IdleDelayLog,
-    takeover: tokio::sync::Mutex<Option<UpgradeResult>>,
+    takeover: tokio::sync::Mutex<Option<DaemonUpgradeResult>>,
     draining: AtomicBool,
     closing_to: watch::Sender<Option<String>>,
 }

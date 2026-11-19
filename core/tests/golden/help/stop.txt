@@ -6,7 +6,7 @@ Stop agents that Facade started and keep them in your list. You can still read t
 them or resume a saved session if the CLI supports it.
 
 Arguments:
-  <AGENT>...  Agent ID or name
+  <AGENT>...  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
 
 Options:
   -h, --help  Print help

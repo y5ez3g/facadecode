@@ -38,11 +38,100 @@
         "windows": [
           {
             "id": "terminal",
+            "address": "terminal@golden-host",
             "machine_id": "<machine ID>",
             "name": "Terminal",
             "connected": true,
+            "locations": [
+              {
+                "location_id": "<project location>",
+                "label": "project",
+                "folder": "<test>/project",
+                "kind": "folder"
+              },
+              {
+                "location_id": "<home location>",
+                "label": "home",
+                "folder": "<test>/home",
+                "kind": "folder"
+              }
+            ],
             "clis": [
-              "fake"
+              {
+                "cli": "claude",
+                "display_name": "Claude Code",
+                "available": false,
+                "problem": "claude was not found on the PATH of a terminal in <test>/home, and clis.claude.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "codex",
+                "display_name": "Codex",
+                "available": false,
+                "problem": "codex was not found on the PATH of a terminal in <test>/home, and clis.codex.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "agy",
+                "display_name": "Antigravity",
+                "available": false,
+                "problem": "agy was not found on the PATH of a terminal in <test>/home, and clis.agy.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "muse",
+                "display_name": "Muse Code",
+                "available": false,
+                "problem": "muse was not found on the PATH of a terminal in <test>/home, and clis.muse.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "opencode",
+                "display_name": "OpenCode",
+                "available": false,
+                "problem": "opencode was not found on the PATH of a terminal in <test>/home, and clis.opencode.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": false,
+                  "effort": false
+                }
+              },
+              {
+                "cli": "pi",
+                "display_name": "Pi",
+                "available": false,
+                "problem": "pi was not found on the PATH of a terminal in <test>/home, and clis.pi.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "fake",
+                "display_name": "Fake CLI",
+                "available": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              }
             ]
           }
         ],
@@ -51,14 +140,12 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           },
@@ -66,16 +153,23 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -120,10 +214,96 @@
         "windows": [
           {
             "id": "terminal",
+            "address": "terminal@golden-host",
             "machine_id": "<machine ID>",
             "name": "Terminal",
             "connected": true,
-            "clis": []
+            "locations": [
+              {
+                "location_id": "<project location>",
+                "label": "project",
+                "folder": "<test>/project",
+                "kind": "folder"
+              },
+              {
+                "location_id": "<home location>",
+                "label": "home",
+                "folder": "<test>/home",
+                "kind": "folder"
+              }
+            ],
+            "clis": [
+              {
+                "cli": "claude",
+                "display_name": "Claude Code",
+                "available": false,
+                "problem": "#a3's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "codex",
+                "display_name": "Codex",
+                "available": false,
+                "problem": "#a3's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "agy",
+                "display_name": "Antigravity",
+                "available": false,
+                "problem": "#a3's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "muse",
+                "display_name": "Muse Code",
+                "available": false,
+                "problem": "#a3's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "opencode",
+                "display_name": "OpenCode",
+                "available": false,
+                "problem": "#a3's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": false,
+                  "effort": false
+                }
+              },
+              {
+                "cli": "pi",
+                "display_name": "Pi",
+                "available": false,
+                "problem": "#a3's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "fake",
+                "display_name": "Fake CLI",
+                "available": false,
+                "problem": "#a3's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              }
+            ]
           }
         ],
         "agents": [
@@ -131,14 +311,12 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           },
@@ -146,14 +324,12 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -161,16 +337,23 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -215,10 +398,96 @@
         "windows": [
           {
             "id": "terminal",
+            "address": "terminal@golden-host",
             "machine_id": "<machine ID>",
             "name": "Terminal",
             "connected": true,
-            "clis": []
+            "locations": [
+              {
+                "location_id": "<project location>",
+                "label": "project",
+                "folder": "<test>/project",
+                "kind": "folder"
+              },
+              {
+                "location_id": "<home location>",
+                "label": "home",
+                "folder": "<test>/home",
+                "kind": "folder"
+              }
+            ],
+            "clis": [
+              {
+                "cli": "claude",
+                "display_name": "Claude Code",
+                "available": false,
+                "problem": "#a4's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "codex",
+                "display_name": "Codex",
+                "available": false,
+                "problem": "#a4's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "agy",
+                "display_name": "Antigravity",
+                "available": false,
+                "problem": "#a4's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "muse",
+                "display_name": "Muse Code",
+                "available": false,
+                "problem": "#a4's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "opencode",
+                "display_name": "OpenCode",
+                "available": false,
+                "problem": "#a4's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": false,
+                  "effort": false
+                }
+              },
+              {
+                "cli": "pi",
+                "display_name": "Pi",
+                "available": false,
+                "problem": "#a4's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "fake",
+                "display_name": "Fake CLI",
+                "available": false,
+                "problem": "#a4's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              }
+            ]
           }
         ],
         "agents": [
@@ -226,14 +495,12 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           },
@@ -241,14 +508,12 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -256,14 +521,12 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -271,16 +534,23 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -325,11 +595,100 @@
         "windows": [
           {
             "id": "terminal",
+            "address": "terminal@golden-host",
             "machine_id": "<machine ID>",
             "name": "Terminal",
             "connected": true,
+            "locations": [
+              {
+                "location_id": "<project location>",
+                "label": "project",
+                "folder": "<test>/project",
+                "kind": "folder"
+              },
+              {
+                "location_id": "<home location>",
+                "label": "home",
+                "folder": "<test>/home",
+                "kind": "folder"
+              }
+            ],
             "clis": [
-              "fake"
+              {
+                "cli": "claude",
+                "display_name": "Claude Code",
+                "available": false,
+                "problem": "claude was not found on the PATH of a terminal in <test>/home, and clis.claude.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "codex",
+                "display_name": "Codex",
+                "available": false,
+                "problem": "codex was not found on the PATH of a terminal in <test>/home, and clis.codex.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "agy",
+                "display_name": "Antigravity",
+                "available": false,
+                "problem": "agy was not found on the PATH of a terminal in <test>/home, and clis.agy.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "muse",
+                "display_name": "Muse Code",
+                "available": false,
+                "problem": "muse was not found on the PATH of a terminal in <test>/home, and clis.muse.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "opencode",
+                "display_name": "OpenCode",
+                "available": false,
+                "problem": "opencode was not found on the PATH of a terminal in <test>/home, and clis.opencode.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": false,
+                  "effort": false
+                }
+              },
+              {
+                "cli": "pi",
+                "display_name": "Pi",
+                "available": false,
+                "problem": "pi was not found on the PATH of a terminal in <test>/home, and clis.pi.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "fake",
+                "display_name": "Fake CLI",
+                "available": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              }
             ]
           }
         ],
@@ -338,14 +697,12 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           },
@@ -353,14 +710,12 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -368,14 +723,12 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -383,14 +736,12 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -398,16 +749,23 @@
             "id": "#a5",
             "name": "#a5",
             "cli": "muse",
+            "address": "#a5@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -435,7 +793,7 @@
           "name": "facade",
           "version": "<version>"
         },
-        "instructions": "You are a Facade guest, in a terminal of your own. Messages and Facade's results reach you only as your turn ends or with the person's next prompt, so never promise to report one unprompted. Facade's tools start, list and stop the agents on this computer, exchange messages with them, and read and type into the terminals of the agents Facade started. Address an agent by its ID, such as #a3, its unique @name, or both. 🔔 is Facade's result, not an agent's reply. Starting an agent and delivering a message never prove its work is done.\n\n---\nname: facade\ndescription: \"How the Facade Code tools work: start and stop agents, send and read Facade messages, and read or type into agent terminals. Use when you work with other agents through Facade, or a Facade message or result appears.\"\n---\n\n# Facade Code tools\n\nServer `facade` has eight tools: start_agent, list_agents, stop_agent, send_message, read_messages, read_screen,\ntype_text and press_keys. Each answers with `status`: success, with `data` where it has facts to give, or failure, with\n`reason` and a `message` that says what is wrong, whether anything was done, and what to do next.\n\n## Agents\n\n`start_agent({cli: \"codex\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`\nstarts Codex in that folder with your window membership. Its `data.id`, such as \"#a7\", addresses it from then on.\nIts run takes YOLO from `facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person\nset it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows, with folders\nand CLIs for connected windows. It lists the agents you reach, including ended agents. With YOLO off you can reach agents\nin your creation tree. Use an ID when a name matches more than one agent.\n\n## Messages\n\n`send_message({to: \"#a7\", text: \"Run the tests again.\"})` types the message into #a7's terminal under a header that\nnames you, such as `📨 Message from Max (#a3) · #m42`, then its text. A reply names what it answers, `reply_to: \"#m42\"`,\nand its header adds `· Reply to #m42`. Messages from the person come from #human. Use #human to notify the person\nthrough the subscriptions of your connected member windows.\nA start's prompt is answered later by Facade, not by the agent: `🔔 Ada (#a7) has started. · #m43`, under its own number,\nsays whether the prompt was passed on, and asks for no reply.\nDelivery is finite: a message the recipient's CLI does not take in time fails, and no one tries it again; one to a guest,\na CLI session the person started, waits for its next turn.\n`read_messages({})` returns your messages not yet delivered, `read_messages({last: 5})` the five newest, and\n`read_messages({after: \"#m42\"})` every one after #m42. No agent reads another's inbox.\n\nThe same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo work for that same message. A new send call has a new ID, even if its text matches. A Facade system result about a message is a separate kind of information, not another copy of that message's instruction.\n\n## Terminals\n\n`read_screen({agent: \"#a7\"})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go\nwhere its cursor is, as `press_keys({agent: \"#a7\", keys: [\"Down\", \"Enter\"]})` picks a menu's second item.\n\nWritten by Facade core <version>.\n"
+        "instructions": "You are a Facade guest, in a terminal of your own. Messages and Facade's results reach you only as your turn ends or with the person's next prompt, so never promise to report one unprompted. Facade's tools start, list and stop the agents on this computer, exchange messages with them, and read and type into the terminals of the agents Facade started. Address an agent by its ID, such as #a3, its unique @name, or both. 🔔 is Facade's result, not an agent's reply. Starting an agent and delivering a message never prove its work is done.\n\n---\nname: facade\ndescription: \"How the Facade Code tools work: start and stop agents, send and read Facade messages, and read or type into agent terminals. Use when you work with other agents through Facade, or a Facade message or result appears.\"\n---\n\n# Facade Code tools\n\nServer `facade` has eight tools: start_agent, list_agents, stop_agent, send_message, read_messages, read_screen,\ntype_text and press_keys. Each answers with `status`: success, with `data` where it has facts to give, or failure, with\n`reason` and a `message` that says what is wrong, whether anything was done, and what to do next.\n\n## Agents\n\n`start_agent({cli: \"codex\", folder: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`\nstarts Codex in that folder with your window membership. Copy its `data.address` to reach it from then on.\nIts run takes YOLO from `facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person\nset it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows. Connected\nwindows list launch `locations`, each with a `folder`, and CLI availability in `clis`. The result lists reachable agents, including\nended ones. With YOLO off you reach your creation tree. Copy an agent's `address` into tool calls.\n\n## Messages\n\n`send_message({to: \"#a7@gpu\", text: \"Run the tests again.\"})` types into that agent's terminal under a header that\nnames you, such as `📨 Message from Max (#a3) · #m42`, then its text. A reply uses the received message address in `reply_to`,\nand its header adds `· Reply to #m42`. Messages from the person come from #human. Use #human to notify the person\nthrough the subscriptions of your connected member windows.\nA start's prompt is answered later by Facade, not by the agent: `🔔 Ada (#a7) has started. · #m43`, under its own number,\nsays whether the prompt was passed on, and asks for no reply.\nDelivery is finite: a message the recipient's CLI does not take in time fails, and no one tries it again; one to a guest,\na CLI session the person started, waits for its next turn.\n`read_messages({})` returns your messages not yet delivered, `read_messages({last: 5})` the five newest, and\n`read_messages({after: \"#m42\"})` every one after #m42. You can copy its `address` into `after`.\n\nThe same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo work for that same message. A new send call has a new ID, even if its text matches. A Facade system result about a message is a separate kind of information, not another copy of that message's instruction.\n\n## Terminals\n\n`read_screen({agent: \"#a7\", lines: 20})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go\nwhere its cursor is, as `press_keys({agent: \"#a7\", keys: [\"Down\", \"Enter\"]})` picks a menu's second item.\n\nWritten by Facade core <version>.\n"
       }
     }
   },
@@ -453,10 +811,96 @@
         "windows": [
           {
             "id": "terminal",
+            "address": "terminal@golden-host",
             "machine_id": "<machine ID>",
             "name": "Terminal",
             "connected": true,
-            "clis": []
+            "locations": [
+              {
+                "location_id": "<project location>",
+                "label": "project",
+                "folder": "<test>/project",
+                "kind": "folder"
+              },
+              {
+                "location_id": "<home location>",
+                "label": "home",
+                "folder": "<test>/home",
+                "kind": "folder"
+              }
+            ],
+            "clis": [
+              {
+                "cli": "claude",
+                "display_name": "Claude Code",
+                "available": false,
+                "problem": "#a6's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "codex",
+                "display_name": "Codex",
+                "available": false,
+                "problem": "#a6's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "agy",
+                "display_name": "Antigravity",
+                "available": false,
+                "problem": "#a6's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "muse",
+                "display_name": "Muse Code",
+                "available": false,
+                "problem": "#a6's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "opencode",
+                "display_name": "OpenCode",
+                "available": false,
+                "problem": "#a6's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": false,
+                  "effort": false
+                }
+              },
+              {
+                "cli": "pi",
+                "display_name": "Pi",
+                "available": false,
+                "problem": "#a6's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "fake",
+                "display_name": "Fake CLI",
+                "available": false,
+                "problem": "#a6's environment is unavailable: its CLI has not given it yet: its session-start hook gives it; nothing was started",
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              }
+            ]
           }
         ],
         "agents": [
@@ -464,14 +908,12 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           },
@@ -479,14 +921,12 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -494,14 +934,12 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -509,14 +947,12 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -524,14 +960,12 @@
             "id": "#a5",
             "name": "#a5",
             "cli": "muse",
+            "address": "#a5@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -539,16 +973,23 @@
             "id": "#a6",
             "name": "#a6",
             "cli": "opencode",
+            "address": "#a6@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -593,11 +1034,100 @@
         "windows": [
           {
             "id": "terminal",
+            "address": "terminal@golden-host",
             "machine_id": "<machine ID>",
             "name": "Terminal",
             "connected": true,
+            "locations": [
+              {
+                "location_id": "<project location>",
+                "label": "project",
+                "folder": "<test>/project",
+                "kind": "folder"
+              },
+              {
+                "location_id": "<home location>",
+                "label": "home",
+                "folder": "<test>/home",
+                "kind": "folder"
+              }
+            ],
             "clis": [
-              "fake"
+              {
+                "cli": "claude",
+                "display_name": "Claude Code",
+                "available": false,
+                "problem": "claude was not found on the PATH of a terminal in <test>/home, and clis.claude.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "codex",
+                "display_name": "Codex",
+                "available": false,
+                "problem": "codex was not found on the PATH of a terminal in <test>/home, and clis.codex.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "agy",
+                "display_name": "Antigravity",
+                "available": false,
+                "problem": "agy was not found on the PATH of a terminal in <test>/home, and clis.agy.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "muse",
+                "display_name": "Muse Code",
+                "available": false,
+                "problem": "muse was not found on the PATH of a terminal in <test>/home, and clis.muse.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "opencode",
+                "display_name": "OpenCode",
+                "available": false,
+                "problem": "opencode was not found on the PATH of a terminal in <test>/home, and clis.opencode.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": false,
+                  "effort": false
+                }
+              },
+              {
+                "cli": "pi",
+                "display_name": "Pi",
+                "available": false,
+                "problem": "pi was not found on the PATH of a terminal in <test>/home, and clis.pi.program does not name its location",
+                "not_installed": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              },
+              {
+                "cli": "fake",
+                "display_name": "Fake CLI",
+                "available": true,
+                "overrides": {
+                  "model": true,
+                  "effort": true
+                }
+              }
             ]
           }
         ],
@@ -606,14 +1136,12 @@
             "id": "#a1",
             "name": "host",
             "cli": "fake",
+            "address": "#a1@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/project",
+            "folder": "<test>/project",
             "state": "starting",
             "creator": "#human"
           },
@@ -621,14 +1149,12 @@
             "id": "#a2",
             "name": "#a2",
             "cli": "claude",
+            "address": "#a2@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -636,14 +1162,12 @@
             "id": "#a3",
             "name": "#a3",
             "cli": "codex",
+            "address": "#a3@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -651,14 +1175,12 @@
             "id": "#a4",
             "name": "#a4",
             "cli": "agy",
+            "address": "#a4@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -666,14 +1188,12 @@
             "id": "#a5",
             "name": "#a5",
             "cli": "muse",
+            "address": "#a5@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -681,14 +1201,12 @@
             "id": "#a6",
             "name": "#a6",
             "cli": "opencode",
+            "address": "#a6@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
           },
@@ -696,16 +1214,23 @@
             "id": "#a7",
             "name": "#a7",
             "cli": "pi",
+            "address": "#a7@golden-host",
             "machine_id": "<machine ID>",
             "windows": [
-              {
-                "machine_id": "<machine ID>",
-                "window_id": "terminal"
-              }
+              "terminal"
             ],
-            "path": "<test>/home",
+            "folder": "<test>/home",
             "state": "unknown",
             "creator": "#human"
+          }
+        ],
+        "machines": [
+          {
+            "machine_id": "<machine ID>",
+            "name": "golden-host",
+            "build": "<version>",
+            "state": "responded",
+            "responded_at": "<time>"
           }
         ]
       }
@@ -723,6 +1248,7 @@
       "status": "success",
       "data": {
         "id": "#m1",
+        "address": "#m1@id:<compact machine ID>",
         "delivery": "waiting_in_inbox"
       }
     }

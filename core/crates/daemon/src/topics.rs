@@ -1,18 +1,18 @@
-//! The four topics a client can watch: the agents, the windows, an agent's screen, and an inbox's
-//! messages. Each watch is a snapshot and a task that turns what changes into the topic's changes,
-//! resending everything where it fell behind. The server sends them on.
+//! Client watches of agents, machines, windows, screens and inboxes. Each watch gives a snapshot
+//! followed by changes, resending the current view where it fell behind.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{
-    self, AgentInfo, AgentsChange, AgentsTopic, LocationInfo, LocationKind, Message,
-    MessagesChange, MessagesTopic, MessagesWatchArgs, ScreenChange, ScreenSnapshot, ScreenTopic,
-    ScreenWatchArgs, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowInfo, WindowRef, WindowsChange,
-    WindowsTopic,
+    self, AgentInfo, AgentsChange, AgentsSnapshot, AgentsTopic, AgentsUpdate, AgentsWatchArgs,
+    LocationInfo, LocationKind, Message, MessagesChange, MessagesTopic, MessagesWatchArgs,
+    ScreenChange, ScreenSnapshot, ScreenTopic, ScreenWatchArgs, TERMINAL_WINDOW,
+    TERMINAL_WINDOW_NAME, WatchParams, WindowInfo, WindowRef, WindowsChange, WindowsTopic,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
+use facade_base::machine::{Caller, MachinesChange, MachinesTopic};
 use facade_base::operations::{NoArgs, Topic};
 use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
@@ -22,7 +22,7 @@ use crate::Daemon;
 use crate::agent::{AgentCommand, AgentHandle, ViewerChange, viewer_channel};
 use crate::command_line::CliViewer;
 use crate::messages::Change;
-use crate::records::{self, Reach};
+use crate::records::Reach;
 use crate::server::{Client, Watch, WatchChange};
 use crate::service::{actor_stopped, decode_or_default, value_of};
 
@@ -30,6 +30,12 @@ use crate::service::{actor_stopped, decode_or_default, value_of};
 const SCREEN_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The changes a watch holds for the server before it waits.
 const CHANGES_WAITING: usize = 64;
+
+pub(crate) fn topic_names() -> Vec<String> {
+    let mut names = daemon::topic_names();
+    names.extend(facade_base::machine::topic_names());
+    names
+}
 
 impl Daemon {
     /// Starts watching `topic` for `client`. Each topic subscribes to its changes before it takes
@@ -46,7 +52,25 @@ impl Daemon {
                 self.watch_screen(client, decode_arguments(args)?, viewer)
                     .await
             }
-            AgentsTopic::NAME => Ok(self.watch_agents(client)),
+            AgentsTopic::NAME => {
+                if !args.is_null() {
+                    let args: AgentsWatchArgs = decode_arguments(args)?;
+                    if args.member_machine_id.is_some() {
+                        return Err(ErrorBody::refused(
+                            "member watches are opened by the machine network",
+                        ));
+                    }
+                }
+                self.watch_agents_as(
+                    Reach::from(&self.local_caller(client)?),
+                    None,
+                    client.window.is_some(),
+                )
+            }
+            MachinesTopic::NAME => {
+                let NoArgs {} = decode_or_default(args)?;
+                self.watch_machines()
+            }
             MessagesTopic::NAME => self.watch_messages(client, decode_or_default(args)?, viewer),
             WindowsTopic::NAME => {
                 let NoArgs {} = decode_or_default(args)?;
@@ -54,7 +78,7 @@ impl Daemon {
             }
             other => Err(ErrorBody::invalid_argument(format!(
                 "unknown topic {other}; supported topics: {}",
-                daemon::topic_names().join(", ")
+                topic_names().join(", ")
             ))),
         }
     }
@@ -63,6 +87,10 @@ impl Daemon {
     /// window's messages watch stops counting as one that can tell the person.
     /// changes; the other topics hold nothing more.
     pub(crate) async fn end_watch(&self, _client: &Client, _topic: &str, viewer: u64) {
+        self.end_viewer(viewer).await;
+    }
+
+    pub(crate) async fn end_viewer(&self, viewer: u64) {
         let ending = self.watch_ends.lock().unwrap().remove(&viewer);
         match ending {
             Some(WatchEnd::Viewer(agent)) => {
@@ -76,12 +104,27 @@ impl Daemon {
     /// An agent's screen: what it shows now, then its output, redraws and exit, as viewer
     /// `viewer` of the agent.
     async fn watch_screen(
-        &self,
+        self: &Arc<Self>,
         client: &Client,
         args: ScreenWatchArgs,
         viewer: u64,
     ) -> Result<Watch, ErrorBody> {
-        let agent = self.terminal_agent(&args.agent, client.agent.as_deref())?;
+        let caller = self.local_caller(client)?;
+        let reference = self.addressed_agent(&caller, &args.agent, false).await?;
+        if reference.machine_id != self.machine_id {
+            return self.watch_remote_screen(reference, caller, args).await;
+        }
+        let agent = self.resolve_agent(&reference.agent_id, &Reach::from(&caller))?;
+        self.watch_agent_screen(agent, args, viewer).await
+    }
+
+    async fn watch_agent_screen(
+        &self,
+        agent: AgentHandle,
+        args: ScreenWatchArgs,
+        viewer: u64,
+    ) -> Result<Watch, ErrorBody> {
+        crate::operations::refuse_guest_terminal(&agent)?;
         let (tx, mut feed) = viewer_channel();
         let stalled = feed.stalled();
         let (reply, drawn) = oneshot::channel();
@@ -110,6 +153,7 @@ impl Daemon {
         };
         let snapshot = ScreenSnapshot {
             agent_id: agent.id().to_string(),
+            machine_id: self.machine_id.clone(),
             cols: drawn.cols,
             rows: drawn.rows,
             redraw: facade_base::base64::encode(&drawn.redraw),
@@ -152,56 +196,234 @@ impl Daemon {
         })
     }
 
-    /// The agents in the client's reach as its watch began: an agent out of reach stays unknown
-    /// to the client, and so does its removal.
-    fn watch_agents(self: &Arc<Self>, client: &Client) -> Watch {
-        let reach = self.reach_of_client(client);
-        let mut following = self.changes.subscribe();
-        let reached = |infos: Vec<AgentInfo>| -> Vec<AgentInfo> {
-            infos
-                .into_iter()
-                .filter(|info| reach.reaches(info))
-                .collect()
+    pub(crate) async fn start_forwarded_watch(
+        self: &Arc<Self>,
+        caller: &Caller,
+        params: WatchParams,
+        viewer: u64,
+    ) -> Result<Watch, ErrorBody> {
+        match params.topic.as_str() {
+            AgentsTopic::NAME => {
+                let args: AgentsWatchArgs = decode_arguments(params.args)?;
+                if args.member_machine_id.as_deref() != Some(caller.machine_id())
+                    || !matches!(caller, Caller::Terminal { .. })
+                {
+                    return Err(ErrorBody::refused(
+                        "a member watch belongs to its originating core",
+                    ));
+                }
+                self.watch_agents_as(Reach::from(caller), args.member_machine_id, false)
+            }
+            ScreenTopic::NAME => {
+                let args: ScreenWatchArgs = decode_arguments(params.args)?;
+                let agent = self.resolve_agent(&args.agent, &Reach::from(caller))?;
+                self.watch_agent_screen(agent, args, viewer).await
+            }
+            _ => Err(ErrorBody::refused(
+                "this topic has no forwarded subscription",
+            )),
+        }
+    }
+
+    async fn watch_remote_screen(
+        &self,
+        reference: facade_base::machine::AgentRef,
+        caller: Caller,
+        mut args: ScreenWatchArgs,
+    ) -> Result<Watch, ErrorBody> {
+        args.agent = reference.agent_id;
+        let params = WatchParams {
+            topic: ScreenTopic::NAME.to_string(),
+            args: value_of(args),
         };
-        let snapshot = reached(self.agent_infos());
-        let mut known: HashSet<String> =
-            snapshot.iter().map(|info| info.agent_id.clone()).collect();
+        let mut subscription = self
+            .network
+            .watch(
+                &reference.machine_id,
+                caller,
+                params,
+                Some(SCREEN_SNAPSHOT_TIMEOUT),
+            )
+            .await?;
+        let snapshot = std::mem::take(&mut subscription.snapshot);
+        let (changes, sent) = mpsc::channel(CHANGES_WAITING);
+        tokio::spawn(async move {
+            let forward = async {
+                while let Some(change) = subscription.next().await {
+                    match change {
+                        Ok(value) => {
+                            if changes.send(WatchChange::Change(value)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = changes.send(WatchChange::Disconnect).await;
+            };
+            tokio::select! { () = forward => {}, () = changes.closed() => {} }
+        });
+        Ok(Watch {
+            snapshot,
+            changes: sent,
+        })
+    }
+
+    /// An external editor view includes projections. Machine member watches expose local records.
+    fn watch_agents_as(
+        self: &Arc<Self>,
+        reach: Reach,
+        member_machine_id: Option<String>,
+        include_remote: bool,
+    ) -> Result<Watch, ErrorBody> {
+        let mut following = self.changes.subscribe();
+        let local = self.machine_id.clone();
+        let reached = move |info: &AgentInfo| {
+            info.machine_id == local
+                && reach.reaches(info)
+                && member_machine_id.as_ref().is_none_or(|id| {
+                    !info.guest && info.windows.iter().any(|window| &window.machine_id == id)
+                })
+        };
+        let mut agents: Vec<_> = self.agent_infos().into_iter().filter(&reached).collect();
+        let machines = self.machine_table()?;
+        for agent in &mut agents {
+            self.project_agent(agent, &machines);
+        }
+        let mut known: HashSet<String> = agents.iter().map(|info| info.agent_id.clone()).collect();
+        let snapshot = AgentsSnapshot {
+            agents,
+            machines: if include_remote {
+                self.remote_agent_states()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        };
         let (changes, sent) = mpsc::channel(CHANGES_WAITING);
         let daemon = self.clone();
         tokio::spawn(async move {
             loop {
-                let received = match following.recv().await {
+                let next = tokio::select! {
+                    next = following.recv() => next,
+                    () = changes.closed() => return,
+                };
+                let received = match next {
                     Ok(change) => vec![change],
                     Err(RecvError::Lagged(_)) => {
-                        let now = daemon.agent_infos();
-                        let now = now.into_iter().filter(|info| reach.reaches(info)).collect();
-                        resync_agents(&known, now)
+                        let mut fresh = resync_agents(
+                            &known,
+                            daemon.agent_infos().into_iter().filter(&reached).collect(),
+                            &daemon.machine_id,
+                        );
+                        if include_remote {
+                            fresh.extend(
+                                daemon
+                                    .remote_agent_states()
+                                    .into_iter()
+                                    .map(|machine| AgentsUpdate::MachineState { machine }),
+                            );
+                        }
+                        fresh
                     }
                     Err(RecvError::Closed) => return,
                 };
-                for change in received {
-                    match &change {
-                        AgentsChange::Updated { agent } if !reach.reaches(agent) => continue,
-                        AgentsChange::Updated { agent } => {
+                for mut change in received {
+                    match &mut change {
+                        AgentsUpdate::Updated { agent } if reached(agent) => {
                             known.insert(agent.agent_id.clone());
+                            let Ok(machines) = daemon.machine_table() else {
+                                return;
+                            };
+                            daemon.project_agent(agent, &machines);
                         }
-                        AgentsChange::Removed { agent_id }
-                            if !known.remove(agent_id) && reach != Reach::All =>
-                        {
-                            continue;
+                        AgentsUpdate::Updated { agent }
+                            if include_remote && agent.machine_id != daemon.machine_id => {}
+                        AgentsUpdate::Removed {
+                            machine_id,
+                            agent_id,
+                        } if *machine_id == daemon.machine_id => {
+                            if !known.remove(agent_id) {
+                                continue;
+                            }
                         }
-                        AgentsChange::Removed { .. } | AgentsChange::Unknown => {}
+                        AgentsUpdate::Removed { .. } | AgentsUpdate::MachineState { .. }
+                            if include_remote => {}
+                        _ => continue,
                     }
-                    if !send(&changes, &change).await {
+                    if !send(&changes, &AgentsChange::from(change)).await {
                         return;
                     }
                 }
             }
         });
-        Watch {
-            snapshot: value_of(&snapshot),
+        Ok(Watch {
+            snapshot: value_of(snapshot),
             changes: sent,
-        }
+        })
+    }
+
+    fn watch_machines(self: &Arc<Self>) -> Result<Watch, ErrorBody> {
+        let mut following = self.machine_views.subscribe();
+        let snapshot = self.machine_table()?;
+        let mut known: BTreeMap<_, _> = snapshot
+            .iter()
+            .map(|row| (row.machine_id.clone(), row.clone()))
+            .collect();
+        let (changes, sent) = mpsc::channel(CHANGES_WAITING);
+        let daemon = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let next = tokio::select! {
+                    next = following.recv() => next,
+                    () = changes.closed() => return,
+                };
+                let rows = match next {
+                    Ok(rows) => rows,
+                    Err(RecvError::Lagged(_)) => match daemon.machine_table() {
+                        Ok(rows) => rows,
+                        Err(_) => return,
+                    },
+                    Err(RecvError::Closed) => return,
+                };
+                let current: BTreeMap<_, _> = rows
+                    .into_iter()
+                    .map(|row| (row.machine_id.clone(), row))
+                    .collect();
+                for (id, machine) in &current {
+                    if known.get(id) != Some(machine)
+                        && !send(
+                            &changes,
+                            &MachinesChange::Updated {
+                                machine: machine.clone(),
+                            },
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                }
+                for id in known.keys().filter(|id| !current.contains_key(*id)) {
+                    if !send(
+                        &changes,
+                        &MachinesChange::Removed {
+                            machine_id: id.clone(),
+                        },
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                }
+                known = current;
+            }
+        });
+        Ok(Watch {
+            snapshot: value_of(snapshot),
+            changes: sent,
+        })
     }
 
     /// An agent reads its own inbox. An editor sees the messages handed to its window.
@@ -353,15 +575,6 @@ impl Daemon {
         }
     }
 
-    /// The reach of `client`: the person's is everything.
-    fn reach_of_client(&self, client: &Client) -> Reach {
-        let acting = client.agent.as_deref();
-        let caller = acting
-            .and_then(|id| self.get_agent(id))
-            .map(|agent| agent.info());
-        records::reach_of(acting, caller.as_ref())
-    }
-
     /// The agent the client acts for, whose inbox the messages topic reads; it must be listed.
     fn listed_actor(&self, agent: Option<&str>) -> Result<String, ErrorBody> {
         let Some(agent) = agent else {
@@ -378,7 +591,7 @@ impl Daemon {
     }
 
     /// The windows: the editor windows, then the terminal window while it holds running agents.
-    fn window_infos(&self) -> Vec<WindowInfo> {
+    pub(crate) fn window_infos(&self) -> Vec<WindowInfo> {
         let mut infos = self.windows.infos();
         infos.extend(self.terminal_window());
         infos
@@ -411,7 +624,7 @@ impl Daemon {
         (!locations.is_empty()).then(|| WindowInfo {
             machine_id: terminal.machine_id,
             window_id: terminal.window_id,
-            label: TERMINAL_WINDOW_LABEL.into(),
+            name: TERMINAL_WINDOW_NAME.into(),
             environment: "local".into(),
             connected: true,
             folders: Vec::new(),
@@ -448,15 +661,20 @@ fn screen_change(out: ViewerChange) -> ScreenChange {
 }
 
 /// What brings a client that knew the agents `known` to the agents `now`.
-fn resync_agents(known: &HashSet<String>, now: Vec<AgentInfo>) -> Vec<AgentsChange> {
+fn resync_agents(
+    known: &HashSet<String>,
+    now: Vec<AgentInfo>,
+    machine_id: &str,
+) -> Vec<AgentsUpdate> {
     let gone = known
         .iter()
         .filter(|id| !now.iter().any(|info| &info.agent_id == *id))
-        .map(|id| AgentsChange::Removed {
+        .map(|id| AgentsUpdate::Removed {
             agent_id: id.clone(),
+            machine_id: machine_id.to_string(),
         });
-    let mut changes: Vec<AgentsChange> = gone.collect();
-    changes.extend(now.into_iter().map(|info| AgentsChange::Updated {
+    let mut changes: Vec<AgentsUpdate> = gone.collect();
+    changes.extend(now.into_iter().map(|info| AgentsUpdate::Updated {
         agent: Box::new(info),
     }));
     changes

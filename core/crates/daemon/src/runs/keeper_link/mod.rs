@@ -12,7 +12,8 @@ use anyhow::Context;
 use facade_base::daemon::KeeperInfo;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::keeper::{
-    AgentArgs, AgentStart, AgentStop, AgentSync, HeldAgent, StartArgs, SyncArgs,
+    AgentStart, AgentStop, AgentSync, KeeperAgentArgs, KeeperHeldAgent, KeeperStartArgs,
+    KeeperStartWireArgs, KeeperSyncArgs,
 };
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::service::{self, Report, RestartBackoff, Service};
@@ -58,7 +59,7 @@ struct Connection {
     first: Option<Arc<KeeperClient>>,
     identity: Option<ProcessIdentity>,
     build: Option<String>,
-    protocol: Option<[u32; 2]>,
+    protocol_range: Option<[u32; 2]>,
     requested: bool,
     reservations: usize,
     sent: usize,
@@ -125,7 +126,7 @@ impl KeeperLink {
                 first: None,
                 identity: None,
                 build: None,
-                protocol: None,
+                protocol_range: None,
                 requested: false,
                 reservations: 0,
                 sent: 0,
@@ -153,7 +154,7 @@ impl KeeperLink {
         mut reservation: StartReservation,
         id: &str,
         number: u64,
-        args: StartArgs,
+        args: KeeperStartArgs,
         exits: ExitSink,
         kind: RunKind,
     ) -> Result<StartedRun, ErrorBody> {
@@ -173,7 +174,9 @@ impl KeeperLink {
         self.runs.begin(id, number, Arc::clone(&exits));
         reservation.sent = true;
         self.connection.lock().unwrap().sent += 1;
-        let response = keeper.call::<AgentStart>(&args).await;
+        let response = keeper
+            .call::<AgentStart>(&KeeperStartWireArgs::from(args))
+            .await;
         let started = match response {
             Err(error) => {
                 if error.uncertain() {
@@ -305,7 +308,7 @@ impl KeeperLink {
     }
 
     /// Recovery: obtains a held run's terminal from the startup connection, before readiness.
-    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &KeeperHeldAgent) -> Result<PtyMaster, ErrorBody> {
         let keeper = self.recovery_keeper()?;
         Self::terminal(&keeper, held).await
     }
@@ -313,7 +316,7 @@ impl KeeperLink {
     /// Recovery: keeps a second terminal copy and the run's exit sink. Blocking, no I/O waits.
     pub(crate) fn register_recovered(
         &self,
-        held: &HeldAgent,
+        held: &KeeperHeldAgent,
         master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
@@ -342,7 +345,7 @@ impl KeeperLink {
     /// Recovery: retains unreadable runs untouched; asks the keeper to stop unrecorded ones.
     pub(crate) async fn take_keeper_only(
         &self,
-        held: HeldAgent,
+        held: KeeperHeldAgent,
         record: KeeperOnly,
     ) -> Result<(), ErrorBody> {
         let keeper = self.recovery_keeper()?;
@@ -405,8 +408,8 @@ impl KeeperLink {
     }
 
     /// Reads the protocol range from the last accepted keeper hello.
-    pub(crate) fn keeper_protocol(&self) -> Option<[u32; 2]> {
-        self.connection.lock().unwrap().protocol
+    pub(crate) fn keeper_protocol_range(&self) -> Option<[u32; 2]> {
+        self.connection.lock().unwrap().protocol_range
     }
 
     /// Finds the keeper holding the startup lock and waits at most ten seconds for its hello.
@@ -421,7 +424,7 @@ impl KeeperLink {
                 Ok(keeper) => {
                     let found = FoundKeeper::Connected {
                         build: keeper.hello.build.clone(),
-                        held: keeper.hello.agents.clone(),
+                        held: keeper.hello.held_agents.clone(),
                     };
                     let mut state = self.connection.lock().unwrap();
                     state.first = Some(keeper);
@@ -503,8 +506,11 @@ impl KeeperLink {
             .ok_or_else(|| ErrorBody::new(Reason::Unavailable, "the keeper is not connected"))
     }
 
-    async fn terminal(keeper: &KeeperClient, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
-        let args = SyncArgs {
+    async fn terminal(
+        keeper: &KeeperClient,
+        held: &KeeperHeldAgent,
+    ) -> Result<PtyMaster, ErrorBody> {
+        let args = KeeperSyncArgs {
             agent: held.id.clone(),
             pid: held.pid,
             birth: held.birth.clone(),
@@ -520,7 +526,7 @@ impl KeeperLink {
 
     async fn stop_with(keeper: &KeeperClient, id: &str) -> Result<(), ErrorBody> {
         keeper
-            .call::<AgentStop>(&AgentArgs { agent: id.into() })
+            .call::<AgentStop>(&KeeperAgentArgs { agent: id.into() })
             .await?;
         Ok(())
     }
@@ -547,7 +553,7 @@ impl KeeperLink {
             let mut state = self.connection.lock().unwrap();
             state.identity = Some(keeper.identity.clone());
             state.build = Some(keeper.hello.build.clone());
-            state.protocol = Some(keeper.hello.protocol);
+            state.protocol_range = Some(keeper.hello.protocol_range);
         }
         Ok(keeper)
     }
@@ -570,11 +576,11 @@ impl KeeperLink {
         }
         let mut plan = self
             .runs
-            .reconcile(keeper.identity.pid, &keeper.hello.agents)?;
+            .reconcile(keeper.identity.pid, &keeper.hello.held_agents)?;
         for held in plan.unrecorded {
             Self::stop_unrecorded(keeper, &held.id).await?;
         }
-        for (args, master, stopping) in self.runs.missing(&keeper.hello.agents)? {
+        for (args, master, stopping) in self.runs.missing(&keeper.hello.held_agents)? {
             if stopping {
                 plan.stops.push(args.agent.clone());
             }

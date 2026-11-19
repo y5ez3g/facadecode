@@ -1,43 +1,9 @@
-//! A tool call's arguments, read against the tool's input schema before anything is done. One
-//! failure reports every problem of a call together: the arguments it needs and left out first, then
-//! each other problem in the order of the schema.
+//! A tool call's arguments, normalized against the input schema. Collects missing arguments and
+//! other problems for the caller to report.
 
 use serde_json::{Map, Number, Value, json};
 
-use super::envelope;
-
-/// The problems found in one call's arguments.
-#[derive(Debug, Default)]
-pub(super) struct Problems {
-    missing: Vec<String>,
-    others: Vec<String>,
-}
-
-impl Problems {
-    /// Notes a problem other than a missing argument.
-    pub(super) fn add(&mut self, problem: impl Into<String>) {
-        self.others.push(problem.into());
-    }
-
-    fn total(&self) -> usize {
-        self.missing.len() + self.others.len()
-    }
-
-    /// The `invalid_argument` failure of a call to `tool` that names every problem; none without
-    /// problems.
-    pub(super) fn into_failure(self, tool: &str) -> Option<Value> {
-        if self.total() == 0 {
-            return None;
-        }
-        let mut words = Vec::with_capacity(self.total() + 2);
-        if !self.missing.is_empty() {
-            words.push(format!("{tool} requires {}", self.missing.join(", ")));
-        }
-        words.extend(self.others);
-        words.push("nothing was done".to_string());
-        Some(envelope::failure("invalid_argument", words.join("; ")))
-    }
-}
+use super::Problems;
 
 /// The arguments `given` to `tool`, read as its input `schema` describes them: each argument left
 /// out takes its default, and absent arguments are none at all. Every problem goes to `problems`.
@@ -75,10 +41,10 @@ impl Owner<'_> {
         }
     }
 
-    fn unknown(&self, key: &str) -> String {
+    fn note_unknown(&self, key: &str, problems: &mut Problems) {
         match self {
-            Owner::Arguments(tool) => format!("{key} is not an argument of {tool}"),
-            Owner::Field(field) => format!("{key} is not a field of {field}"),
+            Owner::Arguments(tool) => problems.add_unknown_argument(tool, key),
+            Owner::Field(field) => problems.add(format!("{key} is not a field of {field}")),
         }
     }
 }
@@ -99,12 +65,17 @@ fn read_fields(
             .is_some_and(|names| names.iter().any(|name| name.as_str() == Some(key)))
     };
     for key in given.keys().filter(|key| !properties.contains_key(*key)) {
-        problems.add(owner.unknown(key));
+        owner.note_unknown(key, problems);
     }
     let mut read = Map::new();
     for (key, property) in properties {
         let path = owner.path(key);
         match given.get(key) {
+            Some(Value::String(_))
+                if matches!(owner, Owner::Arguments("start_agent")) && key == "worktree" =>
+            {
+                problems.add(r#"worktree must be an object. Use {"branch": "topic"}"#);
+            }
             Some(value) => {
                 if let Some(value) = read_value(property, value, &path, problems) {
                     read.insert(key.clone(), value);
@@ -287,10 +258,8 @@ mod tests {
         });
         let read = |given: Value| {
             let mut problems = Problems::default();
-            let arguments = read_arguments("start_agent", &schema, &given, &mut problems);
-            problems
-                .into_failure("start_agent")
-                .map_or(Ok(arguments), Err)
+            let arguments = read_arguments("example", &schema, &given, &mut problems);
+            problems.into_failure("example").map_or(Ok(arguments), Err)
         };
         let worktree = json!({ "branch": "review", "base_ref": "HEAD" });
         assert_eq!(
@@ -304,7 +273,7 @@ mod tests {
         let failure = read(json!({ "worktree": { "branch": "", "colour": "red" } })).unwrap_err();
         assert_eq!(
             failure["message"],
-            "start_agent requires worktree.base_ref; colour is not a field of worktree; \
+            "example requires worktree.base_ref; colour is not a field of worktree; \
              worktree.branch must not be empty; nothing was done"
         );
         assert_eq!(

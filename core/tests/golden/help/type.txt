@@ -7,14 +7,15 @@ Type text into the agent's terminal, or press keys to answer its menus. Add '--e
 after the text. To give the agent a task or ask it a question, use 'facade send'.
 
 Arguments:
-  <AGENT>  Agent ID or name
+  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
   <TEXT>   Text to type; put '--' before text that starts with '-'
 
 Options:
       --enter      Press Enter after the text
-  -k, --key <KEY>  Press a key; repeat for more: Enter, Esc, Tab, Shift+Tab, Backspace, Delete, Up,
-                   Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z or one
-                   character
+  -k, --key <KEY>  Press a key. Repeat for 1 to 100 keys. Use Enter, Esc, Tab, Shift+Tab, Backspace,
+                   Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to
+                   Ctrl+Z or one non-control Unicode code point. Names and Ctrl combinations ignore
+                   ASCII case
   -h, --help       Print help
 
 Examples:

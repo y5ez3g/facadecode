@@ -8,7 +8,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::daemon::{Kept, TextWritten, WindowDeliveryFailure};
+use super::daemon::{
+    Kept, TextWritten, WindowDelivery, WindowDeliveryFailure, WindowDeliveryOutcome,
+};
+use super::machine::{
+    MachineIdConflict, MessageRef, ProtocolMismatch, SshInteraction, Unavailable,
+};
 
 pub use crate::line::MAX_LINE_BYTES;
 
@@ -134,6 +139,14 @@ pub enum ServerMessage {
     Response(Response),
 }
 
+/// A frame from either direction of a machine session. A request without an ID is a notification.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MachineMessage {
+    Request(Request),
+    Response(Response),
+}
+
 /// A request error.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ErrorBody {
@@ -144,6 +157,55 @@ pub struct ErrorBody {
     pub message: String,
     /// Structured error details.
     pub data: Box<ErrorData>,
+}
+
+/// A send error with its window receipt before encoding it for a client.
+#[derive(Clone, Debug)]
+pub struct SendFailure {
+    pub error: ErrorBody,
+    pub window_delivery: Option<Vec<WindowDeliveryOutcome>>,
+}
+
+impl From<ErrorBody> for SendFailure {
+    fn from(mut error: ErrorBody) -> Self {
+        let failures = error.data.windows.take();
+        let window_delivery = error
+            .data
+            .window_delivery
+            .take()
+            .map(WindowDelivery::into_outcomes)
+            .or_else(|| {
+                failures.map(|failures| {
+                    failures
+                        .into_iter()
+                        .map(|WindowDeliveryFailure { window, reason }| {
+                            WindowDeliveryOutcome::NotDelivered { window, reason }
+                        })
+                        .collect()
+                })
+            });
+        Self {
+            error,
+            window_delivery,
+        }
+    }
+}
+
+impl From<SendFailure> for ErrorBody {
+    fn from(failure: SendFailure) -> Self {
+        let mut error = failure.error;
+        if let Some(outcomes) = failure.window_delivery {
+            let receipt = WindowDelivery::from_outcomes(outcomes);
+            if error.data.unavailable.as_ref().is_some_and(|unavailable| {
+                unavailable.execution == crate::machine::ExecutionOutcome::OutcomeUnknown
+            }) {
+                error.data.window_delivery = Some(receipt);
+            } else {
+                error.data.windows = Some(receipt.not_delivered);
+            }
+        }
+        error
+    }
 }
 
 /// Error details for clients to inspect.
@@ -173,6 +235,23 @@ pub struct ErrorData {
     /// it could not take the message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows: Option<Vec<WindowDeliveryFailure>>,
+    /// The receipt for a send whose remote window outcomes could not be confirmed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_delivery: Option<WindowDelivery>,
+    /// The original kept message, where its delivery outcome is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_ref: Option<MessageRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_id_conflict: Option<MachineIdConflict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_interaction: Option<SshInteraction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<Unavailable>,
+    /// Complete references that matched a name or machine ID prefix.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<ProtocolMismatch>,
 }
 
 /// Error reasons shared by both protocols.
@@ -193,9 +272,14 @@ pub enum Reason {
     /// The operation cannot complete: for example, a stop or a screen watch's snapshot timed out,
     /// or the keeper disconnected.
     Unavailable,
-    /// The peers share no protocol version, or a required client kind, operation, or field is
+    /// The two sides share no protocol version, or a required client kind, operation, or field is
     /// unsupported.
-    ProtocolIncompatible,
+    #[serde(rename = "protocol_incompatible")]
+    IncompatibleProtocol,
+    /// Two running daemons introduced themselves with the same machine ID.
+    MachineIdConflict,
+    /// A saved SSH connection needs a foreground login or verification.
+    SshInteractionRequired,
     /// A message exceeds the line limit, or input exceeds the per-call limit or available queue
     /// room.
     CapacityExceeded,
@@ -207,7 +291,12 @@ pub enum Reason {
     /// Facade's settings file, `facade.json` in the Facade home, cannot be read as it must, which
     /// stops every launch until it is fixed. The message says each problem, with the file's path
     /// and, where known, its line and column.
-    ConfigurationInvalid,
+    #[serde(rename = "configuration_invalid")]
+    InvalidSettings,
+    /// A tool server lacks a caller it can serve. The v2 spelling also covers invalid settings.
+    #[serde(rename = "configuration_invalid", skip_deserializing)]
+    #[schemars(skip)]
+    CallerUnavailable,
     /// The call was withdrawn by its `cancel` before it took effect: a message whose paste had not
     /// begun, which is not kept.
     Cancelled,
@@ -236,6 +325,13 @@ impl ErrorBody {
             kept: None,
             entry: None,
             windows: None,
+            window_delivery: None,
+            message_ref: None,
+            machine_id_conflict: None,
+            ssh_interaction: None,
+            unavailable: None,
+            candidates: Vec::new(),
+            protocol: None,
         });
         let code = if reason == Reason::InvalidArgument {
             INVALID_PARAMS
@@ -292,6 +388,23 @@ impl ErrorBody {
 }
 
 impl Reason {
+    /// Compatibility names still used by the v2 client projections.
+    #[allow(non_upper_case_globals)]
+    pub const ConfigurationInvalid: Self = Self::InvalidSettings;
+    #[allow(non_upper_case_globals)]
+    pub const ProtocolIncompatible: Self = Self::IncompatibleProtocol;
+
+    /// The reason for clients that project the canonical error.
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            Reason::InvalidSettings => "invalid_settings",
+            Reason::IncompatibleProtocol => "incompatible_protocol",
+            Reason::CallerUnavailable => "caller_unavailable",
+            reason => reason.as_str(),
+        }
+    }
+
+    /// The original protocol name used by the v2 daemon and v1 keeper.
     pub fn as_str(self) -> &'static str {
         match self {
             Reason::InvalidArgument => "invalid_argument",
@@ -300,11 +413,13 @@ impl Reason {
             Reason::Ended => "ended",
             Reason::PartialInput => "partial_input",
             Reason::Unavailable => "unavailable",
-            Reason::ProtocolIncompatible => "protocol_incompatible",
+            Reason::IncompatibleProtocol => "protocol_incompatible",
+            Reason::MachineIdConflict => "machine_id_conflict",
+            Reason::SshInteractionRequired => "ssh_interaction_required",
             Reason::CapacityExceeded => "capacity_exceeded",
             Reason::Internal => "internal",
             Reason::Refused => "refused",
-            Reason::ConfigurationInvalid => "configuration_invalid",
+            Reason::InvalidSettings | Reason::CallerUnavailable => "configuration_invalid",
             Reason::Cancelled => "cancelled",
             Reason::WorktreeFailed => "worktree_failed",
             Reason::Upgrading => "upgrading",
@@ -395,6 +510,21 @@ pub fn read_server_message<R: BufRead>(
     reader: &mut R,
     buffer: &mut Vec<u8>,
 ) -> io::Result<Option<ServerMessage>> {
+    read_message(reader, buffer)
+}
+
+/// Reads a request, notification or response on a symmetric machine session.
+pub fn read_machine_message<R: BufRead>(
+    reader: &mut R,
+    buffer: &mut Vec<u8>,
+) -> io::Result<Option<MachineMessage>> {
+    read_message(reader, buffer)
+}
+
+fn read_message<T: DeserializeOwned>(
+    reader: &mut impl BufRead,
+    buffer: &mut Vec<u8>,
+) -> io::Result<Option<T>> {
     match read_line(reader, buffer)? {
         Line::Eof => Ok(None),
         Line::TooLong => Err(io::Error::new(
@@ -424,6 +554,76 @@ pub fn decode_arguments<T: DeserializeOwned>(params: Value) -> Result<T, ErrorBo
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn canonical_reasons_keep_v2_names_and_diagnostic_details() {
+        let mut settings = ErrorBody::new(Reason::InvalidSettings, "this entry is malformed");
+        settings.data.entry = Some("fake".into());
+        let old_settings = json!({
+            "code": -32000, "message": "this entry is malformed",
+            "data": { "reason": "configuration_invalid", "entry": "fake" },
+        });
+        assert_eq!(serde_json::to_value(&settings).unwrap(), old_settings);
+        let decoded: ErrorBody = serde_json::from_value(old_settings).unwrap();
+        assert_eq!(decoded, settings);
+        assert_eq!(decoded.data.reason.canonical_name(), "invalid_settings");
+        assert_eq!(
+            decoded.to_string(),
+            "this entry is malformed (configuration_invalid)"
+        );
+
+        let mut protocol = ErrorBody::new(Reason::IncompatibleProtocol, "different protocol");
+        protocol.data.protocol = Some(ProtocolMismatch {
+            local_build: "current".into(),
+            local_protocol: [2, 2],
+            remote_build: "old".into(),
+            remote_protocol: [1, 1],
+        });
+        let old_protocol = json!({
+            "code": -32000, "message": "different protocol",
+            "data": {
+                "reason": "protocol_incompatible",
+                "protocol": {
+                    "local_build": "current", "local_protocol": [2, 2],
+                    "remote_build": "old", "remote_protocol": [1, 1],
+                },
+            },
+        });
+        assert_eq!(serde_json::to_value(&protocol).unwrap(), old_protocol);
+        let decoded: ErrorBody = serde_json::from_value(old_protocol).unwrap();
+        assert_eq!(decoded, protocol);
+        assert_eq!(
+            decoded.data.reason.canonical_name(),
+            "incompatible_protocol"
+        );
+        assert_eq!(
+            decoded.to_string(),
+            "different protocol (protocol_incompatible)"
+        );
+    }
+
+    #[test]
+    fn a_callerless_tool_server_has_a_distinct_canonical_reason() {
+        let caller = Reason::CallerUnavailable;
+        assert_eq!(caller.canonical_name(), "caller_unavailable");
+        assert_eq!(caller.as_str(), "configuration_invalid");
+        let v2 = serde_json::to_value(caller).unwrap();
+        assert_eq!(v2, json!("configuration_invalid"));
+        // The old name describes invalid settings until the caller context is known.
+        assert_eq!(
+            serde_json::from_value::<Reason>(v2).unwrap(),
+            Reason::InvalidSettings
+        );
+        for (reason, name) in [
+            (Reason::Refused, "refused"),
+            (Reason::Upgrading, "upgrading"),
+            (Reason::NotFound, "not_found"),
+            (Reason::InvalidArgument, "invalid_argument"),
+        ] {
+            assert_eq!(reason.canonical_name(), name);
+            assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));
+        }
+    }
 
     #[test]
     fn server_messages_distinguish_notifications_and_responses() {

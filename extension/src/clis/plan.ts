@@ -176,7 +176,7 @@ export function adjustedEnvironment(entry: CatalogEntry, layered: { readonly [na
 
 /** Where `entry`'s program is for a launch in `cwd`, found with the launch's own environment (CLIS-1.2). */
 export function executableOf(entry: CatalogEntry, env: Environment, cwd: string, platform: NodeJS.Platform): FoundExecutable {
-	return resolveExecutable(entry.path, entry.adapter.command, entry.adapter.setting, env, cwd, platform);
+	return resolveExecutable(entry.path, entry.adapter.command, entry.entry.programSetting, env, cwd, platform);
 }
 
 /** How `entry`'s program `file` starts for a launch in `cwd`: as its adapter's verified launcher has it, else as a program (CLIS-1.2). */
@@ -417,13 +417,13 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		const was = BUILT_IN_ADAPTERS.find(each => each.id === input.builtIn)?.displayName ?? input.builtIn;
 		const now = builtIn === undefined ? 'a program' : BUILT_IN_ADAPTERS.find(each => each.id === builtIn)?.displayName ?? builtIn;
 		throw input.resume
-			? new CliPlanError(`${entry.entry.setting} runs ${now} now, but this conversation is ${was}'s; it cannot be resumed with it`, 'unsupported',
+			? new CliPlanError(`${entry.entry.setting} runs ${now} now, but this session is ${was}'s; it cannot be resumed with it`, 'unsupported',
 				{ kind: 'resume_type_changed', values: [entry.entry.setting, was] })
 			: new CliPlanError(`${entry.entry.setting} runs ${now} now, but this agent ran ${was}; it cannot be restored with it`, 'unsupported',
 				{ kind: 'pin_type_changed', values: [entry.entry.setting, was] });
 	}
 	if (input.resume && (!input.resume.sessionId || input.resume.sessionId.includes('\0') || !adapter.groups.resume)) {
-		throw new CliPlanError(`${adapter.displayName} cannot resume this exact conversation`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
+		throw new CliPlanError(`${adapter.displayName} cannot resume this exact session`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
 	}
 	const sessionId = input.resume?.sessionId ?? (adapter.groups.session && input.sessionFile ? newSessionId() : undefined);
 	const takes = takesThrough(adapter, target.throughCmd, input.cwd, platform);
@@ -506,10 +506,11 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 			...native ? expanded(adapter.groups.prompt!, { ...values, prompt: input.prompt! }) : []];
 		return { args, started, integration };
 	};
+	const { programSetting } = entry.entry;
 	let launch = launchWith(injection);
 	if (target.throughCmd && injection && launch.args.some(unsafeForCmd) && !launchWith(undefined).args.some(unsafeForCmd)) {
 		injection = undefined;
-		tools = { state: 'unavailable', problem: 'cmd', reason: `${found.executable} runs through cmd.exe, which cannot be given the Facade tools' arguments safely; set ${adapter.setting}.command to the CLI's own program or Node entry point` };
+		tools = { state: 'unavailable', problem: 'cmd', reason: `${found.executable} runs through cmd.exe, which cannot be given the Facade tools' arguments safely; set ${programSetting} to the CLI's own program or Node entry point` };
 		launch = launchWith(undefined);
 	}
 	const { args, started, integration } = launch;
@@ -522,16 +523,16 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		// cmd.exe starts in no UNC folder - a network share's, a WSL distribution's \\wsl$ one - but in the Windows directory,
 		// where the CLI would run with the run's permissions: refused before anything starts
 		if (/^[\\/]{2}/.test(input.cwd)) {
-			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot run in the UNC folder ${input.cwd}; set ${adapter.setting}.command to the CLI's own program or Node entry point`, 'unsupported',
-				{ kind: 'cmd_unc_folder', values: [found.executable, input.cwd, adapter.setting] });
+			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot run in the UNC folder ${input.cwd}; set ${programSetting} to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unc_folder', values: [found.executable, input.cwd, programSetting] });
 		}
 		// The program's own path reaches cmd.exe too, quoted only where it holds a space
 		if (unsafeForCmd(target.executable)) {
-			throw new CliPlanError(`${target.executable} runs through cmd.exe, which cannot be given its path safely; set ${adapter.setting}.command to the CLI's own program or Node entry point`, 'unsupported',
-				{ kind: 'cmd_unsafe_path', values: [target.executable, adapter.setting] });
+			throw new CliPlanError(`${target.executable} runs through cmd.exe, which cannot be given its path safely; set ${programSetting} to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unsafe_path', values: [target.executable, programSetting] });
 		}
-		const refused = (arg: string) => new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(arg)} safely; set ${adapter.setting}.command to the CLI's own program or Node entry point`, 'unsupported',
-			{ kind: 'cmd_unsafe', values: [found.executable, shown(arg), adapter.setting] });
+		const refused = (arg: string) => new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(arg)} safely; set ${programSetting} to the CLI's own program or Node entry point`, 'unsupported',
+			{ kind: 'cmd_unsafe', values: [found.executable, shown(arg), programSetting] });
 		// An argument of the adapter's own that cannot pass: no configured argument is to blame, nor would taking one out help
 		const own = launchWith(injection, []).args.find(unsafeForCmd);
 		if (own !== undefined) {
@@ -542,8 +543,8 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		if (configured) {
 			const setting = entry.extraSetting;
 			const character = unsafeCharacterForCmd(configured.value)!;
-			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given ${setting}[${configured.index}] safely, as that argument contains ${character}; set ${adapter.setting}.command to the CLI's own program or Node entry point`, 'unsupported',
-				{ kind: 'cmd_unsafe_setting', values: [found.executable, setting, String(configured.index), character, adapter.setting] });
+			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given ${setting}[${configured.index}] safely, as that argument contains ${character}; set ${programSetting} to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unsafe_setting', values: [found.executable, setting, String(configured.index), character, programSetting] });
 		}
 		const unsafe = args.find(unsafeForCmd);
 		if (unsafe !== undefined) {

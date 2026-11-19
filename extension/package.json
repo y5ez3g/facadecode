@@ -75,8 +75,14 @@
 				"icon": "$(facade-new-agent)"
 			},
 			{
-				"command": "facade.history",
-				"title": "%command.history%",
+				"command": "facade.resumeAgent",
+				"title": "%command.resumeAgent%",
+				"category": "%command.category%",
+				"icon": "$(history)"
+			},
+			{
+				"command": "facade.continueSession",
+				"title": "%command.continueSession%",
 				"category": "%command.category%",
 				"icon": "$(history)"
 			},
@@ -91,8 +97,8 @@
 				"category": "%command.category%"
 			},
 			{
-				"command": "facade.showActiveAgents",
-				"title": "%command.showActiveAgents%",
+				"command": "facade.goToAgent",
+				"title": "%command.goToAgent%",
 				"category": "%command.category%"
 			},
 			{
@@ -101,8 +107,13 @@
 				"category": "%command.category%"
 			},
 			{
-				"command": "facade.closeAgent",
-				"title": "%command.closeAgent%",
+				"command": "facade.stopAgent",
+				"title": "%command.stopAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.dismissAgent",
+				"title": "%command.dismissAgent%",
 				"category": "%command.category%"
 			},
 			{
@@ -176,8 +187,13 @@
 					"group": "navigation@1"
 				},
 				{
-					"command": "facade.history",
-					"when": "view == facade.agents",
+					"command": "facade.resumeAgent",
+					"when": "view == facade.agents && facade.engine == rust",
+					"group": "navigation@2"
+				},
+				{
+					"command": "facade.continueSession",
+					"when": "view == facade.agents && facade.engine != rust",
 					"group": "navigation@2"
 				},
 				{
@@ -218,12 +234,21 @@
 					"group": "2_move@2"
 				},
 				{
-					"command": "facade.closeAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
+					"command": "facade.stopAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && !webviewAgentEnded",
+					"group": "4_close@1"
+				},
+				{
+					"command": "facade.dismissAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewAgentEnded",
 					"group": "4_close@1"
 				}
 			],
 			"commandPalette": [
+				{
+					"command": "facade.resumeAgent",
+					"when": "facade.engine == rust"
+				},
 				{
 					"command": "facade.showAgentLaunch",
 					"when": "facade.engine != rust"
@@ -233,8 +258,12 @@
 					"when": "facade.agentSelected"
 				},
 				{
-					"command": "facade.closeAgent",
-					"when": "facade.agentSelected"
+					"command": "facade.stopAgent",
+					"when": "facade.agentSelected && !facade.agentSelectedEnded"
+				},
+				{
+					"command": "facade.dismissAgent",
+					"when": "facade.agentSelected && facade.agentSelectedEnded"
 				},
 				{
 					"command": "facade.showAgentDetails",

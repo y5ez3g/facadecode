@@ -10,13 +10,15 @@ mod relay;
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use facade_base::daemon::{HelloParams, HelloResult, methods};
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::ErrorBody;
-use facade_base::sockets::{DaemonListener, ServerSocket};
+use facade_base::sockets::{DaemonListener, ServerReader, ServerSocket, ServerWriter};
 use serde_json::Value;
+use tokio::io::BufReader;
 use tokio::sync::{mpsc, watch};
 
 use crate::{Cancel, WindowBinding};
@@ -29,6 +31,12 @@ pub(crate) struct Client {
     pub(crate) window: Option<WindowBinding>,
     /// The agent the client acts for, by ID: the one its hello named, or the one its sessions name.
     pub(crate) agent: Option<String>,
+}
+
+/// An ID shared by local and forwarded watches on this daemon.
+pub(crate) fn next_viewer() -> u64 {
+    static NEXT_VIEWER: AtomicU64 = AtomicU64::new(1);
+    NEXT_VIEWER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A watch the service started: its snapshot, then its changes. The watch ends when the sender of
@@ -63,6 +71,8 @@ pub(crate) trait Service: Send + Sync + 'static {
     type Hold: Send;
     /// Counts a connection as the daemon's work until dropped.
     type Work: Send;
+    /// An authorized machine session, held until its last RPC response is written.
+    type Machine: Send;
 
     /// Answers a hello whose protocol versions and kind the server accepted.
     fn hello(
@@ -70,6 +80,28 @@ pub(crate) trait Service: Send + Sync + 'static {
         hello: HelloParams,
         peer_pid: Option<u32>,
     ) -> impl Future<Output = Result<(HelloResult, Client, Self::Hold), ErrorBody>> + Send;
+
+    /// Authorizes a machine hello after the server has checked its protocol version.
+    fn machine_hello(
+        self: &Arc<Self>,
+        hello: HelloParams,
+        peer_pid: Option<u32>,
+    ) -> impl Future<Output = Result<(HelloResult, Self::Machine), ErrorBody>> + Send;
+
+    /// Authorizes changing this client's RPC connection to a machine session.
+    fn machine_connect(
+        self: &Arc<Self>,
+        client: &Client,
+        args: Value,
+    ) -> impl Future<Output = Result<(Value, Self::Machine), ErrorBody>> + Send;
+
+    /// Runs the authorized machine session over the stream after its RPC response was written.
+    fn serve_machine(
+        self: &Arc<Self>,
+        machine: Self::Machine,
+        read: BufReader<ServerReader>,
+        write: ServerWriter,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     /// Runs `operation` for `client`.
     fn call(

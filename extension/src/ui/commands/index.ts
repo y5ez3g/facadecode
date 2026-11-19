@@ -4,7 +4,7 @@
 
 import * as vscode from 'vscode';
 import type { WindowRef } from '../../base/coreProtocol';
-import type { Agents, ConversationDiscoveryPort, ConversationKey, CliCatalogPort, Event, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, OtherAgent, RetainedConversation, RunId, WorktreePort } from '../../core/ports';
+import type { Agents, ConversationDiscoveryPort, ConversationEntry, ConversationKey, CliCatalogPort, Event, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, OtherAgent, RetainedConversation, RunId, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
@@ -13,7 +13,8 @@ import { PanelView } from '../panel';
 import { pickFilter } from '../pickers/filter';
 import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
-import { resumeAgent } from '../pickers/resume';
+import type { MachineLaunch } from '../pickers/machineLaunch';
+import { pickSession } from '../pickers/resume';
 import { messageOf } from '../../base/errors';
 import { newAgent } from '../pickers/newAgent';
 import { PanelPrefs } from '../order';
@@ -27,10 +28,12 @@ interface RustUi {
 	readonly window: () => WindowRef;
 	readonly ready: () => Promise<unknown>;
 	readonly onDidChangeWindow: vscode.Event<Promise<unknown>>;
+	readonly network: MachineLaunch;
 	otherAgents(): readonly OtherAgent[];
+	queryOtherAgents(): Promise<readonly OtherAgent[]>;
 	readonly onDidChangeOtherAgents: Event<void>;
 	adoptAgent(agent: string): Promise<RunId>;
-	closeOtherAgent(agent: string): ReturnType<Agents['close']>;
+	stopOtherAgent(agent: string): ReturnType<Agents['stop']>;
 	retainedConversations(): readonly RetainedConversation[];
 	resumeRetained(agent: string, options: { readonly reveal: boolean }): Promise<RunId>;
 	worktreeAgents(path: string): number;
@@ -83,26 +86,29 @@ function cardWords(): CardWords {
 		location: value => vscode.l10n.t("Location: {0}", value),
 		path: value => vscode.l10n.t("Path: {0}", value),
 		pinned: vscode.l10n.t("Pinned"),
+		runningOn: machine => vscode.l10n.t("Running on {0}", machine),
+		connectionLost: vscode.l10n.t("Connection lost · reconnecting"),
 		starting: vscode.l10n.t("Starting"),
 		// {0} is the CLI's name, such as Claude Code
 		startingCli: cli => vscode.l10n.t("Starting {0}…", cli),
 		creatingWorktree: vscode.l10n.t("Creating worktree…"),
-		// A card's second line before any message: its agent began a new conversation, or resumed one
-		started: vscode.l10n.t("New conversation started"),
-		resumed: vscode.l10n.t("Conversation resumed"),
+		// A card's opening before any message (PANEL-1.4).
+		started: vscode.l10n.t("New session started"),
+		resumed: vscode.l10n.t("Agent resumed"),
+		continued: vscode.l10n.t("Session continued"),
 		working: vscode.l10n.t("Working"),
 		notWorking: vscode.l10n.t("Idle"),
 		// {0} is why: the failure the agent ended with, or the error its CLI reported
 		error: reason => vscode.l10n.t("Error · {0}", reason),
-		activityUnavailable: vscode.l10n.t("Status unavailable · check terminal"),
+		activityUnavailable: vscode.l10n.t("State unavailable · check terminal"),
 		// Why its activity is unknown: no report yet since its start, none ever, one taken back, a screen not recognized, or a terminal reset
-		activityUnknown: why => why === 'waiting' ? vscode.l10n.t("No initial status · check terminal")
-			: why === 'not_reporting' ? vscode.l10n.t("No status from CLI · check terminal")
-				: why === 'cleared' ? vscode.l10n.t("Status cleared · check terminal")
-					: why === 'screen_unrecognized' ? vscode.l10n.t("Status unrecognized · check terminal")
-						: vscode.l10n.t("Status reset · check terminal"),
+		activityUnknown: why => why === 'waiting' ? vscode.l10n.t("No initial state · check terminal")
+			: why === 'not_reporting' ? vscode.l10n.t("No state from CLI · check terminal")
+				: why === 'cleared' ? vscode.l10n.t("State cleared · check terminal")
+					: why === 'screen_unrecognized' ? vscode.l10n.t("State unrecognized · check terminal")
+						: vscode.l10n.t("State reset · check terminal"),
 		needsAttention: vscode.l10n.t("Attention needed"),
-		toolsConnecting: vscode.l10n.t("Collaboration not connected yet"),
+		toolsConnecting: vscode.l10n.t("Facade tools not connected yet"),
 		needsPermission: vscode.l10n.t("Permission needed"),
 		needsSignIn: vscode.l10n.t("Sign-in needed"),
 		hasQuestion: vscode.l10n.t("Answer needed"),
@@ -117,20 +123,20 @@ function cardWords(): CardWords {
 		// {0} is why its new worktree could not be created, without its closing period
 		worktreeFailed: reason => vscode.l10n.t("Worktree failed · {0}", reason),
 		toolsUnavailable: (problem, file) => problem === 'cmd'
-			? vscode.l10n.t("Collaboration off · replace .cmd with CLI in facade.json")
+			? vscode.l10n.t("Facade tools unavailable · replace .cmd with CLI in facade.json")
 			: problem === 'conflict' && file
 				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
-				? vscode.l10n.t("Collaboration off · move or rename {0}", file)
+				? vscode.l10n.t("Facade tools unavailable · move or rename {0}", file)
 				: problem === 'variable' && file
 					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
-					? vscode.l10n.t("Collaboration off · {0} unreadable", file)
+					? vscode.l10n.t("Facade tools unavailable · {0} unreadable", file)
 					: problem === 'disconnected'
 						// The agent's CLI stopped the Facade tools it had started with, or they ended on their own
-						? vscode.l10n.t("Collaboration stopped · end and resume")
-						: vscode.l10n.t("Collaboration off · file creation failed"),
+						? vscode.l10n.t("Facade tools disconnected")
+						: vscode.l10n.t("Facade tools unavailable · file creation failed"),
 		// {0} the agent that sent it, with its window where that is another; {1} its text
 		saidByAgent: (sender, line) => vscode.l10n.t("Last message from agent {0}: {1}", sender, line),
-		saidByPerson: line => vscode.l10n.t("Your last input: {0}", line),
+		saidByPerson: line => vscode.l10n.t("Last input: {0}", line),
 		saidByFacade: line => vscode.l10n.t("Facade result: {0}", line)
 	};
 }
@@ -160,59 +166,73 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			throw new Error(vscode.l10n.t('Facade cannot do this right now'));
 		}
 	};
+	const sessions = async (kind: 'resume' | 'continue') => {
+		const window = rust?.window();
+		const source = kind === 'resume' ? rust && {
+			kind: 'resume' as const,
+			retained: () => { checkWindow(window); return rust.retainedConversations(); },
+			resume: (id: string) => { checkWindow(window); return rust.resumeRetained(id, { reveal: true }); }
+		} : deps.conversations && {
+			kind: 'continue' as const,
+			conversations: deps.conversations,
+			savedName: deps.savedName,
+			continueSession: (entry: ConversationEntry) => { checkWindow(window); return deps.agents.resume(entry, { reveal: true }); }
+		};
+		if (!source) { return; }
+		// Both pickers show while the window prepares the selected source (UX-1.1).
+		const prepared = (async () => {
+			await (rust ? rust.ready() : deps.ready);
+			await deps.locations.refresh().catch(err => deps.log.event(`Using known working locations: ${messageOf(err)}`));
+			if (source.kind === 'continue') { await deps.agents.refreshConversations(); }
+			checkWindow(window);
+		})();
+		prepared.catch(() => undefined);
+		try {
+			await pickSession({ ...source, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
+				reveal: run => agent.reveal(run), select: run => model.select(run),
+				notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
+				...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
+		} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved sessions: {0}", messageOf(err)), {}); }
+	};
 	const flows = {
-		resume: async () => {
-			if (!deps.conversations) { return; }
-			const window = rust?.window();
-			// The picker shows at once, busy while this window's agents, its locations and the conversations other windows hold are read (UX-1.1)
-			const prepared = (async () => {
-				await (rust ? rust.ready() : deps.ready);
-				await deps.locations.refresh().catch(err => deps.log.event(`Resume uses the known working locations: ${messageOf(err)}`));
-				await deps.agents.refreshConversations();
-				checkWindow(window);
-			})();
-			// Said by the picker, which takes it: never a rejection no one hears where the picker could not be made
-			prepared.catch(() => undefined);
-			try {
-				await resumeAgent({ conversations: deps.conversations, savedName: deps.savedName, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
-					resume: entry => { checkWindow(window); return deps.agents.resume(entry, { reveal: true }); },
-					reveal: run => agent.reveal(run), select: run => model.select(run),
-					notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
-					...rust ? { retained: {
-						list: () => { checkWindow(window); return rust.retainedConversations(); },
-						resume: id => { checkWindow(window); return rust.resumeRetained(id, { reveal: true }); }
-					} } : {},
-					...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
-			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
-		},
 		newAgent: (startAt?: LocationId) => {
 			const window = rust?.window();
 			return newAgent({
 				agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history,
 				select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media,
 				...deps.names ? { names: deps.names } : {}, ...deps.remote ? { remote: deps.remote } : {},
-				...rust ? { worktreeAgents: {
-					count: path => rust.worktreeAgents(path),
-					close: async path => rust.window() === window && rust.closeWorktreeAgents(path)
-				} } : {}
+				...rust ? {
+					worktreeAgents: {
+						count: path => rust.worktreeAgents(path),
+						close: async path => rust.window() === window && rust.closeWorktreeAgents(path)
+					},
+					network: {
+						onDidChange: rust.network.onDidChange,
+						machines: () => rust.window() === window ? rust.network.machines() : undefined,
+						catalog: async machine => { checkWindow(window); return rust.network.catalog(machine); },
+						preflight: async (machine, request) => { checkWindow(window); return rust.network.preflight(machine, request); },
+						launch: (machine, request) => { checkWindow(window); return rust.network.launch(machine, request); }
+					}
+				} : {}
 			}, startAt);
 		},
 		goToAgent: () => {
 			const window = rust?.window();
 			return goToAgent({
 				model, agents: deps.agents, media, reveal: run => agent.reveal(run),
-				copyReference: run => agent.copyReference(run), close: run => agent.close(run), ...deps.icons ? { icons: deps.icons } : {},
+				copyReference: run => agent.copyReference(run), stop: run => agent.stop(run), dismiss: run => agent.dismiss(run), ...deps.icons ? { icons: deps.icons } : {},
 				...rust ? { others: {
 					list: () => rust.window() === window ? rust.otherAgents() : [],
+					query: async () => { checkWindow(window); return rust.queryOtherAgents(); },
 					onDidChange: rust.onDidChangeOtherAgents,
 					open: async id => {
 						try { checkWindow(window); await agent.reveal(await rust.adoptAgent(id)); }
 						catch (err) { deps.notifyError(rust.describeError(err), {}); }
 					},
 					copyReference: facts => rust.window() === window ? agent.copyReference(facts.id, facts) : Promise.resolve(),
-					close: facts => agent.close(facts.id, { facts, stop: () => {
+					stop: facts => agent.stop(facts.id, { facts, stop: () => {
 						checkWindow(window);
-						return rust.closeOtherAgent(facts.id);
+						return rust.stopOtherAgent(facts.id);
 					} })
 				} } : {}
 			});
@@ -223,8 +243,8 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		switch (what) {
 			case 'open':
 				return target === undefined || !deps.agents.get(target) ? 'gone' : await agent.reveal(target) ? undefined : 'failed';
-			case 'resume':
-				await flows.resume();
+			case 'continueSession':
+				await sessions('continue');
 				return undefined;
 			case 'new':
 				// From the filtered empty panel, at the filtered location; from the other empty panel, where New Agent would (PANEL-1.2, LIFECYCLE-1.2)
@@ -262,7 +282,8 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		view,
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
 		deps.execution.onDidActivate(run => model.activated(run)),
-		vscode.commands.registerCommand(COMMANDS.history, () => flows.resume()),
+		...rust ? [vscode.commands.registerCommand(COMMANDS.resumeAgent, () => sessions('resume'))] : [],
+		vscode.commands.registerCommand(COMMANDS.continueSession, () => sessions('continue')),
 		vscode.commands.registerCommand(COMMANDS.newAgent, () => flows.newAgent()),
 		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, deps.locations, deps.log)),
 		// The same, its title button filled while a filter is on (UX-3.2)

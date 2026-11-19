@@ -5,7 +5,7 @@ Usage: facade screen [OPTIONS] <AGENT>
 Print what an agent has shown recently: the last lines of its screen and scrollback as plain text.
 
 Arguments:
-  <AGENT>  Agent ID or name
+  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
 
 Options:
   -n, --lines <N>  Number of lines to print, from 1 to 2,000 [default: 50]

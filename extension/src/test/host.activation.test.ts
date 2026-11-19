@@ -151,7 +151,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		service.sayActivationFailed({ subscriptions: [] } as never, failure);
 		assert.deepStrictEqual(manifest.contributes.commands.map(each => each.command).filter(id => !commands.has(id)), [], 'every contributed command answers');
 		await vscode.commands.executeCommand('facade.newAgent');
-		await vscode.commands.executeCommand('facade.showActiveAgents');
+		await vscode.commands.executeCommand('facade.goToAgent');
 		assert.deepStrictEqual(shown, Array(3).fill({ text: failure.message, items: ['Reload Window'] }));
 	});
 

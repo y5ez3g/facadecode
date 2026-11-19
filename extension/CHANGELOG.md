@@ -8,14 +8,20 @@
 - **Closing a window on the Rust engine leaves its agents running.** Reopen the workspace to return to the same
   processes and screens. On the old engine, agents still stop after 90 seconds for a local window or five minutes for
   a remote one if the workspace stays closed. The old engine remains available until 0.2.0.
-- **End Agent on the Rust engine keeps the record and Pin.** Resume Agent can restore the same agent number after
+- **Stop Agent on the Rust engine keeps the record and Pin.** Resume Agent can restore the same agent number after
   stopping. Reopening the workspace restores eligible Pins by machine and agent number. For session-only Pins from
   the old engine, pin the agent again to enable automatic restoration.
 - **Open the same Rust agent in more than one window.** Go to Agent can open a running agent from another window on the
-  same Facade machine. Both windows show the same process. End Agent closes its card and tab in every connected member
+  network. Both windows show the same process. Stop Agent closes its card and tab in every connected member
   window. Resume Agent can bring back its original number from any member window.
 - **Rust agents can contact you in every connected member window.** A send to `#human` reports which window subscriptions
   received it. Each window shows and dismisses its notification independently.
+- **Start agents on connected Facade machines.** New Agent opens with this window's CLIs. To run an agent on another
+  machine, choose Change Working Location, pick a machine and location, then select one of its CLIs. A remote icon
+  on each remote agent's card shows where it runs. In a terminal, use
+  `facade start --machine <MACHINE> <PROGRAM>`.
+- **Remote-SSH windows join the Facade network automatically.** With Facade core available locally, the window connects
+  its remote workspace to it for as long as the window is open.
 
 ## 0.1.6
 

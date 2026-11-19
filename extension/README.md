@@ -43,8 +43,9 @@ Packages are available for macOS (Intel x64 and Apple silicon), Linux (x64 and A
 The **Facade Code** panel in the Activity Bar shows all agents in your window. Each card displays the agent's name, its CLI, and a status dot, with ⓘ details showing its title, folder, and creator.
 
 - **Start and configure.** Click **New Agent...** to choose a CLI. In the picker, select **Change Name...** to name your session or **Change Working Location...** to pick a folder or create a Git worktree.
-- **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it; open the card's gear menu and choose **End Agent** to end the session.
-- **Pin and resume.** Use **Pin Agent** to keep essential agents at the top of the panel and restore them when the workspace opens again. Use **Resume Agent...** in the panel header to search history and restore past conversations in their original folders.
+- **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it. In the card's gear menu, **Stop Agent** stops the process and **Dismiss Agent** closes an ended card.
+- **Custom keyboard shortcuts.** Replace any binding to `facade.closeAgent` in `keybindings.json` with `facade.stopAgent` for stopping or `facade.dismissAgent` for dismissing an ended card. Replace `facade.history` with `facade.resumeAgent` for the original Rust agent or `facade.continueSession` for CLI history. Replace `facade.showActiveAgents` with `facade.goToAgent`.
+- **Pin and resume.** Use **Pin Agent** to keep essential agents at the top of the panel and restore them when the workspace opens again. Use **Resume Agent...** to restore a Rust agent by its original number. Use **Continue Session...** to start a new agent with a saved session in its original folder.
 
 For details on agent cards, resuming sessions, pinning, git worktrees, and window reloads, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#one-panel-for-every-agent).
 
@@ -84,11 +85,11 @@ Saved changes apply to agents started afterwards; running agents keep their sett
   "yolo": false,
   "clis": {
     // A built-in, changed by its name
-    "codex": { "command": "/opt/homebrew/bin/codex", "model": "my-model" },
+    "codex": { "program": "/opt/homebrew/bin/codex", "model": "my-model" },
     "pi": { "enabled": false },
     // CLIs of your own, by names of your own
     "Codex · work": { "type": "codex", "args": ["--profile", "work"] },
-    "aider": { "type": "custom", "command": "aider", "args": ["--model", "sonnet"] }
+    "aider": { "type": "custom", "program": "aider", "args": ["--model", "sonnet"] }
   }
 }
 ```
@@ -99,7 +100,7 @@ Saved changes apply to agents started afterwards; running agents keep their sett
 | `names` | 140 built-in names | Names suggested at random, excluding names already used in this window. Blank names are filled the same way; an empty or exhausted list uses the agent ID. |
 | `clis.<name>.type` | The built-in's own | `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` for a built-in CLI under settings of its own, or `custom` for any other program. Required for a name of your own. |
 | `clis.<name>.icon` | The type's icon; `facade-pearl` for `custom` | A built-in logo (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`) or one of the 16 `facade-` robots listed in the file. |
-| `clis.<name>.command` | The CLI's command on PATH | The program to start: a name found on the terminal's PATH, or a path. Required for `custom`. |
+| `clis.<name>.program` | The CLI's command on PATH | The program to start: a name found on the terminal's PATH, or a path. Required for `custom`. |
 | `clis.<name>.args` | `[]` | Arguments added to the command line, exactly as written. Facade refuses the options it sets itself, such as approvals, the model and the conversation. |
 | `clis.<name>.env` | `{}` | Environment variables: a string sets one, `null` removes one, and `${env:NAME}` reads one from the editor's environment. |
 | `clis.<name>.model`, `clis.<name>.effort` | The CLI's own | The model and reasoning effort new agents start with, for the CLIs that take them; a start that chooses its own wins. |

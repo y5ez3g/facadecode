@@ -24,9 +24,10 @@ use std::time::Duration;
 
 use facade_base::daemon::KeeperInfo;
 use facade_base::jsonrpc::ErrorBody;
-use facade_base::keeper::{HeldAgent, StartArgs};
+use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs};
 use facade_base::process::ProcessExit;
 use facade_base::programs::Held;
+use facade_base::start::StartCommand;
 use facade_base::terminal::PtyMaster;
 use facade_rules::Rule;
 use tokio::sync::{mpsc, oneshot};
@@ -98,8 +99,7 @@ pub(crate) struct RunRequest<'a> {
 
 /// A run ready for the keeper.
 pub(crate) struct PreparedRun {
-    /// The program, then its arguments.
-    pub(crate) command: Vec<String>,
+    pub(crate) launch: StartCommand<String>,
     pub(crate) env: BTreeMap<String, String>,
     /// The CLI reports its session to its run folder.
     pub(crate) captures: bool,
@@ -111,7 +111,6 @@ pub(crate) struct PreparedRun {
     /// The run's folder and what goes in it.
     pub(crate) files: RunFiles,
     pub(crate) rule: Option<&'static Rule>,
-    pub(crate) cwd: String,
     /// The request's kind: whether the run is the agent's first or a resume.
     pub(crate) kind: RunKind,
 }
@@ -155,7 +154,7 @@ pub(crate) enum FoundKeeper {
     /// A keeper accepted this daemon: its build and the runs it holds.
     Connected {
         build: String,
-        held: Vec<HeldAgent>,
+        held: Vec<KeeperHeldAgent>,
     },
 }
 
@@ -226,11 +225,10 @@ impl Runs {
         rows: u16,
         exits: ExitSink,
     ) -> Result<StartedRun, ErrorBody> {
-        let args = StartArgs {
+        let args = KeeperStartArgs {
             agent: id.to_string(),
-            command: prepared.command.clone(),
+            launch: prepared.launch.clone(),
             env: prepared.env.clone(),
-            path: prepared.cwd.clone(),
             cols,
             rows,
         };
@@ -242,7 +240,7 @@ impl Runs {
             Ok(_) => {
                 let rule = prepared.rule.map(|rule| rule.cli.as_str());
                 self.preparation
-                    .plugin_used(id, rule, Path::new(&prepared.cwd));
+                    .plugin_used(id, rule, Path::new(&prepared.launch.folder));
             }
             Err(_) if prepared.kind == RunKind::Start => self.preparation.remove_folders(id),
             Err(_) => {}
@@ -399,12 +397,12 @@ impl Runs {
     }
 
     /// The keeper protocol range of the keeper this daemon last said hello to.
-    pub(crate) fn keeper_protocol(&self) -> Option<[u32; 2]> {
-        self.link.keeper_protocol()
+    pub(crate) fn keeper_protocol_range(&self) -> Option<[u32; 2]> {
+        self.link.keeper_protocol_range()
     }
 
     /// Recovery: takes back from the startup keeper the terminal of a run it holds.
-    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &KeeperHeldAgent) -> Result<PtyMaster, ErrorBody> {
         self.link.take_back(held).await
     }
 
@@ -413,7 +411,7 @@ impl Runs {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_recovered(
         &self,
-        held: &HeldAgent,
+        held: &KeeperHeldAgent,
         master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
@@ -434,7 +432,7 @@ impl Runs {
     /// stopped where it has none.
     pub(crate) async fn take_keeper_only(
         &self,
-        held: HeldAgent,
+        held: KeeperHeldAgent,
         record: KeeperOnly,
     ) -> Result<(), ErrorBody> {
         self.link.take_keeper_only(held, record).await

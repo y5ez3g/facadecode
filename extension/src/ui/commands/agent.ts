@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { FacadeError, invalid } from '../../core/errors';
 import { labelOf, normalizeName } from '../../core/names';
-import type { Agents, ExecutionPort, HumanPort, RunFacts, RunId } from '../../core/ports';
+import { canDismiss, type Agents, type ExecutionPort, type HumanPort, type RunFacts, type RunId } from '../../core/ports';
 import { referenceOf } from '../../core/reach';
 import { COMMANDS } from '../catalog';
 import { PanelModel } from '../model';
@@ -75,30 +75,44 @@ export class AgentActions {
 	/** Copies `@name #aN`, with no toast: Go to Agent's item button (LIFECYCLE-2.1). */
 	async copyReference(run: RunId, facts = this.deps.agents.get(run)): Promise<void> {
 		if (facts) {
-			await vscode.env.clipboard.writeText(referenceOf(facts));
+			await vscode.env.clipboard.writeText(referenceOf({ name: facts.name, alias: facts.address ?? facts.alias }));
 		}
 	}
 
-	/**
-	 * End Agent (LIFECYCLE-3.1): its card and terminal go at once and its process ends in the background. An actual failure to end it
-	 * goes to the person who asked; an unreachable process is not said to have ended.
-	 */
-	async close(run: RunId, outside?: { readonly facts: RunFacts; readonly stop: () => ReturnType<Agents['close']> }): Promise<void> {
+	/** Stop Agent (LIFECYCLE-3.1) uses the active engine's stop and reports its result to the initiator. */
+	async stop(run: RunId, outside?: { readonly facts: RunFacts; readonly stop: () => ReturnType<Agents['stop']> }): Promise<boolean> {
 		const facts = outside?.facts ?? this.deps.agents.get(run);
 		if (!facts) {
-			return;
+			return false;
 		}
 		try {
-			const outcome = await (outside ? outside.stop() : this.deps.agents.close(run));
+			const outcome = await (outside ? outside.stop() : this.deps.agents.stop(run));
 			if (outcome === 'failed') {
 				if (outside) {
 					throw new Error(vscode.l10n.t('Facade cannot do this right now'));
 				}
-				this.deps.notifyError(vscode.l10n.t("{0}'s card and terminal were closed, but its process could not be terminated.", labelOf(facts)), {});
+				this.deps.notifyError(vscode.l10n.t("{0}'s card and terminal were closed, but its process could not be stopped.", labelOf(facts)), {});
+			} else if (outcome === 'unconfirmed') {
+				this.deps.notifyError(vscode.l10n.t("Could not stop {0}: {1}", labelOf(facts), vscode.l10n.t("Stop unconfirmed · check process")), {});
 			}
+			return outcome === 'terminated' || outcome === 'already_exited' || outcome === 'already_ended';
 		} catch (err) {
 			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(vscode.l10n.t("Could not end {0}: {1}", labelOf(facts), reasonOf(err)), {});
+				this.deps.notifyError(vscode.l10n.t("Could not stop {0}: {1}", labelOf(facts), reasonOf(err)), {});
+			}
+			return false;
+		}
+	}
+
+	/** Dismiss Agent (LIFECYCLE-3.1) closes only the ended pair in this window. */
+	async dismiss(run: RunId): Promise<void> {
+		const facts = this.deps.agents.get(run);
+		if (!facts || !canDismiss(facts)) { return; }
+		try {
+			await this.deps.agents.dismiss(run);
+		} catch (err) {
+			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
+				this.deps.notifyError(vscode.l10n.t("Could not dismiss {0}: {1}", labelOf(facts), reasonOf(err)), {});
 			}
 		}
 	}
@@ -131,7 +145,7 @@ export class AgentActions {
 }
 
 /**
- * The commands about one agent (UX-3.1, 3.2): Go to Agent, Pin and Unpin, Rename, End Agent, and the card's menu - Move Up and
+ * The commands about one agent (UX-3.1, 3.2): Go to Agent, Pin, Unpin, Rename, Stop, Dismiss and the card's menu - Move Up and
  * Move Down among them (PANEL-2.2).
  */
 export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActions, flows: { readonly goToAgent: () => Promise<void> }): vscode.Disposable[] {
@@ -142,11 +156,12 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 		return run === undefined ? undefined : does(run);
 	});
 	return [
-		vscode.commands.registerCommand(COMMANDS.showActiveAgents, () => flows.goToAgent()),
+		vscode.commands.registerCommand(COMMANDS.goToAgent, () => flows.goToAgent()),
 		on(COMMANDS.pinAgent, true, run => actions.pin(run, true)),
 		on(COMMANDS.unpinAgent, true, run => actions.pin(run, false)),
 		on(COMMANDS.renameAgent, true, run => actions.rename(run)),
-		on(COMMANDS.closeAgent, true, run => actions.close(run)),
+		on(COMMANDS.stopAgent, true, async run => { await actions.stop(run); }),
+		on(COMMANDS.dismissAgent, true, run => actions.dismiss(run)),
 		// Notification navigation: the exact run it names, never another (UX-3.2)
 		vscode.commands.registerCommand(COMMANDS.revealAgent, (arg?: unknown) => {
 			if (arg === undefined) {

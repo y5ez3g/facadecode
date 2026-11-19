@@ -5,7 +5,10 @@
 
 use std::collections::BTreeMap;
 
-use facade_base::daemon::{AgentArgs, AgentInspect, HookSession, HookSessionStart, is_session_id};
+use facade_base::daemon::{
+    AgentInspect, AgentSelectorArgs, HookSession, HookSessionStart, is_session_id,
+};
+use facade_base::jsonrpc::Reason;
 use facade_base::process::ProcessState;
 use serde_json::Value;
 
@@ -48,7 +51,10 @@ fn recorded_session(relay: &Relay, cli: &str, agent: &str) -> Option<Option<Stri
     )
     .ok()?;
     let agent = agent.to_string();
-    let info = client.call::<AgentInspect>(AgentArgs { agent }).ok()?.agent;
+    let info = client
+        .call::<AgentInspect>(AgentSelectorArgs { agent })
+        .ok()?
+        .agent;
     let a_run_of_cli = info.cli == cli && !info.guest && info.process == ProcessState::Running;
     a_run_of_cli.then_some(info.session)
 }
@@ -111,7 +117,10 @@ pub(super) fn agent_for_call(relay: &Relay, cli: &str, meta: &Value) -> Result<S
                 "this tool call names no session of {cli}, so Facade cannot tell whose it is; \
                  nothing was done"
             );
-            Err(envelope::failure("configuration_invalid", message))
+            Err(envelope::failure(
+                Reason::CallerUnavailable.canonical_name(),
+                message,
+            ))
         }
     }
 }
@@ -141,7 +150,7 @@ fn join(
             session: session.to_string(),
             cwd: relay.hello.cwd.clone(),
             pid,
-            parent: None,
+            part_of_session: None,
             env,
             status_file: None,
         })
@@ -149,7 +158,7 @@ fn join(
     started.agent_id.ok_or_else(|| {
         let message =
             format!("Facade lists {cli}'s session {session} as no guest; nothing was done");
-        envelope::failure("unavailable", message)
+        envelope::failure(Reason::CallerUnavailable.canonical_name(), message)
     })
 }
 

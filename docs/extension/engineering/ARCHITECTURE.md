@@ -176,16 +176,28 @@ description as it changes, as the window regains focus and as a picker refreshes
 connection's bound window. The extension shares UI surfaces between engines and wires the Rust member search
 and restoration into them when on Rust. Core's errors show in the person's language by their reason, core's own
 words after. The window starts no ptyd, shim or Facade tools of its own,
-keeps no record of its agents, and offers no Show Agent Launch. The window component is the same for both engines: an
+keeps no record of its agents, and offers no Show Agent Command Line. The window component is the same for both engines: an
 old-engine agent's request to a Rust window finds it unavailable.
 
-End Agent calls `agent.stop` for a running agent. End Agent and normal exit record the conversation in `conversations/`
+Stop Agent calls `agent.stop` for a running agent. Stops and exits record the conversation in `conversations/`
 for Resume and leave the agent's record in core (RULES-4.1). Go to Agent uses `agent.adopt` to add the editor's
-logical window to an existing agent. The `agents` snapshot identifies members and verifies Pins by machine ID and
-number. Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN`
+logical window to an existing agent. `agent.list` queries the network for Go to Agent. The `machines` topic gives New
+Agent its targets. `cli.list` and `location.list` read the chosen machine and `agent.start_preflight` checks the
+request before `agent.start`. The `agents` view keys each record by running machine and agent ID. A remote machine's
+synced snapshot replaces that machine's records. A pending, unreachable or missing snapshot keeps its known cards
+and pauses their terminal input. Losing the local core connection marks every remote card disconnected until its
+running machine syncs again. A temporarily ended screen watch retries while its agent remains reachable and its tab
+is open. The replacement watch draws a fresh screen before accepting input. Complete
+local snapshots verify Pins by machine ID and number. Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN`
 (RULES-4.2). The shared workspace file and logical-window presentation keys follow 3.1. A Rust window's terminals
 get `<home>/core/bin` before `PATH` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`
 (CLIS-1.2), so `facade` there reaches the window's agents; an old-engine window's get neither.
+
+For a Rust Remote-SSH window the remote workspace host registers the logical window and supplies its packaged
+`facade machine serve --home-hex`, using its resolved Facade home. The local window component opens a `terminal`
+connection to local core and starts one temporary `machine.connect` with bridge transport. VS Code commands carry
+bounded byte chunks, EOF and stderr across the existing Remote-SSH connection. Closing or reloading a window closes
+its own bridge. The local component uses core's first-connection flag for the notice in EXPERIENCE-2.2.
 
 ## 2 Ownership and recovery
 
@@ -480,7 +492,7 @@ other ptyd is gone ended with it, how is not known. A run whose kept details nam
 its Facade tools not injected. Agents and messages started after an update are numbered past the older build's numbers
 (1.1). Once none of the window's runs is left in such a ptyd, or it holds none as the window finds it, the window lets
 it go and no longer joins it for its runs, so that it can exit once idle. A window's listing of every workspace's runs -
-as it activates, releasing the project files of agents gone everywhere (CLIS-2.2), and as Resume Agent lists what it may
+as it activates, releasing the project files of agents gone everywhere (CLIS-2.2), and as Continue Session lists what it may
 start - asks every other ptyd anew, so that no conversation an agent holds is started twice (LIFECYCLE-3.2). A ptyd of a
 build from before ptyds were named by build exits after five minutes with no live run and no connection, a wait every
 connection to it - a listing's too - starts again. New starts use current settings/protocol, in the window's own ptyd. A

@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use facade_base::daemon::{CliInfo, Overrides, StartArgs, WindowInfo};
+use facade_base::daemon::{AgentStartArgs, CliInfo, Overrides, WindowInfo};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::programs::{on_path, program_of, runnable};
 use facade_base::settings::Settings;
@@ -23,7 +23,7 @@ use crate::{Daemon, blocking_in_place};
 /// The settings file, read for a start or a resume: its problems refuse either.
 pub(crate) fn read_settings() -> Result<Settings, ErrorBody> {
     blocking_in_place(facade_base::settings::read)
-        .map_err(|problems| ErrorBody::new(Reason::ConfigurationInvalid, problems))
+        .map_err(|problems| ErrorBody::new(Reason::InvalidSettings, problems))
 }
 
 /// The settings file's `names`, for an agent named outside a start: a guest, or an agent renamed
@@ -57,13 +57,14 @@ pub(crate) struct Configured {
 /// refused in its tool's words.
 pub(crate) fn configure(
     settings: &Settings,
-    args: &StartArgs,
+    args: &AgentStartArgs,
+    folder: &str,
     by_model: bool,
 ) -> Result<Configured, ErrorBody> {
     let all = entries::read(settings);
-    match entries::find(&all, &args.command[0]) {
+    match entries::find(&all, &args.launch.program) {
         Some(entry) => configure_entry(entry, args, by_model),
-        None if by_model => Err(no_such_cli(&all, args)),
+        None if by_model => Err(no_such_cli(&all, args, folder)),
         None => configure_program(args, by_model),
     }
 }
@@ -72,7 +73,7 @@ pub(crate) fn configure(
 /// being turned off, then a model or effort its CLI takes none of.
 fn configure_entry(
     entry: &Entry,
-    args: &StartArgs,
+    args: &AgentStartArgs,
     by_model: bool,
 ) -> Result<Configured, ErrorBody> {
     let (model, effort) = (args.model.as_deref(), args.effort.as_deref());
@@ -80,7 +81,7 @@ fn configure_entry(
     if let Some(asked) = entry.refused_choice(model, effort) {
         return Err(refused_choice(entry.display_name(), asked, by_model));
     }
-    let own = &args.command[1..];
+    let own = &args.launch.args;
     Ok(Configured {
         cli: entry.name.clone(),
         rule: entry.kind.and_then(|kind| kind.rule()),
@@ -89,7 +90,7 @@ fn configure_entry(
         words: [
             entry.choices(model, effort, own),
             entry.args.clone(),
-            own.to_vec(),
+            own.clone(),
         ]
         .concat(),
         env: entry.environment(&args.env),
@@ -97,8 +98,8 @@ fn configure_entry(
 }
 
 /// A start of the program the first word names, by its path or name: it takes no model or effort.
-fn configure_program(args: &StartArgs, by_model: bool) -> Result<Configured, ErrorBody> {
-    let cli = program_name(&args.command[0]);
+fn configure_program(args: &AgentStartArgs, by_model: bool) -> Result<Configured, ErrorBody> {
+    let cli = program_name(&args.launch.program);
     let asked = [("model", &args.model), ("effort", &args.effort)]
         .into_iter()
         .find_map(|(asked, chosen)| chosen.as_ref().map(|_| asked));
@@ -110,13 +111,13 @@ fn configure_program(args: &StartArgs, by_model: bool) -> Result<Configured, Err
         rule: None,
         entry: None,
         program: None,
-        words: args.command[1..].to_vec(),
+        words: args.launch.args.clone(),
         env: args.env.clone(),
     })
 }
 
 /// An MCP tool's start names a CLI no entry has: say which ones it could name there.
-fn no_such_cli(all: &[Entry], args: &StartArgs) -> ErrorBody {
+fn no_such_cli(all: &[Entry], args: &AgentStartArgs, folder: &str) -> ErrorBody {
     let listed: Vec<&str> = all
         .iter()
         .filter(|entry| entry.listed(&args.env))
@@ -127,9 +128,8 @@ fn no_such_cli(all: &[Entry], args: &StartArgs) -> ErrorBody {
         false => listed.join(", "),
     };
     let message = format!(
-        "No CLI {} is configured at {}; the CLIs there are {listed}.",
-        quoted(&args.command[0]),
-        args.cwd
+        "No CLI {} is configured at {folder}; the CLIs there are {listed}.",
+        quoted(&args.launch.program),
     );
     ErrorBody::new(Reason::NotFound, message)
 }
@@ -152,7 +152,7 @@ impl Configured {
             return Ok(());
         };
         blocking_in_place(|| entry_program(entry, &self.env, cwd))?;
-        let command = entry.command.as_deref();
+        let command = entry.program.as_deref();
         self.program = command.map(|command| program_of(command, &self.env, cwd));
         Ok(())
     }
@@ -208,7 +208,7 @@ fn refused_choice(cli: &str, asked: &str, by_model: bool) -> ErrorBody {
 pub(crate) fn check_entry(entry: &Entry, env: &BTreeMap<String, String>) -> Result<(), ErrorBody> {
     let problems = entry.problems_with(env);
     if !problems.is_empty() {
-        let error = ErrorBody::new(Reason::ConfigurationInvalid, problems.join("; "));
+        let error = ErrorBody::new(Reason::InvalidSettings, problems.join("; "));
         return Err(by_entry(error, entry));
     }
     if entry.enabled {
@@ -226,7 +226,7 @@ pub(crate) fn check_entry(entry: &Entry, env: &BTreeMap<String, String>) -> Resu
 }
 
 /// The program `entry` runs in `folder` with the environment `env` it starts with (CLIS-1.2,
-/// CONFIGURATION-2.2): its `command`, else its type's program on the `PATH`. Else why none can
+/// CONFIGURATION-2.2): its `program`, else its type's program on the `PATH`. Else why none can
 /// run there: `not_found`, in its setting's words, as `list_agents`, a start and a resume all say
 /// it (CONFIGURATION-4.1), or `unavailable` for a folder that is not there.
 pub(crate) fn entry_program(
@@ -239,8 +239,9 @@ pub(crate) fn entry_program(
         let message = format!("the folder {folder} is not available");
         return Err(ErrorBody::new(Reason::Unavailable, message));
     }
-    let (path, setting) = (env_var(env, "PATH"), &entry.setting);
-    let found = match entry.command.as_deref() {
+    let path = env_var(env, "PATH");
+    let setting = entry.program_setting();
+    let found = match entry.program.as_deref() {
         // A path: `~`, relative or absolute, with either separator where the system has two.
         Some(command)
             if command.contains('/')
@@ -251,7 +252,7 @@ pub(crate) fn entry_program(
             match runnable(&file) {
                 true => Ok(file),
                 false => Err(format!(
-                    "{setting}.command is {}, and {} is not a program that can be run",
+                    "{setting} is {}, and {} is not a program that can be run",
                     quoted(command),
                     file.display()
                 )),
@@ -259,7 +260,7 @@ pub(crate) fn entry_program(
         }
         Some(command) => on_path(command, path, at).ok_or_else(|| {
             format!(
-                "{setting}.command is {}, which was not found on the PATH of a terminal in \
+                "{setting} is {}, which was not found on the PATH of a terminal in \
                  {folder}",
                 quoted(command)
             )
@@ -270,7 +271,7 @@ pub(crate) fn entry_program(
             on_path(program, path, at).ok_or_else(|| {
                 format!(
                     "{program} was not found on the PATH of a terminal in {folder}, and \
-                     {setting}.command does not name its location"
+                     {setting} does not name its location"
                 )
             })
         }
@@ -325,7 +326,7 @@ pub(crate) fn resume_entry(
     }
     let words = [entry.choices(None, None, &[]), entry.args.clone()].concat();
     let program = entry
-        .command
+        .program
         .as_deref()
         .map(|command| program_of(command, &env, cwd));
     Ok(Resumed {
@@ -414,6 +415,40 @@ impl Clis {
 }
 
 impl Daemon {
+    /// The CLI choices in this machine's login environment.
+    pub(crate) async fn login_clis(
+        &self,
+    ) -> Result<facade_base::machine::CliListResult, ErrorBody> {
+        let (environment, home) = self.login_environment().await?;
+        let clis = clis_from(&Ok(environment), &home);
+        Ok(facade_base::machine::CliListResult {
+            clis: clis.rows,
+            settings_problem: clis.settings_problem,
+        })
+    }
+
+    pub(crate) async fn login_environment(
+        &self,
+    ) -> Result<(BTreeMap<String, String>, String), ErrorBody> {
+        let env = facade_base::system::login_environment(std::time::Duration::from_secs(3))
+            .await
+            .map_err(|error| {
+                ErrorBody::new(
+                    Reason::Unavailable,
+                    format!("could not read this machine's login environment: {error:#}"),
+                )
+            })?;
+        let home = facade_base::system::home_folder_in(&env)
+            .and_then(|path| path.into_os_string().into_string().ok())
+            .ok_or_else(|| {
+                ErrorBody::new(
+                    Reason::Unavailable,
+                    "this machine's login environment has no user home folder",
+                )
+            })?;
+        Ok((env, home))
+    }
+
     /// Shows in each of `windows` the CLIs a start by `viewer` can run there, as the settings file
     /// and the programs are now: an agent's from its environment and folder, the same in every
     /// window; an editor's from each window's own `env` and first folder, and none in a window that
@@ -466,7 +501,7 @@ fn clis_from(environment: &Result<BTreeMap<String, String>, ErrorBody>, folder: 
             let checked = cli_problem(entry, environment, folder)?;
             // A built-in CLI whose own program is not found where it would start.
             let not_installed = entry.built_in
-                && entry.command.is_none()
+                && entry.program.is_none()
                 && checked
                     .as_ref()
                     .is_err_and(|error| error.data.reason == Reason::NotFound);
@@ -514,7 +549,7 @@ fn cli_problem(
     let problems = entry.problems_with(env);
     if !problems.is_empty() {
         let message = problems.join("; ");
-        return Some(Err(ErrorBody::new(Reason::ConfigurationInvalid, message)));
+        return Some(Err(ErrorBody::new(Reason::InvalidSettings, message)));
     }
     let program = blocking_in_place(|| entry_program(entry, &entry.environment(env), folder));
     Some(program.map(|_| ()))

@@ -462,7 +462,7 @@ export interface RunMeta {
 	readonly titleSource?: 'conversation';
 	/** The conversation store its launch used, where its titles are read (CLIS-2.4). */
 	readonly titleStore?: string;
-	/** Whether it resumed a conversation rather than beginning one (PANEL-1.4), kept across a reload. */
+	/** The old engine's persisted flag for a saved session started in a new run (PANEL-1.4). */
 	readonly resumed?: true;
 	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4). */
 	readonly said?: string;
@@ -518,11 +518,12 @@ export interface ConversationEntry {
 /** A retained core agent offered by the Rust Resume picker under its original number (LIFECYCLE-3.2). */
 export interface RetainedConversation {
 	readonly agent: string;
+	readonly alias: string;
 	readonly name: string;
 	readonly entry: ConversationEntry;
 }
 
-/** A Resume picker session: batches of 100, recent first, with metadata read once and reused (LIFECYCLE-3.2). */
+/** A Continue Session history, read in batches of 100 with metadata reused (LIFECYCLE-3.2). */
 export interface ConversationPager extends Disposable {
 	/** The next batch, or `done` once every relevant store is exhausted; never silently stops at a scan limit. */
 	next(): Promise<{ readonly entries: readonly ConversationEntry[]; readonly done: boolean }>;
@@ -642,7 +643,7 @@ export interface WorktreePort {
 // ---------------------------------------------------------------------------------------------------------------------------
 // Runs as the core records them (RULES-2.2, 3.1)
 
-/** Internal lifecycle (RULES-3.1); explicit close removes the run from the UI at once, whatever this says. */
+/** Internal lifecycle (RULES-3.1). */
 export type Lifecycle = 'starting' | 'running' | 'ended';
 
 /** The visible startup stage of an accepted launch (LIFECYCLE-1.5). */
@@ -660,6 +661,10 @@ export interface RunError {
 }
 
 export interface RunFacts {
+	/** The running machine's display name when its ID differs from the editor window's. */
+	readonly remoteMachine?: string;
+	/** The copyable, machine-qualified core reference. */
+	readonly address?: string;
 	readonly sessionId?: string;
 	readonly resumable?: boolean;
 	/**
@@ -691,6 +696,8 @@ export interface RunFacts {
 	readonly yolo: boolean;
 	readonly createdAt: number;
 	readonly lifecycle: Lifecycle;
+	/** The card looks ended, but the latest start, resume or exit is still unconfirmed. */
+	readonly endUnconfirmed?: true;
 	readonly phase: Phase;
 	readonly pid?: number;
 	readonly startedAt?: number;
@@ -726,11 +733,8 @@ export interface RunFacts {
 	 * while it runs and after a reattachment, whatever its CLI's settings say since (CLIS-2.4).
 	 */
 	readonly titleStore?: string;
-	/**
-	 * It resumed a conversation by its ID - Resume Agent's, or a restored Pin's - rather than beginning a new one: its card's second line
-	 * says so before any message (PANEL-1.4).
-	 */
-	readonly resumed?: true;
+	/** A known opening. Resume reuses its agent number. Continue starts another agent from a saved session (PANEL-1.4). */
+	readonly sessionOpening?: 'started' | 'resumed' | 'continued';
 	/**
 	 * The last message sent to it (PANEL-1.4): what its CLI took from its input after the person's Enter, or a message Facade
 	 * delivered. Its card's second line says it from then on.
@@ -816,7 +820,7 @@ export interface WindowLifetimePort {
 }
 
 /** Request-bearing run metadata can remain without a visible pair until its request ID expires (MCP-1.1). */
-export type RetainedRun = RunFacts & { readonly requestOnly?: true };
+export type RetainedRun = Omit<RunFacts, 'sessionOpening'> & { readonly resumed?: true; readonly requestOnly?: true };
 
 /** Durable run metadata: failed launches retained red, or request-bearing records without a pair. */
 export interface RetainedStore {
@@ -887,12 +891,21 @@ export type ResumeResult = RunId | { readonly running: RunId | 'elsewhere' };
 /** An agent a Rust window can adopt via Go to Agent (LIFECYCLE-2.3). */
 export interface OtherAgent {
 	readonly facts: RunFacts;
-	readonly windows: readonly { readonly label: string; readonly connected: boolean }[];
+	readonly windows: readonly { readonly label: string; readonly connected?: boolean }[];
 }
+
+/** Whether the card can offer Dismiss Agent (LIFECYCLE-3.1). */
+export function canDismiss(facts: RunFacts): boolean {
+	return facts.lifecycle === 'ended' && !facts.endUnconfirmed;
+}
+
+/** The actual cleanup outcome, shared by editor Stop and existing close flows. */
+export type AgentCloseResult = CleanupResult | 'already_ended' | 'not_started';
 
 export interface Agents {
 	/** Whether this window still owns its workspace's agents: once another window took them over, none is this window's (RULES-4.1). */
 	owned?(): boolean;
+	/** Continues a history entry under a new number, or finds the run already holding the session (LIFECYCLE-3.3). */
 	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): ResumeResult | Promise<ResumeResult>;
 	holding(key: ConversationKey): RunId | 'elsewhere' | undefined;
 	refreshConversations(): Promise<void>;
@@ -916,8 +929,12 @@ export interface Agents {
 	creationPending?(run: RunId): boolean;
 	/** Its post-start creation prompt was delivered or given up: its input is held for it no longer (RULES-1.10). */
 	creationSettled?(run: RunId): void;
-	/** End Agent, the single action ending for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
-	close(run: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<CleanupResult | 'already_ended' | 'not_started'>;
+	/** Stop Agent rechecks the run before stopping. An ended pair remains available to dismiss. */
+	stop(run: RunId): Promise<AgentCloseResult>;
+	/** Dismiss Agent closes a confirmed ended pair in this window (LIFECYCLE-3.1). */
+	dismiss(run: RunId): Promise<void>;
+	/** The close and cleanup used by the existing MCP and worktree flows. */
+	close(run: RunId, options?: { readonly forWorktreeDeletion: true }): Promise<AgentCloseResult>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */
 	rename(run: RunId, name: string): void;
 	list(): readonly RunFacts[];

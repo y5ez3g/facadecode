@@ -41,7 +41,7 @@ let restoring = savedBrowsing();
 const DOTS: readonly unknown[] = ['working', 'error', 'none'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
 
-const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean }, { pin: isBoolean, unpin: isBoolean });
+const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean }, { dismiss: value => value === true, pin: isBoolean, unpin: isBoolean });
 const isFile: Check = value => isString(value) && /^[\w.-]+$/.test(value as string);
 const isAvatar: Check = value => isShaped(value, { file: isFile }, { eyes: isFile });
 const PLACE_KINDS: readonly unknown[] = ['repo', 'worktree', 'folder'];
@@ -54,7 +54,7 @@ const isDetails: Check = value => isShaped(value, { location: isFact(['location'
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString, alias: isString,
 	dot: value => DOTS.includes(value), stateText: isString, line: isString, details: isDetails, label: isString, menu: isMenu
-}, { avatar: isAvatar, startedAt: isNumber, pinned: isBoolean, repeated: value => value === true });
+}, { avatar: isAvatar, startedAt: isNumber, pinned: isBoolean, runningOn: isString, repeated: value => value === true });
 const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
@@ -384,7 +384,7 @@ function emptyParts(): readonly EmptyPart[] {
 			return [{ kind: 'text', text: strings.noFolder }, { kind: 'button', text: strings.openFolder, run: () => act('openFolder') }];
 		case 'noAgents':
 			return [{ kind: 'text', text: strings.noAgents }, { kind: 'button', text: strings.newAgent, run: () => act('new') },
-				...(strings.resumeAgent ? [{ kind: 'button', text: strings.resumeAgent, run: () => act('resume'), secondary: true } as const] : [])];
+				...(strings.continueSession ? [{ kind: 'button', text: strings.continueSession, run: () => act('continueSession'), secondary: true } as const] : [])];
 		case 'noMatch':
 			return [
 				// A function, not the label itself: a folder or branch name may hold `$&` or `$'`, which a replacement string would expand
@@ -732,15 +732,17 @@ function update(entry: Drawn, card: Card): void {
 		entry.dot.className = `dot ${card.dot}`;
 	}
 	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3)
-	const place = JSON.stringify([card.pinned, card.repeated && card.alias]);
+	const place = JSON.stringify([card.pinned, card.runningOn, card.repeated && card.alias]);
 	if (place !== entry.place) {
 		entry.place = place;
-		entry.top.replaceChildren(entry.name, ...card.repeated ? [el('span', 'short-id', card.alias)] : [], ...card.pinned ? [pin()] : [], entry.actions);
+		const status = card.runningOn ? remoteStatus(card.runningOn) : card.pinned ? pin() : undefined;
+		entry.top.replaceChildren(entry.name, ...card.repeated ? [el('span', 'short-id', card.alias)] : [], ...status ? [status] : [], entry.actions);
 	}
 	// The Pin button where the card can be pinned or unpinned, filled where it is pinned as its passive Pin is (PANEL-1.3)
 	const pinnable = card.menu.pin === true || card.menu.unpin === true;
 	element.classList.toggle('pinnable', pinnable);
 	element.classList.toggle('pinned', card.pinned === true);
+	element.classList.toggle('remote-agent', card.runningOn !== undefined);
 	entry.pinButton.hidden = !pinnable;
 	const pinLook = card.pinned ? 'filled' : 'outline';
 	if (entry.pinButton.dataset.look !== pinLook) {
@@ -800,6 +802,18 @@ function pin(): HTMLElement {
 	const element = el('span', 'pin');
 	element.setAttribute('aria-hidden', 'true');
 	element.append(pinIcon(true));
+	return element;
+}
+
+// VS Code codicon `globe` (PANEL-1.3). The card's accessible label includes the same text as this status tooltip.
+const GLOBE_PATH = 'M8 1C4.141 1 1 4.141 1 8C1 11.859 4.141 15 8 15C11.859 15 15 11.859 15 8C15 4.141 11.859 1 8 1ZM8 14C7.422 14 6.686 12.906 6.288 11H9.713C9.315 12.906 8.579 14 8.001 14H8ZM6.121 10C6.044 9.392 6 8.723 6 8C6 7.277 6.044 6.608 6.121 6H9.878C9.955 6.608 9.999 7.277 9.999 8C9.999 8.723 9.955 9.392 9.878 10H6.121ZM2 8C2 7.299 2.121 6.626 2.343 6H5.121C5.041 6.656 5 7.332 5 8C5 8.668 5.041 9.344 5.121 10H2.343C2.121 9.374 2 8.701 2 8ZM8 2C8.578 2 9.314 3.094 9.712 5H6.287C6.685 3.094 7.422 2 8 2ZM10.879 6H13.657C13.879 6.626 14 7.299 14 8C14 8.701 13.879 9.374 13.657 10H10.879C10.959 9.344 11 8.668 11 8C11 7.332 10.959 6.656 10.879 6ZM13.195 5H10.722C10.516 3.938 10.199 2.98 9.775 2.268C11.228 2.719 12.446 3.707 13.195 5ZM6.226 2.268C5.802 2.98 5.484 3.938 5.279 5H2.806C3.556 3.707 4.774 2.718 6.226 2.268ZM2.805 11H5.278C5.484 12.062 5.801 13.02 6.225 13.732C4.772 13.281 3.554 12.293 2.805 11ZM9.774 13.732C10.198 13.02 10.516 12.062 10.721 11H13.194C12.444 12.293 11.226 13.282 9.774 13.732Z';
+
+function remoteStatus(title: string): HTMLElement {
+	const element = el('span', 'remote-status');
+	element.title = title;
+	element.setAttribute('aria-hidden', 'true');
+	element.append(icon('remote-icon', [['path', { d: GLOBE_PATH }]]));
+	element.addEventListener('click', event => event.stopPropagation());
 	return element;
 }
 
@@ -1265,6 +1279,7 @@ function contextOf(card: Card): string {
 	return JSON.stringify({
 		webviewSection: 'agent',
 		run_id: card.runId,
+		...(menu.dismiss ? { webviewAgentEnded: true } : {}),
 		...(menu.moveUp ? { webviewMoveUp: true } : {}),
 		...(menu.moveDown ? { webviewMoveDown: true } : {}),
 		preventDefaultContextMenuItems: true

@@ -10,7 +10,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentInfo } from '../../base/coreProtocol';
+import type { AgentInfo, Said } from '../../base/coreProtocol';
 import type { Pin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
 import { normalizeDriveLetter, until, windowsInCore } from './editors';
@@ -18,7 +18,10 @@ import { normalizeDriveLetter, until, windowsInCore } from './editors';
 type Card = PanelState['cards'][number];
 type SavedPin = Pin & { readonly agent?: string; readonly home?: string; readonly machine_id?: string };
 
-export type ListedAgent = Pick<AgentInfo, 'agent_id' | 'machine_id' | 'windows' | 'cwd' | 'process' | 'pid' | 'session' | 'state_detail'>;
+export type ListedAgent = Omit<AgentInfo, 'cwd' | 'said'> & {
+	readonly folder: string;
+	readonly last_input?: Said;
+};
 
 export interface RunningAgent {
 	readonly id: string;
@@ -65,7 +68,7 @@ export async function pickCard(command: string): Promise<Card> {
 }
 
 export const newCard = () => pickCard('facade.newAgent');
-export const resumeCard = () => pickCard('facade.history');
+export const resumeCard = () => pickCard('facade.resumeAgent');
 
 export function aliasOf(card: Card): string {
 	assert.match(card.alias, /^#a\d+$/u, 'the card shows its agent number');
@@ -93,7 +96,7 @@ export function facadeAs(agent: string | undefined, ...args: string[]): string {
 }
 
 export function listed(): ListedAgent[] {
-	return JSON.parse(facade('list', '--json')) as ListedAgent[];
+	return (JSON.parse(facade('list', '--json')) as { readonly agents: ListedAgent[] }).agents;
 }
 
 function windowOf(id: string): string {
@@ -136,7 +139,7 @@ export async function running(id: string): Promise<RunningAgent> {
 		const agent = listed().find(each => each.agent_id === id);
 		if (!agent?.pid || !agent.session || agent.process !== 'running') { return undefined; }
 		process.kill(agent.pid, 0);
-		return { id, pid: agent.pid, session: agent.session, cwd: agent.cwd };
+		return { id, pid: agent.pid, session: agent.session, cwd: agent.folder };
 	});
 }
 
@@ -167,10 +170,10 @@ async function checkLive(before: RunningAgent): Promise<void> {
 }
 
 export async function stop(card: Card): Promise<void> {
-	await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+	await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	await until(`#${card.alias.slice(1)} to stop and its card to close`, async () => {
 		const agent = listed().find(each => `#${each.agent_id}` === card.alias);
-		assert.ok(agent, `End Agent keeps ${card.alias}'s record`);
+		assert.ok(agent, `Stop Agent keeps ${card.alias}'s record`);
 		return agent.process === 'ended' && !(await state()).cards.some(each => each.alias === card.alias) && !hasAgentTab(card) || undefined;
 	});
 }

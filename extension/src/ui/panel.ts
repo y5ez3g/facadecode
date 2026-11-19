@@ -43,7 +43,7 @@ const isFlag: Check = value => typeof value === 'boolean';
 const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
-	resume: { target: false },
+	continueSession: { target: false },
 	clearFilter: { target: false },
 	openFolder: { target: false },
 	// F2 on a card: the host opens the Input Box and validates the name (PANEL-3.1)
@@ -319,7 +319,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const strings: Strings = {
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
-			resumeAgent: vscode.l10n.t("Resume Agent"),
+			continueSession: vscode.l10n.t("Continue Session"),
 			clearFilter: vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
 			noAgents: vscode.l10n.t("Start an agent in this workspace."),

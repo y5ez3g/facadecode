@@ -16,7 +16,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use facade_base::daemon::{
-    CLOSING_TIME, DAEMON_PROTOCOL_VERSION, DRAIN_TIME, QUIET_TIME, UpgradeArgs, UpgradeResult,
+    CLOSING_TIME, DAEMON_PROTOCOL_VERSION, DRAIN_TIME, DaemonUpgradeArgs, DaemonUpgradeResult,
+    QUIET_TIME,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::keeper::shared_version;
@@ -66,9 +67,9 @@ impl Lifecycle {
     /// way; a second request meanwhile gets the first one's answer.
     pub(crate) async fn take_over(
         self: &Arc<Self>,
-        args: UpgradeArgs,
+        args: DaemonUpgradeArgs,
         activity: Arc<impl LifecycleActivity>,
-    ) -> Result<UpgradeResult, ErrorBody> {
+    ) -> Result<DaemonUpgradeResult, ErrorBody> {
         let mut under_way = self.takeover.lock().await;
         if let Some(answer) = under_way.as_ref() {
             return Ok(answer.clone());
@@ -84,9 +85,9 @@ impl Lifecycle {
     /// Checks the build and the protocols, installs the build and points the launchers at it.
     /// A step that fails leaves the running Facade as it was.
     async fn prepare_takeover(
-        args: &UpgradeArgs,
+        args: &DaemonUpgradeArgs,
         activity: &impl LifecycleActivity,
-    ) -> Result<UpgradeResult, ErrorBody> {
+    ) -> Result<DaemonUpgradeResult, ErrorBody> {
         let ours = facade_base::build_id();
         if !facade_base::takes_over(&args.build, &ours) {
             let same_version = facade_base::version_of(&args.build).is_some()
@@ -102,10 +103,10 @@ impl Lifecycle {
             };
             return Err(ErrorBody::refused(why));
         }
-        let [low, high] = args.daemon_protocol;
+        let [low, high] = args.daemon_protocol_range;
         if !(low..=high).contains(&DAEMON_PROTOCOL_VERSION) {
             return Err(ErrorBody::new(
-                Reason::ProtocolIncompatible,
+                Reason::IncompatibleProtocol,
                 format!(
                     "{} speaks daemon protocol {low} to {high}, and this Facade, {ours}, speaks \
                      {DAEMON_PROTOCOL_VERSION}: stop the running Facade before switching builds",
@@ -116,12 +117,12 @@ impl Lifecycle {
         let running = activity.running_count();
         // The keeper stays while it holds CLIs, so the new build must speak its protocol.
         if running > 0
-            && let Some(keeper) = activity.keeper_protocol()
-            && shared_version(args.keeper_protocol, keeper).is_none()
+            && let Some(keeper) = activity.keeper_protocol_range()
+            && shared_version(args.keeper_protocol_range, keeper).is_none()
         {
-            let [low, high] = args.keeper_protocol;
+            let [low, high] = args.keeper_protocol_range;
             return Err(ErrorBody::new(
-                Reason::ProtocolIncompatible,
+                Reason::IncompatibleProtocol,
                 format!(
                     "{} speaks keeper protocol {low} to {high}, and the running keeper speaks {} \
                      to {}: this new build needs every agent closed first; close them and try \
@@ -155,9 +156,9 @@ impl Lifecycle {
                 facade_base::daemon::agents_word(running)
             ),
         );
-        Ok(UpgradeResult {
+        Ok(DaemonUpgradeResult {
             from: ours,
-            agents: running,
+            agent_count: running,
         })
     }
 

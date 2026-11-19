@@ -48,7 +48,15 @@ export interface LaunchDescription {
 	/** Configuration errors, each naming its setting path; with any, no plan is shown (CLIS-4.1). */
 	readonly problems: readonly CliProblem[];
 	/** The program found, and how; else why none was; none looked for while its configuration has errors, so that none is invented. */
-	readonly program: { readonly file: string; readonly configured: string; readonly script?: string; readonly throughCmd: boolean } | { readonly missing: string; readonly said: CliSaid } | { readonly unresolved: true };
+	readonly program:
+		| {
+			readonly file: string;
+			readonly configured?: { readonly value: string; readonly setting: string };
+			readonly script?: string;
+			readonly throughCmd: boolean;
+		}
+		| { readonly missing: string; readonly said: CliSaid }
+		| { readonly unresolved: true };
 	readonly cwd: string;
 	/** Where its environment comes from, lowest first, and what the configured layers set or remove, secrets redacted. */
 	readonly environment: {
@@ -126,7 +134,7 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 		...Object.keys(unadjusted).filter(name => !Object.hasOwn(env, name)).map(name => ({ source: 'adapter' as const, name, value: null })),
 		...Object.entries(env).filter(([name, value]) => unadjusted[name] !== value).map(([name, value]) => ({ source: 'adapter' as const, name, value: redacted(value, name) as string }))
 	];
-	// While its configuration has errors no program is looked for: a wrong `command` is never PATH's command (CLIS-1.2)
+	// While its configuration has errors no program is looked for: a wrong `program` is never PATH's command (CLIS-1.2)
 	const problems = configurationProblems(entry, destination);
 	const executable = problems.length ? undefined : executableOf(entry, env, cwd, platform);
 	let program: LaunchDescription['program'];
@@ -136,7 +144,12 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 		program = { missing: redactedText(executable.problem), said: safeSaid(executable.said) };
 	} else {
 		const target = targetOf(entry, executable.executable, env, platform, cwd);
-		program = { file: target.executable, configured: entry.path, ...target.args.length ? { script: target.args.join(' ') } : {}, throughCmd: target.throughCmd };
+		program = {
+			file: target.executable,
+			...entry.path ? { configured: { value: entry.path, setting: entry.entry.programSetting } } : {},
+			...target.args.length ? { script: target.args.join(' ') } : {},
+			throughCmd: target.throughCmd
+		};
 	}
 	let args: readonly string[] | undefined;
 	let runSettings: LaunchDescription['runSettings'];

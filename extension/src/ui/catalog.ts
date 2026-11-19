@@ -10,12 +10,14 @@ export const PANEL_VIEW = 'facade.agents';
 /** The public commands of UX-3.1 and the context-only ones of UX-3.2. */
 export const COMMANDS = {
 	newAgent: 'facade.newAgent',
-	history: 'facade.history',
+	resumeAgent: 'facade.resumeAgent',
+	continueSession: 'facade.continueSession',
 	pinAgent: 'facade.pinAgent',
 	unpinAgent: 'facade.unpinAgent',
-	showActiveAgents: 'facade.showActiveAgents',
+	goToAgent: 'facade.goToAgent',
 	renameAgent: 'facade.renameAgent',
-	closeAgent: 'facade.closeAgent',
+	stopAgent: 'facade.stopAgent',
+	dismissAgent: 'facade.dismissAgent',
 	/** The selected card's details, for the keyboard (PANEL-1.5, UX-2.3). */
 	showAgentDetails: 'facade.showAgentDetails',
 	filter: 'facade.filter',

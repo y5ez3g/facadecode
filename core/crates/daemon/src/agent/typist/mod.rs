@@ -1889,7 +1889,7 @@ mod tests {
         None,
         TextWritten::Full,
         Some(true),
-        Some(DeliveredVia::Terminal),
+        Some(DeliveredVia::TypedIntoInput),
     );
     /// Pasted, and what became of it not known.
     const NOT_KNOWN: Became = (
@@ -2107,7 +2107,7 @@ mod tests {
         assert!(terminal.write_all().is_empty());
         assert_eq!(
             delivered_via(&post, number),
-            Some(DeliveredVia::Read),
+            Some(DeliveredVia::ReadByRecipient),
             "its read answered its sender"
         );
         assert!(!typist.busy() && typist.held_bytes() == 0);
@@ -2127,7 +2127,10 @@ mod tests {
                 .write
                 .is_empty()
         );
-        assert_eq!(delivered_via(&post, number), Some(DeliveredVia::Read));
+        assert_eq!(
+            delivered_via(&post, number),
+            Some(DeliveredVia::ReadByRecipient)
+        );
         assert!(!typist.busy() && typist.held_bytes() == 0);
     }
 
@@ -2906,7 +2909,7 @@ mod tests {
         assert_eq!(became(&post, first_number), TYPED);
         assert_eq!(
             delivered_via(&post, second_number),
-            Some(DeliveredVia::Read),
+            Some(DeliveredVia::ReadByRecipient),
             "the read's delivery stays"
         );
         terminal.step(&mut typist, now, ANY);

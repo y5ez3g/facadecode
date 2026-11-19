@@ -268,10 +268,10 @@ fn an_editor_window_lists_its_folders_and_the_checkouts_of_their_repositories() 
     );
 }
 
-/// A disconnected window without a workspace can rebind until recovery. Recovery keeps windows
-/// referenced by an agent record as a member or as its location source.
+/// Recovery keeps every disconnected window without a workspace, since an agent on another
+/// machine can reference one that has no references in this daemon's store.
 #[test]
-fn recovery_removes_only_unreferenced_windows_without_a_workspace() {
+fn recovery_keeps_disconnected_windows_without_a_workspace() {
     let home = TestHome::new("windowprune");
     let empty = window("win-unused", None, &[]);
     let (unused_wire, unused) = ide_binding(&home, &empty);
@@ -316,11 +316,8 @@ fn recovery_removes_only_unreferenced_windows_without_a_workspace() {
     drop((reloaded, terminal));
     home.wait_for_idle_exit();
 
-    assert!(
-        listed(&home, &unused.window_id).is_none(),
-        "recovery removes the unreferenced window"
-    );
     for (reference, label) in [
+        (&unused, "win-unused window"),
         (&member, "win-member window"),
         (&source, "win-source window"),
     ] {
@@ -482,7 +479,7 @@ fn two_editors_share_a_running_agent_after_adoption() {
     );
     for wire in [&mut first, &mut second] {
         let reply = wire.request("watch", json!({ "topic": "agents" }));
-        let record = reply["result"]["snapshot"]
+        let record = reply["result"]["snapshot"]["agents"]
             .as_array()
             .unwrap()
             .iter()
@@ -586,6 +583,29 @@ fn messages_to_the_person_report_each_member_windows_delivery() {
         json!([{ "window": right, "reason": "window_disconnected" }]),
         "{partial}"
     );
+    let mut mcp = McpTestClient::open(&home, &id);
+    let partial = mcp.call(
+        "send_message",
+        json!({ "to": "#human", "text": "one window took the MCP message" }),
+    );
+    let message_id = partial["data"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{partial}"));
+    let machine = facade_base::address::exact_machine_selector(&left.machine_id);
+    assert_eq!(
+        partial,
+        json!({
+            "status": "success",
+            "data": {
+                "id": message_id, "address": format!("{message_id}@{machine}"),
+                "delivery": "delivered_to_windows",
+                "window_delivery": [
+                    {"window": left.window_id, "state": "delivered"},
+                    {"window": right.window_id, "state": "not_delivered", "reason": "window_disconnected"},
+                ],
+            },
+        })
+    );
     let command = home
         .command(&test_binaries().facade)
         .env("FACADE_AGENT", &id)
@@ -626,11 +646,30 @@ fn messages_to_the_person_report_each_member_windows_delivery() {
             "{refused}"
         );
     }
+    let refused = mcp.call(
+        "send_message",
+        json!({ "to": "#human", "text": "no window can take the MCP message" }),
+    );
+    assert_eq!(refused["status"], "failure", "{refused}");
+    assert_eq!(refused["reason"], "unavailable", "{refused}");
+    let rows = refused["data"]["window_delivery"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{refused}");
+    for window in [&left, &right] {
+        assert!(
+            rows.contains(&json!({
+                "window": window.window_id,
+                "state": "not_delivered",
+                "reason": "window_disconnected"
+            })),
+            "{refused}"
+        );
+    }
+    assert_eq!(refused["data"], json!({ "window_delivery": rows }));
     let kept: i64 = rusqlite::Connection::open(home.path.join("core/facade.db"))
         .unwrap()
         .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(kept, 3, "only the delivered messages were saved");
+    assert_eq!(kept, 4, "only the delivered messages were saved");
 
     let (mut late, _) = ide_binding(&home, &window("win-3", Some("three"), folders));
     adopt(&mut late, &id);
@@ -644,11 +683,29 @@ fn starts_keep_members_and_location_sources_separate() {
     let home = TestHome::new("windowstart");
     let repo = base(&home).join("app");
     repository(&repo);
+    git(&repo, &["tag", "review-base"]);
+    std::fs::write(repo.join("head-only"), "the current commit").unwrap();
+    git(&repo, &["add", "head-only"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Facade",
+            "-c",
+            "user.email=facade@example.invalid",
+            "commit",
+            "-qm",
+            "after review-base",
+        ],
+    );
     std::fs::create_dir_all(base(&home).join("app.worktrees/review")).unwrap();
+    let notes = base(&home).join("notes");
+    std::fs::create_dir(&notes).unwrap();
+    let notes = real(&notes);
     let folder = real(&repo);
     let (mut wire, source) = ide_binding(
         &home,
-        &window("win-1", Some("one"), std::slice::from_ref(&folder)),
+        &window("win-1", Some("one"), &[folder.clone(), notes.clone()]),
     );
     let boss = start_fake(&mut wire, &home, &source, &folder, "boss");
     let parent = agent(&home, &boss);
@@ -697,27 +754,29 @@ fn starts_keep_members_and_location_sources_separate() {
     let mut mcp = McpTestClient::open(&home, &boss);
     let inherited = mcp.call(
         "start_agent",
-        json!({ "name": "helper", "cli": "fake", "path": folder }),
+        json!({ "name": "helper", "cli": "fake", "folder": folder }),
     );
     assert_eq!(inherited["status"], "success", "{inherited}");
-    assert_eq!(inherited["data"]["windows"], memberships(&[&source, &away]));
+    let mut expected_windows = [&source.window_id, &away.window_id];
+    expected_windows.sort_unstable();
+    assert_eq!(inherited["data"]["windows"], json!(expected_windows));
     assert_eq!(inherited["data"]["machine_id"], source.machine_id);
-    let worktree = json!({ "name": "reviewer", "cli": "fake", "path": folder, "worktree": "review",
-        "window": away.window_id, "location_source_window": source.window_id });
+    let worktree = json!({
+        "name": "reviewer", "cli": "fake", "folder": folder,
+        "worktree": { "branch": "review", "base_ref": "review-base" },
+        "window": away.window_id, "location_source_window": source.window_id,
+    });
     let made = mcp.call("start_agent", worktree.clone());
     assert_eq!(made["status"], "success", "{made}");
     let path = real(&base(&home).join("app.worktrees/review-1"));
-    assert_eq!(made["data"]["path"], path, "{made}");
-    assert_eq!(made["data"]["windows"], memberships(&[&away]));
+    assert_eq!(made["data"]["folder"], path, "{made}");
+    assert!(!Path::new(&path).join("head-only").exists());
+    assert_eq!(made["data"]["windows"], json!([away.window_id]));
     let reviewer = home.agent_from_list_json("reviewer").unwrap();
     assert_eq!(reviewer["location_source_window"], json!(source));
     assert_eq!(reviewer["windows"], memberships(&[&away]));
-    assert!(
-        places(&listed(&home, &source.window_id).unwrap())
-            .contains(&(path.clone(), "worktree".into()))
-    );
 
-    let again = mcp.call("start_agent", worktree);
+    let again = mcp.call("start_agent", worktree.clone());
     assert!(
         again["message"]
             .as_str()
@@ -726,28 +785,114 @@ fn starts_keep_members_and_location_sources_separate() {
         "{again}"
     );
     let list = mcp.call("list_agents", json!({}));
-    let windows = list["data"]["windows"].as_array().unwrap();
+    let windows = list["data"]["windows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{list}"));
     let connected = windows
         .iter()
         .find(|window| window["id"] == source.window_id)
         .unwrap();
     assert_eq!(connected["connected"], true, "{connected}");
-    assert!(
-        connected["folders"]
-            .as_array()
-            .unwrap()
-            .contains(&json!(path))
-    );
+    assert!(connected.get("folders").is_none(), "{connected}");
+    let locations = connected["locations"].as_array().unwrap();
+    let snapshot = listed(&home, &source.window_id).unwrap();
+    let wire_locations = snapshot["locations"].as_array().unwrap();
+    assert_eq!(locations.len(), 3, "{connected}");
+    for (folder, wire_kind, mcp_kind) in [
+        (&notes, "folder", "folder"),
+        (&folder, "main", "main_checkout"),
+        (&path, "worktree", "worktree"),
+    ] {
+        let wire_location = wire_locations
+            .iter()
+            .find(|location| location["path"] == folder.as_str())
+            .unwrap();
+        assert_eq!(wire_location["kind"], wire_kind, "{wire_location}");
+        assert!(
+            locations.contains(&json!({
+                "location_id": wire_location["location_id"], "label": wire_location["label"],
+                "folder": folder, "kind": mcp_kind,
+            })),
+            "{connected}"
+        );
+    }
     let offline = windows
         .iter()
         .find(|window| window["id"] == away.window_id)
         .unwrap();
-    assert_eq!(offline["connected"], false, "{offline}");
-    assert_eq!(offline["machine_id"], source.machine_id, "{offline}");
-    assert!(
-        offline.get("folders").is_none() && offline.get("clis").is_none(),
-        "{offline}"
+    let machine = list["data"]["machines"][0]["name"].as_str().unwrap();
+    assert_eq!(
+        offline,
+        &json!({
+            "id": away.window_id, "address": format!("{}@{machine}", away.window_id),
+            "machine_id": away.machine_id, "name": "win-away window", "connected": false,
+        })
     );
+
+    let same = mcp.call(
+        "start_agent",
+        json!({
+            "name": "same-window", "cli": "fake", "folder": folder,
+            "window": connected["address"], "location_source_window": connected["address"],
+        }),
+    );
+    assert_eq!(same["status"], "success", "{same}");
+    assert_eq!(same["data"]["windows"], json!([source.window_id]), "{same}");
+    let same = home.agent_from_list_json("same-window").unwrap();
+    assert_eq!(same["location_source_window"], json!(source), "{same}");
+
+    // One long label makes the same rows travel in a file.
+    let mut description = window("win-empty", None, &[]);
+    description["label"] = json!("x".repeat(8_000));
+    let (_empty, empty) = ide_binding(&home, &description);
+    let long = mcp.call("list_agents", json!({}));
+    assert_eq!(long["status"], "success", "{long}");
+    let file = long["data"]["file"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{long}"));
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    let inline_machine = &list["data"]["machines"][0];
+    let saved_machine = &data["machines"][0];
+    for row in [inline_machine, saved_machine] {
+        assert_eq!(row["state"], "responded", "{row}");
+        assert!(
+            row["responded_at"]
+                .as_str()
+                .and_then(facade_base::time::parse_iso_time)
+                .is_some(),
+            "{row}"
+        );
+    }
+    let mut expected = list["data"]["machines"].clone();
+    expected[0]["responded_at"] = saved_machine["responded_at"].clone();
+    assert_eq!(data["machines"], expected);
+    let saved = data["windows"].as_array().unwrap();
+    for row in windows {
+        assert!(
+            saved.contains(row),
+            "window missing from the long list: {row}"
+        );
+    }
+    let empty = saved
+        .iter()
+        .find(|row| row["id"] == empty.window_id)
+        .unwrap();
+    assert_eq!(empty["locations"], json!([]), "{empty}");
+    assert!(empty["clis"].is_array(), "{empty}");
+
+    let mut from_head = worktree;
+    from_head["name"] = json!("head-reviewer");
+    from_head["worktree"] = json!({ "branch": "review-head" });
+    from_head["window"] = offline["address"].clone();
+    from_head["location_source_window"] = json!(format!(
+        "{}@{}",
+        source.window_id,
+        facade_base::address::exact_machine_selector(&source.machine_id)
+    ));
+    let made = mcp.call("start_agent", from_head);
+    assert_eq!(made["status"], "success", "{made}");
+    let folder = made["data"]["folder"].as_str().unwrap();
+    assert!(Path::new(folder).join("head-only").is_file(), "{made}");
 }
 
 /// Two creations of one branch sent together take turns: one makes the worktree, and the other is
@@ -1191,7 +1336,7 @@ fn a_reopened_workspace_lists_its_ended_agents_under_the_same_logical_window() {
     let (mut later, reclaimed) = ide_binding(&home, &window("win-new", Some("k1"), &folders));
     assert_eq!(reclaimed, original);
     let snapshot = later.request("watch", json!({ "topic": "agents" }));
-    let kept = snapshot["result"]["snapshot"]
+    let kept = snapshot["result"]["snapshot"]["agents"]
         .as_array()
         .unwrap()
         .iter()

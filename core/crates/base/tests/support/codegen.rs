@@ -2,14 +2,14 @@
 
 use facade_base::daemon::{
     self, AgentInfo, ChangedParams, ClientKind, HelloParams, HelloResult, KeeperInfo,
-    UnwatchParams, WatchParams, WatchResult,
+    UnwatchParams, WatchEndedParams, WatchParams, WatchResult,
 };
 use facade_base::jsonrpc::{
-    ErrorBody, ErrorData, Notification, Reason, Request, Response, ServerMessage,
+    ErrorBody, ErrorData, MachineMessage, Notification, Reason, Request, Response, ServerMessage,
 };
-use facade_base::keeper;
 use facade_base::operations::{CallParams, Operation, OperationVisitor, Topic, TopicVisitor};
 use facade_base::process::{ProcessExit, ProcessState};
+use facade_base::{keeper, machine};
 use schemars::{JsonSchema, SchemaGenerator};
 use serde_json::{Map, Value, json};
 
@@ -340,6 +340,15 @@ pub fn typescript_fields(properties: &Map<String, Value>, schema: &Value) -> Vec
         .collect()
 }
 
+/// The lists advertised to ordinary clients in `hello`.
+fn client_names() -> (Vec<String>, Vec<String>) {
+    let mut topics = daemon::topic_names();
+    topics.extend(machine::topic_names());
+    let mut operations = daemon::operation_names();
+    operations.extend(machine::operation_names());
+    (topics, operations)
+}
+
 pub fn typescript_file(
     definitions: &Map<String, Value>,
     ops: &[OperationDoc],
@@ -359,13 +368,14 @@ pub fn typescript_file(
         "export const METHODS = {} as const;\n",
         json!(methods)
     ));
+    let (topic_names, operation_names) = client_names();
     out.push_str(&format!(
         "export const TOPICS = {} as const;\n",
-        json!(daemon::topic_names())
+        json!(topic_names)
     ));
     out.push_str(&format!(
         "export const OPS = {} as const;\n",
-        json!(daemon::operation_names())
+        json!(operation_names)
     ));
     out.push_str(
         "export type Topic = typeof TOPICS[number];\nexport type Operation = keyof Operations;\n",
@@ -558,6 +568,7 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
         Response,
         Notification,
         ServerMessage,
+        MachineMessage,
         ErrorBody,
         ErrorData,
         Reason,
@@ -569,17 +580,27 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
         WatchParams,
         WatchResult,
         UnwatchParams,
-        ChangedParams
+        ChangedParams,
+        WatchEndedParams,
+        machine::ForwardParams,
+        machine::ForwardCall,
+        machine::AdvertiseParams,
+        machine::ConnectedParams,
+        machine::ConnectFailedParams
     );
     add!(AgentInfo, ProcessState, ProcessExit);
     let mut ops = OperationDocs(&mut types, Vec::new());
     daemon::visit_operations(&mut ops);
+    machine::visit_operations(&mut ops);
+    machine::visit_internal_operations(&mut ops);
     let ops = ops.1;
     let mut topics = TopicDocs(&mut types, Vec::new());
     daemon::visit_topics(&mut topics);
+    machine::visit_topics(&mut topics);
     let topics = topics.1;
     let mut definitions = types.definitions();
     specialize_operation_and_topic_schemas(&mut definitions, &ops, &topics);
+    let (topic_names, operation_names) = client_names();
     let schema = serde_json::to_string_pretty(&json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Facade daemon protocol",
@@ -589,8 +610,8 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
         "protocol": daemon::DAEMON_PROTOCOL_VERSION,
         "oldest_protocol": daemon::MIN_DAEMON_PROTOCOL_VERSION,
         "methods": daemon::METHODS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-        "topics": daemon::topic_names(),
-        "ops": daemon::operation_names(),
+        "topics": topic_names,
+        "ops": operation_names,
         "$defs": definitions,
     }))
     .expect("schema must serialize")
@@ -653,9 +674,9 @@ fn keeper_reasons() -> Vec<(String, String)> {
 /// Generates the keeper protocol reference.
 pub fn generate_keeper_reference() -> (&'static str, String) {
     let mut types = SchemaRegistry::new();
-    let _ = types.add::<keeper::HelloParams>();
-    let _ = types.add::<keeper::HelloResult>();
-    let _ = types.add::<keeper::AgentChange>();
+    let _ = types.add::<keeper::KeeperHelloParams>();
+    let _ = types.add::<keeper::KeeperHelloResult>();
+    let _ = types.add::<keeper::KeeperAgentChange>();
     let mut ops = OperationDocs(&mut types, Vec::new());
     keeper::visit_operations(&mut ops);
     let ops = ops.1;

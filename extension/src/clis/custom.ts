@@ -19,7 +19,7 @@ export function programAdapterOf(entry: EntrySettings): CliAdapter {
 		id: entry.name,
 		displayName: entry.name,
 		setting: entry.setting,
-		command: entry.command,
+		command: entry.program,
 		groups: {},
 		takes: { model: false, effort: false },
 		values: () => ({}),

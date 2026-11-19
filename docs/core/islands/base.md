@@ -54,11 +54,17 @@ to speak of, so every other crate can depend on it and it depends on none of the
 
 The public paths are `facade_base::<module>`. Grouped by who calls them:
 
+**The command line and Rust MCP**
+
+- `key_input` defines the public key names and batch limit. `key_problems` checks a batch and gives the current
+  spelling for a v2 alias.
+
 **Every program**
-- `build_id()`, `version()`, `VERSION`, `version_of(build)`, `takes_over(newer, running)`;
-  `take_test_build()` first in `main`, and `this_program()`, for tests that make a program play
-  another build: through a script, or without one through a file beside the program, its name and
-  `TEST_BUILD_SUFFIX`, which `install` and `point_launchers_at` carry with it.
+- Build and version helpers include `build_id()`, `version()`, `VERSION`, `build_version(build)`,
+  `version_of(build)` and `takes_over(newer, running)`. Call `take_test_build()` first in `main`.
+  Tests can make a program play another build through a script or a file beside the program.
+  `this_program()` locates the program. `install` and `point_launchers_at` carry the file named with
+  `TEST_BUILD_SUFFIX` beside it.
 - `paths::{facade_home, core_dir, home_key, daemon_socket, keeper_socket, daemon_socket_for,
   keeper_socket_for}`, `socket_dir` on Unix; `paths::ClientSocket`, a blocking client's end
   (Unix's `UnixStream`; on Windows a named pipe's, which checks the server's user), and
@@ -97,9 +103,13 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `jsonrpc`: the framing and errors both protocols share (below).
 
 **The daemon**
+- `machine` defines machine introductions, caller identity, forwarded requests and machine
+  operations and topics. `address` parses selectors and formats machine-qualified references.
+  `ssh` supplies arguments for foreground and saved connections and encodes the remote home.
+  `system::hostname` and `system::login_environment` supply the host name and login environment.
 - `daemon`: the daemon protocol's types, operations and topics; see
   [PROTOCOL.md](../../../core/protocol/PROTOCOL.md). Also the shared checks and texts the protocol
-  defines: `check_message_text`, `display_name`, `typed_text`, `start_result_text`,
+  defines: `check_message_text`, `display_name`, `typed_text`, `typed_text_with_machines`, `start_result_text`,
   `is_session_id`, `location_id`, `agents_word`, `plain`.
   `WindowDescription` carries optional `colors: TerminalColors` and `env`: the terminal colors
   its agents reply to OSC 10, 11 and 12 with, and the environment whose `PATH` gives an `ide`
@@ -131,6 +141,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 **The `facade` program**
 - `daemon_client::{DaemonClient, Identity, environment, takeover_timeout}`: a blocking client
   that connects, says hello, calls, watches, and reconnects to a daemon that took over.
+  A caller that manages reconnection can call `DaemonClient::disable_auto_reconnect`.
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.

@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use facade_base::daemon::{AgentInfo, WindowRef, display_name};
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::machine::{AgentRef, Caller};
 use facade_base::process::ProcessState;
 
 use crate::HUMAN;
@@ -24,7 +25,27 @@ pub(crate) enum Reach {
     All,
     /// The agents of the creation tree whose first agent is `root`: the reach of `agent`, whose run
     /// has YOLO off.
-    Tree { agent: String, root: String },
+    Tree { agent: AgentRef, root: AgentRef },
+    /// A caller that left the local agent list, whose own number names its local tree's root.
+    LocalUnlisted { agent: String },
+}
+
+impl From<&Caller> for Reach {
+    fn from(caller: &Caller) -> Self {
+        match caller {
+            Caller::Terminal { .. } | Caller::Ide { .. } | Caller::Agent { yolo: true, .. } => {
+                Self::All
+            }
+            Caller::Agent {
+                agent,
+                root,
+                yolo: false,
+            } => Self::Tree {
+                agent: agent.clone(),
+                root: root.clone(),
+            },
+        }
+    }
 }
 
 impl Reach {
@@ -32,18 +53,27 @@ impl Reach {
     pub(crate) fn reaches(&self, info: &AgentInfo) -> bool {
         match self {
             Reach::All => true,
-            Reach::Tree { root, .. } => &info.root == root,
+            Reach::Tree { root, .. } => {
+                info.root == root.agent_id && root_machine(info) == root.machine_id.as_str()
+            }
+            Reach::LocalUnlisted { agent } => {
+                info.root == *agent && root_machine(info) == info.machine_id.as_str()
+            }
         }
     }
 
     /// The refusal of a call about agent `id`, which the client does not reach.
     pub(crate) fn refusal(&self, id: &str) -> ErrorBody {
-        let reason = match self {
-            Reach::All => String::new(),
-            Reach::Tree { agent, .. } => format!(
-                ": #{agent}'s run has YOLO off, so it reaches only the agents of its creation tree"
-            ),
+        let caller = match self {
+            Reach::All => None,
+            Reach::Tree { agent, .. } => Some(agent.agent_id.as_str()),
+            Reach::LocalUnlisted { agent } => Some(agent.as_str()),
         };
+        let reason = caller.map_or_else(String::new, |agent| {
+            format!(
+                ": #{agent}'s run has YOLO off, so it reaches only the agents of its creation tree"
+            )
+        });
         ErrorBody::new(
             Reason::Refused,
             format!("#{id} is out of reach{reason}; nothing was done"),
@@ -149,16 +179,30 @@ impl Records {
     }
 }
 
-/// The reach of a client acting for agent `caller`, or for the person where it acts for none.
-/// `info` is the caller's, where it is listed; one no longer listed reaches the tree it would be
-/// the first of, as the agents it starts then join.
+/// The complete reference of an agent record's tree root.
+pub(crate) fn root_of(info: &AgentInfo) -> AgentRef {
+    AgentRef {
+        machine_id: root_machine(info).to_string(),
+        agent_id: info.root.clone(),
+    }
+}
+
+fn root_machine(info: &AgentInfo) -> &str {
+    info.root_machine_id.as_deref().unwrap_or(&info.machine_id)
+}
+
+/// The reach of a local client acting for an agent, or for the person. An unlisted caller can
+/// reach the local tree whose root is its own number.
 pub(crate) fn reach_of(caller: Option<&str>, info: Option<&AgentInfo>) -> Reach {
     match (caller, info) {
         (None, _) => Reach::All,
-        (Some(_), Some(info)) if info.yolo => Reach::All,
-        (Some(caller), info) => Reach::Tree {
-            agent: caller.to_string(),
-            root: info.map_or(caller, |info| info.root.as_str()).to_string(),
+        (Some(_), Some(info)) => Reach::from(&Caller::Agent {
+            agent: info.reference(),
+            root: root_of(info),
+            yolo: info.yolo,
+        }),
+        (Some(agent), None) => Reach::LocalUnlisted {
+            agent: agent.to_string(),
         },
     }
 }
@@ -340,14 +384,20 @@ mod tests {
 
     use super::*;
 
+    const LOCAL_MACHINE: &str = "e0dc2812-46d1-4cf2-82d2-e4940b1ef844";
+    const OTHER_MACHINE: &str = "adc7bed6-e018-47ba-aa88-2040512d915b";
+
     /// Agent `id`, named `name`, started by `creator` in the tree of `root`, its run's YOLO `yolo`.
     fn agent(id: &str, name: &str, creator: Option<&str>, root: &str, yolo: bool) -> AgentInfo {
         AgentInfo {
+            address: None,
+            label: None,
+            unreachable: false,
             agent_id: id.into(),
             name: name.into(),
             cli: "fake".into(),
             cwd: "/w".into(),
-            machine_id: String::new(),
+            machine_id: LOCAL_MACHINE.into(),
             windows: Vec::new(),
             location_source_window: None,
             location_id: "loc-1".into(),
@@ -424,11 +474,38 @@ mod tests {
         assert_eq!(reached(None), ["a1", "a2", "a3", "a4", "a5"], "the person");
         assert_eq!(
             reach(&agents, Some("a9")),
-            Reach::Tree {
-                agent: "a9".into(),
-                root: "a9".into()
-            },
+            Reach::LocalUnlisted { agent: "a9".into() },
             "an agent no longer listed"
+        );
+
+        let cy = reach(&agents, Some("a3"));
+        let unrelated = AgentInfo {
+            machine_id: OTHER_MACHINE.into(),
+            ..agent("a1", "Fay", None, "a1", false)
+        };
+        assert!(
+            !cy.reaches(&unrelated),
+            "another machine's root with the same number names a different tree"
+        );
+
+        let remote = AgentInfo {
+            machine_id: OTHER_MACHINE.into(),
+            creator_machine_id: Some(LOCAL_MACHINE.into()),
+            root_machine_id: Some(LOCAL_MACHINE.into()),
+            ..agent("a6", "Gia", Some("a3"), "a1", false)
+        };
+        assert!(
+            cy.reaches(&remote),
+            "a child on another machine is in reach"
+        );
+        let caller = Caller::Agent {
+            agent: remote.reference(),
+            root: root_of(&remote),
+            yolo: remote.yolo,
+        };
+        assert!(
+            Reach::from(&caller).reaches(&agents[0]),
+            "the child also reaches its root"
         );
     }
 

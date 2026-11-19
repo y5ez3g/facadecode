@@ -114,6 +114,9 @@ struct Harness {
 
 fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16) -> AgentInfo {
     AgentInfo {
+        address: None,
+        label: None,
+        unreachable: false,
         agent_id: "a1".into(),
         name: "Pixel".into(),
         cli: "sh".into(),

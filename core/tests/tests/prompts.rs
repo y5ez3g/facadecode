@@ -11,7 +11,7 @@ use facade_scenarios::*;
 /// the server and the location of boss's folder in the terminal window.
 fn boss(home: &TestHome) -> (McpTestClient, String) {
     home.start_named_fake("boss", &[]);
-    let cwd = home.agent_from_list_json("boss").unwrap()["cwd"]
+    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -24,7 +24,7 @@ fn start_child(boss: &mut McpTestClient, path: &str, prompt: &str) -> Value {
     let started = boss.call(
         "start_agent",
         json!({
-            "name": "child", "cli": "fake", "window": "terminal", "path": path, "prompt": prompt,
+            "name": "child", "cli": "fake", "window": "terminal", "folder": path, "prompt": prompt,
         }),
     );
     assert_eq!(started["status"], "success", "{started}");
@@ -143,6 +143,12 @@ fn start_agent_s_prompt_goes_first_and_its_caller_gets_one_result() {
             .is_some_and(|text| text.contains("child (#a2) has started")),
         "a result says what it is in words: {read}"
     );
+    assert_eq!(started["data"]["result_message"], row["id"], "{started}");
+    for after in [&row["address"], &started["data"]["result_message"]] {
+        let again = boss.call("read_messages", json!({ "after": after }));
+        assert_eq!(again["status"], "success", "{again}");
+        assert_eq!(again["data"]["messages"], json!([]), "{again}");
+    }
 }
 
 /// A message sent to the new agent while its prompt waits for the tools goes after the prompt.
@@ -213,7 +219,7 @@ fn a_prompt_whose_agent_ends_before_its_tools_settle_fails_as_ended() {
     // The child takes boss's environment, so its CLI starts its Facade server a minute after its
     // own start.
     home.start_named_fake("boss", &[("FAKECLI_MCP_DELAY_MS", "60000")]);
-    let cwd = home.agent_from_list_json("boss").unwrap()["cwd"]
+    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();

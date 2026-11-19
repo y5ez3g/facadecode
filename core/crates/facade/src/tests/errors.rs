@@ -5,7 +5,12 @@ use std::path::PathBuf;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
 
-use crate::errors::{Problem, about_agent, about_send, bare_id, ended_agent, ended_by_name, words};
+use facade_base::machine::{ExecutionOutcome, MachineIdentity, Unavailable};
+
+use crate::errors::{
+    Change, Problem, about_agent, about_change, about_send, bare_id, ended_agent, ended_by_name,
+    words,
+};
 
 fn given(text: &str) -> String {
     text.to_string()
@@ -332,5 +337,108 @@ fn a_settings_file_that_cannot_be_used_gets_the_fix_tip() {
         said,
         "error: could not use the settings file: /home/you/.facade/facade.json:3:7: expected a \
          string\n  tip: fix the settings file and try again"
+    );
+}
+
+/// The rows of failures between machines, from the facts the command and the service give.
+#[test]
+fn machine_rows_print_their_error_and_tip() {
+    let rows: Vec<(Problem, &str)> = vec![
+        (
+            Problem::SshFailed {
+                destination: given("gpu"),
+                why: given("Permission denied (publickey)."),
+            },
+            "error: could not connect to gpu over SSH: Permission denied (publickey).\n  tip: run \
+             'ssh gpu' to check that you can log in",
+        ),
+        (
+            Problem::NoFacade {
+                destination: given("gpu"),
+            },
+            "error: could not find facade on gpu\n  tip: install Facade on gpu and add its folder to \
+             the PATH that SSH commands use",
+        ),
+        (
+            Problem::Version {
+                machine: given("gpu"),
+                theirs: given("0.1.5"),
+                ours: given("0.1.7"),
+            },
+            "error: gpu runs Facade 0.1.5, which cannot connect to Facade 0.1.7\n  tip: install \
+             Facade 0.1.7 on gpu",
+        ),
+        (
+            Problem::SshLogin {
+                machine: given("gpu"),
+                repair: ["facade", "machine", "add", "gpu"].map(given).to_vec(),
+            },
+            "error: SSH to gpu needs you to log in\n  tip: run 'facade machine add gpu'",
+        ),
+        (
+            Problem::MachineStoppedResponding {
+                machine: given("gpu"),
+                change: Some((Change::Stop, given("a17@gpu"))),
+            },
+            "error: could not confirm that a17@gpu stopped: gpu stopped responding\n  tip: run \
+             'facade list' to check",
+        ),
+        (
+            Problem::NoMachine {
+                given: given("lab"),
+            },
+            "error: no machine 'lab'\n  tip: run 'facade machine list' to see your machines",
+        ),
+    ];
+    for (problem, printed) in rows {
+        assert_eq!(problem.to_string(), printed);
+        assert_eq!(problem.exit_code(), 1);
+    }
+}
+
+/// A call that never reached the agent's machine says so for the agent `stop` was given.
+#[test]
+fn an_unreachable_machine_names_what_was_not_done() {
+    let mut body = ErrorBody::new(Reason::Unavailable, "gpu: The request did not run.");
+    body.data.unavailable = Some(Unavailable {
+        execution: ExecutionOutcome::OutcomeUnknown,
+        machine: Some(MachineIdentity {
+            machine_id: given("3f9a2c1d-0000-4000-8000-000000000000"),
+            name: given("gpu"),
+        }),
+        window: None,
+        matches: Vec::new(),
+        unanswered: Vec::new(),
+    });
+    let error = about_change("a17@gpu", Change::Remove, body.into());
+    assert_eq!(
+        words(&error),
+        "error: could not confirm that a17@gpu was removed: gpu stopped responding\n  tip: run \
+         'facade list' to check"
+    );
+}
+
+/// `stop` of a name that some machines did not answer says which, as any command does.
+#[test]
+fn a_name_search_some_machines_did_not_answer_names_them_for_stop() {
+    let mut body = ErrorBody::new(
+        Reason::Unavailable,
+        "not every machine answered the search for Pixel",
+    );
+    body.data.unavailable = Some(Unavailable {
+        execution: ExecutionOutcome::NotExecuted,
+        machine: None,
+        window: None,
+        matches: Vec::new(),
+        unanswered: vec![MachineIdentity {
+            machine_id: given("3f9a2c1d-0000-4000-8000-000000000000"),
+            name: given("gpu"),
+        }],
+    });
+    let error = about_change("Pixel", Change::Stop, body.into());
+    assert_eq!(
+        words(&error),
+        "error: no agent 'Pixel' on the machines that responded; gpu did not respond\n  tip: run \
+         'facade list' to see your agents"
     );
 }

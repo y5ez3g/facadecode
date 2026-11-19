@@ -41,16 +41,18 @@ notification, which receives no response, even when it fails.
 answers as usual, with what became of it. It withdraws only an `agent.send` whose message's paste has not begun (see
 [Agent messages](#agent-messages)); every other call goes on. Closing a connection withdraws nothing.
 
-Wait for a successful `hello` before using the connection. In this example, `→` is a client message and `←` is a daemon
-message. The redraw's base64 value is abbreviated.
+Wait for a successful `hello` before using the connection. Its `ops` and `topics` list the operations and topics offered
+to clients, including machine management and queries. `window.deliver` and `agent.deliver_start_result` are
+reserved for machine sessions. In this example, `→` is a client message and `←` is a daemon message. The redraw's
+base64 value is abbreviated.
 
 ```text
 → {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[2,2],"build":"1.4.2","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","messages","windows","machines"],"ops":["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log","machine.connect","machine.add","machine.list","machine.remove","machine.rename","agent.list","cli.list","location.list","agent.start_preflight"]}}
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"command":["claude"],"cwd":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","name":"Pixel","cli":"claude","cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","windows":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","window_id":"terminal"}],"location_id":"loc-5f3c2a1b9e8d7c60","pid":5001,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:22:05.123Z","root":"a1","yolo":false,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"agent":"a1"}}}
-← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","cols":120,"rows":30,"redraw":"G1s/MjAyNmw…","process":"running"}}}
+← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw…","process":"running"}}}
 ← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"output","data":"aGVsbG8="}}}
 → {"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"agent":"a1","raw":"aGk="}}}
 → {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.type","args":{"agent":"a1","text":"run the tests","enter":true}}}
@@ -221,7 +223,11 @@ states before it serves clients.
 A CLI that runs by a built-in's rule is given Facade's tools for its run, the MCP server `facade-mcp`, where its rule gives them;
 `facade-mcp` is the relay to the daemon's own MCP server, below.
 The daemon lists Facade's version 3 tool definitions in `tools/list`. `list_agents` and `start_agent` results
-identify the running machine and member windows. `start_agent` inputs select local windows by ID.
+identify the running machine and member windows. In `start_agent`, `window` can be a member window ID on the
+originating machine (`win-2`) or a qualified ID (`win-2@gpu` or `win-2@id:3f9a2c1d`). A member window can be
+disconnected. `location_source_window` is a bare ID of a connected window on the running machine. On a local
+start, a relative `path` resolves from the calling agent's working directory. A remote start takes an absolute
+`path` on the running machine.
 `send_message` reports which windows' subscriptions took a notification.
 
 Antigravity's runs get them from a plugin in the folder they start in, `.agents/plugins/facade/`, which the runs there share:
@@ -386,11 +392,13 @@ message whose paste began goes on, and its answer says what reached the terminal
 `#human` is the person. The daemon takes the sending agent's member windows at send time. It offers the message to the
 current `messages` subscriptions of each connected member window. A subscription channel accepting the notification
 counts as delivery to that window. A send succeeds once at least one window accepts it. Its result has
-`delivered_via: notified` and `windows: { delivered, not_delivered }`. `delivered` contains window references and
-`not_delivered` contains `{ window, reason }` entries. If every window misses the message, the daemon keeps no message
-and returns `unavailable` with those entries in `data.windows`. The reasons are `window_disconnected` and
-`not_watching`, which also covers a subscription that closes before it can take the message. A send from the person to
-the person is refused.
+`delivered_via: notified` and `windows: { delivered, not_delivered, outcome_unknown }`. All three arrays are present,
+including empty ones. `delivered` contains window references. `not_delivered` contains `{ window, reason }` entries
+for confirmed failures. Reasons include `window_disconnected`, `not_watching`, and `machine_unavailable`.
+`outcome_unknown` contains windows that were sent a notification whose receipt was lost. With no confirmed delivery
+and an unknown outcome, the daemon keeps the message and returns `unavailable` with `data.message_ref`,
+`data.window_delivery`, and `data.unavailable.execution: outcome_unknown`. If all failures are confirmed, it keeps
+no message and returns `unavailable` with the failures in `data.windows`. A send from the person to the person is refused.
 
 The daemon saves the window outcomes before it responds. A repeat with the same request ID waits for an in-progress send
 or returns the saved message and outcomes. If the daemon ended between saving the message and saving the outcomes, a
@@ -785,3 +793,46 @@ keeper protocol are at version 1. MCP's date versions are independent of Facade'
 Ignore fields you do not recognize and skip a change whose `kind` you do not recognize. Treat unrecognized enum
 values as unknown locally. Rust uses `Unknown`, or `Unrecognized` where `unknown` is a protocol value.
 The daemon refuses an unsupported client kind in `hello`.
+
+### Machine sessions
+
+A machine session is a bidirectional use of daemon protocol 2 over SSH. The first line is a
+`hello` with `kind: machine` and the initiating daemon's `MachineHello`. The response gives the
+answering daemon's introduction. Each introduction includes a machine ID and a boot ID for the
+running daemon. Paths that reach the same boot ID are routes to the same daemon.
+
+On Linux, `ssh_cleans_processes` reports whether logind will clean up processes when this user's
+SSH session ends. Omit the field on other platforms or when the policy is unknown. If the policy
+applies, advise the user to ask the remote administrator to add the SSH account to `KillExcludeUsers`
+in `logind.conf`. The exclusion takes precedence over `KillOnlyUsers` and `KillUserProcesses`.
+
+Each direction numbers its JSON-RPC requests independently. After `hello`, each daemon sends its
+first full `advertise` as a request with an `id`. The receiving daemon verifies the machine ID and
+`boot_id` against the introduction, checks for conflicts, and decides whether the sending machine
+may join. It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon
+registers and advertises the directly connected machine after accepting that machine's first table
+and receiving success for its own. Later `advertise` updates are full-table notifications without
+an `id` and replace the sending machine's previous table.
+
+The `route` of `forward` lists the remaining hops through the destination.
+The forwarding machine removes its own hop and preserves the original `Caller`. The destination
+reads the method and arguments. A start or send can carry a request ID scoped to the original
+caller and target. A call that could not be sent is `not_executed`. A sent call that lost its
+response can report `outcome_unknown`. A forwarded watch that loses its route ends with
+`watch_ended`; a new watch begins with a fresh snapshot.
+
+For a forwarded `call`, `params` is `ForwardCall`. The originating daemon sets `by_model` from
+the authenticated local connection, attaches known sender names on `agent.send`, and takes
+colors from the bound editor window on `agent.resize`. The destination reads these facts on
+machine sessions. Local client calls use `CallParams`.
+
+`machine.connect` first answers the authorized local client, then switches that connection to
+machine frames. After the foreground handshake, the local daemon sends `connected` or
+`connect_failed` to that client. `machine.add` answers once the daemon has verified the
+saved destination on its own connection.
+
+Agent views identify a record by machine and agent number. The `agents` snapshot has local
+`agents` and remote `machines` rows. A `synced` row or change carries the machine's entire list,
+including an empty list. A pending, unreachable or absent row keeps earlier records visible as
+disconnected. A window notification to `#human` carries its full `MessageRef`. Window receipts
+distinguish delivery, confirmed failure and an unknown outcome.

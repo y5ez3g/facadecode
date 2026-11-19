@@ -7,12 +7,15 @@
 // so activation waits a bounded time for its command. Without it Facade cannot tell this window from another, and says so plainly.
 
 import * as crypto from 'crypto';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
-	isDamagedWindowIdentity, isUnreadableWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, type DamagedWindowIdentity, type UnreadableWindowIdentity,
-	type WindowIdentity
+	isDamagedWindowIdentity, isUnreadableWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, WORKSPACE_MACHINE_BRIDGE_COMMAND,
+	type DamagedWindowIdentity, type UnreadableWindowIdentity, type WindowIdentity
 } from '../base/windowIdentity';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
+import { RemoteSshWorkspace } from './remoteSshWorkspace';
+import { FACADE_PROGRAM } from './rust/types';
 
 /** The window component's extension ID. */
 export const WINDOW_COMPONENT = 'facade.facadecode-window';
@@ -72,6 +75,15 @@ export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_
 			}
 		});
 	}
+}
+
+/** Answers this window's local component once the Rust engine on its Remote-SSH host is ready. */
+export function serveRemoteSshMachine(context: vscode.ExtensionContext, identity: WindowIdentity, home: string): vscode.Disposable {
+	const bridge = new RemoteSshWorkspace(identity, path.join(context.extensionPath, FACADE_PROGRAM), home);
+	const command = vscode.commands.registerCommand(WORKSPACE_MACHINE_BRIDGE_COMMAND, (request: unknown) => bridge.request(request));
+	const disposable = vscode.Disposable.from(command, bridge);
+	context.subscriptions.push(disposable);
+	return disposable;
 }
 
 /**

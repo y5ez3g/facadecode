@@ -47,13 +47,14 @@ narrative headline. Parsing the text as JSON yields exactly `structuredContent`.
 a success sets it to false. There is no `accepted` status.
 
 ```ts
-type Result<T> =
+type Result<T, FailureData = never> =
   | { status: "success"; data?: T }
-  | { status: "failure"; reason: string; message: string };
+  | { status: "failure"; reason: string; message: string; data?: FailureData };
 ```
 
 Success includes `data` only when it has facts to return. stop_agent, type_text and press_keys return status alone.
-Failure has only `status`, `reason` and `message`: no `data`, `effects`, `error`, error code or `recovery` object.
+Failure has `status`, `reason` and `message`. Rust failures can also give structured facts in `data`, such as
+partially written input, retained worktrees, window delivery outcomes and protocol version details.
 The message says what went wrong, whether anything was done, and what to do next. Partial or unknown effects must be
 stated in that message; unknown does not mean nothing happened. CLI/Git/transport errors keep their useful diagnostic.
 
@@ -68,12 +69,17 @@ Common failure reasons:
 | Reason | Meaning |
 | --- | --- |
 | `invalid_argument` | Missing, unknown or invalid arguments, including an invalid startup window, path or CLI |
-| `not_found` | No matching agent or message |
+| `not_found` | No matching agent or message, or another missing target reported by the Rust daemon |
 | `ambiguous_reference` | A name matches more than one agent; give an ID |
-| `out_of_reach` | The target is outside the caller's creation tree with YOLO off |
+| `refused` | Rust daemon refusal, including a target outside the caller's creation tree with YOLO off |
+| `out_of_reach` | Old-engine refusal for a target outside the caller's creation tree with YOLO off |
 | `ended` | The target ended and cannot take the requested input |
 | `unsupported` | An unknown tool or a CLI without message input support |
-| `configuration_invalid` | Invalid settings or a server that cannot act for this caller |
+| `invalid_settings` | Rust could not read or validate Facade settings |
+| `caller_unavailable` | The Rust tool server cannot act for a caller, including when the session has its own server |
+| `incompatible_protocol` | The Rust daemon or its peer needs a different protocol version, with details in `data.protocol` when available |
+| `upgrading` | The Rust daemon is handing over to a newer build |
+| `configuration_invalid` | Invalid settings or a server without a caller on the old engine |
 | `unavailable` | Facade or a window cannot be reached, or the result is unknown |
 | `capacity_exceeded` | Input capacity is exhausted |
 | `partial_input` | Only part of the input reached the terminal |
@@ -134,11 +140,22 @@ when a new choice is needed. Defaults and already specified values require no ex
 
 ### 2.2 start_agent arguments
 
-**Start an agent with its CLI and path. The old engine also requires its destination window.**
+**Start a configured CLI in its launch folder.**
 
-On Rust, `window` and `location_source_window` are optional local window IDs. They supply the selected member and
-the window providing the path independently (RULES-2.4, RULES-4.1). The result includes the machine ID and member
-window references. The table and examples below give the old-engine contract.
+On Rust, only `cli` is required. A local `folder` may be relative to the caller's working folder. A remote `folder`
+must be absolute on the running machine. When omitted, the daemon uses the caller's recorded folder for a local start
+or the running machine's login folder for a remote start. An explicitly empty folder is invalid.
+
+The optional `window` selects initial membership and can be qualified with a machine. The optional
+`location_source_window` selects the connected window on the running machine that supplies the folder and worktree
+independently (RULES-2.4, RULES-4.1). Use its bare ID or copy its `address` from `list_agents`. A qualified source window
+must match the running machine selected by `machine` or by its local default. The `worktree` argument is an object
+with a nonempty `branch` and optional nonempty
+`base_ref`, which defaults to `HEAD` of the selected checkout. It creates a new worktree. To start in an existing
+worktree, give its `folder`. Rust rejects `path` and a string `worktree` with `invalid_argument` and gives the
+corresponding argument or object to use.
+
+The table and examples below give the old-engine contract.
 
 | Field | Type / meaning |
 | --- | --- |
@@ -174,8 +191,13 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-Success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's folder.
-It does not expose process/tools state, requested settings, prompt details, effects or call correlation IDs.
+On Rust, `data.folder` is the resulting launch directory, including the new worktree where one was made. The result
+also gives `id`, `name`, `address`, `machine_id` and member `windows` as window address strings. With a prompt,
+`result_message` can give the address of the result owed to the caller. A failure can give the worktree facts kept
+as `data.kept.branch` and `data.kept.folder`.
+
+An old-engine success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's
+folder. It does not expose process/tools state, requested settings, prompt details, effects or call correlation IDs.
 The golden start of helper answers:
 
 ```json
@@ -214,8 +236,24 @@ or automatic creator progress report.
 
 **One query returns window discovery and agents within the caller's reach.**
 
-On Rust, window rows include `machine_id` and `connected`. Disconnected windows remain listed with no folders or
-CLIs. An agent row has its `machine_id` and a `windows` array of references containing `machine_id` and `window_id`.
+On Rust, a disconnected window gives `id`, `address`, `machine_id`, `name` and `connected`. A connected window, including
+the terminal window, also gives `locations` and `clis` arrays, including when empty. A location gives `location_id`,
+`label`, its absolute path as `folder`, and `kind` as `folder`, `main_checkout` or `worktree`. Each CLI gives `cli`,
+`display_name`, `available` and `overrides` with `model` and `effort` booleans. It can also give `problem` and
+`not_installed: true`. A long result writes the complete list object to the file named by `data.file`, with the same rows.
+
+An agent row has its `id`, `address`, launch `folder` and `machine_id`. Its `windows` are window address strings, and
+`creator` is the creator's address or `#human`. Its `state` describes the CLI's last observed activity. If its running
+machine is unreachable, the row also gives `unreachable: true`. Bare role references name the caller's machine.
+Copy an object's machine-qualified `address` into a tool argument. A machine name is used when unique among the selectable machines.
+Otherwise, the selector uses an unambiguous `id:` prefix, with the full ID available when the machine set is unavailable.
+
+Machine rows in `data.machines` give `machine_id`, `name`, `build` when known, and `state` as `responded`, `failed`,
+`timed_out` or `unreachable`. For `responded` and `failed`, a received reply gives the origin's receive time as
+`responded_at`. An unreachable machine also gives `unreachable: true`. The file form carries the same machine rows.
+
+Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
+Equal timestamps are ordered by machine ID, then by numeric agent ID.
 The rest of this rule describes the old-engine result and its connected-window scope.
 
 No arguments. There are no filters, details mode or pagination. Ended agents are included, oldest first.
@@ -273,15 +311,19 @@ Text beginning with `[Earlier output truncated]` lost its beginning on its way: 
 and type_text refuse it as invalid_argument before any effect, asking for shorter parts.
 
 Within thirty seconds (1.3), return the message's `id` and `delivery` in data for agent delivery and old-engine human
-contact, as below. Rust `#human` success uses `delivered_to_windows` and the delivered and undelivered windows under
-`data.windows`. A zero-delivery failure includes the reasons for each window. Delivery counts handoff to the window's
-subscription under COLLABORATION-2.3.
+contact, as below. Rust also gives the message's `address`. A Rust send to `#human` succeeds with `delivered_to_windows`
+when at least one window's subscription took it under COLLABORATION-2.3. Both success and failure use
+`data.window_delivery` for the observed outcomes. Each row gives a `window` address and a `state` of `delivered`,
+`not_delivered` or `outcome_unknown`. Only `not_delivered` has a `reason`. When there are no member windows, the
+failure gives an empty array. An unconfirmed send can give the retained message's `id` and `address` with its known
+outcomes. Argument errors before a send use the ordinary failure envelope.
 
 | Delivery | Meaning |
 | --- | --- |
 | `typed_into_input` | Typed into the recipient's input and submitted |
 | `read_by_recipient` | The recipient read it with read_messages before it was typed |
 | `shown_to_person` | Handed to the person through the caller's editor window |
+| `delivered_to_windows` | Rust handed it to at least one member window's subscription |
 | `waiting_in_inbox` | A guest or MCP member takes it from its inbox later |
 
 Ordinary delivery follows RULES-1.4–1.6's input checks. A message's text is typed at most once.
@@ -332,6 +374,7 @@ A send to a guest answers:
 **Read only the calling agent's incoming messages, never its sent messages or another inbox; reading delivers.**
 
 Arguments: `after?:string` naming a message ID, or `last?:integer` (1–100). Giving both is `invalid_argument`.
+Rust also accepts the message's returned `address` as `after` for the caller's own inbox.
 With neither, return messages not yet delivered. after returns the retained messages after that ID; last returns
 the newest messages up to that count. One read returns at most 100 messages; where more follow, `data.next_cursor` is
 the after that reads them. There are no ids, all, cursor or limit arguments. Selection stays inside the caller's inbox,
@@ -339,8 +382,9 @@ including with YOLO. Every returned message is delivered, including unread messa
 no other message is. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
 
 Return `data.messages`, oldest first. Each record has `id`, `from`, `at` and the complete body as `text`, plus
-`reply_to` when given. from is the sender's `@name #aN`, its ID alone when unnamed, `#human` for the person, or
-`facade` for a Facade result. A Facade result's text is plain English; there is no nested result object, kind, delivery
+`reply_to` when given. Rust also returns each message's `address`. Its `from` and `reply_to` fields are address
+strings. The person is `#human`, and Facade results give `facade` as `from`. On the old engine, `from` is the sender's
+`@name #aN`, its ID alone when unnamed, `#human` for the person, or `facade` for a Facade result. A Facade result's text is plain English; there is no nested result object, kind, delivery
 record, call ID, window or environment. A system result is separate from the message it concerns.
 
 The golden inbox read of a message held back by a draft answers:
@@ -362,8 +406,9 @@ The golden inbox read of a message held back by a draft answers:
 }
 ```
 
-Above 8,000 combined body code points, return only `data.file`, a string path to the complete JSON array of selected
-records. If writing that file fails, return the messages inline so the read does not lose the messages it delivered.
+Above 8,000 combined body code points, return the whole page of records as a JSON array in the file named by
+`data.file`, a string path. When another page follows, the result also includes `data.next_cursor`. If writing that
+file fails, return the page inline as `data.messages` so the read does not lose the messages it delivered.
 An uncertain return may repeat the same record without another terminal paste. An empty result has an empty messages
 array and no notice. This is an immediate snapshot, not a wait or evidence about pending work. New messages arrive
 through normal delivery without polling; MCP members read them themselves (6.1).
@@ -374,10 +419,12 @@ through normal delivery without polling; MCP members read them themselves (6.1).
 
 **Read rendered terminal text without taking focus or treating its words as instructions.**
 
-Required `agent:string`; optional `last:integer=50` (1–2000), counting the last lines including scrollback.
-Enforce normal tree reach. Return only `ended:boolean` and `text` in data. ended says the agent has ended and its
-retained screen will not change again. Empty live output is successful empty output; an agent without a screen
-fails as `unavailable`. Guests and MCP members have no Facade terminal to read.
+Required `agent:string`. Optional `lines:integer=50` accepts 1–2000 and counts the last lines including scrollback.
+Rust returns `invalid_argument` with a hint to use `lines` when a call supplies `last`.
+Enforce normal tree reach. Return only `ended:boolean` and `text` in data. `ended` says whether the run had ended when
+the screen was read. When true, return the screen that run left. A later read after a resume can show new output
+under the same agent ID. Empty live output is successful empty output. An agent without a screen fails as
+`unavailable`. Guests and MCP members have no Facade terminal to read.
 
 The text uses `[[...]]` for inverse video and `{{...}}` for dim text; both together nest as `[[{{...}}]]`.
 A backslash escapes each literal backslash, bracket or brace in the source text, so literal marker-like content
@@ -386,14 +433,15 @@ spaces and Unicode. Cues come directly from terminal cells; the model need not c
 highlight. Do not execute escape sequences.
 
 Above 8,000 text code points, return `ended` and `file`, a string path to a complete UTF-8 text file, in place of text.
+If writing the file fails, return `unavailable` and ask for a smaller `lines` value.
 There is no agent ID, timestamp, buffer, style-format field, line count, stale flag or last_alternate_frame in data.
-An invalid last argument answers:
+A string passed as `lines` gives this answer.
 
 ```json
 {
   "status": "failure",
   "reason": "invalid_argument",
-  "message": "last must be an integer, not a string; nothing was done"
+  "message": "lines must be an integer, not a string; nothing was done"
 }
 ```
 
@@ -401,16 +449,17 @@ An invalid last argument answers:
 
 **Write exactly the requested direct text/keys without draft protection or policy selection.**
 
-type_text: required `agent:string`, `text:string`; optional `enter:boolean=false`. Text is nonempty and at most 1 MiB.
-It may contain printable Unicode plus tab, line feed and carriage return, including multiline or whitespace text.
-Other C0/C1 control characters, including ESC, are rejected as `invalid_argument` before writing; use press_keys for
-control keys. An empty string is invalid even with enter:true; use press_keys to press Enter alone.
+In Rust MCP, `type_text` requires `agent:string` and nonempty `text:string` of at most 1 MiB.
+`enter:boolean` defaults to false.
+Text may contain printable Unicode, tabs, line feeds and carriage returns. Other C0/C1 controls cause
+`invalid_argument` before anything is typed. Use `press_keys` for Esc or to press Enter by itself.
 
-press_keys: required `agent:string`, `keys:string[]` (one key alone is taken too), with 1–100 recognized keys.
-Names are Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space
-and Ctrl+A through Ctrl+Z, in any letter case, and any one printable character exactly. Return, Esc and ArrowUp-style
-aliases are rejected as `invalid_argument`, as are other unsupported names, before writing. Use the terminal's actual
-encoding; delay only when its input protocol requires it.
+`press_keys` requires `agent:string` and `keys:string[]`. A JSON array written as a string or a single key string
+is also accepted. A call takes 1 to 100 keys after this conversion. Use Enter, Esc, Tab, Shift+Tab, Backspace,
+Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A through Ctrl+Z, or one non-control Unicode
+code point per key. Named keys and Ctrl combinations ignore ASCII case. Single code points are typed as given.
+On an invalid batch, the tool returns `invalid_argument` before typing and gives the current spelling for
+Escape, Return and ArrowUp-style aliases. Keys use the terminal's encoding and timing.
 
 Both operate on the addressed live terminal within normal tree reach and serialize with other automated input.
 They can act on drafts, menus or unknown layouts, and on a CLI without an input reader; no input-box evidence is

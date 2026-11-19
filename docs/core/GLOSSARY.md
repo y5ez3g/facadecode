@@ -185,9 +185,8 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 |---|---|---|
 | keeper | The process that holds every agent's terminal and starts the daemon | service (for this) |
 | daemon | The process that runs agents, messages and the protocol | service (for this) |
-| machine ID | The persistent identity of a Facade home, stored as a lowercase UUID v4 in the home's database and given as `machine_id` | host name, OS machine ID, node ID, peer ID |
 | relay | `facade-mcp`: forwards MCP lines between an MCP client and the daemon, line by line | proxy, bridge, shim |
-| link | A long connection that reconnects when it breaks: the relay's `DaemonLink`, the daemon's keeper link | — |
+| link | A reconnecting connection between local Facade services, such as the relay's `DaemonLink` or the daemon's keeper link | — |
 | program | An executable file | binary, executable |
 | launcher | One of the two programs in `core/bin/` that run the current build's: a symbolic link on macOS and Linux, a copy on Windows | shim, wrapper |
 | build | The programs of one build, in `core/bin/<build>/`, with its ConPTY folder on Windows | — |
@@ -203,6 +202,35 @@ identity itself, it uses `human`, as in `Started by: human`. Help addresses the 
 In public `facade` diagnostics, "upgrade the running Facade" means switching the running services to the newer
 command's build. Installation instructions use "upgrade" for installing a newer version. Code and protocol call the
 service switch a takeover.
+
+## Machines and connections
+
+| Use | Means | Not these |
+|---|---|---|
+| machine | One Facade home and the core that manages it. Two Facade homes on the same computer are two machines. Use `facade machine`, `machine.*` and the `machines` topic | node, peer, host (for this) |
+| machine ID | The persistent ID of a machine, stored in its home's database as a lowercase UUID v4 with hyphens and given as `machine_id` | host name, OS machine ID, node ID, peer ID |
+| short ID | The first eight hexadecimal digits of a machine ID after removing hyphens, used for display. An `id:` selector uses a unique prefix of 8 to 32 hexadecimal digits. The ID column in `facade machine list` prints the shortest such selector | machine ID, machine name (for this) |
+| machine name | The name a machine stores for itself, initially derived from its host name. A person can rename it, and machines can share a name | machine ID, host name (for this) |
+| daemon start ID | A random UUID v4 generated each time the daemon starts and kept in memory. Machine introductions and tables carry it as `boot_id` to recognize the same running daemon on several connections | machine ID, OS boot ID |
+| connection | A direct, bidirectional channel between two machines. A live connection carries one machine session over SSH or a bridge | link, route (for this) |
+| saved connection | An SSH connection whose destination, remote home and machine ID the daemon keeps for background reconnects. `facade machine add` saves it once the background hello verifies the machine ID | — |
+| temporary connection | A connection held by a foreground `facade machine connect` command or by one Remote-SSH window. It closes when the command exits or the window closes or reloads | saved connection (for this) |
+| machine session | The two-way JSON-RPC exchange on a live connection. The daemons introduce themselves with `hello` before exchanging requests, responses, notifications and cancellations | CLI session, SSH login (for this) |
+| route | The ordered machine IDs a call passes through. The forwarded `route` gives the remaining machines and ends with the destination | connection, link (for this) |
+| forward, forwarding | Carry a call or subscription through an intermediate machine. The original caller and payload travel intact, and responses follow the request's path back | relay (for this) |
+| bridge | The temporary transport for a Remote-SSH window. VS Code commands carry bytes, EOF and stderr between the local window component and the remote `facade machine serve` over the existing editor connection | relay, tunnel (for this) |
+| unreachable | A machine currently has no route from here. A remote agent's `unreachable` flag reports that its running machine cannot be reached | offline, ended, removed (for this) |
+| disconnected | The display state of a remote card or attached terminal after its live feed is lost. It keeps the last view until a fresh snapshot arrives | unreachable (for a view), ended, removed |
+| SSH interaction required | The state of a saved connection when background SSH needs a person to authenticate or verify the host. Retries pause until the person runs the supplied `facade machine add` command. The reason is `ssh_interaction_required`; the command line says `needs SSH login` | unreachable (for this reason) |
+| machine ID conflict | Two live daemons claim the same machine ID with different daemon start IDs. Facade refuses the conflicting connection and reports both paths with `machine_id_conflict` | duplicate machine name, alternate route (for this) |
+
+## Agent and message addresses
+
+| Use | Means | Not these |
+|---|---|---|
+| structured identity | An agent or message number paired with its full machine ID for storage, protocol and forwarding. In an `AgentRef` the ID names the running machine. In a `MessageRef` it names the machine that stores the message | display label, copyable address |
+| display label | The text shown for an agent or message. A local label uses its number alone, such as `#a17`. A remote label adds the machine, such as `#a17@gpu`, and uses a unique `id:` prefix if the machine name is shared. The command line writes labels bare, as `a17@gpu` and `m42@gpu`; message headers and MCP keep the `#` | copyable address (for this) |
+| copyable address | The `address` text for an agent or message, always qualified by a machine, even on its own machine. Use a unique machine name or `id:` prefix, such as `#m42@gpu` or `#m42@id:3f9a2c1d` | display label, bare number |
 
 ## Core's parts
 

@@ -6,7 +6,7 @@ See what an agent is doing and what it is waiting for. You can also check its Fa
 saved session and the last text submitted to it.
 
 Arguments:
-  <AGENT>  Agent ID or name
+  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
 
 Options:
       --json  Print the details as JSON

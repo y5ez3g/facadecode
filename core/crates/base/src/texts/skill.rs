@@ -31,17 +31,17 @@ type_text and press_keys. Each answers with `status`: success, with `data` where
 
 ## Agents
 
-`start_agent({cli: \"codex\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`
-starts Codex in that folder with your window membership. Its `data.id`, such as \"#a7\", addresses it from then on.
+`start_agent({cli: \"codex\", folder: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser test.\"})`
+starts Codex in that folder with your window membership. Copy its `data.address` to reach it from then on.
 Its run takes YOLO from `facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person
-set it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows, with folders
-and CLIs for connected windows. It lists the agents you reach, including ended agents. With YOLO off you can reach agents
-in your creation tree. Use an ID when a name matches more than one agent.
+set it up. It can use these tools in either case. `list_agents({})` shows connected and disconnected windows. Connected
+windows list launch `locations`, each with a `folder`, and CLI availability in `clis`. The result lists reachable agents, including
+ended ones. With YOLO off you reach your creation tree. Copy an agent's `address` into tool calls.
 
 ## Messages
 
-`send_message({to: \"#a7\", text: \"Run the tests again.\"})` types the message into #a7's terminal under a header that
-names you, such as `📨 Message from Max (#a3) · #m42`, then its text. A reply names what it answers, `reply_to: \"#m42\"`,
+`send_message({to: \"#a7@gpu\", text: \"Run the tests again.\"})` types into that agent's terminal under a header that
+names you, such as `📨 Message from Max (#a3) · #m42`, then its text. A reply uses the received message address in `reply_to`,
 and its header adds `· Reply to #m42`. Messages from the person come from #human. Use #human to notify the person
 through the subscriptions of your connected member windows.
 A start's prompt is answered later by Facade, not by the agent: `🔔 Ada (#a7) has started. · #m43`, under its own number,
@@ -49,13 +49,13 @@ says whether the prompt was passed on, and asks for no reply.
 Delivery is finite: a message the recipient's CLI does not take in time fails, and no one tries it again; one to a guest,
 a CLI session the person started, waits for its next turn.
 `read_messages({})` returns your messages not yet delivered, `read_messages({last: 5})` the five newest, and
-`read_messages({after: \"#m42\"})` every one after #m42. No agent reads another's inbox.
+`read_messages({after: \"#m42\"})` every one after #m42. You can copy its `address` into `after`.
 ";
 
 /// The skill's section after the repeated-message paragraph: the terminals.
 const AFTER_REPEATS: &str = "## Terminals
 
-`read_screen({agent: \"#a7\"})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go
+`read_screen({agent: \"#a7\", lines: 20})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go
 where its cursor is, as `press_keys({agent: \"#a7\", keys: [\"Down\", \"Enter\"]})` picks a menu's second item.
 ";
 

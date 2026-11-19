@@ -50,13 +50,13 @@ function step(flow: Flow, locations: Locations, title: string, placeholderOf: (c
 }
 
 /**
- * The location Show Agent Launch shows, the person's choice (CLIS-4.1): native steps by folder, as Change Working Location
+ * The location Show Agent Command Line shows, the person's choice (CLIS-4.1): native steps by folder, as Change Working Location
  * has them - a folder's own step titled with it, Back returning to the folders at it. Null where the person ends the flow.
  */
 export async function chooseLaunchLocation(locations: Locations, log: LogPort): Promise<Location | null> {
 	// A location catalog opened reads Git again where needed; its items follow (WORKTREES-1.3)
 	locations.refresh().catch(err => log.event(`Could not refresh the working locations: ${messageOf(err)}`));
-	const title = vscode.l10n.t("Show Agent Launch");
+	const title = vscode.l10n.t("Show Agent Command Line");
 	const flow = new Flow();
 	let at: string | undefined;
 	let chosen: Location | null = null;

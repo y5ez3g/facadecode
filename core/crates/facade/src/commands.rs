@@ -5,26 +5,33 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::SystemTime;
 
+use facade_base::address::{
+    display_machine_selector, exact_machine_selector, parse_machine_selector,
+};
 use facade_base::daemon::{
-    AgentArgs, AgentInfo, AgentInspect, AgentRemove, AgentRename, AgentResume, AgentScreen,
-    AgentSend, AgentStart, AgentState, AgentStop, AgentType, AgentsTopic, DEFAULT_TERMINAL_SIZE,
-    DeliveredVia, DeliveryFailure, DeliveryStatus, HelloResult, HowEnded, InputInfo, InputState,
-    InspectResult, IntegrationAdd, IntegrationArgs, IntegrationInfo, IntegrationList,
-    IntegrationRemove, IntegrationsArgs, Message, MessagesTopic, MessagesWatchArgs, PartState,
-    RenameArgs, ResumeArgs, ScreenArgs, SendArgs, StartArgs, TextWritten, ToolsState, TypeArgs,
-    WaitKind, WindowDeliveryFailure, WindowRef,
+    AgentInfo, AgentInspect, AgentInspectResult, AgentRemove, AgentRename, AgentRenameArgs,
+    AgentResume, AgentResumeArgs, AgentScreen, AgentScreenArgs, AgentSelectorArgs, AgentSend,
+    AgentSendArgs, AgentStart, AgentStartWireArgs, AgentState, AgentStop, AgentType, AgentTypeArgs,
+    DEFAULT_TERMINAL_SIZE, DeliveredVia, DeliveryFailure, DeliveryStatus, HelloResult, HowEnded,
+    InputInfo, InputState, IntegrationAdd, IntegrationArgs, IntegrationInfo, IntegrationList,
+    IntegrationListArgs, IntegrationRemove, Message, MessagesTopic, MessagesWatchArgs, PartState,
+    TextWritten, ToolsState, WaitKind, WindowDeliveryFailure, WindowRef, typed_text_with_machines,
 };
 use facade_base::daemon_client::{DaemonClient, made_request_id};
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine::{
+    AgentList, AgentListResult, MachineIdentity, MachineList, MachineQueryArgs, MachineQueryStatus,
+    MachineStateRow,
+};
 use facade_base::operations::{NoArgs, Operation};
 use facade_base::process::{EndReason, ProcessState};
 use facade_base::time::parse_iso_time;
 use facade_rules::integration::command_program;
-use serde_json::json;
+use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
 
-use crate::errors::{Problem, about_agent, about_send, bare_id};
-use crate::{ExitText, Opening, Shown};
+use crate::errors::{Change, Problem, about_agent, about_change, about_send, about_start, bare_id};
+use crate::{ExitText, Opening, Shown, single_line, table};
 
 /// How a command prints: for the reader, or as JSON.
 pub(crate) enum Format {
@@ -51,30 +58,78 @@ pub(crate) fn start(
     client: &mut DaemonClient,
     name: Option<String>,
     prompt: Option<String>,
+    (machine, folder): (Option<String>, Option<String>),
     command: Vec<String>,
     terminal: Option<(u16, u16)>,
 ) -> anyhow::Result<Option<Shown>> {
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
-    let args = StartArgs {
+    let on = machine.clone();
+    let selected = if let Some(selector) = machine
+        .as_deref()
+        .and_then(|machine| parse_machine_selector(machine).ok())
+    {
+        let mut matches = machines(client)?
+            .into_iter()
+            .filter(|machine| selector.matches(machine));
+        matches.next().filter(|_| matches.next().is_none())
+    } else {
+        None
+    };
+    let local = machine.is_none()
+        || selected
+            .as_ref()
+            .is_some_and(|machine| machine.machine_id == client.hello_result.machine_id);
+    // Pin a unique match so the folder and the start refer to the same machine even after a
+    // rename. Let the daemon report an unresolved selector.
+    let machine = selected
+        .map(|machine| exact_machine_selector(&machine.machine_id))
+        .or(machine);
+    // v2 forwards an omitted remote folder as an empty cwd with cwd_is_default set.
+    let cwd_is_default = !local && folder.is_none();
+    let cwd = if local {
+        match folder {
+            Some(folder) => std::path::absolute(folder)?,
+            None => std::env::current_dir()?,
+        }
+        .to_string_lossy()
+        .into_owned()
+    } else {
+        folder.unwrap_or_default()
+    };
+    let args = AgentStartWireArgs {
         command,
         name,
-        cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
+        cwd,
+        machine,
+        cwd_is_default,
         window: None,
+        initial_windows: None,
         location_source_window: None,
         env: environment(),
         cols,
         rows,
         prompt,
         call_id: None,
+        result_message_id: None,
+        result_message_machine_id: None,
         request_id: Some(made_request_id()),
         worktree: None,
         model: None,
         effort: None,
         session: None,
     };
-    let (started, _) = client.call_with_request_id::<AgentStart>(args, false)?;
-    let AgentInfo { agent_id, name, .. } = started.agent;
-    Ok(show(agent_id, Opening::Started { name }, terminal))
+    let (started, _) = client
+        .call_with_request_id::<AgentStart>(args, false)
+        .map_err(|error| match &on {
+            Some(machine) => about_start(machine, error),
+            None => error,
+        })?;
+    let here = client.hello_result.machine_id.clone();
+    let shown = display_id(client, &started.agent);
+    let opening = Opening::Started {
+        name: started.agent.name.clone(),
+    };
+    Ok(show(&started.agent, &here, shown, opening, terminal))
 }
 
 /// Inspects the earlier run before resuming its session in a new run.
@@ -84,11 +139,14 @@ pub(crate) fn resume(
     terminal: Option<(u16, u16)>,
 ) -> anyhow::Result<Option<Shown>> {
     let earlier = client
-        .call::<AgentInspect>(AgentArgs {
+        .call::<AgentInspect>(AgentSelectorArgs {
             agent: agent.clone(),
         })
         .map_err(|error| about_agent(&agent, error))?;
-    let id = earlier.agent.agent_id;
+    let here = client.hello_result.machine_id.clone();
+    let remote = earlier.agent.machine_id != here;
+    let exact = exact_id(&earlier.agent, &here);
+    let id = shown_id(&earlier.agent);
     if earlier.agent.guest {
         return Err(Problem::Guest { id }.into());
     }
@@ -103,28 +161,95 @@ pub(crate) fn resume(
     }
     let (cols, rows) = terminal.unwrap_or(DEFAULT_TERMINAL_SIZE);
     let resumed = client
-        .call::<AgentResume>(ResumeArgs {
-            agent: id,
-            env: environment(),
+        .call::<AgentResume>(AgentResumeArgs {
+            agent: exact,
+            // The run on another machine takes that machine's login environment.
+            env: if remote {
+                BTreeMap::new()
+            } else {
+                environment()
+            },
             cols,
             rows,
         })
         .map_err(|error| about_agent(&agent, error))?;
-    let AgentInfo { agent_id, name, .. } = resumed;
-    Ok(show(agent_id, Opening::Resumed { name }, terminal))
+    let shown = display_id(client, &resumed);
+    let opening = Opening::Resumed {
+        name: resumed.name.clone(),
+    };
+    Ok(show(&resumed, &here, shown, opening, terminal))
 }
 
-fn show(agent: String, opening: Opening, terminal: Option<(u16, u16)>) -> Option<Shown> {
+/// Returns the agent to attach to, by its exact address, or prints its ID when detached.
+fn show(
+    agent: &AgentInfo,
+    here: &str,
+    shown: String,
+    opening: Opening,
+    terminal: Option<(u16, u16)>,
+) -> Option<Shown> {
     if terminal.is_some() {
-        return Some(Shown { agent, opening });
+        return Some(Shown {
+            agent: exact_id(agent, here),
+            opening,
+        });
     }
-    println_or_end!("{agent}");
+    println_or_end!("{shown}");
     None
+}
+
+/// The agent as the command line prints it, naming its machine where the record has no label.
+fn display_id(client: &mut DaemonClient, agent: &AgentInfo) -> String {
+    if agent.label.is_some() || agent.machine_id == client.hello_result.machine_id {
+        return shown_id(agent);
+    }
+    format!(
+        "{}@{}",
+        agent.agent_id,
+        machine_selector(client, &agent.machine_id)
+    )
+}
+
+/// The agent as the command line prints it: `a3` here, `a17@gpu` on another machine.
+fn shown_id(agent: &AgentInfo) -> String {
+    agent
+        .label
+        .as_deref()
+        .map_or(agent.agent_id.as_str(), |label| {
+            label.trim_start_matches('#')
+        })
+        .to_string()
+}
+
+/// The agent as a later call names it: its ID here, its exact address on another machine.
+fn exact_id(agent: &AgentInfo, here: &str) -> String {
+    match agent.machine_id == here {
+        true => agent.agent_id.clone(),
+        false => agent.reference().exact_address(),
+    }
 }
 
 /// Prints one row or one bare ID per agent, or the agent array as JSON.
 pub(crate) fn list(client: &mut DaemonClient, listing: Listing) -> anyhow::Result<()> {
-    let agents = client.snapshot::<AgentsTopic>(NoArgs {})?;
+    let listed = client.call::<AgentList>(MachineQueryArgs { machine: None })?;
+    if let Listing::Json = listing {
+        let json = agent_list_json(listed)?;
+        println_or_end!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+    for machine in &listed.machines {
+        let why = match machine.status {
+            MachineQueryStatus::Answered => continue,
+            MachineQueryStatus::Unavailable => "it is unreachable",
+            MachineQueryStatus::TimedOut => "it did not respond within 3 seconds",
+            MachineQueryStatus::Error => "it failed",
+        };
+        eprintln!(
+            "warning: could not list the agents on {}: {why}",
+            single_line(&machine.name)
+        );
+    }
+    let agents = listed.agents;
     match listing {
         Listing::Table => {
             let text = list_text(&agents, SystemTime::now());
@@ -136,9 +261,28 @@ pub(crate) fn list(client: &mut DaemonClient, listing: Listing) -> anyhow::Resul
         }
         Listing::Quiet if !agents.is_empty() => println_or_end!("{}", quiet_text(&agents)),
         Listing::Quiet => {}
-        Listing::Json => println_or_end!("{}", serde_json::to_string_pretty(&agents)?),
+        Listing::Json => {}
     }
     Ok(())
+}
+
+/// Projects the agent records and the machine rows of a completed v2 list.
+pub(crate) fn agent_list_json(listed: AgentListResult) -> serde_json::Result<Value> {
+    let mut agents = serde_json::to_value(listed.agents)?;
+    for agent in agents.as_array_mut().expect("agent list is an array") {
+        name_agent_json_fields(agent);
+    }
+    let machines = listed
+        .machines
+        .into_iter()
+        .map(|mut machine| {
+            let short_id = std::mem::take(&mut machine.short_id);
+            let mut row = serde_json::to_value(MachineStateRow::from(machine))?;
+            row["short_id"] = Value::String(short_id);
+            Ok(row)
+        })
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    Ok(json!({ "agents": agents, "machines": machines }))
 }
 
 pub(crate) fn inspect(
@@ -147,21 +291,41 @@ pub(crate) fn inspect(
     format: Format,
 ) -> anyhow::Result<()> {
     let inspected = client
-        .call::<AgentInspect>(AgentArgs {
+        .call::<AgentInspect>(AgentSelectorArgs {
             agent: agent.clone(),
         })
         .map_err(|error| about_agent(&agent, error))?;
     match format {
         Format::Text => println_or_end!("{}", inspect_text(&inspected, SystemTime::now())),
-        Format::Json => println_or_end!("{}", serde_json::to_string_pretty(&inspected)?),
+        Format::Json => {
+            let mut json = serde_json::to_value(inspected)?;
+            name_agent_json_fields(&mut json["agent"]);
+            println_or_end!("{}", serde_json::to_string_pretty(&json)?);
+        }
     }
     Ok(())
+}
+
+/// Names the two CLI fields in a serialized v2 agent, keeping its field order and values.
+fn name_agent_json_fields(agent: &mut Value) {
+    let fields = agent.as_object_mut().expect("agent record is an object");
+    *fields = std::mem::take(fields)
+        .into_iter()
+        .map(|(name, value)| {
+            let name = match name.as_str() {
+                "cwd" => "folder".into(),
+                "said" => "last_input".into(),
+                _ => name,
+            };
+            (name, value)
+        })
+        .collect();
 }
 
 /// Prints the requested number of screen and scrollback lines as plain text.
 pub(crate) fn screen(client: &mut DaemonClient, agent: String, lines: u16) -> anyhow::Result<()> {
     let screen = client
-        .call::<AgentScreen>(ScreenArgs {
+        .call::<AgentScreen>(AgentScreenArgs {
             agent: agent.clone(),
             lines: Some(lines),
         })
@@ -181,7 +345,7 @@ pub(crate) fn type_input(
     keys: Vec<String>,
 ) -> anyhow::Result<()> {
     client
-        .call::<AgentType>(TypeArgs {
+        .call::<AgentType>(AgentTypeArgs {
             agent: agent.clone(),
             raw: None,
             text,
@@ -198,10 +362,11 @@ pub(crate) fn send(
     text: String,
     reply_to: Option<String>,
 ) -> anyhow::Result<()> {
-    let args = SendArgs {
+    let args = AgentSendArgs {
         to: to.clone(),
         text,
         reply_to,
+        reply_to_machine_id: None,
         request_id: Some(made_request_id()),
         time_left_ms: None,
     };
@@ -212,7 +377,18 @@ pub(crate) fn send(
             Some(problem) => problem.into(),
             None => about_send(&to, error),
         })?;
-    let message = &result.message;
+    let mut message = result.message;
+    if let Some(reference) = message.message_ref.clone()
+        && reference.machine_id != here
+    {
+        // A message to an agent on another machine is numbered there: m42@gpu to a17@gpu.
+        let machine = machine_selector(client, &reference.machine_id);
+        message.message_id = format!("{}@{machine}", message.message_id);
+        if message.to != "human" {
+            message.to = format!("{}@{machine}", message.to);
+        }
+    }
+    let message = &message;
     if message.to != "human" {
         println_or_end!("{}", sent(message)?);
         return Ok(());
@@ -240,24 +416,40 @@ pub(crate) fn send(
             window_failure(failure, &here)
         );
     }
+    for window in &windows.outcome_unknown {
+        eprintln!(
+            "warning: could not confirm that {} showed {id}",
+            window_name(window, &here)
+        );
+    }
     Ok(())
 }
 
 /// The refusal of a message to the human that none of the sender's windows showed.
 fn not_shown(error: &anyhow::Error, here: &str) -> Option<Problem> {
-    let windows = error
+    let data = &error
         .chain()
         .find_map(|cause| cause.downcast_ref::<ErrorBody>())?
-        .data
-        .windows
-        .as_deref()?;
-    if windows.is_empty() {
-        return Some(Problem::InNoWindow);
-    }
-    let why: Vec<String> = windows
-        .iter()
-        .map(|failure| window_failure(failure, here))
-        .collect();
+        .data;
+    let why: Vec<String> = match (&data.window_delivery, &data.windows) {
+        (Some(delivery), _) => delivery
+            .not_delivered
+            .iter()
+            .map(|failure| window_failure(failure, here))
+            .chain(
+                delivery
+                    .outcome_unknown
+                    .iter()
+                    .map(|window| format!("{} may not have shown it", window_name(window, here))),
+            )
+            .collect(),
+        (None, Some(windows)) if windows.is_empty() => return Some(Problem::InNoWindow),
+        (None, Some(windows)) => windows
+            .iter()
+            .map(|failure| window_failure(failure, here))
+            .collect(),
+        (None, None) => return None,
+    };
     Some(Problem::NotShown {
         why: why.join("; "),
     })
@@ -282,9 +474,39 @@ fn window_failure(failure: &WindowDeliveryFailure, here: &str) -> String {
     let why = match failure.reason.as_str() {
         "window_disconnected" => "is closed",
         "not_watching" => "is not showing Facade messages",
+        "machine_unavailable" => "is on a machine Facade could not connect to",
         reason => reason,
     };
     format!("{} {why}", window_name(&failure.window, here))
+}
+
+/// The identities in the daemon's machine table, including saved machines without a route.
+fn machines(client: &mut DaemonClient) -> anyhow::Result<Vec<MachineIdentity>> {
+    client.call::<MachineList>(NoArgs {}).map(|listed| {
+        listed
+            .machines
+            .into_iter()
+            .map(|machine| MachineIdentity {
+                machine_id: machine.machine_id,
+                name: machine.name,
+            })
+            .collect()
+    })
+}
+
+/// How a reader names the machine `id` among `machines`: its name where unique, else `id:` and
+/// enough of its ID.
+fn selector_among(machines: &[MachineIdentity], id: &str) -> String {
+    machines
+        .iter()
+        .find(|machine| machine.machine_id == id)
+        .map(|machine| display_machine_selector(machine, machines))
+        .unwrap_or_else(|| exact_machine_selector(id))
+}
+
+/// How a reader names the machine `id`.
+fn machine_selector(client: &mut DaemonClient, id: &str) -> String {
+    selector_among(&machines(client).unwrap_or_default(), id)
 }
 
 /// Prints and delivers up to 100 inbox messages as the recipient's terminal would show them.
@@ -293,10 +515,29 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
     if inbox.messages.is_empty() {
         eprintln!("No messages waiting.");
     } else {
+        let here = client.hello_result.machine_id.clone();
+        let remote = |id: Option<&str>| id.is_some_and(|id| id != here);
+        let machines = match inbox.messages.iter().any(|message| {
+            remote(message.from_machine_id.as_deref())
+                || remote(message.reply_to_machine_id.as_deref())
+        }) {
+            true => machines(client).unwrap_or_default(),
+            false => Vec::new(),
+        };
+        let selector = |id: Option<&str>| {
+            let id = id.filter(|id| *id != here)?;
+            Some(selector_among(&machines, id))
+        };
         let shown: Vec<String> = inbox
             .messages
             .iter()
-            .map(facade_base::daemon::typed_text)
+            .map(|message| {
+                typed_text_with_machines(
+                    message,
+                    selector(message.from_machine_id.as_deref()).as_deref(),
+                    selector(message.reply_to_machine_id.as_deref()).as_deref(),
+                )
+            })
             .collect();
         println_or_end!("{}", shown.join("\n\n"));
     }
@@ -305,12 +546,12 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
 
 pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> anyhow::Result<()> {
     let renamed = client
-        .call::<AgentRename>(RenameArgs {
+        .call::<AgentRename>(AgentRenameArgs {
             agent: agent.clone(),
             name,
         })
         .map_err(|error| about_agent(&agent, error))?;
-    println_or_end!("{} {}", renamed.agent_id, single_line(&renamed.name));
+    println_or_end!("{} {}", shown_id(&renamed), single_line(&renamed.name));
     Ok(())
 }
 
@@ -319,7 +560,12 @@ pub(crate) fn stop(
     agents: Vec<String>,
     report: &dyn Fn(&anyhow::Error) -> i32,
 ) -> anyhow::Result<i32> {
-    Ok(change_agents::<AgentStop>(client, agents, report))
+    Ok(change_agents::<AgentStop>(
+        client,
+        agents,
+        Change::Stop,
+        report,
+    ))
 }
 
 pub(crate) fn remove(
@@ -327,24 +573,30 @@ pub(crate) fn remove(
     agents: Vec<String>,
     report: &dyn Fn(&anyhow::Error) -> i32,
 ) -> anyhow::Result<i32> {
-    Ok(change_agents::<AgentRemove>(client, agents, report))
+    Ok(change_agents::<AgentRemove>(
+        client,
+        agents,
+        Change::Remove,
+        report,
+    ))
 }
 
 /// Run one operation per argument. A service refusal leaves the connection usable.
-fn change_agents<O: Operation<Args = AgentArgs>>(
+fn change_agents<O: Operation<Args = AgentSelectorArgs>>(
     client: &mut DaemonClient,
     agents: Vec<String>,
+    change: Change,
     report: &dyn Fn(&anyhow::Error) -> i32,
 ) -> i32 {
     let mut code = 0;
     for agent in agents {
-        match client.call::<O>(AgentArgs {
+        match client.call::<O>(AgentSelectorArgs {
             agent: agent.clone(),
         }) {
             Ok(_) => println_or_end!("{}", single_line(&agent)),
             Err(error) => {
                 let refused = error.chain().any(|cause| cause.is::<ErrorBody>());
-                report(&about_agent(&agent, error));
+                report(&about_change(&agent, change, error));
                 if !refused {
                     return 1;
                 }
@@ -370,7 +622,7 @@ pub(crate) fn integration(
             client.call::<IntegrationRemove>(IntegrationArgs { cli, env })?
         }
         IntegrationAction::List => {
-            let list = client.call::<IntegrationList>(IntegrationsArgs { env })?;
+            let list = client.call::<IntegrationList>(IntegrationListArgs { env })?;
             match format {
                 Format::Text => {
                     println_or_end!(
@@ -420,7 +672,7 @@ pub(crate) fn status(
                     "version": version,
                     "daemon": { "pid": hello.pid, "build": hello.build },
                     "keeper": hello.keeper,
-                    "agents": hello.agents,
+                    "agents": hello.agent_count,
                 }),
                 None => json!({ "running": false, "home": home.to_string_lossy() }),
             };
@@ -452,48 +704,6 @@ fn environment() -> BTreeMap<String, String> {
         );
     }
     variables
-}
-
-fn single_line(text: &str) -> String {
-    text.replace(
-        |ch: char| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'),
-        " ",
-    )
-}
-
-/// Align columns by the width of their headers and cells.
-pub(crate) fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
-    let rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| row.iter().map(|cell| single_line(cell)).collect())
-        .collect();
-    let mut widths: Vec<usize> = headers.iter().map(|header| header.width()).collect();
-    for row in &rows {
-        for (width, cell) in widths.iter_mut().zip(row) {
-            *width = (*width).max(cell.width());
-        }
-    }
-    let mut lines = Vec::with_capacity(rows.len() + 1);
-    lines.push(table_row(headers.iter().copied(), &widths));
-    for row in &rows {
-        lines.push(table_row(row.iter().map(String::as_str), &widths));
-    }
-    lines.join("\n")
-}
-
-fn table_row<'a>(cells: impl Iterator<Item = &'a str>, widths: &[usize]) -> String {
-    let mut line = String::new();
-    for (column, (cell, width)) in cells.zip(widths).enumerate() {
-        if column > 0 {
-            line.push_str("   ");
-        }
-        line.push_str(cell);
-        if column + 1 < widths.len() {
-            let _ = write!(line, "{:pad$}", "", pad = width - cell.width());
-        }
-    }
-    line.truncate(line.trim_end_matches(' ').len());
-    line
 }
 
 pub(crate) fn ago(at: SystemTime, now: SystemTime) -> String {
@@ -602,7 +812,7 @@ pub(crate) fn list_text(agents: &[AgentInfo], now: SystemTime) -> String {
                 agent.cli.clone()
             };
             vec![
-                agent.agent_id.clone(),
+                shown_id(agent),
                 agent.name.clone(),
                 cli,
                 state_words(agent),
@@ -615,19 +825,15 @@ pub(crate) fn list_text(agents: &[AgentInfo], now: SystemTime) -> String {
 }
 
 pub(crate) fn quiet_text(agents: &[AgentInfo]) -> String {
-    agents
-        .iter()
-        .map(|agent| agent.agent_id.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
+    agents.iter().map(shown_id).collect::<Vec<_>>().join("\n")
 }
 
-pub(crate) fn inspect_text(inspected: &InspectResult, now: SystemTime) -> String {
+pub(crate) fn inspect_text(inspected: &AgentInspectResult, now: SystemTime) -> String {
     let agent = &inspected.agent;
     let mut lines = Vec::new();
     let mut field =
         |label: &str, value: &str| lines.push(format!("{label:<15}{}", single_line(value)));
-    field("ID:", &agent.agent_id);
+    field("ID:", &shown_id(agent));
     field("Name:", &agent.name);
     let cli = if agent.guest {
         format!("{} (guest)", agent.cli)
@@ -797,7 +1003,7 @@ pub(crate) fn integrations_text(list: &[IntegrationInfo], now: SystemTime) -> St
             ]
         })
         .collect();
-    table(&["CLI", "STATUS", "ADDED"], &rows)
+    table(&["CLI", "STATE", "ADDED"], &rows)
 }
 
 pub(crate) fn status_text(
@@ -822,7 +1028,7 @@ pub(crate) fn status_text(
         || "none".into(),
         |keeper| service(keeper.pid, &keeper.build),
     );
-    let agents = quantity(hello.agents as u64);
+    let agents = quantity(hello.agent_count as u64);
     format!(
         "Facade is running.\n  Home:      {home}\n  Version:   {version}\n  Daemon:    {daemon}\n  Keeper:    {keeper}\n  Agents:    {agents}"
     )

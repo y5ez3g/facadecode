@@ -83,7 +83,7 @@ with `TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `CLAUDE_CODE_IDE_SKIP_AUTO_IN
 `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` too, so a Claude Code that `facade start` runs there shows no welcome; a Claude Code
 run directly there then does not install its VS Code extension, and one installed by hand works as before.
 
-An omitted `command` uses the type's command on PATH; `custom` requires one (CONFIGURATION-2.2). A simple name is
+An omitted `program` uses the type's command on PATH; `custom` requires one (CONFIGURATION-2.2). A simple name is
 searched on that PATH; a relative path is from launch cwd; leading `~` uses that environment's home; an absolute path
 is exact. Empty or whitespace-only is invalid. There is no silent fallback to another CLI.
 Require executable file on POSIX, file plus PATHEXT resolution on Windows. Preserve quoted PATH entries. A Windows
@@ -94,7 +94,7 @@ one and it is there - and Muse Code's installer launcher runs its active native 
 beside npm's shim, else a Node program (`.exe` or `.com`) on the launch's PATH, never a version manager's `.cmd` or
 `.bat`. Any other `.cmd` or `.bat` runs through cmd.exe, which Facade gives no text it would read as its own: a launch
 through cmd.exe is refused before execution where an argument or the program's own path holds `"`, `%`, `^`, `&`, `|`,
-`<`, `>`, `!` or a line break, saying to set the entry's `command` to its own program or Node entry point; a configured
+`<`, `>`, `!` or a line break, saying to set the entry's `program` to its own program or Node entry point; a configured
 argument is named by its place in its setting and that character, never quoted. Where only the Facade tools' arguments
 cannot pass, the CLI starts without the tools, which are unavailable with why (2.2). A launch never builds an unescaped
 shell string. cmd.exe starts in no UNC folder - a network share's, a WSL distribution's `\\wsl$` one - but in the Windows
@@ -494,7 +494,7 @@ records its session as its run's.
 
 ### 3.1 Launch arguments and environment
 
-**Entries use `command`, `args` and `env`; each adapter rejects options that replace Facade's launch choices.**
+**Entries use `program`, `args` and `env`; each adapter rejects options that replace Facade's launch choices.**
 
 CONFIGURATION-2.2 owns field shapes and defaults, CONFIGURATION-3.1 literal arguments, and 1.2 environment handling.
 Arrays are used whole, in order. There is no public argument-group engine, placeholder template, trust-file merger
@@ -607,7 +607,7 @@ ARCHITECTURE-5's separate concern.
 
 **An entry's type selects the adapter, while its name and settings stay its own.**
 
-CONFIGURATION-2 defines entry identity and capabilities. Resolve a built-in type using this entry's `command`, `args`
+CONFIGURATION-2 defines entry identity and capabilities. Resolve a built-in type using this entry's `program`, `args`
 and `env`, without inheriting another entry. Use that type's readers, native history, trust and supported options.
 Its name remains the API ID, and its icon follows CONFIGURATION-2.4. Record name and type with conversation metadata
 so restoration can validate the original entry (CONFIGURATION-3.4); a missing or changed entry never falls back to a
@@ -648,12 +648,14 @@ report its state stays unknown, not an integration error (CONFIGURATION-2.3).
 
 ## 4 Inspection and design
 
-### 4.1 Show Agent Launch...
+### 4.1 Show Agent Command Line...
 
-**Show Agent Launch... displays a start's effective launch and actual known choices without running a CLI.**
+**Show Agent Command Line... displays the command line an agent would use, with its source and settings.**
 
-Show executable/environment source, cwd, literal argument order, resulting YOLO, native sandbox/approval facts, how the
-folder is trusted and configuration errors. It includes the arguments and variables the Facade tools (2.2) and session
+The old engine opens a read-only document titled `Agent Command Line` headed `Agent command line in {0}`.
+The picker uses `Show Agent Command Line`, with ` · {folder}` appended at the second step.
+Show executable and environment sources, the folder, literal argument order, resulting YOLO, native sandbox and
+approval facts, folder trust and configuration errors. It includes the arguments and variables the Facade tools (2.2) and session
 tracking (2.4) add at a start, in their literal order, without writing any launch file to show them: a value that exists
 only once a start makes it - a generated path or session ID - appears as a named placeholder, and what cannot be planned
 without writing files is said in words. Use one launch configuration and RULES-4.3's YOLO source. A chosen inspection
@@ -719,7 +721,7 @@ installed CLI is the runtime evidence.
 | 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, terminal and report titles rejected for each built-in (2.3), Muse Code's screen reader on its fixtures and its reports' precedence |
 | 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks; native-title refresh at 2.4's read times, its cache and its retention across reattachment, as VERIFICATION U14 checks |
 | 3.1–3.4 | Literal arguments, reserved-option tables and aliases, short clusters and attached values, Go single-dash options, end marker versus a required value, parent/child config conflicts, per-CLI dash-prefixed values read consistently by validation/migration/settings extraction/list merging/hook merging, additive integrations and settings/hooks merges, run settings with POSIX 0600 and inherited Windows permissions, Antigravity's file with and without tools or identity tracking, Claude null conflicts, custom-program limits, native prompt mapping, folder trust and user configuration preserved |
-| 4.1–4.2 | Show Agent Launch describes and redacts the configured launch and run-settings JSON, writes no preview files, and says where no trust entry is written; staged cwd validation |
+| 4.1–4.2 | Show Agent Command Line describes and redacts the configured launch and run-settings JSON, writes no preview files, and says where no trust entry is written; staged cwd validation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes; no claim inferred from a dated observation |
 
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.

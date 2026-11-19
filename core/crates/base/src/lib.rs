@@ -17,18 +17,20 @@ mod platform;
 mod protocol;
 mod texts;
 
+pub mod key_input;
 pub mod log;
 pub mod paths;
 pub mod process;
 pub mod settings;
+pub mod start;
 pub mod time;
 
 pub use build::{
-    TEST_BUILD_SUFFIX, VERSION, build_id, take_test_build, takes_over, this_program, version,
-    version_of,
+    TEST_BUILD_SUFFIX, VERSION, build_id, build_version, take_test_build, takes_over, this_program,
+    version, version_of,
 };
 pub use platform::modules::*;
-pub use protocol::{base64, daemon, daemon_client, jsonrpc, keeper, operations};
+pub use protocol::{address, base64, daemon, daemon_client, jsonrpc, keeper, machine, operations};
 pub use texts::{instructions, skill, tools};
 
 /// Eight random bytes from the operating system, for keys and names nobody may guess. Panics if

@@ -2,16 +2,17 @@
 
 The daemon manages the agents of one Facade home and serves its clients: the editor, the `facade`
 commands, the hooks and the relays of the CLIs' MCP servers. It is the crate `facade-daemon`
-(`core/crates/daemon/`). `facade daemon` runs it through its one public function, `run`. Its nine
-child islands each own one kind of data. This layer joins them.
+(`core/crates/daemon/`). `facade daemon` runs it through its one public function, `run`. This layer
+joins the child islands and serves calls and subscriptions for this home from other machines.
 
 ## Owns
 
-- The agent list: every agent listed, by its ID, with its handle.
+- The local agent list, by agent ID, with a handle for each record. The editor's view adds records
+  from the machines where its windows' other agents run.
 - `core/facade.db`, its schema and its one connection. It keeps this machine's ID, logical
-  windows, agent memberships, and each run's recorded location source. The parts get handles
-  of their own tables. The first open creates the schema and counters in one transaction.
-  Each write across tables is one transaction.
+  windows, agent memberships, each run's location source, saved SSH connections, and the IDs and
+  names of machines this home has seen. The parts get handles of their own tables. The first open
+  creates the schema and counters in one transaction. Each write across tables is one transaction.
 - The `agents` topic's changes, which every listed agent's record goes out on.
 - The starts under way with a request ID, so that a repeated start waits for the first one's response.
 - What each open watch lets go of when it ends: a screen viewer, or a window's watch that lets Facade
@@ -25,8 +26,14 @@ child islands each own one kind of data. This layer joins them.
   method. The parts' locks never nest; the keeper link's lock and each actor's record are leaf
   locks.
 - A start writes its record, initial members, location source and any prompt together. Removal
-  deletes an agent's record, members and inbox together. A start result is written only while its
-  caller's record has no exit or its guest record is still kept.
+  deletes an agent's record, members and inbox together. An agent starting on another machine
+  binds its prompt result to a number reserved on its creator's machine. A result reaches that
+  inbox only while the creator's record has no exit or its guest record is still kept.
+- The source daemon resolves addresses and establishes the caller from its local connection.
+  The running machine decides reach from the caller's complete creation-tree root and YOLO.
+- A person message has one number on its sender's machine. That machine records which member
+  windows accepted the change, declined it or have an unknown outcome. Replies use the original
+  message's machine ID and number.
 - The cross-island orders (start, paste, session, output, removal and window binding, guest join
   and end) are kept as [ARCHITECTURE](../ARCHITECTURE.md) states them.
 - Clients are accepted only once recovery has listed every readable agent.
@@ -42,7 +49,7 @@ child islands each own one kind of data. This layer joins them.
 - An `ide` client's `numbers_given` raises the agent counter through records and the message counter
   through messages before `hello` responds; a counter is never lowered.
 - The daemon exits only after five idle seconds in a row, decided under the lock that accepts work.
-  While an agent runs or a guest is listed, nothing wakes that decision but an exit or a guest's end.
+  A running agent, a listed guest, a machine session or a saved connection keeps the daemon active.
 - `impl Daemon` exists only in this layer's files.
 - One actor task per agent, on a multi-thread tokio runtime; blocking work goes to blocking workers
   or runs in place.
@@ -58,11 +65,13 @@ child islands each own one kind of data. This layer joins them.
 - **`facade daemon`**: `facade_daemon::run() -> anyhow::Result<()>`. The keeper starts it in the
   background; it also runs in the foreground. It reports a failed start on the startup channel.
 - **Clients**: the daemon protocol on the daemon socket, as
-  [PROTOCOL](../../../core/protocol/PROTOCOL.md) describes it: every operation and the four topics
-  (agents, windows, messages, screen). `daemon.log` gives the person's clients the log's last 200
+  [PROTOCOL](../../../core/protocol/PROTOCOL.md) describes it: operations and the agents, machines,
+  windows, messages and screen topics. `daemon.log` gives the person's clients the log's last 200
   lines at most, the home folder written `~`; a call for an agent or a guest is refused.
 - **Relays**: a hello with `relay` makes the connection a relay's; its lines are MCP, which the mcp
   island responds to.
+- **Machines**: a machine hello or a terminal person's `machine.connect` hands the connection to
+  the machine session layer after the server flushes the authorization response.
 - **The keeper**: the keeper protocol, as [KEEPER](../../../core/protocol/KEEPER.md) describes it,
   through runs' keeper link.
 - **Files** under the home's `core/`: `facade.db`, `screens/<id>/`, `runs/`, `results/`,
@@ -89,16 +98,21 @@ The layer's files:
 | `operations.rs` | Start, resume, stop, remove, rename, a run's exit, the environment of an agent's CLI. Resume distinguishes a session the CLI has not saved yet from one never reported. |
 | `delivery.rs` | `agent.send`, start prompts, results, and input handed to an agent. |
 | `presence.rs` | Joins and ends guests, handles window binding, and stops runs whose location source reports their folder gone. |
-| `topics.rs` | The four watch topics: snapshots, changes, resyncs, and what a watch's end lets go of. |
+| `topics.rs` | Watch snapshots, changes, resyncs, and what a watch's end lets go of. |
+| `remote_agents.rs` | One member subscription for each reachable machine, with pending, synced and unreachable states. A synced event carries that machine's complete records. |
+| `machine_service.rs` | Machine authorization, saved connections, names and the machines view. |
+| `network_operations.rs` | Address resolution, one-time queries, and routing and dispatch of machine calls and watches. |
 | `relays.rs` | Relay hellos, the in-process connection the MCP tools use, MCP members. |
 | `service.rs` | The server's `Service` trait for the daemon: hello, calls, watches, relays. |
 | `recovery.rs` | Recovery at startup: agents, their runs and screens, messages left pending. |
 | `command_line.rs` | Which CLI a start or resume runs, from the settings file and rules. |
 | `waits.rs` | A started agent's long waits, sent to its creator. |
 
-**Values the parts share**: `HUMAN` (the person's ID), `Sender` (who said something: an agent and
-its name then, or the person), `Cancel` (a call's cancellation), `ToolsGiven` (how a run's CLI got
-Facade's tools), and the test gates and `blocking_in_place`.
+**Values the parts share**: `HUMAN` (the person's ID), `Sender` (an agent and its name then, or the
+person), `Caller` (the authenticated identity carried across machines), `Cancel` (a call's
+cancellation), `ToolsGiven` (how a run's CLI got Facade's tools), `SavedConnection` (the machine
+ID, SSH destination and optional Facade home shared by store and network), and the test gates and
+`blocking_in_place`.
 
 **Table handles**: `NumberTable` to records (agent numbers), `MessageTable` to messages,
 `GuestTable` and `IntegrationTable` to guests, `WindowTable` to windows. A handle holds the store and
@@ -107,10 +121,10 @@ offers only its table's methods.
 **Startup** (`start_and_serve`) takes the home's daemon lock and exits if it cannot get it. It takes
 the clean-end note, holds this build's programs open, makes runs, finds the keeper, opens the store,
 makes the other parts and sweeps. It recovers agents, guests and pending messages, then restores
-disconnected windows and reclaims those without a workspace or saved agent references. It releases
-plugins no run uses and serves the keeper link. It starts the tasks that follow runs, guests,
-results and long waits, and starts the hourly sweep. It then binds the socket, reports the start
-and serves until idle.
+every persisted window as disconnected. It releases plugins no run uses and serves the keeper
+link. It starts the tasks that follow runs, guests, results, long waits, machine sessions and
+routes, restores saved connections, and starts the hourly sweep. It then binds the socket,
+reports the start and serves until idle.
 
 **What each part gets and how it reports back**:
 
@@ -121,6 +135,7 @@ and serves until idle.
 | runs | the home, the held programs, a `RunEvent` sender; per run, an `ExitSink` | `RunEvent::Exited`, `RunEvent::Session` (acknowledged once committed) |
 | records | `NumberTable` | return values |
 | windows | the machine ID and `WindowTable` | return values and changes on the `windows` topic |
+| network | the local machine introduction, the SSH control directory and an event sender | session events, new routes, and calls and subscriptions addressed to this machine |
 | guests | `GuestTable`, `IntegrationTable`, the held programs, a `GuestEvent` sender | `GuestEvent::Ended`, `GuestEvent::TurnIdle` |
 | lifecycle | the `LifecycleActivity` implementation and the idle pause channels | work guards, draining refusals, `closing`, the clean-end fact |
 | server | the `Service` implementation, the idle exit's `closing` and `paused` | trait calls into this layer |
@@ -387,7 +402,10 @@ A run's command line, environment, folder, plugin and session following.
 Agent IDs, default names, and what a reference names within a client's reach (`records.rs`).
 
 - **Owns:** the default names held for starts not yet listed; the IDs of agents whose records this version cannot read; the 140 default names, the same list as `extension/src/base/names.ts`. It reaches the database through `NumberTable` and `MembershipTable`.
-- **Keeps:** every `#aN` comes from the number counter, committed before it is used, so no ID is given twice, even after a failed start. A default name is free across the agent's member windows, ignoring case and surrounding spaces, and no other start holds it; when none is free, the name is the ID, such as `#a7`. A reference names one agent or the person, or fails: an ID outside reach is refused, a name only names agents in reach, and a name several agents have is ambiguous. `#human` always names the person; `human` and `@human` name the person unless an agent in reach has that name.
+- **Keeps:** every `#aN` comes from the SQLite `numbers` table in the Facade home's `core/facade.db`.
+  The counter is committed before the ID is assigned and keeps IDs unique across restarts while
+  the database is retained. A failed start still consumes its number.
+  A default name is free across the agent's member windows, ignoring case and surrounding spaces, and no other start holds it; when none is free, the name is the ID, such as `#a7`. A reference names one agent or the person, or fails: an ID outside reach is refused, a name only names agents in reach, and a name several agents have is ambiguous. `#human` always names the person; `human` and `@human` name the person unless an agent in reach has that name.
 - **Never does:** hold agent handles (it reads only `AgentInfo`); touch any other table; take the agents lock (the daemon passes in what it needs).
 - **Interface:**
   - `Records::new(NumberTable, MembershipTable)`; `next_id() -> Result<String, ErrorBody>` (async, `a<N>`); `raise_above(given)`, after which every `#aN` is above `given` (blocks); `reserve_name(windows, listed, id, names) -> String` and `release_name(name)`, where the caller holds the agents lock; `add_window(agent_id, &WindowRef)` returns the committed sorted membership of an existing agent; `keep_unreadable(ids)` once at startup; `is_unreadable(id)` during recovery.
@@ -412,18 +430,18 @@ Logical editor windows and their connections, subscriptions and locations. `src/
     against their binding.
   - Closing the last connection clears the window's subscriptions and publishes it as
     disconnected. The saved logical ID and instance remain available to another hello.
-  - At startup, before accepting clients, recovery reclaims a window with no workspace if no
-    agent names it as a member window or a location source. The store checks the saved references,
-    including those of agents whose records recovery could not read.
+  - At startup, before accepting clients, restores each saved window as disconnected, including
+    windows without a workspace. An agent that runs elsewhere can still have one as a member.
   - A person message counts a window after a current subscription accepts the queued change.
     Delivery uses the generation and viewers observed before the message took a number.
 - **Never does:** stop or move agents; read the agent list; run Git (locations does that).
 - **Interface:**
-  - `Windows::new(machine_id, WindowTable)`, `restore(delete_empty)`,
+  - `Windows::new(machine_id, WindowTable)`, `restore()`,
     `bind(WindowDescription) -> (WindowConnection, Vec<String>)`, and
     `update(&WindowBinding, WindowDescription) -> Vec<String>`. The folder list is the previous
     description's. The guard's `binding()` identifies the logical window and generation.
   - `is_current(&WindowBinding)` checks that the binding still has a connection.
+    `colors_for_binding(&WindowBinding)` checks the binding and reads its colors under one lock.
   - `watch_person(&WindowBinding, viewer, sink) -> PersonWatch`,
     `person_target(&WindowRef) -> PersonTarget`, and `deliver_to_person(&PersonTarget, change)`.
   - `check_member(&WindowRef)`, `label(&WindowRef)`, `colors(&WindowRef)`, `folders(id)`,
@@ -447,6 +465,29 @@ A window's locations, read from its folders through Git, and the worktrees made 
   - `async read(folders: &[String], before: &Catalog) -> Catalog`.
   - `Catalog::locations() -> &[LocationInfo]`, `problems() -> &[String]`, `location(path) -> Option<&LocationInfo>`, `holding(path) -> Option<&LocationInfo>` (the innermost location that is `path` or holds it), `left_by(folders) -> Vec<String>` (the paths that only folders no longer in `folders` brought).
   - `async create(source: &Path, worktree: &Worktree, branch_prefix: Option<&str>, creations: &Creations) -> Result<LocationInfo, ErrorBody>`: returns the new location, of kind `Worktree` and labelled with the branch.
+
+### network
+
+The machine sessions, their routes and the SSH processes they use. `src/network/`.
+
+- **Owns:** directly connected machines, saved connections' running SSH processes and retry state, the
+  current machine table, and the calls and watches passing over each connection.
+- **Keeps:**
+  - A session becomes usable once both ends accept the introduction and its first machine table.
+    Later tables from a directly connected machine replace its previous table. Routes with the same
+    machine and boot IDs may coexist. A machine ID with two live boot IDs is refused.
+  - The shortest route wins; equal lengths are ordered by next machine ID. Each call or watch
+    uses its original route for its lifetime. A forwarding hop uses the outer route and deadline
+    and passes the original caller and payload onward.
+  - Closing a session ends its calls, subscriptions and watchers. Saved SSH connections try
+    again every ten seconds and pause when SSH needs the person to interact.
+  - Each registered connection gives its session a handler for its table updates and forwarded
+    requests. The session manages frames, watches and cancellation. The network manages routes
+    and releases the registration when its session ends.
+- **Interface:** `Network::new`, `local_hello`, `check_peer`, `machines`, `rename_local`,
+  `accept` and `connect` for authorized streams, `start_saved` and `remove_saved`, and async
+  `call` and `watch`. `Event::Target` delivers a call or subscription with its cancellation and
+  response channels. `Event::RoutesChanged` supplies the current machine table.
 
 ### guests
 
@@ -507,6 +548,8 @@ trait and writes responses and watch changes back, without knowing what any oper
     closes.
   - Once the client closes while its input waits, nothing more from it runs.
   - A watch's response, with its snapshot, is sent before any of its changes.
+  - A machine hello or connect hands the same buffered reader and writer to the machine session
+    after its response is flushed. The old connection releases its watches before the handoff.
   - Once a newer Facade takes over, every connection past `hello` gets a `closing` notification;
     what the client sent before its response, or within 0.2 seconds, still runs; then its reading
     ends.
@@ -527,6 +570,8 @@ trait and writes responses and watch changes back, without knowing what any oper
     - `watch(&Client, topic, args, viewer) -> Result<Watch>`; `unwatch(&Client, topic, viewer)`
     - `relay(params, peer_pid) -> Result<(Value, Arc<dyn RelayLines>)>`: the relay hello's response
       and what serves its MCP lines.
+    - `machine_hello` and `machine_connect` authorize a session and return its response and
+      handoff state. `serve_machine` takes that state with the stream's existing halves.
     - `closing() -> watch::Receiver<Option<String>>`: the build taking over.
     - `draining() -> Option<ErrorBody>`: the error a new hello, call or watch gets during a
       takeover; an attached terminal's keys and size, and `daemon.upgrade`, still run.
@@ -553,7 +598,7 @@ The MCP server behind each relay connection: it responds to the MCP client's JSO
   - A screen's result file is deleted after 30 days; a messages' file once its first message is no longer kept; an agents' file stays.
 - **Never does:** holds `Daemon` or calls a sibling; changes the tool definitions (`facade_base::tools::DEFINITIONS`); reads a member's inbox to count its messages, since reading delivers them.
 - **Interface** (called by the daemon's relay code and the hourly sweep):
-  - `Relay::of(params, pid, birth, connect: Connect, join: JoinMember) -> Result<Relay, ErrorBody>`: checks the hello and its contract version.
+  - `Relay::of(params, pid, birth, connect: Connect, join: JoinMember) -> Result<Relay, ErrorBody>` decodes `RelayHelloParams` and checks its contract version.
   - `Relay::serves() -> Serves` (blocking); `serve_member(id)` after a restart finds the relay's member again; `reconnect() -> bool`; `notice(line) -> bool` as a line is read (notes or cancels a send); `respond(&Serves, line, arrived) -> Option<Value>` (blocking); `hold_presence(agent)`.
   - `enum Serves { Agent(id), Guest(cli), Member(id), Nobody, Aside }`.
   - `type Connect = Box<dyn Fn(&Identity) -> anyhow::Result<Option<DaemonClient>>>`: None while the daemon is taking over.

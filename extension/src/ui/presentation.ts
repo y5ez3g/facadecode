@@ -118,7 +118,7 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		// {0} is an entry, such as clis.Codex; {1} the built-in CLI whose name it is, such as Codex
 		case 'entry_name_builtin': return vscode.l10n.t("{0}: this is {1}'s name; choose another name for this CLI", a, b);
 		// {0} is an entry, such as clis.codex; {1} the type of value it holds, such as string
-		case 'entry_type_object': return vscode.l10n.t("{0} must be an object of type, icon, command, args, env, model, effort and enabled; received {1}", a, b);
+		case 'entry_type_object': return vscode.l10n.t("{0} must be an object of type, icon, program, args, env, model, effort and enabled; received {1}", a, b);
 		// {0} is an entry, such as clis.codex; {1} a field of it that is no field; {2} the fields an entry takes
 		case 'entry_field': return vscode.l10n.t("{0}.{1} is not a field of an entry, which takes {2}", a, b, c);
 		// {0} is the field, such as clis.claude.type; {1} the built-in's entry, such as claude; {2} its CLI, such as Claude Code
@@ -129,11 +129,12 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		// kind of value it holds, such as string or number
 		case 'entry_type_unknown':
 		case 'entry_icon': return vscode.l10n.t("{0} must be one of {1}; received {2}", a, b, c);
-		// {0} is the field, such as clis.codex.command; {1} the type of value it holds, such as number
+		// {0} is the field, such as clis.codex.program; {1} the type of value it holds, such as number
 		case 'entry_text_type': return vscode.l10n.t("{0} must be a string; received {1}", a, b);
 		// {0} is the field, such as clis.codex.model
 		case 'entry_text_empty': return vscode.l10n.t("{0} is empty; set it, or leave it out", a);
 		case 'entry_text_nul': return vscode.l10n.t("{0} contains a NUL character, which it cannot hold", a);
+		case 'entry_program_conflict': return vscode.l10n.t("{0} conflicts with command. Keep program.", a);
 		case 'entry_command_missing': return vscode.l10n.t("{0} is missing; set it to the program to run", a);
 		// {0} is the field, such as clis.aider.model
 		case 'entry_choice_program': return vscode.l10n.t("{0} is not taken by a program: give its own options in args", a);
@@ -174,18 +175,18 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'environment_nul': return vscode.l10n.t("{0}.{1} contains a NUL character, which is not permitted in environment variables", a, b);
 		// {0} is the CLI's name, such as Claude Code; {1} its entry, such as clis.claude
 		case 'cli_disabled': return vscode.l10n.t("{0} is turned off by {1}.enabled", a, b);
-		// {0} is the CLI's command, {1} the folder, {2} its entry, such as clis.claude
-		case 'not_on_path': return vscode.l10n.t("{0} was not found on PATH in {1}, and {2}.command does not name its location", a, b, c);
-		case 'path_not_on_path': return vscode.l10n.t("{0}.command is {1}, which was not found on PATH in {2}", a, b, c);
-		case 'not_runnable': return vscode.l10n.t("{0}.command is {1}, and {2} is not an executable program", a, b, c);
-		// {0} is the program, {1} the argument, {2} the CLI's entry, such as clis.claude
-		case 'cmd_unsafe': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept argument {1}; set {2}.command to the CLI executable or Node entry point", a, b, c);
-		// {0} is the program; {1} the setting, such as clis.claude.args; {2} the argument's place in it; {3} the character; {4} the CLI's entry
-		case 'cmd_unsafe_setting': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept {1}[{2}] containing {3}; set {4}.command to the CLI executable or Node entry point", a, b, c, d, e);
-		// {0} is the program, {1} the CLI's entry, such as clis.claude
-		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept its path; set {1}.command to the CLI executable or Node entry point", a, b);
-		// {0} is the program, {1} the folder - a network share's or a WSL distribution's, starting with \\ - {2} the CLI's entry
-		case 'cmd_unc_folder': return vscode.l10n.t("{0} runs via cmd.exe, which cannot run in UNC path {1}; set {2}.command to the CLI executable or Node entry point", a, b, c);
+		// {0} is the CLI's command, {1} the folder, {2} its program setting, such as clis.claude.program
+		case 'not_on_path': return vscode.l10n.t("{0} was not found on PATH in {1}, and {2} does not name its location", a, b, c);
+		case 'path_not_on_path': return vscode.l10n.t("{0} is {1}, which was not found on PATH in {2}", a, b, c);
+		case 'not_runnable': return vscode.l10n.t("{0} is {1}, and {2} is not an executable program", a, b, c);
+		// {0} is the program, {1} the argument, {2} its program setting, such as clis.claude.program
+		case 'cmd_unsafe': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept argument {1}; set {2} to the CLI executable or Node entry point", a, b, c);
+		// {0} is the program; {1} the setting, such as clis.claude.args; {2} the argument's place in it; {3} the character; {4} the program setting
+		case 'cmd_unsafe_setting': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept {1}[{2}] containing {3}; set {4} to the CLI executable or Node entry point", a, b, c, d, e);
+		// {0} is the program, {1} its program setting, such as clis.claude.program
+		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept its path; set {1} to the CLI executable or Node entry point", a, b);
+		// {0} is the program, {1} the folder - a network share's or a WSL distribution's, starting with \\ - {2} the program setting
+		case 'cmd_unc_folder': return vscode.l10n.t("{0} runs via cmd.exe, which cannot run in UNC path {1}; set {2} to the CLI executable or Node entry point", a, b, c);
 		// {0} is the installed version of OpenCode, such as 1.19.5; the commands are npm's, to be kept as they are
 		case 'opencode_1x': return vscode.l10n.t("OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli", a);
 		// {0} is the script, such as a package's cli.js
@@ -198,10 +199,12 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		// {0} is the CLI's ID, quoted; {1} the settings file
 		case 'cli_not_configured': return vscode.l10n.t("No CLI {0} is configured; add it to clis in {1}.", a, b);
 		// {0} is the entry, such as clis["Codex · work"]; {1} the CLI the conversation is of, such as Codex
-		case 'resume_type_changed': return vscode.l10n.t("{0} runs another CLI now, but this conversation is {1}'s; it cannot be resumed with it", a, b);
+		case 'resume_type_changed': return vscode.l10n.t("{0} runs another CLI now, but this session is {1}'s; it cannot be resumed with it", a, b);
+		// {0} is the quoted entry name; {1} is the settings file on the agent's machine
+		case 'resume_entry_gone': return vscode.l10n.t("{0} is no longer in clis of {1}, so this session cannot be resumed with it.", a, b);
 		// {0} is the entry, such as clis["Codex · work"]; {1} the CLI the pinned agent ran, such as Codex
 		case 'pin_type_changed': return vscode.l10n.t("{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it", a, b);
-		case 'pin_unsupported': return vscode.l10n.t("Its CLI cannot resume this exact conversation, so it cannot be pinned.");
+		case 'pin_unsupported': return vscode.l10n.t("Its CLI cannot resume this exact session, so it cannot be pinned.");
 		case 'location_gone': return vscode.l10n.t("The working location is no longer available.");
 		// {0} is the working location's path
 		case 'location_not_here': return vscode.l10n.t("The working location {0} is not available in this window.", a);

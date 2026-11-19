@@ -4,6 +4,7 @@
 
 import * as assert from 'assert';
 import { spawn, ChildProcess } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -674,7 +675,7 @@ suite('The agent panel in Chromium', function () {
 
 	test('J05: green work breathes and a red error is still; idle, a blocker and unknown activity show no dot, each named in its card\'s label (RULES-3.2)', async () => {
 		await evaluate(`document.documentElement.style.cssText = '--vscode-charts-green:#00ff00;--vscode-descriptionForeground:#888888;--vscode-charts-yellow:#ffff00;--vscode-charts-red:#ff0000;--vscode-sideBar-background:#202020';`);
-		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'none', stateText: 'Idle' }), newCard(3, { dot: 'none', stateText: 'Permission needed', line: 'Permission needed · Run tests?' }), newCard(4, { dot: 'none', stateText: 'Status unavailable · check terminal', line: 'Status unavailable · check terminal' }), newCard(5, { dot: 'error', stateText: 'Error · Process exited · code 2' })]`);
+		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'none', stateText: 'Idle' }), newCard(3, { dot: 'none', stateText: 'Permission needed', line: 'Permission needed · Run tests?' }), newCard(4, { dot: 'none', stateText: 'State unavailable · check terminal', line: 'State unavailable · check terminal' }), newCard(5, { dot: 'error', stateText: 'Error · Process exited · code 2' })]`);
 		await deliver({ type: 'state', state: { revision: 2, loading: false, cards, cardCount: 5, capabilities: { remote: false } } });
 		const seen = await evaluate(`(() => { return [...document.querySelectorAll('.agent')].map(card => { const dot = card.querySelector('.dot'), style = getComputedStyle(dot); const paint = style.backgroundImage.match(/rgba?\\([^)]+\\)/)?.[0] ?? style.backgroundColor; return [dot.className, style.display === 'none' ? 'hidden' : paint, getComputedStyle(dot, '::after').animationName, style.boxShadow.includes('inset')]; }); })()`);
 		assert.deepStrictEqual(seen, [
@@ -822,17 +823,31 @@ suite('The agent panel in Chromium', function () {
 	test('PANEL-3.2: a state the extension sends is drawn whichever of a card\'s fields it has - two cards of one name with their short IDs among them; none is refused', async () => {
 		// Every field a card can have: a field the host's cards gain that the page's check does not know fails here, as `repeated` did
 		const every: { readonly [K in keyof Required<Card>]: Card[K] } = {
-			pinned: true, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
+			pinned: true, runningOn: undefined, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
 			dot: 'working', stateText: 'Working', line: '📨 Check the build',
 			details: { summary: { id: 'title', label: 'Title: ', value: 'Check the build' }, titleLabel: 'Title: ', untitled: 'No title yet', startedBy: 'Maker #a7', location: { id: 'location', label: 'Location: ', value: 'main', kind: 'repo' }, path: { id: 'path', label: 'Path: ', value: '/project' }, description: { title: 'Title: Check the build', place: 'Path: /project' } },
-			label: 'Ada, #a1, Working', startedAt: Date.now(), menu: { pin: false, unpin: true, moveUp: false, moveDown: true }
+			label: 'Ada, #a1, Working', startedAt: Date.now(),
+			menu: { dismiss: true, pin: false, unpin: true, moveUp: false, moveDown: true } satisfies Required<Card['menu']>
 		};
 		const twin: Card = { ...every, pinned: undefined, selected: false, runId: 'run-2', alias: '#a2', avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' }, menu: { pin: true, moveUp: true, moveDown: false } };
-		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3' };
+		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3@gpu',
+			runningOn: 'Running on gpu', menu: { moveUp: true, moveDown: false } };
 		await deliver({ type: 'state', state: { revision: 7, loading: false, cards: [every, twin, other], cardCount: 3, capabilities: { remote: false }, clockAt: Date.now() } });
 		await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
 		assert.deepStrictEqual(await evaluate(`[window.errors, [...document.querySelectorAll('.agent')].map(card => [card.querySelector('.name').textContent, card.querySelector('.short-id')?.textContent ?? null])]`),
 			[[], [['Ada', '#a1'], ['Ada', '#a2'], ['Cy', null]]]);
+		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.agent')].map(card => JSON.parse(card.dataset.vscodeContext).webviewAgentEnded === true)`),
+			[true, false, false]);
+		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.agent')].map(card =>
+			[...card.querySelectorAll('.remote-status')].map(status => {
+				const icon = status.querySelector('svg');
+				const { width, height } = icon.getBoundingClientRect();
+				return [status.tagName, status.title, card.querySelector('.pin-button').hidden,
+					icon.getAttribute('viewBox'), width, height, icon.childElementCount, getComputedStyle(icon.querySelector('path')).fillRule];
+			}))`), [[], [], [['SPAN', 'Running on gpu', true, '0 0 16 16', 14, 14, 1, 'nonzero']]]);
+		const globePath: string = await evaluate(`document.querySelector('.remote-status svg path').getAttribute('d')`);
+		assert.strictEqual(createHash('sha256').update(globePath).digest('hex'),
+			'06b0276dc7ce4a4233e18ae71682b9bf7c607643da389ca9d11c67795c2083e1', 'the VS Code globe path (PANEL-1.3)');
 	});
 
 	test('PANEL-1.3: Pin and Unpin refit the same card, and a repeated name\'s ID comes and goes without losing its name', async () => {
@@ -1339,11 +1354,11 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; Rename and End always; never Pin or Unpin, its button\'s', async () => {
-		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); agents[1] = newCard(2, { menu: { pin: true, moveUp: true, moveDown: false } }); agents[2] = newCard(3, { pinned: true, menu: { unpin: true, moveUp: false, moveDown: false } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 4).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
+	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; the ended context only for Dismiss Agent; never Pin or Unpin, its button\'s', async () => {
+		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); agents[1] = newCard(2, { menu: { pin: true, moveUp: true, moveDown: false } }); agents[2] = newCard(3, { pinned: true, menu: { unpin: true, dismiss: true, moveUp: false, moveDown: false } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 4).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
 			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-2', webviewMoveUp: true, preventDefaultContextMenuItems: true },
-			{ webviewSection: 'agent', run_id: 'run-3', preventDefaultContextMenuItems: true },
+			{ webviewSection: 'agent', run_id: 'run-3', webviewAgentEnded: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-4', preventDefaultContextMenuItems: true }
 		]);
 	});
@@ -1426,7 +1441,8 @@ suite('The agent panel in Chromium', function () {
 
 	test('a message for this page of an unknown type, with a missing, extra or mistyped field, is refused with a diagnostic and changes nothing (PANEL-3.2)', async () => {
 		const bad = await evaluate(`[stateOf([newCard(1, { dot: 'unknown' })]), stateOf([{ ...newCard(1), avatar: { file: '../x.png' } }]), (() => { const state = stateOf([newCard(1)]); delete state.capabilities; return state; })(), stateOf([{ ...newCard(1), extra: true }]),
-			stateOf([newCard(1, { line: 7 })]), stateOf([newCard(1)], { capabilities: { canManageWorktrees: false, remote: false } })]`);
+			stateOf([newCard(1, { line: 7 })]), stateOf([newCard(1, { menu: { moveUp: false, moveDown: false, dismiss: false } })]),
+			stateOf([newCard(1)], { capabilities: { canManageWorktrees: false, remote: false } })]`);
 		for (const message of [{ type: 'navigate', url: 'https://example.com' }, { type: 'state' }, ...bad.map((state: object) => ({ type: 'state', state })), { type: 'renameAgent', agent: '1' }, { type: 'answer', action: 'x', value: {} }, { type: 'outcome', action: 'x', ok: 'yes' }, { type: 'scrolling', scrolling: { sensitivity: 1, fast: 5, smooth: false } }]) {
 			await evaluate('window.errors = []');
 			await deliver(message);
@@ -1436,8 +1452,8 @@ suite('The agent panel in Chromium', function () {
 
 	test('PANEL-1.2, J13: the empty panel says why - no agents, none in the filter\'s location, no folder - each with its own native, keyboard-reachable buttons; nothing while loading', async () => {
 		const empty = (state: object) => evaluate(`(() => { panel.render(stateOf([], ${JSON.stringify(state)})); const empty = document.getElementById('empty'); return [empty.hidden, [...empty.children].map(each => { const button = each.querySelector('button'); return button ? (button.classList.contains('secondary') ? 'secondary:' : 'button:') + button.textContent : each.textContent; })]; })()`);
-		// No agent: New Agent, no ellipsis (PANEL-1.2), with Resume secondary
-		assert.deepStrictEqual(await empty({ empty: 'noAgents' }), [false, ['noAgents', 'button:newAgent', 'secondary:resumeAgent']]);
+		// No agent: New Agent, no ellipsis (PANEL-1.2), with Continue Session secondary
+		assert.deepStrictEqual(await empty({ empty: 'noAgents' }), [false, ['noAgents', 'button:newAgent', 'secondary:continueSession']]);
 		// A filter shows none: how many it hides, Clear Filter first and New Agent secondary
 		assert.deepStrictEqual(await empty({ empty: 'noMatch', cardCount: 3, filter: { kind: 'location', id: 'loc-1', label: 'shop · login-fix' } }), [false, ['No agents found in "shop · login-fix".', '3 other agents are in this workspace.', 'button:clearFilter', 'secondary:newAgent']]);
 		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 1, filter: { kind: 'location', id: 'loc-1', label: 'main' } }))[1][1], '1 other agent is in this workspace.');

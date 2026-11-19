@@ -137,8 +137,10 @@ git grep -nE 'cfg!?\(.*(target_os|target_family|unix|windows)' -- core/crates ':
 ### Tests
 
 - While code is being written, nobody writes new tests or optimizes in advance.
-- Unit tests change with the code. Normal-path and security tests must pass. The edge-case tests of a mechanism that
-  changed are deleted, not rewritten.
+- Unit tests change with the code. Normal-path and security tests must pass.
+- Keep boundary cases for behavior the interface still promises. When the implementation changes, move affected cases to
+  the protocol or public entry point that exposes the behavior. Delete a boundary case only when the interface drops the
+  behavior it covers.
 - Scenario tests use only the protocol and the programs.
 - Every test run uses an empty `TMPDIR` of its own, and every Facade home a test makes is inside it. No test writes to
   the person's home folder: `core/scripts/test-all.sh` runs the tests with `HOME` in its temporary folder, and reports

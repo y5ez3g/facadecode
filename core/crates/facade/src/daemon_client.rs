@@ -6,15 +6,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use facade_base::daemon::{
-    ClientKind, DAEMON_PROTOCOL_VERSION, DaemonUpgrade, MIN_DAEMON_PROTOCOL_VERSION, UpgradeArgs,
-    UpgradeResult,
+    ClientKind, DAEMON_PROTOCOL_VERSION, DaemonUpgrade, DaemonUpgradeArgs, DaemonUpgradeResult,
+    MIN_DAEMON_PROTOCOL_VERSION,
 };
-use facade_base::daemon_client::{DaemonClient, Identity, takeover_timeout};
+use facade_base::daemon_client::{DaemonClient, Identity, takeover_timeout, transient_transport};
 use facade_base::keeper::{KEEPER_PROTOCOL_VERSION, MIN_KEEPER_PROTOCOL_VERSION};
 use facade_base::paths::ClientSocket;
 use facade_base::service::{self, Candidate, Report, Service};
 
-use crate::errors::Problem;
+use crate::errors::{self, Problem, ServeFailure};
 
 /// The wait for the initial connection, including time to start the daemon.
 const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -127,7 +127,10 @@ pub(super) fn connect_or_start_for(agent: &str) -> anyhow::Result<DaemonClient> 
 
 /// Makes a command's first connection with default callbacks.
 fn first_connection(identity: &Identity) -> Result<DaemonClient, ConnectFailure> {
-    attempt_as(identity, &|| false, &mut |_| true, Notes::Public)
+    connect_with_takeover(
+        |timeout| reach(identity, &|| false, &mut |_| true, timeout),
+        Notes::Public,
+    )
 }
 
 /// The failure of a command's attempt to reach Facade, for the reader: why, and the log that says
@@ -136,7 +139,7 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
     let error = anyhow::Error::from(failure);
     let (why, log) = match error.downcast_ref::<Unstarted>() {
         Some(unstarted) => (unstarted.why.clone(), Some(unstarted.log.clone())),
-        None => (crate::errors::cause(&error), None),
+        None => (errors::cause(&error), None),
     };
     Problem::Unreachable { why, log }.into()
 }
@@ -155,7 +158,7 @@ pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
 /// or no shared protocol version, as the catalog row.
 fn explicit(error: anyhow::Error) -> anyhow::Error {
     Problem::Unreachable {
-        why: crate::errors::cause(&error),
+        why: errors::cause(&error),
         log: None,
     }
     .into()
@@ -185,10 +188,14 @@ pub(super) fn reconnect(
     cancelled: &dyn Fn() -> bool,
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure> {
-    attempt_as(
-        &identity_for(terminal_agent(), true),
-        cancelled,
-        opening,
+    let identity = identity_for(terminal_agent(), true);
+    connect_with_takeover(
+        |timeout| {
+            let mut client = reach(&identity, cancelled, opening, timeout)?;
+            // Let attach reopen the connection so every socket goes through its cancellation callback.
+            client.disable_auto_reconnect();
+            Ok(client)
+        },
         Notes::Public,
     )
 }
@@ -202,19 +209,17 @@ enum Notes {
 }
 
 /// Reaches the daemon and asks an eligible older build to hand over before using the connection.
-fn attempt_as(
-    identity: &Identity,
-    cancelled: &dyn Fn() -> bool,
-    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+fn connect_with_takeover(
+    mut connect: impl FnMut(Duration) -> Result<DaemonClient, ConnectFailure>,
     notes: Notes,
 ) -> Result<DaemonClient, ConnectFailure> {
-    let mut client = reach(identity, cancelled, opening, DAEMON_CONNECT_TIMEOUT)?;
+    let mut client = connect(DAEMON_CONNECT_TIMEOUT)?;
     let ours = facade_base::build_id();
     if facade_base::takes_over(&ours, &client.hello_result.build)
         && let Some(handed) = ask_to_take_over(&mut client, &ours, notes)?
     {
         drop(client);
-        client = follow_takeover(identity, cancelled, opening, &ours, handed, notes)?;
+        client = follow_takeover(connect, &ours, handed, notes)?;
     }
     // A test can hold a command here, after its hello and before its call.
     service::gate_for_test("command-connected");
@@ -227,19 +232,19 @@ fn ask_to_take_over(
     client: &mut DaemonClient,
     ours: &str,
     notes: Notes,
-) -> Result<Option<(Instant, UpgradeResult)>, ConnectFailure> {
+) -> Result<Option<(Instant, DaemonUpgradeResult)>, ConnectFailure> {
     let asked = Instant::now();
     let program = facade_base::this_program().map_err(permanent)?;
     let speaks = |variable, low, high| test_range(variable).unwrap_or([low, high]);
-    let upgrade = UpgradeArgs {
+    let upgrade = DaemonUpgradeArgs {
         program: program.display().to_string(),
         build: ours.to_string(),
-        daemon_protocol: speaks(
+        daemon_protocol_range: speaks(
             "FACADE_TEST_DAEMON_PROTOCOL",
             MIN_DAEMON_PROTOCOL_VERSION,
             DAEMON_PROTOCOL_VERSION,
         ),
-        keeper_protocol: speaks(
+        keeper_protocol_range: speaks(
             "FACADE_TEST_KEEPER_PROTOCOL",
             MIN_KEEPER_PROTOCOL_VERSION,
             KEEPER_PROTOCOL_VERSION,
@@ -249,14 +254,9 @@ fn ask_to_take_over(
         Ok(handed) => Ok(Some((asked, handed))),
         Err(error) => {
             let theirs = &client.hello_result.build;
-            if notes == Notes::Hidden {
-                eprintln!("facade: Facade {ours} could not take over from {theirs}: {error:#}");
-                return Ok(None);
-            }
-            let why = crate::errors::cause(&error);
             eprintln!(
-                "warning: could not upgrade running Facade {theirs}: {why}; continuing with \
-                 {theirs}"
+                "{}",
+                errors::takeover_refused(ours, theirs, &error, notes == Notes::Hidden)
             );
             Ok(None)
         }
@@ -266,54 +266,42 @@ fn ask_to_take_over(
 /// Waits, after a handover began, for the daemon of this build, and says on one line how it went.
 /// A command goes on with the older build if it answers again.
 fn follow_takeover(
-    identity: &Identity,
-    cancelled: &dyn Fn() -> bool,
-    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+    connect: impl FnOnce(Duration) -> Result<DaemonClient, ConnectFailure>,
     ours: &str,
-    (asked, handed): (Instant, UpgradeResult),
+    (asked, handed): (Instant, DaemonUpgradeResult),
     notes: Notes,
 ) -> Result<DaemonClient, ConnectFailure> {
     let timeout = takeover_timeout();
-    match reach(identity, cancelled, opening, timeout) {
+    match connect(timeout) {
         Ok(client) if client.hello_result.build == ours => {
-            if notes == Notes::Hidden {
-                eprintln!(
-                    "facade: Facade {ours} took over from {}; {} kept running ({:.1} s)",
-                    handed.from,
-                    facade_base::daemon::agents_word(handed.agents),
-                    asked.elapsed().as_secs_f64()
-                );
-                return Ok(client);
-            }
             eprintln!(
-                "note: upgraded running Facade {} to {ours}; {} kept running",
-                handed.from,
-                facade_base::daemon::agents_word(handed.agents),
+                "{}",
+                errors::took_over(
+                    ours,
+                    &handed.from,
+                    &facade_base::daemon::agents_word(handed.agent_count),
+                    asked.elapsed(),
+                    notes == Notes::Hidden,
+                )
             );
             Ok(client)
         }
         Ok(client) => {
             let theirs = &client.hello_result.build;
             let logs = logs_folder().map(|logs| logs.display().to_string());
-            if notes == Notes::Hidden {
-                eprintln!(
-                    "facade: Facade {ours} could not take over from {theirs}, which runs on; see {}",
-                    logs.unwrap_or_default()
-                );
-                return Ok(client);
-            }
             eprintln!(
-                "warning: could not upgrade running Facade {theirs}: check '{}' for details; \
-                 continuing with {theirs}",
-                logs.unwrap_or_default()
+                "{}",
+                errors::older_runs_on(
+                    ours,
+                    theirs,
+                    &logs.unwrap_or_default(),
+                    notes == Notes::Hidden,
+                )
             );
             Ok(client)
         }
         Err(ConnectFailure::Timeout(error)) => {
-            let error = error.context(format!(
-                "Facade {ours} did not answer within {} seconds of taking over",
-                timeout.as_secs()
-            ));
+            let error = error.context(errors::takeover_silent(ours, timeout.as_secs()));
             Err(ConnectFailure::Timeout(error))
         }
         Err(failure) => Err(failure),
@@ -390,17 +378,9 @@ fn silent_keeper(logs: &Path) -> Unstarted {
         let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
         Some(line.trim().to_string())
     });
-    let (why, seen) = match last {
-        Some(line) => (
-            format!("the Facade keeper exited before it started, saying: {line}"),
-            log.clone(),
-        ),
-        None => (
-            "the Facade keeper exited before it started and logged nothing".to_string(),
-            logs.to_path_buf(),
-        ),
-    };
-    let hidden = format!("{why}; see {}", seen.display());
+    let why = errors::keeper_exited(last.as_deref());
+    let seen = if last.is_some() { log.as_path() } else { logs };
+    let hidden = errors::see_log(&why, seen);
     Unstarted {
         why,
         log,
@@ -427,6 +407,33 @@ fn reach(
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
     timeout: Duration,
 ) -> Result<DaemonClient, ConnectFailure> {
+    reach_daemon(cancelled, timeout, |socket, deadline| {
+        DaemonClient::connect(socket, identity, deadline, opening)
+    })
+}
+
+/// Opens the daemon's socket for the machine hello arriving from SSH.
+pub(super) fn machine_socket() -> anyhow::Result<ClientSocket> {
+    Ok(reach_daemon(
+        &|| false,
+        DAEMON_CONNECT_TIMEOUT,
+        |socket, _| match ClientSocket::connect(socket) {
+            Ok(client) => Ok(Some(client)),
+            Err(error) if transient_transport(&error) => Ok(None),
+            Err(why) => Err(ServeFailure::Socket {
+                path: socket.to_path_buf(),
+                why,
+            }
+            .into()),
+        },
+    )?)
+}
+
+fn reach_daemon<T>(
+    cancelled: &dyn Fn() -> bool,
+    timeout: Duration,
+    mut open: impl FnMut(&Path, Instant) -> anyhow::Result<Option<T>>,
+) -> Result<T, ConnectFailure> {
     let home = service::create_private_home().map_err(permanent)?;
     let logs = home.join("logs");
     let socket = facade_base::paths::daemon_socket().map_err(permanent)?;
@@ -436,9 +443,7 @@ fn reach(
         if cancelled() {
             return Err(ConnectFailure::Cancelled);
         }
-        if let Some(client) =
-            DaemonClient::connect(&socket, identity, deadline, opening).map_err(permanent)?
-        {
+        if let Some(client) = open(&socket, deadline).map_err(permanent)? {
             return Ok(client);
         }
         keeper.check(&logs)?;
@@ -454,15 +459,8 @@ fn reach(
             keeper.start().map_err(permanent)?;
         }
         if Instant::now() >= deadline {
-            let why = if daemon_runs {
-                "Facade is still starting".to_string()
-            } else {
-                format!(
-                    "the Facade daemon did not start within {} seconds",
-                    timeout.as_secs()
-                )
-            };
-            let hidden = format!("{why}; see {}", logs.display());
+            let why = errors::daemon_slow(daemon_runs, timeout.as_secs());
+            let hidden = errors::see_log(&why, &logs);
             let log = logs.join("daemon.log");
             let starting = daemon_runs;
             return Err(ConnectFailure::Timeout(
@@ -493,7 +491,10 @@ fn still_starting(error: &anyhow::Error) -> bool {
 /// with hello.
 pub(super) fn detach() -> anyhow::Result<i32> {
     let identity = identity_for(terminal_agent(), true);
-    match attempt_as(&identity, &|| false, &mut |_| true, Notes::Hidden) {
+    match connect_with_takeover(
+        |timeout| reach(&identity, &|| false, &mut |_| true, timeout),
+        Notes::Hidden,
+    ) {
         Err(ConnectFailure::Timeout(still)) if still_starting(&still) => {
             eprintln!("facade: {still:#}")
         }

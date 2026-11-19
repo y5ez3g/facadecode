@@ -116,7 +116,7 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
 fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     let home = TestHome::new("yolobadfile");
     home.start_named_fake("ada", &[]);
-    let cwd = record(&home, "ada")["cwd"].as_str().unwrap().to_string();
+    let cwd = record(&home, "ada")["folder"].as_str().unwrap().to_string();
     let file = home.path.join("facade.json").display().to_string();
     settings(&home, "{\n  \"yolo\": \"false\",\n  \"colour\": 1\n}");
     let said = format!(
@@ -137,9 +137,9 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     );
     let mut ada = McpTestClient::open(&home, "a1");
     let start =
-        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "path": cwd });
+        |name: &str| json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd });
     let mcp = ada.call("start_agent", start("nope"));
-    assert_eq!(mcp["reason"], "configuration_invalid", "{mcp}");
+    assert_eq!(mcp["reason"], "invalid_settings", "{mcp}");
     assert!(
         mcp["message"]
             .as_str()
@@ -160,12 +160,12 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
 fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
     let home = TestHome::new("yolotrees");
     home.start_named_fake("ada", &[]);
-    let cwd = record(&home, "ada")["cwd"].as_str().unwrap().to_string();
+    let cwd = record(&home, "ada")["folder"].as_str().unwrap().to_string();
     let mut ada = McpTestClient::open(&home, "a1");
     let child = |server: &mut McpTestClient, name: &str| {
         let started = server.call(
             "start_agent",
-            json!({ "name": name, "cli": "fake", "window": "terminal", "path": cwd }),
+            json!({ "name": name, "cli": "fake", "window": "terminal", "folder": cwd }),
         );
         assert_eq!(started["status"], "success", "{started}");
         record(&home, name)
@@ -250,9 +250,13 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     let mut ada = McpTestClient::open(&home, "a1");
     let started = ada.call(
         "start_agent",
-        json!({ "name": "cy", "cli": "fake", "window": reference.window_id, "path": folder }),
+        json!({ "name": "cy", "cli": "fake", "window": reference.window_id, "folder": folder }),
     );
-    assert_eq!(started["data"]["windows"], json!([reference]), "{started}");
+    assert_eq!(
+        started["data"]["windows"],
+        json!([reference.window_id]),
+        "{started}"
+    );
     assert_eq!(record(&home, "cy")["root"], "a1");
     let listed = ada.call("list_agents", json!({}));
     let ids: Vec<&Value> = listed["data"]["agents"]
@@ -276,7 +280,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
         ("stop_agent", json!({ "agent": "#a2" })),
     ] {
         let refused = ada.call(tool, arguments);
-        assert_eq!(refused["reason"], "out_of_reach", "{tool}: {refused}");
+        assert_eq!(refused["reason"], "refused", "{tool}: {refused}");
     }
     let named = ada.call("send_message", json!({ "to": "@bob", "text": "hi" }));
     assert_eq!(named["reason"], "not_found", "{named}");
@@ -298,7 +302,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
     );
     let launched = ada.call(
         "start_agent",
-        json!({ "name": "eve", "cli": "fake", "window": reference.window_id, "path": folder }),
+        json!({ "name": "eve", "cli": "fake", "window": reference.window_id, "folder": folder }),
     );
     assert_eq!(launched["status"], "success", "{launched}");
     assert_eq!(
@@ -320,7 +324,7 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
 fn guest(home: &TestHome, session: &str) -> Value {
     let listed: Value =
         facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
-    listed
+    listed["agents"]
         .as_array()
         .unwrap()
         .iter()
@@ -353,7 +357,7 @@ fn a_guest_takes_yolo_from_the_settings_file_as_it_joins_for_its_reach() {
         "{listed}"
     );
     let refused = off.call("read_screen", json!({ "agent": "#a1" }));
-    assert_eq!(refused["reason"], "out_of_reach", "{refused}");
+    assert_eq!(refused["reason"], "refused", "{refused}");
     settings(&home, r#"{"yolo": true}"#);
     let mut on = McpTestClient::open_guest(&home, "claude", &[("CLAUDE_CODE_SESSION_ID", "c2")]);
     assert_eq!(guest(&home, "c2")["yolo"], true);
@@ -370,7 +374,7 @@ fn a_guest_takes_yolo_from_the_settings_file_as_it_joins_for_its_reach() {
     assert_eq!(guest(&home, "c1")["yolo"], false, "the YOLO it joined with");
     assert_eq!(
         off.call("read_screen", json!({ "agent": "#a1" }))["reason"],
-        "out_of_reach"
+        "refused"
     );
     let old = home.kill_daemon();
     home.wait_for_daemon_after(old, secs(30))
@@ -727,19 +731,17 @@ fn each_cli_launches_with_yolo_on_as_its_rule_says_and_with_yolo_off_as_it_nativ
         assert!(started.status.success(), "{cli}: {}", stderr(&started));
         (
             arguments(&argv),
-            record(&home, name)["cwd"].as_str().unwrap().to_string(),
+            record(&home, name)["folder"].as_str().unwrap().to_string(),
         )
     };
     let clis = ["claude", "codex", "agy", "muse", "opencode", "pi"];
     for cli in clis {
         let (args, folder) = launch(cli, &format!("{cli}-on"));
-        // Codex's folder as a TOML string: on Windows with its drive letter in lower case, as
-        // Codex keys its projects, and each `\` written `\\`.
+        // Codex keys Windows projects by an ASCII-lowercase path. In TOML each backslash is escaped.
         #[cfg(unix)]
         let in_toml = folder.clone();
         #[cfg(windows)]
-        let in_toml =
-            format!("{}{}", folder[..1].to_lowercase(), &folder[1..]).replace('\\', "\\\\");
+        let in_toml = folder.to_ascii_lowercase().replace('\\', "\\\\");
         let at = launch_arguments(cli);
         let added: Vec<String> = yolo_arguments(cli)
             .iter()

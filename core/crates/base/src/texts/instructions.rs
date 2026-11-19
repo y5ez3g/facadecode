@@ -4,7 +4,7 @@
 //! joined as a guest. The sentences they share are written once, here.
 
 use crate::protocol::daemon::{
-    AgentInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowInfo, display_name,
+    AgentInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_NAME, WindowInfo, display_name,
 };
 
 /// How to name an agent in a call.
@@ -85,13 +85,13 @@ pub fn place_of<'a>(agent: &'a AgentInfo, windows: &'a [WindowInfo]) -> Place<'a
 /// The name of window `id` on `machine_id`, or its own ID if it is unlisted.
 fn window_name<'a>(machine_id: &str, id: &'a str, windows: &'a [WindowInfo]) -> &'a str {
     if id == TERMINAL_WINDOW {
-        return TERMINAL_WINDOW_LABEL;
+        return TERMINAL_WINDOW_NAME;
     }
     match windows
         .iter()
         .find(|listed| listed.machine_id == machine_id && listed.window_id == id)
     {
-        Some(listed) => &listed.label,
+        Some(listed) => &listed.name,
         None => id,
     }
 }

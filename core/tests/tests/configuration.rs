@@ -128,7 +128,7 @@ fn a_custom_cli_runs_its_program_as_it_is() {
     let file = args_file(&home, "tool");
     let program = test_binaries().fakecli.to_string_lossy().into_owned();
     let entry = json!({
-        "type": "custom", "command": program, "args": ["--resume-like", ""],
+        "type": "custom", "program": program, "args": ["--resume-like", ""],
         "env": { "FAKECLI_ARGS": file },
     });
     settings(&home, &json!({ "clis": { "tool": entry } }));
@@ -216,19 +216,37 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
     });
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     let rows = ada.call("list_agents", json!({}))["data"]["windows"][0]["clis"].clone();
+    let rows = rows.as_array().unwrap();
     let named: Vec<&str> = rows
-        .as_array()
-        .unwrap()
         .iter()
-        .filter_map(Value::as_str)
+        .map(|row| row["cli"].as_str().unwrap())
         .filter(|cli| ["fake", "fake work", "oc", "off", "bad"].contains(cli))
         .collect();
-    assert_eq!(named, ["fake", "fake work", "oc"], "{rows}");
+    assert_eq!(named, ["fake", "fake work", "oc", "bad"], "{rows:?}");
+    let info = |cli: &str| rows.iter().find(|row| row["cli"] == cli).unwrap();
+    assert_eq!(
+        info("fake work"),
+        &json!({
+            "cli": "fake work", "display_name": "fake work", "available": true,
+            "overrides": { "model": true, "effort": true },
+        })
+    );
+    assert_eq!(info("oc")["available"], true);
+    assert_eq!(info("oc")["overrides"]["effort"], false);
+    let bad_row = info("bad");
+    assert_eq!(bad_row["available"], false, "{bad_row}");
+    assert!(
+        bad_row["problem"]
+            .as_str()
+            .unwrap()
+            .starts_with("clis.bad.icon must be one of"),
+        "{bad_row}"
+    );
     let start = |cli: &str, more: Value| {
-        let mut call = json!({ "name": "worker", "cli": cli, "window": "terminal", "path": cwd });
+        let mut call = json!({ "name": "worker", "cli": cli, "window": "terminal", "folder": cwd });
         call.as_object_mut()
             .unwrap()
             .extend(more.as_object().unwrap().clone());
@@ -250,7 +268,7 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
         "{oc}"
     );
     let bad = ada.call("start_agent", start("bad", json!({})));
-    assert_eq!(bad["reason"], "configuration_invalid", "{bad}");
+    assert_eq!(bad["reason"], "invalid_settings", "{bad}");
     assert!(
         bad["message"]
             .as_str()
@@ -473,18 +491,21 @@ fn an_entry_s_args_are_merged_as_their_cli_reads_them() {
 }
 
 /// The MCP and CLI starts both diagnose an entry's executable by its setting (CONFIGURATION-2.2,
-/// 4.1): a built-in missing from `PATH`, a name missing from `PATH`, and a path to no program.
+/// 4.1): the default is missing from PATH, or the current or legacy field names a program that
+/// cannot be found or run.
 #[test]
 fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     let home = TestHome::new("configprogram");
     let clis = json!({
-        "oc": { "type": "opencode" }, "named": { "type": "fake", "command": "no-such-cli" },
+        "oc": { "type": "opencode" },
+        "named": { "type": "fake", "command": "no-such-cli" },
+        "canonical": { "type": "fake", "program": "no-such-cli" },
         "gone": { "type": "fake", "command": "/nope/facade-fakecli" },
     });
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
     let mut ada = McpTestClient::open(&home, "a1");
-    let folder = home.agent_from_list_json("ada").unwrap()["cwd"]
+    let folder = home.agent_from_list_json("ada").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -500,7 +521,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         (
             "oc",
             format!(
-                "opencode was not found on the PATH of a terminal in {folder}, and clis.oc.command \
+                "opencode was not found on the PATH of a terminal in {folder}, and clis.oc.program \
                  does not name its location"
             ),
         ),
@@ -508,6 +529,13 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
             "named",
             format!(
                 "clis.named.command is \"no-such-cli\", which was not found on the PATH of a \
+                 terminal in {folder}"
+            ),
+        ),
+        (
+            "canonical",
+            format!(
+                "clis.canonical.program is \"no-such-cli\", which was not found on the PATH of a \
                  terminal in {folder}"
             ),
         ),
@@ -520,9 +548,9 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         ),
     ];
     for (cli, problem) in said {
-        let start = json!({ "name": "w", "cli": cli, "window": "terminal", "path": folder });
+        let start = json!({ "name": "w", "cli": cli, "window": "terminal", "folder": folder });
         let mcp = ada.call("start_agent", start);
-        assert_eq!(mcp["reason"], "invalid_argument", "{mcp}");
+        assert_eq!(mcp["reason"], "not_found", "{mcp}");
         assert_eq!(mcp["message"], problem, "{mcp}");
         let refused = refused(&home, cli);
         assert!(
@@ -547,14 +575,14 @@ fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
     let mut ada = McpTestClient::open(&home, "a1");
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
-        json!({ "name": "w", "cli": "off reads", "window": "terminal", "path": cwd }),
+        json!({ "name": "w", "cli": "off reads", "window": "terminal", "folder": cwd }),
     );
     let said = "clis[\"off reads\"].env.A reads ${env:NOT_SET_FOR_THIS}, but NOT_SET_FOR_THIS is \
                 not in the environment it starts with; set it there, or write the value";
-    assert_eq!(refused["reason"], "configuration_invalid", "{refused}");
+    assert_eq!(refused["reason"], "invalid_settings", "{refused}");
     assert_eq!(refused["message"], said, "{refused}");
 }
 
@@ -569,14 +597,14 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
     let mut ada = McpTestClient::open(&home, "a1");
     let window = ada.call("list_agents", json!({}))["data"]["windows"][0].clone();
     assert_eq!(window["clis"], json!([]), "{window}");
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
-        json!({ "name": "w", "cli": "fake", "window": "terminal", "path": cwd }),
+        json!({ "name": "w", "cli": "fake", "window": "terminal", "folder": cwd }),
     );
     let message = refused["message"].as_str().unwrap();
     assert!(
-        refused["reason"] == "configuration_invalid"
+        refused["reason"] == "invalid_settings"
             && message.contains("facade.json:1:2: yolo must be true or false; received string")
             && message.matches("yolo must be").count() == 1,
         "{refused}"
@@ -589,12 +617,12 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
 fn start_agent_refuses_a_blank_model_or_effort() {
     let home = TestHome::new("configblank");
     home.start_named_fake("ada", &[]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     let refused = ada.call(
         "start_agent",
         json!({
-            "name": "w", "cli": "fake", "window": "terminal", "path": cwd, "model": "  ",
+            "name": "w", "cli": "fake", "window": "terminal", "folder": cwd, "model": "  ",
             "effort": "\u{feff}",
         }),
     );
@@ -688,7 +716,10 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
     let rows = w.call("list_agents", json!({}))["data"]["windows"][0]["clis"].clone();
     for cli in ["fake", "homed", "here"] {
         assert!(
-            rows.as_array().unwrap().iter().any(|row| row == cli),
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["cli"] == cli && row["available"] == true),
             "{cli} listed available: {rows}"
         );
     }
@@ -857,15 +888,15 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
         McpTestClient::open(&home, boss["result"]["agent"]["agent_id"].as_str().unwrap());
     let mut start = |cli: &str, more: Value| {
         let mut call = json!({
-            "name": "w", "cli": cli, "window": reference.window_id, "location_source_window": reference.window_id, "path": folder,
-            "worktree": format!("{cli}-branch"),
+            "name": "w", "cli": cli, "window": reference.window_id, "location_source_window": reference.window_id, "folder": folder,
+            "worktree": { "branch": format!("{cli}-branch") },
         });
         call.as_object_mut()
             .unwrap()
             .extend(more.as_object().unwrap().clone());
         boss.call("start_agent", call)
     };
-    for (cli, reason) in [("nope", "invalid_argument"), ("off", "unavailable")] {
+    for (cli, reason) in [("nope", "not_found"), ("off", "unavailable")] {
         let refused = start(cli, json!({}));
         assert_eq!(refused["reason"], reason, "{refused}");
     }
@@ -874,7 +905,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
         "failure"
     );
     settings(&home, &json!({ "yolo": "no" }));
-    assert_eq!(start("fake", json!({}))["reason"], "configuration_invalid");
+    assert_eq!(start("fake", json!({}))["reason"], "invalid_settings");
     assert_eq!(
         git(&repo, &["worktree", "list"]).lines().count(),
         1,
@@ -944,12 +975,12 @@ fn an_agent_starts_agents_with_its_own_environment() {
         "{}",
         home.screen("ada")
     );
-    let cwd = home.agent_from_list_json("ada").unwrap()["cwd"].clone();
+    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     for (name, cli) in [("kid", "fake"), ("dumper", "dump")] {
         let started = ada.call(
             "start_agent",
-            json!({ "name": name, "cli": cli, "window": "terminal", "path": cwd }),
+            json!({ "name": name, "cli": cli, "window": "terminal", "folder": cwd }),
         );
         assert_eq!(started["status"], "success", "{started}");
     }

@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentInfo, WindowInfo, WindowRef } from '../../base/coreProtocol';
+import type { AgentInfo, MessageRef, WindowInfo, WindowRef } from '../../base/coreProtocol';
 import { freePort, Workbench } from './cdpInput';
 import { endEditors, normalizeDriveLetter, until } from './editors';
 import type { PinIdentity, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
@@ -104,15 +104,17 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 	}
 }
 
-async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {
-	await until(`#${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}`, async () => {
+async function expectAgent(window: DrivenWindow, id: string, pinned: boolean, opening?: string): Promise<void> {
+	const shown = opening === undefined ? '' : ` with opening ${JSON.stringify(opening)}`;
+	await until(`#${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}${shown}`, async () => {
 		const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
-		return cards.length === 1 && cards[0].id === id && cards[0].pinned === pinned && cards[0].column !== null && terminals === 1 || undefined;
+		return cards.length === 1 && cards[0].id === id && cards[0].pinned === pinned && cards[0].column !== null
+			&& terminals === 1 && (opening === undefined || cards[0].line === opening) || undefined;
 	});
 }
 
 /** Read the real notification center, then use its Open Message button to check the ID. */
-async function expectNotice(window: DrivenWindow, id: string, text: string, earlier?: string): Promise<void> {
+async function expectNotice(window: DrivenWindow, message: MessageRef, text: string, earlier?: string): Promise<void> {
 	await window.act({ kind: 'notifications' });
 	const workbench = await window.workbench();
 	try {
@@ -134,8 +136,10 @@ async function expectNotice(window: DrivenWindow, id: string, text: string, earl
 			return !!button;
 		})()`);
 		assert.ok(opened, 'the notice offers Open Message');
-		const document = await window.act<string>({ kind: 'message', id });
-		assert.ok(document.includes(`#${id}`) && document.includes(text), document);
+		const id = `#${message.message_id}`;
+		const address = `${id}@id:${message.machine_id.replace(/-/g, '')}`;
+		const document = await window.act<string>({ kind: 'message', address });
+		assert.ok(document.includes(id) && document.includes(text), document);
 	} finally {
 		workbench.cdp.close();
 	}
@@ -187,13 +191,31 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 		return window;
 	};
 	const first = await start(folder, 'a');
+	const fresh = await first.act<RunningAgent>({ kind: 'start' });
+	await expectAgent(first, fresh.id, false, 'New session started');
+	await first.act({ kind: 'stop', agent: fresh.id });
+	await first.act({ kind: 'wait-for-exit', pid: fresh.pid });
+	const resumed = await first.act<RunningAgent>({ kind: 'resume', agent: fresh.id });
+	assertSameRun({ ...resumed, pid: fresh.pid }, fresh, 'Resume keeps the number, session and cwd');
+	assert.notStrictEqual(resumed.pid, fresh.pid);
+	await expectAgent(first, fresh.id, false, 'Agent resumed');
 	const other = await start(peer, 'b');
+	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: fresh.id }), resumed);
+	await expectAgent(other, fresh.id, false, '');
+	await first.act({ kind: 'stop', agent: fresh.id });
+	await other.act({ kind: 'wait-for-exit', pid: resumed.pid });
+	await until('both windows to close the stopped pair', async () => {
+		const views = await Promise.all([first, other].map(window => window.act<WindowView>({ kind: 'snapshot' })));
+		return views.every(view => view.cards.length === 0 && view.terminals === 0) || undefined;
+	});
+	console.log('  ✔ The starting window knows the new session and the same-number resume. A fresh window adopts it with no opening claim');
+
 	const screen = 'Shared agent screen';
 	const before = await first.act<RunningAgent>({ kind: 'start', screen });
 	const original = await firstMember(first, before.id);
 	const earlier = 'Sent before the other window joined';
 	const earlyId = await first.act<string>({ kind: 'send', agent: before.id, text: earlier });
-	await expectNotice(first, earlyId, earlier);
+	await expectNotice(first, { machine_id: first.ready.machineId, message_id: earlyId }, earlier);
 	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: before.id }), before);
 	const both = await other.act<WindowRef[]>({ kind: 'members', agent: before.id });
 	assert.strictEqual(both.length, 2);
@@ -203,7 +225,8 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	await Promise.all([expectAgent(first, before.id, false), expectAgent(other, before.id, false)]);
 	const shared = 'Sent to both member windows';
 	const sharedId = await first.act<string>({ kind: 'send', agent: before.id, text: shared });
-	await Promise.all([expectNotice(first, sharedId, shared), expectNotice(other, sharedId, shared, earlier)]);
+	const sharedMessage = { machine_id: first.ready.machineId, message_id: sharedId };
+	await Promise.all([expectNotice(first, sharedMessage, shared), expectNotice(other, sharedMessage, shared, earlier)]);
 	console.log('  ✔ Both member windows show the same message once, and the new member does not show the earlier message');
 	await first.act({ kind: 'pin', agent: before.id });
 	await other.act({ kind: 'pin', agent: before.id });
@@ -230,7 +253,7 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	assertSameRun(left, right, 'both workspaces restored the same process');
 	assertSameRun({ ...left, pid: before.pid }, before, 'the resume kept the number, session and cwd');
 	assert.notStrictEqual(left.pid, before.pid, 'the original process ended before the resume');
-	console.log('  ✔ End Agent closes both member windows\' cards and tabs, and both Pins restore one process by the original number');
+	console.log('  ✔ Stop Agent closes both member windows\' cards and tabs, and both Pins restore one process by the original number');
 	await deleteWorktree(restored[0], restored[1], original, member);
 	await Promise.all(restored.map(window => window.close()));
 	await sameWorkspace(start, journey);
@@ -264,7 +287,7 @@ async function deleteWorktree(source: DrivenWindow, peer: DrivenWindow, sourceRe
 		})()`));
 		const confirmation = await until('the Delete Worktree confirmation', () => workbench.cdp.evaluate<string | undefined>(
 			`document.querySelector('.monaco-dialog-box')?.textContent ?? undefined`));
-		assert.ok(confirmation.includes(agent.cwd) && confirmation.includes('Its agent will be ended.'), confirmation);
+		assert.ok(confirmation.includes(agent.cwd) && confirmation.includes('Its agent will be stopped.'), confirmation);
 		const confirmed = await workbench.cdp.evaluate<boolean>(`(() => {
 			const button = Array.from(document.querySelectorAll('.monaco-dialog-box .monaco-button'))
 				.find(button => button.textContent?.trim() === 'Delete');

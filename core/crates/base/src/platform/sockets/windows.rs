@@ -49,6 +49,22 @@ const PIPE_BUFFER_BYTES: u32 = 65_536;
 /// One overlapped instance of the named pipe `path`, with the access list that lets in its owner
 /// alone. For the keeper, and each of the daemon's instances.
 pub fn server_pipe(path: &Path) -> io::Result<OwnedHandle> {
+    owner_only_pipe(
+        path.as_os_str(),
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        PIPE_UNLIMITED_INSTANCES,
+    )
+}
+
+/// An instance of the named pipe `name` with `open_mode`, `pipe_mode` and up to `instances`
+/// instances, and the access list that lets in its owner alone.
+pub(crate) fn owner_only_pipe(
+    name: &OsStr,
+    open_mode: u32,
+    pipe_mode: u32,
+    instances: u32,
+) -> io::Result<OwnedHandle> {
     let sddl: Vec<u16> = OsStr::new(OWNER_ONLY)
         .encode_wide()
         .chain(Some(0))
@@ -71,14 +87,14 @@ pub fn server_pipe(path: &Path) -> io::Result<OwnedHandle> {
         lpSecurityDescriptor: descriptor,
         bInheritHandle: 0,
     };
-    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let name: Vec<u16> = name.encode_wide().chain(Some(0)).collect();
     // SAFETY: `name` is NUL-terminated and `attributes` points at a valid descriptor.
     let pipe = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            PIPE_UNLIMITED_INSTANCES,
+            open_mode,
+            pipe_mode,
+            instances,
             PIPE_BUFFER_BYTES,
             PIPE_BUFFER_BYTES,
             0,

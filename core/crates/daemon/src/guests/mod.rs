@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{
-    AgentInfo, AgentState, HookSession, IntegrationArgs, IntegrationInfo, IntegrationsArgs,
-    IntegrationsList, StateDetail, StateReason, ToolsState, is_session_id, location_id,
+    AgentInfo, AgentState, HookSession, IntegrationArgs, IntegrationInfo, IntegrationListArgs,
+    IntegrationListResult, StateDetail, StateReason, ToolsState, is_session_id, location_id,
 };
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::process::ProcessState;
@@ -97,9 +97,9 @@ impl Guests {
         }
     }
 
-    /// The session `session` acts for, and whether a guest has it. The hook's `parent`, or what an
-    /// earlier hook said of it, makes it part of another; the session a hook names is noted as such
-    /// before the whole is looked for.
+    /// The session `session` acts for, and whether a guest has it. The hook's `part_of_session`, or
+    /// what an earlier hook said of it, makes it part of another. The roster records that relation
+    /// before finding the whole session.
     pub(crate) fn find(
         &self,
         session: &HookSession,
@@ -107,7 +107,7 @@ impl Guests {
         let names = [
             Some(&session.cli),
             Some(&session.session),
-            session.parent.as_ref(),
+            session.part_of_session.as_ref(),
         ];
         if !names.into_iter().flatten().all(|name| is_session_id(name)) {
             return Err(ErrorBody::invalid_argument(
@@ -116,8 +116,8 @@ impl Guests {
             ));
         }
         let mut roster = self.roster.lock().unwrap();
-        if let Some(parent) = &session.parent {
-            roster.note_part(&session.cli, &session.session, parent);
+        if let Some(whole) = &session.part_of_session {
+            roster.note_part(&session.cli, &session.session, whole);
         }
         let whole = roster.whole_of(&session.cli, &session.session);
         let guest = roster.guest_of(&session.cli, &whole).cloned();
@@ -127,7 +127,7 @@ impl Guests {
         }
         let whole = HookSession {
             session: whole,
-            parent: None,
+            part_of_session: None,
             ..session.clone()
         };
         Ok((whole, guest.map_or(SessionMatch::New, SessionMatch::Part)))
@@ -339,8 +339,8 @@ impl Guests {
 
     pub(crate) async fn integration_list(
         &self,
-        args: IntegrationsArgs,
-    ) -> Result<IntegrationsList, ErrorBody> {
+        args: IntegrationListArgs,
+    ) -> Result<IntegrationListResult, ErrorBody> {
         self.integrations.list(args).await
     }
 
@@ -385,6 +385,9 @@ fn joined(id: &str, name: &str, cli: &str, session: &str, cwd: String) -> (Agent
         heard_at: now.clone(),
     };
     let info = AgentInfo {
+        address: None,
+        label: None,
+        unreachable: false,
         agent_id: id.to_string(),
         name: name.to_string(),
         cli: cli.to_string(),

@@ -23,7 +23,7 @@ export function lifetimeDriverFiles(): Readonly<Record<string, string>> {
 
 /** The closed window's process and transcript can still be read using the core CLI. */
 export function checkClosedAgent(step: Extract<Closed, { readonly after: 'reload' }>, call: (...args: string[]) => string): void {
-	const agents = JSON.parse(call('list', '--json')) as ListedAgent[];
+	const { agents } = JSON.parse(call('list', '--json')) as { readonly agents: ListedAgent[] };
 	assert.deepStrictEqual(agents.map(each => [each.agent_id, each.pid, each.process]), [[step.before.id, step.before.pid, 'running']], 'the closed window’s original agent is still running');
 	assert.ok(call('screen', step.before.id, '--lines', '120').includes(step.screenText), 'the closed window’s screen still holds its transcript');
 }

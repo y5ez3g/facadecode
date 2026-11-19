@@ -173,12 +173,13 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
   - To daemon (`command_line.rs`), the `entries` module, used to read `facade.json`'s CLIs:
     `entries::read(&Settings) -> Vec<Entry>` (built-ins first in rule order, then added CLIs in
     file order) and `entries::find(&[Entry], name)`. Daemon also uses the `Entry` fields
-    `kind`, `command` and `args`, and these methods:
+    `kind`, `program` and `args`, and these methods:
     - `display_name()`;
     - `takes("model" | "effort")`;
     - `refused_choice(model, effort)`;
     - `choices(model, effort, words)`;
     - `environment(env)`, which fills each `${env:NAME}` from the start's environment;
+    - `program_setting()` names the key read or the preferred key for an unset program;
     - `problems_with(env)`;
     - `listed(env)`.
 
@@ -321,7 +322,9 @@ the entries `facade integration add` writes into a CLI's user settings, and the 
     `SessionReport` (`facade`, session file, cwd) and `Tools`, through `start_command_line` and `resume_command_line`;
     `uses_folder_plugin(cli)`, `plugin_files(program, facade)`, `plugin_version(manifest)`, `PLUGIN_FOLDER`,
     `PLUGIN_MEMBERS` and `SKILL_FILE`, to write and replace Antigravity's folder plugin.
-  - For the daemon's guests: `integration` (`CLIS`, `Programs`, `Kind`, `Target`, `Part`, `Held`, `targets`, `write`,
+  - `integration::CLIS` lists the rule names accepted by `facade integration add` and
+    `facade integration remove`. The daemon uses the same list for `integration.list`.
+  - For the daemon's guests: `integration` (`Programs`, `Kind`, `Target`, `Part`, `Held`, `targets`, `write`,
     `parts`, `wanted`, `take_out`, `held`, `note`, `claude_server`, `claude_server_add`, `claude_server_remove`,
     `is_facade_server`, `same_server`, and `command_program(cli)`, the program the daemon runs to add a server where
     Facade does not write it itself: `claude`). `held` reports an entry an earlier version wrote as `Changed`, so the

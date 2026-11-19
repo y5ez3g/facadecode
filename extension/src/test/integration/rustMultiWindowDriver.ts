@@ -9,18 +9,18 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentInfo, HelloResult, StartArgs, StartResult, WindowRef } from '../../base/coreProtocol';
+import type { HelloResult, StartArgs, StartResult, WindowRef } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
 import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
-import { agentTab, aliasOf, facade, facadeAs, hasAgentTab, keepConversation, listed, newCard, pickCard, pin, running, state, stop } from './rustWindowDriver';
+import { agentTab, aliasOf, facade, facadeAs, hasAgentTab, keepConversation, listed, newCard, pickCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 
 type Action =
-	| { readonly kind: 'snapshot' | 'notifications' | 'filter' }
-	| { readonly kind: 'start'; readonly screen: string; readonly secondGroup?: boolean }
-	| { readonly kind: 'adopt' | 'pin' | 'stop' | 'members' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'snapshot' | 'notifications' | 'filter' | 'show-agent-picker' }
+	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
+	| { readonly kind: 'adopt' | 'resume' | 'remote-card' | 'pin' | 'stop' | 'members' | 'saved-pin'; readonly agent: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly agent: string; readonly text: string }
-	| { readonly kind: 'message'; readonly id: string }
+	| { readonly kind: 'message'; readonly address: string }
 	| { readonly kind: 'wait-for-exit'; readonly pid: number }
 	| { readonly kind: 'worktree'; readonly source: WindowRef; readonly peer: WindowRef; readonly branch: string }
 	| { readonly kind: 'worktree-removed'; readonly id: string; readonly folder: string };
@@ -46,7 +46,7 @@ export interface SavedPin {
 }
 
 export interface WindowView {
-	readonly cards: readonly { readonly id: string; readonly pinned: boolean; readonly column: number | null; readonly selected: boolean }[];
+	readonly cards: readonly { readonly id: string; readonly pinned: boolean; readonly column: number | null; readonly selected: boolean; readonly line: string }[];
 	readonly terminals: number;
 	readonly filter?: PanelState['filter'];
 }
@@ -67,7 +67,7 @@ async function view(): Promise<WindowView> {
 	const panel = await state();
 	return {
 		cards: panel.cards.map(card => ({
-			id: card.alias.slice(1), pinned: card.pinned === true, column: agentTab(card)?.group.viewColumn ?? null, selected: card.selected
+			id: card.alias.slice(1), pinned: card.pinned === true, column: agentTab(card)?.group.viewColumn ?? null, selected: card.selected, line: card.line
 		})),
 		terminals: vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length,
 		filter: panel.filter
@@ -115,9 +115,12 @@ async function perform(action: Action): Promise<unknown> {
 			if (action.secondGroup) { await openSecondGroup(); }
 			const card = await newCard();
 			const agent = await running(aliasOf(card).slice(1));
-			keepConversation(agent.cwd, agent.session, action.screen);
-			facade('type', agent.id, action.screen, '--enter');
-			await until(`#${agent.id}'s screen text`, () => facade('screen', agent.id, '--lines', '120').includes(action.screen) || undefined);
+			const screen = action.screen;
+			keepConversation(agent.cwd, agent.session, screen ?? 'A session opened in this window');
+			if (screen !== undefined) {
+				facade('type', agent.id, screen, '--enter');
+				await until(`#${agent.id}'s screen text`, () => facade('screen', agent.id, '--lines', '120').includes(screen) || undefined);
+			}
 			return agent;
 		}
 		case 'filter':
@@ -130,11 +133,25 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'saved-pin':
 			return savedPin(action.agent);
-		case 'adopt': {
-			const card = await pickCard('facade.showActiveAgents');
+		case 'adopt':
+		case 'resume': {
+			const card = await (action.kind === 'resume' ? resumeCard() : pickCard('facade.goToAgent'));
 			assert.strictEqual(aliasOf(card), `#${action.agent}`, 'the picker opens the requested agent by its original number');
 			await until(`#${action.agent}'s terminal tab`, () => hasAgentTab(card) || undefined);
 			return running(action.agent);
+		}
+		case 'show-agent-picker':
+			void vscode.commands.executeCommand('facade.goToAgent');
+			return true;
+		case 'remote-card': {
+			const card = await until(action.agent + "'s card", async () => (await state()).cards.find(card => card.alias === action.agent));
+			assert.ok(card.runningOn && !card.pinned, JSON.stringify(card));
+			await until(`${card.alias}'s terminal tab`, () => hasAgentTab(card) || undefined);
+			await until(`${card.alias}'s remote icon`, async () => {
+				const icons = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '.remote-status .remote-icon' });
+				return icons?.length === 1 || undefined;
+			});
+			return card.alias;
 		}
 		case 'pin':
 		case 'stop': {
@@ -160,8 +177,8 @@ async function perform(action: Action): Promise<unknown> {
 			await vscode.commands.executeCommand('notifications.showList');
 			return true;
 		case 'message': {
-			const document = await until(`Open Message to open #${action.id}`, () => vscode.workspace.textDocuments.find(each =>
-				each.uri.scheme === 'facade-message' && each.uri.query === action.id));
+			const document = await until(`Open Message to open ${action.address}`, () => vscode.workspace.textDocuments.find(each =>
+				each.uri.scheme === 'facade-message' && each.uri.query === action.address));
 			return document.getText();
 		}
 		case 'wait-for-exit':
@@ -201,8 +218,7 @@ async function perform(action: Action): Promise<unknown> {
 		}
 		case 'worktree-removed': {
 			await until('Git to remove the fixture worktree', () => !fs.existsSync(action.folder) || undefined);
-			const agents = JSON.parse(facade('list', '--json')) as AgentInfo[];
-			const ended = agents.find(agent => agent.agent_id === action.id);
+			const ended = listed().find(agent => agent.agent_id === action.id);
 			assert.ok(ended?.process === 'ended' && ended.exit?.at, JSON.stringify(ended));
 			const trace = fs.readFileSync(gitTrace, 'utf8').trim().split('\n')
 				.map(line => JSON.parse(line) as { event: string; argv?: string[]; time: string });

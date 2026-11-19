@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Show Agent Launch (CLIS-4.1): a read-only document of how each CLI would start now in a chosen working location - executable and
+// Show Agent Command Line (CLIS-4.1): a read-only document of how each CLI would start now in a chosen working location - executable and
 // environment source, working directory, literal argument order, YOLO, sandbox and approvals, how the folder is trusted and
 // configuration errors - computed without running any CLI or writing any file, secrets redacted, in the person's language.
 
@@ -29,7 +29,7 @@ import { YOLO_SETTING } from './settings';
 import { terminalEnvSetting } from './terminals';
 
 /** Where the document lives: read-only, as a content provider's documents are. */
-const DOCUMENT = vscode.Uri.from({ scheme: 'facade-launch', path: '/Agent Launch' });
+const DOCUMENT = vscode.Uri.from({ scheme: 'facade-launch', path: '/Agent Command Line' });
 
 /** An argument as the document lists it: as it is, or quoted where whitespace, quotes or emptiness would hide its bounds. */
 function shownArg(arg: string): string {
@@ -106,7 +106,7 @@ function trustText(trust: LaunchTrust): string {
 		return vscode.l10n.t("Trust: {0} merged into {1} before each start; unreadable files are preserved and the CLI prompts in its terminal", JSON.stringify(trustEntryJson(trust.target)), trust.target.file);
 	}
 	// {0} is the CLI's options that trust the folder
-	return trust.args.length ? vscode.l10n.t("Trust: for this launch alone, by {0}", shownArgs(trust.args)) : vscode.l10n.t("Trust: none required; the CLI does not prompt for trust");
+	return trust.args.length ? vscode.l10n.t("Trust: for this start alone, by {0}", shownArgs(trust.args)) : vscode.l10n.t("Trust: none required; the CLI does not prompt for trust");
 }
 
 /** One CLI's section of the document. */
@@ -115,16 +115,16 @@ function launchSection(launch: LaunchDescription): string[] {
 	const add = (text: string) => lines.push(`  ${text}`);
 	if (!launch.enabled) {
 		// {0} is the CLI's entry, such as clis.claude
-		add(vscode.l10n.t("Status: off; {0}.enabled is false, so New Agent does not offer it", launch.setting));
+		add(vscode.l10n.t("State: off; {0}.enabled is false, so New Agent does not offer it", launch.setting));
 	} else if (launch.problems.length) {
-		add(vscode.l10n.t("Status: cannot start until configuration errors are fixed"));
+		add(vscode.l10n.t("State: cannot start until configuration errors are fixed"));
 	} else if ('missing' in launch.program) {
 		// {0} is why
-		add(vscode.l10n.t("Status: cannot start: {0}", reasonText(launch.program.said, launch.program.missing)));
+		add(vscode.l10n.t("State: cannot start: {0}", reasonText(launch.program.said, launch.program.missing)));
 	} else if (launch.planProblem !== undefined) {
-		add(vscode.l10n.t("Status: cannot start: {0}", reasonText(launch.planProblem.said, launch.planProblem.text)));
+		add(vscode.l10n.t("State: cannot start: {0}", reasonText(launch.planProblem.said, launch.planProblem.text)));
 	} else {
-		add(vscode.l10n.t("Status: available"));
+		add(vscode.l10n.t("State: available"));
 	}
 	if (launch.problems.length) {
 		add(vscode.l10n.t("Configuration errors:"));
@@ -133,7 +133,7 @@ function launchSection(launch: LaunchDescription): string[] {
 	if ('file' in launch.program) {
 		add(launch.program.configured
 			// {0} is the program; {1} its entry, such as clis.codex; {2} the command configured there
-			? vscode.l10n.t("Executable: {0} (from {1}.command {2})", launch.program.file, launch.setting, JSON.stringify(launch.program.configured))
+			? vscode.l10n.t("Executable: {0} (from {1} {2})", launch.program.file, launch.program.configured.setting, JSON.stringify(launch.program.configured.value))
 			: vscode.l10n.t("Executable: {0} (found on PATH)", launch.program.file));
 		if (launch.program.script !== undefined) {
 			add(vscode.l10n.t("Node script: {0}", launch.program.script));
@@ -146,7 +146,7 @@ function launchSection(launch: LaunchDescription): string[] {
 	} else {
 		add(vscode.l10n.t("Executable: unresolved until configuration errors are fixed"));
 	}
-	add(vscode.l10n.t("Working directory: {0}", launch.cwd));
+	add(vscode.l10n.t("Folder: {0}", launch.cwd));
 	// {0} is the layers, joined by arrows
 	add(vscode.l10n.t("Environment layers, lowest precedence first: {0}", launch.environment.sources.map(source => sourceText(source, launch)).join(' → ')));
 	for (const variable of launch.environment.variables) {
@@ -203,14 +203,14 @@ export function launchDocument(input: LaunchDocumentInput): string {
 	const { yolo, location } = input;
 	if (input.gone !== undefined) {
 		// {0} is the working location's name
-		return `${vscode.l10n.t("Working location {0} is no longer available. Run Show Agent Launch again to choose another.", input.gone)}\n`;
+		return `${vscode.l10n.t("Working location {0} is no longer available. Run Show Agent Command Line again to choose another.", input.gone)}\n`;
 	}
 	const lines: string[] = [];
 	if (!location) {
-		lines.push(vscode.l10n.t("No folder is open. Open a folder to view agent launch details."));
+		lines.push(vscode.l10n.t("No folder is open. Open a folder to view agent command lines."));
 	} else {
 		// {0} is the working location's name
-		lines.push(vscode.l10n.t("Agent launch in {0}", location.label));
+		lines.push(vscode.l10n.t("Agent command line in {0}", location.label));
 		lines.push(location.environment === undefined
 			// {0} is the working location's path
 			? vscode.l10n.t("Working location: {0}", location.path)
@@ -238,7 +238,7 @@ export function launchDocument(input: LaunchDocumentInput): string {
 			const { adapter } = entry;
 			lines.push('', `${adapter.displayName} (${adapter.id}, ${adapter.setting})`);
 			if (!entry.enabled) {
-				lines.push(`  ${vscode.l10n.t("Status: off; {0}.enabled is false, so New Agent does not offer it", adapter.setting)}`);
+				lines.push(`  ${vscode.l10n.t("State: off; {0}.enabled is false, so New Agent does not offer it", adapter.setting)}`);
 			}
 			lines.push(entry.problems.length ? `  ${vscode.l10n.t("Configuration errors:")}` : `  ${vscode.l10n.t("Configuration errors: none")}`);
 			entry.problems.forEach(problem => lines.push(`    - ${reasonText(problem.said, problem.text)}`));
@@ -248,7 +248,7 @@ export function launchDocument(input: LaunchDocumentInput): string {
 }
 
 /**
- * The location Show Agent Launch's argument names (UX-3.1): `{ location_id }` exactly; nothing, as the Command Palette gives, or
+ * The location Show Agent Command Line's argument names (UX-3.1): `{ location_id }` exactly; nothing, as the Command Palette gives, or
  * `null`, for the person to choose. Anything else fails without a guess.
  */
 export function locationArgument(argument: unknown): string | undefined {
@@ -281,7 +281,7 @@ export async function chosen(locations: Pick<LocationPort, 'snapshot' | 'resolve
 }
 
 /**
- * Registers Show Agent Launch (CLIS-4.1): the command, and its read-only document, read again as Facade's settings file or the
+ * Registers Show Agent Command Line (CLIS-4.1): the command, and its read-only document, read again as Facade's settings file or the
  * terminal environment settings change while it is open. `remote` is the window's remote authority, as its environment is named.
  */
 export function registerShowLaunch(clis: HostClis, locations: LocationPort, log: LogPort, settings: Pick<FacadeSettings, 'file'>, remote?: string): vscode.Disposable {

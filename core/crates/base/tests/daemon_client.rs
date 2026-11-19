@@ -3,10 +3,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use facade_base::daemon::{ClientKind, DAEMON_PROTOCOL_VERSION};
+use facade_base::daemon::{ClientKind, DAEMON_PROTOCOL_VERSION, ScreenTopic, ScreenWatchArgs};
 use facade_base::daemon_client::{DaemonClient, Identity};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::jsonrpc::{ErrorBody, Notification, Reason, Request, Response, encode_line};
 use facade_base::sockets::{DaemonListener, ServerSocket};
+use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// A stand-in daemon's socket, for a home named after the test and this process: a file in this
@@ -98,7 +99,7 @@ fn an_answer_to_hello_this_build_cannot_read_is_another_protocol_s() {
         .unwrap_or_else(|| panic!("not a protocol's error: {err:#}"));
     assert_eq!(
         body.data.reason,
-        Reason::ProtocolIncompatible,
+        Reason::IncompatibleProtocol,
         "{}",
         body.message
     );
@@ -162,4 +163,56 @@ fn a_daemon_that_closed_the_connection_before_hello_is_no_daemon_yet() {
         "{:?}",
         connected.map(|client| client.is_some())
     );
+}
+
+#[test]
+fn a_caller_that_manages_reconnection_receives_the_upgrading_refusal() {
+    let socket = TestSocket::new("watch-upgrading");
+    let refusal = ErrorBody::new(Reason::Upgrading, "a newer daemon is taking over");
+    let response_error = refusal.clone();
+    let daemon = stand_in(&socket.0, |connection| async move {
+        let mut connection = read_hello(connection).await;
+        let mut greeting = encode_line(&Response::ok(
+            1,
+            json!({
+                "protocol": DAEMON_PROTOCOL_VERSION, "build": "0.2.0", "pid": 1, "agents": 0,
+                "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "topics": ["screen"], "ops": [],
+            }),
+        ));
+        greeting.extend(encode_line(&Notification::new(
+            "closing",
+            json!({"build": "0.2.1"}),
+        )));
+        connection.write_all(&greeting).await.unwrap();
+
+        let mut line = String::new();
+        connection.read_line(&mut line).await.unwrap();
+        let watch: Request = serde_json::from_str(&line).unwrap();
+        assert_eq!(watch.method, "watch");
+        let answer = Response::failed(watch.id, response_error);
+        connection.write_all(&encode_line(&answer)).await.unwrap();
+        line.clear();
+        connection.read_line(&mut line).await.unwrap();
+        let closing: Notification = serde_json::from_str(&line).unwrap();
+        assert_eq!(closing.method, "closing");
+    });
+    let mut client = DaemonClient::connect(
+        &socket.0,
+        &terminal(),
+        Instant::now() + Duration::from_secs(5),
+        &mut |_| true,
+    )
+    .unwrap()
+    .unwrap();
+    client.disable_auto_reconnect();
+    let err = client
+        .watch::<ScreenTopic>(ScreenWatchArgs {
+            agent: "a1".into(),
+            keep_scrollback: true,
+            include_scrollback: false,
+        })
+        .unwrap_err();
+    assert_eq!(err.downcast_ref::<ErrorBody>(), Some(&refusal));
+    assert_eq!(client.closing.as_deref(), Some("0.2.1"));
+    daemon.join().unwrap();
 }

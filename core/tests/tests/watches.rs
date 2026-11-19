@@ -16,7 +16,7 @@ fn agents_watch_delivers_snapshot_and_changes_until_unwatch() {
     let watch = watching["result"]["watch"]
         .as_u64()
         .expect("expected a watch ID");
-    let snapshot = watching["result"]["snapshot"]
+    let snapshot = watching["result"]["snapshot"]["agents"]
         .as_array()
         .cloned()
         .unwrap_or_default();

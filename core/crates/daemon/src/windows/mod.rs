@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{
-    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, TerminalColors, WindowDeliveryFailure,
+    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_NAME, TerminalColors, WindowDeliveryOutcome,
     WindowDescription, WindowInfo, WindowRef, WindowsChange, WorktreeCreateArgs, location_id,
 };
 use facade_base::files::{folder_key, real_path};
@@ -110,7 +110,7 @@ impl Window {
         WindowInfo {
             machine_id: self.binding.window.machine_id.clone(),
             window_id: self.binding.window.window_id.clone(),
-            label: self.description.label.clone(),
+            name: self.description.name.clone(),
             environment: self.description.environment.clone(),
             connected: self.connections > 0,
             folders: self.description.folders.clone(),
@@ -231,10 +231,10 @@ impl Windows {
     /// Refuses a description no editor window gives: no ID, the terminal window's ID, or a folder
     /// that is not an absolute path.
     pub(crate) fn check(description: &WindowDescription) -> Result<(), ErrorBody> {
-        if description.id.trim().is_empty() || description.id == TERMINAL_WINDOW {
+        if description.instance_id.trim().is_empty() || description.instance_id == TERMINAL_WINDOW {
             return Err(ErrorBody::invalid_argument(format!(
                 "{:?} is not an editor window's ID",
-                description.id
+                description.instance_id
             )));
         }
         match description
@@ -249,24 +249,14 @@ impl Windows {
         }
     }
 
-    /// Restores saved logical windows before clients connect. The store reclaims workspace-less
-    /// windows with no saved agent references.
-    pub(crate) fn restore(
-        &self,
-        delete_empty: impl Fn(&WindowRef) -> anyhow::Result<bool>,
-    ) -> Result<(), ErrorBody> {
+    /// Restores every saved logical window before clients connect.
+    pub(crate) fn restore(&self) -> Result<(), ErrorBody> {
         let rows = blocking_in_place(|| self.shared.table.logical_windows())
             .map_err(ErrorBody::internal)?;
         let mut state = Registry::default();
         for row in rows {
             let binding = self.shared.first_binding(&row.window_id);
             state.last_sequence = state.last_sequence.max(row.sequence);
-            if row.description.workspace.is_none()
-                && blocking_in_place(|| delete_empty(&binding.window))
-                    .map_err(ErrorBody::internal)?
-            {
-                continue;
-            }
             state.windows.insert(
                 row.window_id,
                 Window::new(binding, row.sequence, row.description),
@@ -288,7 +278,7 @@ impl Windows {
             let known = state
                 .windows
                 .values()
-                .find(|window| window.description.id == description.id);
+                .find(|window| window.description.instance_id == description.instance_id);
             let matched = known.or_else(|| {
                 let workspace = description.workspace.as_ref()?;
                 state
@@ -303,7 +293,7 @@ impl Windows {
             match matched {
                 Some(window) => {
                     let mut binding = window.binding.clone();
-                    if window.description.id != description.id {
+                    if window.description.instance_id != description.instance_id {
                         binding.generation += 1;
                     }
                     (binding, window.sequence)
@@ -368,10 +358,10 @@ impl Windows {
                 .get(id)
                 .filter(|window| window.is_current(binding))
                 .ok_or_else(|| stale_connection(binding))?;
-            if description.id != window.description.id {
+            if description.instance_id != window.description.instance_id {
                 return Err(ErrorBody::invalid_argument(format!(
                     "this connection cannot describe window instance {:?}",
-                    description.id
+                    description.instance_id
                 )));
             }
             WindowRow {
@@ -438,7 +428,7 @@ impl Windows {
     pub(crate) fn person_target(
         &self,
         window: &WindowRef,
-    ) -> Result<PersonTarget, WindowDeliveryFailure> {
+    ) -> Result<PersonTarget, WindowDeliveryOutcome> {
         if window.machine_id == self.shared.machine_id && window.window_id == TERMINAL_WINDOW {
             return Err(delivery_failure(window, "not_watching"));
         }
@@ -462,7 +452,7 @@ impl Windows {
         &self,
         target: &PersonTarget,
         change: &serde_json::Value,
-    ) -> Result<(), WindowDeliveryFailure> {
+    ) -> Result<(), WindowDeliveryOutcome> {
         let state = self.shared.state.lock().unwrap();
         let window_ref = &target.binding.window;
         let window = state
@@ -496,8 +486,8 @@ fn stale_connection(binding: &WindowBinding) -> ErrorBody {
     )
 }
 
-fn delivery_failure(window: &WindowRef, reason: &str) -> WindowDeliveryFailure {
-    WindowDeliveryFailure {
+fn delivery_failure(window: &WindowRef, reason: &str) -> WindowDeliveryOutcome {
+    WindowDeliveryOutcome::NotDelivered {
         window: window.clone(),
         reason: reason.to_string(),
     }
@@ -542,13 +532,13 @@ impl Windows {
     }
 
     /// The local terminal's name, an editor window's own name, or its ID.
-    pub(crate) fn label(&self, window: &WindowRef) -> String {
+    pub(crate) fn name(&self, window: &WindowRef) -> String {
         let id = &window.window_id;
         if window.machine_id != self.shared.machine_id {
             return id.clone();
         }
         if id == TERMINAL_WINDOW {
-            return TERMINAL_WINDOW_LABEL.to_string();
+            return TERMINAL_WINDOW_NAME.to_string();
         }
         self.shared
             .state
@@ -556,7 +546,7 @@ impl Windows {
             .unwrap()
             .windows
             .get(id)
-            .map_or_else(|| id.clone(), |window| window.description.label.clone())
+            .map_or_else(|| id.clone(), |window| window.description.name.clone())
     }
 
     /// Later window changes.
@@ -636,7 +626,7 @@ impl Windows {
                 let nor_inside = if exact { "" } else { ", nor inside one" };
                 ErrorBody::invalid_argument(format!(
                     "{cwd} is not a location of window {}{nor_inside}",
-                    window.description.label
+                    window.description.name
                 ))
             })?;
             (
@@ -675,6 +665,20 @@ impl Windows {
             .description
             .colors
             .clone()
+    }
+
+    /// Reads colors for a current connection and distinguishes an unset palette from a stale binding.
+    pub(crate) fn colors_for_binding(
+        &self,
+        binding: &WindowBinding,
+    ) -> Result<Option<TerminalColors>, ErrorBody> {
+        let state = self.shared.state.lock().unwrap();
+        let window = state
+            .windows
+            .get(&binding.window.window_id)
+            .filter(|window| window.is_current(binding))
+            .ok_or_else(|| stale_connection(binding))?;
+        Ok(window.description.colors.clone())
     }
 
     /// The environment window `id` last described, kept only in memory.

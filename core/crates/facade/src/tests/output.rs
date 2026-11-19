@@ -5,13 +5,17 @@ use std::path::Path;
 use std::time::Duration;
 
 use facade_base::daemon::{HelloResult, IntegrationInfo, Message, PartState};
+use facade_base::machine::{AgentListResult, MachineListResult};
 use serde_json::{Value, json};
 
 use super::{agent, before, input, inspection, now};
 use crate::commands::{
-    ago, input_words, inspect_text, integration_status, integration_text, integrations_text,
-    list_text, part_words, quiet_text, sent, state_words, status_text, table, tools_words,
+    agent_list_json, ago, input_words, inspect_text, integration_status, integration_text,
+    integrations_text, list_text, part_words, quiet_text, sent, state_words, status_text,
+    tools_words,
 };
+use crate::machine::machine_list_json;
+use crate::table;
 
 /// `text` with each line's trailing spaces removed: the last column's padding is no one's to read.
 fn trimmed(text: &str) -> String {
@@ -19,6 +23,81 @@ fn trimmed(text: &str) -> String {
         .map(str::trim_end)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[test]
+fn agent_list_json_projects_the_same_settled_v2_response() {
+    for (status, state, responded, unreachable) in [
+        ("answered", "responded", true, false),
+        ("unavailable", "unreachable", false, true),
+        ("timed_out", "timed_out", false, false),
+        ("error", "failed", true, false),
+    ] {
+        let mut wire_row = json!({
+            "machine_id": "401b070c-c174-4c94-abb1-cd1efda7a62b",
+            "short_id": "401b070cc174",
+            "name": "peer",
+            "status": status,
+        });
+        if responded {
+            wire_row["build"] = json!("0.1.6+test");
+            wire_row["answered_at"] = json!("2026-11-18T20:00:55.123Z");
+        }
+        let wire = json!({ "agents": [], "machines": [wire_row.clone()] });
+        let list: AgentListResult = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&list).unwrap(), wire);
+
+        let mut expected = wire_row;
+        let fields = expected.as_object_mut().unwrap();
+        fields.shift_remove("status");
+        if let Some(at) = fields.shift_remove("answered_at") {
+            fields.insert("responded_at".into(), at);
+        }
+        fields.insert("state".into(), json!(state));
+        if unreachable {
+            fields.insert("unreachable".into(), json!(true));
+        }
+        assert_eq!(
+            agent_list_json(list).unwrap(),
+            json!({ "agents": [], "machines": [expected] })
+        );
+    }
+}
+
+#[test]
+fn machine_list_json_preserves_routes_and_connection_details_from_the_same_v2_reply() {
+    let wire = json!({ "machines": [
+        {
+            "machine_id": "here", "boot_id": "boot", "name": "local", "build": "0.1.6+test",
+            "route": [],
+            "connections": [{
+                "machine_id": "peer", "initiator_machine_id": "here", "kind": "temporary",
+                "state": "connected",
+            }],
+        },
+        {
+            "machine_id": "peer", "name": "reachable",
+            "route": ["relay", "peer"],
+            "connections": [{
+                "machine_id": "here", "initiator_machine_id": "here", "kind": "saved",
+                "ssh_destination": "qa@peer", "remote_home": "/home/qa/facade", "state": "unavailable",
+            }],
+        },
+        {
+            "machine_id": "closed", "name": "offline",
+            "connections": [{
+                "machine_id": "here", "initiator_machine_id": "here", "kind": "saved",
+                "ssh_destination": "qa@closed", "state": "ssh_interaction_required",
+                "ssh_interaction": { "reason": "needs a login", "command": ["ssh", "qa@closed"] },
+            }],
+        },
+    ] });
+    let list: MachineListResult = serde_json::from_value(wire.clone()).unwrap();
+    let mut expected = wire.clone();
+    expected["machines"][1]["connections"][0]["state"] = json!("disconnected");
+    expected["machines"][2]["unreachable"] = json!(true);
+    assert_eq!(machine_list_json(&list).unwrap(), expected);
+    assert_eq!(serde_json::to_value(&list).unwrap(), wire);
 }
 
 #[test]
@@ -182,7 +261,7 @@ fn the_integration_list_is_a_table_with_when_each_was_added() {
     ];
     assert_eq!(
         trimmed(&integrations_text(&list, now())),
-        "CLI      STATUS            ADDED\n\
+        "CLI      STATE             ADDED\n\
          claude   added             7 days ago\n\
          codex    not added\n\
          agy      needs attention   7 days ago"

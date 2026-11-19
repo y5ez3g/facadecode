@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use facade_base::jsonrpc::{ErrorBody, Notification, Response};
-use facade_base::keeper::{AgentChange, methods};
+use facade_base::keeper::{KeeperAgentChange, methods};
 use facade_base::process::ProcessExit;
 use serde::Serialize;
 
@@ -183,7 +183,7 @@ impl Keeper {
         if !self.link.as_ref().is_some_and(Link::is_greeted) {
             return;
         }
-        let change = AgentChange::Exit {
+        let change = KeeperAgentChange::Exit {
             agent: agent.to_string(),
             exit,
         };

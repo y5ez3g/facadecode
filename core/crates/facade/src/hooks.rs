@@ -315,7 +315,7 @@ fn report_guest(
 fn guest_session(cli: &str, input: &Value) -> Option<HookSession> {
     let hook::NamedSession {
         session,
-        parent,
+        parent: part_of_session,
         cwd,
     } = hook::session_of(cli, input)?;
     let cwd = cwd.or_else(|| Some(std::env::current_dir().ok()?.display().to_string()));
@@ -329,7 +329,7 @@ fn guest_session(cli: &str, input: &Value) -> Option<HookSession> {
         session,
         cwd,
         pid,
-        parent,
+        part_of_session,
         env: Some(environment().0),
         status_file: None,
     })
@@ -385,11 +385,14 @@ mod tests {
     fn message(number: usize, text: &str) -> Message {
         Message {
             message_id: format!("m{number}"),
+            message_ref: None,
             from: "human".into(),
+            from_machine_id: None,
             from_name: None,
             to: "a7".into(),
             text: text.to_string(),
             reply_to: None,
+            reply_to_machine_id: None,
             from_window: None,
             call_id: None,
             result: None,

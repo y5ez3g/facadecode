@@ -46,7 +46,7 @@ fn with_session(home: &TestHome, session: &str) -> Option<Value> {
     let listed: Value =
         facade_scenarios::serde_json::from_str(&stdout(&home.run_facade(&["list", "--json"])))
             .ok()?;
-    listed
+    listed["agents"]
         .as_array()?
         .iter()
         .find(|agent| agent["session"] == session)
@@ -102,7 +102,7 @@ fn a_session_joins_as_a_guest_works_ends_its_turns_and_leaves() {
             &json!("unknown")
         )
     );
-    assert_eq!(guest["cwd"], project);
+    assert_eq!(guest["folder"], project);
     // Facade knows no process or terminal of a guest's, so it names none.
     assert!(
         ["pid", "cols", "rows"]
@@ -628,7 +628,7 @@ fn a_subagent_s_session_acts_for_its_parent_s_guest() {
         facade_scenarios::serde_json::from_str(&stdout(&home.run_facade(&["list", "--json"])))
             .unwrap();
     assert_eq!(
-        agents.as_array().unwrap().len(),
+        agents["agents"].as_array().unwrap().len(),
         1,
         "the child is no guest of its own: {agents}"
     );

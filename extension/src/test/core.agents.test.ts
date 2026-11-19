@@ -923,11 +923,14 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual([world.agents.list().map(run => run.id), world.execution.pairs.has(id), world.retained.has(id)], [[], false, false]);
 	});
 
-	test('explicit close removes card and terminal at once and cleans up in the background (J07, LIFECYCLE-3.1)', async () => {
+	test('Stop Agent removes a live pair at once and Dismiss leaves it in place (J07, LIFECYCLE-3.1)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		const closing = world.agents.close(id);
+		await world.agents.dismiss(id);
+		assert.strictEqual(world.agents.get(id)?.lifecycle, 'running');
+		assert.deepStrictEqual(world.execution.removed, []);
+		const closing = world.agents.stop(id);
 		assert.strictEqual(world.agents.get(id), undefined, 'gone from the record at once');
 		assert.deepStrictEqual(world.execution.removed, [id], 'its terminal is gone at once');
 		assert.strictEqual(await closing, 'terminated');
@@ -935,13 +938,15 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.get(id), undefined, 'its later exit does not bring it back');
 	});
 
-	test('a close removes the card and terminal at once even where its kept record cannot be removed - the store refuses the write (LIFECYCLE-3.1)', async () => {
+	test('Dismiss removes the ended pair even where its kept record cannot be removed - the store refuses the write (LIFECYCLE-3.1)', async () => {
 		const world = setUp({ planError: new PlanError('claude is not installed in this environment.', 'not_found') });
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		assert.ok(world.retained.has(id), 'its failed start is kept for a reload');
 		world.retained.delete = () => { throw new Error('Timed out after 5 seconds waiting for another window to release the lock'); };
-		assert.strictEqual(await world.agents.close(id), 'already_ended');
+		assert.strictEqual(await world.agents.stop(id), 'already_ended');
+		assert.ok(world.agents.get(id), 'a stale Stop leaves the known ended card');
+		await world.agents.dismiss(id);
 		assert.deepStrictEqual([world.agents.get(id), world.execution.removed, world.changes.filter(change => change.kind === 'removed').map(change => change.run)], [undefined, [id], [id]]);
 		assert.ok(world.log.some(line => /Could not remove the kept record of run-.*: Timed out/.test(line)));
 	});
@@ -1590,6 +1595,15 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.strictEqual(world.log.filter(line => /Could not list the conversations running/.test(line)).length, 1, 'the same failure said once');
 	});
 
+	test('Continue Session asks for the exact session ID and working location before starting a process', () => {
+		const world = setUp();
+		assert.throws(() => world.agents.resume({ ...ENTRY, key: { ...ENTRY.key, sessionId: '' } }, { reveal: true }),
+			{ message: 'An exact session ID is required.' });
+		assert.throws(() => world.agents.resume({ ...ENTRY, cwdChoices: [ENTRY.cwd, '/other'] }, { reveal: true }),
+			{ message: 'Choose a working location before continuing this session.' });
+		assert.deepStrictEqual(world.plans, []);
+	});
+
 	test('WORKTREES-1.2: a Resume in a cwd within a location keeps that anchor from its acceptance - before its process starts, and kept red and across a reload after a failed start - remembering the cwd only once its process started', async () => {
 		const world = setUp();
 		const locations = (world.agents as unknown as { deps: { locations: { conversationLocation?: (cwd: string) => Location | undefined } } }).deps.locations;
@@ -1799,7 +1813,7 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		let refused: unknown;
 		try { world.agents.resume({ ...ENTRY, cwd: '/elsewhere/app' }, { reveal: false }); } catch (err) { refused = err; }
 		assert.ok(refused instanceof FacadeError);
-		assert.deepStrictEqual([refused.said, refused.message], [{ kind: 'location_not_here', values: ['/elsewhere/app'] }, 'The conversation\'s working location /elsewhere/app is not available in this window.']);
+		assert.deepStrictEqual([refused.said, refused.message], [{ kind: 'location_not_here', values: ['/elsewhere/app'] }, 'The session\'s working location /elsewhere/app is not available in this window.']);
 		(world.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save({ id: 'pin-gone', conversation: { environment: 'local', cli: 'claude', sessionId: 'gone' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: 'Gone' });
 		await world.agents.restorePins();
 		assert.deepStrictEqual([world.agents.list().map(run => run.error?.reason), world.errors.map(error => error.text)], [
@@ -2205,12 +2219,14 @@ suite('Agents started by agents, and their tools (RULES-4.3, LIFECYCLE-2.2, CLIS
 
 /** What the card says of its run, in these words. */
 const WORDS = {
+	runningOn: (machine: string) => `Running on ${machine}`,
+	connectionLost: 'Connection lost · reconnecting',
 	title: (value: string) => `Title: ${value}`, location: (value: string) => `Location: ${value}`, path: (value: string) => `Path: ${value}`, untitledPending: 'No title yet', untitledUnreadable: 'Title unavailable',
 	starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...',
-	started: 'New conversation started', resumed: 'Conversation resumed', working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error · ${reason}`,
-	activityUnavailable: 'Status unavailable · check terminal', activityUnknown: (why: string) => `Status ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Collaboration not connected yet', needsPermission: 'Permission needed',
+	started: 'New session started', resumed: 'Agent resumed', continued: 'Session continued', working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error · ${reason}`,
+	activityUnavailable: 'State unavailable · check terminal', activityUnknown: (why: string) => `State ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Facade tools not connected yet', needsPermission: 'Permission needed',
 	needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed', exitedWithCode: (code: string) => `Process exited · code ${code}`, endedBySignal: (signal: string) => `Process terminated · ${signal}`,
-	exitUnknown: 'Process lost · reason unknown', toolsUnavailable: (problem?: string) => `Collaboration off · ${problem}`,
+	exitUnknown: 'Process lost · reason unknown', toolsUnavailable: (problem?: string) => `Facade tools unavailable · ${problem}`,
 	startFailed: (reason: string) => `Start failed · ${reason}`, worktreeFailed: (reason: string) => `Worktree failed · ${reason}`,
 	saidByAgent: (sender: string, line: string) => `${sender}: ${line}`, saidByPerson: (line: string) => line, saidByFacade: (line: string) => line
 } satisfies CardWords;
@@ -2471,13 +2487,13 @@ suite('A run\'s title: its conversation\'s, as its CLI keeps it (CLIS-2.4, PANEL
 		await settle();
 		const restored = world.agents.list().find(run => run.pin === 'pin-2')!;
 		const fresh = world.agents.list().find(run => run.pin === 'pin-new')!;
-		const shown = (run: RunId) => { const facts = world.agents.get(run)!; return [facts.title, facts.resumed, statusOf(facts, WORDS).line]; };
+		const shown = (run: RunId) => { const facts = world.agents.get(run)!; return [facts.title, facts.sessionOpening, statusOf(facts, WORDS).line]; };
 		const before = [shown(resumed), kept(world, resumed).resumed, shown(restored.id), shown(fresh.id), store.reads.map(read => read.key.sessionId)];
 		world.execution.identities.fire({ run: fresh.id, sessionId: 'sess-3' });
 		await settle();
 		assert.deepStrictEqual([accepted, before, store.reads.map(read => read.key.sessionId)], [
 			[['sess-1', '/work/app']],
-			[['Saved work', true, 'Conversation resumed'], true, ['Pinned work', true, 'Conversation resumed'], [undefined, undefined, 'New conversation started'], ['sess-1', 'sess-2']],
+			[['Saved work', 'continued', 'Session continued'], true, ['Pinned work', 'continued', 'Session continued'], [undefined, 'started', 'New session started'], ['sess-1', 'sess-2']],
 			['sess-1', 'sess-2', 'sess-3']
 		]);
 	});
@@ -2495,22 +2511,27 @@ suite('A run\'s title: its conversation\'s, as its CLI keeps it (CLIS-2.4, PANEL
 		const reload = setUp({ sessions: true, titles: later.port, after: timers().after });
 		reload.execution.liveRuns = [
 			{ run: id, claimedElsewhere: false, pid: 4242, startedAt: 1000, meta },
+			{ run: 'run-fresh', claimedElsewhere: false, pid: 4244, startedAt: 1000, meta: { ...meta, alias: '#a8', sessionId: undefined, resumed: undefined } },
 			{ run: 'run-ended', claimedElsewhere: false, pid: 4243, startedAt: 1000, meta: { ...meta, alias: '#a9', sessionId: 'sess-9' }, exited: { code: 0, interruptVerified: false } }
 		];
 		await reload.agents.restore();
 		await settle();
 		const facts = reload.agents.get(id)!;
-		const shown = [meta.title, meta.resumed, facts.title, facts.resumed, statusOf(facts, WORDS).line, later.reads.map(read => read.key.sessionId)];
+		const shown = [meta.title, meta.resumed, facts.title, facts.sessionOpening, statusOf(facts, WORDS).line, later.reads.map(read => read.key.sessionId)];
+		assert.strictEqual(statusOf(reload.agents.get('run-fresh')!, WORDS).line, 'New session started');
 		// A start that failed is kept red with what it was: that it resumed among it
 		const failing = setUp({ sessions: true });
 		failing.execution.spawnError = new Error('could not start');
 		const failed = failing.agents.resume(ENTRY, { reveal: true }) as RunId;
 		await failing.agents.started(failed);
 		const again = setUp({ sessions: true });
-		again.retained.set(failed, failing.retained.get(failed)!);
+		const retained = failing.retained.get(failed)!;
+		assert.strictEqual(retained.resumed, true);
+		assert.ok(!Object.hasOwn(retained, 'sessionOpening'));
+		again.retained.set(failed, retained);
 		await again.agents.restore();
-		assert.deepStrictEqual([shown, failing.retained.get(failed)?.resumed, again.agents.get(failed)?.resumed], [
-			['Saved work', true, 'Saved work', true, 'Conversation resumed', ['sess-1']], true, true
+		assert.deepStrictEqual([shown, again.agents.get(failed)?.sessionOpening], [
+			['Saved work', true, 'Saved work', 'continued', 'Session continued', ['sess-1']], 'continued'
 		]);
 	});
 

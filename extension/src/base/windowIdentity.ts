@@ -8,6 +8,38 @@ import { isOwnerClaim, type OwnerClaim } from './ownership';
 /** Public command shared by the workspace and local window components; it is not a palette action. */
 export const WINDOW_IDENTITY_COMMAND = 'facade.window.identity';
 export const WINDOW_TERMINALS_COMMAND = 'facade.window.terminals';
+/** Carries this Remote-SSH window's machine relay over VS Code's existing connection. */
+export const WORKSPACE_MACHINE_BRIDGE_COMMAND = 'facade.workspace.machineBridge';
+export const MACHINE_BRIDGE_CHUNK_BYTES = 64 * 1024;
+
+export type MachineBridgePipe = 'stdout' | 'stderr';
+
+export interface MachineBridgeHandle {
+	readonly session: string;
+	readonly token: string;
+	readonly stream: string;
+}
+
+export type MachineBridgeAction = { readonly kind: 'open' | 'end' | 'close' }
+	| { readonly kind: 'read'; readonly pipe: MachineBridgePipe }
+	| { readonly kind: 'write'; readonly data: string };
+
+export function isMachineBridgeRequest(value: unknown): value is MachineBridgeHandle & MachineBridgeAction {
+	return isJsonObject(value) && typeof value.session === 'string' && isWindowToken(value.token) && isWindowToken(value.stream)
+		&& (value.kind === 'open' || value.kind === 'end' || value.kind === 'close'
+			|| (value.kind === 'read' && (value.pipe === 'stdout' || value.pipe === 'stderr'))
+			|| (value.kind === 'write' && typeof value.data === 'string'));
+}
+
+/** A nonempty, bounded chunk in canonical base64, as the command carries binary data. */
+export function machineBridgeBytes(value: unknown): Buffer | undefined {
+	if (typeof value !== 'string' || !value.length || value.length > Math.ceil(MACHINE_BRIDGE_CHUNK_BYTES / 3) * 4) {
+		return undefined;
+	}
+	const bytes = Buffer.from(value, 'base64');
+	return bytes.length && bytes.length <= MACHINE_BRIDGE_CHUNK_BYTES && bytes.toString('base64') === value ? bytes : undefined;
+}
+
 /** Bounds an abandoned registration; it is not an owner lease or a process lifetime. */
 export const TERMINAL_REGISTRATION_MS = 10_000;
 

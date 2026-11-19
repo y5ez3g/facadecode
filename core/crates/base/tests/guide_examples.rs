@@ -11,6 +11,7 @@ use facade_base::daemon::{
     WatchParams, WatchResult,
 };
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine;
 use facade_base::operations::{
     CallParams, EmptyResult, Operation, OperationVisitor, Topic, TopicVisitor,
 };
@@ -86,6 +87,7 @@ fn operation(name: &str, value: &Value, result: bool) -> Result<(), String> {
         read: None,
     };
     daemon::visit_operations(&mut part);
+    machine::visit_operations(&mut part);
     part.read
         .unwrap_or_else(|| Err(format!("{name} is no operation of this build")))
 }
@@ -125,6 +127,7 @@ fn topic(name: &str, value: &Value, of: Of) -> Result<(), String> {
         read: None,
     };
     daemon::visit_topics(&mut part);
+    machine::visit_topics(&mut part);
     part.read
         .unwrap_or_else(|| Err(format!("{name} is no topic of this build")))
 }
@@ -211,7 +214,10 @@ impl Exchange {
                                 .collect::<Vec<_>>()
                         })
                     };
-                    let (topics, ops) = (daemon::topic_names(), daemon::operation_names());
+                    let mut topics = daemon::topic_names();
+                    topics.extend(machine::topic_names());
+                    let mut ops = daemon::operation_names();
+                    ops.extend(machine::operation_names());
                     if names("topics").as_ref() != Some(&topics) {
                         return Err(format!("its topics are not this build's, {topics:?}"));
                     }

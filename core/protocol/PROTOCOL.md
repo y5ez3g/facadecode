@@ -47,16 +47,18 @@ notification, which receives no response, even when it fails.
 answers as usual, with what became of it. It withdraws only an `agent.send` whose message's paste has not begun (see
 [Agent messages](#agent-messages)); every other call goes on. Closing a connection withdraws nothing.
 
-Wait for a successful `hello` before using the connection. In this example, `→` is a client message and `←` is a daemon
-message. The redraw's base64 value is abbreviated.
+Wait for a successful `hello` before using the connection. Its `ops` and `topics` list the operations and topics offered
+to clients, including machine management and queries. `window.deliver` and `agent.deliver_start_result` are
+reserved for machine sessions. In this example, `→` is a client message and `←` is a daemon message. The redraw's
+base64 value is abbreviated.
 
 ```text
 → {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[2,2],"build":"1.4.2","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","messages","windows","machines"],"ops":["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log","machine.connect","machine.add","machine.list","machine.remove","machine.rename","agent.list","cli.list","location.list","agent.start_preflight"]}}
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"command":["claude"],"cwd":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","name":"Pixel","cli":"claude","cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","windows":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","window_id":"terminal"}],"location_id":"loc-5f3c2a1b9e8d7c60","pid":5001,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:22:05.123Z","root":"a1","yolo":false,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"agent":"a1"}}}
-← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","cols":120,"rows":30,"redraw":"G1s/MjAyNmw…","process":"running"}}}
+← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw…","process":"running"}}}
 ← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"output","data":"aGVsbG8="}}}
 → {"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"agent":"a1","raw":"aGk="}}}
 → {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.type","args":{"agent":"a1","text":"run the tests","enter":true}}}
@@ -227,7 +229,11 @@ states before it serves clients.
 A CLI that runs by a built-in's rule is given Facade's tools for its run, the MCP server `facade-mcp`, where its rule gives them;
 `facade-mcp` is the relay to the daemon's own MCP server, below.
 The daemon lists Facade's version 3 tool definitions in `tools/list`. `list_agents` and `start_agent` results
-identify the running machine and member windows. `start_agent` inputs select local windows by ID.
+identify the running machine and member windows. In `start_agent`, `window` can be a member window ID on the
+originating machine (`win-2`) or a qualified ID (`win-2@gpu` or `win-2@id:3f9a2c1d`). A member window can be
+disconnected. `location_source_window` is a bare ID of a connected window on the running machine. On a local
+start, a relative `path` resolves from the calling agent's working directory. A remote start takes an absolute
+`path` on the running machine.
 `send_message` reports which windows' subscriptions took a notification.
 
 Antigravity's runs get them from a plugin in the folder they start in, `.agents/plugins/facade/`, which the runs there share:
@@ -392,11 +398,13 @@ message whose paste began goes on, and its answer says what reached the terminal
 `#human` is the person. The daemon takes the sending agent's member windows at send time. It offers the message to the
 current `messages` subscriptions of each connected member window. A subscription channel accepting the notification
 counts as delivery to that window. A send succeeds once at least one window accepts it. Its result has
-`delivered_via: notified` and `windows: { delivered, not_delivered }`. `delivered` contains window references and
-`not_delivered` contains `{ window, reason }` entries. If every window misses the message, the daemon keeps no message
-and returns `unavailable` with those entries in `data.windows`. The reasons are `window_disconnected` and
-`not_watching`, which also covers a subscription that closes before it can take the message. A send from the person to
-the person is refused.
+`delivered_via: notified` and `windows: { delivered, not_delivered, outcome_unknown }`. All three arrays are present,
+including empty ones. `delivered` contains window references. `not_delivered` contains `{ window, reason }` entries
+for confirmed failures. Reasons include `window_disconnected`, `not_watching`, and `machine_unavailable`.
+`outcome_unknown` contains windows that were sent a notification whose receipt was lost. With no confirmed delivery
+and an unknown outcome, the daemon keeps the message and returns `unavailable` with `data.message_ref`,
+`data.window_delivery`, and `data.unavailable.execution: outcome_unknown`. If all failures are confirmed, it keeps
+no message and returns `unavailable` with the failures in `data.windows`. A send from the person to the person is refused.
 
 The daemon saves the window outcomes before it responds. A repeat with the same request ID waits for an in-progress send
 or returns the saved message and outcomes. If the daemon ended between saving the message and saving the outcomes, a
@@ -792,6 +800,49 @@ Ignore fields you do not recognize and skip a change whose `kind` you do not rec
 values as unknown locally. Rust uses `Unknown`, or `Unrecognized` where `unknown` is a protocol value.
 The daemon refuses an unsupported client kind in `hello`.
 
+### Machine sessions
+
+A machine session is a bidirectional use of daemon protocol 2 over SSH. The first line is a
+`hello` with `kind: machine` and the initiating daemon's `MachineHello`. The response gives the
+answering daemon's introduction. Each introduction includes a machine ID and a boot ID for the
+running daemon. Paths that reach the same boot ID are routes to the same daemon.
+
+On Linux, `ssh_cleans_processes` reports whether logind will clean up processes when this user's
+SSH session ends. Omit the field on other platforms or when the policy is unknown. If the policy
+applies, advise the user to ask the remote administrator to add the SSH account to `KillExcludeUsers`
+in `logind.conf`. The exclusion takes precedence over `KillOnlyUsers` and `KillUserProcesses`.
+
+Each direction numbers its JSON-RPC requests independently. After `hello`, each daemon sends its
+first full `advertise` as a request with an `id`. The receiving daemon verifies the machine ID and
+`boot_id` against the introduction, checks for conflicts, and decides whether the sending machine
+may join. It replies with an empty result (`{}`) or a structured JSON-RPC error. Each daemon
+registers and advertises the directly connected machine after accepting that machine's first table
+and receiving success for its own. Later `advertise` updates are full-table notifications without
+an `id` and replace the sending machine's previous table.
+
+The `route` of `forward` lists the remaining hops through the destination.
+The forwarding machine removes its own hop and preserves the original `Caller`. The destination
+reads the method and arguments. A start or send can carry a request ID scoped to the original
+caller and target. A call that could not be sent is `not_executed`. A sent call that lost its
+response can report `outcome_unknown`. A forwarded watch that loses its route ends with
+`watch_ended`; a new watch begins with a fresh snapshot.
+
+For a forwarded `call`, `params` is `ForwardCall`. The originating daemon sets `by_model` from
+the authenticated local connection, attaches known sender names on `agent.send`, and takes
+colors from the bound editor window on `agent.resize`. The destination reads these facts on
+machine sessions. Local client calls use `CallParams`.
+
+`machine.connect` first answers the authorized local client, then switches that connection to
+machine frames. After the foreground handshake, the local daemon sends `connected` or
+`connect_failed` to that client. `machine.add` answers once the daemon has verified the
+saved destination on its own connection.
+
+Agent views identify a record by machine and agent number. The `agents` snapshot has local
+`agents` and remote `machines` rows. A `synced` row or change carries the machine's entire list,
+including an empty list. A pending, unreachable or absent row keeps earlier records visible as
+disconnected. A window notification to `#human` carries its full `MessageRef`. Window receipts
+distinguish delivery, confirmed failure and an unknown outcome.
+
 ## Methods
 
 | Name | Description |
@@ -802,6 +853,11 @@ The daemon refuses an unsupported client kind in `hello`.
 | `unwatch` | Ends a watch (`UnwatchParams`). |
 | `cancel` | Cancels a call still under way on this connection, by that call's request ID (`CancelParams`), and answers `{}`. It withdraws only an `agent.send` whose message's paste has not begun, which then answers `cancelled` and is not kept; every other call goes on, and its own answer says what it did. Closing the connection withdraws nothing. |
 | `changed` | Reports a change for one watch (`ChangedParams`). |
+| `watch_ended` | Ends a forwarded watch (`WatchEndedParams`). |
+| `advertise` | Replaces the directly connected machine's table (`AdvertiseParams`). |
+| `forward` | Forwards a request to its destination (`ForwardParams`). |
+| `connected` | Reports the foreground connection's successful handshake to the local CLI (`ConnectedParams`). |
+| `connect_failed` | Reports a foreground connection failure to the local CLI (`ConnectFailedParams`). |
 | `closing` | From the daemon, a notification: a newer Facade takes over (`ClosingParams`). Every answer this connection waits for has been written. The client sends nothing more but `closing` back, a notification without params, and connects again; the new daemon answers within seconds. A client that does not answer within 0.2 seconds is cut. |
 
 ## Topics
@@ -810,10 +866,11 @@ Topics available to `watch`. Their types are defined below.
 
 | Name | Arguments | Snapshot | Change | Description |
 |---|---|---|---|---|
-| `agents` | `NoArgs` | `AgentInfo[]` | `AgentsChange` | Lists agent records, then sends `updated` to insert or replace a record by `agent_id` and `removed` to remove it. Starts, exits, removals, renames, and a state of waiting for the person or an error are published immediately. Other state changes, and title and size changes, are batched for up to 200 ms. |
+| `agents` | `AgentsWatchArgs` | `AgentsSnapshot` | `AgentsChange` | Lists agent records and machine sync states, then sends `updated` and `removed` by machine and agent ID. Starts, exits, removals, renames, and a state of waiting for the person or an error are published immediately. Other state changes, and title and size changes, are batched for up to 200 ms. |
 | `screen` | `ScreenWatchArgs` | `ScreenSnapshot` | `ScreenChange` | Follows one agent's screen: a full redraw, then `output`, `redraw`, `exit`, and `removed` changes. A viewer that is behind during removal receives the last screen, any exit it missed, and then `removed`. |
 | `messages` | `MessagesWatchArgs` | `MessagesSnapshot` | `MessagesChange` | Reads the inbox of the agent the client acts for: the selected messages, oldest first, then `updated` when a message arrives or its delivery changes, and `removed` when one is no longer kept: withdrawn by its send's `cancel`, gone after its 30 days, or gone with its inbox. A snapshot delivers every message it returns that was not yet delivered: its typist does not type it, or finishes a paste it began, and its sender learns that it was read. A change delivers nothing, so a client that hands messages to a model takes them through a snapshot. For an `ide` client it reads the person's inbox, `human`. Its snapshot includes the messages delivered to that logical window. Its changes carry new notifications sent to that window's subscription. Messages and what became of them are kept 30 days, across daemon restarts. |
 | `windows` | `NoArgs` | `WindowInfo[]` | `WindowsChange` | Lists logical editor windows, including disconnected windows retained for reopening, and the terminal window while it holds running agents. Then sends `updated` to insert or replace a window and `removed` to remove it, by machine ID and window ID. For a client that acts for an agent, each window lists the CLIs a start by that agent can run. |
+| `machines` | `NoArgs` | `MachineInfo[]` | `MachinesChange` | Follows the view of reachable machines and saved connections. |
 
 ## Operations
 
@@ -844,6 +901,17 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `worktree.create` | `WorktreeCreateArgs` | `LocationInfo` | Makes a Git worktree from the checkout at `cwd`, a location of the window, with a new branch that starts at `base_ref`, at `<main folder>.worktrees/<branch>`: the branch less the window's branch prefix, with characters a folder name cannot hold replaced by `-`, and `-1`, `-2` and so on after it where that path is taken. Answers with the new location. Refuses before changing anything a branch Git does not accept, a folder name some system cannot hold, and a location that is not a checkout with a commit. Creations into one `.worktrees` folder run one at a time; one that waits more than 120 seconds for another fails. Git's failures answer `worktree_failed`: one partway keeps what it made, and its error says what in `data.kept`. |
 | `daemon.upgrade` | `UpgradeArgs` | `UpgradeResult` | Hands the running Facade over to a newer build, `program`, while every agent runs on, and answers once the handover is under way; `closing` follows on every connection past `hello`. The build must be of a higher version than this daemon's and speak its daemon protocol version; while agents run, it must also speak the running keeper's protocol, as the keeper never changes build while it holds CLIs. This daemon installs the build, points the launchers at it, drains and exits; the keeper then starts the launcher's daemon, the new build, and starts it again with its restart delay where it does not come up. Nothing rolls back. Calls that arrive meanwhile answer `upgrading` and did nothing. A second request while a handover is under way answers when the first does. |
 | `daemon.log` | `DaemonLogArgs` | `DaemonLogResult` | Reads the daemon's log, `core/logs/daemon.log`, which Facade keeps for 30 days: its last `lines` lines, oldest first. For the person's clients alone: the log names every agent and who sent whom a message, so a call that acts for an agent or a guest answers `refused`, YOLO or not. More than 200 lines answers `invalid_argument`. |
+| `machine.connect` | `MachineConnectArgs` | `MachineConnectResult` | Authorizes foreground SSH and changes the client stream into the machine session. |
+| `machine.add` | `MachineAddArgs` | `MachineAddResult` | Saves a verified connection and waits for its background session to connect. |
+| `machine.list` | `NoArgs` | `MachineListResult` | Lists reachable machines and saved connections, with routes and connection states. |
+| `machine.remove` | `MachineRemoveArgs` | `MachineRemoveResult` | Removes the local saved connection and reports remaining reachability. |
+| `machine.rename` | `MachineRenameArgs` | `MachineRenameResult` | Changes the name on the selected machine. |
+| `agent.list` | `MachineQueryArgs` | `AgentListResult` | Lists reachable agents from the selected machine or all known query destinations. Answers once they reply or after three seconds. The client receives agents oldest first, using the creation time recorded by each agent's own machine. Equal timestamps are ordered by machine ID, then by numeric agent ID. |
+| `cli.list` | `MachineQueryArgs` | `CliListResult` | Lists the CLIs of the selected machine's login environment. |
+| `location.list` | `MachineQueryArgs` | `LocationListResult` | Lists locations the selected machine's windows supply. |
+| `agent.start_preflight` | `StartArgs` | `EmptyResult` | Checks a start's program and location without starting an agent or making a worktree. |
+| `window.deliver` | `DeliverArgs` | `WindowDelivery` | Offers a message to the listed local window subscriptions and returns their outcomes. Machine sessions only. |
+| `agent.deliver_start_result` | `DeliverStartResultArgs` | `EmptyResult` | Delivers the result of a start at its reserved message number. Machine sessions only. |
 
 ## Error reasons
 
@@ -857,7 +925,9 @@ The `data.reason` values of the daemon protocol.
 | `ended` | The agent ended: it takes no more input or messages. |
 | `partial_input` | A text or keys call stopped partway: the agent ended, or its terminal stopped taking input, after part of the call reached the terminal. The error's data says what went in. |
 | `unavailable` | The operation cannot complete: for example, a stop or a screen watch's snapshot timed out, or the keeper disconnected. |
-| `protocol_incompatible` | The peers share no protocol version, or a required client kind, operation, or field is unsupported. |
+| `protocol_incompatible` | The two sides share no protocol version, or a required client kind, operation, or field is unsupported. |
+| `machine_id_conflict` | Two running daemons introduced themselves with the same machine ID. |
+| `ssh_interaction_required` | A saved SSH connection needs a foreground login or verification. |
 | `capacity_exceeded` | A message exceeds the line limit, or input exceeds the per-call limit or available queue room. |
 | `internal` | An internal Facade error. |
 | `refused` | The caller is not allowed to perform this operation. The keeper accepts only the daemon holding the daemon lock. |
@@ -869,6 +939,14 @@ The `data.reason` values of the daemon protocol.
 
 ## Types
 
+### AdvertiseParams
+
+A complete replacement for a directly connected machine's table. Every row has a route, build and boot ID.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machines` | `MachineInfo[]` | yes |  |
+
 ### AgentArgs
 
 Arguments for an operation on one agent.
@@ -879,11 +957,14 @@ Arguments for an operation on one agent.
 
 ### AgentInfo
 
-An agent record. Field names match MCP `list_agents`.
+An agent record.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `agent_id` | `string` | yes | The stable ID: `a` followed by a number, unique within the Facade home while its counter file remains. |
+| `agent_id` | `string` | yes | The stable ID is `a` followed by a number. It is unique within its Facade home while that home's SQLite database (`core/facade.db`) retains the agent number counter. |
+| `address` | `string` | no | The copyable address, including a machine selector. The serving daemon fills client views. |
+| `label` | `string` | no | The label in the serving client's machine view. |
+| `unreachable` | `boolean` | no | The running machine is currently unreachable. |
 | `name` | `string` | yes | The display name. Names are nonempty but may repeat. |
 | `cli` | `string` | yes | The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a program started by its path or name. |
 | `cwd` | `string` | yes | The CLI's working folder at startup. |
@@ -910,23 +991,76 @@ An agent record. Field names match MCP `list_agents`.
 | `tools_reason` | `ToolsReason` | no | Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable. |
 | `guest` | `boolean` | no | A guest: a session of a CLI the person started outside Facade, which joined through the CLI's hooks. Its terminal is not Facade's: Facade cannot read its screen, type into it, resize, stop or resume it. Omitted for an agent Facade started. |
 
+### AgentListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `AgentInfo[]` | yes |  |
+| `machines` | `MachineQueryResult[]` | yes |  |
+
+### AgentMachineState
+
+How complete the agent view is for one remote running machine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `state` | `AgentSyncState` | yes |  |
+| `agents` | `AgentInfo[]` | no | For a synced machine, its complete records, including an empty list. |
+
+### AgentRef
+
+An agent's durable identity, independently of names and routes.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `agent_id` | `string` | yes |  |
+
 ### AgentState
 
 What an agent is doing, from its CLI's own status reports, from its screen where its CLI's rule reads it, and from Facade's own facts. The first state that holds, in this order, is the agent's: `waiting_for_you`, `error`, `just_done`, `working`, `idle`, `starting`, then `unknown`; `ended` once its process ended.
 
 `'starting' \| 'working' \| 'waiting_for_you' \| 'just_done' \| 'idle' \| 'error' \| 'ended' \| 'unknown'`
 
+### AgentSyncState
+
+`'synced' \| 'pending' \| 'unreachable'`
+
 ### AgentsChange
 
 A change to the `agents` topic. Skip unknown change kinds.
 
-`{ readonly kind: 'updated'; readonly agent: AgentInfo } \| { readonly kind: 'removed'; readonly agent_id: string }`
+`{ readonly kind: 'updated'; readonly agent: AgentInfo } \| { readonly kind: 'removed'; readonly machine_id: string; readonly agent_id: string } \| { readonly kind: 'machine_state'; readonly machine: AgentMachineState }`
+
+### AgentsSnapshot
+
+The agents view and the synchronization state of its remote contributors.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `AgentInfo[]` | yes | Records on the machine that serves this view. |
+| `machines` | `AgentMachineState[]` | yes |  |
+
+### AgentsWatchArgs
+
+Arguments for the agents view. The member-machine filter is for internal forwarded watches.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `member_machine_id` | `string` | no |  |
 
 ### CallParams
 
 Parameters for `call`.
 
-`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.adopt'; readonly args: AgentArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs }`
+`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.adopt'; readonly args: AgentArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.add'; readonly args: MachineAddArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'agent.list'; readonly args: MachineQueryArgs } \| { readonly op: 'cli.list'; readonly args: MachineQueryArgs } \| { readonly op: 'location.list'; readonly args: MachineQueryArgs } \| { readonly op: 'agent.start_preflight'; readonly args: StartArgs } \| { readonly op: 'window.deliver'; readonly args: DeliverArgs } \| { readonly op: 'agent.deliver_start_result'; readonly args: DeliverStartResultArgs }`
+
+### Caller
+
+The identity supplied by the daemon that accepted a local call.
+
+`{ readonly kind: 'terminal'; readonly machine_id: string } \| { readonly kind: 'ide'; readonly window: WindowRef } \| { readonly kind: 'agent'; readonly agent: AgentRef; readonly root: AgentRef; readonly yolo: boolean }`
 
 ### ChangedParams
 
@@ -935,7 +1069,7 @@ A `changed` notification for one watch.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `watch` | `number` | yes | The watch number returned on this connection. |
-| `change` | `AgentsChange \| ScreenChange \| MessagesChange \| WindowsChange` | yes | A change with the type defined by the watched topic. |
+| `change` | `AgentsChange \| ScreenChange \| MessagesChange \| WindowsChange \| MachinesChange` | yes | A change with the type defined by the watched topic. |
 
 ### CliInfo
 
@@ -950,11 +1084,43 @@ A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
 | `not_installed` | `boolean` | no | A built-in CLI whose entry has no problem and names no program of its own, and whose program is not found where the start would run: not installed. Only with `available` false. A client may leave it out of its list instead of showing it as one that cannot start. Omitted otherwise. |
 | `overrides` | `Overrides` | yes | Whether a start can choose its model and its effort (CLIS-1.4). |
 
+### CliListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `clis` | `CliInfo[]` | yes |  |
+| `settings_problem` | `string` | no |  |
+
 ### ClientKind
 
 The kind of client connecting to the daemon.
 
-`'terminal' \| 'mcp' \| 'ide'`
+`'terminal' \| 'mcp' \| 'ide' \| 'machine'`
+
+### ConnectFailedParams
+
+Foreground handshake failed after local authorization.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `error` | `ErrorBody` | yes |  |
+
+### ConnectedParams
+
+Connection verified on the foreground stream.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `MachineHello` | yes |  |
+| `first_connection` | `boolean` | yes |  |
+
+### ConnectionKind
+
+`'saved' \| 'temporary'`
+
+### ConnectionState
+
+`'connected' \| 'unavailable' \| 'ssh_interaction_required'`
 
 ### DaemonLogArgs
 
@@ -971,6 +1137,25 @@ The result of `daemon.log`.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `lines` | `string[]` | yes | The last lines of `core/logs/daemon.log`, oldest first, the home folder written as `~`. Empty where there is no log. |
+
+### DeliverArgs
+
+A single message for the person, offered to its member windows on another machine.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `message_ref` | `MessageRef` | yes |  |
+| `message` | `Message` | yes |  |
+| `windows` | `WindowRef[]` | yes |  |
+
+### DeliverStartResultArgs
+
+A start's result message for its creator, with the number the creator's machine reserved.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `recipient` | `AgentRef` | yes |  |
+| `message` | `Message` | yes |  |
 
 ### DeliveredVia
 
@@ -1039,6 +1224,42 @@ Error details for clients to inspect.
 | `kept` | `Kept` | no | With `worktree.create`, or `agent.start` with a `worktree`, that failed after Git made part or all of the worktree: what it made, which stays. |
 | `entry` | `string` | no | With a refused start or resume that an entry of the settings file caused - its program not found, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot take - the entry's name, such as `claude`. A client offers to open the settings file. |
 | `windows` | `WindowDeliveryFailure[]` | no | With `unavailable` when no member window took a message to `#human`: each window and why it could not take the message. |
+| `window_delivery` | `WindowDelivery` | no | The receipt for a send whose remote window outcomes could not be confirmed. |
+| `message_ref` | `MessageRef` | no | The original kept message, where its delivery outcome is unknown. |
+| `machine_id_conflict` | `MachineIdConflict` | no |  |
+| `ssh_interaction` | `SshInteraction` | no |  |
+| `unavailable` | `Unavailable` | no |  |
+| `candidates` | `string[]` | no | Complete references that matched a name or machine ID prefix. |
+| `protocol` | `ProtocolMismatch` | no |  |
+
+### ExecutionOutcome
+
+`'not_executed' \| 'outcome_unknown'`
+
+### ForwardCall
+
+A call on a machine session with facts the originating daemon takes from the local caller.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `call` | `CallParams` | yes |  |
+| `by_model` | `boolean` | yes | The originating connection acts for a model through MCP. Selects the model's start rules. |
+| `from_name` | `string` | no | The verified sender's name for `agent.send`, when known. |
+| `from_window` | `string` | no | The name of the sender's sole member window for `agent.send`, when known. |
+| `window_colors` | `TerminalColors` | no | Colors from the window in `Caller::Ide` for `agent.resize`. |
+
+### ForwardParams
+
+Parameters of `forward`. The outer JSON-RPC ID identifies this hop.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `route` | `string[]` | yes | Remaining machine IDs. First is this hop's receiver and last is the final receiver. |
+| `caller` | `Caller` | yes |  |
+| `time_left_ms` | `number` | no | Milliseconds left where the call has a deadline. |
+| `request_id` | `string` | no | The existing deduplication ID, carried only for `agent.start` and `agent.send`. |
+| `method` | `string` | yes | The original JSON-RPC method, decoded at the final receiver. |
+| `params` | `unknown` | yes | The method payload. A forwarded `call` carries `ForwardCall`. |
 
 ### HandOver
 
@@ -1061,6 +1282,7 @@ Parameters for `hello`.
 | `sessions` | `string[]` | no | The sessions the client's CLI names in its environment, such as `CLAUDE_CODE_SESSION_ID`. The client acts for the agent that has one of them, the newest where several do, ahead of `agent`: a command a guest's model runs acts for the guest. |
 | `window` | `WindowDescription` | no | The editor window this client is part of. Required for `ide`, and refused for any other kind. Every connection of a window describes it; the window is there while one of them is open. |
 | `numbers_given` | `NumbersGiven` | no | For an `ide` client: the highest agent and message numbers its editor gave before, such as 41 for `#a41`. The daemon's next numbers are above both these and its own, from then on. Refused for any other kind with `invalid_argument`. |
+| `machine` | `MachineHello` | no | Required on a machine session, absent on a local client connection. |
 
 ### HelloResult
 
@@ -1068,9 +1290,10 @@ The result of `hello`: daemon details and supported topics and operations.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `protocol` | `number` | yes | The highest protocol version shared by both peers. |
+| `protocol` | `number` | yes | The highest protocol version shared by the client and daemon. |
 | `build` | `string` | yes | The daemon's build. |
 | `machine_id` | `string` | yes | The daemon's Facade machine ID. |
+| `machine` | `MachineHello` | no | The answering daemon's introduction on a machine session. |
 | `window` | `WindowRef` | no | For an `ide` client, the logical window bound to this connection. |
 | `pid` | `number` | yes | The daemon's process ID. |
 | `agent` | `string` | no | The agent this client acts for, as `agent` and `sessions` decided. Omitted where it acts for none. |
@@ -1148,7 +1371,7 @@ Arguments for `integration.add` and `integration.remove`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `cli` | `string` | yes | The CLI, by its rule's name: `claude`, `codex`, `opencode` or `pi`. |
+| `cli` | `string` | yes | The CLI's rule name from `facade_rules::integration::CLIS`, shown by `facade integration add --help`. |
 | `env` | `{ readonly [key: string]: string }` | yes | The caller's environment, as `agent.start` takes it. It says where the CLI keeps its user configuration (`HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`), and `PATH` finds `claude`. |
 
 ### IntegrationInfo
@@ -1222,6 +1445,184 @@ What a location is.
 
 `'folder' \| 'main' \| 'worktree'`
 
+### LocationListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `locations` | `WindowLocation[]` | yes |  |
+
+### MachineAddArgs
+
+Save the identity verified in the foreground session.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ssh_destination` | `string` | yes |  |
+| `remote_home` | `string` | no |  |
+| `machine_id` | `string` | yes |  |
+
+### MachineAddResult
+
+The saved connection is ready.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `MachineHello` | yes |  |
+| `first_connection` | `boolean` | yes |  |
+
+### MachineConnectArgs
+
+A foreground machine session to authorize.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `transport` | `MachineTransport` | yes |  |
+| `kind` | `ConnectionKind` | yes | A bridge is always temporary. |
+
+### MachineConnectResult
+
+Returned before switching the local client stream into a machine session.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ssh_destination` | `string` | no |  |
+| `remote_home` | `string` | no |  |
+| `expected_machine_id` | `string` | no |  |
+
+### MachineConnection
+
+One connection as seen from its machine table row.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes | The other end of the connection. |
+| `initiator_machine_id` | `string` | yes |  |
+| `kind` | `ConnectionKind` | yes |  |
+| `ssh_destination` | `string` | no |  |
+| `remote_home` | `string` | no |  |
+| `state` | `ConnectionState` | yes |  |
+| `ssh_interaction` | `SshInteraction` | no |  |
+
+### MachineHello
+
+The introduction on each side of a machine hello.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `boot_id` | `string` | yes | Changes each time the daemon starts. Distinguishes concurrent uses of a machine ID. |
+| `name` | `string` | yes |  |
+| `build` | `string` | yes |  |
+| `protocol` | `[number, number]` | yes |  |
+| `ssh_cleans_processes` | `boolean` | no | On Linux, whether the system clears this user's processes at the end of the SSH session. |
+
+### MachineIdConflict
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `paths` | `[string, string]` | yes | Both conflicting connection paths, including their sources. |
+
+### MachineIdentity
+
+A machine's persistent identity and current display name.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+
+### MachineInfo
+
+A row visible from the machine that supplies the table.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `boot_id` | `string` | no | The running daemon, where observed. Every advertised route carries it. |
+| `name` | `string` | yes |  |
+| `build` | `string` | no |  |
+| `route` | `string[]` | no | The remaining hops, ending at this machine. Empty for the table's own machine. Absent for a saved destination without a route. |
+| `connections` | `MachineConnection[]` | yes |  |
+
+### MachineListResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machines` | `MachineInfo[]` | yes |  |
+
+### MachineMessage
+
+A frame from either direction of a machine session. A request without an ID is a notification.
+
+`Request \| Response`
+
+### MachineQueryArgs
+
+Selects a machine for a query. An omitted selector uses the operation's default.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | no |  |
+
+### MachineQueryResult
+
+The outcome of asking one machine for its reachable agents.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `short_id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+| `build` | `string` | no |  |
+| `status` | `MachineQueryStatus` | yes |  |
+| `answered_at` | `string` | no | The UTC time of the answer, to milliseconds, when a machine answered. |
+
+### MachineQueryStatus
+
+`'answered' \| 'unavailable' \| 'timed_out' \| 'error'`
+
+### MachineRemoveArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | yes | An input machine selector. |
+
+### MachineRemoveResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `ssh_destination` | `string` | yes |  |
+| `remote_home` | `string` | no |  |
+| `reachable` | `boolean` | yes |  |
+
+### MachineRenameArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | yes | An input machine selector. |
+| `name` | `string` | yes |  |
+
+### MachineRenameResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+
+### MachineTransport
+
+The transport the local client will bridge to this machine session.
+
+`{ readonly kind: 'ssh'; readonly ssh_destination: string; readonly remote_home?: string } \| { readonly kind: 'bridge' }`
+
+### MachinesChange
+
+A change to the machine table visible to a client.
+
+`{ readonly kind: 'updated'; readonly machine: MachineInfo } \| { readonly kind: 'removed'; readonly machine_id: string }`
+
 ### Message
 
 A message: one sender, one recipient, the complete text, and what became of it.
@@ -1229,16 +1630,28 @@ A message: one sender, one recipient, the complete text, and what became of it.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `message_id` | `string` | yes | `m` followed by a number, unique within the Facade home. |
+| `message_ref` | `MessageRef` | no | The full reference for a window notification to the person or a remote send receipt. |
 | `from` | `string` | yes | The sender: an agent ID, `human` for the person, or `facade` for a result: Facade's own words on what became of a start, not an agent's. |
+| `from_machine_id` | `string` | no | The sender's machine, when different from the one that stored the message. |
 | `from_name` | `string` | no | The sender's name when it sent the message. Omitted for the person. |
 | `to` | `string` | yes | The recipient's agent ID, or `human` for the person. |
 | `text` | `string` | yes | The complete text as sent. |
 | `reply_to` | `string` | no | The message this one answers. |
+| `reply_to_machine_id` | `string` | no | The replied-to message's machine, when different from the one that stored this message. |
 | `from_window` | `string` | no | The sender's window name if it had a single member window and the recipient did not belong to that window. |
 | `call_id` | `string` | no | A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the call its result answers. |
 | `result` | `StartOutcome` | no | A result's facts, which its text words. Omitted for any other message. |
 | `at` | `string` | yes | When Facade received it, in UTC ISO 8601 format with milliseconds. |
 | `delivery` | `Delivery` | yes |  |
+
+### MessageRef
+
+A message's identity on the machine that assigned its number.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `message_id` | `string` | yes |  |
 
 ### MessagesChange
 
@@ -1334,11 +1747,20 @@ A start prompt's message ID and what became of it.
 | `message_id` | `string` | yes |  |
 | `delivery` | `Delivery` | yes |  |
 
+### ProtocolMismatch
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `local_build` | `string` | yes |  |
+| `local_protocol` | `[number, number]` | yes |  |
+| `remote_build` | `string` | yes |  |
+| `remote_protocol` | `[number, number]` | yes |  |
+
 ### Reason
 
 Error reasons shared by both protocols.
 
-`'invalid_argument' \| 'not_found' \| 'ambiguous_reference' \| 'ended' \| 'partial_input' \| 'unavailable' \| 'protocol_incompatible' \| 'capacity_exceeded' \| 'internal' \| 'refused' \| 'configuration_invalid' \| 'cancelled' \| 'worktree_failed' \| 'upgrading' \| 'unsupported'`
+`'invalid_argument' \| 'not_found' \| 'ambiguous_reference' \| 'ended' \| 'partial_input' \| 'unavailable' \| 'protocol_incompatible' \| 'machine_id_conflict' \| 'ssh_interaction_required' \| 'capacity_exceeded' \| 'internal' \| 'refused' \| 'configuration_invalid' \| 'cancelled' \| 'worktree_failed' \| 'upgrading' \| 'unsupported'`
 
 ### RenameArgs
 
@@ -1431,6 +1853,7 @@ A full screen snapshot at the start of a watch.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `agent_id` | `string` | yes | The ID of the agent being viewed. |
+| `machine_id` | `string` | yes | The agent's running machine, for reconnecting to its exact reference. |
 | `cols` | `number` | yes | Terminal width required to apply the redraw. |
 | `rows` | `number` | yes | Terminal height required to apply the redraw. |
 | `redraw` | `string` | yes | Base64-encoded terminal bytes that redraw the screen at this size. Restores cursor state, charsets, and modes. On the main screen, up to 1,000 rows of agent scrollback come first unless `include_scrollback` is false. `keep_scrollback` controls whether the viewer's existing scrollback is cleared before the redraw. |
@@ -1470,8 +1893,9 @@ Arguments for `agent.send`.
 |---|---|---|---|
 | `to` | `string` | yes | The recipient: an agent ID (`a3`, `#a3`, or `3`), a unique name of a running agent with or without `@`, a name followed by its ID such as `@Pixel #a3`, or `#human` for the person. |
 | `text` | `string` | yes | The complete message: at most 8,000 characters and 540 lines of text, tabs, and line breaks, not blank. |
-| `reply_to` | `string` | no | The message this one answers: one in the sender's inbox, by ID (`m4` or `#m4`). |
-| `request_id` | `string` | no | The caller's own ID of this send, 1 to 200 characters. The same ID again from the same sender within an hour of the message answers that message as it stands now, joining its delivery while it lasts, and sends nothing again. A send refused or withdrawn keeps none. |
+| `reply_to` | `string` | no | The message this one answers, by ID or qualified reference such as `#m4@gpu`. |
+| `reply_to_machine_id` | `string` | no | The storage machine of the reply's reference, after the originating daemon verified it. |
+| `request_id` | `string` | no | The caller's own ID of this send, 1 to 200 characters. The same ID again from the same sender, including its machine, and target within an hour answers that message as it stands, joining its delivery while it lasts, and sends nothing again. A send refused or withdrawn keeps none. |
 | `time_left_ms` | `number` | no | What is left of the send's 30 seconds as it leaves the client, in milliseconds: its delivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500. |
 
 ### SendResult
@@ -1481,11 +1905,14 @@ The response to `agent.send`: the message as it stands, whether the call repeate
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `message_id` | `string` | yes | `m` followed by a number, unique within the Facade home. |
+| `message_ref` | `MessageRef` | no | The full reference for a window notification to the person or a remote send receipt. |
 | `from` | `string` | yes | The sender: an agent ID, `human` for the person, or `facade` for a result: Facade's own words on what became of a start, not an agent's. |
+| `from_machine_id` | `string` | no | The sender's machine, when different from the one that stored the message. |
 | `from_name` | `string` | no | The sender's name when it sent the message. Omitted for the person. |
 | `to` | `string` | yes | The recipient's agent ID, or `human` for the person. |
 | `text` | `string` | yes | The complete text as sent. |
 | `reply_to` | `string` | no | The message this one answers. |
+| `reply_to_machine_id` | `string` | no | The replied-to message's machine, when different from the one that stored this message. |
 | `from_window` | `string` | no | The sender's window name if it had a single member window and the recipient did not belong to that window. |
 | `call_id` | `string` | no | A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the call its result answers. |
 | `result` | `StartOutcome` | no | A result's facts, which its text words. Omitted for any other message. |
@@ -1510,6 +1937,13 @@ What `hook.session-start` answers.
 | `agent_id` | `string` | no | The guest the session joined as. Omitted for a session of a run Facade started, which the hook leaves alone. |
 | `instructions` | `string` | no | What the guest's model is told: its ID, and how its messages reach it; then Facade's skill. |
 
+### SshInteraction
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reason` | `string` | yes |  |
+| `command` | `string[]` | yes | The complete command and arguments with which to repair the saved connection. |
+
 ### StartArgs
 
 Arguments for `agent.start`, supplied by the client.
@@ -1519,14 +1953,19 @@ Arguments for `agent.start`, supplied by the client.
 | `command` | `string[]` | yes | The CLI followed by more of its arguments. The exact name of a CLI of Facade's settings file, `facade.json` in the Facade home - a built-in's, such as `claude`, or one its `clis` adds - starts that CLI as its entry says, its entry's `args` before these (CONFIGURATION-2, 3). Any other word, including a path, runs as that program, as given. A start from an `mcp` client names one CLI of the file and nothing more; another name is refused with `not_found`, naming the CLIs there. A file that cannot be read as a whole refuses every start with `configuration_invalid`, and so does a CLI whose entry is wrong, saying each problem; a CLI its entry turns off is refused with `unavailable`, and one whose program cannot run where it starts with `not_found`, saying so by its setting. |
 | `name` | `string` | no | The display name, trimmed. A missing, empty, or blank name gets a name from the settings file's `names`, else from the built-in names: one unused in any of the initial member windows, ignoring case and surrounding spaces. If every name is taken or the list is empty, uses the agent's ID, such as `#a7` (LIFECYCLE-2.1). Given names may repeat. |
 | `cwd` | `string` | yes | The CLI's absolute working folder. If `location_source_window` is set, `cwd` must be that window's location or a folder inside one. |
+| `machine` | `string` | no | The machine selector at the entrance to a start. Omitted to use the caller's machine. |
+| `cwd_is_default` | `boolean` | no | The caller supplied its default cwd. A remote start uses the running machine's login home. |
 | `window` | `WindowRef` | no | The one initial member window, when supplied. Omitted to use the caller's default. |
+| `initial_windows` | `WindowRef[]` | no | The initial members the originating daemon verified for a forwarded start. |
 | `location_source_window` | `WindowRef` | no | The connected local window that supplies the running location for `cwd`, if selected. |
 | `env` | `{ readonly [key: string]: string }` | no | The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`, and `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor, and CLI session variables, but keeps `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`, which tell the CLI which terminal app displays it; then it sets `TERM`, `COLORTERM`, and `PWD`. Supply the user's remaining environment explicitly. `facade start` does this, omitting non-UTF-8 variables and naming them on stderr. A start from an `mcp` client takes its agent's environment instead, as that agent's CLI started with it, less what that CLI's rule added: a CLI chooses what it gives its MCP server, while a `facade` command sends its shell's. Where that environment cannot be read, as when the CLI is not running or the system hides it, the start fails with `unavailable` and starts nothing. A start that an agent asks for, from its tools or its terminal, inherits that environment as it is, including what the agent's own entry `env` set or removed, as a shell started from another inherits its variables; the started CLI's own entry applies on top (CONFIGURATION-2.1, 3.2). |
 | `cols` | `number` | yes | The initial terminal width in columns, at least 2. |
 | `rows` | `number` | yes | The initial terminal height in rows, at least 1. |
 | `prompt` | `string` | no | The agent's first message, its text as `agent.send` takes it: from the agent the client acts for, or else from the person. It is kept as the start answers, and delivered once the CLI's tools connected or will not, before any other message. A prompt from an agent owes that agent a result once it is settled. Only a CLI of the settings file takes one: a program started by its path or name is refused one, and the program of a `custom` entry, whose input Facade does not read, starts and fails it as `unsupported` (CONFIGURATION-2.3). |
 | `call_id` | `string` | no | The ID of the MCP `tools/call` that asked for the start, which the prompt's result names. |
-| `request_id` | `string` | no | The caller's own ID of this start, 1 to 200 characters. The same ID again from the same creator within an hour of the agent's start answers that agent as it stands now, and starts nothing. A start that failed keeps none, and the ID goes with its agent's record. |
+| `result_message_id` | `string` | no | The creator's reserved result message number for a forwarded start with a prompt. |
+| `result_message_machine_id` | `string` | no | The machine that reserved the result message number. |
+| `request_id` | `string` | no | The caller's own ID of this start, 1 to 200 characters. The same ID again from the same creator, including its machine, and target within an hour answers that agent as it stands, and starts nothing. A start that failed keeps none, and the ID goes with its agent's record. |
 | `worktree` | `Worktree` | no | A worktree with a new branch to make and start in. With a location source window, uses the supplied location. Otherwise, uses the repository of `cwd`. The daemon checks the request ID before it makes the worktree, so a repeat makes none. |
 | `model` | `string` | no | The model this start chooses, over its entry's `model` (CONFIGURATION-3.3, CLIS-1.4). A CLI that takes none from Facade, as OpenCode and a program do not, refuses it with `unsupported`. Omitted, a model the command's own words choose, else the entry's, else the CLI's own. |
 | `effort` | `string` | no | The effort this start chooses, over its entry's `effort`, as `model` is. |
@@ -1550,6 +1989,7 @@ The result of `agent.start`.
 | `agent` | `AgentInfo` | yes | The agent's record. |
 | `prompt` | `Message` | no | The prompt, kept and pending, where one was given. |
 | `result_message_id` | `string` | no | The ID of the result the prompt owes the agent the client acts for, a message from `facade` once the prompt is settled. Omitted where no result is owed. |
+| `result_message_machine_id` | `string` | no | The machine that assigned `result_message_id`, when a result is owed. |
 | `repeated` | `boolean` | no | The call repeated an earlier one by its request ID: the agent is that call's, as it stands now. Omitted otherwise. |
 
 ### StateDetail
@@ -1621,6 +2061,16 @@ Arguments for `agent.type`: exactly one of `raw`, `text`, or `keys`.
 | `enter` | `boolean` | no | Press Enter after `text`, in a write of its own 0.1 seconds and the CLI's settle time for the text after the whole text reached the terminal. Empty text with `enter` presses Enter alone. Defaults to false. |
 | `keys` | `string[]` | no | Keys to press in order: Enter (or Return), Escape (or Esc), Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right (or ArrowUp, ArrowDown, ArrowLeft, ArrowRight), Home, End, PageUp, PageDown, Space, and Ctrl+A to Ctrl+Z, in any letter case, or any one character other than a control character, exactly as given. Each goes as a terminal sends it in the CLI's modes. After an Escape, the next key waits 50 ms. |
 
+### Unavailable
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `execution` | `ExecutionOutcome` | yes |  |
+| `machine` | `MachineIdentity` | no |  |
+| `window` | `WindowRef` | no |  |
+| `matches` | `string[]` | no | Complete addresses returned before a name lookup could finish. |
+| `unanswered` | `MachineIdentity[]` | no |  |
+
 ### UnwatchParams
 
 Parameters for `unwatch`.
@@ -1655,11 +2105,20 @@ What a CLI waits for.
 
 `'permission' \| 'question' \| 'auth' \| 'unknown'`
 
+### WatchEndedParams
+
+A forwarded watch ended. A new watch starts with a fresh snapshot.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `watch` | `number` | yes |  |
+| `error` | `ErrorBody` | yes |  |
+
 ### WatchParams
 
 Parameters for `watch`.
 
-`{ readonly topic: 'agents'; readonly args?: NoArgs } \| { readonly topic: 'screen'; readonly args: ScreenWatchArgs } \| { readonly topic: 'messages'; readonly args: MessagesWatchArgs } \| { readonly topic: 'windows'; readonly args?: NoArgs }`
+`{ readonly topic: 'agents'; readonly args: AgentsWatchArgs } \| { readonly topic: 'screen'; readonly args: ScreenWatchArgs } \| { readonly topic: 'messages'; readonly args: MessagesWatchArgs } \| { readonly topic: 'windows'; readonly args?: NoArgs } \| { readonly topic: 'machines'; readonly args?: NoArgs }`
 
 ### WatchResult
 
@@ -1668,7 +2127,7 @@ The result of `watch`, sent before any changes for that watch.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `watch` | `number` | yes | The watch number used by `changed` notifications and `unwatch`. |
-| `snapshot` | `AgentInfo[] \| ScreenSnapshot \| MessagesSnapshot \| WindowInfo[]` | yes | The topic snapshot. Later changes arrive as ordered `changed` notifications. |
+| `snapshot` | `AgentsSnapshot \| ScreenSnapshot \| MessagesSnapshot \| WindowInfo[] \| MachineInfo[]` | yes | The topic snapshot. Later changes arrive as ordered `changed` notifications. |
 
 ### WindowDelivery
 
@@ -1678,6 +2137,7 @@ The member windows' outcomes for one message to the person.
 |---|---|---|---|
 | `delivered` | `WindowRef[]` | yes | Windows whose `messages` subscriptions took the notification. |
 | `not_delivered` | `WindowDeliveryFailure[]` | yes | Windows whose subscriptions did not take the notification. |
+| `outcome_unknown` | `WindowRef[]` | yes | The notification was sent, and its receipt was lost before delivery could be confirmed. |
 
 ### WindowDeliveryFailure
 
@@ -1686,7 +2146,7 @@ Why a member window did not take a notification.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `window` | `WindowRef` | yes |  |
-| `reason` | `string` | yes | `window_disconnected` if the window has no connection, or `not_watching` if no current subscription took the notification. |
+| `reason` | `string` | yes | `window_disconnected` if the window has no connection, or `not_watching` if no current subscription took the notification, or `machine_unavailable` if it could not be sent to the window's machine. |
 
 ### WindowDescription
 
@@ -1720,6 +2180,13 @@ A window: an editor window, or the terminal window, `terminal`, which holds the 
 | `observed_at` | `string` | no | When Facade last read the window's locations, in UTC ISO 8601 format with milliseconds; for the terminal window, when it was listed. Omitted for a window whose locations this daemon has not read yet. |
 | `clis` | `CliInfo[]` | no | The CLIs a start can run in this window, each found on a `PATH` or not: for a client that acts for an agent, that agent's; for an `ide` client, the one in the window's own `env`. None for a window with no folder, and none where Facade's settings file cannot be read as a whole. Omitted for a client that acts for no agent, and for an `ide` client where the window gave no `env`. |
 | `settings_problem` | `string` | no | For a client that acts for an agent, or an `ide` client where the window gave `env`, what is wrong with Facade's settings file where it cannot be read as a whole, which then lists no CLI and stops every start, as one text. Omitted where the file reads. |
+
+### WindowLocation
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `window` | `WindowRef` | yes |  |
+| `location` | `LocationInfo` | yes |  |
 
 ### WindowRef
 

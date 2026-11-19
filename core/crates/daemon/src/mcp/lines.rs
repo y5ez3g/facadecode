@@ -4,10 +4,10 @@
 
 use std::time::Instant;
 
+use facade_base::jsonrpc::Reason;
 use serde_json::{Value, json};
 
-use super::tool_calls::{self, ToolCall};
-use super::{Relay, Serves, guest_sessions, instructions};
+use super::{Relay, Serves, ToolCall, envelope, guest_sessions, instructions};
 
 /// The MCP versions this server speaks, newest first. It answers with the version the client asks
 /// for, or else the newest.
@@ -77,6 +77,9 @@ fn is_id(id: &Value) -> bool {
     id.is_string() || id.is_number()
 }
 
+/// Checks and runs a tool call for the agent the line acts for.
+type DispatchTool = fn(&Relay, &str, &str, &Value, &ToolCall) -> Option<Value>;
+
 /// The response to one line from the client, which arrived at `arrived`: none for a notification or
 /// a response.
 pub(super) fn respond(
@@ -84,6 +87,8 @@ pub(super) fn respond(
     serves: &Serves,
     line: &[u8],
     arrived: Instant,
+    definitions: &[Value],
+    dispatch: DispatchTool,
 ) -> Option<Value> {
     let message = match serde_json::from_slice::<Value>(line) {
         Ok(message) => message,
@@ -118,8 +123,8 @@ pub(super) fn respond(
     let answered = match method {
         "initialize" => initialize(relay, &acting_for, params),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(list_tools(relay, &acting_for)),
-        "tools/call" => call_tool(relay, &acting_for, &id, params, arrived),
+        "tools/list" => Ok(list_tools(relay, &acting_for, definitions)),
+        "tools/call" => call_tool(relay, &acting_for, &id, params, arrived, dispatch),
         other => Err((METHOD_NOT_FOUND, format!("no method {other}"))),
     };
     Some(match answered {
@@ -155,7 +160,7 @@ fn initialize(relay: &Relay, serves: &Serves, params: &Value) -> Result<Value, R
 /// from the start, under the keys the CLIs' rules name, for the CLIs that otherwise load a server's
 /// tools on demand behind a search. No tool lists a result schema: every result is the same
 /// envelope (MCP-1.2), and a schema would cost every turn its bytes.
-fn list_tools(relay: &Relay, serves: &Serves) -> Value {
+fn list_tools(relay: &Relay, serves: &Serves, definitions: &[Value]) -> Value {
     facade_base::service::gate_for_test("mcp-before-tools-list");
     // The client has the tools with this answer, so only now does the daemon learn they are there:
     // a start's prompt or a message it sends next finds them loaded. Unit tests have no daemon.
@@ -170,7 +175,7 @@ fn list_tools(relay: &Relay, serves: &Serves) -> Value {
     let always_load: serde_json::Map<String, Value> = facade_rules::always_load_keys()
         .map(|key| (key.to_string(), Value::Bool(true)))
         .collect();
-    let tools: Vec<Value> = tool_calls::definitions()
+    let tools: Vec<Value> = definitions
         .iter()
         .map(|definition| {
             let mut tool = definition.clone();
@@ -191,6 +196,7 @@ fn call_tool(
     id: &Value,
     params: &Value,
     arrived: Instant,
+    dispatch: DispatchTool,
 ) -> Result<Value, Refused> {
     let Some(name) = params["name"].as_str() else {
         let why = "tools/call names its tool with a string name";
@@ -200,14 +206,14 @@ fn call_tool(
     let arguments = &params["arguments"];
     let result = match serves {
         Serves::Agent(agent) | Serves::Member(agent) => {
-            tool_calls::call(relay, agent, name, arguments, &call)
+            dispatch(relay, agent, name, arguments, &call)
         }
         Serves::Guest(cli) => match guest_sessions::agent_for_call(relay, cli, &params["_meta"]) {
-            Ok(agent) => tool_calls::call(relay, &agent, name, arguments, &call),
+            Ok(agent) => dispatch(relay, &agent, name, arguments, &call),
             Err(failure) => Some(failure),
         },
-        Serves::Nobody => Some(tool_calls::unconfigured()),
-        Serves::Aside => Some(tool_calls::aside()),
+        Serves::Nobody => Some(unconfigured()),
+        Serves::Aside => Some(aside()),
     };
     relay.sends.finish(&call.key);
     let Some(result) = result else {
@@ -219,18 +225,28 @@ fn call_tool(
     }))
 }
 
+/// What a call to a server that acts for no one answers.
+fn unconfigured() -> Value {
+    let message = "this Facade server was not started for a Facade agent, so it serves no tools; \
+                   nothing was done";
+    envelope::failure(Reason::CallerUnavailable.canonical_name(), message)
+}
+
+/// What a guest's server answers where the Facade run has a server of its own.
+fn aside() -> Value {
+    let message = "this Facade server serves no tools here: the Facade run it started in has a \
+                   server of its own; nothing was done";
+    envelope::failure(Reason::CallerUnavailable.canonical_name(), message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn answered(line: &str) -> Value {
-        respond(
-            &Relay::for_test(&[], &[]),
-            &Serves::Agent("a7".into()),
-            line.as_bytes(),
-            Instant::now(),
-        )
-        .expect("an answer")
+        Relay::for_test(&[], &[])
+            .respond(&Serves::Agent("a7".into()), line.as_bytes(), Instant::now())
+            .expect("an answer")
     }
 
     #[test]
@@ -267,27 +283,28 @@ mod tests {
         );
     }
 
-    /// A server for no one, before a member joins, lists no tools, and a call does nothing.
+    /// A server without a caller cannot execute a tool.
     #[test]
     fn a_server_without_its_agent_serves_no_tools() {
-        let unconfigured = |line: &str| {
-            respond(
-                &Relay::for_test(&[], &[]),
-                &Serves::Nobody,
-                line.as_bytes(),
-                Instant::now(),
-            )
-            .expect("an answer")
+        let relay = Relay::for_test(&[], &[]);
+        let answer = |serves: &Serves, line: &str| {
+            relay
+                .respond(serves, line.as_bytes(), Instant::now())
+                .expect("an answer")
         };
+        let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}"#;
+        for serves in [Serves::Nobody, Serves::Aside] {
+            assert_eq!(answer(&serves, list)["result"], json!({ "tools": [] }));
+            let called = answer(&serves, call);
+            assert_eq!(
+                called["result"]["structuredContent"]["reason"], "caller_unavailable",
+                "{called}"
+            );
+        }
+        let called = answer(&Serves::Guest("codex".into()), call);
         assert_eq!(
-            unconfigured(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["result"],
-            json!({ "tools": [] })
-        );
-        let called = unconfigured(
-            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agents","arguments":{}}}"#,
-        );
-        assert_eq!(
-            called["result"]["structuredContent"]["reason"], "configuration_invalid",
+            called["result"]["structuredContent"]["reason"], "caller_unavailable",
             "{called}"
         );
     }
@@ -435,6 +452,56 @@ mod tests {
         );
         let no_name = answered(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{}}"#);
         assert_eq!(no_name["error"]["code"], -32602);
+
+        let mut relay = Relay::for_test(&[], &[]);
+        relay.connect = Box::new(|_| panic!("a rejected tool call must not connect"));
+        let rejected = relay
+            .respond(
+                &Serves::Agent("a7".into()),
+                br##"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_messages","arguments":{"after":"#m4","last":2}}}"##,
+                Instant::now(),
+            )
+            .expect("an answer");
+        assert_eq!(rejected["result"]["isError"], true);
+        assert_eq!(
+            rejected["result"]["structuredContent"],
+            json!({
+                "status": "failure",
+                "reason": "invalid_argument",
+                "message": "give after or last, not both; nothing was done",
+            })
+        );
+    }
+
+    #[test]
+    fn read_screen_refuses_last_before_connecting_to_the_daemon() {
+        let mut relay = Relay::for_test(&[], &[]);
+        relay.connect = Box::new(|_| panic!("a rejected tool call must not connect"));
+        for arguments in [
+            json!({ "agent": "#a7", "last": 4 }),
+            json!({ "agent": "#a7", "last": 4, "lines": 4 }),
+        ] {
+            let call = json!({
+                "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                "params": { "name": "read_screen", "arguments": arguments },
+            });
+            let answer = relay
+                .respond(
+                    &Serves::Agent("a7".into()),
+                    call.to_string().as_bytes(),
+                    Instant::now(),
+                )
+                .expect("an answer");
+            assert_eq!(answer["result"]["isError"], true);
+            assert_eq!(
+                answer["result"]["structuredContent"],
+                json!({
+                    "status": "failure",
+                    "reason": "invalid_argument",
+                    "message": "unknown argument 'last' for read_screen. Use 'lines'; nothing was done",
+                })
+            );
+        }
     }
 
     #[test]
@@ -456,22 +523,22 @@ mod tests {
             json!({ "code": -32601, "message": "no method resources/list" })
         );
         assert!(
-            respond(
-                &Relay::for_test(&[], &[]),
-                &Serves::Agent("a7".into()),
-                br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-                Instant::now()
-            )
-            .is_none()
+            Relay::for_test(&[], &[])
+                .respond(
+                    &Serves::Agent("a7".into()),
+                    br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                    Instant::now(),
+                )
+                .is_none()
         );
         assert!(
-            respond(
-                &Relay::for_test(&[], &[]),
-                &Serves::Agent("a7".into()),
-                br#"{"jsonrpc":"2.0","id":9,"result":{}}"#,
-                Instant::now()
-            )
-            .is_none(),
+            Relay::for_test(&[], &[])
+                .respond(
+                    &Serves::Agent("a7".into()),
+                    br#"{"jsonrpc":"2.0","id":9,"result":{}}"#,
+                    Instant::now(),
+                )
+                .is_none(),
             "a response to nothing asks for nothing"
         );
     }

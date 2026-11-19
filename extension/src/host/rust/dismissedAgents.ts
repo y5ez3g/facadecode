@@ -28,12 +28,12 @@ export class WorkspaceDismissedAgents implements DismissedAgents {
 		});
 	}
 
-	retain(agents: ReadonlySet<string>): void {
+	retain(keep: (agent: string) => boolean): void {
 		const machine = this.machineId();
 		this.state.mutate<unknown>(KEY, value => {
 			const stored = isJsonObject(value) ? value : {};
 			const current = agentsIn(stored, machine);
-			const kept = current.filter(id => agents.has(id));
+			const kept = current.filter(keep);
 			return current.length === kept.length ? value : withAgents(stored, machine, kept);
 		});
 	}

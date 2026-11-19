@@ -3,13 +3,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { CleanupResult, Location, RunFacts } from '../core/ports';
+import type { CleanupResult, Location, RunChange, RunFacts } from '../core/ports';
+import type { PanelState } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
 
 const LOCATION: Location = { id: 'loc-main', path: '/shop', uri: 'file:///shop', environment: 'local', label: 'main', folders: [{ index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' }], kind: 'checkout', opened: true, git: 'ok', branch: 'main' };
 const RUN = `run-${'3'.padStart(32, '0')}`;
 
-/** The editor's Quick Pick as Resume Agent drives it: what it shows, and whether it is up. */
+/** The editor's Quick Pick as Continue Session drives it: what it shows, and whether it is up. */
 class FakePick {
 	title = '';
 	placeholder = '';
@@ -47,6 +48,9 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let clipboard: string[];
 	let errors: string[];
 	let closed: string[];
+	let dismissed: string[];
+	let runs: Map<string, RunFacts>;
+	let runsChanged: TestEmitter<RunChange>;
 	let cleanup: CleanupResult | 'already_ended';
 	let did: string[];
 	let pinned: string[];
@@ -69,9 +73,15 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let fileProblems: { readonly setting: string; readonly problem: string }[];
 	const settle = () => new Promise(resolve => setImmediate(resolve));
 	const run = (id: string, arg?: unknown) => handlers.get(id)!(arg);
+	const openPanel = () => {
+		const said = new TestEmitter<unknown>();
+		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
+			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		return said;
+	};
 
 	setup(async () => {
-		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; did = []; pinned = [];
+		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; dismissed = []; did = []; pinned = [];
 		refreshing = Promise.resolve(); pickers = []; opened = 0; unpinned = []; order = []; provider = undefined; posted = [];
 		cleanup = 'terminated';
 		fileProblems = [];
@@ -94,14 +104,16 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		};
 		const { registerUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 		const changes = new TestEmitter<never>();
+		runsChanged = new TestEmitter<RunChange>();
 		settingsSaved = new TestEmitter<void>();
 		iconReads = 0;
-		const runs = new Map([[RUN, FACTS]]);
+		runs = new Map([[RUN, FACTS]]);
+		const close = async (id: string) => { closed.push(id); runs.delete(id); return cleanup; };
 		disposables = registerUi({
 			agents: {
-				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: id => { pinned.push(id); order.push(`pin ${id}`); }, unpin: id => { unpinned.push(id); order.push(`unpin ${id}`); }, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
+				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: runsChanged.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: id => { pinned.push(id); order.push(`pin ${id}`); }, unpin: id => { unpinned.push(id); order.push(`unpin ${id}`); }, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
 			launch: () => RUN,
-				close: async id => { closed.push(id); runs.delete(id); return cleanup; }, rename: () => undefined
+				stop: close, dismiss: async id => { dismissed.push(id); runs.delete(id); }, close, rename: () => undefined
 			},
 			worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 			conversations: { open: () => { opened++; return { next: async () => ({ entries: [], done: true }), dispose: () => undefined }; } },
@@ -198,15 +210,33 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		await run('facade.pinAgent', { webview: 'facade.agents', webviewSection: 'agent', run_id: RUN, preventDefaultContextMenuItems: true });
 		assert.deepStrictEqual(pinned, [RUN]);
 		for (const bad of [{ run: RUN }, { run_id: 3 }, 'run', null]) {
-			assert.throws(() => run('facade.closeAgent', bad), /run_id/, JSON.stringify(bad));
+			assert.throws(() => run('facade.stopAgent', bad), /run_id/, JSON.stringify(bad));
+			assert.throws(() => run('facade.dismissAgent', bad), /run_id/, JSON.stringify(bad));
 		}
 		assert.throws(() => run('facade.revealAgent'), /run_id/);
 	});
 
-	test('LIFECYCLE-3.1: End Agent ends the exact run; a process that could not be ended is said to the person who asked, an unconfirmed one is not claimed ended', async () => {
+	test('LIFECYCLE-3.1: Stop Agent stops the exact run and tells the initiator about failures and unknown results', async () => {
 		cleanup = 'failed';
-		await run('facade.closeAgent', { run_id: RUN });
-		assert.deepStrictEqual([closed, errors], [[RUN], ["Ada Lovelace's card and terminal were closed, but its process could not be terminated."]]);
+		await run('facade.stopAgent', { run_id: RUN });
+		assert.deepStrictEqual([closed, errors], [[RUN], ["Ada Lovelace's card and terminal were closed, but its process could not be stopped."]]);
+
+		cleanup = 'unconfirmed';
+		runs.set(RUN, FACTS);
+		await run('facade.stopAgent', { run_id: RUN });
+		assert.deepStrictEqual([closed, errors[1]], [[RUN, RUN], 'Could not stop Ada Lovelace: Stop unconfirmed · check process']);
+	});
+
+	test('LIFECYCLE-3.1: Dismiss Agent rechecks the exact card and accepts only a confirmed end', async () => {
+		const target = { run_id: RUN };
+		await run('facade.dismissAgent', target);
+		runs.set(RUN, { ...FACTS, lifecycle: 'ended', endUnconfirmed: true });
+		await run('facade.dismissAgent', target);
+		assert.deepStrictEqual(dismissed, []);
+		runs.set(RUN, { ...FACTS, lifecycle: 'ended' });
+		await run('facade.dismissAgent', { run_id: 'gone' });
+		await run('facade.dismissAgent', target);
+		assert.deepStrictEqual([closed, dismissed], [[], [RUN]]);
 	});
 
 	test('LIFECYCLE-2.1: Go to Agent\'s copy button copies `@name #aN`, and `#aN` alone for an agent with an empty name', async () => {
@@ -221,7 +251,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual(copied, ['@Ada Lovelace #a3', '#a4']);
 	});
 
-	test('UX-2.4: a Pin, Unpin or End refused for Facade\'s own reason says it in the person\'s words; one whose agent went meanwhile says nothing, and no run\'s ID', async () => {
+	test('UX-2.4: a Pin, Unpin, Stop or Dismiss refused for Facade\'s own reason says it in the person\'s words; one whose agent went meanwhile says nothing, and no run\'s ID', async () => {
 		const notified: string[] = [];
 		const vscode = { l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) } };
 		const load = withModules({ vscode });
@@ -229,12 +259,15 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const { FacadeError, OWNERSHIP_LOST } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
 		let refusal: Error = new FacadeError('INVALID', 'ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST);
 		const refuse = () => { throw refusal; };
-		const agents = { get: () => FACTS, pin: refuse, unpin: refuse, close: async () => refuse() };
+		let facts = FACTS;
+		const agents = { get: () => facts, pin: refuse, unpin: refuse, stop: async () => refuse(), dismiss: async () => refuse() };
 		const actions = new AgentActions({ agents: agents as never, model: {} as never, execution: {} as never, notifyError: text => notified.push(text) });
 		actions.pin(RUN, true);
 		actions.pin(RUN, false);
-		await actions.close(RUN);
-		refusal = new FacadeError('INVALID', 'unsupported', 'Ada Lovelace\'s CLI cannot resume this exact conversation, so it cannot be pinned.', { kind: 'pin_unsupported', values: [] });
+		await actions.stop(RUN);
+		facts = { ...FACTS, lifecycle: 'ended' };
+		await actions.dismiss(RUN);
+		refusal = new FacadeError('INVALID', 'unsupported', 'Ada Lovelace\'s CLI cannot resume this exact session, so it cannot be pinned.', { kind: 'pin_unsupported', values: [] });
 		actions.pin(RUN, true);
 		refusal = new FacadeError('NOT_FOUND', 'not_found', `No agent ${RUN} in this window.`);
 		actions.pin(RUN, true);
@@ -244,15 +277,13 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([reasonOf(new PlanError('No CLI "gone" is configured; the built-ins are claude.', 'not_found', { kind: 'cli_not_configured', values: ['"gone"', '~/.facade/facade.json'] })), reasonOf(new Error('EACCES: permission denied'))],
 			['No CLI "gone" is configured; add it to clis in ~/.facade/facade.json.', 'EACCES: permission denied'], 'a system error keeps its own words');
 		assert.deepStrictEqual(notified, [
-			`Could not pin Ada Lovelace: ${owned}`, `Could not unpin Ada Lovelace: ${owned}`, `Could not end Ada Lovelace: ${owned}`,
-			'Could not pin Ada Lovelace: Its CLI cannot resume this exact conversation, so it cannot be pinned.'
+			`Could not pin Ada Lovelace: ${owned}`, `Could not unpin Ada Lovelace: ${owned}`, `Could not stop Ada Lovelace: ${owned}`, `Could not dismiss Ada Lovelace: ${owned}`,
+			'Could not pin Ada Lovelace: Its CLI cannot resume this exact session, so it cannot be pinned.'
 		]);
 	});
 
 	test('UX-3.1, PANEL-1.5: Show Agent Details from the Command Palette opens the selected card\'s details, the view focused first; with no card selected it does nothing', async () => {
-		const said = new TestEmitter<unknown>();
-		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
-			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		const said = openPanel();
 		said.fire({ type: 'ready', page: '0'.repeat(31) + '1', reducedMotion: false });
 		await settle();
 		const focused = () => executed.filter(args => args[0] === 'facade.agents.focus').length;
@@ -266,9 +297,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	});
 
 	test('PANEL-1.3, 3.1: the card\'s Pin button\'s pin and unpin reach Pin and Unpin of its own run; a run gone answers gone, with nothing done', async () => {
-		const said = new TestEmitter<unknown>();
-		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
-			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		const said = openPanel();
 		const page = '0'.repeat(31) + '1';
 		said.fire({ type: 'ready', page, reducedMotion: false });
 		await settle();
@@ -280,14 +309,53 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([order, outcomes], [[`pin ${RUN}`, `unpin ${RUN}`], [[`pin-${RUN}`, 'ok'], [`unpin-${RUN}`, 'ok'], ['pin-run-gone', 'gone'], ['unpin-run-gone', 'gone']]]);
 	});
 
+	test('PANEL-1.4: production card copy follows tool connection, CLI state and the source of input', async () => {
+		const noState = { activity: 'unknown', reporting: false } as const;
+		const waiting = { ...noState, notReady: true } as const;
+		const unavailable = { tools: 'unavailable' } as const;
+		const cases: [Partial<RunFacts>, string][] = [
+			[{ tools: 'connecting', notReady: true }, 'Facade tools not connected yet'],
+			[{ ...unavailable, toolsProblem: 'disconnected' }, 'Facade tools disconnected'],
+			[{ ...unavailable, toolsProblem: 'cmd' }, 'Facade tools unavailable · replace .cmd with CLI in facade.json'],
+			[{ ...unavailable, toolsProblem: 'conflict', toolsFile: 'SKILL.md' }, 'Facade tools unavailable · move or rename SKILL.md'],
+			[{ ...unavailable, toolsProblem: 'variable', toolsFile: 'OPENCODE_CONFIG_CONTENT' }, 'Facade tools unavailable · OPENCODE_CONFIG_CONTENT unreadable'],
+			[{ ...unavailable, toolsProblem: 'files' }, 'Facade tools unavailable · file creation failed'],
+			[{ ...waiting, activityUnknown: 'waiting' }, 'No initial state · check terminal'],
+			[{ ...waiting, activityUnknown: 'not_reporting' }, 'No state from CLI · check terminal'],
+			[{ ...waiting, activityUnknown: 'cleared' }, 'State cleared · check terminal'],
+			[{ ...waiting, activityUnknown: 'screen_unrecognized' }, 'State unrecognized · check terminal'],
+			[{ ...waiting, activityUnknown: 'screen_reset' }, 'State reset · check terminal'],
+		];
+		runs.set(RUN, { ...FACTS, ...noState, said: 'Check the log' });
+		runsChanged.fire({ run: RUN, kind: 'lifecycle' });
+		const expected = new Map(cases.map(([facts, line], index) => {
+			const id = `run-${String(index + 10).padStart(32, '0')}`;
+			runs.set(id, { ...FACTS, id, alias: `#a${index + 10}`, ...facts });
+			runsChanged.fire({ run: id, kind: 'added' });
+			return [id, line];
+		}));
+		await settle();
+		openPanel().fire({ type: 'ready', page: '0'.repeat(31) + '1', reducedMotion: false });
+		await settle();
+		const { cards } = posted.filter(message => message.type === 'state').at(-1)!.state as PanelState;
+		for (const [id, line] of expected) {
+			const card = cards.find(each => each.runId === id);
+			assert.deepStrictEqual([card?.line, card?.stateText], [line, line], id);
+		}
+		const own = cards.find(each => each.runId === RUN)!;
+		assert.deepStrictEqual([own.line, own.stateText], ['🧑‍💻 Check the log', 'State unavailable · check terminal']);
+		assert.match(own.label, /Last input: Check the log$/);
+		assert.doesNotMatch(own.label, /Facade tools/, 'a CLI without tool injection reports no tool problem');
+	});
+
 	test('notification navigation reveals the exact run and selects its card (UX-3.2)', async () => {
 		assert.deepStrictEqual([await run('facade.revealAgent', { run_id: RUN }), await run('facade.revealAgent', { run_id: `run-${'8'.padStart(32, '0')}` }), did], [true, false, [`reveal ${RUN}`]]);
 	});
 
-	test('UX-1.1, LIFECYCLE-3.2: Resume Agent shows its picker at once, busy, while the window\'s locations are read again; the histories open after, never before', async () => {
+	test('UX-1.1, LIFECYCLE-3.2: Continue Session shows its picker at once, busy, while the window\'s locations are read again; the histories open after, never before', async () => {
 		let finish!: () => void;
 		refreshing = new Promise<void>(resolve => { finish = resolve; });
-		const done = run('facade.history') as Promise<void>;
+		const done = run('facade.continueSession') as Promise<void>;
 		await settle();
 		const reading = [pickers.length, pickers[0]?.shown, pickers[0]?.busy, opened];
 		finish();
@@ -296,12 +364,12 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const read = [opened, pickers[0].busy, pickers[0].placeholder];
 		pickers[0].hide();
 		await done;
-		assert.deepStrictEqual([reading, read, errors], [[1, true, true, 0], [1, false, 'No saved conversations in this window\'s folders'], []]);
+		assert.deepStrictEqual([reading, read, errors], [[1, true, true, 0], [1, false, 'No saved sessions in this window\'s folders'], []]);
 	});
 
-	test('CONFIGURATION-4.1: Resume Agent says a settings file wrong as a whole, as the CLIs read it, and opens no history', async () => {
+	test('CONFIGURATION-4.1: Continue Session says a settings file wrong as a whole, as the CLIs read it, and opens no history', async () => {
 		fileProblems = [{ setting: '~/.facade/facade.json', problem: '~/.facade/facade.json:1:1: Expected a JSON object' }];
-		const done = run('facade.history') as Promise<void>;
+		const done = run('facade.continueSession') as Promise<void>;
 		await settle();
 		await settle();
 		const shown = [(pickers[0].items as { readonly label: string; readonly detail?: string }[]).map(item => [item.label, item.detail]), opened];

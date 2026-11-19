@@ -22,14 +22,17 @@ export interface CardWords {
 	readonly path: (value: string) => string;
 
 	readonly pinned?: string;
+	readonly runningOn: (machine: string) => string;
+	readonly connectionLost: string;
 	readonly starting: string;
 	/** `Starting {0}…`, {0} the CLI's name: the startup stage while its process starts (LIFECYCLE-1.5). */
 	readonly startingCli: (cli: string) => string;
 	/** The startup stage while its new worktree is made (LIFECYCLE-1.5, WORKTREES-2.1). */
 	readonly creatingWorktree: string;
-	/** `New conversation started` and `Conversation resumed`: how its run began - a new conversation, or one it resumed - before any message (PANEL-1.4). */
+	/** How its session opened, shown before the first message (PANEL-1.4). */
 	readonly started: string;
 	readonly resumed: string;
+	readonly continued: string;
 	readonly working: string;
 	readonly notWorking: string;
 	/** `Error · {0}`, {0} the reason: a red card's state, as its accessible label says it; its second line says the reason alone (PANEL-1.4). */
@@ -124,11 +127,14 @@ export interface CardSaid {
 /**
  * What a card says of its run (RULES-3.2, PANEL-1.4): its dot by {@link dotOf}; its second line one of three kinds - the person's input
  * `🧑‍💻`, another agent's message `📨`, or Facade's own, unmarked: a Facade result, or a notable state while it lasts - its start, over
- * any message; what its CLI waits for; why its dot is red - then the last message again; before any, how its run began,
- * `New conversation started` or `Conversation resumed`. Its state in words is the accessible label's, never the second line's, nor is a
+ * any message; what its CLI waits for; why its dot is red - then the last message again; before any, its known opening,
+ * `New session started`, `Agent resumed` or `Session continued`. Its state in words is the accessible label's, never the second line's, nor is a
  * title. Never a completion claim.
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
+	if (facts.remoteMachine !== undefined && facts.disconnected) {
+		return { dot: 'none', stateText: words.connectionLost, ...noticeOf(words.connectionLost) };
+	}
 	const dot = dotOf(facts);
 	if (facts.error || facts.lifecycle === 'ended') {
 		// Its second line says why without `Error · `, which its red dot says; its state, as a screen reader hears it, keeps it (PANEL-1.4)
@@ -163,7 +169,10 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	}
 	// The last message sent to it - the task it was started with being the first - else how its run began
 	const said = saidOf(facts);
-	return said ? { dot, stateText, line: said.line, said, ...unsaid } : { dot, stateText, ...noticeOf(facts.resumed ? words.resumed : words.started), ...unsaid };
+	if (said) { return { dot, stateText, line: said.line, said, ...unsaid }; }
+	if (!facts.sessionOpening) { return { dot, stateText, line: '', ...unsaid }; }
+	const opening = facts.sessionOpening === 'resumed' ? words.resumed : facts.sessionOpening === 'continued' ? words.continued : words.started;
+	return { dot, stateText, ...noticeOf(opening), ...unsaid };
 }
 
 /** The mark of the person's own input on its card: someone at a computer, as `📨` marks another agent's message (PANEL-1.4). */
@@ -270,6 +279,8 @@ export function labelOf(format: (value: string) => string): string {
 export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly repeated?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly readsTitles?: boolean; readonly icon?: string }): Card {
 	const { place, words } = input;
 	const status = statusOf(facts, words);
+	const runningOn = facts.remoteMachine === undefined ? undefined : words.runningOn(facts.remoteMachine);
+	const pinned = facts.remoteMachine === undefined && !!facts.pin;
 	const field = (id: DetailId, format: (value: string) => string, value: string): DetailField => ({ id, label: labelOf(format), value });
 	// Its conversation's complete title as its CLI stores it, where its CLI saved one; else why there is none - not yet, or never, for
 	// a CLI Facade has no history reader for - after the same `Title: ` label (PANEL-1.5)
@@ -287,7 +298,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const restated = !status.said && (heard === status.stateText || words.error(heard) === status.stateText);
 	// What the state and the second line leave unsaid - why activity is unknown, tools still connecting - once (PANEL-1.4, 1.5)
 	const unsaid = status.reason && status.reason !== status.stateText && !heard.includes(status.reason) ? [status.reason] : [];
-	const label = [facts.name, facts.alias, ...(facts.pin && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...restated ? [] : [heard], ...unsaid].filter(Boolean).join(', ');
+	const label = [facts.name, facts.alias, runningOn, ...(pinned && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...restated ? [] : [heard], ...unsaid].filter(Boolean).join(', ');
 	// The label says the state, the location and the second line: the description says what else the details do, in their order - its
 	// title, then, after when it started, which the page says, where it works and its path
 	const spoken = new Set([status.stateText, status.line, ...status.notice ? [status.notice] : [], ...status.said ? [status.said.text] : []]);
@@ -298,7 +309,8 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const avatar = avatarOf(input.icon ?? facts.cli);
 	return {
 		runId: facts.id,
-		...(facts.pin ? { pinned: true } : {}),
+		...(pinned ? { pinned: true } : {}),
+		...(runningOn ? { runningOn } : {}),
 		selected: input.selected,
 		name: facts.name,
 		alias: facts.alias,

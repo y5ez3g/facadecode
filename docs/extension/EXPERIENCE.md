@@ -24,9 +24,10 @@ explanation; there is no separate tutorial, team wizard or product-mode choice.
 
 **The person sees the location and suggested name, chooses a CLI, and continues in its editor terminal.**
 
-The last successfully used CLI is first and preselected; choosing it still starts only after the person's action. Change
-Working Location and Change Name remain at the bottom of the same picker - Change Name alone where there is no location
-to change (1.5). A name has an editable recommendation from `names` and may contain spaces or repeat. A blank name
+The picker opens with CLI choices in the window's execution environment. The last successfully used CLI is first
+and preselected. The person chooses a CLI to start the agent. Change Working Location and Change Name remain at
+the bottom of the same picker, with Change Name alone where there is no location to change (1.5).
+A name has an editable recommendation from `names` and may contain spaces or repeat. A blank name
 is filled in; an empty or exhausted list uses the agent ID (LIFECYCLE-2.1). CLI login and permissions remain in the terminal. The current name and actual location remain visible while searching for a
 CLI - the window's one place to work going without saying - as specified in LIFECYCLE-1.1. No account or CLI setup is
 silently performed by Facade. Open Settings shows Facade's section in the editor's Settings. Its Edit in facade.json
@@ -36,19 +37,19 @@ Claude setup for another API, and choose that entry in the picker
 
 ### 1.3 Default working location
 
-**Human New Agent uses the last successfully used location; first use starts with the first folder's first location.**
+**Human New Agent opens on the window's machine, at the last successfully used location still offered there.**
 
-An opened main checkout is first; an opened worktree is first when that worktree is the folder opened. A plain folder is
-its own location. Canceling a picker or an agent-created launch does not change the human default. Details and
-missing-location fallback belong to
-[LIFECYCLE-1](features/LIFECYCLE.md#1-launch).
+First use starts with the first folder's first location. An opened main checkout is first, or an opened worktree when that
+worktree is the folder opened. A plain folder is its own location. LIFECYCLE-1.2 defines the successful human launches
+that update this default and the fallback when a location is missing.
 
 ### 1.4 Initial exceptions
 
 **A missing prerequisite is explained where the person can correct it without changing what they selected.**
 
-No folder: the picker offers Open Folder. No CLI: the picker explains discovery in this environment and offers
-Open Settings. Choose Edit in facade.json there, or edit the file opened directly in a remote window whose Settings
+With no folder, the picker offers Open Folder and still lets the person choose an available remote working location
+when another Facade machine is listed (LIFECYCLE-1.1). When no CLI is available, the picker explains discovery in this
+environment and offers Open Settings. Choose Edit in facade.json there, or edit the file opened directly in a remote window whose Settings
 open as JSON (CONFIGURATION-1.2).
 A bad file blocks new starts with its error; a bad entry leaves other entries usable (CONFIGURATION-4.1).
 If old settings cannot be migrated together, the file link explains the conflict and opens the old editor settings
@@ -59,10 +60,11 @@ not block either step. A removed location is reselected; no silent CLI substitut
 
 **Change Working Location is an item in the same menu that shows the current location and CLI choices.**
 
-Choose a folder, then its location/worktree, then return to CLI selection. A single-folder window has no folder step; a
-plain folder outside a Git repository has no location step, and in a single-folder window there is no location to
-change, the window's one place to work going without saying (LIFECYCLE-1.3). Back preserves selections; Escape makes no
-launch or worktree. Creating a worktree is an advanced choice in this flow, with the same contract as
+With multiple Facade machines, choose the machine inside Change Working Location, then choose a working location on it.
+On this window's machine, choose a folder and its location or worktree, skipping single-choice steps. On another
+machine, choose a location there or its login home. The picker returns to the chosen location's CLIs with the same name
+(LIFECYCLE-1.3). Back preserves selections. Escape cancels without launching an agent or creating a worktree.
+Creating a worktree is an advanced choice in this flow, with the same contract as
 [Worktrees](features/WORKTREES.md).
 
 ### 1.6 Seeing the agent start
@@ -78,7 +80,7 @@ it, without moving the list or taking focus (LIFECYCLE-2.2). Progress is shown i
 **A failed accepted launch retains its card and terminal; a usable CLI remains available if its Facade tools fail.**
 
 The second line explains the actual error. Operation errors go to the initiator: human UI errors to that window's
-person, agent operation errors to that agent, with no extra human popup. End Agent removes the retained pair
+person, agent operation errors to that agent, with no extra human popup. Dismiss Agent removes the retained pair
 immediately; closing its tab only hides it. Native Git post-create preparation does not gate CLI startup once the
 worktree exists and Git recognizes it.
 
@@ -95,23 +97,26 @@ anything, whether its run began or resumed a conversation - unless Facade says, 
 dot is red or what the CLI waits for (PANEL-1.4); absence of reliable status is never claimed as idle. A turn ending
 removes the dot without a notification or a claim that the task is complete. A busy agent's tab turns a spinner before
 its name (LIFECYCLE-2.2). Clicking a card opens that same terminal. On Rust, Go to Agent can open another running
-agent from the same machine in this window. The agent remains in its existing windows (LIFECYCLE-2.3).
+agent on a reachable Facade machine in this window. The agent remains in its existing windows (LIFECYCLE-2.3).
 
-### 2.2 Only errors and explicit calls to the person notify
+### 2.2 Notifications go to the window that needs them
 
-**Only relevant human-operation errors and explicit calls to the person produce human notifications.**
+**Human-operation errors, explicit calls to the person and Remote-SSH connection notices use native notifications.**
 
 Agent-operation errors return to the calling agent. Agent-to-agent delivery, replies and system-result handoff never
 automatically fall back to a person; if no agent can receive an error, the report ends. Native runtime failures follow
 RULES-1.8. No startup, idle, turn-end, permission or login news is announced. Explicit calls to the person can show
 independently in multiple connected Rust member windows under COLLABORATION-2.3.
+A Rust Remote-SSH window reports once if its local Facade core is missing. When that core first connects to a Facade
+machine through the window, the window explains which agents can control agents on the remote machine.
 
 ### 2.3 A turn ends, a process exits, or the person ends an agent
 
-**A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until End Agent.**
+**A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until Dismiss Agent.**
 
-Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. End Agent
-removes its card and terminal immediately and cleans up the process in the background. A successful Rust stop
+Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. Stop Agent
+removes a local card and terminal immediately and cleans up the process in the background. A card for a process
+on another Facade machine stays until its stop is confirmed (LIFECYCLE-3.1). A successful Rust stop
 closes the other connected members' cards and tabs too (RULES-4.1). Closing one tab only hides that window's view
 (LIFECYCLE-2.2). Worktrees and the agents it started stay.
 
@@ -132,15 +137,15 @@ across closure and reconnect. System results that cannot return simply end.
 
 ### 2.5 Resume and Pin
 
-**Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
+**Resume Agent restores the same numbered Rust agent. Continue Session starts a new agent with the chosen saved session.**
 
-Resume lists relevant vendor histories with the original CLI and location. On Rust, any member can use Resume to
-continue a saved agent with its original number (LIFECYCLE-3.2). Pin and the native terminal tab's Pin are the
+Continue Session lists relevant CLI histories with the original CLI and location. On Rust, any member window can
+use Resume Agent to restore that numbered agent (LIFECYCLE-3.2). Pin and the native terminal tab's Pin are the
 same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
 Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
 card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a
-hidden one hidden. Closing a tab showing its pin mark unpins it. End Agent and normal exit preserve the Pin on the
-Rust engine, and each workspace decides what it pins. On the old engine, both unpin the agent. Whole-window close
+hidden one hidden. Closing a tab showing its pin mark unpins it. Stop Agent, Dismiss Agent and normal exit preserve the Pin on the
+Rust engine, and each workspace decides what it pins. On the old engine, all three unpin the agent. Whole-window close
 and abnormal exit preserve the intent on either engine. The pinned agents' tabs reopen one after another in the
 Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own
 restoration and capability limits.
@@ -227,7 +232,7 @@ outcome remains unchanged. An agent explicitly contacts the person through `#hum
 
 **Stopping or cancellation does not undo completed input or user files.**
 
-Canceling an unaccepted picker changes nothing. End Agent on an accepted launch immediately removes UI and prevents
+Canceling an unaccepted picker changes nothing. Stop Agent on an accepted launch immediately removes UI and prevents
 later CLI startup; a worktree already created stays. Hiding its tab does neither. Facade does not manage Git
 initialization, initial commits, or native post-create preparation jobs; it deletes only a clean linked worktree the
 person confirms. External removal of a window folder/worktree closes its affected agents. An unconfirmed remote cleanup
