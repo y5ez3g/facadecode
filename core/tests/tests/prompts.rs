@@ -204,13 +204,13 @@ fn a_message_sent_while_the_prompt_waits_goes_after_it() {
     home.release_gate("before-prompt-delivery");
     let sent = send.wait_with_output().unwrap();
     assert!(sent.status.success(), "{}", stderr(&sent));
-    assert_eq!(
-        submitted(&home, "📨"),
-        [
-            prompt(&host),
-            "📨 Message from the command line · m3\nand then this".to_string()
-        ]
+    let message = "📨 Message from the command line · m3\nand then this";
+    assert!(
+        wait_for_submission(&home, message),
+        "{:?}",
+        home.submitted_messages()
     );
+    assert_eq!(submitted(&home, "📨"), [prompt(&host), message.to_string()]);
     assert!(
         wait_for_submission(&home, &result(&host)),
         "{:?}",
