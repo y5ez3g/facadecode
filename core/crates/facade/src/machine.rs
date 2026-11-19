@@ -1,32 +1,39 @@
 //! Machine commands and the foreground SSH connection.
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::Shutdown;
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
+use std::time::Duration;
 
 use anyhow::Context as _;
-use facade_base::address::{display_machine_selector, machine_id_selector, short_machine_id};
-use facade_base::daemon::{ClientKind, HelloParams, HelloResult, display_name, methods};
+use facade_base::address::short_machine_id;
+use facade_base::daemon::{display_name, methods};
 use facade_base::daemon_client::{DaemonClient, transient_transport};
 use facade_base::jsonrpc::{
-    RequestRead, ServerMessage, decode_arguments, read_request, read_server_message,
+    ErrorBody, MAX_LINE_BYTES, RequestRead, ServerMessage, decode_arguments, read_request,
+    read_server_message,
 };
 use facade_base::machine::{
-    ConnectedParams, ConnectionKind, ConnectionOutcome, ConnectionState, MachineAdd,
-    MachineAddArgs, MachineConnect, MachineConnectArgs, MachineConnection, MachineHello,
-    MachineIdentity, MachineInfo, MachineList, MachineListResult, MachineRemove, MachineRemoveArgs,
-    MachineRename, MachineRenameArgs, MachineTransport,
+    ConnectedParams, ConnectionOutcome, MachineRemoveArgs, MachineRenameArgs,
 };
 use facade_base::operations::NoArgs;
 use facade_base::paths::ClientSocket;
-use facade_base::ssh::{self, SshMode};
+use facade_base::ssh::{self, BootstrapAction, RemoteLoginShell, RemoteProbe, SshMode};
+use facade_base::v3::{
+    ClientKind, ConnectionKind, ConnectionState, DAEMON_PROTOCOL_RANGE, HelloParams, HelloResult,
+    MachineConnect, MachineConnectArgs, MachineConnection, MachineHello, MachineInfo, MachineList,
+    MachineListResult, MachineRemove, MachineRename, MachineState, MachineTransport,
+};
 use serde_json::Value;
 
 use crate::cli::{MachineAction, ServeArgs, SshTarget};
 use crate::errors::{self, Problem, ServeFailure, about_connection, about_machine, repair_tip};
 use crate::table;
+
+// Leave time for the person's SSH prompts before the daemon's machine handshake starts.
+const SSH_LOGIN_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl ServeArgs {
     fn home(self) -> anyhow::Result<Option<PathBuf>> {
@@ -48,10 +55,11 @@ impl ServeArgs {
 pub(crate) fn run(
     action: MachineAction,
     connect: &dyn Fn() -> anyhow::Result<DaemonClient>,
-    serve_socket: &dyn Fn(Option<PathBuf>) -> anyhow::Result<ClientSocket>,
+    serve_socket: &dyn Fn(Option<PathBuf>, bool) -> anyhow::Result<Option<ClientSocket>>,
 ) -> anyhow::Result<i32> {
     match action {
-        MachineAction::Add(target) => return foreground(target, ConnectionKind::Saved, connect),
+        MachineAction::Add(target) => return add(target),
+        MachineAction::Link(target) => return foreground(target, ConnectionKind::Saved, connect),
         MachineAction::Connect(target) => {
             return foreground(target, ConnectionKind::Temporary, connect);
         }
@@ -85,16 +93,21 @@ pub(crate) fn run(
                 })
                 .map_err(|error| about_machine(&machine, None, error))?;
             println_or_end!(
-                "id:{} {}",
+                "{} {}",
                 short_machine_id(&renamed.machine_id),
                 display_name(&renamed.name)
             );
         }
         MachineAction::Serve(args) => {
-            let home = args.home()?;
+            let wake = !args.no_start;
+            let home = args
+                .home()
+                .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
             let mut input = BufReader::new(io::stdin());
             let (id, first) = read_machine_hello(&mut input)?;
-            let mut socket = serve_socket(home)?;
+            let Some(mut socket) = serve_socket(home, wake)? else {
+                return Ok(3);
+            };
             socket.write_all(&first)?;
             return serve_stdio(input, socket, id);
         }
@@ -104,24 +117,7 @@ pub(crate) fn run(
 
 /// Gives the CLI the machine's reachability and the public state of each direct connection.
 pub(crate) fn machine_list_json(listed: &MachineListResult) -> serde_json::Result<Value> {
-    let mut json = serde_json::to_value(listed)?;
-    let rows = json["machines"]
-        .as_array_mut()
-        .expect("machine list is an array");
-    for (machine, row) in listed.machines.iter().zip(rows) {
-        if machine.is_unreachable() {
-            row["unreachable"] = Value::Bool(true);
-        }
-        let links = row["connections"]
-            .as_array_mut()
-            .expect("connections are an array");
-        for (connection, link) in machine.connections.iter().zip(links) {
-            if connection.state == ConnectionState::Disconnected {
-                link["state"] = Value::String("disconnected".into());
-            }
-        }
-    }
-    Ok(json)
+    serde_json::to_value(listed)
 }
 
 /// Reads the exact first frame and checks that it selects the daemon's machine protocol.
@@ -140,18 +136,15 @@ fn read_machine_hello(input: &mut impl BufRead) -> anyhow::Result<(u64, Vec<u8>)
         first.ends_with(b"\n")
             && request.jsonrpc == "2.0"
             && request.method == methods::HELLO
-            && request.params.get("relay").is_none(),
+            && ["agent", "sessions", "window", "numbers_given", "relay"]
+                .iter()
+                .all(|key| request.params.get(*key).is_none()),
         EXPECTED
     );
     let id = request.id.context(EXPECTED)?;
     let hello: HelloParams = decode_arguments(request.params).context(EXPECTED)?;
     anyhow::ensure!(
-        hello.kind == ClientKind::Machine
-            && hello.machine.is_some()
-            && hello.agent.is_none()
-            && hello.sessions.is_empty()
-            && hello.window.is_none()
-            && hello.numbers_given.is_none(),
+        hello.kind == ClientKind::Machine && hello.machine.is_some(),
         EXPECTED
     );
     Ok((id, first))
@@ -177,7 +170,10 @@ fn serve_stdio(
     let accepted = response.error.is_none();
     if accepted {
         let hello: HelloResult = decode_arguments(response.result.unwrap_or_default())?;
-        anyhow::ensure!(hello.machine.is_some(), ServeFailure::NoSession);
+        anyhow::ensure!(
+            hello.protocol == DAEMON_PROTOCOL_RANGE[1] && hello.machine.is_some(),
+            ServeFailure::NoSession
+        );
     }
     let mut stdout = io::stdout().lock();
     stdout.write_all(&reply)?;
@@ -243,46 +239,371 @@ enum ForegroundEnd {
     BeforeHandshake,
 }
 
+struct SshSession {
+    child: Child,
+    input: ChildStdin,
+    output: BufReader<ChildStdout>,
+    stderr: std::thread::JoinHandle<String>,
+}
+
+impl SshSession {
+    fn spawn(words: &[std::ffi::OsString]) -> anyhow::Result<Self> {
+        let mut command = Command::new("ssh");
+        command.args(words).stderr(Stdio::piped());
+        let (mut child, input, output) = ssh::spawn_ssh(command).context(errors::NO_OPENSSH)?;
+        let stderr = pass_on_stderr(child.stderr.take());
+        Ok(Self {
+            child,
+            input,
+            output: BufReader::new(output),
+            stderr,
+        })
+    }
+
+    fn finish(self, kill: bool) -> io::Result<(ExitStatus, String)> {
+        let Self {
+            mut child,
+            input,
+            output,
+            stderr,
+        } = self;
+        drop((input, output));
+        if kill {
+            let _ = child.kill();
+        }
+        let status = child.wait()?;
+        Ok((status, stderr.join().unwrap_or_default()))
+    }
+}
+
+fn bootstrap_ssh(
+    ssh_args: &[String],
+    destination: &str,
+    home: Option<&str>,
+    mode: SshMode,
+    build: &str,
+) -> anyhow::Result<SshSession> {
+    let command = |shell| {
+        ssh::remote_login_bootstrap_command(shell, home, build, true).map_err(|error| {
+            if error == ssh::SshArgumentError::Home {
+                anyhow::Error::new(ErrorBody::invalid_argument(error.to_string()))
+            } else {
+                error.into()
+            }
+        })
+    };
+    // Validate the home and release before asking SSH to log in.
+    let unix_command = command(RemoteLoginShell::Unix)?;
+    let control_dir = if mode == SshMode::Add {
+        ssh::ssh_control_dir(&facade_base::paths::facade_home()?)?
+    } else {
+        None
+    };
+    let words = ssh::ssh_login_args(ssh_args, mode, control_dir.as_deref())
+        .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+    let mut session = SshSession::spawn(&words)?;
+    let probe_login = |input: &mut ChildStdin,
+                       output: &mut BufReader<ChildStdout>|
+     -> anyhow::Result<_> {
+        if !send_ssh(input, ssh::REMOTE_PLATFORM_PROBE)? {
+            return Ok(None);
+        }
+        let Some(shell) = read_login_marker(output, ssh::parse_remote_platform)? else {
+            return Ok(None);
+        };
+        let system = shell.system();
+        let remote = match shell {
+            RemoteLoginShell::Unix => unix_command,
+            _ => command(shell)?,
+        };
+        if !send_ssh(input, remote.as_bytes())?
+            || read_login_marker(output, |line| {
+                (line == ssh::REMOTE_BOOTSTRAP_BEGIN).then_some(())
+            })?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let Some(line) = read_bootstrap_line(output)? else {
+            return Ok(None);
+        };
+        let probe = ssh::parse_remote_probe(std::str::from_utf8(&line)?).map_err(|error| {
+            if error == ssh::SshArgumentError::Probe {
+                Problem::StartupPrints {
+                    destination: display_name(destination),
+                }
+                .into()
+            } else {
+                anyhow::Error::new(error).context(format!(
+                    "invalid Facade version on {}",
+                    display_name(destination)
+                ))
+            }
+        })?;
+        let action = ssh::bootstrap_action(&probe, build, true)?;
+        if let (BootstrapAction::UpgradeLocal, RemoteProbe::Installed(remote)) = (action, probe) {
+            anyhow::bail!(
+                "{} runs Facade {}. Run 'facade upgrade' on this machine and try again.",
+                display_name(destination),
+                facade_base::build_version(&remote)
+            );
+        }
+        Ok(Some((system, action)))
+    };
+    let prelude = std::thread::scope(|scope| {
+        let (report, result) = mpsc::sync_channel(1);
+        let input = &mut session.input;
+        let output = &mut session.output;
+        scope.spawn(move || {
+            let _ = report.send(probe_login(input, output));
+        });
+        match result.recv_timeout(SSH_LOGIN_PROBE_TIMEOUT) {
+            Ok(result) => result,
+            Err(error) => {
+                // End this SSH process before joining the blocked probe reader.
+                let _ = session.child.kill();
+                match error {
+                    mpsc::RecvTimeoutError::Timeout => anyhow::bail!(
+                        "SSH to {} did not finish its login probe within {} seconds",
+                        display_name(destination),
+                        SSH_LOGIN_PROBE_TIMEOUT.as_secs()
+                    ),
+                    mpsc::RecvTimeoutError::Disconnected => Err(error.into()),
+                }
+            }
+        }
+    });
+    let (system, action) = match prelude {
+        Ok(Some(setup)) => setup,
+        Ok(None) => {
+            let (status, stderr) = session.finish(false)?;
+            return Err(ssh_failure(destination, status, stderr));
+        }
+        Err(error) => {
+            let _ = session.finish(true);
+            return Err(error);
+        }
+    };
+    let directive = match action {
+        BootstrapAction::Serve => ssh::BOOTSTRAP_SERVE,
+        BootstrapAction::Install => ssh::BOOTSTRAP_INSTALL,
+        _ => unreachable!("the active connection can serve or install"),
+    };
+    let ready = match send_ssh(&mut session.input, directive) {
+        Ok(true) => read_bootstrap_line(&mut session.output),
+        Ok(false) => Ok(None),
+        Err(error) => Err(error.into()),
+    };
+    let error = match ready {
+        Ok(Some(line)) if line.as_slice() == ssh::BOOTSTRAP_READY.as_bytes() => return Ok(session),
+        Ok(Some(_)) => {
+            let _ = session.finish(true);
+            anyhow::anyhow!("expected the remote Facade bootstrap to report ready")
+        }
+        Ok(None) => {
+            let (status, stderr) = session.finish(false)?;
+            if action == BootstrapAction::Serve {
+                return Err(ssh_failure(destination, status, stderr));
+            }
+            let reason = ssh_reason(status, stderr);
+            anyhow::anyhow!("{reason}")
+        }
+        Err(error) => {
+            let _ = session.finish(true);
+            error
+        }
+    };
+    if action == BootstrapAction::Install {
+        let install = ssh::remote_install_command(system, build, home)?;
+        Err(anyhow::anyhow!(
+            "could not install Facade {} on {} ({error:#})\n  \
+             tip: run this command on that machine\n{install}",
+            facade_base::build_version(build),
+            display_name(destination)
+        ))
+    } else {
+        Err(error)
+    }
+}
+
+fn send_ssh(input: &mut ChildStdin, bytes: &[u8]) -> io::Result<bool> {
+    match input.write_all(bytes).and_then(|()| input.flush()) {
+        Ok(()) => Ok(true),
+        Err(error) if transient_transport(&error) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn read_login_marker<T>(
+    source: &mut impl BufRead,
+    recognize: impl Fn(&[u8]) -> Option<T>,
+) -> anyhow::Result<Option<T>> {
+    while let Some(line) = read_bootstrap_line(source)? {
+        if let Some(marker) = recognize(&line) {
+            return Ok(Some(marker));
+        }
+    }
+    Ok(None)
+}
+
+fn read_bootstrap_line(source: &mut impl BufRead) -> anyhow::Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    let bytes = source
+        .take(MAX_LINE_BYTES as u64 + 1)
+        .read_until(b'\n', &mut line)?;
+    if bytes == 0 {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        bytes <= MAX_LINE_BYTES && line.ends_with(b"\n"),
+        "expected a complete remote Facade bootstrap line"
+    );
+    line.pop();
+    if line.ends_with(b"\r") {
+        line.pop();
+    }
+    Ok(Some(line))
+}
+
+fn ssh_failure(destination: &str, status: ExitStatus, stderr: String) -> anyhow::Error {
+    let destination = display_name(destination);
+    if stderr.is_empty() && status.success() {
+        return Problem::SshClosed { destination }.into();
+    }
+    Problem::SshFailed {
+        destination,
+        why: ssh_reason(status, stderr),
+    }
+    .into()
+}
+
+fn ssh_reason(status: ExitStatus, stderr: String) -> String {
+    if stderr.is_empty() {
+        errors::ssh_exit(status.code())
+    } else {
+        stderr
+    }
+}
+
+/// Leaves the saved connection with the process that opened it once the daemon confirms it.
+fn add(target: SshTarget) -> anyhow::Result<i32> {
+    let mut command = Command::new(std::env::current_exe()?);
+    // Keep terminal diagnostics live, and let callers capturing this command see EOF when it
+    // returns. The link can outlive the command's redirected output.
+    let stderr = if io::stderr().is_terminal() {
+        Stdio::inherit()
+    } else {
+        Stdio::piped()
+    };
+    command
+        .args(["machine", "link"])
+        .stdin(Stdio::inherit())
+        .stderr(stderr)
+        .stdout(Stdio::piped());
+    if let Some(home) = target.home {
+        command.arg(format!("--home={home}"));
+    }
+    command.args(target.ssh_args);
+    ssh::keep_redirected_output_private().context("could not keep the caller's output private")?;
+    let mut link = command
+        .spawn()
+        .context("could not start the saved machine connection")?;
+    let diagnostics = link.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let _ = io::copy(&mut stderr, &mut io::stderr());
+        })
+    });
+    let stdout = link.stdout.take().expect("machine link stdout was piped");
+    let mut receipt = String::new();
+    let received = BufReader::new(stdout)
+        .read_line(&mut receipt)
+        .context("could not read the saved machine connection result")
+        .and_then(|_| {
+            if receipt.ends_with('\n') {
+                serde_json::from_str::<ConnectedParams>(&receipt)
+                    .map(Some)
+                    .context("machine link returned an invalid connection result")
+            } else {
+                Ok(None)
+            }
+        });
+    if let Ok(Some(connected)) = &received {
+        if connected.first_connection {
+            print_trust(&connected.machine);
+        }
+        println_or_end!(
+            "Saved the connection to {}.",
+            display_name(&connected.machine.name)
+        );
+        print_logout_cleanup(&connected.machine);
+        return Ok(0);
+    }
+    if received.is_err() {
+        let _ = link.kill();
+    }
+    let status = link.wait();
+    if let Some(diagnostics) = diagnostics {
+        let _ = diagnostics.join();
+    }
+    received?;
+    let status = status?;
+    anyhow::ensure!(
+        !status.success(),
+        "machine link ended before confirming the saved connection"
+    );
+    Ok(status.code().unwrap_or(1))
+}
+
 fn foreground(
     target: SshTarget,
     kind: ConnectionKind,
     connect: &dyn Fn() -> anyhow::Result<DaemonClient>,
 ) -> anyhow::Result<i32> {
     let save = kind == ConnectionKind::Saved;
-    let given = target.ssh_destination.clone();
+    let given = ssh::parse_ssh_destination(&target.ssh_args)
+        .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?
+        .to_owned();
     let mut daemon = connect()?;
-    let authorized = daemon
-        .call::<MachineConnect>(MachineConnectArgs {
-            transport: MachineTransport::Ssh {
-                ssh_destination: target.ssh_destination,
-                remote_home: target.home,
-            },
-            kind,
-        })
-        .map_err(|error| about_connection(&given, error))?;
-    let destination = authorized
-        .ssh_destination
-        .ok_or(Problem::NoSshDestination)?;
-    let control_dir = if save {
-        ssh::ssh_control_dir(&facade_base::paths::facade_home()?)?
-    } else {
-        None
-    };
-    let words = ssh::machine_ssh_args(
-        &destination,
-        authorized.remote_home.as_deref(),
+    let session = bootstrap_ssh(
+        &target.ssh_args,
+        &given,
+        target.home.as_deref(),
         if save { SshMode::Add } else { SshMode::Connect },
-        control_dir.as_deref(),
+        &facade_base::build_id(),
     )?;
-    let (mut from_daemon, to_daemon) = daemon.into_stream();
-    let connection = to_daemon.try_clone()?;
-    let mut command = Command::new("ssh");
-    command.args(words).stderr(Stdio::piped());
-    let (mut child, mut to_ssh, from_ssh) = spawn_ssh(command).context(errors::NO_OPENSSH)?;
-    let ssh_said = pass_on_stderr(child.stderr.take());
-    let input_result = copy_to_daemon(to_daemon, move |socket| {
-        copy_stream(BufReader::new(from_ssh), socket)
-    });
+    // MachineConnect starts the daemon's handshake clock. SSH is ready to carry the hello now.
+    let streams = (|| -> anyhow::Result<_> {
+        let authorized = daemon
+            .call::<MachineConnect>(MachineConnectArgs {
+                transport: MachineTransport::Ssh {
+                    ssh_destination: given.clone(),
+                    ssh_args: target.ssh_args,
+                    remote_home: target.home,
+                },
+                kind,
+            })
+            .map_err(|error| about_connection(&given, error))?;
+        let destination = authorized
+            .ssh_destination
+            .ok_or(Problem::NoSshDestination)?;
+        let (from_daemon, to_daemon) = daemon.into_stream();
+        let connection = to_daemon.try_clone()?;
+        Ok((destination, from_daemon, to_daemon, connection))
+    })();
+    let (destination, mut from_daemon, to_daemon, connection) = match streams {
+        Ok(streams) => streams,
+        Err(error) => {
+            let _ = session.finish(true);
+            return Err(error);
+        }
+    };
+    let SshSession {
+        mut child,
+        input: mut to_ssh,
+        output: from_ssh,
+        stderr: ssh_said,
+    } = session;
+    let input_result = copy_to_daemon(to_daemon, move |socket| copy_stream(from_ssh, socket));
 
     let result = (|| -> anyhow::Result<ForegroundEnd> {
         let Some(connected) = forward_hello(&mut from_daemon, &mut to_ssh)
@@ -290,64 +611,45 @@ fn foreground(
         else {
             return Ok(ForegroundEnd::BeforeHandshake);
         };
-        if connected.first_connection {
-            print_trust(&connected.machine);
-        }
-        if !save {
+        let end = if save {
+            // The Connected reply follows persistence of the verified machine ID and original SSH
+            // arguments. Report success, then keep carrying the same SSH session.
+            let mut stdout = io::stdout().lock();
+            serde_json::to_writer(&mut stdout, &connected)?;
+            stdout.write_all(b"\n")?;
+            stdout.flush()?;
+            ForegroundEnd::Saved
+        } else {
+            if connected.first_connection {
+                print_trust(&connected.machine);
+            }
             let name = display_name(&connected.machine.name);
             eprintln!("Connected to {name}. Press Ctrl-C to disconnect.");
             print_logout_cleanup(&connected.machine);
-            copy_to_ssh(from_daemon, to_ssh)?;
-            return Ok(ForegroundEnd::Disconnected(name));
-        }
-        // Keep the foreground session alive while the daemon verifies its new saved session.
-        std::thread::spawn(move || {
-            let _ = copy_to_ssh(from_daemon, to_ssh);
-        });
-        let saved = connect()?
-            .call::<MachineAdd>(MachineAddArgs {
-                ssh_destination: destination.clone(),
-                remote_home: authorized.remote_home,
-                machine_id: connected.machine.machine_id,
-            })
-            .map_err(|error| about_connection(&destination, error))?;
-        if saved.first_connection && !connected.first_connection {
-            print_trust(&saved.machine);
-        }
-        println_or_end!(
-            "Saved the connection to {}.",
-            display_name(&saved.machine.name)
-        );
-        print_logout_cleanup(&saved.machine);
-        Ok(ForegroundEnd::Saved)
+            ForegroundEnd::Disconnected(name)
+        };
+        copy_to_ssh(from_daemon, to_ssh)?;
+        Ok(end)
     })();
 
     let ssh_closed = matches!(input_result.try_recv(), Ok(Ok(_)));
     let _ = connection.shutdown(Shutdown::Both);
-    if !ssh_closed && !matches!(result, Ok(ForegroundEnd::Saved)) {
+    if !ssh_closed {
         let _ = child.kill();
     }
     let status = child.wait()?;
-    let destination = display_name(&destination);
     match result? {
         ForegroundEnd::Saved => Ok(0),
         ForegroundEnd::Disconnected(machine) => Err(Problem::ConnectionLost {
             machine,
-            destination,
+            destination: display_name(&destination),
         }
         .into()),
-        ForegroundEnd::BeforeHandshake => match status.code() {
-            Some(127 | 9009) => Err(Problem::NoFacade { destination }.into()),
-            Some(0) => Err(Problem::SshClosed { destination }.into()),
-            code => {
-                let said = ssh_said.join().unwrap_or_default();
-                let why = match said.is_empty() {
-                    false => said,
-                    true => errors::ssh_exit(code),
-                };
-                Err(Problem::SshFailed { destination, why }.into())
-            }
-        },
+        ForegroundEnd::BeforeHandshake => Err(ssh_failure(
+            &destination,
+            status,
+            ssh_said.join().unwrap_or_default(),
+        )),
     }
 }
 
@@ -355,38 +657,20 @@ fn foreground(
 /// line that is not blank once SSH closes it.
 fn pass_on_stderr(stderr: Option<std::process::ChildStderr>) -> std::thread::JoinHandle<String> {
     std::thread::spawn(move || {
-        let Some(stderr) = stderr else {
-            return String::new();
-        };
         let mut last = String::new();
+        let Some(stderr) = stderr else {
+            return last;
+        };
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            eprintln!("{line}");
-            if !line.trim().is_empty() {
-                last = line.trim().to_string();
+            // A saved link may still be running after its foreground command closes the pipe.
+            let _ = writeln!(io::stderr(), "{line}");
+            let line = line.trim();
+            if !line.is_empty() {
+                last = line.to_owned();
             }
         }
         last
     })
-}
-
-/// Starts OpenSSH with pipes for its standard input and output.
-fn spawn_ssh(mut command: Command) -> io::Result<(Child, ChildStdin, ChildStdout)> {
-    #[cfg(windows)]
-    {
-        let stdio = ssh::ssh_stdio()?;
-        let child = command.stdin(stdio.stdin).stdout(stdio.stdout).spawn()?;
-        Ok((child, stdio.to_ssh, stdio.from_ssh))
-    }
-    #[cfg(not(windows))]
-    {
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
-        let to_ssh = child.stdin.take().expect("stdin was piped");
-        let from_ssh = child.stdout.take().expect("stdout was piped");
-        Ok((child, to_ssh, from_ssh))
-    }
 }
 
 /// Passes machine frames unchanged and handles the local daemon's handshake outcome.
@@ -444,52 +728,44 @@ fn print_logout_cleanup(machine: &MachineHello) {
 /// Prints one row per machine, this one first, and a warning for each saved connection that needs
 /// an SSH login.
 fn print_table(machines: &[MachineInfo], local_machine_id: &str) {
-    let identities: Vec<_> = machines
-        .iter()
-        .map(|machine| MachineIdentity {
-            machine_id: machine.machine_id.clone(),
-            name: machine.name.clone(),
-        })
-        .collect();
     let label = |id: &str| {
-        identities
+        machines
             .iter()
             .find(|machine| machine.machine_id == id)
-            .map(|machine| display_machine_selector(machine, &identities))
-            .unwrap_or_else(|| format!("id:{}", short_machine_id(id)))
+            .map_or_else(|| short_machine_id(id), |machine| machine.selector.clone())
     };
     let mut ordered: Vec<&MachineInfo> = machines.iter().collect();
     ordered.sort_by_key(|machine| machine.machine_id != local_machine_id);
-    let saved_here = |machine: &MachineInfo| -> Vec<&MachineConnection> {
-        machines
-            .iter()
-            .flat_map(|any| &any.connections)
-            .filter(|connection| {
-                connection.kind == ConnectionKind::Saved
-                    && connection.initiator_machine_id == local_machine_id
-                    && connection.machine_id == machine.machine_id
-                    && connection.ssh_destination.is_some()
-            })
-            .fold(Vec::new(), |mut unique, connection| {
-                if !unique.iter().any(|seen: &&MachineConnection| {
-                    seen.ssh_destination == connection.ssh_destination
-                        && seen.remote_home == connection.remote_home
-                }) {
-                    unique.push(connection);
-                }
-                unique
-            })
-    };
+    let saved_here = ordered
+        .first()
+        .filter(|machine| machine.machine_id == local_machine_id)
+        .map_or(&[][..], |machine| machine.connections.as_slice());
     let mut logins = Vec::new();
+    let mut ssh_errors = Vec::new();
     let rows: Vec<Vec<String>> = ordered
         .iter()
         .map(|machine| {
-            let saved = saved_here(machine);
-            let needs_login = saved
+            let saved = saved_here
                 .iter()
-                .find_map(|connection| connection.ssh_interaction.as_ref());
-            if let Some(interaction) = needs_login {
-                logins.push((label(&machine.machine_id), interaction.command.clone()));
+                .filter(|connection| {
+                    connection.kind == ConnectionKind::Saved
+                        && connection.initiator_machine_id == local_machine_id
+                        && connection.machine_id == machine.machine_id
+                        && connection.ssh_destination.is_some()
+                })
+                .map(|connection| {
+                    let arguments = saved_arguments(connection);
+                    if connection.state == ConnectionState::SshInteractionRequired {
+                        let mut repair = ["facade", "machine", "add"].map(str::to_owned).to_vec();
+                        repair.extend(arguments.iter().cloned());
+                        logins.push((&machine.selector, repair));
+                    }
+                    errors::repair_command(&arguments).unwrap_or_else(|words| words.join(" "))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            if let Some(error) = &machine.ssh_error {
+                ssh_errors.push((&machine.selector, error));
             }
             let route = match machine.route.as_deref() {
                 Some([]) => "this machine".to_string(),
@@ -502,51 +778,112 @@ fn print_table(machines: &[MachineInfo], local_machine_id: &str) {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                None if needs_login.is_some()
-                    || machine.connections.iter().any(|connection| {
-                        connection.state == ConnectionState::SshInteractionRequired
-                    }) =>
-                {
-                    "needs SSH login".to_string()
-                }
-                None => "unreachable".to_string(),
+                None => String::new(),
             };
-            let saved = saved
-                .iter()
-                .map(|connection| {
-                    let destination = connection.ssh_destination.as_deref().unwrap_or_default();
-                    match &connection.remote_home {
-                        Some(home) => format!("{destination} --home {home}"),
-                        None => destination.to_string(),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
+            let state = match machine.state {
+                MachineState::Online => "online",
+                MachineState::Connecting => "connecting",
+                MachineState::Sleeping => "sleeping",
+                MachineState::Unreachable => "unreachable",
+                MachineState::SshInteractionRequired => "needs SSH login",
+            };
             vec![
                 machine.name.clone(),
-                machine_id_selector(&machine.machine_id, &identities),
+                short_machine_id(&machine.machine_id),
+                machine.selector.clone(),
                 machine
                     .build
                     .as_deref()
                     .map_or("", facade_base::build_version)
                     .to_owned(),
+                state.to_owned(),
                 route,
+                machine.last_seen.clone().unwrap_or_default(),
                 saved,
             ]
         })
         .collect();
     println_or_end!(
         "{}",
-        table(&["NAME", "ID", "VERSION", "ROUTE", "SAVED"], &rows)
+        table(
+            &[
+                "NAME",
+                "ID",
+                "SELECTOR",
+                "VERSION",
+                "STATE",
+                "ROUTE",
+                "LAST SEEN",
+                "SAVED"
+            ],
+            &rows,
+        )
     );
+    for (machine, error) in ssh_errors {
+        eprintln!("warning: SSH to {}: {error}", display_name(machine));
+    }
     for (machine, repair) in logins {
         eprintln!(
             "warning: {} needs an SSH login; {}",
-            display_name(&machine),
+            display_name(machine),
             repair_tip(&repair)
         );
     }
     if machines.len() == 1 {
         eprintln!("No other machines. Run 'facade machine add <DESTINATION>' to connect one.");
+    }
+}
+
+fn saved_arguments(connection: &MachineConnection) -> Vec<String> {
+    let mut arguments = Vec::new();
+    if let Some(home) = &connection.remote_home {
+        arguments.extend(["--home".to_owned(), home.clone()]);
+    }
+    if connection.ssh_args.is_empty() {
+        arguments.extend(connection.ssh_destination.iter().cloned());
+    } else {
+        arguments.extend(connection.ssh_args.iter().cloned());
+    }
+    arguments
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MachineListResult, machine_list_json};
+    use serde_json::json;
+
+    #[test]
+    fn machine_list_json_preserves_routes_and_connection_details_from_the_same_v3_reply() {
+        let wire = json!({ "machines": [
+            {
+                "machine_id": "here", "boot_id": "boot", "name": "local", "build": "0.1.6+test",
+                "selector": "local", "state": "online", "route": [],
+                "connections": [{
+                    "machine_id": "peer", "initiator_machine_id": "here", "kind": "temporary",
+                    "state": "connected",
+                }],
+            },
+            {
+                "machine_id": "peer", "name": "reachable", "selector": "reachable",
+                "state": "online", "route": ["relay", "peer"],
+                "connections": [{
+                    "machine_id": "here", "initiator_machine_id": "here", "kind": "saved",
+                    "ssh_destination": "qa@peer", "ssh_args": ["-p", "2222", "qa@peer"],
+                    "remote_home": "/home/qa/facade", "state": "unavailable",
+                }],
+            },
+            {
+                "machine_id": "closed", "name": "offline", "selector": "offline",
+                "state": "ssh_interaction_required", "last_seen": "2026-11-18T20:00:55.123Z",
+                "ssh_error": "qa@closed: Permission denied (publickey,password).",
+                "connections": [{
+                    "machine_id": "here", "initiator_machine_id": "here", "kind": "saved",
+                    "ssh_destination": "qa@closed", "state": "ssh_interaction_required",
+                    "ssh_interaction": { "reason": "needs a login", "command": ["ssh", "qa@closed"] },
+                }],
+            },
+        ] });
+        let list: MachineListResult = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(machine_list_json(&list).unwrap(), wire);
     }
 }

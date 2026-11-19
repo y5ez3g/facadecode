@@ -261,6 +261,9 @@ pub(crate) enum MachineAction {
         #[arg(value_name = "NAME", help = "New name")]
         name: String,
     },
+    // Holds the SSH session after the public add command returns.
+    #[command(hide = true)]
+    Link(SshTarget),
     // For Facade: the far end of a machine connection, which SSH runs on the other machine.
     #[command(hide = true)]
     Serve(ServeArgs),
@@ -271,9 +274,11 @@ pub(crate) enum MachineAction {
 pub(crate) struct SshTarget {
     #[arg(
         value_name = "DESTINATION",
+        required = true,
+        num_args = 1,
         help = "SSH host from your SSH config, or user@host"
     )]
-    pub(crate) ssh_destination: String,
+    pub(crate) ssh_args: Vec<String>,
     #[arg(
         long,
         value_name = "PATH",
@@ -289,6 +294,8 @@ pub(crate) struct ServeArgs {
     pub(crate) home: Option<std::path::PathBuf>,
     #[arg(long)]
     pub(crate) home_hex: Option<String>,
+    #[arg(long)]
+    pub(crate) no_start: bool,
 }
 
 /// `start`'s Arguments section, which shows PROGRAM and its arguments as two arguments though

@@ -386,16 +386,29 @@ fn reach(
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
     timeout: Duration,
 ) -> Result<DaemonClient, ConnectFailure> {
-    reach_daemon(cancelled, timeout, |socket, deadline| {
+    reach_daemon(true, cancelled, timeout, |socket, deadline| {
         DaemonClient::connect(socket, identity, deadline, opening)
     })
 }
 
 /// Opens the daemon's socket for the machine hello arriving from SSH.
-pub(super) fn machine_socket() -> anyhow::Result<ClientSocket> {
-    Ok(reach_daemon(
+pub(super) fn machine_socket(wake: bool) -> anyhow::Result<Option<ClientSocket>> {
+    if !wake {
+        let home = facade_base::paths::core_dir()?;
+        if service::live_holder(&home, Service::Daemon)?.is_none()
+            && service::live_holder(&home, Service::Keeper)?.is_none()
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(reach_daemon(
+        wake,
         &|| false,
-        DAEMON_CONNECT_TIMEOUT,
+        if wake {
+            DAEMON_CONNECT_TIMEOUT
+        } else {
+            RUNNING_TIMEOUT
+        },
         |socket, _| match ClientSocket::connect(socket) {
             Ok(client) => Ok(Some(client)),
             Err(error) if transient_transport(&error) => Ok(None),
@@ -405,15 +418,21 @@ pub(super) fn machine_socket() -> anyhow::Result<ClientSocket> {
             }
             .into()),
         },
-    )?)
+    )?))
 }
 
 fn reach_daemon<T>(
+    start_if_idle: bool,
     cancelled: &dyn Fn() -> bool,
     timeout: Duration,
     mut open: impl FnMut(&Path, Instant) -> anyhow::Result<Option<T>>,
 ) -> Result<T, ConnectFailure> {
-    let home = service::create_private_home().map_err(permanent)?;
+    let home = if start_if_idle {
+        service::create_private_home()
+    } else {
+        facade_base::paths::core_dir()
+    }
+    .map_err(permanent)?;
     let logs = home.join("logs");
     let socket = facade_base::paths::daemon_socket().map_err(permanent)?;
     let deadline = Instant::now() + timeout;
@@ -429,7 +448,8 @@ fn reach_daemon<T>(
         let daemon_runs = service::live_holder(&home, Service::Daemon)
             .map_err(permanent)?
             .is_some();
-        if !daemon_runs
+        if start_if_idle
+            && !daemon_runs
             && keeper.0.is_none()
             && service::live_holder(&home, Service::Keeper)
                 .map_err(permanent)?

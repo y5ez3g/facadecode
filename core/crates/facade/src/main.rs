@@ -98,7 +98,10 @@ fn main() {
         Command::Keeper
             | Command::Daemon { .. }
             | Command::Machine {
-                action: MachineAction::Add(_) | MachineAction::Connect(_) | MachineAction::Serve(_)
+                action: MachineAction::Add(_)
+                    | MachineAction::Connect(_)
+                    | MachineAction::Link(_)
+                    | MachineAction::Serve(_)
             }
     ) {
         facade_base::service::default_broken_pipe();
@@ -249,13 +252,13 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Keeper => facade_keeper::serve().map(|()| 0),
         Command::Daemon { detach: false } => facade_daemon::run().map(|()| 0),
         Command::Daemon { detach: true } => daemon_client::detach(),
-        Command::Machine { action } => machine::run(action, &connect_or_start, &|home| {
+        Command::Machine { action } => machine::run(action, &connect_or_start, &|home, wake| {
             if let Some(home) = home {
                 // SAFETY: the initial command chooses the home before opening a socket or starting
                 // any threads. The keeper and daemon inherit this home if started below.
                 unsafe { std::env::set_var("FACADE_HOME", home) };
             }
-            daemon_client::machine_socket()
+            daemon_client::machine_socket(wake)
         }),
         Command::Start {
             name,
