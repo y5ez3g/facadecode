@@ -6,20 +6,21 @@ use std::time::{Duration, Instant};
 
 use facade_base::address::{MachineSelector, parse_message_address};
 use facade_base::daemon::{
-    AgentSend, AgentSendArgs, AgentSendResult, DeliveredVia, DeliveryFailure, DeliveryStatus,
-    FACADE, Message, MessagesTopic, MessagesWatchArgs, SendOutcome, WindowDeliveryOutcome,
-    check_message_text,
+    AgentSend, AgentSendArgs, DeliveredVia, DeliveryFailure, DeliveryStatus, FACADE, Message,
+    MessagesTopic, MessagesWatchArgs, SendOutcome, WindowDeliveryOutcome, check_message_text,
 };
 use facade_base::daemon_client::{Cut, DaemonClient, cancel_line, upgrading};
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{MachineIdentity, MessageRef};
+use facade_base::machine::{ExecutionOutcome, MachineIdentity, MessageRef, Unavailable};
+use facade_base::operations::Operation;
+use facade_base::v3::{self, AgentKind};
 use serde_json::{Map, Value, json};
 
 use super::addresses::Addresses;
 use super::daemon_calls::{self, CONNECT_TIMEOUT, agent_failed, failed, machine_identities};
 use super::envelope::{self, MAX_INLINE_CHARS};
 use super::result_files::{self, ResultFile};
-use super::{Problems, Relay, ToolCall, optional, text};
+use super::{ActorIdentity, Problems, Relay, ToolCall, optional, text};
 use crate::HUMAN;
 
 /// The time a send answers within, from its line's arrival (RULES-1.2).
@@ -54,11 +55,8 @@ fn time_left(arrived: Instant) -> Option<Duration> {
 /// Sends a message for `agent` as `call`, and answers how its delivery ended.
 ///
 /// It connects and hands the message over within the send's 30 seconds and gives Facade what is
-/// left of them; with nothing left, it sends nothing and answers `timeout`. A send cut off by a newer
-/// Facade taking over, or by a restart, goes again with the same request ID to the daemon that
-/// answers next, and joins what the first did. Answers nothing where its client cancelled it before
-/// it was written, or Facade withdrew the message for the cancellation, as it does where its paste
-/// has not begun.
+/// left of them. A send cut off by takeover or restart goes again with the same request ID. Until
+/// the daemon confirms a receipt, an unresolved first attempt may still have sent the message.
 pub(super) fn send(
     relay: &Relay,
     agent: &str,
@@ -66,19 +64,77 @@ pub(super) fn send(
     call: &ToolCall,
 ) -> Option<Value> {
     let to = text(arguments, "to");
+    send_over::<AgentSend>(
+        relay,
+        call,
+        |timeout| daemon_calls::open(relay, &daemon_calls::as_agent(agent), timeout),
+        |left| AgentSendArgs {
+            to: to.clone(),
+            text: text(arguments, "text"),
+            reply_to: optional(arguments, "reply_to"),
+            reply_to_machine_id: None,
+            request_id: Some(call.request_id.clone()),
+            time_left_ms: left.map(|left| left.as_millis() as u64),
+        },
+        |sent, client| delivered(&sent.into(), &client.hello_result.machine_id),
+        |err, client| {
+            agent_failed(
+                client,
+                err,
+                &to,
+                "whether the message was sent is not known: it may arrive",
+                time_left(call.arrived),
+            )
+        },
+    )
+}
+
+pub(super) fn send_verified(
+    relay: &Relay,
+    actor: &ActorIdentity,
+    arguments: &Map<String, Value>,
+    call: &ToolCall,
+) -> Option<Value> {
+    send_over::<v3::AgentSend>(
+        relay,
+        call,
+        |timeout| {
+            daemon_calls::open_with(
+                || (relay.verified().services.connect)(&actor.reference),
+                timeout,
+            )
+        },
+        |left| v3::AgentSendArgs {
+            to: text(arguments, "to"),
+            text: text(arguments, "text"),
+            reply_to: optional(arguments, "reply_to"),
+            reply_to_machine_id: None,
+            request_id: Some(call.request_id.clone()),
+            time_left_ms: left.map(|left| left.as_millis() as u64),
+        },
+        |sent, _| delivered_verified(sent, actor.kind),
+        |err, _| {
+            failed(
+                err,
+                "whether the message was sent is not known: it may arrive",
+            )
+        },
+    )
+}
+
+fn send_over<O: Operation>(
+    relay: &Relay,
+    call: &ToolCall,
+    open: impl Fn(Duration) -> Result<DaemonClient, Value>,
+    send_args: impl Fn(Option<Duration>) -> O::Args,
+    receipt: impl FnOnce(O::Result, &mut DaemonClient) -> Value,
+    failure: impl FnOnce(&anyhow::Error, &mut DaemonClient) -> Value,
+) -> Option<Value> {
     let connect = || {
         let timeout = time_left(call.arrived)
             .unwrap_or_default()
             .min(CONNECT_TIMEOUT);
-        daemon_calls::open(relay, &daemon_calls::as_agent(agent), timeout)
-    };
-    let send_args = |left: Option<Duration>| AgentSendArgs {
-        to: to.clone(),
-        text: text(arguments, "text"),
-        reply_to: optional(arguments, "reply_to"),
-        reply_to_machine_id: None,
-        request_id: Some(call.request_id.clone()),
-        time_left_ms: left.map(|left| left.as_millis() as u64),
+        open(timeout)
     };
     let connected = connect();
     // Tests hold a send here, before its daemon call.
@@ -87,22 +143,27 @@ pub(super) fn send(
         Ok(client) => client,
         Err(failure) => return Some(failure),
     };
+    let mut outcome_unknown = false;
     let outcome = loop {
         let Some(left) = time_left(call.arrived) else {
+            if outcome_unknown {
+                return Some(send_unconfirmed());
+            }
             let message =
                 "the send's 30 seconds ran out before Facade could take it; nothing was sent";
             return Some(envelope::failure("timeout", message));
         };
-        let written = relay.sends.write(&call.key, &mut client, |client| {
-            client.begin_call::<AgentSend>(send_args(Some(left)))
-        })?;
-        let sent = written.and_then(|id| client.result::<AgentSend>(id));
-        let go_again = sent
-            .as_ref()
-            .is_err_and(|err| err.downcast_ref::<Cut>().is_some() || upgrading(err));
-        if !go_again {
+        let Some(written) = relay.sends.write(&call.key, &mut client, |client| {
+            client.begin_call::<O>(send_args(Some(left)))
+        }) else {
+            return outcome_unknown.then(send_unconfirmed);
+        };
+        let sent = written.and_then(|id| client.result::<O>(id));
+        let cut = sent.as_ref().is_err_and(|err| err.is::<Cut>());
+        if !cut && !sent.as_ref().is_err_and(upgrading) {
             break sent;
         }
+        outcome_unknown |= cut;
         client = match connect() {
             Ok(client) => client,
             Err(_) => break sent,
@@ -110,20 +171,33 @@ pub(super) fn send(
         // A cancellation after the cut went with the cut connection. The same request ID joins the
         // message the next daemon kept, and the cancellation follows it there.
         if relay.sends.cancelled(&call.key) {
-            break withdraw(&mut client, send_args(time_left(call.arrived)));
+            let Some(left) = time_left(call.arrived) else {
+                return outcome_unknown.then(send_unconfirmed);
+            };
+            break withdraw::<O>(&mut client, send_args(Some(left)));
         }
     };
     match outcome {
-        Ok(sent) => Some(delivered(&sent.into(), &client.hello_result.machine_id)),
+        Ok(sent) => Some(receipt(sent, &mut client)),
         Err(err) if relay.sends.cancelled(&call.key) && was_cancelled(&err) => None,
-        Err(err) => Some(agent_failed(
-            &mut client,
-            &err,
-            &to,
-            "whether the message was sent is not known: it may arrive",
-            time_left(call.arrived),
-        )),
+        Err(_) if outcome_unknown => Some(send_unconfirmed()),
+        Err(err) => Some(failure(&err, &mut client)),
     }
+}
+
+fn send_unconfirmed() -> Value {
+    let mut error = ErrorBody::new(
+        Reason::Unavailable,
+        "the original send's delivery outcome is unknown",
+    );
+    error.data.unavailable = Some(Unavailable {
+        execution: ExecutionOutcome::OutcomeUnknown,
+        machine: None,
+        window: None,
+        matches: Vec::new(),
+        unanswered: Vec::new(),
+    });
+    envelope::refusal(&error)
 }
 
 fn was_cancelled(err: &anyhow::Error) -> bool {
@@ -134,10 +208,26 @@ fn was_cancelled(err: &anyhow::Error) -> bool {
 /// Sends a message again by its request ID and cancels it at once on the same connection: the
 /// daemon withdraws the message it kept where its paste has not begun, and otherwise answers what
 /// became of it.
-fn withdraw(client: &mut DaemonClient, args: AgentSendArgs) -> anyhow::Result<AgentSendResult> {
-    let id = client.begin_call::<AgentSend>(args)?;
+fn withdraw<O: Operation>(client: &mut DaemonClient, args: O::Args) -> anyhow::Result<O::Result> {
+    let id = client.begin_call::<O>(args)?;
     client.writer.write_all(&cancel_line(id))?;
-    client.result::<AgentSend>(id)
+    client.result::<O>(id)
+}
+
+fn delivered_verified(sent: v3::SendResult, sender: AgentKind) -> Value {
+    let delivery = &sent.message.delivery;
+    let how = match delivery_word(delivery.status, delivery.delivered_via) {
+        Some(how) => how,
+        None => return delivery_failed(delivery, &sent.message.to, sent.withdrawn),
+    };
+    let mut data = json!({ "id": sent.id, "delivery": how });
+    if sender == AgentKind::Guest {
+        data["next"] = json!({
+            "tool": "read_messages",
+            "arguments": { "wait": true, "reply_to": sent.id },
+        });
+    }
+    envelope::success(data)
 }
 
 /// The stored message reference. The local inbox supplies the machine for its own records.
@@ -174,29 +264,35 @@ fn delivered(sent: &SendOutcome, local_machine: &str) -> Value {
             Err(failure) => failure,
         };
     }
-    let how = match (delivery.status, delivery.delivered_via) {
-        (DeliveryStatus::Success, Some(DeliveredVia::ReadByRecipient)) => "read_by_recipient",
-        (DeliveryStatus::Success, _) => "typed_into_input",
-        // A guest takes its messages at its next turn: the send ends here.
-        (DeliveryStatus::Pending, _) => "waiting_in_inbox",
-        _ => {
-            let mut words = delivery.failure_words(&format!("#{}", message.to));
-            if sent.withdrawn {
-                words += &format!(
-                    "; it was withdrawn from #{}'s inbox, so it is safe to send it again later",
-                    message.to
-                );
-            }
-            let reason = serde_json::to_value(delivery.reason.unwrap_or(DeliveryFailure::Unknown))
-                .ok()
-                .and_then(|reason| reason.as_str().map(str::to_string))
-                .unwrap_or_default();
-            return envelope::failure(&reason, words);
-        }
+    let how = match delivery_word(delivery.status, delivery.delivered_via) {
+        Some(how) => how,
+        None => return delivery_failed(delivery, &format!("#{}", message.to), sent.withdrawn),
     };
     envelope::success(json!({
         "id": id, "address": address, "delivery": how
     }))
+}
+
+fn delivery_word(status: DeliveryStatus, via: Option<DeliveredVia>) -> Option<&'static str> {
+    match (status, via) {
+        (DeliveryStatus::Success, Some(DeliveredVia::ReadByRecipient)) => Some("read_by_recipient"),
+        (DeliveryStatus::Success, _) => Some("typed_into_input"),
+        (DeliveryStatus::Pending, _) => Some("waiting_in_inbox"),
+        _ => None,
+    }
+}
+
+fn delivery_failed(delivery: &facade_base::daemon::Delivery, to: &str, withdrawn: bool) -> Value {
+    let mut words = delivery.failure_words(to);
+    if withdrawn {
+        words +=
+            &format!("; it was withdrawn from {to}'s inbox, so it is safe to send it again later");
+    }
+    let reason = serde_json::to_value(delivery.reason.unwrap_or(DeliveryFailure::Unknown))
+        .ok()
+        .and_then(|reason| reason.as_str().map(str::to_string))
+        .unwrap_or_default();
+    envelope::failure(&reason, words)
 }
 
 /// A pending repeat can carry the original receipt with window outcomes still unknown.
@@ -377,7 +473,7 @@ pub(super) fn read(client: &mut DaemonClient, arguments: &Map<String, Value>) ->
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::WindowRef;
+    use facade_base::daemon::{MessagesSnapshot, WindowRef};
 
     use super::*;
 
@@ -397,12 +493,18 @@ mod tests {
             machine_id: remote.into(),
             name: "gpu".into(),
         }];
+        let snapshot = MessagesSnapshot {
+            messages: vec![message],
+            ..MessagesSnapshot::default()
+        };
         let view = |here: &str, machines: &[MachineIdentity]| {
-            view_of(&message, &Addresses { here, machines })
+            let (count, result) = super::super::project_inbox(&snapshot, here, machines).unwrap();
+            assert_eq!(count, 1);
+            result["data"]["messages"][0].clone()
         };
         let named = view(local, &machines);
-        assert_eq!(named["from"], "#a7@gpu");
-        assert_eq!(named["reply_to"], "#m3@gpu");
+        assert_eq!(named["from"], "a7@gpu");
+        assert_eq!(named["reply_to"], "m3@gpu");
         assert!(named.get("from_address").is_none());
         assert!(named.get("from_machine_id").is_none());
         assert!(named.get("reply_to_machine_id").is_none());
@@ -418,21 +520,17 @@ mod tests {
             },
         ]);
         let duplicate = view(local, &machines);
-        assert_eq!(duplicate["from"], "#a7@id:3f9a2c1d0");
-        assert_eq!(duplicate["reply_to"], "#m3@id:3f9a2c1d0");
-        assert_eq!(view(remote, &machines)["from"], "#a7");
+        assert_eq!(duplicate["from"], format!("a7@{remote}"));
+        assert_eq!(duplicate["reply_to"], format!("m3@{remote}"));
+        let same_machine = view(remote, &machines);
+        assert_eq!(same_machine["from"], format!("a7@{remote}"));
+        assert_eq!(same_machine["reply_to"], "m3");
 
         let exact = view(local, &[]);
-        assert_eq!(exact["from"], "#a7@id:3f9a2c1d0ad14bd3a032a6f7b4f89ac4");
-        assert_eq!(exact["reply_to"], "#m3@id:3f9a2c1d0ad14bd3a032a6f7b4f89ac4");
-        assert_eq!(exact["id"], "#m42");
-        assert_eq!(
-            exact["address"],
-            format!(
-                "#m42@{}",
-                facade_base::address::exact_machine_selector(local)
-            )
-        );
+        assert_eq!(exact["from"], "a7@3f9a2c1d");
+        assert_eq!(exact["reply_to"], "m3@3f9a2c1d");
+        assert_eq!(exact["id"], "m42");
+        assert_eq!(exact["text"], "Ready");
     }
 
     #[test]

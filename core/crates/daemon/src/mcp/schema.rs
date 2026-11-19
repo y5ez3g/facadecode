@@ -72,7 +72,9 @@ fn read_fields(
         let path = owner.path(key);
         match given.get(key) {
             Some(Value::String(_))
-                if matches!(owner, Owner::Arguments("start_agent")) && key == "worktree" =>
+                if matches!(owner, Owner::Arguments("start_agent"))
+                    && key == "worktree"
+                    && property["type"] == "object" =>
             {
                 problems.add(r#"worktree must be an object. Use {"branch": "topic"}"#);
             }

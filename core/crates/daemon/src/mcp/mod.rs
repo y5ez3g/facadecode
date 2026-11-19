@@ -14,12 +14,15 @@ mod daemon_calls;
 mod envelope;
 mod guest_sessions;
 mod in_flight;
+mod inbox_page;
 mod instructions;
 mod lines;
 mod message_tools;
 mod result_files;
 mod schema;
 mod terminal_tools;
+pub(crate) mod verified;
+mod verified_tools;
 
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex, PoisonError};
@@ -30,7 +33,9 @@ use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+pub(crate) use inbox_page::project_inbox;
 pub(crate) use result_files::{clean_results, results_folder};
+pub(crate) use verified::{ActorIdentity, ActorServices};
 
 /// The version of the relay contract this daemon speaks, as a relay's hello names it.
 pub(crate) const RELAY_CONTRACT: u32 = 1;
@@ -88,14 +93,22 @@ pub(crate) struct Relay {
     /// The relay's process and when it started: together they name its calls at every daemon.
     pid: u32,
     birth: String,
-    connect: Connect,
-    join: JoinMember,
-    /// The member this relay serves, once it joined or the daemon found it again.
-    member: Mutex<Option<String>>,
+    mode: Mode,
     /// Its `send_message` calls not yet answered.
     sends: in_flight::Sends,
     /// The connection that shows the daemon its agent's tools are there, once they are.
     presence: Mutex<Option<DaemonClient>>,
+}
+
+enum Mode {
+    Legacy(Legacy),
+    Verified(verified::Verified),
+}
+
+struct Legacy {
+    connect: Connect,
+    join: JoinMember,
+    member: Mutex<Option<String>>,
 }
 
 impl Relay {
@@ -108,6 +121,33 @@ impl Relay {
         connect: Connect,
         join: JoinMember,
     ) -> Result<Relay, ErrorBody> {
+        Self::new(
+            params,
+            pid,
+            birth,
+            Mode::Legacy(Legacy {
+                connect,
+                join,
+                member: Mutex::default(),
+            }),
+        )
+    }
+
+    pub(crate) fn of_verified(
+        params: Value,
+        pid: u32,
+        birth: String,
+        services: ActorServices,
+    ) -> Result<Relay, ErrorBody> {
+        Self::new(
+            params,
+            pid,
+            birth,
+            Mode::Verified(verified::Verified::new(services)),
+        )
+    }
+
+    fn new(params: Value, pid: u32, birth: String, mode: Mode) -> Result<Relay, ErrorBody> {
         let hello: RelayHelloParams = decode_arguments(params)?;
         if hello.relay != RELAY_CONTRACT {
             let message = format!(
@@ -120,9 +160,7 @@ impl Relay {
             hello,
             pid,
             birth,
-            connect,
-            join,
-            member: Mutex::default(),
+            mode,
             sends: in_flight::Sends::default(),
             presence: Mutex::default(),
         })
@@ -155,7 +193,11 @@ impl Relay {
     /// Serves member `id` from now on: the daemon found the member this relay joined as before it
     /// restarted.
     pub(crate) fn serve_member(&self, id: String) {
-        *self.member.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+        *self
+            .legacy()
+            .member
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(id);
     }
 
     /// Notes or cancels a call as its line is read, before it waits for a thread. True where the
@@ -168,7 +210,31 @@ impl Relay {
     /// `serves`: none for a notification or a response. It waits on the daemon, so it runs in a
     /// blocking task.
     pub(crate) fn respond(&self, serves: &Serves, line: &[u8], arrived: Instant) -> Option<Value> {
-        lines::respond(self, serves, line, arrived, &DEFINITIONS, dispatch_tool)
+        lines::respond(self, Some(serves), line, arrived)
+    }
+
+    pub(crate) fn respond_verified(&self, line: &[u8], arrived: Instant) -> Option<Value> {
+        lines::respond(self, None, line, arrived)
+    }
+
+    pub(crate) fn hold_verified_presence(&self) {
+        if let Mode::Verified(verified) = &self.mode {
+            verified.hold_presence(self);
+        }
+    }
+
+    fn legacy(&self) -> &Legacy {
+        let Mode::Legacy(legacy) = &self.mode else {
+            unreachable!("legacy relay entry point");
+        };
+        legacy
+    }
+
+    fn verified(&self) -> &verified::Verified {
+        let Mode::Verified(verified) = &self.mode else {
+            unreachable!("verified relay entry point");
+        };
+        verified
     }
 
     /// Shows the daemon that `agent`'s tools are there, from now until the relay's connection ends,
@@ -176,7 +242,7 @@ impl Relay {
     pub(crate) fn hold_presence(&self, agent: &str) {
         let mut presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
         if presence.is_none() {
-            match (self.connect)(&daemon_calls::as_agent(agent)) {
+            match (self.legacy().connect)(&daemon_calls::as_agent(agent)) {
                 Ok(held) => *presence = held,
                 Err(err) => facade_base::log::write(
                     "facade-mcp",
@@ -189,7 +255,11 @@ impl Relay {
 
     /// Whom the server acts for now: the member, once one joined on a relay that served no one.
     fn acting_for(&self, serves: &Serves) -> Serves {
-        let member = self.member.lock().unwrap_or_else(PoisonError::into_inner);
+        let member = self
+            .legacy()
+            .member
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         match (serves, member.as_ref()) {
             (Serves::Nobody, Some(id)) => Serves::Member(id.clone()),
             _ => serves.clone(),
@@ -199,11 +269,12 @@ impl Relay {
     /// The member this relay serves, joining first where it has none. Held while it joins, so one
     /// relay joins once.
     fn member_or_join(&self, client: Option<&str>) -> Result<String, ErrorBody> {
-        let mut member = self.member.lock().unwrap_or_else(PoisonError::into_inner);
+        let legacy = self.legacy();
+        let mut member = legacy.member.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(id) = member.as_ref() {
             return Ok(id.clone());
         }
-        let id = (self.join)(client)?;
+        let id = (legacy.join)(client)?;
         *member = Some(id.clone());
         Ok(id)
     }
@@ -221,6 +292,11 @@ impl Relay {
 /// The tools as `tools/list` describes them, in order, without a result schema.
 static DEFINITIONS: LazyLock<Vec<Value>> = LazyLock::new(|| {
     serde_json::from_str(facade_base::tools::DEFINITIONS).expect("the tool definitions are JSON")
+});
+
+static V3_DEFINITIONS: LazyLock<Vec<Value>> = LazyLock::new(|| {
+    serde_json::from_str(facade_base::tools::V3_DEFINITIONS)
+        .expect("the v3 tool definitions are JSON")
 });
 
 #[derive(Clone, Copy)]
@@ -339,13 +415,21 @@ impl Problems {
 
 /// Reads the arguments as the tool's schema describes them, then checks the tool's extra rules.
 fn validate_tool(name: &str, given: &Value) -> Result<(Tool, Map<String, Value>), Value> {
+    validate(name, given, &DEFINITIONS)
+}
+
+fn validate(
+    name: &str,
+    given: &Value,
+    definitions: &[Value],
+) -> Result<(Tool, Map<String, Value>), Value> {
     let found = Tool::named(name).zip(
-        DEFINITIONS
+        definitions
             .iter()
             .find(|definition| definition["name"] == name),
     );
     let Some((tool, definition)) = found else {
-        let names: Vec<&str> = DEFINITIONS
+        let names: Vec<&str> = definitions
             .iter()
             .filter_map(|definition| definition["name"].as_str())
             .collect();
@@ -426,9 +510,11 @@ impl Relay {
             hello,
             pid: 7,
             birth: "1".to_string(),
-            connect: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
-            join: Box::new(|_| Err(ErrorBody::internal("unit tests have no daemon"))),
-            member: Mutex::default(),
+            mode: Mode::Legacy(Legacy {
+                connect: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
+                join: Box::new(|_| Err(ErrorBody::internal("unit tests have no daemon"))),
+                member: Mutex::default(),
+            }),
             sends: in_flight::Sends::default(),
             presence: Mutex::default(),
         }
@@ -481,7 +567,7 @@ mod tests {
 
     #[test]
     fn the_tools_are_the_eight_in_their_order() {
-        let names: Vec<&str> = DEFINITIONS
+        let names: Vec<&str> = V3_DEFINITIONS
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect();
@@ -502,26 +588,17 @@ mod tests {
 
     #[test]
     fn start_agent_checks_folder_and_worktree_before_dispatch() {
-        let (_, args) = validate_tool("start_agent", &json!({ "cli": "fake" })).unwrap();
+        let validate = |args: &Value| super::validate("start_agent", args, &V3_DEFINITIONS);
+        let (_, args) = validate(&json!({ "cli": "fake" })).unwrap();
         assert!(!args.contains_key("folder"));
-        for (args, base) in [
-            (
-                json!({ "cli": "fake", "worktree": { "branch": "review" } }),
-                "HEAD",
-            ),
-            (
-                json!({ "cli": "fake", "worktree": { "branch": "review", "base_ref": "v1" } }),
-                "v1",
-            ),
-        ] {
-            let (_, args) = validate_tool("start_agent", &args).unwrap();
-            assert_eq!(
-                args["worktree"],
-                json!({ "branch": "review", "base_ref": base })
-            );
-        }
+        let (_, args) = validate(&json!({"cli": "fake", "worktree": "review"})).unwrap();
+        assert_eq!(args["worktree"], "review");
         for (args, message) in [
             (json!({}), "start_agent requires cli"),
+            (
+                json!({ "cli": "fake", "args": ["--example"] }),
+                "args is not an argument of start_agent",
+            ),
             (
                 json!({ "cli": "fake", "path": ".", "folder": "." }),
                 "unknown argument 'path' for start_agent. Use 'folder'",
@@ -535,31 +612,19 @@ mod tests {
                 "folder must not be empty",
             ),
             (
-                json!({ "cli": "fake", "worktree": "review" }),
-                r#"worktree must be an object. Use {"branch": "topic"}"#,
+                json!({ "cli": "fake", "worktree": { "branch": "review", "base_ref": "HEAD" } }),
+                "worktree must be a string, not an object",
             ),
             (
-                json!({ "cli": "fake", "worktree": r#"{"branch":"review"}"# }),
-                r#"worktree must be an object. Use {"branch": "topic"}"#,
+                json!({ "cli": "fake", "worktree": "" }),
+                "worktree must not be empty",
             ),
             (
-                json!({ "cli": "fake", "worktree": {} }),
-                "start_agent requires worktree.branch",
-            ),
-            (
-                json!({ "cli": "fake", "worktree": { "branch": "" } }),
-                "worktree.branch must not be empty",
-            ),
-            (
-                json!({ "cli": "fake", "worktree": { "branch": "review", "base_ref": "" } }),
-                "worktree.base_ref must not be empty",
-            ),
-            (
-                json!({ "cli": "fake", "worktree": { "branch": "review", "path": "." } }),
-                "path is not a field of worktree",
+                json!({ "cli": "fake", "window": "win-1" }),
+                "window is not an argument of start_agent",
             ),
         ] {
-            let Err(failure) = validate_tool("start_agent", &args) else {
+            let Err(failure) = validate(&args) else {
                 panic!("accepted invalid start_agent arguments: {args}");
             };
             assert_eq!(failure["reason"], "invalid_argument", "{failure}");
@@ -569,11 +634,11 @@ mod tests {
 
     #[test]
     fn read_screen_requires_an_agent_and_defaults_lines_to_fifty() {
-        let (_, arguments) = validate_tool("read_screen", &json!({ "agent": "#a7" })).unwrap();
+        let validate = |args: &Value| super::validate("read_screen", args, &V3_DEFINITIONS);
+        let (_, arguments) = validate(&json!({ "agent": "a7" })).unwrap();
         assert_eq!(arguments["lines"], 50);
         for lines in [1, 2000] {
-            let (_, arguments) =
-                validate_tool("read_screen", &json!({ "agent": "#a7", "lines": lines })).unwrap();
+            let (_, arguments) = validate(&json!({ "agent": "a7", "lines": lines })).unwrap();
             assert_eq!(arguments["lines"], lines);
         }
         for (given, message) in [
@@ -582,15 +647,15 @@ mod tests {
                 "read_screen requires agent; nothing was done",
             ),
             (
-                json!({ "agent": "#a7", "lines": 0 }),
+                json!({ "agent": "a7", "lines": 0 }),
                 "lines must be from 1 to 2000, not 0; nothing was done",
             ),
             (
-                json!({ "agent": "#a7", "lines": 2001 }),
+                json!({ "agent": "a7", "lines": 2001 }),
                 "lines must be from 1 to 2000, not 2001; nothing was done",
             ),
         ] {
-            let Err(failure) = validate_tool("read_screen", &given) else {
+            let Err(failure) = validate(&given) else {
                 panic!("accepted invalid read_screen arguments: {given}");
             };
             assert_eq!(failure["reason"], "invalid_argument");

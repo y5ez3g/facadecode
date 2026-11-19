@@ -47,16 +47,23 @@ pub(super) fn open(
     identity: &Identity,
     timeout: Duration,
 ) -> Result<DaemonClient, Value> {
+    open_with(|| (relay.legacy().connect)(identity), timeout)
+}
+
+pub(super) fn open_with(
+    connect: impl Fn() -> anyhow::Result<Option<DaemonClient>>,
+    timeout: Duration,
+) -> Result<DaemonClient, Value> {
     let deadline = Instant::now() + timeout;
     loop {
-        let unavailable = match (relay.connect)(identity) {
+        let unavailable = match connect() {
             Ok(Some(client)) => return Ok(client),
             Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(RETRY_INTERVAL);
                 continue;
             }
             Ok(None) => format!(
-                "Facade did not answer within {} seconds; nothing was done",
+                "the Orchestrator did not respond within {} seconds; nothing was done",
                 timeout.as_secs()
             ),
             Err(err) => match err.downcast_ref::<ErrorBody>() {

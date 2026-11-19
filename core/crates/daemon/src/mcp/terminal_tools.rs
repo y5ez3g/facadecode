@@ -135,6 +135,16 @@ fn type_into(client: &mut DaemonClient, input: AgentTypeArgs) -> Value {
         Ok(_) => return envelope::success(json!({})),
         Err(err) => err,
     };
+    input_failure(&err, &agent, |consequence| {
+        agent_failed(client, &err, &agent, consequence, Some(CONNECT_TIMEOUT))
+    })
+}
+
+pub(super) fn input_failure(
+    err: &anyhow::Error,
+    agent: &str,
+    failed: impl FnOnce(&str) -> Value,
+) -> Value {
     match err.downcast_ref::<ErrorBody>() {
         Some(error) if error.data.reason == Reason::PartialInput => {
             let mut refusal = envelope::refusal(error);
@@ -144,14 +154,8 @@ fn type_into(client: &mut DaemonClient, input: AgentTypeArgs) -> Value {
             ));
             refusal
         }
-        _ => agent_failed(
-            client,
-            &err,
-            &agent,
-            &format!(
-                "whether the input reached {agent} is not known; read its screen before typing again"
-            ),
-            Some(CONNECT_TIMEOUT),
-        ),
+        _ => failed(&format!(
+            "whether the input reached {agent} is not known; read its screen before typing again"
+        )),
     }
 }

@@ -5,6 +5,7 @@
 
 use facade_base::daemon::WindowDeliveryOutcome;
 use facade_base::jsonrpc::{ErrorBody, SendFailure};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::addresses::Addresses;
@@ -20,6 +21,12 @@ pub(super) fn success(data: Value) -> Value {
         }
         _ => json!({ "status": "success" }),
     }
+}
+
+pub(super) fn encode(data: impl Serialize) -> Result<Value, ErrorBody> {
+    serde_json::to_value(data)
+        .map(success)
+        .map_err(ErrorBody::internal)
 }
 
 /// A failure for `reason`, a short word, saying in `message` what went wrong, whether anything was

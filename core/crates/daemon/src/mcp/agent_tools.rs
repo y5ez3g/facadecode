@@ -233,7 +233,7 @@ pub(super) fn start(
 }
 
 /// A start the daemon refused, saying where a worktree it made stays.
-fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
+pub(super) fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
     let mut refused = envelope::refusal_with_addresses(error, addresses);
     if let Some(unavailable) = &error.data.unavailable {
         refused["data"]["execution"] = json!(unavailable.execution);

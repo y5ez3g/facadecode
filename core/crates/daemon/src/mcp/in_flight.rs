@@ -13,6 +13,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use facade_base::daemon_client::{DaemonClient, cancel_line};
 use facade_base::paths::ClientSocket;
+use tokio::sync::watch;
+
+use crate::Cancel;
 
 /// A call under way.
 #[derive(Default)]
@@ -20,6 +23,7 @@ struct Pending {
     cancelled: bool,
     /// The daemon connection its call went out on, and the call's request ID there.
     written: Option<(ClientSocket, u64)>,
+    read: Option<watch::Sender<bool>>,
 }
 
 #[derive(Default)]
@@ -35,6 +39,23 @@ impl Sends {
         self.table().insert(key, Pending::default());
     }
 
+    pub(super) fn note_read(&self, key: String) {
+        self.table().insert(
+            key,
+            Pending {
+                read: Some(watch::Sender::new(false)),
+                ..Pending::default()
+            },
+        );
+    }
+
+    pub(super) fn read_cancel(&self, key: &str) -> Cancel {
+        self.table()
+            .get(key)
+            .and_then(|pending| pending.read.as_ref())
+            .map_or_else(Cancel::default, |read| Cancel::of(read.subscribe()))
+    }
+
     /// Cancels call `key` for its client. A call already written gets a `cancel` on its connection;
     /// one being written is cancelled by its own thread once it is. A call already answered stays.
     pub(super) fn cancel(&self, key: &str) {
@@ -44,6 +65,9 @@ impl Sends {
                 return;
             };
             pending.cancelled = true;
+            if let Some(read) = &pending.read {
+                read.send_replace(true);
+            }
             match &pending.written {
                 Some((connection, id)) => connection.try_clone().ok().map(|copy| (copy, *id)),
                 None => None,
