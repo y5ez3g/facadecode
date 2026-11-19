@@ -50,6 +50,7 @@ async fn carry(
         if reader.read_until(b'\n', &mut line).await? == 0 {
             return Ok(());
         }
+        let arrived = Instant::now();
         if super::is_closing_response(&line) {
             answered.notify_one();
             *closing_answered = true;
@@ -59,7 +60,7 @@ async fn carry(
             continue;
         }
         let (lines, outbox) = (lines.clone(), outbox.clone());
-        let (message, arrived) = (std::mem::take(&mut line), Instant::now());
+        let message = std::mem::take(&mut line);
         tokio::spawn(async move {
             let answering = lines.clone();
             let answer = tokio::task::spawn_blocking(move || answering.respond(&message, arrived))

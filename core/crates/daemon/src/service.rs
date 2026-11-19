@@ -173,6 +173,7 @@ impl server::Service for Daemon {
             },
             window,
             agent,
+            verified_actor: None,
         };
         Ok((result, client, presence))
     }
