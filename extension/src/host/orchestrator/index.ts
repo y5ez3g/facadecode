@@ -28,6 +28,8 @@ import { OrchestratorTerminals } from './terminals';
 import { DaemonError, type OrchestratorLink } from './types';
 import { openRustWorkspace } from './workspace';
 
+declare const FACADE_TEST_MODE: boolean;
+
 interface OrchestratorDeps {
 	readonly root: string;
 	readonly home: string;
@@ -147,8 +149,12 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 			}
 		};
 		const human: WindowHuman = new WindowHuman(run => agents.open(run));
+		const reportError: WindowHuman['error'] = (text, options) => {
+			if (typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE) { console.error(text); }
+			human.error(text, options);
+		};
 		const notifyError = (error: unknown): void => {
-			human.error(messageOf(error), { settingsFile: error instanceof HostSettingsError });
+			reportError(messageOf(error), { settingsFile: error instanceof HostSettingsError });
 		};
 		const agents = new OrchestratorAgents({
 			link, terminals, workspace, locations,
@@ -197,7 +203,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 			openSettings: () => settings.open().catch(notifyError),
 			extensionUri: context.extensionUri,
 			workspaceState: panelPreferences(context.workspaceState),
-			notifyError: (text, options) => human.error(text, options),
+			notifyError: reportError,
 			motion: reduced => terminals.systemMotion(reduced)
 		}), settings.register(), registerDaemonLog(link));
 

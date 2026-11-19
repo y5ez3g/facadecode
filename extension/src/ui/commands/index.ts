@@ -220,13 +220,7 @@ export function registerOrchestratorUi(deps: OrchestratorUiDeps): vscode.Disposa
 			const run = targetOf(arg, model, agents, true);
 			return run === undefined ? undefined : view.showDetails(run);
 		}),
-		...registerRustAgentCommands({
-			model, agents, actions, goToAgent: pickers.goToAgent,
-			notifyError: (text, options) => {
-				if (typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE) { console.error(text); }
-				deps.notifyError(text, options);
-			}
-		}),
+		...registerRustAgentCommands({ model, agents, actions, notifyError: deps.notifyError, goToAgent: pickers.goToAgent }),
 		...registerTestUi(model, view, agents)
 	];
 }

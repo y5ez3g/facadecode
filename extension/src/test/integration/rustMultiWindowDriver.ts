@@ -39,6 +39,7 @@ export interface WindowReady {
 	readonly home: string;
 	readonly machineId: string;
 	readonly platform: NodeJS.Platform;
+	readonly hostPid: number;
 }
 
 export interface SavedPin {
@@ -177,6 +178,13 @@ async function perform(action: Action): Promise<unknown> {
 			await until(`${action.name}'s pinned terminal`, async () => {
 				const current = await find();
 				return current?.pinned && hasAgentTab(current) || undefined;
+			}).catch(async error => {
+				const snapshot = await state();
+				const tabs = vscode.window.tabGroups.all.flatMap(group => group.tabs.map(tab => ({
+					label: tab.label, terminal: tab.input instanceof vscode.TabInputTerminal, column: group.viewColumn, pinned: tab.isPinned
+				})));
+				const terminals = vscode.window.terminals.map(terminal => ({ name: terminal.name, exit: terminal.exitStatus }));
+				throw new Error(`${(error as Error).message}\n${JSON.stringify({ cards: snapshot.cards, tabs, terminals })}`);
 			});
 			return true;
 		}
@@ -336,7 +344,7 @@ export async function activate(): Promise<void> {
 		const core = hello.result as HelloResult | undefined;
 		assert.ok(core?.protocol === 3 && core.machine_id, JSON.stringify(hello));
 		answer(`${control}.ready`, { result: {
-			folder, remote: vscode.env.remoteName ?? null, home, machineId: core.machine_id, platform: process.platform
+			folder, remote: vscode.env.remoteName ?? null, home, machineId: core.machine_id, platform: process.platform, hostPid: process.pid
 		} satisfies WindowReady });
 		void actions();
 	} catch (error) {

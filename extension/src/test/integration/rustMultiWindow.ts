@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { isDeepStrictEqual } from 'util';
 import type { V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
+import { isProcessRunning } from '../../base/system';
 import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
 import { callInCore, endEditors, normalizeDriveLetter, until } from './editors';
@@ -175,14 +176,28 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	await pinWindow.act({ kind: 'shell-pin', name, set: true });
 	await until('Pin to be visible in the other window', async () => (await cardIn(peerWindow))?.pinned || undefined);
 	await Promise.all([pinWindow.close(), peerWindow.close()]);
+	// Pin recovery groups live extension hosts. Let both hosts exit before the next opening.
+	await until('both closed windows to release their extension hosts', () =>
+		[pinWindow, peerWindow].every(window => !isProcessRunning(window.ready.hostPid)) || undefined);
 	run('stop', address);
 	await until('the pinned agent to stop', async () => (await inspect()).process === 'ended' || undefined);
 	const [restoredWindow, restoredPeer] = await Promise.all([open(folder, 'sh'), open(folder, 'sh2')]);
-	await Promise.all([restoredWindow, restoredPeer].map(window => window.act({ kind: 'shell-pin', name })));
 	const workspaces = path.join(env.FACADE_HOME!, 'extension', 'workspaces');
 	const files = fs.readdirSync(workspaces).map(key => path.join(workspaces, key, 'orchestrator-workspace.json'))
 		.filter(file => fs.existsSync(file));
 	assert.strictEqual(files.length, 1, 'two windows use one workspace roster');
+	const restoredPins = await Promise.allSettled([restoredWindow, restoredPeer].map(window => window.act({ kind: 'shell-pin', name })));
+	const failure = restoredPins.find(each => each.status === 'rejected');
+	if (failure) {
+		const core = await callInCore(env.FACADE_HOME!, 'agent.inspect', { agent: address }, [3, 3]).catch(error => String(error));
+		const directory = path.dirname(files[0]);
+		const recovery = fs.readdirSync(directory).filter(file => file.startsWith('orchestrator-pin-restore')).map(file => {
+			try { return [file, fs.readFileSync(path.join(directory, file), 'utf8')]; }
+			catch (error) { return [file, String(error)]; }
+		});
+		console.error('Shell Pin recovery', JSON.stringify({ core, recovery, windows: restoredPins.map(each => each.status === 'rejected' ? String(each.reason) : 'opened') }));
+		throw failure.reason;
+	}
 	const roster = () => JSON.parse(fs.readFileSync(files[0], 'utf8')) as {
 		members: readonly { machine_id: string; agent_id: string }[];
 		pins: readonly { machine_id: string; agent: string }[];
