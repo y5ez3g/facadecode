@@ -14,12 +14,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { coreProgram, EDITOR_FLAGS, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, windowsInCore } from './editors';
+import { coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, windowsInCore } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, seedLegacyPin, windowLifetime } from './windowLifetime';
-import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
+import { multiWindowDriverFiles, rustMultiWindow, shellHandoff, withRustWindows } from './rustMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -172,6 +172,9 @@ async function main(): Promise<void> {
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
 		'window.restoreWindows': 'none',
+		'update.mode': 'none',
+		'extensions.autoUpdate': false,
+		'extensions.autoCheckUpdates': false,
 		'facade.rustEngine': engine === 'rust' ? 'auto' : 'off'
 	};
 	/**
@@ -202,9 +205,11 @@ async function main(): Promise<void> {
 	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2) - its CLIs `clis` of Facade's
 	 * settings file, `yolo` there where given, and the editor's settings `more` beside the suite's.
 	 */
+	let testProfiles = 0;
 	const run = async (name: string, folder: string, env: { readonly [name: string]: string } = {}, clis: { readonly [name: string]: Entry } = {},
 		more: { readonly [setting: string]: unknown } = {}, claude = claudeConfig, yolo?: boolean) => {
-		const user = path.join(root, `u-${name}`);
+		const profile = editorProfile(root, `t${++testProfiles}`);
+		const { user } = profile;
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
 		// Each run numbers its agents from #a1: what an earlier run's CLIs recorded goes first
@@ -219,7 +224,7 @@ async function main(): Promise<void> {
 				vscodeExecutablePath: executable,
 				extensionDevelopmentPath: [extension, windowComponent],
 				extensionTestsPath: path.join(__dirname, 'index'),
-				launchArgs: [folder, '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, `x-${name}`), '--shared-data-dir', path.join(root, `s-${name}`), '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				launchArgs: [folder, '--disable-extensions', ...profile.args],
 				extensionTestsEnv: {
 					FACADE_HOME: facade,
 					FACADE_IT_RECORD: record,
@@ -227,7 +232,8 @@ async function main(): Promise<void> {
 					FACADE_IT_ENGINE: engine,
 					CLAUDE_CONFIG_DIR: claude,
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
-					...env
+					...env,
+					...profile.env
 				}
 			});
 		} finally {
@@ -245,11 +251,10 @@ async function main(): Promise<void> {
 		const suffix = `${cli.id}${expiry ? '-expiry' : reopening ? '-reopen' : ''}`;
 		// VS Code puts its main IPC socket below user data on macOS. Its already long canonical TMPDIR leaves no room for
 		// names such as u-conversion-opencode or u-conversion-claude-reopen (the Unix socket limit is 103 characters).
-		const profile = `${BUILT_INS.indexOf(cli)}${expiry ? 'e' : reopening ? 'r' : 'c'}`;
+		const profile = editorProfile(root, `${BUILT_INS.indexOf(cli)}${expiry ? 'e' : reopening ? 'r' : 'c'}`);
 		const solo = path.join(root, `solo-${suffix}`);
 		const second = path.join(root, `second-${suffix}`);
-		const user = path.join(root, `u-${profile}`);
-		const extensions = path.join(root, `x-${profile}`), shared = path.join(root, `s-${profile}`);
+		const { user } = profile;
 		const facade = path.join(home, `conversion-${suffix}`);
 		const out = path.join(root, `conversion-${suffix}.jsonl`);
 		const driver = path.join(root, `driver-${suffix}`);
@@ -274,11 +279,11 @@ async function main(): Promise<void> {
 			child.stderr?.on('data', append);
 			child.on('error', append);
 		};
-		const editorEnv = { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_ENGINE: engine,
+		const editorEnv = { ...process.env, ...passed, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_ENGINE: engine,
 			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
 			...!reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
-		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
 			stdio: ['ignore', 'pipe', 'pipe'],
 			env: editorEnv
@@ -320,7 +325,7 @@ async function main(): Promise<void> {
 				if (process.platform === 'darwin') {
 					await endEditors([editor]);
 				}
-				editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+				editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
 					`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
 					stdio: ['ignore', 'pipe', 'pipe'], env: editorEnv
 				});
@@ -377,7 +382,8 @@ async function main(): Promise<void> {
 	const pins = async () => {
 		const cli = BUILT_INS[0];
 		const folder = path.join(root, 'pins');
-		const user = path.join(root, 'u-p'), extensions = path.join(root, 'x-p'), shared = path.join(root, 's-p');
+		const profile = editorProfile(root, 'p');
+		const { user } = profile;
 		const facade = path.join(home, 'pins');
 		const out = path.join(root, 'pins.jsonl');
 		const driver = path.join(root, 'driver-pins');
@@ -393,10 +399,10 @@ async function main(): Promise<void> {
 			fs.rmSync(path.join(root, file));
 		}
 		let editorOutput = '';
-		const editor = spawn(executable, [folder, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+		const editor = spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
 			stdio: ['ignore', 'pipe', 'pipe'],
-			env: { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_PINS: out, CLAUDE_CONFIG_DIR: claudeConfig,
+			env: { ...process.env, ...passed, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_PINS: out, CLAUDE_CONFIG_DIR: claudeConfig,
 				...pinsPerGroup ? { FACADE_IT_PINS_PER_GROUP: pinsPerGroup } : {} }
 		});
 		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
@@ -476,15 +482,16 @@ async function main(): Promise<void> {
 	const crossWindow = async () => {
 		const peer = path.join(root, 'peer');
 		newRepository(peer);
-		const user = path.join(root, 'u-peer');
+		const profile = editorProfile(root, 'peer');
+		const { user } = profile;
 		const facade = path.join(home, 'cross');
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
 		facadeSettings(facade);
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
-		const editor = spawn(executable, [peer, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-peer'), '--shared-data-dir', path.join(root, 's-peer'),
+		const editor = spawn(executable, [peer, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, ...EDITOR_FLAGS], {
 			stdio: 'ignore',
-			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, CLAUDE_CONFIG_DIR: claudeConfig }
+			env: { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, CLAUDE_CONFIG_DIR: claudeConfig }
 		});
 		try {
 			// The other window is there once its component registered it on this computer
@@ -522,7 +529,8 @@ async function main(): Promise<void> {
 		const from = packages(released), to = packages(current ?? path.resolve(__dirname, '..', '..', '..', 'vsix'));
 		const folder = path.join(root, 'update');
 		newRepository(folder);
-		const user = path.join(root, 'u-upd'), extensions = path.join(root, 'x-upd'), shared = path.join(root, 's-upd');
+		const profile = editorProfile(root, 'upd');
+		const { user } = profile;
 		const facade = path.join(home, 'update'), out = path.join(root, 'update.jsonl'), driver = path.join(root, 'driver-update');
 		for (const dir of [path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
@@ -531,22 +539,21 @@ async function main(): Promise<void> {
 		// settings file, which the updated build's agents then start by (CONFIGURATION-6)
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
 			...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
-			...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])),
-			'extensions.autoUpdate': false, 'extensions.autoCheckUpdates': false, 'update.mode': 'none' }));
+			...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])) }));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'update-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'updateDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
-		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig };
+		const env = { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig };
 		const install = (files: readonly string[]) => {
 			for (const file of files) {
-				execFileSync(editorCli(executable), ['--user-data-dir', user, '--extensions-dir', extensions, '--install-extension', file, '--force'], { env, stdio: 'pipe', shell: process.platform === 'win32' });
+				execFileSync(editorCli(executable), [...profile.args, '--install-extension', file, '--force'], { env, stdio: 'pipe', shell: process.platform === 'win32' });
 			}
 		};
 		install(from);
 		let editorOutput = '';
-		const editor = spawn(executable, [folder, '--new-window', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+		const editor = spawn(executable, [folder, '--new-window', ...profile.args,
 			`--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { stdio: ['ignore', 'pipe', 'pipe'], env });
 		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
 		editor.stdout?.on('data', append);
@@ -641,8 +648,7 @@ async function main(): Promise<void> {
 			try {
 				await endEditors([editor]);
 			} finally {
-				endMatching(user);
-				endMatching(extensions);
+				endMatching(profile.env.VSCODE_PORTABLE);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
 			await endRust(facade);
 			}
@@ -694,7 +700,8 @@ async function main(): Promise<void> {
 	/** Real reload, close, reopen and daemon replacement on Rust, followed by saved Pin restoration (RULES-4.1, 4.2). */
 	const rustWindowLifetime = async () => {
 		const folder = path.join(root, 'lifetime');
-		const user = path.join(root, 'u-l'), extensions = path.join(root, 'x-l'), shared = path.join(root, 's-l');
+		const profile = editorProfile(root, 'l');
+		const { user } = profile;
 		const driver = path.join(root, 'driver-lifetime');
 		const facade = path.join(home, 'lifetime');
 		const out = path.join(root, 'lifetime.jsonl');
@@ -707,8 +714,9 @@ async function main(): Promise<void> {
 		}
 		facadeSettings(facade, alone('claude'));
 		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, 'lifetime-cli'), FACADE_IT_WINDOW_LIFETIME: out, CLAUDE_CONFIG_DIR: claudeConfig };
-		const start = () => spawn(executable, [folder, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
-			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+		const start = () => spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
+			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS],
+			{ env: { ...env, ...profile.env }, stdio: ['ignore', 'pipe', 'pipe'] });
 		const call = (...args: string[]) => execFileSync(corePrograms, args, { env, encoding: 'utf8', timeout: 20_000 });
 		console.log('\n  Journey: the Rust window lifetime and saved Pins');
 		try {
@@ -725,19 +733,20 @@ async function main(): Promise<void> {
 			await endRust(facade);
 		}
 	};
-	const rustWindows = async () => {
-		const runName = 'multi';
+	const rustWindows = async (runName: 'multi' | 'handoff') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
-		const peer = path.join(root, 'multi-peer');
-		const shared = path.join(root, 'multi-shared');
-		newRepository(peer);
-		newRepository(shared);
+		const peer = path.join(root, `${runName}-peer`);
+		const shared = path.join(root, `${runName}-shared`);
+		if (runName === 'multi') {
+			newRepository(peer);
+			newRepository(shared);
+		}
 		fs.mkdirSync(driver);
 		for (const [name, contents] of Object.entries(multiWindowDriverFiles())) {
 			fs.writeFileSync(path.join(driver, name), contents);
 		}
-		facadeSettings(facade, alone('claude'));
+		facadeSettings(facade, alone(runName === 'handoff' ? 'codex' : 'claude'));
 		const files = {
 			prefix: path.join(root, runName),
 			read: (file: string) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '',
@@ -748,23 +757,27 @@ async function main(): Promise<void> {
 			}
 		};
 		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, CLAUDE_CONFIG_DIR: claudeConfig };
-		const start = (folder: string, profile: string, control: string, port: number) => {
-			const user = path.join(root, `u-${runName}-${profile}`);
-			const userSettings = path.join(user, 'User', 'settings.json');
+		const start = (folder: string, name: string, control: string, port: number) => {
+			const profile = editorProfile(root, `${runName[0]}-${name}`);
+			const userSettings = path.join(profile.user, 'User', 'settings.json');
 			if (!fs.existsSync(userSettings)) {
 				fs.mkdirSync(path.dirname(userSettings), { recursive: true });
 				fs.writeFileSync(userSettings, JSON.stringify({ ...settings, 'window.dialogStyle': 'custom' }));
 			}
-			return spawn(executable, [folder, '--new-window', '--disable-extensions', '--user-data-dir', user,
-				'--extensions-dir', path.join(root, `x-${runName}-${profile}`), '--shared-data-dir', path.join(root, `s-${runName}-${profile}`),
-				`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`,
-				`--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
-				{ env: { ...env, FACADE_IT_WINDOW_CONTROL: control }, stdio: ['ignore', 'pipe', 'pipe'] });
+			return spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
+				`--extensionDevelopmentPath=${extension}`,
+				...runName === 'multi' ? [`--extensionDevelopmentPath=${windowComponent}`] : [],
+				`--extensionDevelopmentPath=${driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
+				{ env: { ...env, ...profile.env, FACADE_IT_WINDOW_CONTROL: control,
+					...runName === 'handoff' ? { FACADE_IT_WINDOW_PROTOCOL: '3' } : {} }, stdio: ['ignore', 'pipe', 'pipe'] });
 		};
 		try {
-			await withRustWindows(files, start, open => rustMultiWindow(open, {
-				folder: repo, peer, shared, home: facade, remote: null, files, windows: () => windowsInCore(facade)
-			}));
+			await withRustWindows(files, start, open => runName === 'handoff'
+				? shellHandoff(open, repo, corePrograms, {
+					...env, ...isolatedStorage, FACADE_IT_AS: 'codex', HOME: agentsHome, USERPROFILE: agentsHome,
+					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
+				})
+				: rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files, windows: () => windowsInCore(facade) }));
 		} finally {
 			await endRust(facade);
 		}
@@ -776,7 +789,8 @@ async function main(): Promise<void> {
 	 */
 	const engineSwitch = async () => {
 		const solo = path.join(root, 'switch-app');
-		const user = path.join(root, 'u-sw'), extensions = path.join(root, 'x-sw'), shared = path.join(root, 's-sw');
+		const profile = editorProfile(root, 'sw');
+		const { user } = profile;
 		const facade = path.join(home, 'switch');
 		const out = path.join(root, 'switch.jsonl');
 		const driver = path.join(root, 'driver-switch');
@@ -792,10 +806,10 @@ async function main(): Promise<void> {
 		}
 		let editorOutput = '';
 		const editors: ReturnType<typeof spawn>[] = [];
-		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
 			stdio: ['ignore', 'pipe', 'pipe'],
-			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_SWITCH: out, FACADE_IT_AGENTS_HOME: agentsHome, CLAUDE_CONFIG_DIR: claudeConfig }
+			env: { ...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_SWITCH: out, FACADE_IT_AGENTS_HOME: agentsHome, CLAUDE_CONFIG_DIR: claudeConfig }
 		});
 		editors.push(editor);
 		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
@@ -879,7 +893,7 @@ async function main(): Promise<void> {
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
-		if ((only === 'engine' || only === 'switch' || only === 'lifetime' || only === 'multi-window') && engine !== 'rust') {
+		if (['engine', 'switch', 'lifetime', 'multi-window', 'shell-handoff'].includes(only ?? '') && engine !== 'rust') {
 			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
 		}
 		if (only === 'engine' || (!only && engine === 'rust')) {
@@ -889,7 +903,10 @@ async function main(): Promise<void> {
 			await rustWindowLifetime();
 		}
 		if (engine === 'rust' && (!only || only === 'multi-window')) {
-			await rustWindows();
+			await rustWindows('multi');
+		}
+		if (engine === 'rust' && (!only || only === 'shell-handoff')) {
+			await rustWindows('handoff');
 		}
 		if (only === 'switch' || (!only && engine === 'rust')) {
 			await engineSwitch();

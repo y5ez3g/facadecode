@@ -3,16 +3,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { OLDEST_PROTOCOL, PROTOCOL } from '../../base/coreProtocol';
-import type { HelloParams, InspectResult, Response, ScreenText } from '../../base/coreProtocol';
+import type { Response, V3HelloParams, V3InspectResult, V3ScreenText } from '../../base/coreProtocol';
 import { lineReader } from '../../base/lines';
 import { linesOf as cardLines } from '../detailLines';
-import { coreSocket, normalizeDriveLetter } from './editors';
+import { coreProgram, coreSocket, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
 
@@ -102,15 +102,19 @@ async function script(alias: string, steps: readonly Step[], ms = 90_000): Promi
 	return { answer, content: (tool: string, nth = 0) => answer(tool, nth)?.structuredContent };
 }
 
+function fakeAlias(address: string): string {
+	assert.match(address, /^a\d+@[^\s]+$/u);
+	return `#${address.split('@')[0]}`;
+}
+
 /** The person's own agent of this suite: started from New Agent, its card the new one no agent started. */
-async function personAgent(): Promise<{ readonly card: Card; readonly alias: string }> {
+async function personAgent(): Promise<{ readonly card: Card; readonly alias: string; readonly address: string }> {
 	const before = new Set((await state()).cards.map(each => each.runId));
 	void vscode.commands.executeCommand('facade.newAgent');
 	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
 	const card = await until('a new card', async () => {
 		const mine = (await state()).cards.find(each => !before.has(each.runId) && !cardLines(each).some(line => line.startsWith('Started by')));
-		// On the Rust engine its short ID comes with core's answer to the start (RULES-2.2)
-		if (mine && /#a\d+/.test(cardLines(mine).join(' '))) {
+		if (mine && (RUST || /#a\d+/.test(cardLines(mine).join(' ')))) {
 			return mine;
 		}
 		if (!mine) {
@@ -118,26 +122,32 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 		}
 		return undefined;
 	});
-	const alias = cardLines(card).join(' ').match(/#a\d+/)![0];
+	const address = RUST ? await until(`${card.name} in the shared roster`, () => {
+		const extension = vscode.extensions.getExtension('facade.facadecode')!.extensionPath;
+		const json = execFileSync(coreProgram(path.join(extension, 'bin')), ['list', '--json'], { encoding: 'utf8', timeout: 20_000 });
+		const { agents } = JSON.parse(json) as { agents: { type: string; name: string; id: string }[] };
+		return agents.find(row => row.type === 'managed' && row.name === card.name)?.id;
+	}) : cardLines(card).join(' ').match(/#a\d+/)![0];
+	const alias = RUST ? fakeAlias(address) : address;
 	// Its server answered: the agent's Facade tools are there
 	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined)
 		.catch(async (error: Error) => {
 			if (RUST && CLI === 'agy') {
-				try { await agyStartRecord(card, alias); }
+				try { await agyStartRecord(card, alias, address); }
 				catch (diagnostic) { console.error(`Rust agy startup diagnostics unavailable: ${diagnostic}`); }
 				throw error;
 			}
 			throw new Error(`${error.message}\n${startRecord(alias)}`);
 		});
-	return { card, alias };
+	return { card, alias, address };
 }
 
 /** Late, read-only evidence for the Rust agy server wait: never the historical first-draft frame or a reason to start core. */
-async function agyStartRecord(card: Card, alias: string): Promise<void> {
+async function agyStartRecord(card: Card, alias: string, address: string): Promise<void> {
 	console.error(`Rust agy startup diagnostics ${JSON.stringify({ started_at: new Date().toISOString(), runId: card.runId, alias, engine: 'rust', platform: process.platform, arch: process.arch })}`);
 	try {
 		const configured = process.env.FACADE_HOME;
-		if (!configured || !RECORD || !path.isAbsolute(configured) || !path.isAbsolute(RECORD) || card.alias !== alias || !/^#a\d+$/.test(alias)) {
+		if (!configured || !RECORD || !path.isAbsolute(configured) || !path.isAbsolute(RECORD) || fakeAlias(address) !== alias) {
 			throw new Error('unavailable: missing run root/record prefix or mismatched card alias');
 		}
 		// RECORD is a prefix, not a file; run.ts puts this case's root in <run>/home/<case> beside <run>/fake-cli.log.
@@ -150,10 +160,10 @@ async function agyStartRecord(card: Card, alias: string): Promise<void> {
 		console.error(`diagnostic root given=${configured}; real=${home}; fake record prefix=${record}`);
 		try {
 			// A single terminal connection: no startup, takeover, window, reconnect, watch, attach, input or resize.
-			const hello: HelloParams = { protocol: [OLDEST_PROTOCOL, PROTOCOL], build: 'integration-test-diagnostics', kind: 'terminal' };
+			const hello: V3HelloParams = { protocol: [3, 3], build: 'integration-test-diagnostics', kind: 'terminal' };
 			const requests = [{ method: 'hello', params: hello },
-				{ method: 'call', params: { op: 'agent.inspect', args: { agent: alias } } },
-				{ method: 'call', params: { op: 'agent.screen', args: { agent: alias, lines: 400 } } }];
+				{ method: 'call', params: { op: 'agent.inspect', args: { agent: address } } },
+				{ method: 'call', params: { op: 'agent.screen', args: { agent: address, lines: 400 } } }];
 			const socket = net.createConnection(coreSocket(configured));
 			const timer = setTimeout(() => socket.destroy(new Error('diagnostic connection exceeded 5 seconds')), 5_000);
 			try {
@@ -172,8 +182,8 @@ async function agyStartRecord(card: Card, alias: string): Promise<void> {
 								console.error(`${label} unavailable at ${new Date().toISOString()}: ${JSON.stringify(response.error)}`);
 								if (id === 1) { reject(new Error('diagnostic hello refused')); return; }
 							} else if (id > 1) {
-								const inspect = response.result as InspectResult;
-								const screen = response.result as ScreenText;
+								const inspect = response.result as V3InspectResult;
+								const screen = response.result as V3ScreenText;
 								const returned = id === 2 ? inspect?.agent?.agent_id : screen?.agent_id;
 								if (returned?.replace(/^#/, '') !== alias.slice(1)) {
 									console.error(`${label} unavailable: returned agent_id does not match ${alias}`);
@@ -242,9 +252,16 @@ function assertTools(alias: string): void {
 	switch (CLI) {
 		case 'claude': {
 			const server = JSON.parse(fs.readFileSync(after(args, '--mcp-config'), 'utf8')).mcpServers.facade;
-			// Core's relay: its agent and its Facade home are all it is given
-			assert.deepStrictEqual(Object.keys(server.env).sort(), RUST ? ['FACADE_AGENT', 'FACADE_HOME'] : ['ELECTRON_RUN_AS_NODE', 'FACADE_AGENT', 'FACADE_LAUNCH_CONTEXT', 'FACADE_PTYD', 'FACADE_RUN']);
-			assert.strictEqual(`#${server.env.FACADE_AGENT.replace(/^#/, '')}`, alias, 'the MCP child receives its own short ID explicitly');
+			if (RUST) {
+				assert.deepStrictEqual(Object.keys(server.env), ['FACADE_HOME']);
+				assert.strictEqual(server.env.FACADE_HOME, process.env.FACADE_HOME);
+				assert.ok(path.isAbsolute(server.command));
+				assert.ok(server.args[0] === '--run-credential' && typeof server.args[1] === 'string' && server.args[1].length > 0,
+					'core wrote the actual run credential into the private MCP configuration');
+			} else {
+				assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_AGENT', 'FACADE_LAUNCH_CONTEXT', 'FACADE_PTYD', 'FACADE_RUN']);
+				assert.strictEqual(`#${server.env.FACADE_AGENT.replace(/^#/, '')}`, alias, 'the MCP child receives its own short ID explicitly');
+			}
 			assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
 			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (CLIS-2.2)');
 			break;
@@ -315,13 +332,13 @@ interface RustWindow {
 
 /** The discovery and start steps for each engine. The Rust address goes back into tool calls. */
 const discover = (): Step => RUST
-	? { tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.address', folder: 'data.windows.0.locations.0.folder' } }
+	? { tool: 'list_agents', arguments: {} }
 	: { tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } };
 const startChild = (name: string, prompt: string): Step => RUST
-	? { tool: 'start_agent', arguments: { name, window: '$window', folder: '$folder', cli: CLI, prompt }, save: { child: 'data.address', childAlias: 'data.id' } }
+	? { tool: 'start_agent', arguments: { name, cli: CLI, prompt }, save: { child: 'data.id' } }
 	: { tool: 'start_agent', arguments: { name, window_id: '$window', location_id: '$location', cli: CLI, prompt }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } };
-/** The ID a start_agent answer gives its child. */
-const childOf = (started: { data: { id?: string; agent_id?: string } }): string => (RUST ? started.data.id : started.data.agent_id)!;
+/** The alias the fake CLI uses for evidence about the child. */
+const childOf = (started: { data: { id?: string; agent_id?: string } }): string => RUST ? fakeAlias(started.data.id!) : started.data.agent_id!;
 
 const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
@@ -332,38 +349,71 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
 	});
 
-	test('core\'s Facade tools: it lists, starts a child with a first task, reads and types into it and stops it', async function () {
+	test('two helpers appear in their creator\'s workspace and reply through MCP', async function () {
 		if (!RUST) { this.skip(); }
 		this.timeout(120_000);
-		const { card, alias } = await personAgent();
+		const { card, alias, address } = await personAgent();
 		assertTools(alias);
 		const lines = linesOf(alias);
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
 		assert.strictEqual(initialize?.serverInfo?.name, 'facade');
-		assert.ok(initialize?.instructions?.includes(alias), 'the instructions name the agent');
 		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), EIGHT);
-		const ran = await script(alias, [
-			discover(),
-			startChild('Reviewer', 'Review the README.'),
-			{ tool: 'list_agents', arguments: {} },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', wait: 30_000 },
-			{ tool: 'type_text', arguments: { agent: '$child', text: 'typed by its creator' } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'typed by its creator' },
-			{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', untilAbsent: 'typed by its creator' }
+		const terminals = () => vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length;
+		const openTabs = terminals();
+		const helpers = [
+			{ name: 'Reviewer', prompt: 'Review the README.', reply: 'I reviewed the README.' },
+			{ name: 'Verifier', prompt: 'Verify the test setup.', reply: 'I verified the test setup.' }
+		];
+		const started = await script(alias, [
+			...helpers.map(({ name, prompt }) => ({ tool: 'start_agent', arguments: { name, cli: CLI, prompt } })),
+			{ tool: 'list_agents', arguments: {} }
 		]);
-		const started = ran.content('start_agent');
-		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		const child = started.data.id as string;
-		const childCard = (await state()).cards.find(each => each.alias === `#${child.replace(/^#/, '')}`);
-		assert.ok(childCard, 'the child has a card in this window');
-		assert.ok(JSON.stringify(ran.content('read_screen')).includes('Review the README.'), 'its screen is read, its first task on it');
+		const publicList = started.content('list_agents');
+		assert.ok(publicList?.data.agents.some((agent: { id: string }) => agent.id === address), 'the actual relay reaches its own active Agent');
+		const references = helpers.map((helper, index) => {
+			const result = started.content('start_agent', index);
+			assert.strictEqual(result?.status, 'success', JSON.stringify(result));
+			const child = result.data.id as string;
+			return { ...helper, address: child, alias: fakeAlias(child) };
+		});
+		await until('both helper cards', async () => {
+			const cards = (await state()).cards;
+			return references.every(helper => cards.some(each => each.name === helper.name)) || undefined;
+		});
+		assert.strictEqual(terminals(), openTabs, 'helpers add cards without opening terminals');
+		for (const child of references) {
+			const original = await until(`${child.name} to accept its first task`, () =>
+				received(child.alias).find(text => text.endsWith(child.prompt)));
+			const id = / · (m\d+)$/u.exec(original.split('\n')[0])?.[1];
+			assert.ok(id && original.includes(address), original);
+			const sent = await script(child.alias, [{ tool: 'send_message', arguments: { to: address, text: child.reply, reply_to: id } }]);
+			const receipt = sent.content('send_message');
+			assert.strictEqual(receipt?.status, 'success', JSON.stringify(receipt));
+			const returned = /^(m\d+)@([^@\s]+)$/u.exec(receipt.data.id);
+			assert.ok(returned, JSON.stringify(receipt));
+			const [, replyId, machine] = returned;
+			assert.strictEqual(machine, address.split('@')[1], JSON.stringify(receipt));
+			const reply = await until(`${child.name}'s reply at the parent terminal`, () =>
+				received(alias).find(text => text.endsWith(child.reply)));
+			assert.strictEqual(reply, `📨 Message from ${child.name} (${child.address}) · ${replyId} · Reply to ${id}\n${child.reply}`);
+		}
+		const [reviewer, verifier] = references;
+		const ran = await script(alias, [
+			{ tool: 'read_screen', arguments: { agent: reviewer.address }, until: reviewer.prompt },
+			{ tool: 'read_screen', arguments: { agent: verifier.address }, until: verifier.prompt },
+			{ tool: 'type_text', arguments: { agent: reviewer.address, text: 'typed by its creator' } },
+			{ tool: 'read_screen', arguments: { agent: reviewer.address }, until: 'typed by its creator' },
+			{ tool: 'press_keys', arguments: { agent: reviewer.address, keys: ['Ctrl+U'] } },
+			{ tool: 'read_screen', arguments: { agent: reviewer.address }, until: reviewer.prompt, untilAbsent: 'typed by its creator' }
+		]);
+		assert.ok(JSON.stringify(ran.content('read_screen')).includes(reviewer.prompt), 'the parent reads the first helper\'s screen');
+		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes(verifier.prompt), 'the parent reads the second helper\'s screen');
 		assert.strictEqual(ran.content('type_text')?.status, 'success', JSON.stringify(ran.content('type_text')));
-		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('typed by its creator'), 'direct text is a draft in its box');
+		assert.ok(JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'direct text is a draft in its box');
 		assert.strictEqual(ran.content('press_keys')?.status, 'success', JSON.stringify(ran.content('press_keys')));
-		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
-		const stop = await script(alias, [{ tool: 'stop_agent', arguments: { agent: started.data.address } }, { tool: 'list_agents', arguments: {} }]);
-		assert.strictEqual(stop.content('stop_agent')?.status, 'success', JSON.stringify(stop.content('stop_agent')));
+		assert.ok(!JSON.stringify(ran.content('read_screen', 3)).includes('typed by its creator'), 'Ctrl+U cleared it');
+		const stopped = await script(alias, references.map(child => ({ tool: 'stop_agent', arguments: { agent: child.address } })));
+		references.forEach((_, index) => assert.strictEqual(stopped.content('stop_agent', index)?.status, 'success'));
 		assert.ok(card.runId);
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId }).then(undefined, () => undefined);
 	});
@@ -485,7 +535,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const childAlias = childOf(started);
 		// A first task that goes in after startup holds the agent's other messages until it went in (RULES-1.10): the start's one later
 		// result, its outcome, says when an ordinary message can go in (RULES-1.4)
-		if (started.data.prompt?.path === 'post_start') {
+		if (!RUST && started.data.prompt?.path === 'post_start') {
 			await script(alias, [{ tool: 'read_messages', arguments: { all: true }, until: 'after startup', wait: 30_000 }]);
 		}
 		const sending = await script(alias, [
@@ -500,18 +550,13 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 
 		if (RUST) {
 			// Core's results: a send answers how it went in, a refused one why (MCP-1.2, RULES-1.4, 1.5)
-			const windows = first.content('list_agents')?.data.windows as RustWindow[] | undefined;
-			const recipientWindow = windows?.find(entry => entry.name === window);
-			assert.ok(recipientWindow, `the sender's window ${window} is listed`);
 			const [delivered, held, human] = [0, 1, 2].map(nth => sending.content('send_message', nth));
 			assert.deepStrictEqual([delivered?.status, delivered?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(delivered));
 			assert.ok(received(childAlias).some(each => each.includes('Hello from your creator.\nTwo lines, one message.')), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
 			assert.ok(JSON.stringify(sending.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
 			assert.deepStrictEqual([held?.status, held?.reason], ['failure', 'input_draft'], JSON.stringify(held));
-			assert.deepStrictEqual([human?.status, human?.data.delivery], ['success', 'delivered_to_windows'], JSON.stringify(human));
-			assert.deepStrictEqual(human?.data.window_delivery, [
-				{ window: recipientWindow.id, state: 'delivered' }
-			], JSON.stringify(human));
+			assert.strictEqual(human?.status, 'failure', JSON.stringify(human));
+			assert.strictEqual(human?.data?.window_delivery, undefined);
 			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
 			await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
 			await new Promise(resolve => setTimeout(resolve, 8_000));
@@ -525,7 +570,9 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			])).content('send_message');
 			assert.deepStrictEqual([third?.status, third?.reason], ['failure', 'input_unknown'], JSON.stringify(third));
 			fs.rmSync(`${RECORD}.quirks.${childAlias}`);
-			await closePublicAgent(childAlias);
+			const stopped = await script(alias, [{ tool: 'stop_agent', arguments: { agent: '$child' } }]);
+			assert.strictEqual(stopped.content('stop_agent')?.status, 'success');
+			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 			return;
 		}
 		const sent = sending.content('send_message');
@@ -590,7 +637,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 
-	test('a submission its CLI takes slowly, or whose Enter it misses, is pasted once: Enter again over its own draft, never the text (RULES-1.6)', async function () {
+	test('a slow submission is pasted once and a missed Enter follows the engine\'s delivery rule', async function () {
 		this.timeout(120_000);
 		const { card, alias } = await personAgent();
 		const first = await script(alias, [
@@ -605,13 +652,22 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		for (const [quirk, text] of [[{ slowMs: 4_500 }, 'Taken slowly.'], [{ swallow: 1 }, 'Enter missed once.']] as const) {
 			fs.writeFileSync(quirks, JSON.stringify(quirk));
 			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text } }])).content('send_message');
-			// Its next slots see its own draft and press Enter again, within its thirty seconds: delivered, its text never typed again
-			assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
+			const withdrawn = RUST && 'swallow' in quirk;
+			assert.strictEqual(sent?.status, withdrawn ? 'failure' : 'success', JSON.stringify(sent));
 			await new Promise(resolve => setTimeout(resolve, 5_000));
-			assert.strictEqual(once(text), 1, JSON.stringify(received(childAlias)));
+			assert.strictEqual(once(text), withdrawn ? 0 : 1, JSON.stringify(received(childAlias)));
+			if (withdrawn) {
+				const read = await script(alias, [{ tool: 'read_screen', arguments: { agent: '$child' }, untilAbsent: text }]);
+				assert.ok(!JSON.stringify(read.content('read_screen')).includes(text), 'the withdrawn draft was erased');
+			}
 			fs.rmSync(quirks, { force: true });
 		}
-		await closePublicAgent(childOf(started));
+		if (RUST) {
+			const stopped = await script(alias, [{ tool: 'stop_agent', arguments: { agent: '$child' } }]);
+			assert.strictEqual(stopped.content('stop_agent')?.status, 'success');
+		} else {
+			await closePublicAgent(childAlias);
+		}
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 	});
 });

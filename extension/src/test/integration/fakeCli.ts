@@ -32,12 +32,17 @@ const ANSWER = `${ESC}]7501;?:`;
 
 const record = process.env.FACADE_IT_RECORD!;
 // The old engine says `#a1`, core `a1`: the files this fixture leaves, and the tests that read them, name it `#a1` on both
-const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '')}`;
+const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '').split('@')[0]}`;
 const args = process.argv.slice(2);
+const redactCredential = (text: string) => text.replace(/("--run-credential"\s*,\s*)"[^"]+"/g, '$1"<redacted>"');
+const recordedArgs = args.map((word, index) => args[index - 1] === '--run-credential' ? '<redacted>' : redactCredential(word));
 // With the variables of Facade's that reach it: the run's own, and OpenCode's inline configuration
-const facadeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name)));
-fs.writeFileSync(`${record}.args.${agent}`, JSON.stringify({ cwd: process.cwd(), args, env: facadeEnv }));
+const facadeEnv = Object.fromEntries(Object.entries(process.env)
+	.filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name))
+	.map(([name, value]) => [name, value && redactCredential(value)]));
+fs.writeFileSync(`${record}.args.${agent}`, JSON.stringify({ cwd: process.cwd(), args: recordedArgs, env: facadeEnv }), { mode: 0o600 });
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
+fs.appendFileSync(`${record}.starts.${agent}`, `${process.pid}\n`, { mode: 0o600 });
 // Simulate the vendor's identity report explicitly; a launch argument alone no longer enables Pin.
 const sessionFile = process.env.FACADE_CODE_SESSION_FILE;
 if (sessionFile) {

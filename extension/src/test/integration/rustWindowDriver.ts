@@ -10,7 +10,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentInfo, Said } from '../../base/coreProtocol';
+import type { Said, V2AgentInfo, V2AgentListResult } from '../../base/coreProtocol';
 import type { Pin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
 import { normalizeDriveLetter, until, windowsInCore } from './editors';
@@ -18,7 +18,7 @@ import { normalizeDriveLetter, until, windowsInCore } from './editors';
 type Card = PanelState['cards'][number];
 type SavedPin = Pin & { readonly agent?: string; readonly home?: string; readonly machine_id?: string };
 
-export type ListedAgent = Omit<AgentInfo, 'cwd' | 'said'> & {
+export type ListedAgent = Omit<V2AgentInfo, 'cwd' | 'said'> & {
 	readonly folder: string;
 	readonly last_input?: Said;
 };
@@ -96,7 +96,7 @@ export function facadeAs(agent: string | undefined, ...args: string[]): string {
 }
 
 export function listed(): ListedAgent[] {
-	return (JSON.parse(facade('list', '--json')) as { readonly agents: ListedAgent[] }).agents;
+	return (JSON.parse(facade('list', '--json')) as Omit<V2AgentListResult, 'agents'> & { readonly agents: ListedAgent[] }).agents;
 }
 
 function windowOf(id: string): string {

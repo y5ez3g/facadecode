@@ -9,20 +9,24 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { HelloResult, StartArgs, StartResult, WindowRef } from '../../base/coreProtocol';
+import type { HelloResult, V2HelloResult, V2StartArgs, V2StartResult, V2WindowRef } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
 import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
 import { agentTab, aliasOf, facade, facadeAs, hasAgentTab, keepConversation, listed, newCard, pickCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 
 type Action =
-	| { readonly kind: 'snapshot' | 'notifications' | 'filter' | 'show-agent-picker' }
+	| { readonly kind: 'snapshot' | 'notifications' | 'filter' | 'show-agent-picker' | 'window-component' }
+	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
+	| { readonly kind: 'settings-path'; readonly file: string }
+	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
+	| { readonly kind: 'hide-shell-agent'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
 	| { readonly kind: 'adopt' | 'resume' | 'remote-card' | 'pin' | 'stop' | 'members' | 'saved-pin'; readonly agent: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
 	| { readonly kind: 'send'; readonly agent: string; readonly text: string }
 	| { readonly kind: 'message'; readonly address: string }
 	| { readonly kind: 'wait-for-exit'; readonly pid: number }
-	| { readonly kind: 'worktree'; readonly source: WindowRef; readonly peer: WindowRef; readonly branch: string }
+	| { readonly kind: 'worktree'; readonly source: V2WindowRef; readonly peer: V2WindowRef; readonly branch: string }
 	| { readonly kind: 'worktree-removed'; readonly id: string; readonly folder: string };
 
 export type WindowAction = Action | { readonly kind: 'close' };
@@ -46,7 +50,7 @@ export interface SavedPin {
 }
 
 export interface WindowView {
-	readonly cards: readonly { readonly id: string; readonly pinned: boolean; readonly column: number | null; readonly selected: boolean; readonly line: string }[];
+	readonly cards: readonly { readonly id: string; readonly name: string; readonly pinned: boolean; readonly column: number | null; readonly selected: boolean; readonly line: string }[];
 	readonly terminals: number;
 	readonly filter?: PanelState['filter'];
 }
@@ -67,7 +71,8 @@ async function view(): Promise<WindowView> {
 	const panel = await state();
 	return {
 		cards: panel.cards.map(card => ({
-			id: card.alias.slice(1), pinned: card.pinned === true, column: agentTab(card)?.group.viewColumn ?? null, selected: card.selected, line: card.line
+			id: card.alias.slice(1), name: card.name, pinned: card.pinned === true,
+			column: agentTab(card)?.group.viewColumn ?? null, selected: card.selected, line: card.line
 		})),
 		terminals: vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length,
 		filter: panel.filter
@@ -111,6 +116,48 @@ async function perform(action: Action): Promise<unknown> {
 	switch (action.kind) {
 		case 'snapshot':
 			return view();
+		case 'window-component':
+			return vscode.extensions.getExtension('facade.facadecode-window') !== undefined;
+		case 'settings-path':
+			for (const command of ['facade.openSettings', 'facade.openSettingsFile']) {
+				await vscode.commands.executeCommand(command);
+				await until(`${command} to open the Orchestrator settings file`, () => {
+					const file = vscode.window.activeTextEditor?.document.uri.fsPath;
+					return file && normalizeDriveLetter(file) === normalizeDriveLetter(action.file) || undefined;
+				});
+				await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+			}
+			return true;
+		case 'open-shell-agent': {
+			const card = await pickCard('facade.goToAgent');
+			assert.strictEqual(card.name, action.name);
+			await until(`${action.address}'s terminal tab`, () => hasAgentTab(card) || undefined);
+			const terminal = vscode.window.activeTerminal;
+			assert.ok(terminal && terminal.name.startsWith(card.name), 'Go to Agent selected the attached terminal');
+			terminal.sendText(action.text, true);
+			await until('the editor input on the agent screen', () =>
+				facade('screen', action.address, '--lines', '120').includes(action.text) || undefined);
+			return action.address;
+		}
+		case 'shell-pin': {
+			const find = async () => (await state()).cards.find(card => card.name === action.name);
+			const card = await until(`${action.name}'s card`, find);
+			if (action.set) {
+				await vscode.commands.executeCommand('facade.openTerminal', { run_id: card.runId });
+				await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
+			}
+			await until(`${action.name}'s pinned terminal`, async () => {
+				const current = await find();
+				return current?.pinned && hasAgentTab(current) || undefined;
+			});
+			return true;
+		}
+		case 'hide-shell-agent': {
+			const card = await until(`${action.name}'s card`, async () =>
+				(await state()).cards.find(each => each.name === action.name));
+			await vscode.commands.executeCommand('facade.hideAgent', { run_id: card.runId });
+			return true;
+		}
 		case 'start': {
 			if (action.secondGroup) { await openSecondGroup(); }
 			const card = await newCard();
@@ -197,7 +244,7 @@ async function perform(action: Action): Promise<unknown> {
 			const home = process.env.FACADE_HOME!;
 			const user = path.join(path.dirname(control), 'worktree-agent-home');
 			fs.mkdirSync(user, { recursive: true });
-			const args: StartArgs = {
+			const args: V2StartArgs = {
 				command: ['claude'], name: 'Agent in the other window', cwd, window: action.peer,
 				location_source_window: action.source, worktree: { branch: action.branch, base_ref: 'HEAD' },
 				env: {
@@ -206,9 +253,9 @@ async function perform(action: Action): Promise<unknown> {
 				},
 				cols: 80, rows: 24
 			};
-			const reply = await callInCore(home, 'agent.start', args);
+			const reply = await callInCore(home, 'agent.start', args, [2, 2]);
 			assert.ok(reply.result && !reply.error, JSON.stringify(reply));
-			const started = (reply.result as StartResult).agent;
+			const started = (reply.result as V2StartResult).agent;
 			assert.ok(started.pid && fs.existsSync(started.cwd), JSON.stringify(started));
 			assert.deepStrictEqual(started.windows, [action.peer]);
 			assert.deepStrictEqual(started.location_source_window, action.source);
@@ -265,9 +312,13 @@ export async function activate(): Promise<void> {
 		assert.ok(folder, 'the test window has a workspace folder');
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
-		const hello = await helloInCore(home);
-		const core = hello.result as HelloResult | undefined;
-		assert.ok(core?.protocol === 2 && core.machine_id, JSON.stringify(hello));
+		const version = process.env.FACADE_IT_WINDOW_PROTOCOL === '3' ? 3 : 2;
+		if (version === 3) {
+			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
+		}
+		const hello = await helloInCore(home, [version, version]);
+		const core = hello.result as HelloResult | V2HelloResult | undefined;
+		assert.ok(core?.protocol === version && core.machine_id, JSON.stringify(hello));
 		answer(`${control}.ready`, { result: { folder, remote: vscode.env.remoteName ?? null, home, machineId: core.machine_id } satisfies WindowReady });
 		void actions();
 	} catch (error) {

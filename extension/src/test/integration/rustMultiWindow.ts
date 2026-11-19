@@ -3,12 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { ChildProcess } from 'child_process';
+import { execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentInfo, MessageRef, WindowInfo, WindowRef } from '../../base/coreProtocol';
+import type { MessageRef, V2AgentInfo, V2WindowInfo, V2WindowRef, V3InspectResult } from '../../base/coreProtocol';
 import { freePort, Workbench } from './cdpInput';
-import { endEditors, normalizeDriveLetter, until } from './editors';
+import { callInCore, endEditors, normalizeDriveLetter, until } from './editors';
 import type { PinIdentity, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
@@ -113,6 +113,114 @@ async function expectAgent(window: DrivenWindow, id: string, pinned: boolean, op
 	});
 }
 
+/** Go to Agent attaches to a Shell run that survives closing the VS Code window. */
+export async function shellHandoff(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const run = (...args: string[]) => execFileSync(facade, args, { cwd: folder, env, encoding: 'utf8', timeout: 20_000 });
+	const name = 'shell-ada';
+	const address = run('start', '-d', '--name', name, 'codex').trim();
+	assert.match(address, /^a\d+@[^\s]+$/u);
+	const inspect = async () => {
+		const reply = await callInCore(env.FACADE_HOME!, 'agent.inspect', { agent: address }, [3, 3]);
+		assert.ok(!reply.error, JSON.stringify(reply.error));
+		return (reply.result as V3InspectResult).agent;
+	};
+	const before = await inspect();
+	assert.ok(before.pid && before.process === 'running');
+	const window = await open(folder, 'sh');
+	assert.strictEqual(await window.act<boolean>({ kind: 'window-component' }), false);
+	const { settings_file: settingsFile } = JSON.parse(run('status', '--json')) as { settings_file: string };
+	assert.ok(path.isAbsolute(settingsFile ?? ''), 'status gives the absolute settings file');
+	assert.strictEqual(normalizeDriveLetter(settingsFile), normalizeDriveLetter(path.join(env.FACADE_HOME!, 'facade.json')));
+	await window.act({ kind: 'settings-path', file: settingsFile });
+	const marker = 'typed in the isolated editor';
+	await window.act({ kind: 'open-shell-agent', name, address, text: marker });
+	await window.close();
+	const after = await inspect();
+	assert.strictEqual(after.address, address);
+	assert.strictEqual(after.pid, before.pid);
+	assert.strictEqual(after.process, 'running');
+
+	const { spawn } = await import('node-pty');
+	const terminal = spawn(facade, ['attach', address], { cwd: folder, env, cols: 90, rows: 24, name: 'xterm-256color' });
+	let output = '';
+	let exitCode: number | undefined;
+	const data = terminal.onData(chunk => { output += chunk; });
+	const exit = terminal.onExit(event => { exitCode = event.exitCode; });
+	try {
+		await until('the Shell Attach to show the editor input', () => {
+			assert.strictEqual(exitCode, undefined, output);
+			return output.includes(marker) || undefined;
+		});
+		terminal.write('\x1d');
+		assert.strictEqual(await until('Ctrl-] to detach from the terminal', () => exitCode), 0, output);
+		assert.strictEqual((await inspect()).pid, before.pid);
+	} finally {
+		data.dispose();
+		exit.dispose();
+		if (exitCode === undefined) { terminal.kill(); }
+	}
+	console.log('  ✔ Shell start, Go to Agent and Shell Attach used the same terminal after closing VS Code');
+
+	const session = await until('the fake CLI to report its session', async () => (await inspect()).session);
+	const startLog = `${env.FACADE_IT_RECORD}.starts.#${before.agent_id}`;
+	const starts = () => fs.readFileSync(startLog, 'utf8').trim().split(/\r?\n/u).map(Number);
+	const priorStarts = starts().length;
+	const pinWindow = await open(folder, 'sh');
+	const peerWindow = await open(folder, 'sh2');
+	const cardIn = async (window: DrivenWindow) =>
+		(await window.act<WindowView>({ kind: 'snapshot' })).cards.find(card => card.name === name);
+	await until('the other window to see the same workspace card', () => cardIn(peerWindow));
+	await pinWindow.act({ kind: 'shell-pin', name, set: true });
+	await until('Pin to be visible in the other window', async () => (await cardIn(peerWindow))?.pinned || undefined);
+	await Promise.all([pinWindow.close(), peerWindow.close()]);
+	run('stop', address);
+	await until('the pinned agent to stop', async () => (await inspect()).process === 'ended' || undefined);
+	const [restoredWindow, restoredPeer] = await Promise.all([open(folder, 'sh'), open(folder, 'sh2')]);
+	await Promise.all([restoredWindow, restoredPeer].map(window => window.act({ kind: 'shell-pin', name })));
+	const workspaces = path.join(env.FACADE_HOME!, 'extension', 'workspaces');
+	const files = fs.readdirSync(workspaces).map(key => path.join(workspaces, key, 'orchestrator-workspace.json'))
+		.filter(file => fs.existsSync(file));
+	assert.strictEqual(files.length, 1, 'two windows use one workspace roster');
+	const roster = () => JSON.parse(fs.readFileSync(files[0], 'utf8')) as {
+		members: readonly { machine_id: string; agent_id: string }[];
+		pins: readonly { machine_id: string; agent: string }[];
+	};
+	const checkSavedPin = () => {
+		const saved = roster();
+		assert.deepStrictEqual(saved.members, [{ machine_id: before.machine_id, agent_id: before.agent_id }]);
+		assert.strictEqual(saved.pins.length, 1, 'the workspace saves one Pin');
+		assert.strictEqual(saved.pins[0].machine_id, before.machine_id);
+		assert.strictEqual(saved.pins[0].agent, before.agent_id);
+	};
+	checkSavedPin();
+	const restored = await inspect();
+	assert.strictEqual(restored.address, address);
+	assert.strictEqual(restored.process, 'running');
+	assert.strictEqual(restored.session, session);
+	assert.notStrictEqual(restored.pid, before.pid);
+	assert.deepStrictEqual(starts().slice(priorStarts), [restored.pid], 'reopening started the saved Pin once');
+	await restoredPeer.act({ kind: 'hide-shell-agent', name });
+	await until('the hidden card to leave both windows', async () =>
+		!await cardIn(restoredWindow) && !await cardIn(restoredPeer) || undefined);
+	assert.strictEqual((await inspect()).pid, restored.pid, 'Hide leaves the resumed agent running');
+	await restoredWindow.act({ kind: 'open-shell-agent', name, address, text: 'reopened before removal' });
+	await restoredWindow.act({ kind: 'shell-pin', name, set: true });
+	checkSavedPin();
+	await Promise.all([restoredWindow.close(), restoredPeer.close()]);
+	console.log('  ✔ Both windows shared the Pin, reopened one original session, and hid the card while it kept running');
+
+	run('rm', address);
+	const afterRemove = await open(folder, 'sh');
+	await until('explicit removal to clear the saved workspace member and Pin', () => {
+		const saved = roster();
+		return saved.members.length === 0 && saved.pins.length === 0 || undefined;
+	});
+	assert.strictEqual(await cardIn(afterRemove), undefined);
+	assert.deepStrictEqual(starts().slice(priorStarts), [restored.pid], 'an explicit removal cannot reopen the saved session');
+	await afterRemove.close();
+	console.log('  ✔ Explicit removal cleared the saved member and Pin on reopen');
+}
+
 /** Read the real notification center, then use its Open Message button to check the ID. */
 async function expectNotice(window: DrivenWindow, message: MessageRef, text: string, earlier?: string): Promise<void> {
 	await window.act({ kind: 'notifications' });
@@ -152,17 +260,17 @@ interface WindowJourney {
 	readonly peer: string;
 	readonly shared: string;
 	readonly files: WindowFiles;
-	windows(): Promise<readonly WindowInfo[]>;
+	windows(): Promise<readonly V2WindowInfo[]>;
 }
 
-async function firstMember(window: DrivenWindow, agent: string): Promise<WindowRef> {
-	const members = await window.act<WindowRef[]>({ kind: 'members', agent });
+async function firstMember(window: DrivenWindow, agent: string): Promise<V2WindowRef> {
+	const members = await window.act<V2WindowRef[]>({ kind: 'members', agent });
 	assert.strictEqual(members.length, 1, JSON.stringify(members));
 	assert.strictEqual(members[0].machine_id, window.ready.machineId);
 	return members[0];
 }
 
-async function waitConnections(journey: WindowJourney, expected: readonly { readonly window: WindowRef; readonly connected: boolean }[]): Promise<void> {
+async function waitConnections(journey: WindowJourney, expected: readonly { readonly window: V2WindowRef; readonly connected: boolean }[]): Promise<void> {
 	await until('each logical window to have its expected connection', async () => {
 		const windows = await journey.windows();
 		return expected.every(({ window, connected }) => windows.some(each =>
@@ -217,7 +325,7 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	const earlyId = await first.act<string>({ kind: 'send', agent: before.id, text: earlier });
 	await expectNotice(first, { machine_id: first.ready.machineId, message_id: earlyId }, earlier);
 	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: before.id }), before);
-	const both = await other.act<WindowRef[]>({ kind: 'members', agent: before.id });
+	const both = await other.act<V2WindowRef[]>({ kind: 'members', agent: before.id });
 	assert.strictEqual(both.length, 2);
 	const member = both.find(window => window.window_id !== original.window_id);
 	assert.ok(member && member.machine_id === original.machine_id, JSON.stringify(both));
@@ -259,9 +367,9 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	await sameWorkspace(start, journey);
 }
 
-async function deleteWorktree(source: DrivenWindow, peer: DrivenWindow, sourceRef: WindowRef, peerRef: WindowRef): Promise<void> {
+async function deleteWorktree(source: DrivenWindow, peer: DrivenWindow, sourceRef: V2WindowRef, peerRef: V2WindowRef): Promise<void> {
 	const branch = 'agent-in-other-window';
-	const agent = await source.act<AgentInfo>({ kind: 'worktree', source: sourceRef, peer: peerRef, branch });
+	const agent = await source.act<V2AgentInfo>({ kind: 'worktree', source: sourceRef, peer: peerRef, branch });
 	const shown = await source.act<WindowView>({ kind: 'snapshot' });
 	assert.ok(shown.cards.every(card => card.id !== agent.agent_id), 'the location source is outside the agent\'s member windows');
 	await until('the peer window to display its worktree agent', async () => {

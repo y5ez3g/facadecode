@@ -36,8 +36,8 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { MachineConnection, MachineInfo, WindowInfo } from '../../base/coreProtocol';
-import { EDITOR_FLAGS, endCore, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, until } from './editors';
+import type { V2MachineConnection, V2MachineInfo, V2WindowInfo } from '../../base/coreProtocol';
+import { EDITOR_FLAGS, editorProfile, endCore, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, until } from './editors';
 import type { ListedAgent } from './rustWindowDriver';
 import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
@@ -45,9 +45,9 @@ import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rust
 const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network'] as const;
 type Scenario = typeof SCENARIOS[number];
 
-type ListedMachine = Pick<MachineInfo, 'machine_id' | 'route'> & {
+type ListedMachine = Pick<V2MachineInfo, 'machine_id' | 'route'> & {
 	readonly connections: readonly {
-		readonly kind: MachineConnection['kind'];
+		readonly kind: V2MachineConnection['kind'];
 		readonly state: 'connected' | 'disconnected' | 'ssh_interaction_required';
 	}[];
 };
@@ -233,8 +233,9 @@ async function main(): Promise<void> {
 		'remote.SSH.enableRemoteCommand': false
 	};
 	/** A user data folder of the run's own for one editor, new for each scenario: what an earlier one kept there is not this one's. */
-	const userData = (editor: string) => {
-		const user = path.join(root, `u-${editor}`);
+	const profile = (editor: string) => {
+		const local = editorProfile(root, `u-${editor}`, extensions);
+		const { user } = local;
 		fs.rmSync(user, { recursive: true, force: true });
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
@@ -247,11 +248,10 @@ async function main(): Promise<void> {
 			state.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run('ms-vscode-remote.remote-containers', JSON.stringify({ userConfirmedAttachToContainerRequiresTrust: true }));
 			state.close();
 		}
-		return user;
+		return local;
 	};
 	/** What the editor gives its extension hosts, local and remote, with this scenario's own. */
 	const environment = (more: { readonly [variable: string]: string } = {}) => ({ FACADE_IT_ENGINE: engine, FACADE_HOME: facade, CLAUDE_CONFIG_DIR: claude, FACADE_IT_RECORD: record, ...more });
-	const profile = (editor: string) => ['--user-data-dir', userData(editor), '--extensions-dir', extensions, '--shared-data-dir', path.join(root, `s-${editor}`)];
 	const opened = (folder: Folder) => 'local' in folder ? [folder.local] : ['--folder-uri', folder.host.uri(folder.remote)];
 	const workspaceExtension = (folder: Folder) => 'local' in folder ? extension : folder.host.uri(`${folder.host.build}/extension-it`);
 
@@ -348,26 +348,30 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 		// Remote-SSH and Dev Containers, as the hosts need them, in the run's own extensions folder, from the Marketplace
 		const [cli, ...cliArgs] = resolveCliArgsFromVSCodeExecutablePath(executable, { reuseMachineInstall: true });
 		const remotes = [...new Set(hosts.map(host => host.kind === 'ssh' ? 'ms-vscode-remote.remote-ssh' : 'ms-vscode-remote.remote-containers'))];
-		execFileSync(cli, [...cliArgs, ...profile('install'), ...remotes.flatMap(id => ['--install-extension', id])], { stdio: 'inherit' });
+		const installProfile = profile('install');
+		execFileSync(cli, [...cliArgs, ...installProfile.args, ...remotes.flatMap(id => ['--install-extension', id])],
+			{ env: { ...process.env, ...installProfile.env, FACADE_HOME: facade }, stdio: 'inherit' });
 
 		/** An editor of the run that runs no tests, on `folder`; closed with the scenario. */
 		const editor = (editorName: string, folder: Folder) => {
-			const child = spawn(executable, [...opened(folder), '--new-window', ...profile(editorName), `--extensionDevelopmentPath=${workspaceExtension(folder)}`,
+			const local = profile(editorName);
+			const child = spawn(executable, [...opened(folder), '--new-window', ...local.args, `--extensionDevelopmentPath=${workspaceExtension(folder)}`,
 				`--extensionDevelopmentPath=${windowComponent}`, `--extensionEnvironment=${JSON.stringify(environment())}`, ...EDITOR_FLAGS], {
 				stdio: 'ignore',
-				env: { ...process.env, ...environment() }
+				env: { ...process.env, ...local.env, ...environment() }
 			});
 			editors.push(child);
 			return child;
 		};
 		/** The suite in an editor on `folder`, with this scenario's variables. */
 		const suite = async (editorName: string, folder: Folder, more: { readonly [variable: string]: string }) => {
+			const local = profile(editorName);
 			const code = await runTests({
 				vscodeExecutablePath: executable,
 				extensionDevelopmentPath: [workspaceExtension(folder), windowComponent],
 				extensionTestsPath: 'local' in folder ? path.join(__dirname, 'index') : folder.host.uri(`${folder.host.build}/out/test/integration/index`),
-				launchArgs: [...opened(folder), ...profile(editorName), `--extensionEnvironment=${JSON.stringify(environment(more))}`],
-				extensionTestsEnv: environment(more)
+				launchArgs: [...opened(folder), ...local.args, `--extensionEnvironment=${JSON.stringify(environment(more))}`],
+				extensionTestsEnv: { ...local.env, ...environment(more) }
 			});
 			if (code !== 0) {
 				throw new Error(`The ${editorName} journeys failed with exit code ${code}.`);
@@ -409,19 +413,20 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 		};
 		const app = (host: Host): Folder => ({ host, remote: `${root}/app` });
 		const remotePeer = (host: Host): Folder => ({ host, remote: `${root}/remote-peer` });
-		const coreWindows = (host: Host): WindowInfo[] => {
+		const coreWindows = (host: Host): V2WindowInfo[] => {
 			const probe = 'require(process.argv[1]).windowsInCore(process.argv[2]).then(snapshot => console.log(JSON.stringify(snapshot))).catch(error => { console.error(error); process.exitCode = 1; });';
-			return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)}`)) as WindowInfo[];
+			return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)}`)) as V2WindowInfo[];
 		};
 		const sshLifetime = async (host: Host) => {
 			const folder = app(host);
 			const driver = `${root}/lifetime-driver`;
 			const out = `${root}/lifetime.jsonl`;
 			host.run(`mkdir ${quoted(driver)}\n${Object.entries(lifetimeDriverFiles()).map(([name, contents]) => `printf %s ${quoted(contents)} > ${quoted(`${driver}/${name}`)}`).join('\n')}`);
-			const args = [...opened(folder), '--new-window', ...profile('lifetime'), `--extensionDevelopmentPath=${workspaceExtension(folder)}`,
+			const local = profile('lifetime');
+			const args = [...opened(folder), '--new-window', ...local.args, `--extensionDevelopmentPath=${workspaceExtension(folder)}`,
 				`--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${host.uri(driver)}`, ...EDITOR_FLAGS];
 			const env = environment({ FACADE_IT_WINDOW_LIFETIME: out, FACADE_IT_WINDOW_LIFETIME_SSH: '1' });
-			const start = () => spawn(executable, [...args, `--extensionEnvironment=${JSON.stringify(env)}`], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+			const start = () => spawn(executable, [...args, `--extensionEnvironment=${JSON.stringify(env)}`], { env: { ...process.env, ...local.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
 			const call = (...args: string[]) => host.run(`unset FACADE_AGENT\nFACADE_HOME=${quoted(facade)} ${quoted(`${host.build}/extension-it/bin/facade`)} ${args.map(quoted).join(' ')}`);
 			const windows = async () => coreWindows(host);
 			await windowLifetime(start, () => host.run(`if [ -f ${quoted(out)} ]; then cat ${quoted(out)}; fi`), async step => {
@@ -445,22 +450,21 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 					host.run(`printf %s ${quoted(text)} > ${quoted(temporary)} && mv ${quoted(temporary)} ${quoted(file)}`);
 				}
 			};
-			const profiles = new Map<string, string[]>();
+			const profiles = new Map<string, ReturnType<typeof profile>>();
 			const start = (folder: string, name: string, control: string, port: number) => {
 				let user = profiles.get(name);
 				if (!user) {
 					user = profile(`${runName}-${name}`);
-					const userFolder = user[1];
-					fs.writeFileSync(path.join(userFolder, 'User', 'settings.json'), JSON.stringify({ ...settings, 'window.dialogStyle': 'custom' }));
+					fs.writeFileSync(path.join(user.user, 'User', 'settings.json'), JSON.stringify({ ...settings, 'window.dialogStyle': 'custom' }));
 					profiles.set(name, user);
 				}
 				const destination: Folder = { host, remote: folder };
 				const env = environment({ FACADE_IT_WINDOW_CONTROL: control });
-				const args = [...opened(destination), '--new-window', ...user, `--extensionDevelopmentPath=${workspaceExtension(destination)}`,
+				const args = [...opened(destination), '--new-window', ...user.args, `--extensionDevelopmentPath=${workspaceExtension(destination)}`,
 					`--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${host.uri(driver)}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS,
 					`--extensionEnvironment=${JSON.stringify(env)}`];
 				const localPath = `${path.join(extension, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`;
-				return spawn(executable, args, { env: { ...process.env, ...env, PATH: localPath }, stdio: ['ignore', 'pipe', 'pipe'] });
+				return spawn(executable, args, { env: { ...process.env, ...user.env, ...env, PATH: localPath }, stdio: ['ignore', 'pipe', 'pipe'] });
 			};
 			const localCore = path.join(extension, 'bin', 'facade');
 			const daemonLog = path.join(facade, 'core', 'logs', 'daemon.log');
