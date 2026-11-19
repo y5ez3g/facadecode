@@ -129,11 +129,11 @@ interface Stage {
 	 * its answer keeps for its way back - never moved on while the input is held (RULES-1.2, 1.5).
 	 */
 	deadline: number;
-	/** Its outcome where something other than an attempt settled it: the recipient's read_messages delivered the record meanwhile. */
+	/** The outcome when a read or the send's deadline settles the stage directly. */
 	settled?: Outcome;
-	/** Read delivery resolves the send immediately, independently of finishing an already pasted owned draft. */
-	readonly read: Promise<Outcome>;
-	readonly resolveRead: (outcome: Outcome) => void;
+	/** Resolves independently of the attempt loop, which may still be waiting or completing an already issued paste. */
+	readonly settlement: Promise<Outcome>;
+	readonly resolveSettlement: (outcome: Outcome) => void;
 	attempts: number;
 	obstacle?: string;
 	/** The most telling input effects of its attempts so far (RULES-1.6): never forgotten by a later attempt that wrote nothing. */
@@ -300,13 +300,20 @@ export class MessageService implements Messages, Disposable {
 		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline, start: deadline - length } });
 		const stage = this.newStage(request.to, pending.id, start, undefined, length);
 		stage.creation = request.initialPrompt !== undefined;
-		const delivered = Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.read]);
+		const delivered = Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.settlement]);
 		if (ordinary) {
 			// Its send answers with its outcome once its stage ends, by its deadline, which a repeated request of it waits for too (RULES-1.2)
 			const ended = delivered.then(outcome => ({ outcome, record: this.finish(pending.id, outcome) ?? pending }));
 			this.outcomes.set(pending.id, ended.then(each => each.record));
 			void ended.finally(() => this.outcomes.delete(pending.id));
-			const settled = await this.within(ended, start + STAGE_MS - this.mono());
+			let settled = await this.within(ended, start + STAGE_MS - this.mono());
+			if (settled === 'deadline' && stage.obstacle && !stage.written && !stage.submitting && this.usable(stage)) {
+				// A busy loop can run the reply timer before the stage timer. A known obstacle still explains the untouched input.
+				stage.settled ??= { status: 'failure', reason: stage.obstacle, effects: stage.effects, attempts: stage.attempts };
+				stage.resolveSettlement(stage.settled);
+				stage.stop.abort();
+				settled = await ended;
+			}
 			if (settled !== 'deadline') {
 				return { record: settled.record, status: settled.outcome.status, ...(settled.outcome.reason ? { reason: settled.outcome.reason } : {}) };
 			}
@@ -481,7 +488,7 @@ export class MessageService implements Messages, Disposable {
 				stage.settled = { status: 'success', effects, attempts: stage.attempts, via: 'read' };
 				this.save({ ...record, delivery: { ...delivery, status: 'success', effects, via: 'read', deliveredAt: at } });
 				this.deps.log.event(`${record.kind === 'result' ? 'Facade result' : 'Message'} ${record.alias} delivered to ${record.to.alias ?? record.to.run} by its read_messages`);
-				stage.resolveRead(stage.settled);
+				stage.resolveSettlement(stage.settled);
 				if (!stage.submitting && !stage.written) {
 					stage.stop.abort();
 				}
@@ -611,7 +618,7 @@ export class MessageService implements Messages, Disposable {
 	private deliverResults(record: MessageRecord, text: string, stage: Stage): MessageRecord {
 		const batch = stage.batch!;
 		const typed = () => batch.typed ??= batch.records.map(id => batch.texts.get(id)!).join('\n\n');
-		void Promise.race([this.stage(stage, batch.typed !== undefined ? text : typed), stage.read]).then(outcome => {
+		void Promise.race([this.stage(stage, batch.typed !== undefined ? text : typed), stage.settlement]).then(outcome => {
 			for (const id of batch.records) {
 				this.finish(id, outcome);
 			}
@@ -620,10 +627,9 @@ export class MessageService implements Messages, Disposable {
 	}
 
 	private newStage(target: RunId, message: string, start: number, batch?: ResultBatch, length = STAGE_MS): Stage {
-		let resolveRead!: (outcome: Outcome) => void;
-		const read = new Promise<Outcome>(resolve => { resolveRead = resolve; });
+		const { promise: settlement, resolve: resolveSettlement } = Promise.withResolvers<Outcome>();
 		const stage: Stage = {
-			target, message, stop: new AbortController(), start, read, resolveRead, deadline: start + length, attempts: 0, effects: NO_EFFECTS, submitting: false, written: false, entered: false,
+			target, message, stop: new AbortController(), start, settlement, resolveSettlement, deadline: start + length, attempts: 0, effects: NO_EFFECTS, submitting: false, written: false, entered: false,
 			...batch ? { batch } : {}
 		};
 		this.stages.add(stage);
@@ -1167,7 +1173,7 @@ export class MessageService implements Messages, Disposable {
 			this.deliverResults(record, text, stage);
 			return;
 		}
-		const ended = Promise.race([this.stage(stage, text, lead), stage.read]).then(outcome => {
+		const ended = Promise.race([this.stage(stage, text, lead), stage.settlement]).then(outcome => {
 			const final = this.finish(record.id, outcome);
 			if (final && !this.disposed) {
 				this.reportOutcome(final, undefined);

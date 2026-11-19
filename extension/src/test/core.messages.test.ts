@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { timeout } from '../base/async';
 import type { FacadeError } from '../core/errors';
 import { formatMessage, MESSAGE_LEAD, messageIdOf, MessageService, MessageServiceDeps } from '../core/messages';
 import type { InputEffects, InputPort, MessageRecord, SendResult, Submission } from '../core/messagePorts';
@@ -112,7 +113,7 @@ const B = 'run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const C = 'run-cccccccccccccccccccccccccccccccc';
 
 /** `createMs`: how long writing a new record takes, on both clocks. */
-function setUp(options: { readonly createMs?: number } = {}) {
+function setUp(options: { readonly createMs?: number; readonly wait?: MessageServiceDeps['wait'] } = {}) {
 	const runs = new Map<RunId, RunFacts>();
 	const add = (id: RunId, alias: string, name: string) => runs.set(id, { id, alias, name, lifecycle: 'running' } as RunFacts);
 	add(A, '#a1', 'Ada');
@@ -151,6 +152,7 @@ function setUp(options: { readonly createMs?: number } = {}) {
 		ids: { next: () => ++n },
 		clock: { now: () => Date.now() + spent },
 		monotonic: () => performance.now() + spent,
+		wait: options.wait,
 		window: { id: 'win-1', label: 'Design' },
 		environment: 'local',
 		workspace: 'ws-1',
@@ -417,6 +419,24 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(service.inbox(A, { all: true, limit: 100 }).records, []);
 		// Never delivered, the message itself is what B's own read would find waiting
 		assert.deepStrictEqual(service.inbox(B, { limit: 100 }).records.map(record => record.id), ['m-1']);
+	});
+
+	test('a held draft is still reported when the reply deadline fires before the stage timer', async () => {
+		const { service, input, stored } = setUp({
+			// Simulate a delayed callback for the stage's last wait at 27 seconds.
+			wait: (ms, signal) => timeout(ms >= 2_499 && ms <= 2_501 ? ms + 1_000 : ms, signal)
+		});
+		input.states.set(B, ['draft']);
+		const start = Date.now();
+		const request = { from: A, to: B, text: 'Hello', elapsedMs: 0, requestId: 'held-draft' };
+		const result = await settled(service.send(request), 31_000);
+		assert.deepStrictEqual([result.status, result.reason, Date.now() - start], ['failure', 'input_draft', 30_000]);
+		assert.deepStrictEqual(result.record.delivery, { status: 'failure', reason: 'input_draft', effects: NO_EFFECTS, deadline: start + 29_500, attempts: 10 });
+		assert.deepStrictEqual(stored.get(result.record.id), result.record);
+		assert.deepStrictEqual(await service.send(request), result);
+		input.states.set(B, ['usable']);
+		await sleep(3_000);
+		assert.deepStrictEqual(input.begun, [], 'a late callback cannot paste the expired message');
 	});
 
 	test('unknown input, then a menu, consume their slots, the deadline never moved on; time already spent before Facade had the request comes off the thirty seconds (RULES-1.2, 1.4, 1.5)', async () => {

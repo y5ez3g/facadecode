@@ -588,7 +588,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		// Held by the draft through its thirty seconds: it fails with nothing typed, its outcome in its answer (RULES-1.2, 1.4, 1.5)
 		const waiting = sending.content('send_message', 1);
 		assert.strictEqual(waiting?.status, 'failure', JSON.stringify(waiting));
-		assert.deepStrictEqual([waiting.error.reason, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'none', 'none']);
+		assert.deepStrictEqual([waiting.error.reason, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'none', 'none'], JSON.stringify(waiting));
 		const second = waiting.data.message_id as string;
 
 		const human = sending.content('send_message', 2);
