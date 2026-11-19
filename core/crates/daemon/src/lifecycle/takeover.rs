@@ -16,11 +16,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use facade_base::daemon::{
-    CLOSING_TIME, DAEMON_PROTOCOL_VERSION, DRAIN_TIME, DaemonUpgradeArgs, DaemonUpgradeResult,
-    QUIET_TIME,
+    CLOSING_TIME, DRAIN_TIME, DaemonUpgradeArgs, DaemonUpgradeResult, QUIET_TIME,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::keeper::shared_version;
+use facade_base::v3::DAEMON_PROTOCOL_RANGE;
 use tokio::sync::watch;
 
 use super::{Lifecycle, LifecycleActivity};
@@ -103,34 +103,38 @@ impl Lifecycle {
             };
             return Err(ErrorBody::refused(why));
         }
-        let [low, high] = args.daemon_protocol_range;
-        if !(low..=high).contains(&DAEMON_PROTOCOL_VERSION) {
+        if shared_version(args.daemon_protocol_range, DAEMON_PROTOCOL_RANGE).is_none() {
+            let [low, high] = args.daemon_protocol_range;
+            let [ours_low, ours_high] = DAEMON_PROTOCOL_RANGE;
             return Err(ErrorBody::new(
                 Reason::IncompatibleProtocol,
                 format!(
-                    "{} speaks daemon protocol {low} to {high}, and this Facade, {ours}, speaks \
-                     {DAEMON_PROTOCOL_VERSION}: stop the running Facade before switching builds",
+                    "{} can take over daemon protocols {low} to {high}, and this Facade, {ours}, \
+                     serves {ours_low} to {ours_high}. Stop the running Facade before switching builds.",
                     args.build
                 ),
             ));
         }
-        let running = activity.running_count();
         // The keeper stays while it holds CLIs, so the new build must speak its protocol.
-        if running > 0
-            && let Some(keeper) = activity.keeper_protocol_range()
+        if let Some(keeper) = activity.keeper_protocol_range()
             && shared_version(args.keeper_protocol_range, keeper).is_none()
         {
-            let [low, high] = args.keeper_protocol_range;
-            return Err(ErrorBody::new(
-                Reason::IncompatibleProtocol,
-                format!(
-                    "{} speaks keeper protocol {low} to {high}, and the running keeper speaks {} \
-                     to {}: this new build needs every agent closed first; close them and try \
-                     again",
-                    args.build, keeper[0], keeper[1]
-                ),
-            ));
+            let agents = activity.running_managed_addresses();
+            if !agents.is_empty() {
+                let [low, high] = args.keeper_protocol_range;
+                let [keeper_low, keeper_high] = keeper;
+                let addresses = agents.join(", ");
+                return Err(ErrorBody::new(
+                    Reason::IncompatibleProtocol,
+                    format!(
+                        "{} speaks keeper protocol {low} to {high}, and the running keeper speaks \
+                         {keeper_low} to {keeper_high}. Stop the running agents {addresses} and try again.",
+                        args.build
+                    ),
+                ));
+            }
         }
+        let running = activity.running_count();
         let builds: Vec<String> = activity
             .keeper_build()
             .into_iter()

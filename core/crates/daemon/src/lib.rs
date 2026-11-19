@@ -263,6 +263,19 @@ impl LifecycleActivity for Daemon {
         agent::screen_writes()
     }
 
+    fn running_managed_addresses(&self) -> Vec<String> {
+        self.agents()
+            .into_iter()
+            .filter(|agent| !agent.is_guest() && agent.exit().borrow().is_none())
+            .map(|agent| {
+                let reference = agent.info().reference();
+                self.agent_address(&reference).unwrap_or_else(|_| {
+                    format!("{} on machine {}", reference.agent_id, reference.machine_id)
+                })
+            })
+            .collect()
+    }
+
     fn running_count(&self) -> usize {
         self.agents()
             .iter()

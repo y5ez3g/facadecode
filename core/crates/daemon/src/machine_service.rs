@@ -12,6 +12,8 @@ use facade_base::machine::{
 };
 use facade_base::sockets::{ServerReader, ServerWriter};
 use facade_base::ssh::{SshMode, machine_ssh_args};
+use facade_base::v3;
+use facade_base::v3::address as addresses;
 use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::sync::mpsc;
@@ -75,6 +77,20 @@ pub(crate) async fn follow_network(
 }
 
 impl Daemon {
+    pub(crate) fn machine_identities(&self) -> Result<Vec<MachineIdentity>, ErrorBody> {
+        Ok(identities(&self.network.machines_v3()))
+    }
+
+    pub(crate) fn machine_address_part(&self, machine_id: &str) -> Result<String, ErrorBody> {
+        let visible = self.machine_identities()?;
+        machine_address_part(machine_id, &visible)
+    }
+
+    pub(crate) fn agent_address(&self, reference: &AgentRef) -> Result<String, ErrorBody> {
+        let machine = self.machine_address_part(&reference.machine_id)?;
+        Ok(addresses::format_agent_address(reference, &machine))
+    }
+
     pub(crate) fn machine_hello_plan(
         &self,
         hello: HelloParams,
@@ -484,4 +500,33 @@ fn offline_machine(identity: MachineIdentity) -> MachineInfo {
         route: None,
         connections: Vec::new(),
     }
+}
+
+pub(crate) fn machine_address_part(
+    machine_id: &str,
+    visible: &[MachineIdentity],
+) -> Result<String, ErrorBody> {
+    let unnamed = MachineIdentity {
+        machine_id: machine_id.to_owned(),
+        name: String::new(),
+    };
+    let target = visible
+        .iter()
+        .find(|entry| entry.machine_id == machine_id)
+        .unwrap_or(&unnamed);
+    addresses::display_machine_selector(target, visible).map_err(|error| {
+        ErrorBody::new(
+            Reason::AmbiguousReference,
+            format!("{error}; use machine rename to give it a unique name"),
+        )
+    })
+}
+
+fn identities(rows: &[v3::MachineInfo]) -> Vec<MachineIdentity> {
+    rows.iter()
+        .map(|row| MachineIdentity {
+            machine_id: row.machine_id.clone(),
+            name: row.name.clone(),
+        })
+        .collect()
 }
