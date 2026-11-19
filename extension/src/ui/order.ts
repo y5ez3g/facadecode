@@ -19,9 +19,14 @@ const SELECTION = 'facade.panel.selection';
 /** Run IDs as RULES-2.2 makes them. */
 const RUN_ID = /^run-[0-9a-f]{32}$/;
 const AGENT_ID = /^a\d+$/;
+const AGENT_REF = /^[^/]+\/a\d+$/;
+
+function rustKey(run: string): boolean {
+	return AGENT_REF.test(run) || AGENT_ID.test(run);
+}
 
 /**
- * The panel's preferences in this workspace: the manual card order by run ID (PANEL-2.1), and the display filter by its
+ * The panel's preferences in this workspace: the card order by run ID or AgentRef (PANEL-2.1, RULES-6.1), and the display filter by its
  * environment-qualified location ID or folder URI, with its last label (PANEL-2.3). A value of another shape - an earlier
  * development build's - is ignored, never translated, with one line in the agents log (ARCHITECTURE-4.2).
  */
@@ -31,8 +36,12 @@ export class PanelPrefs {
 
 	constructor(private readonly storage: Storage, private readonly log?: LogPort, private readonly logicalWindow = false) { }
 
-	/** Rust's displayed run ID can be provisional. Its core number survives reopening (RULES-2.2). */
+	/** A workspace AgentRef survives reopening and distinguishes equal numbers on different machines (RULES-6.1). */
 	keyOf(run: RunFacts): string {
+		const reference = run.orchestrator?.reference;
+		if (reference) {
+			return `${reference.machine_id}/${reference.agent_id}`;
+		}
 		return this.logicalWindow && run.alias ? run.alias.slice(1) : run.id;
 	}
 
@@ -41,8 +50,8 @@ export class PanelPrefs {
 		if (value === undefined) {
 			return [];
 		}
-		const pattern = this.logicalWindow ? AGENT_ID : RUN_ID;
-		const runs = Array.isArray(value) ? value.filter((run): run is string => typeof run === 'string' && pattern.test(run)) : [];
+		const valid = this.logicalWindow ? rustKey : (run: string) => RUN_ID.test(run);
+		const runs = Array.isArray(value) ? value.filter((run): run is string => typeof run === 'string' && valid(run)) : [];
 		if (!Array.isArray(value) || runs.length !== value.length) {
 			this.ignore(ORDER, 'card order');
 		}
@@ -51,18 +60,18 @@ export class PanelPrefs {
 
 	setOrder(order: readonly string[]): void {
 		// The current panel order remains usable when workspace storage cannot persist it.
-		this.save(ORDER, this.logicalWindow ? order.filter(run => AGENT_ID.test(run)) : [...order], 'card order');
+		this.save(ORDER, this.logicalWindow ? order.filter(rustKey) : [...order], 'card order');
 	}
 
 	selection(): string | undefined {
 		if (!this.logicalWindow) { return undefined; }
 		const value = this.storage.get<unknown>(SELECTION);
-		return typeof value === 'string' && AGENT_ID.test(value) ? value : undefined;
+		return typeof value === 'string' && rustKey(value) ? value : undefined;
 	}
 
 	setSelection(run: string | undefined): void {
 		if (this.logicalWindow) {
-			this.save(SELECTION, run && AGENT_ID.test(run) ? run : undefined, 'card selection');
+			this.save(SELECTION, run && rustKey(run) ? run : undefined, 'card selection');
 		}
 	}
 

@@ -49,12 +49,13 @@ const PLACE_KINDS: readonly unknown[] = ['repo', 'worktree', 'folder'];
 const isFact = (ids: readonly unknown[], more: Readonly<Record<string, Check>> = {}): Check => value => isShaped(value, { id: id => ids.includes(id), label: isString, value: isString, ...more });
 const isDetails: Check = value => isShaped(value, { location: isFact(['location'], { kind: kind => PLACE_KINDS.includes(kind) }), path: isFact(['path']),
 	titleLabel: isString, description: value => isShaped(value, { title: isString, place: isString }) }, {
-	summary: isFact(['title']), untitled: isString, startedBy: isString
+	summary: isFact(['title']), untitled: isString, startedBy: isString, machine: isFact(['machine']), address: isFact(['address'])
 });
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString, alias: isString,
 	dot: value => DOTS.includes(value), stateText: isString, line: isString, details: isDetails, label: isString, menu: isMenu
-}, { avatar: isAvatar, startedAt: isNumber, pinned: isBoolean, runningOn: isString, repeated: value => value === true });
+}, { avatar: isAvatar, startedAt: isNumber, pinned: isBoolean, runningOn: isString, repeated: value => value === true,
+	orchestrator: value => isShaped(value, { cli: isString, running: isBoolean }) });
 const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
@@ -428,6 +429,7 @@ interface Drawn {
 	readonly dot: HTMLElement;
 	readonly name: HTMLElement;
 	readonly top: HTMLElement;
+	readonly meta: HTMLElement;
 	readonly line: HTMLElement;
 	/** The buttons at the first line's end while the pointer is on the card: its details, its menu, and its Pin where it has one (PANEL-1.3). */
 	readonly actions: HTMLElement;
@@ -558,6 +560,7 @@ function make(card: Card): Drawn {
 	const name = el('span', 'name');
 	top.append(name);
 	const bottom = el('span', 'line bottom');
+	const meta = el('span', 'card-meta');
 	const line = el('span', 'title');
 	bottom.append(line);
 	body.append(top, bottom);
@@ -571,7 +574,7 @@ function make(card: Card): Drawn {
 	const pinButton = action('pin-button', pinIcon(false));
 	actions.append(info, gear, pinButton);
 	top.append(actions);
-	const entry: Drawn = { element, avatar, dot, name, top, line, actions, info, gear, pinButton, look: lookOf(card.avatar), place: '', card };
+	const entry: Drawn = { element, avatar, dot, name, top, meta, line, actions, info, gear, pinButton, look: lookOf(card.avatar), place: '', card };
 	// The pointer on the card shows its buttons: the name gives the line's end up to them, and takes it back as the pointer goes
 	element.addEventListener('pointerenter', () => setHovered(entry, true));
 	element.addEventListener('pointerleave', () => pointerLeft(entry));
@@ -739,10 +742,11 @@ function update(entry: Drawn, card: Card): void {
 		entry.top.replaceChildren(entry.name, ...card.repeated ? [el('span', 'short-id', card.alias)] : [], ...status ? [status] : [], entry.actions);
 	}
 	// The Pin button where the card can be pinned or unpinned, filled where it is pinned as its passive Pin is (PANEL-1.3)
-	const pinnable = card.menu.pin === true || card.menu.unpin === true;
+	const pinnable = !card.orchestrator && (card.menu.pin === true || card.menu.unpin === true);
 	element.classList.toggle('pinnable', pinnable);
 	element.classList.toggle('pinned', card.pinned === true);
 	element.classList.toggle('remote-agent', card.runningOn !== undefined);
+	element.classList.toggle('orchestrator', card.orchestrator !== undefined);
 	entry.pinButton.hidden = !pinnable;
 	const pinLook = card.pinned ? 'filled' : 'outline';
 	if (entry.pinButton.dataset.look !== pinLook) {
@@ -751,6 +755,17 @@ function update(entry: Drawn, card: Card): void {
 	}
 	if (entry.line.textContent !== card.line) {
 		entry.line.textContent = card.line;
+	}
+	if (card.orchestrator) {
+		if (!entry.meta.parentElement) {
+			entry.line.before(entry.meta);
+		}
+		const meta = `${card.stateText} · ${card.orchestrator.cli}${card.line ? ' ·' : ''}`;
+		if (entry.meta.textContent !== meta) {
+			entry.meta.textContent = meta;
+		}
+	} else {
+		entry.meta.remove();
 	}
 	element.classList.toggle('selected', card.selected);
 	element.setAttribute('aria-selected', String(card.selected));
@@ -881,6 +896,13 @@ detailsStarted.append(icon('fact-icon', [['path', { d: CLOCK_PATH }]]), detailsS
 let placeKind: PlaceKind = 'repo';
 const detailsLocation = fact('details-fact', PLACE_ICONS[placeKind]());
 const detailsPath = fact('details-fact', icon('fact-icon', [['path', { d: FOLDER_PATH }]]));
+const detailsMachine = fact('details-fact', icon('fact-icon', [['path', { d: GLOBE_PATH }]]));
+const detailsAddress = fact('details-fact', icon('fact-icon', [['path', { d: TAG_PATH }]]));
+const copyReference = button(strings.copyReference ?? '', () => {
+	if (detailed?.card.details.address) {
+		act('copyReference', detailed.card.runId);
+	}
+}, true);
 detailsFacts.append(detailsSummary.row, detailsWho, detailsStarted, detailsLocation.row, detailsPath.row);
 detailsScroll.append(detailsFacts);
 details.append(detailsArrow, detailsScroll);
@@ -971,12 +993,12 @@ function fillDetails(): void {
 		return;
 	}
 	const { card } = entry;
-	const { summary, location, path } = card.details;
+	const { summary, location, path, machine, address } = card.details;
 	show(detailsSummary, summary ?? { label: card.details.titleLabel, value: card.details.untitled ?? '' });
 	detailsSummary.row.classList.toggle('untitled', !summary);
 	write(detailsName, card.name || card.alias);
 	// Its short ID right after its name; an empty name's ID is its name
-	write(detailsMore, card.name ? ` ${card.alias}` : '');
+	write(detailsMore, card.name && !card.orchestrator ? ` ${card.alias}` : '');
 	write(detailsStartedText, startedOf(card, nowOf()) ?? '');
 	if (location.kind !== placeKind) {
 		placeKind = location.kind;
@@ -984,6 +1006,18 @@ function fillDetails(): void {
 	}
 	show(detailsLocation, location);
 	show(detailsPath, path);
+	if (card.orchestrator) {
+		if (!detailsMachine.row.parentElement) {
+			detailsFacts.append(detailsMachine.row, detailsAddress.row, copyReference);
+		}
+		show(detailsMachine, machine);
+		show(detailsAddress, address);
+		copyReference.hidden = !address || !strings.copyReference;
+	} else {
+		detailsMachine.row.remove();
+		detailsAddress.row.remove();
+		copyReference.remove();
+	}
 	placeDetails(entry);
 	// How long ago, as time passes with no new state, from what this card says now
 	scheduleDetailsClock();
@@ -1280,6 +1314,8 @@ function contextOf(card: Card): string {
 		webviewSection: 'agent',
 		run_id: card.runId,
 		...(menu.dismiss ? { webviewAgentEnded: true } : {}),
+		...(card.orchestrator ? { webviewAgentRunning: card.orchestrator.running,
+			webviewAgentPinned: card.pinned === true, webviewAgentPinnable: menu.pin === true } : {}),
 		...(menu.moveUp ? { webviewMoveUp: true } : {}),
 		...(menu.moveDown ? { webviewMoveDown: true } : {}),
 		preventDefaultContextMenuItems: true

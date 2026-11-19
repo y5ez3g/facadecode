@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Act, AgoWords, Card, Strings } from './protocol';
+import { AgoWords, Card, PageAct, Strings } from './protocol';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -60,7 +60,7 @@ let actions = 0;
  * Has the extension do what the person did, on the card of run `target` where it is a card's (PANEL-3.1). Answers the action's ID,
  * which the extension's outcome names: this page's generation and a count, so that no other page's action has it.
  */
-export function act(what: Act, target?: string): string {
+export function act(what: PageAct, target?: string): string {
 	const action = `${page}-${++actions}`;
 	post({ type: 'act', action, what, ...(target !== undefined ? { target } : {}) });
 	return action;

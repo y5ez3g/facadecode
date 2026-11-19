@@ -15,7 +15,7 @@ export interface CardMenu {
 }
 
 /** Which fact a field of a card's details is (PANEL-1.5): stable whatever its words say, in every language. */
-export type DetailId = 'title' | 'location' | 'path';
+export type DetailId = 'title' | 'location' | 'path' | 'machine' | 'address';
 
 /**
  * One fact of a card's details: its value, and what a screen reader says before it - its label as the window's language says it,
@@ -46,6 +46,8 @@ export interface CardDetails {
 	readonly untitled?: string;
 	/** The agent that started it, where an agent did: `name #aN`. */
 	readonly startedBy?: string;
+	readonly machine?: DetailField;
+	readonly address?: DetailField;
 	/** Where it works, always: its main checkout, worktree or folder, its icon saying which - then, always, its path. */
 	readonly location: DetailField & { readonly kind: PlaceKind };
 	readonly path: DetailField;
@@ -79,6 +81,8 @@ export interface Card {
 	readonly stateText: string;
 	/** The second line (PANEL-1.4). */
 	readonly line: string;
+	/** The CLI in words and the terminal action's availability for an Orchestrator card (PANEL-4). */
+	readonly orchestrator?: { readonly cli: string; readonly running: boolean };
 	/** Its details, its location among them: no card shows its location (PANEL-1.3, 1.5). */
 	readonly details: CardDetails;
 	/** The accessible label (PANEL-1.5). */
@@ -119,6 +123,8 @@ export interface PanelState {
 
 /** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons; PANEL-1.3's Pin). */
 export type Act = 'open' | 'new' | 'continueSession' | 'clearFilter' | 'openFolder' | 'rename' | 'pin' | 'unpin';
+
+export type PageAct = Act | 'copyReference';
 
 /** The host's answer to one action of the page that asked: `gone` (its card's run is gone) or `failed`. */
 export interface Outcome {
@@ -166,6 +172,7 @@ export interface Strings {
 	readonly agents: string;
 	readonly newAgent: string;
 	readonly continueSession?: string;
+	readonly copyReference?: string;
 	readonly clearFilter: string;
 	/** The empty panel's words (PANEL-1.2): why it is empty. */
 	readonly noAgents: string;

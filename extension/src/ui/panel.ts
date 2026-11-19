@@ -6,8 +6,9 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { isJsonObject, JsonObject } from '../base/json';
 import type { LogPort } from '../core/ports';
-import type { Act, Outcome, PanelState, Scrolling, Strings } from '../webview/protocol';
-import { CONTEXT, PANEL_VIEW } from './catalog';
+import type { Act, Outcome, PageAct, PanelState, Scrolling, Strings } from '../webview/protocol';
+import { isAgentRunning } from './cardView';
+import { COMMANDS, CONTEXT, PANEL_VIEW } from './catalog';
 import { PanelModel } from './model';
 import { agentCountText } from './presentation';
 
@@ -40,7 +41,7 @@ const isTarget: Check = value => typeof value === 'string' && value.length > 0 &
 const isFlag: Check = value => typeof value === 'boolean';
 
 /** What the person can do on the page (PANEL-3.1, 1.2), each with whether it is a card's and so names the card's run. */
-const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
+const ACTS: { readonly [what in PageAct]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
 	continueSession: { target: false },
@@ -50,7 +51,8 @@ const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	rename: { target: true },
 	// A card's Pin button (PANEL-1.3), as Pin Agent and Unpin Agent in the palette (UX-3.1)
 	pin: { target: true },
-	unpin: { target: true }
+	unpin: { target: true },
+	copyReference: { target: true }
 };
 
 /**
@@ -84,7 +86,7 @@ function webviewMessageOf(raw: unknown): (JsonObject & { readonly type: string; 
 		return undefined;
 	}
 	// A card's action names its card's run, and no other has one
-	if (raw.type === 'act' && ACTS[raw.what as Act].target !== (raw.target !== undefined)) {
+	if (raw.type === 'act' && ACTS[raw.what as PageAct].target !== (raw.target !== undefined)) {
 		return undefined;
 	}
 	return raw as JsonObject & { readonly type: string; readonly page: string };
@@ -235,8 +237,22 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			return;
 		}
 		let reason: Outcome['reason'] | undefined;
+		const what = message.what as PageAct;
+		const target = message.target as string | undefined;
 		try {
-			reason = await this.actions(message.what as Act, message.target as string | undefined);
+			if (what === 'copyReference') {
+				const facts = target === undefined ? undefined : this.model.runFacts(target);
+				if (this.model.usesOrchestrator() && facts?.address) {
+					await vscode.commands.executeCommand(COMMANDS.copyAgentReference, { run_id: facts.id });
+				} else {
+					reason = 'gone';
+				}
+			} else if (what === 'open' && this.model.usesOrchestrator()) {
+				const facts = target === undefined ? undefined : this.model.select(target);
+				reason = !facts ? 'gone' : isAgentRunning(facts) ? await this.actions(what, target) : undefined;
+			} else {
+				reason = await this.actions(what, target);
+			}
 		} catch (err) {
 			this.log.event(`The panel could not ${message.what as string}: ${err instanceof Error ? err.message : String(err)}`);
 			reason = 'failed';
@@ -279,6 +295,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			[CONTEXT.hasAgents, state.cardCount > 0],
 			[CONTEXT.agentSelected, selected !== undefined],
 			[CONTEXT.agentSelectedEnded, selected?.ended === true],
+			['facade.agentSelectedRunning', selected?.running === true],
 			[CONTEXT.agentSelectedPinned, selected?.pinned === true],
 			[CONTEXT.agentSelectedPinnable, selected?.pinnable === true],
 			// Its card drawn: Show Agent Details has nothing to open for a card the filter hides (PANEL-2.3)
@@ -319,7 +336,8 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const strings: Strings = {
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
-			continueSession: vscode.l10n.t("Continue Session"),
+			continueSession: this.model.usesOrchestrator() ? vscode.l10n.t("Resume Agent") : vscode.l10n.t("Continue Session"),
+			...(this.model.usesOrchestrator() ? { copyReference: vscode.l10n.t("Copy Agent Reference") } : {}),
 			clearFilter: vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
 			noAgents: vscode.l10n.t("Start an agent in this workspace."),
