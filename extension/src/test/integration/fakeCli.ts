@@ -40,7 +40,10 @@ const recordedArgs = args.map((word, index) => args[index - 1] === '--run-creden
 const facadeEnv = Object.fromEntries(Object.entries(process.env)
 	.filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name))
 	.map(([name, value]) => [name, value && redactCredential(value)]));
-fs.writeFileSync(`${record}.args.${agent}`, JSON.stringify({ cwd: process.cwd(), args: recordedArgs, env: facadeEnv }), { mode: 0o600 });
+const launchRecord = `${record}.args.${agent}`;
+const nextLaunch = `${launchRecord}.${process.pid}.next`;
+fs.writeFileSync(nextLaunch, JSON.stringify({ cwd: process.cwd(), args: recordedArgs, env: facadeEnv }), { mode: 0o600 });
+fs.renameSync(nextLaunch, launchRecord);
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
 fs.appendFileSync(`${record}.starts.${agent}`, `${process.pid}\n`, { mode: 0o600 });
 // Simulate the vendor's identity report explicitly; a launch argument alone no longer enables Pin.
