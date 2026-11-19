@@ -74,12 +74,12 @@ internal static class FacadeTestProcesses {
             string command = CommandLine(handle);
             if (command == null || command.Replace('/', '\\').IndexOf(marker, StringComparison.OrdinalIgnoreCase) < 0) return;
             // Use the same process handle for the match and the stop, even if the PID is reused.
-            if (!TerminateProcess(handle, 1)) {
-                int error = Marshal.GetLastWin32Error();
-                if (WaitForSingleObject(handle, 0) == 0) return;
-                throw new Win32Exception(error);
-            }
-            if (WaitForSingleObject(handle, 2000) != 0) throw new TimeoutException("Test process " + pid + " did not exit.");
+            bool terminated = TerminateProcess(handle, 1);
+            int error = terminated ? 0 : Marshal.GetLastWin32Error();
+            // The editor can already be shutting down when the sweep reaches it.
+            if (WaitForSingleObject(handle, 2000) == 0) return;
+            if (!terminated) throw new Win32Exception(error, "Could not stop test process " + pid + " (Windows error " + error + ").");
+            throw new TimeoutException("Test process " + pid + " did not exit.");
         } finally { CloseHandle(handle); }
     }
 }
