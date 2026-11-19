@@ -41,7 +41,7 @@ let restoring = savedBrowsing();
 const DOTS: readonly unknown[] = ['working', 'error', 'none'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
 
-const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean }, { pin: isBoolean, unpin: isBoolean });
+const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean }, { dismiss: value => value === true, pin: isBoolean, unpin: isBoolean });
 const isFile: Check = value => isString(value) && /^[\w.-]+$/.test(value as string);
 const isAvatar: Check = value => isShaped(value, { file: isFile }, { eyes: isFile });
 const PLACE_KINDS: readonly unknown[] = ['repo', 'worktree', 'folder'];

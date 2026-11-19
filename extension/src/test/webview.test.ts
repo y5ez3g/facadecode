@@ -825,7 +825,8 @@ suite('The agent panel in Chromium', function () {
 			pinned: true, runningOn: undefined, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
 			dot: 'working', stateText: 'Working', line: '📨 Check the build',
 			details: { summary: { id: 'title', label: 'Title: ', value: 'Check the build' }, titleLabel: 'Title: ', untitled: 'No title yet', startedBy: 'Maker #a7', location: { id: 'location', label: 'Location: ', value: 'main', kind: 'repo' }, path: { id: 'path', label: 'Path: ', value: '/project' }, description: { title: 'Title: Check the build', place: 'Path: /project' } },
-			label: 'Ada, #a1, Working', startedAt: Date.now(), menu: { pin: false, unpin: true, moveUp: false, moveDown: true }
+			label: 'Ada, #a1, Working', startedAt: Date.now(),
+			menu: { dismiss: true, pin: false, unpin: true, moveUp: false, moveDown: true } satisfies Required<Card['menu']>
 		};
 		const twin: Card = { ...every, pinned: undefined, selected: false, runId: 'run-2', alias: '#a2', avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' }, menu: { pin: true, moveUp: true, moveDown: false } };
 		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3@gpu',
@@ -834,6 +835,8 @@ suite('The agent panel in Chromium', function () {
 		await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
 		assert.deepStrictEqual(await evaluate(`[window.errors, [...document.querySelectorAll('.agent')].map(card => [card.querySelector('.name').textContent, card.querySelector('.short-id')?.textContent ?? null])]`),
 			[[], [['Ada', '#a1'], ['Ada', '#a2'], ['Cy', null]]]);
+		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.agent')].map(card => JSON.parse(card.dataset.vscodeContext).webviewAgentEnded === true)`),
+			[true, false, false]);
 		assert.deepStrictEqual(await evaluate(`[...document.querySelectorAll('.remote-status')].map(icon => [icon.tagName, icon.title, icon.closest('.agent').querySelector('.pin-button').hidden])`),
 			[['SPAN', 'Running on gpu', true]]);
 	});
@@ -1429,7 +1432,8 @@ suite('The agent panel in Chromium', function () {
 
 	test('a message for this page of an unknown type, with a missing, extra or mistyped field, is refused with a diagnostic and changes nothing (PANEL-3.2)', async () => {
 		const bad = await evaluate(`[stateOf([newCard(1, { dot: 'unknown' })]), stateOf([{ ...newCard(1), avatar: { file: '../x.png' } }]), (() => { const state = stateOf([newCard(1)]); delete state.capabilities; return state; })(), stateOf([{ ...newCard(1), extra: true }]),
-			stateOf([newCard(1, { line: 7 })]), stateOf([newCard(1)], { capabilities: { canManageWorktrees: false, remote: false } })]`);
+			stateOf([newCard(1, { line: 7 })]), stateOf([newCard(1, { menu: { moveUp: false, moveDown: false, dismiss: false } })]),
+			stateOf([newCard(1)], { capabilities: { canManageWorktrees: false, remote: false } })]`);
 		for (const message of [{ type: 'navigate', url: 'https://example.com' }, { type: 'state' }, ...bad.map((state: object) => ({ type: 'state', state })), { type: 'renameAgent', agent: '1' }, { type: 'answer', action: 'x', value: {} }, { type: 'outcome', action: 'x', ok: 'yes' }, { type: 'scrolling', scrolling: { sensitivity: 1, fast: 5, smooth: false } }]) {
 			await evaluate('window.errors = []');
 			await deliver(message);
