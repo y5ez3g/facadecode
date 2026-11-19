@@ -21,7 +21,10 @@ use facade_base::terminal::PtyMaster;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use super::{ExitRecorded, ExitSink, FoundKeeper, RunEvent, RunExit, RunKind, StartedRun};
+use super::{
+    ExitRecorded, ExitSink, FoundKeeper, RunCredentialRecord, RunEvent, RunExit, RunIdentity,
+    RunKind, StartedRun,
+};
 use client::{ConnectError, KeeperClient};
 use registry::{Run, RunRegistry, RunRole};
 
@@ -157,6 +160,7 @@ impl KeeperLink {
         args: KeeperStartArgs,
         exits: ExitSink,
         kind: RunKind,
+        credential_digest: Option<[u8; 32]>,
     ) -> Result<StartedRun, ErrorBody> {
         let selected = reservation.keeper.lock().unwrap().clone();
         let keeper = match selected {
@@ -171,7 +175,8 @@ impl KeeperLink {
                     .expect("keeper was selected")
             }
         };
-        self.runs.begin(id, number, Arc::clone(&exits));
+        self.runs
+            .begin(id, number, Arc::clone(&exits), credential_digest);
         reservation.sent = true;
         self.connection.lock().unwrap().sent += 1;
         let response = keeper
@@ -204,25 +209,34 @@ impl KeeperLink {
                         if kind == RunKind::Start {
                             crate::gate_for_test("after-run-start-response");
                         }
+                        let identity = ProcessIdentity {
+                            pid: process.pid,
+                            birth: process.birth,
+                        };
+                        let credential = credential_digest.map(|digest| RunCredentialRecord {
+                            digest,
+                            process: identity.clone(),
+                        });
                         self.runs.register(
                             id,
                             Run {
-                                identity: ProcessIdentity {
-                                    pid: process.pid,
-                                    birth: process.birth,
-                                },
+                                identity: identity.clone(),
                                 master: copy,
                                 exit: None,
                                 stopping: false,
                                 role: RunRole::Agent,
                                 committed: kind == RunKind::Start,
+                                installed: false,
                                 number,
                                 exits: Some(exits),
+                                credential_digest,
                             },
                         );
                         Ok(StartedRun {
-                            pid: process.pid,
+                            pid: identity.pid,
+                            process: identity,
                             master,
+                            credential,
                         })
                     }
                 },
@@ -263,8 +277,16 @@ impl KeeperLink {
     }
 
     /// Marks a run committed and returns its early exit. Takes registry then pending locks.
-    pub(crate) fn installed(&self, id: &str) -> Option<ProcessExit> {
-        self.runs.installed(id)
+    pub(crate) fn installed(&self, id: &str, number: Option<u64>) -> Option<ProcessExit> {
+        self.runs.installed(id, number)
+    }
+
+    /// Waits up to the keeper readiness interval for the credential's run to be installed.
+    pub(crate) async fn verify_credential(
+        &self,
+        credential: &str,
+    ) -> Result<Option<RunIdentity>, ErrorBody> {
+        self.runs.verify_credential(credential, READY_WAIT).await
     }
 
     /// Releases an ended run synchronously; a running run remains held.
@@ -335,11 +357,22 @@ impl KeeperLink {
                 stopping: held.stopping,
                 role: RunRole::Agent,
                 committed: true,
+                installed: true,
                 number,
                 exits: Some(exits),
+                credential_digest: None,
             },
         );
         Ok(())
+    }
+
+    pub(crate) fn restore_credential(
+        &self,
+        held: &KeeperHeldAgent,
+        number: u64,
+        credential: RunCredentialRecord,
+    ) -> bool {
+        self.runs.restore_credential(held, number, credential)
     }
 
     /// Recovery: retains unreadable runs untouched; asks the keeper to stop unrecorded ones.
@@ -365,8 +398,10 @@ impl KeeperLink {
                         stopping: held.stopping,
                         role: RunRole::Unreadable,
                         committed: true,
+                        installed: false,
                         number: 0,
                         exits: None,
+                        credential_digest: None,
                     },
                 );
                 facade_base::log::write(

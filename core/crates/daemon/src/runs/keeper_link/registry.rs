@@ -2,15 +2,18 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use tokio::time::Instant;
+use std::time::Duration;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::keeper::{KeeperHeldAgent, KeeperSyncArgs};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::terminal::PtyMaster;
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
-use super::{ExitRecorded, ExitSink, RecordedExit, RunExit};
+use crate::runs::credential_digest;
+
+use super::{ExitRecorded, ExitSink, RecordedExit, RunCredentialRecord, RunExit, RunIdentity};
 
 #[derive(PartialEq, Eq)]
 pub(super) enum RunRole {
@@ -26,14 +29,24 @@ pub(super) struct Run {
     pub stopping: bool,
     pub role: RunRole,
     pub committed: bool,
+    /// The daemon has committed the record and installed the agent's terminal.
+    pub installed: bool,
     pub number: u64,
     pub exits: Option<ExitSink>,
+    pub credential_digest: Option<[u8; 32]>,
 }
 
 struct PendingStart {
     exits: ExitSink,
     number: u64,
     exit: Option<ProcessExit>,
+    credential_digest: Option<[u8; 32]>,
+}
+
+enum CredentialState {
+    Pending,
+    Installed(RunIdentity),
+    Ended,
 }
 
 #[derive(Default)]
@@ -49,19 +62,28 @@ pub(super) struct Reconciliation {
 }
 
 impl RunRegistry {
-    pub fn begin(&self, id: &str, number: u64, exits: ExitSink) {
+    pub fn begin(
+        &self,
+        id: &str,
+        number: u64,
+        exits: ExitSink,
+        credential_digest: Option<[u8; 32]>,
+    ) {
         self.pending.lock().unwrap().insert(
             id.into(),
             PendingStart {
                 exits,
                 number,
                 exit: None,
+                credential_digest,
             },
         );
     }
 
     pub fn cancel(&self, id: &str) {
-        self.pending.lock().unwrap().remove(id);
+        if self.pending.lock().unwrap().remove(id).is_some() {
+            self.changed.notify_waiters();
+        }
     }
 
     pub fn register(&self, id: &str, mut run: Run) {
@@ -80,16 +102,105 @@ impl RunRegistry {
         self.changed.notify_waiters();
     }
 
-    pub fn installed(&self, id: &str) -> Option<ProcessExit> {
+    pub fn installed(&self, id: &str, number: Option<u64>) -> Option<ProcessExit> {
         let exit = {
             let mut runs = self.runs.lock().unwrap();
             let run = runs.get_mut(id)?;
+            if number.is_some_and(|number| run.number != number) {
+                return None;
+            }
             run.committed = true;
+            run.installed = true;
             run.exit.clone()
         };
         self.cancel(id);
         self.changed.notify_waiters();
         exit
+    }
+
+    pub async fn verify_credential(
+        &self,
+        credential: &str,
+        timeout: Duration,
+    ) -> Result<Option<RunIdentity>, ErrorBody> {
+        let digest = credential_digest(credential);
+        let deadline = Instant::now() + timeout;
+        let mut waited_for_run = false;
+        loop {
+            let changed = self.changed.notified();
+            match self.credential_state(&digest) {
+                Some(CredentialState::Installed(identity)) => return Ok(Some(identity)),
+                Some(CredentialState::Pending) => waited_for_run = true,
+                None if !waited_for_run => return Ok(None),
+                None | Some(CredentialState::Ended) => {
+                    return Err(ErrorBody::new(
+                        Reason::Unavailable,
+                        "the run for this relay credential is no longer available",
+                    ));
+                }
+            }
+            if tokio::time::timeout_at(deadline, changed).await.is_err() {
+                return Err(ErrorBody::new(
+                    Reason::Unavailable,
+                    "the run for this relay credential is still starting; try again",
+                ));
+            }
+        }
+    }
+
+    fn credential_state(&self, digest: &[u8; 32]) -> Option<CredentialState> {
+        let runs = self.runs.lock().unwrap();
+        if let Some((id, run)) = runs
+            .iter()
+            .find(|(_, run)| run.credential_digest.as_ref() == Some(digest))
+        {
+            let state = if run.exit.is_some() || run.role != RunRole::Agent {
+                CredentialState::Ended
+            } else if run.installed {
+                CredentialState::Installed(RunIdentity {
+                    agent_id: id.clone(),
+                    pid: run.identity.pid,
+                    run: run.number,
+                })
+            } else {
+                CredentialState::Pending
+            };
+            return Some(state);
+        }
+        let pending = self.pending.lock().unwrap();
+        pending
+            .values()
+            .find(|start| start.credential_digest.as_ref() == Some(digest))
+            .map(|start| {
+                if start.exit.is_some() {
+                    CredentialState::Ended
+                } else {
+                    CredentialState::Pending
+                }
+            })
+    }
+
+    pub fn restore_credential(
+        &self,
+        held: &KeeperHeldAgent,
+        number: u64,
+        credential: RunCredentialRecord,
+    ) -> bool {
+        if credential.process.pid != held.pid || credential.process.birth != held.birth {
+            return false;
+        }
+        let mut runs = self.runs.lock().unwrap();
+        let Some(run) = runs.get_mut(&held.id).filter(|run| {
+            run.role == RunRole::Agent
+                && run.installed
+                && run.exit.is_none()
+                && run.identity == credential.process
+                && run.number == number
+        }) else {
+            return false;
+        };
+        run.credential_digest = Some(credential.digest);
+        true
     }
 
     pub fn process(&self, id: &str) -> Option<ProcessIdentity> {
