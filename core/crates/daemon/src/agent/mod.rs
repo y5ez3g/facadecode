@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::{AgentInfo, AgentState, AgentsUpdate, InputInfo, WindowRef};
+use facade_base::daemon::{AgentInfo, AgentsUpdate, InputInfo};
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
 use facade_screen::{Screen, TerminalColors};
@@ -117,12 +117,6 @@ pub(crate) enum InputRejection {
     Backpressured(Input),
 }
 
-/// A member editor window and the colors it supplies to an agent's terminal.
-pub(crate) struct WindowColors {
-    pub(crate) window: WindowRef,
-    pub(crate) colors: TerminalColors,
-}
-
 /// What the actor is asked to do.
 pub(crate) enum AgentCommand {
     /// Takes input for run `run`, at most [`MAX_INPUT_BYTES`]. Input for any other run is refused
@@ -139,18 +133,8 @@ pub(crate) enum AgentCommand {
         rows: u16,
         colors: Option<TerminalColors>,
     },
-    /// Takes colors from the verified member editor window requesting this size.
-    ResizeFromWindow {
-        cols: u16,
-        rows: u16,
-        colors: WindowColors,
-    },
-    /// Updates colors from the current source, or supplies an initial source if allowed.
-    WindowColorsChanged {
-        colors: WindowColors,
-        allow_initial: bool,
-    },
     /// Adds a viewer: its snapshot goes through `reply` before any change.
+    #[cfg(test)]
     AddViewer {
         viewer: u64,
         tx: ViewerSender,
@@ -243,11 +227,6 @@ pub(crate) enum AgentCommand {
         name: String,
         reply: oneshot::Sender<AgentInfo>,
     },
-    /// Applies the committed membership list, publishes a change, and replies with the record.
-    UpdateWindows {
-        windows: Vec<WindowRef>,
-        reply: oneshot::Sender<AgentInfo>,
-    },
 }
 
 /// What an actor starts from.
@@ -303,18 +282,7 @@ pub(crate) fn spawn(
     tx: mpsc::Sender<AgentCommand>,
     changes: broadcast::Sender<AgentsUpdate>,
 ) -> anyhow::Result<AgentHandle> {
-    spawn_with_color_source(start, rx, tx, changes, None)
-}
-
-/// Starts the actor with the window that supplied its initial terminal colors, if any.
-pub(crate) fn spawn_with_color_source(
-    start: ActorStart,
-    rx: mpsc::Receiver<AgentCommand>,
-    tx: mpsc::Sender<AgentCommand>,
-    changes: broadcast::Sender<AgentsUpdate>,
-    color_source: Option<WindowRef>,
-) -> anyhow::Result<AgentHandle> {
-    let shared = Arc::new(Shared::new(start.info.clone(), color_source));
+    let shared = Arc::new(Shared::new(start.info.clone()));
     let room = Arc::new(Notify::new());
     let (exit_tx, exit) = watch::channel(start.info.exit.clone());
     let (settled_tx, settled) = watch::channel(false);
@@ -359,23 +327,15 @@ struct Shared {
 struct Record {
     info: AgentInfo,
     installed_run: u64,
-    color_source: ColorSource,
     title: Option<String>,
 }
 
-enum ColorSource {
-    Default,
-    Window(WindowRef),
-    Terminal,
-}
-
 impl Shared {
-    fn new(info: AgentInfo, color_source: Option<WindowRef>) -> Self {
+    fn new(info: AgentInfo) -> Self {
         Self {
             record: Mutex::new(Record {
                 info,
                 installed_run: FIRST_RUN,
-                color_source: color_source.map_or(ColorSource::Default, ColorSource::Window),
                 title: None,
             }),
             run: AtomicU64::new(FIRST_RUN),
@@ -406,7 +366,7 @@ impl AgentHandle {
         AgentHandle {
             id: info.agent_id.clone(),
             commands,
-            shared: Arc::new(Shared::new(info, None)),
+            shared: Arc::new(Shared::new(info)),
             room: Arc::new(Notify::new()),
             exit: watch::channel(None).1,
             settled: watch::channel(false).1,
@@ -435,14 +395,6 @@ impl AgentHandle {
     pub(crate) fn installed_record(&self) -> (u64, AgentInfo) {
         let record = self.shared.record.lock().unwrap();
         (record.installed_run, record.info.clone())
-    }
-
-    /// The member window supplying the screen's terminal colors, if any.
-    pub(crate) fn color_source(&self) -> Option<WindowRef> {
-        match &self.shared.record.lock().unwrap().color_source {
-            ColorSource::Window(window) => Some(window.clone()),
-            _ => None,
-        }
     }
 
     pub(crate) fn is_guest(&self) -> bool {
@@ -517,17 +469,6 @@ impl AgentHandle {
         let mut record = self.shared.record.lock().unwrap();
         record.info.name = name;
         record.info.clone()
-    }
-
-    /// A guest's turn began or ended: the new record where its state changed.
-    pub(crate) fn set_guest_state(&self, state: AgentState) -> Option<AgentInfo> {
-        let mut record = self.shared.record.lock().unwrap();
-        let info = &mut record.info;
-        if info.state == state && info.state_detail.is_none() {
-            return None;
-        }
-        (info.state, info.state_detail) = (state, None);
-        Some(info.clone())
     }
 
     /// A guest ended.

@@ -28,7 +28,7 @@ mod restart;
 mod settle;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{AgentInfo, Delivery, DeliveryStatus, Message, SendOutcome, TextWritten};
@@ -38,11 +38,10 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
 
 use crate::store::{Kept, KeptMessage, MessageTable, RequestId};
-use crate::{HUMAN, blocking_in_place};
+use crate::{Cancel, HUMAN, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
-pub(crate) use human::{human_result, no_window_delivery};
-#[allow(unused_imports)] // The verified relay supplies the selection when it is wired in.
+pub(crate) use human::human_result;
 pub(crate) use inbox::InboxRead;
 pub(crate) use outcome::{Due, Outcome, delivery_limit};
 pub(crate) use restart::{Recipient, TakeUp, decide};
@@ -71,6 +70,11 @@ pub(crate) enum Settled {
     Kept(Box<Message>),
     /// Failed with none of it typed, and taken out of the inbox: its sender may send it again.
     Withdrawn(Box<Message>),
+    /// Timed out after overlapping the recipient's wait for a specific reply.
+    WithdrawnWhileWaiting {
+        message: Box<Message>,
+        expected_reply_to: MessageRef,
+    },
     /// Withdrawn by its send's `cancel` before its paste began; not kept.
     Cancelled,
 }
@@ -79,7 +83,7 @@ pub(crate) enum Settled {
 #[derive(Clone, Debug)]
 pub(crate) enum Change {
     Updated(Box<Message>),
-    Removed { message_id: String, to: String },
+    Removed { to: String },
 }
 
 impl Change {
@@ -87,7 +91,7 @@ impl Change {
     pub(crate) fn to(&self) -> &str {
         match self {
             Change::Updated(message) => &message.to,
-            Change::Removed { to, .. } => to,
+            Change::Removed { to } => to,
         }
     }
 }
@@ -98,12 +102,6 @@ pub(crate) enum Posted {
     Earlier(Earlier),
 }
 
-/// A pending message to the person, or the one its request ID kept before.
-pub(crate) enum PostedHuman {
-    New(Message),
-    Earlier(Earlier),
-}
-
 /// The message a request ID kept before: still being delivered, or ended as it stands.
 pub(crate) enum Earlier {
     Delivering(Message, watch::Receiver<Option<Settled>>),
@@ -111,7 +109,6 @@ pub(crate) enum Earlier {
     /// The message's private receipt. A failure with no reason records an explicit cancellation.
     Withdrawn(Message),
     HumanReady(SendOutcome),
-    HumanInFlight(watch::Receiver<Option<HumanSend>>),
 }
 
 /// The result a start's prompt owes the agent or guest that sent it.
@@ -162,6 +159,8 @@ struct Open {
     prompt: bool,
     /// The result it owes, where it is a start's prompt from an agent or guest.
     owes: Option<OwedResult>,
+    /// The first reply filter that overlapped this delivery.
+    expected_reply_to: Option<MessageRef>,
     /// Told what became of it. Dropped untold where its inbox went first.
     settled: watch::Sender<Option<Settled>>,
 }
@@ -170,6 +169,40 @@ impl Open {
     /// Whether the send itself can cancel this delivery.
     fn may_cancel(&self) -> bool {
         !self.pasted && !self.prompt && self.owes.is_none()
+    }
+
+    fn note_reply_wait(&mut self, wait: &GuestReplyWait, machine_id: &str, at: &str) {
+        let sender_machine = self
+            .message
+            .from_machine_id
+            .as_deref()
+            .unwrap_or(machine_id);
+        if self.expected_reply_to.is_none()
+            && self.may_cancel()
+            && self.message.reply_to.is_none()
+            && self
+                .message
+                .delivery
+                .deadline
+                .as_deref()
+                .is_some_and(|due| due > at)
+            && sender_machine == wait.reference.machine_id
+        {
+            self.expected_reply_to = Some(wait.reference.clone());
+        }
+    }
+}
+
+/// A Guest's filtered read after it found its inbox empty of matching messages.
+struct GuestReplyWait {
+    reference: MessageRef,
+    until: Instant,
+    cancel: Cancel,
+}
+
+impl GuestReplyWait {
+    fn active(&self) -> bool {
+        self.until > Instant::now() && !self.cancel.is_requested()
     }
 }
 
@@ -185,12 +218,11 @@ struct Deliveries {
 }
 
 type OpenMap = HashMap<u64, Open>;
-type HumanSend = Result<SendOutcome, facade_base::jsonrpc::SendFailure>;
 
 #[derive(Default)]
 struct OpenDeliveries {
     agents: OpenMap,
-    human: HashMap<u64, watch::Sender<Option<HumanSend>>>,
+    guest_reply_waits: HashMap<String, Weak<GuestReplyWait>>,
 }
 
 impl Deliveries {
@@ -223,8 +255,8 @@ impl Deliveries {
             .send(Change::Updated(Box::new(message.clone())));
     }
 
-    fn removed(&self, message_id: String, to: String) {
-        let _ = self.changes.send(Change::Removed { message_id, to });
+    fn removed(&self, to: String) {
+        let _ = self.changes.send(Change::Removed { to });
     }
 
     /// Opens the delivery of `message`. Returns the receiver its settlement reaches.
@@ -241,6 +273,7 @@ impl Deliveries {
             pasted,
             prompt,
             owes,
+            expected_reply_to: None,
             settled,
         };
         open.insert(number(&delivery.message), delivery);
@@ -270,6 +303,17 @@ impl Deliveries {
             Kept::New(mut message) => {
                 self.identify(&mut message);
                 let settled = Self::open(&mut open.agents, message.clone(), false, false, None);
+                if let Some(wait) = open
+                    .guest_reply_waits
+                    .get(&message.to)
+                    .and_then(Weak::upgrade)
+                    && wait.active()
+                {
+                    open.agents
+                        .get_mut(&number(&message))
+                        .expect("the message's delivery was just opened")
+                        .note_reply_wait(&wait, &self.machine_id, &facade_base::time::iso_now());
+                }
                 self.updated(&message);
                 Posted::New(message, settled)
             }
@@ -290,15 +334,12 @@ impl Deliveries {
             return Earlier::Withdrawn(message);
         }
         if message.to == HUMAN {
-            return match open.human.get(&number(&message)) {
-                Some(settled) => Earlier::HumanInFlight(settled.subscribe()),
-                None => Earlier::HumanReady(SendOutcome {
-                    message,
-                    repeated: true,
-                    withdrawn: false,
-                    window_delivery,
-                }),
-            };
+            return Earlier::HumanReady(SendOutcome {
+                message,
+                repeated: true,
+                withdrawn: false,
+                window_delivery,
+            });
         }
         match open.agents.get(&number(&message)) {
             Some(delivery) => {
@@ -338,12 +379,6 @@ impl Messages {
             }),
             results: Mutex::new(Some(receiver)),
         }
-    }
-
-    /// Raises the counter so the next message number is above `given`; one already above stays.
-    /// Blocks.
-    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
-        self.deliveries.table.raise_above(given)
     }
 
     /// The handle an agent's typist delivers through.
@@ -465,8 +500,7 @@ impl Messages {
             return false;
         };
         gone.settled.send_replace(Some(Settled::Cancelled));
-        let Message { message_id, to, .. } = gone.message;
-        deliveries.removed(message_id, to);
+        deliveries.removed(gone.message.to);
         true
     }
 

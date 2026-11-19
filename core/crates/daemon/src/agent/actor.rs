@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use facade_base::daemon::{
     AgentInfo, AgentState, AgentsUpdate, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
-    WindowRef,
 };
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_rules::{BoxReading, InputRule, Rule};
@@ -31,8 +30,8 @@ use super::terminal::{Terminal, TerminalEvent, TerminalWait};
 use super::typist::{Modes, Typing, Typist};
 use super::viewers::{ViewKind, ViewerRequest, Viewers};
 use super::{
-    ActorStart, AgentCommand, ColorSource, FIRST_RUN, Input, InputRejection, Inspection,
-    MAX_INPUT_BYTES, ScreenStart, Shared, Submission, WindowColors,
+    ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
+    ScreenStart, Shared, Submission,
 };
 use crate::{Sender, gate_for_test, pause_for_test};
 
@@ -500,22 +499,10 @@ impl Actor {
             AgentCommand::Resize(cols, rows) => self.take_size(cols, rows, None),
             AgentCommand::ResizeTerminal { cols, rows, colors } => {
                 if !self.ended() {
-                    self.take_size(
-                        cols,
-                        rows,
-                        colors.map(|colors| (ColorSource::Terminal, colors)),
-                    );
+                    self.take_size(cols, rows, colors);
                 }
             }
-            AgentCommand::ResizeFromWindow {
-                cols,
-                rows,
-                colors: WindowColors { window, colors },
-            } => self.take_size(cols, rows, Some((ColorSource::Window(window), colors))),
-            AgentCommand::WindowColorsChanged {
-                colors,
-                allow_initial,
-            } => self.change_window_colors(colors, allow_initial),
+            #[cfg(test)]
             AgentCommand::AddViewer {
                 viewer,
                 tx,
@@ -702,7 +689,6 @@ impl Actor {
                 self.publish();
                 let _ = reply.send(self.links.shared.record.lock().unwrap().info.clone());
             }
-            AgentCommand::UpdateWindows { windows, reply } => self.update_windows(windows, reply),
             // A run that ended takes no prompt: dropping `ready` says so.
             AgentCommand::AwaitPrompt { ready } => {
                 if !self.ended() {
@@ -722,23 +708,6 @@ impl Actor {
             }
         }
         true
-    }
-
-    /// Publishes the committed membership change before replying with that same record.
-    fn update_windows(&mut self, windows: Vec<WindowRef>, reply: oneshot::Sender<AgentInfo>) {
-        let (changed, agent) = {
-            let mut record = self.links.shared.record.lock().unwrap();
-            let changed = record.info.windows != windows;
-            if changed {
-                record.info.windows = windows;
-            }
-            (changed, record.info.clone())
-        };
-        if changed {
-            self.publish_at = None;
-            self.publish_record(agent.clone());
-        }
-        let _ = reply.send(agent);
     }
 
     /// Takes input for run `run`, or says why not.
@@ -811,12 +780,11 @@ impl Actor {
     }
 
     /// Size requested by a client. An agent without a terminal keeps its last screen.
-    fn take_size(&mut self, cols: u16, rows: u16, colors: Option<(ColorSource, TerminalColors)>) {
+    fn take_size(&mut self, cols: u16, rows: u16, colors: Option<TerminalColors>) {
         if !self.terminal.is_open() {
             return;
         }
-        if let Some((source, colors)) = colors {
-            self.links.shared.record.lock().unwrap().color_source = source;
+        if let Some(colors) = colors {
             self.screen_mut().set_colors(colors);
         }
         if self.screen().is_full() {
@@ -833,25 +801,6 @@ impl Actor {
             self.publish_soon();
             self.catch_up_at = Some(Instant::now());
         }
-    }
-
-    /// Rechecks the color source when applying a window's theme from the mailbox.
-    fn change_window_colors(
-        &mut self,
-        WindowColors { window, colors }: WindowColors,
-        allow_initial: bool,
-    ) {
-        {
-            let mut record = self.links.shared.record.lock().unwrap();
-            match &record.color_source {
-                ColorSource::Window(source) if source == &window => {}
-                ColorSource::Default if allow_initial && record.info.windows.contains(&window) => {
-                    record.color_source = ColorSource::Window(window);
-                }
-                _ => return,
-            }
-        }
-        self.screen_mut().set_colors(colors);
     }
 
     /// Logs and applies a size to the screen, then to the terminal. Answers whether the record's

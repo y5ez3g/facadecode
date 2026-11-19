@@ -1,4 +1,4 @@
-//! Agent records: the #aN numbers, default names, window memberships, and what a reference names
+//! Agent records: the #aN numbers, default names, and what a reference names
 //! within a client's reach (RULES-2.3, RULES-4.3).
 //!
 //! Reach decides which agents a client can find, list, read, type into, stop and send to. The
@@ -10,7 +10,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use facade_base::daemon::{AgentInfo, WindowRef, display_name};
+use facade_base::daemon::AgentInfo;
+#[cfg(test)]
+use facade_base::daemon::display_name;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::{AgentRef, Caller};
 use facade_base::process::ProcessState;
@@ -18,8 +20,9 @@ use facade_base::v3::address::AgentKey;
 use facade_base::v3::{self, AgentListEntry, AgentListRow};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::HUMAN;
-use crate::store::{MembershipTable, NumberTable};
+use crate::store::NumberTable;
 
 /// The agents a client reaches.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,8 +32,6 @@ pub(crate) enum Reach {
     /// The agents of the creation tree whose first agent is `root`: the reach of `agent`, whose run
     /// has YOLO off.
     Tree { agent: AgentRef, root: AgentRef },
-    /// A caller that left the local agent list, whose own number names its local tree's root.
-    LocalUnlisted { agent: String },
 }
 
 impl From<&Caller> for Reach {
@@ -54,14 +55,13 @@ impl From<&Caller> for Reach {
 impl Reach {
     /// Whether the client reaches the agent `info` describes.
     pub(crate) fn reaches(&self, info: &AgentInfo) -> bool {
-        self.reaches_root(&info.root, root_machine(info), &info.machine_id)
+        self.reaches_root(&info.root, root_machine(info))
     }
 
-    fn reaches_root(&self, root_id: &str, root_machine: &str, agent_machine: &str) -> bool {
+    fn reaches_root(&self, root_id: &str, root_machine: &str) -> bool {
         match self {
             Reach::All => true,
             Reach::Tree { root, .. } => root_id == root.agent_id && root_machine == root.machine_id,
-            Reach::LocalUnlisted { agent } => root_id == agent && root_machine == agent_machine,
         }
     }
 
@@ -70,7 +70,6 @@ impl Reach {
         let caller = match self {
             Reach::All => None,
             Reach::Tree { agent, .. } => Some(agent.agent_id.as_str()),
-            Reach::LocalUnlisted { agent } => Some(agent.as_str()),
         };
         let reason = caller.map_or_else(String::new, |agent| {
             format!(
@@ -86,6 +85,7 @@ impl Reach {
 
 /// What a reference names.
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum Named {
     /// The agent with this ID.
     Agent(String),
@@ -97,18 +97,16 @@ pub(crate) enum Named {
 /// starts not listed yet, and agents whose records this version cannot read.
 pub(crate) struct Records {
     numbers: NumberTable,
-    members: MembershipTable,
     /// Names held by starts and renames until the record is listed or the operation fails.
     reserved: Mutex<HashMap<String, usize>>,
     unreadable: Mutex<HashSet<String>>,
 }
 
 impl Records {
-    /// Records with their number and membership tables, with nothing reserved or unreadable yet.
-    pub(crate) fn new(numbers: NumberTable, members: MembershipTable) -> Records {
+    /// Records with their number table, with nothing reserved or unreadable yet.
+    pub(crate) fn new(numbers: NumberTable) -> Records {
         Records {
             numbers,
-            members,
             reserved: Mutex::default(),
             unreadable: Mutex::default(),
         }
@@ -123,29 +121,6 @@ impl Records {
             .map_err(|err| ErrorBody::new(Reason::Internal, err.to_string()))?
             .map_err(|err| ErrorBody::new(Reason::Internal, format!("{err:#}")))?;
         Ok(format!("a{number}"))
-    }
-
-    /// Raises the counter so the next agent number is above `given`; one already above stays.
-    /// Blocks.
-    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
-        self.numbers.raise_above(given)
-    }
-
-    /// Compatibility entry point for callers that still pass window memberships and an ID.
-    /// The local list includes online Guests and managed agents, including ended records.
-    pub(crate) fn reserve_name(
-        &self,
-        _windows: &[WindowRef],
-        listed: &[AgentInfo],
-        _id: &str,
-        names: Option<&[String]>,
-    ) -> String {
-        let taken: Vec<String> = listed
-            .iter()
-            .filter(|info| info.process == ProcessState::Running && !info.unreachable)
-            .map(|info| info.name.clone())
-            .collect();
-        self.reserve_active_name(&taken, names)
     }
 
     /// Picks and holds a default name. The caller holds the agents lock and passes the names of
@@ -169,18 +144,6 @@ impl Records {
                 reserved.remove(name);
             }
         }
-    }
-
-    /// Adds a member and returns the committed, sorted memberships, or None if the record is gone.
-    /// Blocks.
-    pub(crate) fn add_window(
-        &self,
-        agent_id: &str,
-        window: &WindowRef,
-    ) -> Result<Option<Vec<WindowRef>>, ErrorBody> {
-        self.members
-            .add(agent_id, window)
-            .map_err(|err| ErrorBody::new(Reason::Internal, format!("{err:#}")))
     }
 
     /// Remembers agents whose records this version cannot read, so their runs are left alone.
@@ -291,7 +254,7 @@ pub(crate) fn lookup(
             continue;
         }
         let root_machine = info.root_machine_id.as_deref().unwrap_or(&info.machine_id);
-        if !reach.reaches_root(&info.root, root_machine, &info.machine_id) {
+        if !reach.reaches_root(&info.root, root_machine) {
             refused = true;
             continue;
         }
@@ -359,19 +322,16 @@ pub(crate) fn list_row(info: &v3::AgentInfo) -> AgentListEntry {
     }
 }
 
-/// The reach of a local client acting for an agent, or for the person. An unlisted caller can
-/// reach the local tree whose root is its own number.
-pub(crate) fn reach_of(caller: Option<&str>, info: Option<&AgentInfo>) -> Reach {
-    match (caller, info) {
-        (None, _) => Reach::All,
-        (Some(_), Some(info)) => Reach::from(&Caller::Agent {
+/// The reach of the agent `caller` describes, or the person's where there is none.
+#[cfg(test)]
+pub(crate) fn reach_of(caller: Option<&AgentInfo>) -> Reach {
+    match caller {
+        None => Reach::All,
+        Some(info) => Reach::from(&Caller::Agent {
             agent: info.reference(),
             root: root_of(info),
             yolo: info.yolo,
         }),
-        (Some(agent), None) => Reach::LocalUnlisted {
-            agent: agent.to_string(),
-        },
     }
 }
 
@@ -381,6 +341,7 @@ pub(crate) fn reach_of(caller: Option<&str>, info: Option<&AgentInfo>) -> Reach 
 /// reach. `#human` names the person, and so do `human` and `@human` while no agent in reach has
 /// that name, in any case. With `running_only`, ended agents are left out of names, and a name only
 /// ended agents have fails as ended.
+#[cfg(test)]
 pub(crate) fn resolve(
     agents: &[AgentInfo],
     reference: &str,
@@ -438,6 +399,7 @@ pub(crate) fn agent_number(id: &str) -> u64 {
 
 /// An agent ID from the ways a person writes one: `a3`, `#a3` and `3` all give `a3`. Anything else
 /// loses only a leading `#`.
+#[cfg(test)]
 pub(crate) fn normalize_agent_reference(reference: &str) -> String {
     let rest = reference.strip_prefix('#').unwrap_or(reference);
     match rest.bytes().all(|byte| byte.is_ascii_digit()) && !rest.is_empty() {
@@ -448,6 +410,7 @@ pub(crate) fn normalize_agent_reference(reference: &str) -> String {
 
 /// `human` or `@human` (`text`) names the person while no agent in reach has that name; otherwise
 /// it is ambiguous.
+#[cfg(test)]
 fn person_unless_named(text: &str, in_reach: &[&AgentInfo]) -> Result<Named, ErrorBody> {
     let named: Vec<&AgentInfo> = in_reach
         .iter()
@@ -468,6 +431,7 @@ fn person_unless_named(text: &str, in_reach: &[&AgentInfo]) -> Result<Named, Err
 
 /// The failure of a reference that names no agent, listing the agents in reach so the caller can
 /// correct it.
+#[cfg(test)]
 fn no_agent(reference: &str, in_reach: &[&AgentInfo]) -> ErrorBody {
     let mut listed: Vec<(u64, String)> = in_reach
         .iter()
@@ -489,6 +453,7 @@ fn no_agent(reference: &str, in_reach: &[&AgentInfo]) -> ErrorBody {
 }
 
 /// The IDs of `agents` by number, joined as `a1, #a4` to follow a `#`.
+#[cfg(test)]
 fn ids(agents: &[&AgentInfo]) -> String {
     let mut ids: Vec<&str> = agents.iter().map(|info| info.agent_id.as_str()).collect();
     ids.sort_by_key(|id| agent_number(id));
@@ -497,6 +462,7 @@ fn ids(agents: &[&AgentInfo]) -> String {
 
 /// The ID at the end of a reference written as Facade writes an agent, a name and then its ID, such
 /// as `#a3` in `@Pixel #a3`.
+#[cfg(test)]
 fn id_at_end(reference: &str) -> Option<&str> {
     let (_, last) = reference.trim().rsplit_once(char::is_whitespace)?;
     let digits = last.strip_prefix("#a")?;
@@ -612,8 +578,13 @@ mod tests {
 
     /// The reach of `caller` among `agents`.
     fn reach(agents: &[AgentInfo], caller: Option<&str>) -> Reach {
-        let info = caller.and_then(|id| agents.iter().find(|info| info.agent_id == id));
-        reach_of(caller, info)
+        let info = caller.map(|id| {
+            agents
+                .iter()
+                .find(|info| info.agent_id == id)
+                .expect("a listed caller")
+        });
+        reach_of(info)
     }
 
     /// The agent `reference` names, from Cy's or another reach.
@@ -648,11 +619,6 @@ mod tests {
         );
         assert_eq!(reached(Some("a4")), ["a1", "a2", "a3", "a4", "a5"]);
         assert_eq!(reached(None), ["a1", "a2", "a3", "a4", "a5"], "the person");
-        assert_eq!(
-            reach(&agents, Some("a9")),
-            Reach::LocalUnlisted { agent: "a9".into() },
-            "an agent no longer listed"
-        );
 
         let cy = reach(&agents, Some("a3"));
         let unrelated = AgentInfo {

@@ -18,15 +18,15 @@
 //! be read at all is logged, skipped and left as it is.
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
-use facade_base::daemon::{Delivery, Message, WindowDelivery, WindowDeliveryOutcome, WindowRef};
+use facade_base::daemon::{Delivery, Message, WindowDelivery, WindowDeliveryOutcome};
 use facade_base::machine::{AgentRef, MessageRef};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::{Store, log};
-use crate::HUMAN;
 
 /// What a message not yet delivered satisfies. `messages_undelivered` holds the messages it
 /// selects, and a query that repeats it uses that index.
@@ -82,6 +82,57 @@ pub(super) fn migrate_withdrawals(connection: &Connection) -> rusqlite::Result<(
          DROP INDEX messages_request;
          CREATE INDEX messages_request ON messages
              (\"from\", from_machine_id, \"to\", request_id, at) WHERE request_id IS NOT NULL;",
+    )
+}
+
+pub(super) fn migrate_send_routes(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "ALTER TABLE messages ADD COLUMN private_receipt INTEGER NOT NULL DEFAULT 0;
+         CREATE TABLE send_routes (
+             sender TEXT NOT NULL,
+             request_id TEXT NOT NULL,
+             target TEXT NOT NULL,
+             machine_id TEXT NOT NULL,
+             agent_id TEXT NOT NULL,
+             reply_message_id TEXT,
+             reply_machine_id TEXT,
+             at TEXT NOT NULL,
+             PRIMARY KEY (sender, request_id, target)
+         );",
+    )
+}
+
+/// The first recipient and checked reply of a send, retained by its originating machine.
+pub(crate) struct SendRoute {
+    pub(crate) recipient: AgentRef,
+    pub(crate) reply: Option<MessageRef>,
+}
+
+fn read_send_route(row: &Row<'_>) -> rusqlite::Result<SendRoute> {
+    let reply_id: Option<String> = row.get(2)?;
+    let reply_machine: Option<String> = row.get(3)?;
+    Ok(SendRoute {
+        recipient: AgentRef {
+            machine_id: row.get(0)?,
+            agent_id: row.get(1)?,
+        },
+        reply: reply_id
+            .zip(reply_machine)
+            .map(|(message_id, machine_id)| MessageRef {
+                message_id,
+                machine_id,
+            }),
+    })
+}
+
+/// The origin sets a route before the receiver dates its receipt. Keep the route for the
+/// one-hour receipt window plus the maximum time a send can spend getting there.
+fn send_route_cutoff() -> String {
+    let age = crate::operations::REQUEST_HOUR.saturating_add(crate::messages::delivery_limit());
+    facade_base::time::iso_time(
+        SystemTime::now()
+            .checked_sub(age)
+            .unwrap_or(SystemTime::UNIX_EPOCH),
     )
 }
 
@@ -361,7 +412,32 @@ pub(super) fn result_number(reference: &MessageRef) -> anyhow::Result<i64> {
 /// Deletes `owner`'s inbox, in `connection`'s transaction. The messages it sent stay. Returns what
 /// it deleted.
 pub(super) fn delete_inbox(connection: &Connection, owner: &str) -> rusqlite::Result<Vec<Gone>> {
-    delete_returning(connection, "\"to\" = ?1 AND withdrawn = 0", owner)
+    let since = crate::operations::an_hour_ago();
+    let mut archived = {
+        let mut statement = connection.prepare(
+            "UPDATE messages SET private_receipt = 1, text = '', from_name = NULL,
+             reply_to = NULL, reply_to_machine_id = NULL, from_window = NULL,
+             request_window_id = NULL, call_id = NULL, result = NULL,
+             result_owed = NULL, result_owed_machine_id = NULL, human_windows = NULL
+             WHERE \"to\" = ?1 AND withdrawn = 0 AND private_receipt = 0
+             AND status <> 'pending' AND request_id IS NOT NULL AND at >= ?2
+             RETURNING number",
+        )?;
+        statement
+            .query_map(params![owner, since], |row| {
+                Ok(Gone {
+                    number: row.get::<_, i64>(0)? as u64,
+                    to: owner.to_owned(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    archived.extend(delete_returning(
+        connection,
+        "\"to\" = ?1 AND withdrawn = 0 AND private_receipt = 0",
+        owner,
+    )?);
+    Ok(archived)
 }
 
 /// Deletes the messages `filter` selects with `value`, returning each.
@@ -371,7 +447,7 @@ fn delete_returning(
     value: &str,
 ) -> rusqlite::Result<Vec<Gone>> {
     let mut statement = connection.prepare(&format!(
-        "DELETE FROM messages WHERE {filter} RETURNING number, \"to\", withdrawn"
+        "DELETE FROM messages WHERE {filter} RETURNING number, \"to\", (withdrawn OR private_receipt)"
     ))?;
     let mut rows = statement.query([value])?;
     let mut gone = Vec::new();
@@ -458,7 +534,7 @@ fn write_delivery(
     let changed = connection.execute(
         &format!(
             "UPDATE messages SET status = ?2, reason = ?3, text_written = ?4, enter_written = ?5, \
-             deadline = ?6, delivered_via = ?7, delivered_at = ?8 WHERE number = ?1 AND withdrawn = 0 AND ({condition})"
+             deadline = ?6, delivered_via = ?7, delivered_at = ?8 WHERE number = ?1 AND withdrawn = 0 AND private_receipt = 0 AND ({condition})"
         ),
         params![
             number as i64,
@@ -547,19 +623,52 @@ impl MessageTable {
         )
     }
 
-    /// Raises the counter so the next message number is above `given`; one already above stays.
-    /// Blocks.
-    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
+    pub(crate) fn send_target(
+        &self,
+        sender: &str,
+        request_id: &str,
+        target: &str,
+    ) -> anyhow::Result<Option<SendRoute>> {
+        use rusqlite::OptionalExtension;
         self.0.with(
-            || "raise the message counter".to_string(),
+            || "read the original send recipient".into(),
             |connection| {
-                connection.execute(
-                    "UPDATE message_numbers SET next = MAX(next, ?1 + 1)",
-                    [given as i64],
-                )
+                connection
+                    .query_row(
+                        "SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
+                WHERE sender = ?1 AND request_id = ?2 AND target = ?3 AND at >= ?4",
+                        params![sender, request_id, target, send_route_cutoff()],
+                        read_send_route,
+                    )
+                    .optional()
             },
-        )?;
-        Ok(())
+        )
+    }
+
+    /// Keeps the first resolved target for retries on this machine, including after takeover.
+    pub(crate) fn keep_send_target(
+        &self,
+        sender: &str,
+        request_id: &str,
+        target: &str,
+        route: &SendRoute,
+    ) -> anyhow::Result<(SendRoute, bool)> {
+        self.0.transaction(|| "save the original send recipient".into(), |connection| {
+            let inserted = connection.execute("INSERT INTO send_routes
+                (sender,request_id,target,machine_id,agent_id,reply_message_id,reply_machine_id,at)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(sender,request_id,target) DO UPDATE SET
+                at=excluded.at, machine_id=excluded.machine_id, agent_id=excluded.agent_id,
+                reply_message_id=excluded.reply_message_id, reply_machine_id=excluded.reply_machine_id
+                WHERE at < ?9",
+                params![sender, request_id, target, route.recipient.machine_id, route.recipient.agent_id,
+                    route.reply.as_ref().map(|reply| &reply.message_id),
+                    route.reply.as_ref().map(|reply| &reply.machine_id),
+                    facade_base::time::iso_now(), send_route_cutoff()])?;
+            let route = connection.query_row("SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
+                WHERE sender = ?1 AND request_id = ?2 AND target = ?3", params![sender,request_id,target],
+                read_send_route)?;
+            Ok((route, inserted == 0))
+        })
     }
 
     /// Takes the next number and writes `message` under it, in one transaction, with `request`,
@@ -608,52 +717,6 @@ impl MessageTable {
         )
     }
 
-    /// Deletes message `number`, withdrawn before its paste began. Returns whether it was kept.
-    pub(crate) fn delete_message(&self, number: u64) -> anyhow::Result<bool> {
-        let deleted = self.0.with(
-            || format!("delete #m{number}"),
-            |connection| {
-                connection.execute(
-                    "DELETE FROM messages WHERE number = ?1 AND withdrawn = 0",
-                    [number as i64],
-                )
-            },
-        )?;
-        Ok(deleted == 1)
-    }
-
-    /// Keeps the first window receipt. Without a confirmed delivery the message stays pending.
-    pub(crate) fn settle_human(
-        &self,
-        number: u64,
-        outcomes: &[WindowDeliveryOutcome],
-    ) -> anyhow::Result<Message> {
-        let delivered_at = outcomes
-            .iter()
-            .any(WindowDeliveryOutcome::is_delivered)
-            .then(facade_base::time::iso_now);
-        let windows =
-            serde_json::to_string(&WindowDelivery::from_outcomes(outcomes.iter().cloned()))?;
-        self.0.transaction(
-            || format!("save the window delivery of #m{number}"),
-            |transaction| {
-                transaction.query_row(
-                    &format!(
-                        "UPDATE messages SET
-                         status = CASE WHEN ?2 IS NOT NULL THEN 'success' ELSE status END,
-                         delivered_via = CASE WHEN ?2 IS NOT NULL THEN 'notified' ELSE NULL END,
-                         delivered_at = ?2, human_windows = ?3
-                         WHERE number = ?1 AND \"to\" = ?4 AND status = 'pending'
-                         AND human_windows IS NULL
-                         RETURNING {COLUMNS}"
-                    ),
-                    params![number as i64, delivered_at, windows, HUMAN],
-                    |row| Ok(read_message(row)?.message),
-                )
-            },
-        )
-    }
-
     /// Looks up a message in its owner's inbox without changing delivery state.
     pub(crate) fn inbox_message(
         &self,
@@ -666,7 +729,7 @@ impl MessageTable {
                 connection
                     .query_row(
                         &format!(
-                            "SELECT {COLUMNS} FROM messages WHERE number = ?1 AND \"to\" = ?2 AND withdrawn = 0"
+                            "SELECT {COLUMNS} FROM messages WHERE number = ?1 AND \"to\" = ?2 AND withdrawn = 0 AND private_receipt = 0"
                         ),
                         params![number as i64, owner],
                         read_message,
@@ -674,26 +737,6 @@ impl MessageTable {
                     .optional()
             },
         )
-    }
-
-    /// The settled messages that reached this window's subscription, in message number order.
-    pub(crate) fn human_inbox(&self, window: &WindowRef) -> anyhow::Result<Vec<Message>> {
-        let kept = self.select(
-            "\"to\" = ?1 AND status = 'success' AND human_windows IS NOT NULL",
-            None,
-            [HUMAN],
-        )?;
-        Ok(kept
-            .into_iter()
-            .filter(|kept| {
-                kept.window_delivery.as_ref().is_some_and(|outcomes| {
-                    outcomes
-                        .iter()
-                        .any(|outcome| outcome.is_delivered() && outcome.window() == window)
-                })
-            })
-            .map(|kept| kept.message)
-            .collect())
     }
 
     /// Begins the delivery of prompt `number`, kept with no deadline while its CLI's tools connect:
@@ -710,7 +753,7 @@ impl MessageTable {
             |connection| {
                 connection.execute(
                     "UPDATE messages SET deadline = ?2, from_name = coalesce(from_name, ?3) \
-                     WHERE number = ?1 AND status = 'pending' AND withdrawn = 0 AND deadline IS NULL",
+                     WHERE number = ?1 AND status = 'pending' AND withdrawn = 0 AND private_receipt = 0 AND deadline IS NULL",
                     params![number as i64, deadline, from_name],
                 )
             },
@@ -728,7 +771,7 @@ impl MessageTable {
             |transaction| {
                 for number in numbers {
                     transaction.execute(
-                        "UPDATE messages SET paste = ?1 WHERE number = ?2 AND withdrawn = 0",
+                        "UPDATE messages SET paste = ?1 WHERE number = ?2 AND withdrawn = 0 AND private_receipt = 0",
                         params![*first as i64, *number as i64],
                     )?;
                 }
@@ -781,6 +824,7 @@ impl MessageTable {
 
     /// Writes, in one transaction, the delivery of each message a read handed over, unless it was
     /// delivered before, and the results the prompts among them owe, as `settle_messages` does.
+    #[cfg(test)]
     pub(crate) fn record_reads(
         &self,
         read: &[(u64, &Delivery)],
@@ -858,7 +902,7 @@ impl MessageTable {
             || "read messages".to_string(),
             |connection| {
                 let mut statement = connection.prepare(&format!(
-                    "SELECT {COLUMNS} FROM messages WHERE withdrawn = 0 AND ({filter}) ORDER BY number{limit}"
+                    "SELECT {COLUMNS} FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND ({filter}) ORDER BY number{limit}"
                 ))?;
                 let mut rows = statement.query(values)?;
                 let mut messages = Vec::new();
@@ -901,6 +945,7 @@ impl MessageTable {
     }
 
     /// The messages of `owner`'s inbox among `numbers`, by number.
+    #[cfg(test)]
     pub(crate) fn inbox_messages(
         &self,
         owner: &str,
@@ -913,6 +958,7 @@ impl MessageTable {
 
     /// Up to `limit` messages of `owner`'s inbox after number `after`, by number: every kept one
     /// with `all`, otherwise those not delivered yet.
+    #[cfg(test)]
     pub(crate) fn inbox_page(
         &self,
         owner: &str,
@@ -929,6 +975,7 @@ impl MessageTable {
 
     /// The newest `last` messages of `owner`'s inbox, by number: of every message where `all`,
     /// else of those not yet delivered.
+    #[cfg(test)]
     pub(crate) fn inbox_last(
         &self,
         owner: &str,
@@ -940,7 +987,7 @@ impl MessageTable {
             false => format!(" AND {UNDELIVERED}"),
         };
         let filter = format!(
-            "number IN (SELECT number FROM messages WHERE withdrawn = 0 AND \"to\" = ?1{undelivered} \
+            "number IN (SELECT number FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND \"to\" = ?1{undelivered} \
              ORDER BY number DESC LIMIT {last})"
         );
         self.select_messages(&filter, None, [owner])
@@ -970,7 +1017,7 @@ impl MessageTable {
             AND (?5 IS NULL OR (reply_to = ?5 AND COALESCE(reply_to_machine_id, ?6) = ?7))";
         match page.last {
             Some(last) => self.select_messages(
-                &format!("number IN (SELECT number FROM messages WHERE withdrawn = 0 AND ({eligible}) ORDER BY number DESC LIMIT {last})"),
+                &format!("number IN (SELECT number FROM messages WHERE withdrawn = 0 AND private_receipt = 0 AND ({eligible}) ORDER BY number DESC LIMIT {last})"),
                 None,
                 values,
             ),
@@ -979,6 +1026,7 @@ impl MessageTable {
     }
 
     /// Every kept message of `owner`'s inbox, by number.
+    #[cfg(test)]
     pub(crate) fn inbox(&self, owner: &str) -> anyhow::Result<Vec<Message>> {
         self.select_messages("\"to\" = ?1", None, [owner])
     }
@@ -999,7 +1047,7 @@ impl MessageTable {
             || "read messages".to_string(),
             |connection| {
                 connection.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM messages WHERE number = ?1 AND withdrawn = 0)",
+                    "SELECT EXISTS (SELECT 1 FROM messages WHERE number = ?1 AND withdrawn = 0 AND private_receipt = 0)",
                     [number as i64],
                     |row| row.get(0),
                 )
@@ -1012,7 +1060,18 @@ impl MessageTable {
     pub(crate) fn expire_messages(&self, before: &str) -> anyhow::Result<Vec<Gone>> {
         self.0.with(
             || "delete expired messages".to_string(),
-            |connection| delete_returning(connection, "at < ?1", before),
+            |connection| {
+                let since = crate::operations::an_hour_ago();
+                connection.execute(
+                    "DELETE FROM send_routes WHERE at < ?1",
+                    [send_route_cutoff()],
+                )?;
+                connection.execute(
+                    "DELETE FROM messages WHERE (withdrawn OR private_receipt) AND at < ?1",
+                    [since],
+                )?;
+                delete_returning(connection, "at < ?1", before)
+            },
         )
     }
 }
@@ -1099,97 +1158,34 @@ mod tests {
     }
 
     #[test]
-    fn human_receipts_survive_reopening_and_appear_only_for_the_delivered_window() {
-        let core = Core::new("human-receipts");
-        let window = WindowRef {
-            machine_id: "here".into(),
-            window_id: "win-1".into(),
-        };
-        let other = WindowRef {
-            machine_id: "elsewhere".into(),
-            ..window.clone()
-        };
-        let receipt = vec![
-            WindowDeliveryOutcome::Delivered {
-                window: window.clone(),
-            },
-            WindowDeliveryOutcome::NotDelivered {
-                window: other.clone(),
-                reason: "window_disconnected".into(),
-            },
-        ];
-        let request = RequestId {
-            id: "to-person",
-            since: "2026-11-09T00:00:00.000Z",
-            caller_window_id: None,
-        };
-        let pending = message(0, HUMAN);
-        let store = core.open();
-        store.insert_message(&pending, Some(request)).unwrap();
-        store.insert_message(&pending, None).unwrap();
-        let settled = store.message_table().settle_human(1, &receipt).unwrap();
-        assert_eq!(settled.delivery.status, DeliveryStatus::Success);
-        assert_eq!(
-            settled.delivery.delivered_via,
-            Some(DeliveredVia::DeliveredToWindows)
-        );
-        let (via, saved): (String, String) = store
-            .connection
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT delivered_via, human_windows FROM messages WHERE number = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(via, "notified");
-        const GROUPED: &str = concat!(
-            r#"{"delivered":[{"machine_id":"here","window_id":"win-1"}],"not_delivered":"#,
-            r#"[{"window":{"machine_id":"elsewhere","window_id":"win-1"},"reason":"window_disconnected"}],"outcome_unknown":[]}"#,
-        );
-        assert_eq!(saved, GROUPED);
-        // A row written by a build using the grouped receipt is read after reopening too.
-        store.connection.lock().unwrap().execute(
-            "UPDATE messages SET status = 'success', delivered_via = 'notified', human_windows = ?1 WHERE number = 2",
-            [GROUPED],
-        ).unwrap();
-        drop(store);
-
-        let store = core.open();
-        let kept = store.find_request("a1", HUMAN, request).unwrap().unwrap();
-        assert_eq!(kept.message, settled);
-        assert_eq!(kept.window_delivery.as_ref(), Some(&receipt));
-        let old = store
-            .message_table()
-            .inbox_message(HUMAN, 2)
-            .unwrap()
-            .unwrap();
-        assert_eq!(old.window_delivery, Some(receipt));
-        assert_eq!(
-            old.message.delivery.delivered_via,
-            Some(DeliveredVia::DeliveredToWindows)
-        );
-        assert_eq!(
-            store.message_table().human_inbox(&window).unwrap(),
-            [settled, old.message]
-        );
-        assert!(
-            store
-                .message_table()
-                .human_inbox(&other)
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    /// A message kept with a request ID is its sender's for the hour: the same sender's same ID
-    /// finds it in the transaction that would keep another, which takes no number. Another sender's
-    /// same ID and the same ID after the hour keep new messages. A withdrawal is private and
-    /// keeps its original failure even when the retry arrives through another window.
-    #[test]
     fn a_request_id_keeps_one_message_per_sender_and_recipient_within_the_hour() {
-        let store = Store::in_memory();
+        let core = Core::new("send-request");
+        let route = SendRoute {
+            recipient: AgentRef {
+                machine_id: "remote-machine".into(),
+                agent_id: "a2".into(),
+            },
+            reply: Some(MessageRef {
+                machine_id: "origin-machine".into(),
+                message_id: "m7".into(),
+            }),
+        };
+        {
+            let store = core.open();
+            let (_, replay) = store
+                .message_table()
+                .keep_send_target("a1", "r1", "helper", &route)
+                .unwrap();
+            assert!(!replay);
+        }
+        let store = core.open();
+        let retained = store
+            .message_table()
+            .send_target("a1", "r1", "helper")
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.recipient, route.recipient);
+        assert_eq!(retained.reply, route.reply);
         // The messages are sent at 2026-11-10T00:00:00.000Z, within the hour since this.
         let within = "2026-11-09T23:00:00.000Z";
         let keep = |message: &Message, id, since| {

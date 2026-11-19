@@ -48,8 +48,6 @@ impl Service for Hellos {
         };
         let client = Client {
             identity,
-            window: None,
-            agent: None,
             verified_actor: None,
         };
         Ok((result, client, ()))

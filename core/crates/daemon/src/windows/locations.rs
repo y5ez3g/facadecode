@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::{Kept, LocationInfo, LocationKind, Worktree, location_id};
+#[cfg(test)]
+use facade_base::daemon::Worktree;
+use facade_base::daemon::{Kept, LocationInfo, LocationKind, location_id};
 use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 
@@ -45,6 +47,7 @@ const UNSET_FOR_GIT: [&str; 8] = [
 ];
 
 /// Characters a folder name cannot hold on some system; a branch's folder has `-` in their place.
+#[cfg(test)]
 const NOT_IN_FOLDER_NAMES: &str = "/\\<>:\"|?*";
 
 /// A window's locations, and what of them could not be read.
@@ -62,6 +65,7 @@ impl Catalog {
         &self.locations
     }
 
+    #[cfg(test)]
     pub(crate) fn problems(&self) -> &[String] {
         &self.problems
     }
@@ -71,24 +75,6 @@ impl Catalog {
         self.locations
             .iter()
             .find(|place| same_folder(&place.path, path))
-    }
-
-    /// The innermost location whose path is `path` or one of its parents, by whole path
-    /// components, `path` having its links resolved.
-    pub(crate) fn holding(&self, path: &str) -> Option<&LocationInfo> {
-        let path = folder_key(Path::new(path));
-        self.locations
-            .iter()
-            .filter(|place| Path::new(&path).starts_with(folder_key(Path::new(&place.path))))
-            .max_by_key(|place| Path::new(&place.path).components().count())
-    }
-
-    /// The paths of the locations that only folders missing from `folders` brought.
-    pub(crate) fn left_by(&self, folders: &[String]) -> Vec<String> {
-        self.with_sources()
-            .filter(|(_, source)| !folders.iter().any(|folder| same_folder(folder, source)))
-            .map(|(place, _)| place.path.clone())
-            .collect()
     }
 
     fn with_sources(&self) -> impl Iterator<Item = (&LocationInfo, &str)> {
@@ -425,10 +411,6 @@ fn worktree_failed(message: String) -> ErrorBody {
 }
 
 /// Checks the selected folder on the running machine. Git is only needed for a new worktree.
-#[allow(
-    dead_code,
-    reason = "The v3 start handlers are wired in the daemon layer"
-)]
 pub(crate) async fn preflight(source: &Path, branch: Option<&str>) -> Result<(), ErrorBody> {
     check_source_folder(source).await?;
     if let Some(branch) = branch {
@@ -571,6 +553,7 @@ impl<'a> Repository<'a> {
 }
 
 /// A creation that passed every check that needs no turn.
+#[cfg(test)]
 struct Creation<'a> {
     repository: Repository<'a>,
     branch: &'a str,
@@ -586,6 +569,7 @@ struct Creation<'a> {
 /// commit, a branch name Git refuses or already has, or a folder name some system cannot hold.
 /// Creations into one `.worktrees` folder take turns, at most 120 seconds of waiting, and the branch
 /// is checked again in the turn. When Git fails partway, the error's `data.kept` names what stays.
+#[cfg(test)]
 pub(crate) async fn create(
     source: &Path,
     worktree: &Worktree,
@@ -603,6 +587,7 @@ pub(crate) async fn create(
     creation.make().await
 }
 
+#[cfg(test)]
 impl<'a> Creation<'a> {
     async fn check(
         source: &'a Path,
@@ -702,6 +687,7 @@ fn partial_failure(destination: &str, error: &GitError, kept: Kept) -> ErrorBody
 /// The folder a worktree of `branch` gets (WORKTREES-2.2): the branch without a leading `prefix`,
 /// with `-` for every control character and every character in [`NOT_IN_FOLDER_NAMES`], the same on
 /// every system. None for a name some system cannot hold.
+#[cfg(test)]
 fn branch_folder(branch: &str, prefix: Option<&str>) -> Option<String> {
     let rest = match prefix {
         Some(prefix) if !prefix.is_empty() => branch.strip_prefix(prefix).unwrap_or(branch),
@@ -722,6 +708,7 @@ fn branch_folder(branch: &str, prefix: Option<&str>) -> Option<String> {
 
 /// Whether every system can hold a folder called `name`: not empty, `.` or `..`, not ending in a
 /// period or a space, and no Windows device name such as `CON` or `LPT1`, with or without a suffix.
+#[cfg(test)]
 fn holdable(name: &str) -> bool {
     if matches!(name, "" | "." | "..") || name.ends_with(['.', ' ']) {
         return false;
@@ -739,6 +726,7 @@ fn holdable(name: &str) -> bool {
 
 /// `<folder>` in `parent`, or else `<folder>-1`, `<folder>-2` and on: the first that no file,
 /// folder, link or registered worktree takes.
+#[cfg(test)]
 fn free_destination(parent: &Path, folder: &str, registered: &[String]) -> PathBuf {
     let mut candidate = parent.join(folder);
     let mut suffix = 0;

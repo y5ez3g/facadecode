@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::{MachineHello, SshInteraction};
-use facade_base::time::{iso_time, parse_iso_time};
+use facade_base::time::iso_time;
 use facade_base::v3::{MachineConnection, MachineInfo, MachineState};
 use tokio::sync::{Notify, oneshot, watch};
 use tokio::time::Instant;
@@ -24,15 +24,6 @@ pub(crate) struct SavedStatus {
 }
 
 impl Network {
-    /// Registers a saved connection and reports its first passive probe.
-    pub(crate) fn start_saved(
-        &self,
-        config: SavedConnection,
-    ) -> oneshot::Receiver<Result<MachineHello, ErrorBody>> {
-        let argv = vec![config.ssh_destination.clone()];
-        self.start_saved_ssh(SavedSsh { config, argv })
-    }
-
     pub(crate) fn start_saved_ssh(
         &self,
         ssh: SavedSsh,
@@ -153,29 +144,6 @@ impl Network {
         };
         ready.await.map_err(ErrorBody::internal)??;
         Ok(())
-    }
-
-    pub(crate) fn saved_status(&self, machine_id: &str) -> Option<SavedStatus> {
-        let state = self.0.state.lock().unwrap();
-        state.saved.get(machine_id).map(Saved::status)
-    }
-
-    pub(crate) fn restore_saved_observation(
-        &self,
-        machine_id: &str,
-        name: Option<String>,
-        last_seen: Option<&str>,
-    ) {
-        let mut state = self.0.state.lock().unwrap();
-        if let Some(saved) = state.saved.get_mut(machine_id) {
-            if saved.name.is_none() {
-                saved.name = name;
-            }
-            if saved.last_seen.is_none() {
-                saved.last_seen = last_seen.and_then(parse_iso_time);
-            }
-            state.publish(&self.0.events, None);
-        }
     }
 
     pub(crate) fn remove_saved(&self, machine_id: &str) -> bool {

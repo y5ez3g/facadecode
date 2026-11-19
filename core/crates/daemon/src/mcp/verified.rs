@@ -8,7 +8,7 @@ use facade_base::machine::AgentRef;
 use facade_base::v3::AgentKind;
 use serde_json::Value;
 
-use super::Relay;
+use super::{ManagedInstructions, Relay};
 use crate::{Cancel, messages::InboxRead};
 
 #[derive(Clone)]
@@ -37,6 +37,7 @@ pub(crate) struct ActorServices {
     pub(crate) authenticate: Authenticate,
     pub(crate) connect: ActorConnect,
     pub(crate) read_inbox: ReadInbox,
+    pub(crate) managed_instructions: ManagedInstructions,
     pub(crate) ready: Ready,
 }
 
@@ -59,14 +60,21 @@ impl Verified {
         }
     }
 
-    pub(super) fn initialize(&self, client_name: Option<&str>) {
-        let mut connection = self
-            .connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if connection.actor.is_none() {
-            connection.client_name = client_name.map(str::to_string);
+    pub(super) fn initialize(
+        &self,
+        relay: &Relay,
+        client_name: Option<&str>,
+    ) -> Result<Option<String>, ErrorBody> {
+        {
+            let mut connection = self
+                .connection
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if connection.actor.is_none() {
+                connection.client_name = client_name.map(str::to_string);
+            }
         }
+        (self.services.managed_instructions)(credential(relay))
     }
 
     pub(super) fn actor(

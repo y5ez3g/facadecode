@@ -1,23 +1,19 @@
-//! What a run's command line is made of, before runs prepares it: the settings file's entry its
-//! first word names (its rule, program, words and environment) or else the program that word
-//! names; whether that entry and program can start in a folder; and the CLIs an agent's windows
-//! offer it.
+//! What a run's command line is made of, before runs prepares it: its configured CLI entry
+//! (rule, program, arguments and environment) and whether that CLI can start in the folder.
 //!
 //! The paths a program is found by are `facade_base::programs`; what a CLI adds to its command line
 //! and environment is `facade_rules`.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use facade_base::daemon::{AgentStartArgs, CliInfo, Overrides, WindowInfo};
+use facade_base::daemon::{CliInfo, Overrides};
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::programs::{on_path, program_of, runnable};
 use facade_base::settings::Settings;
-use facade_base::system::env_var;
+use facade_base::v3::StartArgs;
 use facade_rules::Rule;
-use facade_rules::entries::{self, Entry};
+use facade_rules::entries::{self, Entry, LaunchOptions};
 
-use crate::server::Client;
 use crate::{Daemon, blocking_in_place};
 
 /// The settings file, read for a start or a resume: its problems refuse either.
@@ -37,141 +33,98 @@ pub(crate) fn settings_names() -> Option<Vec<String>> {
 
 /// What a start runs (CONFIGURATION-2, 3).
 pub(crate) struct Configured {
-    /// The CLI its agent records: its entry's name, or the program's file name.
+    /// The CLI its agent records: the configured entry's name.
     pub(crate) cli: String,
     /// The rule it runs by: its entry's type's; none for a program.
     pub(crate) rule: Option<&'static Rule>,
-    /// Its settings file entry; none for a program started by its path or name.
-    pub(crate) entry: Option<Entry>,
+    /// The settings file entry that supplies this CLI.
+    entry: Entry,
     /// The program its entry names in place of its rule's, once found where it starts
     /// ([`Configured::find_program`]).
     pub(crate) program: Option<String>,
-    /// The words after the program: its model's and effort's, its entry's `args`, the start's own.
-    pub(crate) words: Vec<String>,
+    pub(crate) options: LaunchOptions,
     /// The start's environment with its entry's `env` over it.
     pub(crate) env: BTreeMap<String, String>,
 }
 
-/// What start `args` runs by `settings`, read once for it (CONFIGURATION-2, 3, 4.1), as far as
-/// its folder does not decide it. A start from an MCP tool, `by_model`, must name an entry, and is
-/// refused in its tool's words.
+/// Selects the configured CLI for a start. Unknown entries get the choices available here.
 pub(crate) fn configure(
     settings: &Settings,
-    args: &AgentStartArgs,
+    args: &StartArgs,
     folder: &str,
     by_model: bool,
 ) -> Result<Configured, ErrorBody> {
-    let all = entries::read(settings);
-    match entries::find(&all, &args.launch.program) {
-        Some(entry) => configure_entry(entry, args, by_model),
-        None if by_model => Err(no_such_cli(&all, args, folder)),
-        None => configure_program(args, by_model),
-    }
-}
-
-/// A start of `entry`. What is wrong with it in the start's environment refuses it, then its
-/// being turned off, then a model or effort its CLI takes none of.
-fn configure_entry(
-    entry: &Entry,
-    args: &AgentStartArgs,
-    by_model: bool,
-) -> Result<Configured, ErrorBody> {
+    let entries = entries::read(settings);
+    let folder = Path::new(folder);
+    let entry = entries::select(&entries, &args.cli, folder, &args.env).map_err(|error| {
+        with_available_clis(error, &available_clis(&entries, &args.env, folder))
+    })?;
     let (model, effort) = (args.model.as_deref(), args.effort.as_deref());
-    check_entry(entry, &args.env)?;
     if let Some(asked) = entry.refused_choice(model, effort) {
         return Err(refused_choice(entry.display_name(), asked, by_model));
     }
-    let own = &args.launch.args;
+    let options = entry.launch_options(model, effort, &args.args)?;
     Ok(Configured {
         cli: entry.name.clone(),
         rule: entry.kind.and_then(|kind| kind.rule()),
-        entry: Some(entry.clone()),
+        entry: entry.clone(),
         program: None,
-        words: [
-            entry.choices(model, effort, own),
-            entry.args.clone(),
-            own.clone(),
-        ]
-        .concat(),
+        options,
         env: entry.environment(&args.env),
     })
 }
 
-/// A start of the program the first word names, by its path or name: it takes no model or effort.
-fn configure_program(args: &AgentStartArgs, by_model: bool) -> Result<Configured, ErrorBody> {
-    let cli = program_name(&args.launch.program);
-    let asked = [("model", &args.model), ("effort", &args.effort)]
-        .into_iter()
-        .find_map(|(asked, chosen)| chosen.as_ref().map(|_| asked));
-    if let Some(asked) = asked {
-        return Err(refused_choice(&cli, asked, by_model));
-    }
-    Ok(Configured {
-        cli,
-        rule: None,
-        entry: None,
-        program: None,
-        words: args.launch.args.clone(),
-        env: args.env.clone(),
+fn available_clis(entries: &[Entry], env: &BTreeMap<String, String>, folder: &Path) -> Vec<String> {
+    blocking_in_place(|| {
+        entries
+            .iter()
+            .filter(|entry| entry.enabled && entry.problems_with(env).is_empty())
+            .filter(|entry| {
+                entry
+                    .resolve_program(folder, &entry.environment(env))
+                    .is_ok()
+            })
+            .map(|entry| entry.name.clone())
+            .collect()
     })
 }
 
-/// An MCP tool's start names a CLI no entry has: say which ones it could name there.
-fn no_such_cli(all: &[Entry], args: &AgentStartArgs, folder: &str) -> ErrorBody {
-    let listed: Vec<&str> = all
-        .iter()
-        .filter(|entry| entry.listed(&args.env))
-        .map(|entry| entry.name.as_str())
-        .collect();
-    let listed = match listed.is_empty() {
-        true => "none".to_string(),
-        false => listed.join(", "),
+fn with_available_clis(mut error: ErrorBody, available: &[String]) -> ErrorBody {
+    let available = if available.is_empty() {
+        "none".into()
+    } else {
+        available.join(", ")
     };
-    let message = format!(
-        "No CLI {} is configured at {folder}; the CLIs there are {listed}.",
-        quoted(&args.launch.program),
-    );
-    ErrorBody::new(Reason::NotFound, message)
-}
-
-/// The name of the program `command` names, as a person calls it: its file name, without the
-/// extension that makes it runnable on Windows; `command` itself where it names no file.
-fn program_name(command: &str) -> String {
-    match facade_base::programs::program_name(Path::new(command)) {
-        name if name.is_empty() => command.to_string(),
-        name => name,
-    }
+    error
+        .message
+        .push_str(&format!("\nAvailable CLIs: {available}."));
+    error
 }
 
 impl Configured {
     /// Finds its entry's own program from `cwd`, the folder it starts in, once that folder is made
     /// (a worktree it asks for: CONFIGURATION-2.2). Refuses the start where the program its entry
     /// or its type names cannot run there (CONFIGURATION-4.1).
-    pub(crate) fn find_program(&mut self, cwd: &str) -> Result<(), ErrorBody> {
-        let Some(entry) = &self.entry else {
-            return Ok(());
-        };
-        blocking_in_place(|| entry_program(entry, &self.env, cwd))?;
-        let command = entry.program.as_deref();
-        self.program = command.map(|command| program_of(command, &self.env, cwd));
+    pub(crate) fn find_program(
+        &mut self,
+        cwd: &str,
+        settings: &Settings,
+        env: &BTreeMap<String, String>,
+    ) -> Result<(), ErrorBody> {
+        let program = blocking_in_place(|| self.entry.resolve_program(Path::new(cwd), &self.env))
+            .map_err(|error| {
+            with_available_clis(
+                error,
+                &available_clis(&entries::read(settings), env, Path::new(cwd)),
+            )
+        })?;
+        self.program = Some(program.to_string_lossy().into_owned());
         Ok(())
     }
 }
 
-/// Refuses a start of `configured` that continues `session` where it runs no CLI of the settings
-/// file, `command` being what it runs, or its CLI does not resume sessions; before anything starts.
-pub(crate) fn check_session(
-    configured: &Configured,
-    command: &str,
-    session: &str,
-) -> Result<(), ErrorBody> {
-    if configured.entry.is_none() {
-        let message = format!(
-            "{} is not a CLI of the settings file, so it cannot continue a session",
-            quoted(command)
-        );
-        return Err(ErrorBody::new(Reason::Unsupported, message));
-    }
+/// Checks session support before the configured CLI starts.
+pub(crate) fn check_session(configured: &Configured, session: &str) -> Result<(), ErrorBody> {
     match configured.rule {
         Some(rule) if rule.resume_args(session).is_some() => Ok(()),
         _ => {
@@ -202,83 +155,6 @@ fn refused_choice(cli: &str, asked: &str, by_model: bool) -> ErrorBody {
     ErrorBody::new(Reason::Unsupported, message)
 }
 
-/// Refuses a start of `entry` with environment `env` that its settings stop (CONFIGURATION-2.2,
-/// 4.1): what is wrong with it first, else its `enabled` turning it off. Its running agents go
-/// on.
-pub(crate) fn check_entry(entry: &Entry, env: &BTreeMap<String, String>) -> Result<(), ErrorBody> {
-    let problems = entry.problems_with(env);
-    if !problems.is_empty() {
-        let error = ErrorBody::new(Reason::InvalidSettings, problems.join("; "));
-        return Err(by_entry(error, entry));
-    }
-    if entry.enabled {
-        return Ok(());
-    }
-    let message = format!(
-        "{} is turned off by {}.enabled",
-        entry.display_name(),
-        entry.setting
-    );
-    Err(by_entry(
-        ErrorBody::new(Reason::Unavailable, message),
-        entry,
-    ))
-}
-
-/// The program `entry` runs in `folder` with the environment `env` it starts with (CLIS-1.2,
-/// CONFIGURATION-2.2): its `program`, else its type's program on the `PATH`. Else why none can
-/// run there: `not_found`, in its setting's words, as `list_agents`, a start and a resume all say
-/// it (CONFIGURATION-4.1), or `unavailable` for a folder that is not there.
-pub(crate) fn entry_program(
-    entry: &Entry,
-    env: &BTreeMap<String, String>,
-    folder: &str,
-) -> Result<PathBuf, ErrorBody> {
-    let at = Path::new(folder);
-    if !at.is_dir() {
-        let message = format!("the folder {folder} is not available");
-        return Err(ErrorBody::new(Reason::Unavailable, message));
-    }
-    let path = env_var(env, "PATH");
-    let setting = entry.program_setting();
-    let found = match entry.program.as_deref() {
-        // A path: `~`, relative or absolute, with either separator where the system has two.
-        Some(command)
-            if command.contains('/')
-                || command.contains(std::path::MAIN_SEPARATOR)
-                || command == "~" =>
-        {
-            let file = PathBuf::from(program_of(command, env, folder));
-            match runnable(&file) {
-                true => Ok(file),
-                false => Err(format!(
-                    "{setting} is {}, and {} is not a program that can be run",
-                    quoted(command),
-                    file.display()
-                )),
-            }
-        }
-        Some(command) => on_path(command, path, at).ok_or_else(|| {
-            format!(
-                "{setting} is {}, which was not found on the PATH of a terminal in \
-                 {folder}",
-                quoted(command)
-            )
-        }),
-        None => {
-            let rule = entry.kind.and_then(|kind| kind.rule());
-            let program = rule.map_or("", |rule| rule.program.as_str());
-            on_path(program, path, at).ok_or_else(|| {
-                format!(
-                    "{program} was not found on the PATH of a terminal in {folder}, and \
-                     {setting} does not name its location"
-                )
-            })
-        }
-    };
-    found.map_err(|problem| by_entry(ErrorBody::new(Reason::NotFound, problem), entry))
-}
-
 /// What a resume runs (CONFIGURATION-3.4): the entry `cli` names in `settings` as they are now,
 /// which must still run `rule`'s CLI, with its words and program found from `cwd` in the
 /// environment `env` its entry gives.
@@ -297,6 +173,7 @@ pub(crate) fn resume_entry(
     cli: &str,
     cwd: &str,
     env: &BTreeMap<String, String>,
+    saved: LaunchOptions,
 ) -> Result<Resumed, ErrorBody> {
     let all = entries::read(settings);
     let Some(entry) = entries::find(&all, cli) else {
@@ -309,9 +186,9 @@ pub(crate) fn resume_entry(
         );
         return Err(ErrorBody::new(Reason::Unavailable, message));
     };
-    check_entry(entry, env)?;
+    entries::select(&all, cli, Path::new(cwd), env)?;
     let env = entry.environment(env);
-    blocking_in_place(|| entry_program(entry, &env, cwd))?;
+    let program = blocking_in_place(|| entry.resolve_program(Path::new(cwd), &env))?;
     let runs_now = entry.kind.and_then(|kind| kind.rule());
     if runs_now.is_none_or(|now| now.cli != rule.cli) {
         let now = runs_now.map_or("a program", |now| now.display_name.as_str());
@@ -324,14 +201,15 @@ pub(crate) fn resume_entry(
             entry,
         ));
     }
-    let words = [entry.choices(None, None, &[]), entry.args.clone()].concat();
-    let program = entry
-        .program
-        .as_deref()
-        .map(|command| program_of(command, &env, cwd));
+    let (has_model, has_effort) = rule.choices.chosen_in(&rule.arguments, &saved.args);
+    let mut words = rule.choices.args(
+        saved.model.as_deref().filter(|_| !has_model),
+        saved.effort.as_deref().filter(|_| !has_effort),
+    );
+    words.extend(saved.args);
     Ok(Resumed {
         words,
-        program,
+        program: Some(program.to_string_lossy().into_owned()),
         env,
     })
 }
@@ -341,31 +219,9 @@ fn quoted(text: &str) -> String {
     serde_json::to_string(text).expect("a string is JSON")
 }
 
-/// Refuses a start's `prompt` that cannot go as a message, or that goes to `program`, started by
-/// its path or name, whose input Facade does not read. A `custom` entry's program takes it and
-/// fails it as `unsupported` (CONFIGURATION-2.3).
-pub(crate) fn check_start_prompt(
-    prompt: &str,
-    configured: &Configured,
-    program: &str,
-) -> Result<(), ErrorBody> {
-    if let Err(why) = facade_base::daemon::check_message_text(prompt) {
-        let message = format!("the prompt cannot go as a message: {why}");
-        return Err(ErrorBody::invalid_argument(message));
-    }
-    if configured.rule.is_some() || configured.entry.is_some() {
-        return Ok(());
-    }
-    Err(ErrorBody::invalid_argument(format!(
-        "only a CLI of facade.json takes a prompt, as Facade reads its input to send it; \
-         {program} is not one"
-    )))
-}
-
 /// The environment a creator's CLI started with, `read` from its process, less the wiring its
-/// `rule` added, so one CLI's settings never reach another's. Else why it cannot be had: nothing
-/// read means the CLI is not running; what was read needs the `FACADE_AGENT` Facade set before
-/// it can be used as a creator's environment.
+/// the rule added, so one CLI's settings never reach another's. The caller read the running
+/// process by its keeper-verified identity.
 pub(crate) fn creator_environment(
     read: Option<BTreeMap<String, String>>,
     rule: Option<&Rule>,
@@ -373,30 +229,11 @@ pub(crate) fn creator_environment(
     let Some(mut env) = read else {
         return Err("its CLI is not running");
     };
-    if !env.contains_key("FACADE_AGENT") {
-        return Err("the environment read from its CLI has no FACADE_AGENT");
-    }
+    env.retain(|name, _| !name.eq_ignore_ascii_case("FACADE_AGENT"));
     if let Some(rule) = rule {
         rule.remove_wiring_environment(&mut env);
     }
     Ok(env)
-}
-
-/// Whom a `windows` watch lists CLIs for: an agent, an editor window's `ide` client, or neither.
-pub(crate) enum CliViewer {
-    Agent(String),
-    Editor,
-    Neither,
-}
-
-impl CliViewer {
-    pub(crate) fn of(client: &Client) -> CliViewer {
-        match (&client.agent, &client.window) {
-            (Some(agent), _) => CliViewer::Agent(agent.clone()),
-            (None, Some(_)) => CliViewer::Editor,
-            (None, None) => CliViewer::Neither,
-        }
-    }
 }
 
 /// The CLIs a start can run in a window; or, where the settings file is wrong as a whole, none and
@@ -407,24 +244,37 @@ struct Clis {
     settings_problem: Option<String>,
 }
 
-impl Clis {
-    fn show_in(&self, window: &mut WindowInfo) {
-        window.clis = self.rows.clone();
-        window.settings_problem = self.settings_problem.clone();
-    }
-}
-
 impl Daemon {
-    /// The CLI choices in this machine's login environment.
-    pub(crate) async fn login_clis(
+    pub(crate) async fn cli_list(
         &self,
+        folder: Option<String>,
+        environment: BTreeMap<String, String>,
     ) -> Result<facade_base::machine::CliListResult, ErrorBody> {
-        let (environment, home) = self.login_environment().await?;
-        let clis = clis_from(&Ok(environment), &home);
+        let (environment, folder) = self.launch_context(folder, environment).await?;
+        let clis = clis_from(&Ok(environment), &folder);
         Ok(facade_base::machine::CliListResult {
             clis: clis.rows,
             settings_problem: clis.settings_problem,
         })
+    }
+
+    /// Carries the initiating environment on local starts and queries. An absent folder or
+    /// environment uses the login defaults of the machine that will run the CLI.
+    pub(crate) async fn launch_context(
+        &self,
+        folder: Option<String>,
+        environment: BTreeMap<String, String>,
+    ) -> Result<(BTreeMap<String, String>, String), ErrorBody> {
+        if let Some(folder) = folder.as_ref().filter(|_| !environment.is_empty()) {
+            return Ok((environment, folder.clone()));
+        }
+        let (login, home) = self.login_environment().await?;
+        let environment = if environment.is_empty() {
+            login
+        } else {
+            environment
+        };
+        Ok((environment, folder.unwrap_or(home)))
     }
 
     pub(crate) async fn login_environment(
@@ -447,36 +297,6 @@ impl Daemon {
                 )
             })?;
         Ok((env, home))
-    }
-
-    /// Shows in each of `windows` the CLIs a start by `viewer` can run there, as the settings file
-    /// and the programs are now: an agent's from its environment and folder, the same in every
-    /// window; an editor's from each window's own `env` and first folder, and none in a window that
-    /// gave no `env` or has no folder.
-    pub(crate) async fn show_clis(&self, viewer: &CliViewer, windows: &mut [WindowInfo]) {
-        match viewer {
-            CliViewer::Agent(agent) => {
-                let environment = self.environment_of(agent).await;
-                let folder = self
-                    .get_agent(agent)
-                    .map(|agent| agent.info().cwd)
-                    .unwrap_or_default();
-                let clis = clis_from(&environment, &folder);
-                for window in windows {
-                    clis.show_in(window);
-                }
-            }
-            CliViewer::Editor => {
-                for window in windows {
-                    let id = &window.window_id;
-                    let (env, folders) = (self.windows.env(id), self.windows.folders(id));
-                    if let (Some(env), Some(folder)) = (env, folders.first()) {
-                        clis_from(&Ok(env), folder).show_in(window);
-                    }
-                }
-            }
-            CliViewer::Neither => {}
-        }
     }
 }
 
@@ -551,7 +371,8 @@ fn cli_problem(
         let message = problems.join("; ");
         return Some(Err(ErrorBody::new(Reason::InvalidSettings, message)));
     }
-    let program = blocking_in_place(|| entry_program(entry, &entry.environment(env), folder));
+    let program =
+        blocking_in_place(|| entry.resolve_program(Path::new(folder), &entry.environment(env)));
     Some(program.map(|_| ()))
 }
 
@@ -559,9 +380,7 @@ fn cli_problem(
 mod tests {
     use super::*;
 
-    /// The environment a creator's CLI started with comes without what the CLI's rule added. A
-    /// read without the `FACADE_AGENT` Facade set is refused, and no read means the CLI is not
-    /// running.
+    /// A verified run supplies its ordinary environment without relay wiring or old identity.
     #[test]
     fn a_creator_s_environment_comes_without_what_its_rule_added() {
         let fake = facade_rules::find("fake").unwrap().unwrap();
@@ -577,22 +396,22 @@ mod tests {
         let env = creator_environment(Some(read.clone()), Some(fake)).unwrap();
         assert_eq!(
             env.keys().collect::<Vec<_>>(),
-            ["FACADE_AGENT", "MINE"],
+            ["MINE"],
             "the person's own stays and the rule's goes"
         );
         assert_eq!(
             creator_environment(Some(read.clone()), None).unwrap(),
-            read,
-            "a CLI without a rule had nothing added"
+            read.iter()
+                .filter(|(name, _)| name.as_str() != "FACADE_AGENT")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            "only the legacy identity is removed without a rule"
         );
         let hidden = read
             .into_iter()
             .filter(|(name, _)| name != "FACADE_AGENT")
             .collect();
-        assert_eq!(
-            creator_environment(Some(hidden), Some(fake)),
-            Err("the environment read from its CLI has no FACADE_AGENT")
-        );
+        assert_eq!(creator_environment(Some(hidden), Some(fake)).unwrap(), env);
         assert_eq!(
             creator_environment(None, Some(fake)),
             Err("its CLI is not running")

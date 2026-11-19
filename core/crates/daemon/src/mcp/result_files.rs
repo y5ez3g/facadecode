@@ -1,70 +1,23 @@
-//! Results too long for a tool's answer, each in a file of its own under `core/results/`, readable
-//! by this user alone. A file's name says what it holds and when it may go:
+//! The result files under `core/results/` that tools wrote when a result was too long for their
+//! answer, readable by this user alone. A file's name says what it holds and when it may go:
 //!
 //! - `screen-<time>-<process>-<n>.txt`: a screen, deleted after 30 days;
 //! - `messages-m<first>-<time>-<process>-<n>.json`: messages, deleted once its first, oldest
 //!   message is no longer kept (COLLABORATION-4.2);
 //! - `agents-<time>-<process>-<n>.json`: a list of agents, never deleted.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 const SCREEN: &str = "screen-";
 const MESSAGES: &str = "messages-";
-const AGENTS: &str = "agents-";
 
 /// How long a screen's file is kept.
 const SCREEN_KEPT_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// What a result file holds.
-pub(super) enum ResultFile<'a> {
-    Screen,
-    /// Messages, the first of them, the oldest, by its ID, such as `m42`.
-    Messages {
-        first: &'a str,
-    },
-    Agents,
-}
-
-impl ResultFile<'_> {
-    /// How the file's name starts, and its extension.
-    fn name_parts(&self) -> (String, &'static str) {
-        match self {
-            ResultFile::Screen => (SCREEN.to_string(), "txt"),
-            ResultFile::Messages { first } => (format!("{MESSAGES}{first}-"), "json"),
-            ResultFile::Agents => (AGENTS.to_string(), "json"),
-        }
-    }
-}
-
 /// The folder of result files in the core folder `core`.
 pub(crate) fn results_folder(core: &Path) -> PathBuf {
     core.join("results")
-}
-
-/// Writes `text` to a new result file of kind `kind` and answers its path.
-pub(super) fn write(kind: ResultFile<'_>, text: &str) -> anyhow::Result<PathBuf> {
-    static WRITTEN: AtomicU64 = AtomicU64::new(0);
-    let folder = results_folder(&facade_base::paths::core_dir()?);
-    facade_base::files::create_private_folder_all(&folder)?;
-    let time: String = facade_base::time::iso_now()
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .collect();
-    let (start, extension) = kind.name_parts();
-    let count = WRITTEN.fetch_add(1, Ordering::Relaxed);
-    let path = folder.join(format!(
-        "{start}{time}-{}-{count}.{extension}",
-        std::process::id()
-    ));
-    let mut file = facade_base::files::private_options()
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    file.write_all(text.as_bytes())?;
-    Ok(path)
 }
 
 /// Deletes the result files in `folder` that no one can use any more, at `now`: a screen's after 30
@@ -119,15 +72,12 @@ fn first_message_of(name: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
-    /// A result file of messages is named by its first message, and the name gives that message's
-    /// number back; a screen's file, another file, or one an earlier build named without a message
-    /// gives none.
+    /// The name of a result file of messages gives its first message's number back; a screen's
+    /// file, another file, or one an earlier build named without a message gives none.
     #[test]
     fn a_result_file_of_messages_is_named_by_its_first_message() {
-        let (start, _) = ResultFile::Messages { first: "m7" }.name_parts();
-        let name = format!("{start}20261111T120000000Z-42-0.txt");
-        assert_eq!(name, "messages-m7-20261111T120000000Z-42-0.txt");
-        assert_eq!(first_message_of(&name), Some(7));
+        let name = "messages-m7-20261111T120000000Z-42-0.txt";
+        assert_eq!(first_message_of(name), Some(7));
         for other in [
             "messages-20261111T000000000Z-1-0.txt",
             "messages-m-1.txt",

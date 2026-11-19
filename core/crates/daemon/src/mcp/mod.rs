@@ -1,21 +1,15 @@
 //! The MCP server the daemon runs behind each relay. A relay, `facade-mcp`, opens with a hello that
 //! says what its MCP client gave its process: its words, its environment and its folder. After it,
-//! every line is an MCP JSON-RPC message, answered here. Each tool becomes daemon protocol calls,
-//! made over a connection of the call's own that the daemon serves exactly as it serves its socket,
-//! so a tool passes the same checks as any client.
-//!
-//! A relay serves one of four: the agent Facade started it for (`FACADE_AGENT`), the sessions of a
-//! CLI the person started (`--guest <cli>`), a member (any other MCP client, which joins as a guest
-//! when it initializes), or no one.
+//! every line is an MCP JSON-RPC message, answered here. Each tool call acts for the actor the daemon
+//! verified for the relay's connection, and its daemon calls go over a connection bound to that
+//! actor.
 
 mod addresses;
 mod agent_tools;
 mod daemon_calls;
 mod envelope;
-mod guest_sessions;
 mod in_flight;
 mod inbox_page;
-mod instructions;
 mod lines;
 mod message_tools;
 mod result_files;
@@ -25,10 +19,10 @@ pub(crate) mod verified;
 mod verified_tools;
 
 use std::collections::BTreeMap;
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
-use facade_base::daemon_client::{DaemonClient, Identity};
+use facade_base::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -37,44 +31,22 @@ pub(crate) use inbox_page::project_inbox;
 pub(crate) use result_files::{clean_results, results_folder};
 pub(crate) use verified::{ActorIdentity, ActorServices};
 
+/// The instructions for the managed run that the daemon can verify during initialization.
+pub(crate) type ManagedInstructions =
+    Box<dyn Fn(Option<&str>) -> Result<Option<String>, ErrorBody> + Send + Sync>;
+
 /// The version of the relay contract this daemon speaks, as a relay's hello names it.
 pub(crate) const RELAY_CONTRACT: u32 = 1;
-
-/// Opens a connection to the daemon for an identity; None while the daemon hands over to a newer
-/// build and takes no new client.
-pub(crate) type Connect =
-    Box<dyn Fn(&Identity) -> anyhow::Result<Option<DaemonClient>> + Send + Sync>;
-
-/// Lists an MCP client that no one else serves as a member, by the name it gives in `initialize`
-/// (`clientInfo.name`), and answers its agent ID, such as `a7`.
-pub(crate) type JoinMember = Box<dyn Fn(Option<&str>) -> Result<String, ErrorBody> + Send + Sync>;
 
 /// The response to a line whose answering failed unexpectedly.
 pub(crate) fn internal_error() -> Value {
     lines::internal_error()
 }
 
-/// Whom a relay's server acts for.
-#[derive(Clone)]
-pub(crate) enum Serves {
-    /// The agent Facade started, as `FACADE_AGENT` names it.
-    Agent(String),
-    /// The sessions of CLI `cli` that are no Facade run's own, each call acting for the session it
-    /// names: `facade-mcp --guest <cli>`.
-    Guest(String),
-    /// A member: an MCP client listed as a guest for as long as its relay is connected.
-    Member(String),
-    /// No one yet. A client that initializes joins as a member; until then it serves no tools.
-    Nobody,
-    /// No one, beside the server of the Facade run whose own session it is in: a guest's server
-    /// where that run has a server of its own. It serves no tools, and a call says why.
-    Aside,
-}
-
 /// A relay's hello. Its fields are the relay contract's.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RelayHelloParams {
+pub(crate) struct RelayHelloParams {
     /// The relay contract version the relay speaks.
     relay: u32,
     /// The words after its program, such as `--guest codex`.
@@ -87,67 +59,9 @@ struct RelayHelloParams {
     reconnect: bool,
 }
 
-/// One relay connection, shared by the blocking tasks that answer its lines.
-pub(crate) struct Relay {
-    hello: RelayHelloParams,
-    /// The relay's process and when it started: together they name its calls at every daemon.
-    pid: u32,
-    birth: String,
-    mode: Mode,
-    /// Its `send_message` calls not yet answered.
-    sends: in_flight::Sends,
-    /// The connection that shows the daemon its agent's tools are there, once they are.
-    presence: Mutex<Option<DaemonClient>>,
-}
-
-enum Mode {
-    Legacy(Legacy),
-    Verified(verified::Verified),
-}
-
-struct Legacy {
-    connect: Connect,
-    join: JoinMember,
-    member: Mutex<Option<String>>,
-}
-
-impl Relay {
-    /// The relay whose hello `params` came from process `pid`, started at `birth`. Its tools reach
-    /// the daemon through `connect`; an MCP client no one else serves joins through `join`.
-    pub(crate) fn of(
-        params: Value,
-        pid: u32,
-        birth: String,
-        connect: Connect,
-        join: JoinMember,
-    ) -> Result<Relay, ErrorBody> {
-        Self::new(
-            params,
-            pid,
-            birth,
-            Mode::Legacy(Legacy {
-                connect,
-                join,
-                member: Mutex::default(),
-            }),
-        )
-    }
-
-    pub(crate) fn of_verified(
-        params: Value,
-        pid: u32,
-        birth: String,
-        services: ActorServices,
-    ) -> Result<Relay, ErrorBody> {
-        Self::new(
-            params,
-            pid,
-            birth,
-            Mode::Verified(verified::Verified::new(services)),
-        )
-    }
-
-    fn new(params: Value, pid: u32, birth: String, mode: Mode) -> Result<Relay, ErrorBody> {
+impl RelayHelloParams {
+    /// The hello in `params`, where it is of the relay contract this daemon speaks.
+    pub(crate) fn decode(params: Value) -> Result<RelayHelloParams, ErrorBody> {
         let hello: RelayHelloParams = decode_arguments(params)?;
         if hello.relay != RELAY_CONTRACT {
             let message = format!(
@@ -156,48 +70,61 @@ impl Relay {
             );
             return Err(ErrorBody::new(Reason::ProtocolIncompatible, message));
         }
-        Ok(Relay {
+        Ok(hello)
+    }
+
+    /// The words after the relay's program.
+    pub(crate) fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    /// The relay's environment.
+    pub(crate) fn env(&self) -> &BTreeMap<String, String> {
+        &self.env
+    }
+
+    /// The folder the relay runs in, where it could read it.
+    pub(crate) fn cwd(&self) -> Option<&str> {
+        self.cwd.as_deref()
+    }
+}
+
+/// One relay connection, shared by the blocking tasks that answer its lines.
+pub(crate) struct Relay {
+    hello: RelayHelloParams,
+    /// The relay's process and when it started: together they name its calls at every daemon.
+    pid: u32,
+    birth: String,
+    /// The actor its calls act for, and the daemon services that verify and reach it.
+    verified: verified::Verified,
+    /// Its `send_message` and `read_messages` calls not yet answered.
+    sends: in_flight::Sends,
+    /// The connection that shows the daemon its actor's tools are there, once they are.
+    presence: Mutex<Option<DaemonClient>>,
+}
+
+impl Relay {
+    /// The relay whose `hello` came from process `pid`, started at `birth`. Its tools reach the
+    /// daemon through `services`, as the actor they verify.
+    pub(crate) fn of_verified(
+        hello: RelayHelloParams,
+        pid: u32,
+        birth: String,
+        services: ActorServices,
+    ) -> Relay {
+        Relay {
             hello,
             pid,
             birth,
-            mode,
+            verified: verified::Verified::new(services),
             sends: in_flight::Sends::default(),
             presence: Mutex::default(),
-        })
+        }
     }
 
     /// Whether the relay connected to a daemon before.
     pub(crate) fn reconnect(&self) -> bool {
         self.hello.reconnect
-    }
-
-    /// Whom the server acts for, as the relay's words and environment say: the sessions of a CLI
-    /// with `--guest <cli>`, else the agent `FACADE_AGENT` names, else no one. It may ask the
-    /// daemon, so it runs in a blocking task.
-    pub(crate) fn serves(&self) -> Serves {
-        let args = &self.hello.args;
-        let guest_of = args
-            .iter()
-            .position(|word| word == "--guest")
-            .and_then(|at| args.get(at + 1))
-            .filter(|cli| facade_base::daemon::is_session_id(cli));
-        if let Some(cli) = guest_of {
-            return guest_sessions::serves(self, cli);
-        }
-        match self.variable("FACADE_AGENT") {
-            Some(agent) => Serves::Agent(agent.to_string()),
-            None => Serves::Nobody,
-        }
-    }
-
-    /// Serves member `id` from now on: the daemon found the member this relay joined as before it
-    /// restarted.
-    pub(crate) fn serve_member(&self, id: String) {
-        *self
-            .legacy()
-            .member
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(id);
     }
 
     /// Notes or cancels a call as its line is read, before it waits for a thread. True where the
@@ -206,94 +133,20 @@ impl Relay {
         lines::notice(self, line)
     }
 
-    /// The response to `line`, which arrived at `arrived`, from a relay whose server acts for
-    /// `serves`: none for a notification or a response. It waits on the daemon, so it runs in a
-    /// blocking task.
-    pub(crate) fn respond(&self, serves: &Serves, line: &[u8], arrived: Instant) -> Option<Value> {
-        lines::respond(self, Some(serves), line, arrived)
-    }
-
+    /// The response to `line`, which arrived at `arrived`: none for a notification or a response. It
+    /// waits on the daemon, so it runs in a blocking task.
     pub(crate) fn respond_verified(&self, line: &[u8], arrived: Instant) -> Option<Value> {
-        lines::respond(self, None, line, arrived)
+        lines::respond(self, line, arrived)
     }
 
+    /// Shows the daemon that the verified run's tools are there, from now until the relay's
+    /// connection ends. Runs in a blocking task.
     pub(crate) fn hold_verified_presence(&self) {
-        if let Mode::Verified(verified) = &self.mode {
-            verified.hold_presence(self);
-        }
-    }
-
-    fn legacy(&self) -> &Legacy {
-        let Mode::Legacy(legacy) = &self.mode else {
-            unreachable!("legacy relay entry point");
-        };
-        legacy
-    }
-
-    fn verified(&self) -> &verified::Verified {
-        let Mode::Verified(verified) = &self.mode else {
-            unreachable!("verified relay entry point");
-        };
-        verified
-    }
-
-    /// Shows the daemon that `agent`'s tools are there, from now until the relay's connection ends,
-    /// by holding a connection as the agent's MCP server. Runs in a blocking task.
-    pub(crate) fn hold_presence(&self, agent: &str) {
-        let mut presence = self.presence.lock().unwrap_or_else(PoisonError::into_inner);
-        if presence.is_none() {
-            match (self.legacy().connect)(&daemon_calls::as_agent(agent)) {
-                Ok(held) => *presence = held,
-                Err(err) => facade_base::log::write(
-                    "facade-mcp",
-                    "warn",
-                    &format!("could not show that #{agent}'s tools are there: {err:#}"),
-                ),
-            }
-        }
-    }
-
-    /// Whom the server acts for now: the member, once one joined on a relay that served no one.
-    fn acting_for(&self, serves: &Serves) -> Serves {
-        let member = self
-            .legacy()
-            .member
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        match (serves, member.as_ref()) {
-            (Serves::Nobody, Some(id)) => Serves::Member(id.clone()),
-            _ => serves.clone(),
-        }
-    }
-
-    /// The member this relay serves, joining first where it has none. Held while it joins, so one
-    /// relay joins once.
-    fn member_or_join(&self, client: Option<&str>) -> Result<String, ErrorBody> {
-        let legacy = self.legacy();
-        let mut member = legacy.member.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(id) = member.as_ref() {
-            return Ok(id.clone());
-        }
-        let id = (legacy.join)(client)?;
-        *member = Some(id.clone());
-        Ok(id)
-    }
-
-    /// The relay's environment variable `name`, where it is set and not empty.
-    fn variable(&self, name: &str) -> Option<&str> {
-        self.hello
-            .env
-            .get(name)
-            .map(String::as_str)
-            .filter(|value| !value.is_empty())
+        self.verified.hold_presence(self);
     }
 }
 
 /// The tools as `tools/list` describes them, in order, without a result schema.
-static DEFINITIONS: LazyLock<Vec<Value>> = LazyLock::new(|| {
-    serde_json::from_str(facade_base::tools::DEFINITIONS).expect("the tool definitions are JSON")
-});
-
 static V3_DEFINITIONS: LazyLock<Vec<Value>> = LazyLock::new(|| {
     serde_json::from_str(facade_base::tools::V3_DEFINITIONS)
         .expect("the v3 tool definitions are JSON")
@@ -414,10 +267,6 @@ impl Problems {
 }
 
 /// Reads the arguments as the tool's schema describes them, then checks the tool's extra rules.
-fn validate_tool(name: &str, given: &Value) -> Result<(Tool, Map<String, Value>), Value> {
-    validate(name, given, &DEFINITIONS)
-}
-
 fn validate(
     name: &str,
     given: &Value,
@@ -445,39 +294,6 @@ fn validate(
     Ok((tool, arguments))
 }
 
-/// Checks a tool call and runs it on a connection of its own. A cancelled send may return None.
-fn dispatch_tool(
-    relay: &Relay,
-    agent: &str,
-    name: &str,
-    given: &Value,
-    call: &ToolCall,
-) -> Option<Value> {
-    let (tool, arguments) = match validate_tool(name, given) {
-        Ok(checked) => checked,
-        Err(failure) => return Some(failure),
-    };
-    // A send connects within its own 30 seconds.
-    if let Tool::SendMessage = tool {
-        return message_tools::send(relay, agent, &arguments, call);
-    }
-    let mut client = match daemon_calls::open_as_agent(relay, agent) {
-        Ok(client) => client,
-        Err(failure) => return Some(failure),
-    };
-    let client = &mut client;
-    Some(match tool {
-        Tool::StartAgent => agent_tools::start(client, agent, &arguments, call),
-        Tool::ListAgents => agent_tools::list(client),
-        Tool::StopAgent => agent_tools::stop(client, &arguments),
-        Tool::ReadMessages => message_tools::read(client, &arguments),
-        Tool::ReadScreen => terminal_tools::read_screen(client, &arguments),
-        Tool::TypeText => terminal_tools::type_text(client, &arguments),
-        Tool::PressKeys => terminal_tools::press_keys(client, &arguments),
-        Tool::SendMessage => unreachable!("a send was made above"),
-    })
-}
-
 /// The string argument `key`, which the schema checked, or an empty one where it is optional and
 /// left out.
 fn text(arguments: &Map<String, Value>, key: &str) -> String {
@@ -494,27 +310,27 @@ fn optional(arguments: &Map<String, Value>, key: &str) -> Option<String> {
 
 #[cfg(test)]
 impl Relay {
-    /// A relay with `args` and `env` whose tools reach no daemon, as unit tests have none.
-    pub(crate) fn for_test(args: &[&str], env: &[(&str, &str)]) -> Relay {
+    /// A relay whose tools reach no daemon, as unit tests have none.
+    pub(crate) fn for_test() -> Relay {
         let hello = RelayHelloParams {
             relay: RELAY_CONTRACT,
-            args: args.iter().map(|arg| arg.to_string()).collect(),
-            env: env
-                .iter()
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
             cwd: None,
             reconnect: false,
+        };
+        let services = ActorServices {
+            authenticate: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
+            connect: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
+            read_inbox: Box::new(|_, _, _| Err(ErrorBody::internal("unit tests have no daemon"))),
+            managed_instructions: Box::new(|_| Ok(None)),
+            ready: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
         };
         Relay {
             hello,
             pid: 7,
             birth: "1".to_string(),
-            mode: Mode::Legacy(Legacy {
-                connect: Box::new(|_| anyhow::bail!("unit tests have no daemon")),
-                join: Box::new(|_| Err(ErrorBody::internal("unit tests have no daemon"))),
-                member: Mutex::default(),
-            }),
+            verified: verified::Verified::new(services),
             sends: in_flight::Sends::default(),
             presence: Mutex::default(),
         }
@@ -538,7 +354,7 @@ mod tests {
             assert_eq!(request.method, methods::HELLO);
             assert!(crate::server::is_relay_hello(&request.params));
 
-            let hello: RelayHelloParams = decode_arguments(request.params.clone()).unwrap();
+            let hello = RelayHelloParams::decode(request.params.clone()).unwrap();
             assert_eq!(hello.relay, RELAY_CONTRACT);
             assert_eq!(hello.args, ["--guest", "codex"]);
             assert_eq!(
@@ -551,7 +367,7 @@ mod tests {
             let mut with_kind = request.params;
             with_kind["kind"] = json!("mcp");
             assert!(
-                decode_arguments::<RelayHelloParams>(with_kind)
+                RelayHelloParams::decode(with_kind)
                     .is_err_and(|error| error.data.reason == Reason::InvalidArgument)
             );
         }

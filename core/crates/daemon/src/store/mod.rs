@@ -1,12 +1,11 @@
-//! Keeps agent records, agent and message numbers, messages, guests, editor windows and the files of
-//! the CLIs' integrations in `$FACADE_HOME/core/facade.db`, with SQLite in WAL mode and
-//! `synchronous=FULL`.
+//! Keeps agent records, agent and message numbers, messages, guests and editor windows in
+//! `$FACADE_HOME/core/facade.db`, with SQLite in WAL mode and `synchronous=FULL`.
 //!
 //! The daemon alone holds the connection. Each part of the daemon gets the handle of its own table
-//! (`NumberTable`, `MessageTable`, `GuestTable`, `WindowTable`, `MembershipTable`,
-//! `IntegrationTable`), with no transaction of its own. A write across tables is one transaction
-//! here: a record with its members and its start's prompt, an agent or a guest with its inbox,
-//! and a settlement that writes a result only for a caller still there.
+//! (`NumberTable`, `MessageTable`, `GuestTable`, `WindowTable`, `MembershipTable`), with no
+//! transaction of its own. A write across tables is one transaction here: a record with its
+//! members and its start's prompt, an agent or a guest with its inbox, and a settlement that writes
+//! a result only for a caller still there.
 //!
 //! The first open creates the schema, seeds the counters and records this machine's ID in one
 //! transaction. Agent numbers start above every agent the keeper holds. A CLI the keeper holds
@@ -22,10 +21,13 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use facade_base::daemon::{Message, WindowDescription, WindowRef};
-use facade_base::files;
+#[cfg(test)]
+use facade_base::daemon::WindowDescription;
+use facade_base::daemon::{Message, WindowRef};
 use facade_base::machine::MessageRef;
-use facade_base::process::{EndReason, ProcessExit};
+use facade_base::process::{EndReason, ProcessExit, ProcessIdentity};
+use facade_base::{files, settings};
+use facade_rules::entries::{self, LaunchOptions};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, Row, params};
 
@@ -37,12 +39,13 @@ mod messages;
 mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
-pub(crate) use integrations::{IntegrationFile, IntegrationTable};
 pub(crate) use membership::MembershipTable;
 pub(crate) use messages::{
-    Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, Settlement,
+    Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, SendRoute, Settlement,
 };
-pub(crate) use windows::WindowTable;
+pub(crate) use windows::{LegacyWindow, WindowTable};
+
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 	CREATE TABLE numbers (next INTEGER NOT NULL);
@@ -87,6 +90,7 @@ fn log(level: &str, message: &str) {
 }
 
 /// A logical editor window, in allocation order, and the instance last bound to it.
+#[cfg(test)]
 pub(crate) struct WindowRow {
     pub(crate) window_id: String,
     pub(crate) sequence: u64,
@@ -137,6 +141,49 @@ pub(crate) struct KeptStart {
     pub(crate) agent_id: String,
     pub(crate) prompt: Option<u64>,
     pub(crate) result: Option<MessageRef>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CreationSource {
+    Agent,
+    CommandLine,
+    VsCode,
+}
+
+impl CreationSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::CommandLine => "command_line",
+            Self::VsCode => "vs_code",
+        }
+    }
+}
+
+pub(crate) struct InitialLaunch<'a> {
+    pub(crate) source: CreationSource,
+    pub(crate) options: &'a facade_rules::entries::LaunchOptions,
+    pub(crate) relay: &'a RelayRunRecord,
+}
+
+#[derive(Default)]
+pub(crate) struct LaunchDetails {
+    pub(crate) started_at: Option<String>,
+    pub(crate) source: Option<CreationSource>,
+    pub(crate) options: Option<facade_rules::entries::LaunchOptions>,
+}
+
+/// The run identity retained for a reconnecting relay. It is never part of an agent view.
+pub(crate) struct RelayRunRecord {
+    pub(crate) process: ProcessIdentity,
+    pub(crate) version: u32,
+    pub(crate) digest: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RemovalCause {
+    Expired,
+    Removed,
 }
 
 /// The store as the daemon's start reads it.
@@ -203,7 +250,16 @@ impl Store {
             initialize(&mut connection, held)
                 .map_err(|err| anyhow::anyhow!("could not initialize {}: {err}", path.display()))?;
         }
-        migrate(&mut connection).map_err(unreadable)?;
+        migrate(&mut connection, || {
+            settings::read().unwrap_or_else(|error| {
+                log(
+                    "warn",
+                    &format!("could not read settings to migrate launch options: {error}"),
+                );
+                settings::Settings::default()
+            })
+        })
+        .map_err(|err| anyhow::anyhow!("could not migrate {}: {err}", path.display()))?;
         let (machine_id, machine_name) = connection
             .query_row(
                 "SELECT machine_id, name FROM machine WHERE singleton = 1",
@@ -263,22 +319,49 @@ impl Store {
     }
 
     /// Commits a new agent record and its initial members together. Blocks.
+    #[cfg(test)]
     pub(crate) fn insert(&self, record: &AgentRecord) -> anyhow::Result<()> {
+        self.insert_launch(record, None)
+    }
+
+    pub(crate) fn insert_launch(
+        &self,
+        record: &AgentRecord,
+        launch: Option<&InitialLaunch<'_>>,
+    ) -> anyhow::Result<()> {
         self.transaction(
             || format!("save the record of {}", record.agent_id),
-            |connection| insert_record(connection, record),
+            |connection| {
+                insert_record(connection, record)?;
+                if let Some(launch) = launch {
+                    write_launch(connection, &record.agent_id, launch)?;
+                }
+                Ok(())
+            },
         )
     }
 
     /// Commits a new agent record with its start's prompt, in one transaction: the prompt takes the
     /// next message number, and where it `owes_result`, the number after it is kept for its result.
     /// Returns the numbered prompt and its result's number. Blocks.
+    #[cfg(test)]
     pub(crate) fn insert_with_prompt(
         &self,
         record: &AgentRecord,
         prompt: &Message,
         owes_result: bool,
         reserved: Option<&MessageRef>,
+    ) -> anyhow::Result<(Message, Option<MessageRef>)> {
+        self.insert_launch_with_prompt(record, prompt, owes_result, reserved, None)
+    }
+
+    pub(crate) fn insert_launch_with_prompt(
+        &self,
+        record: &AgentRecord,
+        prompt: &Message,
+        owes_result: bool,
+        reserved: Option<&MessageRef>,
+        launch: Option<&InitialLaunch<'_>>,
     ) -> anyhow::Result<(Message, Option<MessageRef>)> {
         let reserved = reserved
             .map(|reference| {
@@ -290,6 +373,9 @@ impl Store {
             || format!("save the record of {} with its prompt", record.agent_id),
             |transaction| {
                 insert_record(transaction, record)?;
+                if let Some(launch) = launch {
+                    write_launch(transaction, &record.agent_id, launch)?;
+                }
                 let prompt = messages::insert(transaction, prompt)?;
                 let number = messages::number_of(&prompt);
                 transaction.execute(
@@ -352,7 +438,8 @@ impl Store {
             |connection| {
                 connection.execute(
                     "UPDATE agents SET exit_code = ?1, exit_signal = ?2, exit_at = ?3, \
-                     exit_reason = ?4 WHERE agent_id = ?5",
+                     exit_reason = ?4, run_auth_birth = NULL, run_credential_digest = NULL \
+                     WHERE agent_id = ?5",
                     params![exit.code, exit.signal, exit.at, reason_name(exit), agent_id],
                 )
             },
@@ -360,12 +447,15 @@ impl Store {
         Ok(())
     }
 
-    /// Commits a resumed run in one statement: its process ID and YOLO, and no exit. Blocks.
+    /// Commits a resumed run in one statement. A missing `started_at` means an uncommitted
+    /// keeper run was recovered; an unmarked v2 row is still eligible for legacy adoption.
     pub(crate) fn record_restart(
         &self,
         agent_id: &str,
         pid: u32,
         yolo: bool,
+        started_at: Option<&str>,
+        relay: Option<&RelayRunRecord>,
     ) -> anyhow::Result<()> {
         #[cfg(debug_assertions)]
         if failing_for_test("fail-restart-commit") {
@@ -376,12 +466,98 @@ impl Store {
             |connection| {
                 connection.execute(
                     "UPDATE agents SET pid = ?2, yolo = ?3, exit_code = NULL, \
-                     exit_signal = NULL, exit_at = NULL, exit_reason = NULL WHERE agent_id = ?1",
-                    params![agent_id, pid, yolo],
+                     exit_signal = NULL, exit_at = NULL, exit_reason = NULL, \
+                     started_at = COALESCE(?4, started_at), \
+                     run_auth_version = CASE WHEN ?4 IS NULL AND run_auth_version IS NULL \
+                         THEN NULL ELSE 3 END, run_auth_birth = ?5, run_credential_digest = ?6 \
+                     WHERE agent_id = ?1",
+                    params![
+                        agent_id,
+                        pid,
+                        yolo,
+                        started_at,
+                        relay.map(|relay| &relay.process.birth),
+                        relay
+                            .and_then(|relay| relay.digest.as_ref())
+                            .map(|digest| digest.as_slice()),
+                    ],
                 )
             },
         )?;
         Ok(())
+    }
+
+    /// A migrated record can acquire legacy identification only from the keeper's held run.
+    pub(crate) fn adopt_legacy_run(
+        &self,
+        agent_id: &str,
+        process: &ProcessIdentity,
+    ) -> anyhow::Result<()> {
+        self.with(
+            || format!("adopt the legacy run of {agent_id}"),
+            |connection| {
+                connection.execute(
+                    "UPDATE agents SET run_auth_version = 2, run_auth_birth = ?3 \
+                     WHERE agent_id = ?1 AND pid = ?2 AND exit_at IS NULL AND run_auth_version IS NULL",
+                    params![agent_id, process.pid, process.birth],
+                )
+            },
+        )?;
+        Ok(())
+    }
+
+    /// The recorded active relay identity, where the current keeper run supplied one.
+    pub(crate) fn relay_run(&self, agent_id: &str) -> anyhow::Result<Option<RelayRunRecord>> {
+        use rusqlite::OptionalExtension;
+
+        self.with(
+            || format!("read the relay identity of {agent_id}"),
+            |connection| {
+                connection.query_row(
+                    "SELECT pid, run_auth_birth, run_auth_version, run_credential_digest FROM agents \
+                     WHERE agent_id = ?1 AND exit_at IS NULL AND run_auth_birth IS NOT NULL",
+                    [agent_id],
+                    |row| Ok(RelayRunRecord {
+                        process: ProcessIdentity { pid: row.get(0)?, birth: row.get(1)? },
+                        version: row.get(2)?,
+                        digest: row.get::<_, Option<Vec<u8>>>(3)?.and_then(|digest| digest.try_into().ok()),
+                    }),
+                ).optional()
+            },
+        )
+    }
+
+    pub(crate) fn launch_details(&self, agent_id: &str) -> anyhow::Result<LaunchDetails> {
+        use rusqlite::OptionalExtension;
+
+        let details = self.with(
+            || format!("read the launch details of {agent_id}"),
+            |connection| connection.query_row(
+                "SELECT started_at, creation_source, launch_options, creator, start_window_id, start_machine_id FROM agents WHERE agent_id = ?1",
+                [agent_id],
+                |row| {
+                    let source: Option<String> = row.get(1)?;
+                    let creator: Option<String> = row.get(3)?;
+                    let start_window: Option<String> = row.get(4)?;
+                    let start_machine: Option<String> = row.get(5)?;
+                    let source = match source.as_deref() {
+                        Some("agent") => Some(CreationSource::Agent),
+                        Some("command_line") => Some(CreationSource::CommandLine),
+                        Some("vs_code") => Some(CreationSource::VsCode),
+                        None if creator.is_some() => Some(CreationSource::Agent),
+                        None if start_window.is_some() => Some(CreationSource::VsCode),
+                        None if start_machine.is_some() => Some(CreationSource::CommandLine),
+                        _ => None,
+                    };
+                    Ok(LaunchDetails {
+                        started_at: row.get(0)?,
+                        source,
+                        options: row.get::<_, Option<String>>(2)?.and_then(|data| serde_json::from_str(&data).ok()),
+                    })
+                },
+            ).optional(),
+        )?;
+        Ok(details.unwrap_or_default())
     }
 
     /// Commits the session an agent's CLI reported; nothing once the record is deleted. Blocks.
@@ -409,12 +585,59 @@ impl Store {
     /// Deletes an agent's record and its inbox, in one transaction. The messages it sent stay in
     /// their recipients' inboxes. Returns the messages deleted. Blocks.
     pub(crate) fn delete(&self, agent_id: &str) -> anyhow::Result<Vec<Gone>> {
+        self.delete_record(agent_id, None)
+    }
+
+    /// Deletes a listed record and saves why it disappeared for stable Pin lookups.
+    pub(crate) fn delete_listed(
+        &self,
+        agent_id: &str,
+        cause: RemovalCause,
+    ) -> anyhow::Result<Vec<Gone>> {
+        self.delete_record(agent_id, Some(cause))
+    }
+
+    fn delete_record(
+        &self,
+        agent_id: &str,
+        cause: Option<RemovalCause>,
+    ) -> anyhow::Result<Vec<Gone>> {
         self.transaction(
             || format!("delete the record of {agent_id}"),
             |transaction| {
+                if let Some(cause) = cause {
+                    transaction.execute(
+                        "INSERT INTO agent_removals (agent_id, expired)
+                         SELECT agent_id, ?2 FROM agents WHERE agent_id = ?1",
+                        params![agent_id, cause == RemovalCause::Expired],
+                    )?;
+                }
                 transaction.execute("DELETE FROM agents WHERE agent_id = ?1", [agent_id])?;
                 transaction.execute("DELETE FROM agent_windows WHERE agent_id = ?1", [agent_id])?;
                 messages::delete_inbox(transaction, agent_id)
+            },
+        )
+    }
+
+    pub(crate) fn removal_cause(&self, agent_id: &str) -> anyhow::Result<Option<RemovalCause>> {
+        use rusqlite::OptionalExtension;
+
+        self.with(
+            || format!("read the removal cause of {agent_id}"),
+            |connection| {
+                connection
+                    .query_row(
+                        "SELECT expired FROM agent_removals WHERE agent_id = ?1",
+                        [agent_id],
+                        |row| {
+                            Ok(if row.get(0)? {
+                                RemovalCause::Expired
+                            } else {
+                                RemovalCause::Removed
+                            })
+                        },
+                    )
+                    .optional()
             },
         )
     }
@@ -452,10 +675,6 @@ impl Store {
         MembershipTable::new(self.clone())
     }
 
-    pub(crate) fn integration_table(self: &Arc<Self>) -> IntegrationTable {
-        IntegrationTable::new(self.clone())
-    }
-
     /// Makes every later write fail, as a store that cannot be written does, until it is turned
     /// off again. For tests.
     #[cfg(test)]
@@ -472,7 +691,7 @@ impl Store {
     pub(crate) fn in_memory() -> Arc<Store> {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection, &[]).unwrap();
-        migrate(&mut connection).unwrap();
+        migrate(&mut connection, settings::Settings::default).unwrap();
         Arc::new(Store {
             connection: Mutex::new(connection),
         })
@@ -498,21 +717,6 @@ impl NumberTable {
             },
         )?;
         Ok(number as u64)
-    }
-
-    /// Raises the counter so the next agent number is above `given`; one already above stays.
-    /// Blocks.
-    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
-        self.0.with(
-            || "raise the agent counter".to_string(),
-            |connection| {
-                connection.execute(
-                    "UPDATE numbers SET next = MAX(next, ?1 + 1)",
-                    [given as i64],
-                )
-            },
-        )?;
-        Ok(())
     }
 }
 
@@ -556,8 +760,8 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
     connection.execute(
         "INSERT INTO agents (agent_id, name, cli, cwd, pid, created_at, exit_code, exit_signal, \
          exit_at, exit_reason, rule, session, creator, creator_machine_id, start_machine_id, start_window_id, root, root_machine_id, \
-         yolo, request_id, prompt, location_id, location_machine_id, location_window_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+         yolo, request_id, prompt, location_id, location_machine_id, location_window_id, started_at, run_auth_version) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?6, 3)",
         params![
             record.agent_id,
             record.name,
@@ -588,6 +792,29 @@ fn insert_record(connection: &Connection, record: &AgentRecord) -> rusqlite::Res
     membership::insert(connection, &record.agent_id, &record.windows)
 }
 
+fn write_launch(
+    connection: &Connection,
+    id: &str,
+    launch: &InitialLaunch<'_>,
+) -> rusqlite::Result<()> {
+    let auth = launch.relay;
+    let options = serde_json::to_string(launch.options)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    connection.execute(
+        "UPDATE agents SET creation_source = ?2, launch_options = ?3, run_auth_version = ?4,
+         run_auth_birth = ?5, run_credential_digest = ?6 WHERE agent_id = ?1",
+        params![
+            id,
+            launch.source.as_str(),
+            options,
+            auth.version,
+            auth.process.birth,
+            auth.digest.as_ref().map(|digest| digest.as_slice())
+        ],
+    )?;
+    Ok(())
+}
+
 /// Creates the schema and counters in one transaction. No number the keeper holds goes out again.
 fn initialize(connection: &mut Connection, held: &[String]) -> rusqlite::Result<()> {
     let next = held
@@ -614,18 +841,72 @@ fn initialize(connection: &mut Connection, held: &[String]) -> rusqlite::Result<
     transaction.commit()
 }
 
-fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
+/// Preserves the v2 machine sources for workspace import. Window descriptions and memberships
+/// already live in their own tables and remain the source for the legacy lookup.
+fn migrate(
+    connection: &mut Connection,
+    read_settings: impl FnOnce() -> settings::Settings,
+) -> anyhow::Result<()> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version >= 2 {
+    if version >= SCHEMA_VERSION {
         return Ok(());
     }
     let transaction = connection.transaction()?;
+    machines::snapshot_legacy_machines(&transaction)?;
+    machines::migrate_routes(&transaction)?;
+    messages::migrate_send_routes(&transaction)?;
     if version == 0 {
         transaction.execute("ALTER TABLE guests ADD COLUMN yolo INTEGER", [])?;
     }
-    messages::migrate_withdrawals(&transaction)?;
-    transaction.pragma_update(None, "user_version", 2)?;
-    transaction.commit()
+    if version < 2 {
+        messages::migrate_withdrawals(&transaction)?;
+    }
+    transaction.execute_batch(
+        "ALTER TABLE agents ADD COLUMN started_at TEXT;
+         ALTER TABLE agents ADD COLUMN run_auth_version INTEGER;
+         ALTER TABLE agents ADD COLUMN run_auth_birth TEXT;
+         ALTER TABLE agents ADD COLUMN run_credential_digest BLOB;
+         ALTER TABLE agents ADD COLUMN creation_source TEXT;
+         ALTER TABLE agents ADD COLUMN launch_options TEXT;
+         CREATE TABLE agent_removals (agent_id TEXT PRIMARY KEY, expired INTEGER NOT NULL);",
+    )?;
+    snapshot_launch_options(&transaction, read_settings)?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Old records take their configured choices once. Their original CLI arguments are unknown.
+fn snapshot_launch_options(
+    connection: &Connection,
+    read_settings: impl FnOnce() -> settings::Settings,
+) -> anyhow::Result<()> {
+    let missing: bool = connection.query_row(
+        "SELECT EXISTS (SELECT 1 FROM agents WHERE launch_options IS NULL)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !missing {
+        return Ok(());
+    }
+    let mut set_options = connection.prepare(
+        "UPDATE agents SET launch_options = ?2 WHERE cli = ?1 AND launch_options IS NULL",
+    )?;
+    for entry in entries::read(&read_settings()) {
+        if entry.model.is_some() || entry.effort.is_some() {
+            let options = LaunchOptions {
+                args: Vec::new(),
+                model: entry.model,
+                effort: entry.effort,
+            };
+            set_options.execute(params![entry.name, serde_json::to_string(&options)?])?;
+        }
+    }
+    connection.execute(
+        "UPDATE agents SET launch_options = ?1 WHERE launch_options IS NULL",
+        [serde_json::to_string(&LaunchOptions::default())?],
+    )?;
+    Ok(())
 }
 
 pub(super) fn machine_uuid() -> String {
@@ -788,24 +1069,6 @@ impl Store {
             |transaction| messages::delete_inbox(transaction, owner),
         )
     }
-    pub(crate) fn keep_integration_file(
-        self: &Arc<Self>,
-        cli: &str,
-        file: &str,
-        before: Option<&[u8]>,
-        written: &[u8],
-        at: &str,
-    ) -> anyhow::Result<()> {
-        self.integration_table()
-            .keep_integration_file(cli, file, before, written, at)
-    }
-    pub(crate) fn forget_integration_file(
-        self: &Arc<Self>,
-        cli: &str,
-        file: &str,
-    ) -> anyhow::Result<()> {
-        self.integration_table().forget_integration_file(cli, file)
-    }
 }
 
 #[cfg(test)]
@@ -883,78 +1146,6 @@ pub(crate) mod tests {
         assert!(
             Store::open(&core, &[]).unwrap().records.is_empty(),
             "an exit after removal must not bring the record back"
-        );
-    }
-
-    /// A file of an integration keeps what it held before Facade's entries and when Facade first
-    /// wrote it; a later write keeps what Facade wrote now, and what it held before as the write
-    /// says. The record lasts until Facade's entries are out.
-    #[test]
-    fn an_integration_s_files_keep_what_they_held_before_until_facade_s_entries_are_out() {
-        let core = core("integration");
-        let store = Store::open(&core, &[]).unwrap().store;
-        store
-            .keep_integration_file(
-                "codex",
-                "/u/.codex/config.toml",
-                Some(b"model = 1\n"),
-                b"one",
-                "t1",
-            )
-            .unwrap();
-        store
-            .keep_integration_file("codex", "/u/.codex/hooks.json", None, b"two", "t2")
-            .unwrap();
-        store
-            .keep_integration_file(
-                "codex",
-                "/u/.codex/config.toml",
-                Some(b"model = 2\n"),
-                b"three",
-                "t3",
-            )
-            .unwrap();
-        drop(store);
-        let store = Store::open(&core, &[]).unwrap().store;
-        let kept = store
-            .integration_table()
-            .integration_files("codex")
-            .unwrap();
-        let file = |file: &str, before: Option<&[u8]>, written: &[u8], at: &str| IntegrationFile {
-            file: file.into(),
-            before: before.map(<[u8]>::to_vec),
-            written: written.to_vec(),
-            added_at: at.into(),
-        };
-        assert_eq!(
-            kept,
-            [
-                file(
-                    "/u/.codex/config.toml",
-                    Some(b"model = 2\n"),
-                    b"three",
-                    "t1"
-                ),
-                file("/u/.codex/hooks.json", None, b"two", "t2")
-            ]
-        );
-        assert!(
-            store
-                .integration_table()
-                .integration_files("claude")
-                .unwrap()
-                .is_empty()
-        );
-        store
-            .forget_integration_file("codex", "/u/.codex/hooks.json")
-            .unwrap();
-        assert_eq!(
-            store
-                .integration_table()
-                .integration_files("codex")
-                .unwrap()
-                .len(),
-            1
         );
     }
 
@@ -1126,22 +1317,52 @@ pub(crate) mod tests {
     fn a_resume_s_commit_sets_the_process_and_clears_the_exit_and_a_session_never_brings_a_record_back()
      {
         let core = core("restart");
-        let store = Store::open(&core, &[]).unwrap().store;
-        store
-            .insert(&AgentRecord {
-                exit: Some(ProcessExit {
-                    code: Some(1),
-                    signal: None,
-                    reason: None,
-                    at: "t".into(),
-                }),
-                ..record("a1")
-            })
+        let mut connection = Connection::open(core.join("facade.db")).unwrap();
+        initialize(&mut connection, &[]).unwrap();
+        let old = record("a1");
+        connection
+            .execute(
+                "INSERT INTO agents (agent_id, name, cli, cwd, pid, created_at, rule, \
+                 start_machine_id, root, root_machine_id, yolo, location_id, exit_code, exit_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 't')",
+                params![
+                    old.agent_id,
+                    old.name,
+                    old.cli,
+                    old.cwd,
+                    old.pid,
+                    old.created_at,
+                    old.rule,
+                    old.start_machine_id,
+                    old.root,
+                    old.root_machine_id,
+                    old.yolo,
+                    old.location_id,
+                ],
+            )
             .unwrap();
+        membership::insert(&connection, &old.agent_id, &old.windows).unwrap();
+        migrate(&mut connection, || {
+            settings::parse(
+                r#"{"clis":{"claude":{"model":"sonnet","effort":"high","args":["--verbose"]}}}"#,
+                "facade.json",
+            )
+            .unwrap()
+        })
+        .unwrap();
+        migrate(&mut connection, || {
+            panic!("a migrated store must keep its saved options")
+        })
+        .unwrap();
+        drop(connection);
+
+        let store = Store::open(&core, &[]).unwrap().store;
         store
             .record_session("a1", Some("86da4482-2bae-4a45-b193-a5664c19826a"))
             .unwrap();
-        store.record_restart("a1", 77, false).unwrap();
+        store
+            .record_restart("a1", 77, false, Some("2026-11-09T17:26:00.123Z"), None)
+            .unwrap();
         drop(store);
         let opened = Store::open(&core, &[]).unwrap();
         let session = Some("86da4482-2bae-4a45-b193-a5664c19826a".into());
@@ -1152,9 +1373,20 @@ pub(crate) mod tests {
             ..record("a1")
         };
         assert_eq!(opened.records, [resumed]);
+        assert_eq!(
+            opened.store.launch_details("a1").unwrap().options,
+            Some(LaunchOptions {
+                args: Vec::new(),
+                model: Some("sonnet".into()),
+                effort: Some("high".into()),
+            })
+        );
         opened.store.delete("a1").unwrap();
         opened.store.record_session("a1", None).unwrap();
-        opened.store.record_restart("a1", 78, true).unwrap();
+        opened
+            .store
+            .record_restart("a1", 78, true, Some("2026-11-09T17:27:00.123Z"), None)
+            .unwrap();
         assert!(
             Store::open(&core, &[]).unwrap().records.is_empty(),
             "a late write must not bring the record back"

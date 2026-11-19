@@ -134,10 +134,17 @@ impl Deliveries {
                 ..ended.message
             };
             if withdrawals.contains(&number) {
-                ended
-                    .settled
-                    .send_replace(Some(Settled::Withdrawn(Box::new(message.clone()))));
-                self.removed(message.message_id, message.to);
+                let settled = match (delivery.reason, ended.expected_reply_to) {
+                    (Some(DeliveryFailure::Timeout), Some(expected_reply_to)) => {
+                        Settled::WithdrawnWhileWaiting {
+                            message: Box::new(message.clone()),
+                            expected_reply_to,
+                        }
+                    }
+                    _ => Settled::Withdrawn(Box::new(message.clone())),
+                };
+                ended.settled.send_replace(Some(settled));
+                self.removed(message.to);
             } else {
                 ended
                     .settled

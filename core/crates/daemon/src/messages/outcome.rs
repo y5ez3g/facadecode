@@ -14,7 +14,6 @@ pub(crate) enum Outcome {
     /// Typed and submitted.
     Typed,
     /// The terminal cleared this message's own paste before submitting it.
-    #[allow(dead_code)] // The terminal sends this after it confirms the cleanup.
     Withdrawn {
         reason: DeliveryFailure,
         text_written: TextWritten,

@@ -1,7 +1,7 @@
 // Actor behavior tests carried from the agent unit suite.
 use std::path::Path;
 
-use facade_base::daemon::TextWritten;
+use facade_base::daemon::{AgentState, TextWritten};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_screen::TerminalColors;
 

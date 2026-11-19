@@ -1,19 +1,12 @@
-//! The terminal tools: `read_screen`, `type_text` and `press_keys`. Text and keys go in without
-//! draft protection: they can edit a draft or answer a menu.
+//! The checks of the terminal tools' arguments, and what a refused input answers. Text and keys go
+//! in without draft protection: they can edit a draft or answer a menu.
 
-use facade_base::daemon::{
-    AgentScreen, AgentScreenArgs, AgentType, AgentTypeArgs, CUT_MARK, first_control,
-};
-use facade_base::daemon_client::DaemonClient;
+use facade_base::daemon::{CUT_MARK, first_control};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::key_input::{KeyProblem, NAMED_KEYS, key_problems};
-use facade_base::process::ProcessState;
 use serde_json::{Map, Value, json};
 
-use super::daemon_calls::{CONNECT_TIMEOUT, agent_failed};
-use super::envelope::{self, MAX_INLINE_CHARS};
-use super::result_files::{self, ResultFile};
-use super::{Problems, text};
+use super::{Problems, envelope};
 
 /// Refuses cut-off text and control characters before any text is typed.
 pub(super) fn check_text(arguments: &Map<String, Value>, problems: &mut Problems) {
@@ -64,82 +57,7 @@ fn key_strings(arguments: &Map<String, Value>) -> Vec<String> {
         .collect()
 }
 
-/// Reads an agent's screen, its last lines as `lines` asks. A reading longer than a result carries
-/// goes to a text file, which the result names in place of the text.
-pub(super) fn read_screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let lines = arguments
-        .get("lines")
-        .and_then(Value::as_u64)
-        .and_then(|lines| u16::try_from(lines).ok());
-    let agent = text(arguments, "agent");
-    let screen = match client.call::<AgentScreen>(AgentScreenArgs {
-        agent: agent.clone(),
-        lines,
-    }) {
-        Ok(screen) => screen,
-        Err(err) => {
-            return agent_failed(
-                client,
-                &err,
-                &agent,
-                "nothing was changed",
-                Some(CONNECT_TIMEOUT),
-            );
-        }
-    };
-    let ended = screen.process == ProcessState::Ended;
-    if screen.text.chars().count() <= MAX_INLINE_CHARS {
-        return envelope::success(json!({ "ended": ended, "text": screen.text }));
-    }
-    match result_files::write(ResultFile::Screen, &screen.text) {
-        Ok(path) => envelope::success(json!({ "ended": ended, "file": path })),
-        Err(err) => envelope::failure(
-            "unavailable",
-            format!(
-                "the screen is too long to return here, and its file could not be written: \
-                 {err:#}; set 'lines' to a smaller number"
-            ),
-        ),
-    }
-}
-
-/// Types text, then Enter where asked, and answers once all of it reached the terminal.
-pub(super) fn type_text(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let input = AgentTypeArgs {
-        agent: text(arguments, "agent"),
-        raw: None,
-        text: Some(text(arguments, "text")),
-        enter: arguments.get("enter") == Some(&Value::Bool(true)),
-        keys: None,
-    };
-    type_into(client, input)
-}
-
-/// Presses keys in order and answers once all of them reached the terminal.
-pub(super) fn press_keys(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let input = AgentTypeArgs {
-        agent: text(arguments, "agent"),
-        raw: None,
-        text: None,
-        enter: false,
-        keys: Some(key_strings(arguments)),
-    };
-    type_into(client, input)
-}
-
-/// Writes `input` into its agent's terminal. Input that did not all go in was cut off partway, or
-/// refused with nothing typed.
-fn type_into(client: &mut DaemonClient, input: AgentTypeArgs) -> Value {
-    let agent = input.agent.clone();
-    let err = match client.call::<AgentType>(input) {
-        Ok(_) => return envelope::success(json!({})),
-        Err(err) => err,
-    };
-    input_failure(&err, &agent, |consequence| {
-        agent_failed(client, &err, &agent, consequence, Some(CONNECT_TIMEOUT))
-    })
-}
-
+/// What input that did not all go in answers: cut off partway, or refused with nothing typed.
 pub(super) fn input_failure(
     err: &anyhow::Error,
     agent: &str,

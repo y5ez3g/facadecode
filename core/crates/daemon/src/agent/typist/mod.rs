@@ -259,6 +259,7 @@ struct DraftCheck {
     prefix: &'static str,
     text: String,
     stable: Option<(Instant, String)>,
+    observed: bool,
     recovered: bool,
     typed: Option<u64>,
 }
@@ -274,6 +275,7 @@ impl DraftCheck {
             text: text[prefix.len()..].to_owned(),
             prefix,
             stable: None,
+            observed: false,
             recovered: typed.is_none(),
             typed,
         }
@@ -281,6 +283,23 @@ impl DraftCheck {
 
     fn prefix(&self) -> Option<&str> {
         (!self.prefix.is_empty()).then_some(self.prefix)
+    }
+
+    fn matches(&self, rule: &PasteRule, reading: &BoxReading) -> bool {
+        reading.info.state == InputState::Draft
+            && reading.draft.as_deref().is_some_and(|text| {
+                facade_rules::is_own_draft(
+                    rule,
+                    text,
+                    &self.text,
+                    self.prefix(),
+                    reading.info.hidden,
+                )
+            })
+    }
+
+    fn backspaces(&self) -> Vec<u8> {
+        vec![b'\x7f'; self.prefix.chars().count() + self.text.chars().count()]
     }
 }
 
@@ -307,6 +326,8 @@ pub(crate) struct Typist {
     current: Option<Typing>,
     inbox: VecDeque<MessageTyping>,
     batch: Option<Batch>,
+    /// A timed-out paste the terminal took before the CLI drew its draft.
+    late_draft: Option<DraftCheck>,
     receipt: Option<Receipt>,
     submitted: Option<Submission>,
     entered: bool,
@@ -337,6 +358,7 @@ impl Typist {
             current: None,
             inbox: VecDeque::new(),
             batch: None,
+            late_draft: None,
             receipt: None,
             submitted: None,
             entered: false,
@@ -549,11 +571,12 @@ impl Typist {
                     enter_written,
                 }
             };
-            self.settle_batch(batch, outcome);
+            self.settle_delivery(&batch.messages, outcome);
         }
         let pending: Vec<_> = self.inbox.drain(..).collect();
         self.deliveries
             .settle(&numbers(&pending), Outcome::untyped(DeliveryFailure::Ended));
+        self.late_draft = None;
         self.receipt = None;
     }
 
@@ -637,7 +660,7 @@ impl Typist {
     }
     /// Reads whether message confirmation needs input observations; no I/O or locks.
     pub(crate) fn reads_input(&self) -> bool {
-        self.batch.is_some() || !self.inbox.is_empty()
+        self.batch.is_some() || self.late_draft.is_some() || !self.inbox.is_empty()
     }
 
     fn record_write(&mut self, offset: u64, length: usize, delay: Duration) {
@@ -667,6 +690,12 @@ impl Typist {
                 break;
             }
         }
+        if !result.write.is_empty()
+            && let Some(draft) = &mut self.late_draft
+        {
+            // A program call can edit the box just like keys from the person.
+            draft.typed = None;
+        }
         self.receipt = Some(receipt);
         result
     }
@@ -688,7 +717,7 @@ impl Typist {
                 DeliveryPhase::Clearing { .. } => Self::uncleared(),
                 _ => Outcome::UNCONFIRMED,
             };
-            self.settle_batch(batch, outcome)
+            self.settle_delivery(&batch.messages, outcome)
         } else {
             Step::wait(deadline)
         }
@@ -720,13 +749,13 @@ impl Typist {
         }
     }
 
-    fn settle_batch(&mut self, batch: Batch, outcome: Outcome) -> Step {
+    fn settle_delivery(&mut self, messages: &[MessageTyping], outcome: Outcome) -> Step {
         if outcome == Outcome::Typed
-            && let Some(last) = batch.messages.last()
+            && let Some(last) = messages.last()
         {
             self.submitted = Some((*last.submission).clone());
         }
-        self.deliveries.settle(&numbers(&batch.messages), outcome);
+        self.deliveries.settle(&numbers(messages), outcome);
         Step::wait((!self.inbox.is_empty() || !self.calls.is_empty()).then(Instant::now))
     }
 
@@ -749,7 +778,7 @@ impl Typist {
         };
         if let Some(batch) = self.batch.take() {
             return match batch.phase {
-                DeliveryPhase::Entered => self.settle_batch(batch, Outcome::Typed),
+                DeliveryPhase::Entered => self.settle_delivery(&batch.messages, Outcome::Typed),
                 DeliveryPhase::Clearing { until } => self.check_cleared(batch, read(), now, until),
                 DeliveryPhase::Draft(draft) => self.check_draft(
                     batch.messages,
@@ -763,11 +792,27 @@ impl Typist {
                 ),
             };
         }
-        if self.paste_held || self.inbox.is_empty() {
+        if self.paste_held || (self.inbox.is_empty() && self.late_draft.is_none()) {
             return Step::default();
         }
         let reading = read();
         let info = self.recall(reading.clone()).info;
+        // An empty box can be the last frame before the CLI took the paste. Wait for
+        // its draft before trusting the box again, and erase it only if it is still ours.
+        if let Some(draft) = &self.late_draft {
+            if draft.typed == Some(typed) && draft.matches(rule, &reading) {
+                let write = draft.backspaces();
+                self.late_draft = None;
+                self.record_write(offset, write.len(), Duration::ZERO);
+                return Step { write, wake: None };
+            }
+            if draft.typed != Some(typed)
+                && info.state == InputState::Draft
+                && reading.draft.is_some()
+            {
+                self.late_draft = None;
+            }
+        }
         let reason = match info.state {
             InputState::Usable => DeliveryFailure::Timeout,
             InputState::Draft => DeliveryFailure::InputDraft,
@@ -788,6 +833,9 @@ impl Typist {
         self.deliveries.settle(&expired, Outcome::untyped(reason));
         if self.inbox.is_empty() {
             return Step::default();
+        }
+        if self.late_draft.is_some() {
+            return Step::wait(self.inbox.iter().map(|message| message.deadline).min());
         }
         if paused.is_none() && self.unprobed(&reading) {
             return self.begin_probe(&reading, now, offset, typed);
@@ -853,17 +901,12 @@ impl Typist {
             .min()
             .expect("started paste");
         let untouched = *draft.typed.get_or_insert(typed) == typed;
-        let own = reading.draft.filter(|text| {
-            untouched
-                && reading.info.state == InputState::Draft
-                && facade_rules::is_own_draft(
-                    rule,
-                    text,
-                    &draft.text,
-                    draft.prefix(),
-                    reading.info.hidden,
-                )
-        });
+        let own = if untouched && draft.matches(rule, &reading) {
+            reading.draft.as_deref()
+        } else {
+            None
+        };
+        draft.observed |= own.is_some();
         let same = |observed: &str, shown: &str| {
             facade_rules::is_same_draft(
                 observed,
@@ -874,7 +917,7 @@ impl Typist {
             )
         };
         if now >= deadline {
-            if own.as_deref().is_some_and(|text| {
+            if own.is_some_and(|text| {
                 draft
                     .stable
                     .as_ref()
@@ -882,8 +925,7 @@ impl Typist {
             }) {
                 // The paste started in an empty input. The person's input has not changed,
                 // and the input box still shows this paste alone. Backspace only that draft.
-                let write =
-                    vec![b'\x7f'; draft.prefix.chars().count() + draft.text.chars().count()];
+                let write = draft.backspaces();
                 let until = now + RESPONSE_GRACE;
                 self.record_write(offset, write.len(), Duration::ZERO);
                 self.batch = Some(Batch {
@@ -900,13 +942,14 @@ impl Typist {
             } else {
                 Self::uncleared()
             };
-            return self.settle_batch(
-                Batch {
-                    messages,
-                    phase: DeliveryPhase::Draft(draft),
-                },
-                outcome,
-            );
+            if !draft.recovered
+                && untouched
+                && !draft.observed
+                && self.recall(reading).info.state == InputState::Usable
+            {
+                self.late_draft = Some(draft);
+            }
+            return self.settle_delivery(&messages, outcome);
         }
         let wake = match own {
             None => {
@@ -917,11 +960,14 @@ impl Typist {
                 if draft
                     .stable
                     .as_ref()
-                    .is_some_and(|(_, shown)| !same(&observed, shown))
+                    .is_some_and(|(_, shown)| !same(observed, shown))
                 {
                     draft.stable = None;
                 }
-                let since = draft.stable.get_or_insert((now, observed)).0;
+                let since = draft
+                    .stable
+                    .get_or_insert_with(|| (now, observed.to_owned()))
+                    .0;
                 let settled = since + facade_rules::settle_time(rule, &draft.text);
                 if now >= settled && paused.is_none() {
                     crate::pause_for_test("before-message-enter");
@@ -962,8 +1008,8 @@ impl Typist {
         until: Instant,
     ) -> Step {
         if self.recall(reading).info.state == InputState::Usable {
-            return self.settle_batch(
-                batch,
+            return self.settle_delivery(
+                &batch.messages,
                 Outcome::Withdrawn {
                     reason: DeliveryFailure::Timeout,
                     text_written: TextWritten::Full,
@@ -971,7 +1017,7 @@ impl Typist {
             );
         }
         if now >= until {
-            return self.settle_batch(batch, Self::uncleared());
+            return self.settle_delivery(&batch.messages, Self::uncleared());
         }
         self.batch = Some(batch);
         Step::wait(Some(until))
@@ -2294,10 +2340,24 @@ mod tests {
             ),
             "its own draft never showed"
         );
+        let second_deadline = deadline + Duration::from_secs(1);
+        let (second, number_behind, told) = message_told(&post, "behind", second_deadline);
+        typist.deliver(second);
+        let wake = terminal.step(&mut typist, deadline, ANY);
+        assert_eq!(wake, Some(second_deadline));
         assert!(
-            !typist.busy() && typist.held_bytes() == 0,
-            "nothing stays held for the Enter that never went"
+            terminal.write_all().is_empty(),
+            "the old empty box admits no paste"
         );
+        terminal.step(&mut typist, second_deadline, ANY);
+        assert_eq!(
+            withdrawn(&post, number_behind, &told),
+            failed(DeliveryFailure::Timeout, TextWritten::None, false)
+        );
+        terminal.reading = input(InputState::Draft, Some("hello"));
+        terminal.step(&mut typist, second_deadline, ANY);
+        assert_eq!(terminal.write_all(), b"\x7f\x7f\x7f\x7f\x7f");
+        assert!(!typist.pasting() && typist.held_bytes() == 0);
 
         let mut typist = typist_for("fake", &post);
         let mut terminal = Terminal {

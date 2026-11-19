@@ -75,3 +75,66 @@ fn view(
         reply_to,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn message_roles_use_unique_names_then_prefixes_or_exact_ids() {
+        let local = "55e07e27-11ef-4b5c-ac23-74d587b3463b";
+        let remote = "3f9a2c1d-0ad1-4bd3-a032-a6f7b4f89ac4";
+        let message: Message = serde_json::from_value(json!({
+            "message_id": "m42", "from": "a7", "from_name": "Ada",
+            "from_machine_id": remote, "to": "a1", "text": "Ready",
+            "reply_to": "m3", "reply_to_machine_id": remote,
+            "at": "2026-11-17T00:00:00.000Z",
+            "delivery": {"status": "pending", "text_written": "none"},
+        }))
+        .unwrap();
+        let mut machines = vec![MachineIdentity {
+            machine_id: remote.into(),
+            name: "gpu".into(),
+        }];
+        let snapshot = MessagesSnapshot {
+            messages: vec![message],
+            ..MessagesSnapshot::default()
+        };
+        let view = |here: &str, machines: &[MachineIdentity]| {
+            let (count, result) = project_inbox(&snapshot, here, machines).unwrap();
+            assert_eq!(count, 1);
+            result["data"]["messages"][0].clone()
+        };
+        let named = view(local, &machines);
+        assert_eq!(named["from"], "a7@gpu");
+        assert_eq!(named["reply_to"], "m3@gpu");
+        assert!(named.get("from_address").is_none());
+        assert!(named.get("from_machine_id").is_none());
+        assert!(named.get("reply_to_machine_id").is_none());
+
+        machines.extend([
+            MachineIdentity {
+                machine_id: local.into(),
+                name: "gpu".into(),
+            },
+            MachineIdentity {
+                machine_id: "3f9a2c1d-1ad1-4bd3-a032-a6f7b4f89ac4".into(),
+                name: "a-saved-peer".into(),
+            },
+        ]);
+        let duplicate = view(local, &machines);
+        assert_eq!(duplicate["from"], format!("a7@{remote}"));
+        assert_eq!(duplicate["reply_to"], format!("m3@{remote}"));
+        let same_machine = view(remote, &machines);
+        assert_eq!(same_machine["from"], format!("a7@{remote}"));
+        assert_eq!(same_machine["reply_to"], "m3");
+
+        let exact = view(local, &[]);
+        assert_eq!(exact["from"], "a7@3f9a2c1d");
+        assert_eq!(exact["reply_to"], "m3@3f9a2c1d");
+        assert_eq!(exact["id"], "m42");
+        assert_eq!(exact["text"], "Ready");
+    }
+}

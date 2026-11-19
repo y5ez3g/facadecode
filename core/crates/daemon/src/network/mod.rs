@@ -189,29 +189,10 @@ impl Network {
         self.0.state.lock().unwrap().machines()
     }
 
-    pub(crate) fn has_connections(&self) -> bool {
-        let state = self.0.state.lock().unwrap();
-        !state.saved.is_empty() || !state.links.is_empty()
-    }
-
     pub(crate) fn rename_local(&self, name: String) {
         let mut state = self.0.state.lock().unwrap();
         state.local.name = name;
         state.publish(&self.0.events, None);
-    }
-
-    /// Takes over an authenticated stream after the server has answered its machine hello.
-    pub(crate) async fn accept<R, W>(
-        &self,
-        remote: MachineHello,
-        read: R,
-        write: W,
-    ) -> Result<(), ErrorBody>
-    where
-        R: AsyncBufRead + Unpin + Send,
-        W: AsyncWrite + Unpin + Send,
-    {
-        self.accept_with_work(remote, read, write, None).await
     }
 
     pub(crate) async fn accept_with_work<R, W>(
@@ -232,25 +213,6 @@ impl Network {
         registered.activate()?;
         drop(initial_work);
         registered.run(read, write, output).await
-    }
-
-    /// Takes over the foreground client stream after its connect authorization response.
-    pub(crate) async fn connect<R, W, F>(
-        &self,
-        connection: FrontConnection,
-        read: R,
-        write: W,
-        on_connected: F,
-    ) -> Result<(), ErrorBody>
-    where
-        R: AsyncBufRead + Unpin + Send,
-        W: AsyncWrite + Unpin + Send,
-        F: FnOnce(&MachineHello) -> Result<bool, ErrorBody> + Send,
-    {
-        self.connect_with_saved(connection, read, write, None, |remote| {
-            on_connected(remote).map(|first| (first, None))
-        })
-        .await
     }
 
     /// Registers the existing session after the parent commits its saved connection.

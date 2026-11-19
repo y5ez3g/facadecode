@@ -26,7 +26,7 @@ pub(super) fn dispatch(
     call: &ToolCall,
     meta: Option<&Value>,
 ) -> Option<Value> {
-    let actor = match relay.verified().actor(relay, meta) {
+    let actor = match relay.verified.actor(relay, meta) {
         Ok(actor) => actor,
         Err(error) => return Some(envelope::refusal(&error)),
     };
@@ -38,7 +38,7 @@ pub(super) fn dispatch(
         return message_tools::send_verified(relay, &actor, &arguments, call);
     }
     let mut client = match open_with(
-        || (relay.verified().services.connect)(&actor.reference),
+        || (relay.verified.services.connect)(&actor.reference),
         CONNECT_TIMEOUT,
     ) {
         Ok(client) => client,
@@ -211,7 +211,7 @@ fn read(
     let args = decode_arguments(Value::Object(arguments.clone()))
         .and_then(|args| inbox_read(client, args, call));
     let result = args.and_then(|args| {
-        (relay.verified().services.read_inbox)(&actor.reference, args, cancel.clone())
+        (relay.verified.services.read_inbox)(&actor.reference, args, cancel.clone())
     });
     match result {
         Ok(result) => Some(result),

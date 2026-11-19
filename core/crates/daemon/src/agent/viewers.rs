@@ -49,8 +49,21 @@ pub(crate) struct ViewerRequest {
 }
 
 pub(crate) enum ViewKind {
+    /// The watch unit tests open with `AddViewer`: it stays through the run's exit.
+    #[cfg(test)]
     Legacy,
     Attach(Option<String>),
+}
+
+impl ViewKind {
+    /// Whether the viewer stays once told the run's exit. An attached viewer ends with the run.
+    fn outlives_exit(&self) -> bool {
+        match self {
+            #[cfg(test)]
+            ViewKind::Legacy => true,
+            ViewKind::Attach(_) => false,
+        }
+    }
 }
 
 /// The viewers of one agent's screen.
@@ -199,7 +212,7 @@ impl Viewers {
     pub(crate) fn send_exit(&mut self, exit: &ProcessExit) {
         self.active.retain_mut(|v| match v.drawing {
             Drawing::Current => {
-                v.tx.send(ViewerChange::Exit(exit.clone())) && matches!(v.kind, ViewKind::Legacy)
+                v.tx.send(ViewerChange::Exit(exit.clone())) && v.kind.outlives_exit()
             }
             _ => {
                 v.drawing = Drawing::RedrawThenExit;
@@ -246,7 +259,7 @@ impl Viewer {
         let mut alive = self.tx.send(frame);
         if let Some(exit) = exit.filter(|_| owes_exit) {
             alive &= self.tx.send(ViewerChange::Exit(exit.clone()));
-            alive &= matches!(self.kind, ViewKind::Legacy);
+            alive &= self.kind.outlives_exit();
         }
         alive
     }

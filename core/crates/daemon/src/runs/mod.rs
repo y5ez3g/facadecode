@@ -216,12 +216,6 @@ impl Runs {
         self.link.reserve_start()
     }
 
-    /// Composes a run's command line and environment, places Facade's plugin, and, for a start,
-    /// creates its run folder. Waits on the file system and the CLI's version.
-    pub(crate) async fn prepare(&self, request: RunRequest<'_>) -> Result<PreparedRun, ErrorBody> {
-        self.preparation.prepare(request, None).await
-    }
-
     /// Prepares a managed launch with instructions for its caller and its private relay.
     pub(crate) async fn prepare_managed(
         &self,
@@ -285,12 +279,6 @@ impl Runs {
             Err(_) => {}
         }
         launched
-    }
-
-    /// The daemon committed agent `id`'s run: listed it, or installed a resumed one. Returns an
-    /// exit that came before, for the daemon to save. Called with the agents locked.
-    pub(crate) fn installed(&self, id: &str) -> Option<ProcessExit> {
-        self.link.installed(id, None)
     }
 
     /// Confirms the specific generation after its record and terminal are installed.

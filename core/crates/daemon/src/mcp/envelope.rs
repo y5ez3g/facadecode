@@ -10,9 +10,6 @@ use serde_json::{Value, json};
 
 use super::addresses::Addresses;
 
-/// The most characters a result carries inline. Longer messages, screens or lists go to a file.
-pub(super) const MAX_INLINE_CHARS: usize = 8000;
-
 /// A success, carrying `data` where it holds anything.
 pub(super) fn success(data: Value) -> Value {
     match data {

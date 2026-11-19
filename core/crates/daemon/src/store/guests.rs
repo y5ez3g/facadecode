@@ -48,6 +48,7 @@ impl GuestTable {
     }
 
     /// Commits a guest's record as it joins.
+    #[cfg(test)]
     pub(crate) fn keep_guest(&self, guest: &GuestRecord) -> anyhow::Result<()> {
         self.keep_snapshot(guest, None)
     }
@@ -116,6 +117,7 @@ impl GuestTable {
     }
 
     /// Commits that Facade heard from guest `agent_id` at `at`.
+    #[cfg(test)]
     pub(crate) fn heard_from_guest(&self, agent_id: &str, at: &str) -> anyhow::Result<()> {
         self.0.with(
             || format!("note that guest {agent_id} was heard from"),

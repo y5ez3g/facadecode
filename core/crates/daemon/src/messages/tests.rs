@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use facade_base::daemon::{
     AgentInfo, DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, MAX_MESSAGES_LIMIT,
-    Message, MessagesSnapshot, MessagesWatchArgs, TextWritten, WindowDeliveryOutcome, WindowRef,
+    Message, MessagesSnapshot, MessagesWatchArgs, TextWritten,
 };
 use facade_base::jsonrpc::Reason;
 use tokio::sync::watch;
@@ -102,73 +102,6 @@ fn ids(snapshot: &MessagesSnapshot) -> Vec<&str> {
         .collect()
 }
 
-#[test]
-fn an_unknown_window_delivery_is_replayed_in_flight_and_after_reopening() {
-    use facade_base::machine::ExecutionOutcome;
-
-    let folder = TestFolder::new("human-replay");
-    let (post, store) = messages_on_disk(&folder);
-    let mut pending = message(0, HUMAN);
-    pending.at = facade_base::time::iso_now();
-    pending.delivery.deadline = None;
-    let request = Some("human-replay");
-    let PostedHuman::New(first) = post.begin_human(pending.clone(), request).unwrap() else {
-        panic!("the first request keeps a message");
-    };
-    let PostedHuman::Earlier(Earlier::HumanInFlight(joined)) =
-        post.begin_human(pending.clone(), request).unwrap()
-    else {
-        panic!("a repeat joins the original request");
-    };
-    let outcomes = vec![
-        WindowDeliveryOutcome::NotDelivered {
-            window: WindowRef {
-                machine_id: "here".into(),
-                window_id: "one".into(),
-            },
-            reason: "not_watching".into(),
-        },
-        WindowDeliveryOutcome::OutcomeUnknown {
-            window: WindowRef {
-                machine_id: "there".into(),
-                window_id: "two".into(),
-            },
-        },
-    ];
-    let failure = post.finish_human(&first, outcomes.clone()).unwrap_err();
-    assert_eq!(failure.window_delivery.as_ref(), Some(&outcomes));
-    let joining = joined.borrow().clone().unwrap().unwrap_err();
-    assert_eq!(joining.window_delivery, failure.window_delivery);
-    let v2 = ErrorBody::from(failure);
-    assert_eq!(ErrorBody::from(joining), v2);
-    assert_eq!(v2.data.message_ref, first.message_ref);
-    assert_eq!(
-        v2.data.unavailable.as_ref().unwrap().execution,
-        ExecutionOutcome::OutcomeUnknown
-    );
-    assert!(v2.data.windows.is_none());
-    let receipt = v2.data.window_delivery.as_ref().unwrap();
-    assert_eq!(receipt.not_delivered.len(), 1);
-    assert_eq!(receipt.outcome_unknown.len(), 1);
-    drop(post);
-    drop(store);
-
-    let (reopened, _store) = messages_on_disk(&folder);
-    let PostedHuman::Earlier(Earlier::HumanReady(prior)) =
-        reopened.begin_human(pending.clone(), request).unwrap()
-    else {
-        panic!("the stored request keeps its original receipt");
-    };
-    assert!(prior.repeated);
-    assert_eq!(prior.message.delivery.status, DeliveryStatus::Pending);
-    assert_eq!(prior.window_delivery.as_ref(), Some(&outcomes));
-    assert_eq!(ErrorBody::from(human_result(prior).unwrap_err()), v2);
-    let PostedHuman::New(next) = reopened.begin_human(pending, None).unwrap() else {
-        panic!("an unrelated request keeps a new message");
-    };
-    assert_eq!(next.message_id, "m2");
-}
-
 /// A message with a request ID is posted once for the caller and recipient. It can be found
 /// while its delivery is open and once it settles.
 #[test]
@@ -239,8 +172,7 @@ fn a_message_whose_paste_has_not_begun_is_withdrawn_and_not_kept() {
     assert!(matches!(*settled.borrow(), Some(Settled::Cancelled)));
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, to })
-            if message_id == "m1" && to == "a2"
+        Ok(Change::Removed { to }) if to == "a2"
     ));
     assert!(
         post.message("m1").is_none() && !post.withdraw(1),
@@ -540,6 +472,7 @@ async fn a_typist_and_a_read_never_both_take_a_message() {
     let first = post
         .read_inbox(
             "a2",
+            false,
             InboxRead::default(),
             crate::Cancel::default(),
             |page| {
@@ -561,6 +494,7 @@ async fn a_typist_and_a_read_never_both_take_a_message() {
     let continued = post
         .read_inbox(
             "a2",
+            false,
             InboxRead {
                 after: Some(first.message_id),
                 ..InboxRead::default()
@@ -649,8 +583,7 @@ fn a_removed_inbox_takes_its_messages_and_tells_their_sends() {
     assert!(post.message("m1").is_none() && post.message("m2").is_some());
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, to })
-            if message_id == "m1" && to == "a2"
+        Ok(Change::Removed { to }) if to == "a2"
     ));
     assert!(
         changes.try_recv().is_err(),
@@ -690,8 +623,7 @@ fn messages_older_than_30_days_are_deleted_and_numbers_go_on() {
     );
     assert!(matches!(
         changes.try_recv(),
-        Ok(Change::Removed { message_id, to })
-            if message_id == "m1" && to == "a2"
+        Ok(Change::Removed { to }) if to == "a2"
     ));
     assert!(
         changes.try_recv().is_err(),

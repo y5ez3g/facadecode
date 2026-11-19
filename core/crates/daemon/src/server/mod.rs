@@ -22,16 +22,12 @@ use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::sync::{mpsc, watch};
 
-use crate::{Cancel, WindowBinding};
+use crate::Cancel;
 
 /// Who a connection is, as its hello settled it.
 pub(crate) struct Client {
     /// What the client said of itself in its hello.
     pub(crate) identity: Identity,
-    /// The editor window and generation bound to this `ide` connection.
-    pub(crate) window: Option<WindowBinding>,
-    /// The local agent ID used by daemon operations.
-    pub(crate) agent: Option<String>,
     /// The stable actor of an in-process connection, supplied by its authenticated caller.
     pub(crate) verified_actor: Option<AgentRef>,
 }

@@ -1,23 +1,37 @@
-//! One fact an agent is told without asking (RULES-1.8): an agent that shares a member window with
-//! its creator, whose CLI has waited twenty seconds on its own permission, question or
-//! sign-in, is reported to that creator once each time it starts waiting, while the creator still
-//! runs. The person is never told by it. Agent states come from the `agents` topic's changes.
+//! Reports a CLI waiting on a permission, question, or sign-in to the Agent that started it.
+//! Each continuous wait is reported once, after twenty seconds. Agent states come from the
+//! `agents` topic's changes.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::daemon::{AgentInfo, AgentState, AgentsUpdate, FACADE, WaitKind, display_name};
+use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::machine::AgentRef;
 use facade_base::process::ProcessState;
+use facade_base::v3::Caller;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 
 use crate::delivery::pending_message;
 use crate::messages::{self, Due, Posted};
+use crate::service::value_of;
 use crate::{Daemon, Sender, log};
 
 /// How long a started agent waits before its creator is told.
 const WAIT_REPORT_DELAY: Duration = Duration::from_secs(20);
+
+pub(crate) const DELIVER_WAIT_NOTICE: &str = "machine.deliver_wait_notice";
+
+#[derive(Deserialize, Serialize)]
+pub(crate) struct WaitNotice {
+    pub(crate) recipient: AgentRef,
+    pub(crate) waiting: AgentRef,
+    pub(crate) name: String,
+    pub(crate) kind: WaitKind,
+}
 
 /// What a started agent waits on, where it is something its creator is told of.
 fn waiting_on(info: &AgentInfo) -> Option<WaitKind> {
@@ -108,8 +122,8 @@ pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
 
 /// The words a creator is told of what its agent `info` waits on: what it waits for first, then
 /// who can answer.
-fn waiting_text(info: &AgentInfo, kind: WaitKind) -> String {
-    let agent = format!("{} (#{})", display_name(&info.name), info.agent_id);
+fn waiting_text(name: &str, address: &str, kind: WaitKind) -> String {
+    let agent = format!("{} ({address})", display_name(name));
     let (what, who) = match kind {
         WaitKind::Permission => ("the person's permission", "Only the person can give it."),
         WaitKind::Auth => ("the person to sign in", "Only the person can sign in."),
@@ -122,67 +136,105 @@ fn waiting_text(info: &AgentInfo, kind: WaitKind) -> String {
 }
 
 impl Daemon {
-    /// Tells `info`'s creator, as a Facade result, that `info` waits on `kind`: only a creator of
-    /// the same window that still runs. A guest creator has no typist: the result waits in its
-    /// inbox for its next turn, as any message to a guest does.
+    /// Routes a wait notification to the machine that holds the creator's inbox.
     fn tell_creator(self: &Arc<Self>, info: &AgentInfo, kind: WaitKind) {
-        let Some(creator) = info.creator.as_deref().and_then(|id| self.get_agent(id)) else {
+        let Some(agent_id) = info.creator.clone() else {
             return;
         };
-        let theirs = creator.info();
-        if theirs.process != ProcessState::Running
-            || !info
-                .windows
-                .iter()
-                .any(|window| theirs.windows.contains(window))
-        {
-            return;
-        }
+        let notice = WaitNotice {
+            recipient: AgentRef {
+                machine_id: info
+                    .creator_machine_id
+                    .clone()
+                    .unwrap_or_else(|| self.machine_id.clone()),
+                agent_id,
+            },
+            waiting: AgentRef {
+                machine_id: self.machine_id.clone(),
+                agent_id: info.agent_id.clone(),
+            },
+            name: info.name.clone(),
+            kind,
+        };
         let due = Due::now();
+        let daemon = self.clone();
+        tokio::spawn(async move {
+            let target = notice.recipient.machine_id.clone();
+            let caller = Caller::Terminal {
+                machine_id: daemon.machine_id.clone(),
+            };
+            let left = due.instant.saturating_duration_since(Instant::now());
+            let result = if target == daemon.machine_id {
+                daemon
+                    .deliver_wait_notice(&caller, notice, Some(left))
+                    .await
+            } else {
+                daemon
+                    .network_call(
+                        &target,
+                        caller,
+                        DELIVER_WAIT_NOTICE,
+                        value_of(notice),
+                        Some(left),
+                        None,
+                    )
+                    .await
+                    .map(|_| ())
+            };
+            if let Err(error) = result {
+                log(
+                    "warn",
+                    &format!("could not deliver a wait notice: {}", error.message),
+                );
+            }
+        });
+    }
+
+    /// Posts a system message on the creator's machine. Forwarded notices are accepted only from
+    /// the machine running the waiting Agent.
+    pub(crate) async fn deliver_wait_notice(
+        &self,
+        caller: &Caller,
+        notice: WaitNotice,
+        remaining: Option<Duration>,
+    ) -> Result<(), ErrorBody> {
+        if !matches!(caller, Caller::Terminal { .. })
+            || caller.machine_id() != notice.waiting.machine_id
+            || self.machine_id != notice.recipient.machine_id
+        {
+            return Err(ErrorBody::refused(
+                "the wait notice does not match the sending or receiving machine",
+            ));
+        }
+        let Some(creator) = self.get_agent(&notice.recipient.agent_id) else {
+            return Err(ErrorBody::new(
+                Reason::NotFound,
+                "the creator is no longer listed",
+            ));
+        };
+        if creator.info().process != ProcessState::Running {
+            return Err(ErrorBody::new(Reason::Ended, "the creator has stopped"));
+        }
+        let due = Due::within(remaining.map(|time| time.as_millis() as u64));
         let from = Sender {
             from: FACADE.to_string(),
             from_name: None,
         };
-        let text = waiting_text(info, kind);
-        let guest = creator.is_guest();
-        let deadline = (!guest).then(|| due.at.clone());
-        let message = pending_message(from, creator.id(), text, None, deadline);
-        let (message, mut settled) = match self.messages.post(message, None, None) {
-            Ok(Posted::New(message, settled)) => (message, settled),
-            Ok(Posted::Earlier(_)) => return,
-            Err(error) => {
-                log(
-                    "warn",
-                    &format!(
-                        "could not tell #{} that #{} waits: {}",
-                        creator.id(),
-                        info.agent_id,
-                        error.message
-                    ),
-                );
-                return;
-            }
-        };
-        log(
-            "info",
-            &format!(
-                "told #{} that #{} waits on {}",
-                creator.id(),
-                info.agent_id,
-                kind.as_str()
-            ),
+        let text = waiting_text(
+            &notice.name,
+            &self.agent_address(&notice.waiting)?,
+            notice.kind,
         );
-        if guest {
-            return;
+        let mut message = pending_message(from, creator.id(), text, None, Some(due.at));
+        message.from_machine_id =
+            (notice.waiting.machine_id != self.machine_id).then_some(notice.waiting.machine_id);
+        if let Posted::New(message, mut settled) = self.messages.post(message, None, None)?
+            && (creator.is_guest() || self.hand_to_typist(&creator, &message, due.instant).await)
+        {
+            self.messages
+                .settle_by_deadline(messages::number(&message), &mut settled, due.instant)
+                .await;
         }
-        let daemon = self.clone();
-        tokio::spawn(async move {
-            if daemon.hand_to_typist(&creator, &message, due.instant).await {
-                daemon
-                    .messages
-                    .settle_by_deadline(messages::number(&message), &mut settled, due.instant)
-                    .await;
-            }
-        });
+        Ok(())
     }
 }
