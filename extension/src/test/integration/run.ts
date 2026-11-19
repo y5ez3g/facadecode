@@ -14,11 +14,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, windowsInCore } from './editors';
+import { callInCore, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import type { V3InspectResult } from '../../base/coreProtocol';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
-import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, seedLegacyPin, windowLifetime } from './windowLifetime';
+import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, shellHandoff, withRustWindows } from './rustMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
@@ -182,7 +183,13 @@ async function main(): Promise<void> {
 	 * a person's real CLI - each entry of `clis` over its built-in's, an added one as it is, and `yolo` where given.
 	 */
 	const facadeSettings = (facade: string, clis: { readonly [name: string]: Entry } = {}, yolo?: boolean) => {
-		const entries: { [name: string]: Entry } = Object.fromEntries(BUILT_INS.map(cli => [cli.id, { command: launchers[cli.id] ?? fake }]));
+		// Resume listing reads the settings entry's effective environment on the Orchestrator machine.
+		const fixtureEnv = engine === 'rust' && only !== 'real' && !nativeLifecycle
+			? { HOME: agentsHome, USERPROFILE: agentsHome, ...isolatedStorage }
+			: undefined;
+		const entries: { [name: string]: Entry } = Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
+			command: launchers[cli.id] ?? fake, ...(fixtureEnv ? { env: fixtureEnv } : {})
+		}]));
 		for (const [name, entry] of Object.entries(clis)) {
 			entries[name] = { ...entries[name], ...entry };
 		}
@@ -281,7 +288,7 @@ async function main(): Promise<void> {
 		};
 		const editorEnv = { ...process.env, ...passed, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_ENGINE: engine,
 			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
-			...!reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
+			...engine === 'old' && !reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
@@ -348,7 +355,7 @@ async function main(): Promise<void> {
 			const before = said.find(line => line.phase === 'folder') as { runId: string; name: string; pid: number } | undefined;
 			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string; name: string; pinned: boolean } | null; terminals: string[] } | undefined;
 			console.log(`  Journey: ${suffix}: Pin and Unpin survive reload; a folder window becomes a multi-root workspace and keeps its pinned agent (LIFECYCLE-3.4, ARCHITECTURE-2.2)\n    ${JSON.stringify(said)}`);
-			if (!before || !after || after.folders !== 2 || (engine === 'rust' ? after.card?.name !== before.name : after.card?.runId !== before.runId) || !after.card?.pinned || !alive(before.pid)
+			if (!before || !after || after.folders !== 2 || after.card?.runId !== before.runId || !after.card?.pinned || !alive(before.pid)
 				|| after.terminals.filter(each => each === before.name).length !== 1 || !['reload-pinned', 'reload-unpinned'].every(phase => said.some(line => line.phase === phase))) {
 				throw new Error('Pin/Unpin did not survive reload, or the folder agent was not the same pinned run, live process and one terminal in the workspace it became.');
 			}
@@ -495,7 +502,7 @@ async function main(): Promise<void> {
 		});
 		try {
 			// The other window is there once its component registered it on this computer
-			if (await registeredWindow(facade, label => label === 'peer') === undefined) {
+			if (engine === 'old' && await registeredWindow(facade, label => label === 'peer') === undefined) {
 				throw new Error('The second editor window did not join this computer\'s Facade windows.');
 			}
 			await run('cross', repo, { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: 'peer', FACADE_IT_PEER_DIR: fs.realpathSync(peer) });
@@ -718,15 +725,18 @@ async function main(): Promise<void> {
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS],
 			{ env: { ...env, ...profile.env }, stdio: ['ignore', 'pipe', 'pipe'] });
 		const call = (...args: string[]) => execFileSync(corePrograms, args, { env, encoding: 'utf8', timeout: 20_000 });
+		const inspect = async (agent: string) => {
+			const response = await callInCore(facade, 'agent.inspect', { agent }, [3, 3]);
+			if (response.error) { throw new Error(response.error.message); }
+			return response.result as V3InspectResult;
+		};
 		console.log('\n  Journey: the Rust window lifetime and saved Pins');
 		try {
 			await windowLifetime(start, () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', async step => {
 				if (step.after === 'reload') {
-					await afterOldWindowGrace(step.windowId, () => windowsInCore(facade), false);
-					checkClosedAgent(step, call);
+					await checkClosedAgent(step, call, inspect);
 				} else if (step.after === 'pins') {
 					call('remove', step.removed);
-					seedLegacyPin(step.legacy);
 				}
 			});
 		} finally {
@@ -777,14 +787,14 @@ async function main(): Promise<void> {
 					...env, ...isolatedStorage, FACADE_IT_AS: 'codex', HOME: agentsHome, USERPROFILE: agentsHome,
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
 				})
-				: rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files, windows: () => windowsInCore(facade) }));
+				: rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files }));
 		} finally {
 			await endRust(facade);
 		}
 	};
 	/**
 	 * Switching engines (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the old engine; both ended,
-	 * a new agent is not started there; reload: the window is on the Rust engine, and Recent continues both by their sessions. The
+	 * a new agent is not started there; reload: the window is on the Rust engine, and Resume Agent continues both saved sessions. The
 	 * reloads end a test run's extension host, so a driver beside Facade Code (engineDriver.ts) does the steps and this judges them.
 	 */
 	const engineSwitch = async () => {
@@ -801,6 +811,7 @@ async function main(): Promise<void> {
 		facadeSettings(facade, alone('claude'));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'switch-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'engineDriver.js'), path.join(driver, 'extension.js'));
+		fs.copyFileSync(path.join(__dirname, 'resumePickerFixture.js'), path.join(driver, 'resumePickerFixture.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
@@ -827,21 +838,21 @@ async function main(): Promise<void> {
 			const two = phase('two') as { agents: { runId: string; alias: string; session: string }[]; core: boolean } | undefined;
 			const still = phase('old-still') as { cards: string[]; alive: boolean[]; core: boolean; setting: string } | undefined;
 			const refused = phase('refused') as { cards: number; newCli: string[]; core: boolean } | undefined;
-			const rust = phase('rust') as { core: boolean; resumed: { alias: string; session: string }[] } | undefined;
+			const rust = phase('rust') as { core: boolean; resumed: { runId: string; session: string }[] } | undefined;
 			const problems = [
 				...!two || two.agents.length !== 2 || two.core ? ['two agents did not start on the old engine, with no core running'] : [],
 				...!still || still.setting !== 'auto' || still.core || still.alive.some(each => !each) || !two || !isDeepStrictEqual([...still.cards].sort(), two.agents.map(agent => agent.runId).sort())
 					? ['after `auto` and a reload the two agents did not go on, on the old engine'] : [],
 				...!refused || refused.cards !== 0 || refused.newCli.length || refused.core ? ['with both ended, a new agent was started or core was started where the window says to reload'] : [],
 				...!rust || !rust.core ? ['the window did not come up on the Rust engine after the second reload'] : [],
-				...rust && two && !isDeepStrictEqual(rust.resumed.map(each => each.session).sort(), two.agents.map(agent => agent.session).sort()) ? ['Recent did not continue both conversations by their sessions'] : [],
-				...rust && two && rust.resumed.some(each => two.agents.some(agent => agent.alias === each.alias)) ? ['a continued conversation reused an old agent\'s number: it must be a new agent'] : [],
+				...rust && two && !isDeepStrictEqual(rust.resumed.map(each => each.session).sort(), two.agents.map(agent => agent.session).sort()) ? ['Resume Agent did not continue both saved sessions'] : [],
+				...rust && rust.resumed.some(each => !/^[^/]+\/a\d+$/u.test(each.runId)) ? ['one of the sessions has no Orchestrator agent identity'] : [],
 				...phase('error') ? [`the driver failed: ${JSON.stringify(phase('error'))}`] : []
 			];
 			if (problems.length) {
 				throw new Error(`Switching engines failed: ${problems.join('; ')}`);
 			}
-			console.log('    ✔ off → auto and a reload keeps the two agents on the old engine; with both ended a new agent is not started; the next reload runs core, and Recent continues both by session as new agents');
+			console.log('    ✔ off → auto keeps the live old agents through one reload. After they end, the next reload starts core and Resume Agent continues both saved sessions');
 		} catch (error) {
 			console.error(`Editor output for the engine switch (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
 			throw error;

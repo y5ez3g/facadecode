@@ -36,10 +36,9 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { V2MachineConnection, V2MachineInfo, V2WindowInfo } from '../../base/coreProtocol';
+import type { V2AgentInfo, V2MachineConnection, V2MachineInfo, V3InspectResult } from '../../base/coreProtocol';
 import { EDITOR_FLAGS, editorProfile, endCore, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, until } from './editors';
-import type { ListedAgent } from './rustWindowDriver';
-import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
+import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
 
 const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network'] as const;
@@ -413,10 +412,6 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 		};
 		const app = (host: Host): Folder => ({ host, remote: `${root}/app` });
 		const remotePeer = (host: Host): Folder => ({ host, remote: `${root}/remote-peer` });
-		const coreWindows = (host: Host): V2WindowInfo[] => {
-			const probe = 'require(process.argv[1]).windowsInCore(process.argv[2]).then(snapshot => console.log(JSON.stringify(snapshot))).catch(error => { console.error(error); process.exitCode = 1; });';
-			return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)}`)) as V2WindowInfo[];
-		};
 		const sshLifetime = async (host: Host) => {
 			const folder = app(host);
 			const driver = `${root}/lifetime-driver`;
@@ -428,11 +423,13 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 			const env = environment({ FACADE_IT_WINDOW_LIFETIME: out, FACADE_IT_WINDOW_LIFETIME_SSH: '1' });
 			const start = () => spawn(executable, [...args, `--extensionEnvironment=${JSON.stringify(env)}`], { env: { ...process.env, ...local.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
 			const call = (...args: string[]) => host.run(`unset FACADE_AGENT\nFACADE_HOME=${quoted(facade)} ${quoted(`${host.build}/extension-it/bin/facade`)} ${args.map(quoted).join(' ')}`);
-			const windows = async () => coreWindows(host);
+			const inspect = async (agent: string): Promise<V3InspectResult> => {
+				const probe = "require(process.argv[1]).callInCore(process.argv[2], 'agent.inspect', { agent: process.argv[3] }, [3, 3]).then(reply => { if (reply.error) { throw Error(reply.error.message); } console.log(JSON.stringify(reply.result)); }).catch(error => { console.error(error); process.exitCode = 1; });";
+				return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)} ${quoted(agent)}`)) as V3InspectResult;
+			};
 			await windowLifetime(start, () => host.run(`if [ -f ${quoted(out)} ]; then cat ${quoted(out)}; fi`), async step => {
 				if (step.after === 'reload') {
-					await afterOldWindowGrace(step.windowId, windows, true);
-					checkClosedAgent(step, call);
+					await checkClosedAgent(step, call, inspect, true);
 				}
 			});
 		};
@@ -473,7 +470,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				if (!network) {
 					await rustMultiWindow(open, {
 						folder: `${root}/app`, peer: `${root}/remote-peer`, shared, home: facade, remote: 'ssh-remote',
-						files, windows: async () => coreWindows(host)
+						files
 					});
 					return;
 				}
@@ -531,7 +528,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 						picker.close();
 					}
 					assert.equal(await second.act<string>({ kind: 'remote-card', agent: address }), address);
-					const { agents } = JSON.parse(call(['list', '--json'])) as { readonly agents: ListedAgent[] };
+					const { agents } = JSON.parse(call(['list', '--json'])) as { readonly agents: V2AgentInfo[] };
 					const record = agents.find(agent => agent.agent_id === id && agent.machine_id === myId);
 					assert.ok(record?.windows?.some(window => window.machine_id === theirId), JSON.stringify(record));
 					console.log('  ✔ Go to Agent adopted the original remote agent and displayed the remote icon');

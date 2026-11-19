@@ -6,13 +6,15 @@
 // directory let the runner interleave actions in two editor windows of the same Facade home.
 
 import * as assert from 'assert';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { HelloResult, V2HelloResult, V2StartArgs, V2StartResult, V2WindowRef } from '../../base/coreProtocol';
+import type { HelloResult, V3StartArgs, V3StartResult } from '../../base/coreProtocol';
+import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
 import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
-import { agentTab, aliasOf, facade, facadeAs, hasAgentTab, keepConversation, listed, newCard, pickCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
+import { agentTab, facade, facadeAs, hasAgentTab, inspect, keepConversation, newCard, pickCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 
 type Action =
 	| { readonly kind: 'snapshot' | 'notifications' | 'filter' | 'show-agent-picker' | 'window-component' }
@@ -21,13 +23,12 @@ type Action =
 	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
 	| { readonly kind: 'hide-shell-agent'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
-	| { readonly kind: 'adopt' | 'resume' | 'remote-card' | 'pin' | 'stop' | 'members' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'adopt' | 'resume' | 'remote-card' | 'pin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
-	| { readonly kind: 'send'; readonly agent: string; readonly text: string }
-	| { readonly kind: 'message'; readonly address: string }
+	| { readonly kind: 'send'; readonly agent: string; readonly to: string; readonly text: string }
 	| { readonly kind: 'wait-for-exit'; readonly pid: number }
-	| { readonly kind: 'worktree'; readonly source: V2WindowRef; readonly peer: V2WindowRef; readonly branch: string }
-	| { readonly kind: 'worktree-removed'; readonly id: string; readonly folder: string };
+	| { readonly kind: 'worktree'; readonly branch: string }
+	| { readonly kind: 'delete-worktree'; readonly folder: string };
 
 export type WindowAction = Action | { readonly kind: 'close' };
 
@@ -38,19 +39,13 @@ export interface WindowReady {
 	readonly machineId: string;
 }
 
-export interface PinIdentity {
-	readonly id: string;
-	readonly agent?: string;
-	readonly machine_id?: string;
-}
-
 export interface SavedPin {
 	readonly file: string;
-	readonly pin: PinIdentity;
+	readonly pin: RustPin;
 }
 
 export interface WindowView {
-	readonly cards: readonly { readonly id: string; readonly name: string; readonly pinned: boolean; readonly column: number | null; readonly selected: boolean; readonly line: string }[];
+	readonly cards: readonly { readonly id: string; readonly name: string; readonly pinned: boolean; readonly column: number | null; readonly running: boolean }[];
 	readonly terminals: number;
 	readonly filter?: PanelState['filter'];
 }
@@ -58,7 +53,6 @@ export interface WindowView {
 export type WindowAnswer = { readonly result: unknown } | { readonly error: string };
 
 const control = process.env.FACADE_IT_WINDOW_CONTROL!;
-const gitTrace = `${control}.git.jsonl`;
 let closing: string | undefined;
 
 function answer(file: string, value: WindowAnswer): void {
@@ -71,8 +65,8 @@ async function view(): Promise<WindowView> {
 	const panel = await state();
 	return {
 		cards: panel.cards.map(card => ({
-			id: card.alias.slice(1), name: card.name, pinned: card.pinned === true,
-			column: agentTab(card)?.group.viewColumn ?? null, selected: card.selected, line: card.line
+			id: card.alias, name: card.name, pinned: card.pinned === true,
+			column: agentTab(card)?.group.viewColumn ?? null, running: card.orchestrator?.running === true
 		})),
 		terminals: vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length,
 		filter: panel.filter
@@ -103,10 +97,10 @@ async function filterByLocation(): Promise<void> {
 function savedPin(id: string): SavedPin {
 	const workspaces = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
 	const found = fs.readdirSync(workspaces).flatMap(key => {
-		const file = path.join(workspaces, key, 'workspace-state.json');
+		const file = path.join(workspaces, key, 'orchestrator-workspace.json');
 		if (!fs.existsSync(file)) { return []; }
-		const state = JSON.parse(fs.readFileSync(file, 'utf8')) as { readonly 'facade.pins'?: PinIdentity[] };
-		return (state['facade.pins'] ?? []).filter(pin => pin.agent === id).map(pin => ({ file, pin }));
+		const state = JSON.parse(fs.readFileSync(file, 'utf8')) as { readonly pins: RustPin[] };
+		return state.pins.filter(pin => pin.agent === id).map(pin => ({ file, pin }));
 	});
 	assert.strictEqual(found.length, 1, `one workspace saved a Pin for #${id}: ${JSON.stringify(found)}`);
 	return found[0];
@@ -161,7 +155,7 @@ async function perform(action: Action): Promise<unknown> {
 		case 'start': {
 			if (action.secondGroup) { await openSecondGroup(); }
 			const card = await newCard();
-			const agent = await running(aliasOf(card).slice(1));
+			const agent = await running(card.alias);
 			const screen = action.screen;
 			keepConversation(agent.cwd, agent.session, screen ?? 'A session opened in this window');
 			if (screen !== undefined) {
@@ -173,17 +167,14 @@ async function perform(action: Action): Promise<unknown> {
 		case 'filter':
 			await filterByLocation();
 			return true;
-		case 'members': {
-			const record = listed().find(agent => agent.agent_id === action.agent);
-			assert.ok(record?.windows?.length, `#${action.agent} has member windows`);
-			return record.windows;
-		}
+		case 'inspect':
+			return inspect(action.agent);
 		case 'saved-pin':
 			return savedPin(action.agent);
 		case 'adopt':
 		case 'resume': {
-			const card = await (action.kind === 'resume' ? resumeCard() : pickCard('facade.goToAgent'));
-			assert.strictEqual(aliasOf(card), `#${action.agent}`, 'the picker opens the requested agent by its original number');
+			const card = await (action.kind === 'resume' ? resumeCard(action.agent) : pickCard('facade.goToAgent'));
+			assert.strictEqual(card.alias, action.agent, 'the picker opens the requested agent by its original number');
 			await until(`#${action.agent}'s terminal tab`, () => hasAgentTab(card) || undefined);
 			return running(action.agent);
 		}
@@ -201,10 +192,13 @@ async function perform(action: Action): Promise<unknown> {
 			return card.alias;
 		}
 		case 'pin':
-		case 'stop': {
-			const card = (await state()).cards.find(each => each.alias === `#${action.agent}`);
+		case 'stop':
+		case 'remove': {
+			const card = (await state()).cards.find(each => each.alias === action.agent);
 			assert.ok(card, `#${action.agent} has a visible card`);
-			await (action.kind === 'pin' ? pin(card) : stop(card));
+			if (action.kind === 'pin') { await pin(card); }
+			else if (action.kind === 'stop') { await stop(card); }
+			else { await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId }); }
 			return true;
 		}
 		case 'running': {
@@ -215,19 +209,15 @@ async function perform(action: Action): Promise<unknown> {
 			return agent;
 		}
 		case 'send': {
-			const sent = facadeAs(action.agent, 'send', '#human', action.text);
-			const id = /^#?(m\d+)\b/mu.exec(sent)?.[1];
-			assert.ok(id, sent);
-			return id;
+			const sent = facadeAs(action.agent, 'send', action.to, action.text);
+			assert.match(sent.trim(), /^m\d+@[^\s]+$/u);
+			await until('the message to appear on the recipient terminal', () =>
+				facade('screen', action.to, '--lines', '120').includes(action.text) || undefined);
+			return true;
 		}
 		case 'notifications':
 			await vscode.commands.executeCommand('notifications.showList');
 			return true;
-		case 'message': {
-			const document = await until(`Open Message to open ${action.address}`, () => vscode.workspace.textDocuments.find(each =>
-				each.uri.scheme === 'facade-message' && each.uri.query === action.address));
-			return document.getText();
-		}
 		case 'wait-for-exit':
 			await until(`PID ${action.pid} to exit`, () => {
 				try {
@@ -244,38 +234,24 @@ async function perform(action: Action): Promise<unknown> {
 			const home = process.env.FACADE_HOME!;
 			const user = path.join(path.dirname(control), 'worktree-agent-home');
 			fs.mkdirSync(user, { recursive: true });
-			const args: V2StartArgs = {
-				command: ['claude'], name: 'Agent in the other window', cwd, window: action.peer,
-				location_source_window: action.source, worktree: { branch: action.branch, base_ref: 'HEAD' },
+			const args: V3StartArgs = {
+				cli: 'claude', name: 'Worktree agent', folder: cwd, worktree: action.branch,
 				env: {
 					PATH: process.env.PATH ?? '', HOME: user, USERPROFILE: user, FACADE_HOME: home,
 					CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR!, FACADE_IT_RECORD: process.env.FACADE_IT_RECORD!
 				},
 				cols: 80, rows: 24
 			};
-			const reply = await callInCore(home, 'agent.start', args, [2, 2]);
+			const reply = await callInCore(home, 'agent.start', args, [3, 3]);
 			assert.ok(reply.result && !reply.error, JSON.stringify(reply));
-			const started = (reply.result as V2StartResult).agent;
+			const started = (reply.result as V3StartResult).agent;
 			assert.ok(started.pid && fs.existsSync(started.cwd), JSON.stringify(started));
-			assert.deepStrictEqual(started.windows, [action.peer]);
-			assert.deepStrictEqual(started.location_source_window, action.source);
-			process.env.GIT_TRACE2_EVENT = gitTrace;
-			void vscode.commands.executeCommand('facade.newAgent');
 			return started;
 		}
-		case 'worktree-removed': {
-			await until('Git to remove the fixture worktree', () => !fs.existsSync(action.folder) || undefined);
-			const ended = listed().find(agent => agent.agent_id === action.id);
-			assert.ok(ended?.process === 'ended' && ended.exit?.at, JSON.stringify(ended));
-			const trace = fs.readFileSync(gitTrace, 'utf8').trim().split('\n')
-				.map(line => JSON.parse(line) as { event: string; argv?: string[]; time: string });
-			const folder = normalizeDriveLetter(action.folder);
-			const removal = trace.find(entry => entry.event === 'start' && entry.argv?.some(word => normalizeDriveLetter(word) === folder)
-				&& entry.argv.includes('worktree') && entry.argv.includes('remove'));
-			assert.ok(removal, 'Git traced the worktree removal');
-			assert.ok(Date.parse(ended.exit.at) <= Date.parse(removal.time), `#${action.id} ended before Git started removal`);
-			delete process.env.GIT_TRACE2_EVENT;
-			await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+		case 'delete-worktree': {
+			const cwd = vscode.workspace.workspaceFolders![0].uri.fsPath;
+			execFileSync('git', ['-C', cwd, 'worktree', 'remove', action.folder], { timeout: 20_000 });
+			assert.ok(!fs.existsSync(action.folder), 'Git removed the fixture worktree');
 			return true;
 		}
 	}
@@ -312,13 +288,12 @@ export async function activate(): Promise<void> {
 		assert.ok(folder, 'the test window has a workspace folder');
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
-		const version = process.env.FACADE_IT_WINDOW_PROTOCOL === '3' ? 3 : 2;
-		if (version === 3) {
+		if (process.env.FACADE_IT_WINDOW_PROTOCOL === '3') {
 			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
 		}
-		const hello = await helloInCore(home, [version, version]);
-		const core = hello.result as HelloResult | V2HelloResult | undefined;
-		assert.ok(core?.protocol === version && core.machine_id, JSON.stringify(hello));
+		const hello = await helloInCore(home, [3, 3]);
+		const core = hello.result as HelloResult | undefined;
+		assert.ok(core?.protocol === 3 && core.machine_id, JSON.stringify(hello));
 		answer(`${control}.ready`, { result: { folder, remote: vscode.env.remoteName ?? null, home, machineId: core.machine_id } satisfies WindowReady });
 		void actions();
 	} catch (error) {

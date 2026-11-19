@@ -25,9 +25,9 @@ const common = { outdir: path.join(stage, 'dist'), bundle: true, sourcemap: true
 const observeResumePicker = {
 	name: 'resume-picker-fixture',
 	setup(build) {
-		const picker = path.join(root, 'src', 'ui', 'pickers', 'resume.ts');
+		const pickers = new Set(['resume.ts', 'stepping.ts'].map(file => path.join(root, 'src', 'ui', 'pickers', file)));
 		const fixture = path.join(root, 'src', 'test', 'integration', 'resumePickerFixture.ts');
-		build.onResolve({ filter: /^vscode$/ }, args => path.normalize(args.importer) === picker ? { path: fixture } : undefined);
+		build.onResolve({ filter: /^vscode$/ }, args => pickers.has(path.normalize(args.importer)) ? { path: fixture } : undefined);
 	}
 };
 await Promise.all([

@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import { createConnection } from 'net';
 import * as path from 'path';
 import { createInterface } from 'readline';
-import type { Response, V2HelloParams, V2WatchResult, V2WindowInfo, V3HelloParams } from '../../base/coreProtocol';
+import type { Response, V2HelloParams, V3HelloParams } from '../../base/coreProtocol';
 
 /** VS Code's fsPath lowercases the drive letter. Compare it like a path from Node or core. */
 export function normalizeDriveLetter(file: string): string {
@@ -230,13 +230,6 @@ export async function helloInCore(home: string, protocol: V3HelloParams['protoco
 	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' });
 }
 
-/** Reads the actual protocol-2 fixture's windows without keeping an editor connected. */
-export async function windowsInCore(home: string): Promise<readonly V2WindowInfo[]> {
-	const response = await readCore(home, { build: 'facade-editor-test', protocol: [2, 2], kind: 'terminal' }, { method: 'watch', params: { topic: 'windows' } });
-	if (response.error) { throw new Error(response.error.message); }
-	return (response.result as V2WatchResult).snapshot as V2WindowInfo[];
-}
-
 export async function callInCore(home: string, op: string, args: object, protocol: V3HelloParams['protocol']): Promise<Response> {
 	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
 }
@@ -291,10 +284,11 @@ export async function endCore(program: string, home: string, ms = 30_000): Promi
 	const env = { ...own, FACADE_HOME: home };
 	const call = (...args: string[]) => spawnSync(program, args, { env, encoding: 'utf8', timeout: 15_000 });
 	const listed = call('list', '--json');
-	const agents = listed.status === 0 ? (JSON.parse(listed.stdout) as { agents: { agent_id?: string }[] }).agents : [];
+	const agents = listed.status === 0 ? (JSON.parse(listed.stdout) as { agents: { id?: string; agent_id?: string }[] }).agents : [];
 	for (const agent of agents) {
-		if (agent.agent_id) {
-			call('remove', agent.agent_id);
+		const reference = agent.id ?? agent.agent_id;
+		if (reference) {
+			call('remove', reference);
 		}
 	}
 	const end = Date.now() + ms;

@@ -320,16 +320,6 @@ function block(id: string, from: string, window: string, text: string): RegExp {
 	return new RegExp(String.raw`📨 Message from [^\n]*\(${escaped(from)}\) · ${escaped(id)}(?: · From ${escaped(label)})?\n${escaped(text)}$`);
 }
 
-interface RustWindow {
-	readonly id: string;
-	readonly address: string;
-	readonly name: string;
-	readonly machine_id: string;
-	readonly connected: boolean;
-	readonly locations?: readonly { folder: string }[];
-	readonly clis?: readonly { cli: string; available: boolean }[];
-}
-
 /** The discovery and start steps for each engine. The Rust address goes back into tool calls. */
 const discover = (): Step => RUST
 	? { tool: 'list_agents', arguments: {} }
@@ -649,16 +639,20 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const childAlias = childOf(started);
 		const quirks = `${RECORD}.quirks.${childAlias}`;
 		const once = (text: string) => received(childAlias).filter(each => each.includes(text)).length;
+		const input = () => fs.readFileSync(`${RECORD}.stdin.${childAlias}`, 'utf8').trim().split('\n')
+			.map(line => (JSON.parse(line) as { data: string }).data).join('');
 		for (const [quirk, text] of [[{ slowMs: 4_500 }, 'Taken slowly.'], [{ swallow: 1 }, 'Enter missed once.']] as const) {
+			const before = input().length;
 			fs.writeFileSync(quirks, JSON.stringify(quirk));
 			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text } }])).content('send_message');
-			const withdrawn = RUST && 'swallow' in quirk;
-			assert.strictEqual(sent?.status, withdrawn ? 'failure' : 'success', JSON.stringify(sent));
+			assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
 			await new Promise(resolve => setTimeout(resolve, 5_000));
-			assert.strictEqual(once(text), withdrawn ? 0 : 1, JSON.stringify(received(childAlias)));
-			if (withdrawn) {
-				const read = await script(alias, [{ tool: 'read_screen', arguments: { agent: '$child' }, untilAbsent: text }]);
-				assert.ok(!JSON.stringify(read.content('read_screen')).includes(text), 'the withdrawn draft was erased');
+			const missed = RUST && 'swallow' in quirk;
+			assert.strictEqual(input().slice(before).split(text).length - 1, 1, 'the message was pasted once');
+			assert.strictEqual(once(text), missed ? 0 : 1, JSON.stringify(received(childAlias)));
+			if (missed) {
+				assert.strictEqual(sent.data.delivery, 'typed_into_input', JSON.stringify(sent));
+				assert.strictEqual(JSON.parse(fs.readFileSync(quirks, 'utf8')).swallow, 0, 'the CLI saw and ignored the written Enter');
 			}
 			fs.rmSync(quirks, { force: true });
 		}
@@ -678,41 +672,35 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
 	});
 
-	test('core\'s tools: it lists the other window, starts an agent there, messages it, reads its screen and stops it', async function () {
+	test('the Orchestrator starts in the other workspace folder and shows the child in its creator\'s workspace', async function () {
 		if (!RUST) { this.skip(); }
 		this.timeout(120_000);
-		const { alias } = await personAgent();
-		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"name":${JSON.stringify(PEER)}`, wait: 30_000 }]);
-		const windows = found.content('list_agents')?.data.windows as RustWindow[] | undefined;
-		const peer = windows?.find(each => each.name === PEER);
-		const folder = peer?.locations?.[0]?.folder;
-		assert.ok(peer?.connected && peer.address && folder && peer.clis?.some(cli => cli.cli === 'claude' && cli.available), `the other window is listed with its locations and CLIs: ${JSON.stringify(found.content('list_agents'))}`);
+		const { alias, card } = await personAgent();
+		const folder = PEER_DIR;
+		assert.ok(folder && normalizeDriveLetter(folder) !== normalizeDriveLetter(vscode.workspace.workspaceFolders![0].uri.fsPath), 'the peer has a distinct folder');
 		const ran = await script(alias, [
-			{ tool: 'start_agent', arguments: { name: 'Remote helper', window: peer.address, location_source_window: peer.address, folder, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.address' } },
+			{ tool: 'start_agent', arguments: { name: 'Other folder helper', folder, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.id' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
-			{ tool: 'list_agents', arguments: {} },
-			{ tool: 'stop_agent', arguments: { agent: '$child' } },
 			{ tool: 'list_agents', arguments: {} }
 		], 90_000);
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		const membership = [peer.id];
-		assert.deepStrictEqual(started.data.windows, membership, 'it started in the other window');
-		assert.strictEqual(started.data.machine_id, peer.machine_id);
 		assert.strictEqual(normalizeDriveLetter(started.data.folder), normalizeDriveLetter(folder));
 		const child = started.data.id as string;
 		assert.deepStrictEqual([ran.content('send_message')?.status, ran.content('send_message')?.data.delivery], ['success', 'typed_into_input'], JSON.stringify(ran.content('send_message')));
 		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('Hello across windows.'), 'its screen shows the message');
-		assert.ok(!(await state()).cards.some(each => each.alias === child), 'its card is in its own window, not this one');
-		const listed = ran.content('list_agents')?.data.agents as { id: string; address: string; machine_id: string; windows: string[]; folder: string }[];
-		assert.deepStrictEqual(listed.filter(each => each.id === child && each.address === started.data.address).map(each => [each.machine_id, each.windows, normalizeDriveLetter(each.folder)]),
-			[[peer.machine_id, membership, normalizeDriveLetter(folder)]], 'its CLI runs in the other window\'s folder');
-		assert.strictEqual(ran.content('stop_agent')?.status, 'success', JSON.stringify(ran.content('stop_agent')));
-		// Core keeps a stopped agent's record, ended, until its window records its conversation and removes it, a moment later
-		const after = (ran.content('list_agents', 1)?.data.agents as { id: string; state?: string }[]).filter(each => each.id === child);
-		assert.ok(after.every(each => each.state === 'ended'), `a stopped agent is gone or listed ended: ${JSON.stringify(after)}`);
+		const listed = ran.content('list_agents')?.data.agents as { id: string; name: string; folder: string }[];
+		assert.deepStrictEqual(listed.filter(each => each.id === child).map(each => [each.name, normalizeDriveLetter(each.folder)]),
+			[['Other folder helper', normalizeDriveLetter(folder)]]);
+		const childId = fakeAlias(child).slice(1);
+		await until('the creator workspace to show the child card', async () => (await state()).cards.find(each => each.alias === childId));
+		assert.ok(!vscode.window.terminals.some(terminal => terminal.name === 'Other folder helper'), 'the child has no terminal view before Attach');
+		const stopped = await script(alias, [{ tool: 'stop_agent', arguments: { agent: '$child' } }, { tool: 'list_agents', arguments: {} }]);
+		assert.strictEqual(stopped.content('stop_agent')?.status, 'success');
+		assert.ok(!(stopped.content('list_agents')?.data.agents as { id: string }[]).some(each => each.id === child), 'the stopped child leaves the active roster');
+		await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId });
 	});
 
 	test('it lists the other window, starts an agent there, messages it, reads its screen and stops it', async function () {

@@ -92,6 +92,13 @@ async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
 }
 
+/** The fake CLI's record uses a leading hash on either engine. */
+function fixtureAlias(card: PanelState['cards'][number]): string | undefined {
+	const alias = card.alias;
+	if (!(RUST ? /^a\d+$/ : /^#a\d+$/).test(alias)) { return undefined; }
+	return RUST ? `#${alias}` : alias;
+}
+
 async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 20_000): Promise<T> {
 	const end = Date.now() + ms;
 	for (;;) {
@@ -116,7 +123,7 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 		const now = await state();
 		const added = now.cards.find(card => !before.has(card.runId));
 		// On the Rust engine its short ID comes with core's answer to the start (RULES-2.2): the card is the test's once it has it
-		if (added && /#a\d+/.test(linesOf(added).join(' '))) {
+		if (added && fixtureAlias(added)) {
 			return added;
 		}
 		if (!added) {
@@ -124,6 +131,12 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 		}
 		return undefined;
 	});
+}
+
+/** Stop and clear the fixture from the workspace once its lifecycle has been checked. */
+async function stopAndHide(runId: string): Promise<void> {
+	await vscode.commands.executeCommand('facade.stopAgent', { run_id: runId });
+	if (RUST) { await vscode.commands.executeCommand('facade.hideAgent', { run_id: runId }); }
 }
 
 function alive(pid: number): boolean {
@@ -136,16 +149,29 @@ function alive(pid: number): boolean {
 }
 
 suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
+	let firstRun: string | undefined;
+
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
 	});
 
+	teardown(async () => {
+		if (firstRun !== undefined) {
+			try {
+				await stopAndHide(firstRun);
+			} finally {
+				firstRun = undefined;
+			}
+		}
+	});
+
 	test('New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder', async () => {
 		const card = await newCard();
+		firstRun = card.runId;
 		const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
 		assert.ok(terminal, 'its editor terminal shows only the agent name');
-		const alias = linesOf(card).join(' ').match(/#a\d+/)?.[0];
+		const alias = fixtureAlias(card);
 		assert.ok(alias, 'the card shows its short ID');
 		const pidFile = `${RECORD}.${alias}`;
 		const pid = await until('the fake CLI to start', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
@@ -216,20 +242,33 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
 			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
-			// Its terminal's title and its report's are no card's: its second line is Facade's own, unmarked, before any message, and its details' title
-			// is its conversation's, from its CLI's own history (PANEL-1.4, 1.5, CLIS-2.4). The CLI writes both within a fifth of a second
-			await new Promise(resolve => setTimeout(resolve, 1_000));
-			const shown = (await state()).cards.find(each => each.runId === card.runId);
-			const said = shown ? [shown.line, ...linesOf(shown)] : [];
-			assert.deepStrictEqual([!!shown && !/^(?:\u{1F9D1}|\u{1F4E8}|\u{1F514})/u.test(shown.line), said.filter(line => /Checking responsive layout|检查标题更新|Plain activity title/.test(line))], [true, []], JSON.stringify(shown));
+			if (RUST) {
+				// RULES-6.2 shows the Orchestrator's terminal title in the card and its details.
+				const shown = await until(`the card title ${title}`, async () => (await state()).cards.find(each => each.runId === card.runId && each.line === title));
+				assert.ok(linesOf(shown).includes(`Title: ${title}`), JSON.stringify(shown));
+				assert.ok(!linesOf(shown).some(line => line.includes('Plain activity title')), JSON.stringify(shown));
+			} else {
+				// CLIS-2.4 gives the old engine a title from history. Let the fixture publish both other titles before checking.
+				await new Promise(resolve => setTimeout(resolve, 1_000));
+				const shown = (await state()).cards.find(each => each.runId === card.runId);
+				const said = shown ? [shown.line, ...linesOf(shown)] : [];
+				assert.deepStrictEqual([!!shown && !/^(?:\u{1F9D1}|\u{1F4E8}|\u{1F514})/u.test(shown.line), said.filter(line => /Checking responsive layout|检查标题更新|Plain activity title/.test(line))], [true, []], JSON.stringify(shown));
+			}
 			assert.strictEqual(unspun(terminal.name), card.name, 'CLI titles never change the native terminal name');
 			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name) ? true : undefined);
 		}
 
 		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
-		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Stop Agent removes the card at once');
+		if (!RUST) {
+			assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Stop Agent removes the card at once');
+		}
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
+		if (RUST) {
+			await until('Stop to retain the ended card', async () => (await state()).cards.find(each => each.runId === card.runId && each.orchestrator?.running === false));
+			await vscode.commands.executeCommand('facade.hideAgent', { run_id: card.runId });
+		}
+		firstRun = undefined;
 	});
 
 	test('LIFECYCLE-2.2: a person types English, Chinese and emoji in an agent terminal, unchanged and without submitting', async function () {
@@ -237,7 +276,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const card = await newCard();
 		let watching: vscode.Disposable | undefined;
 		try {
-			const alias = linesOf(card).join(' ').match(/#a\d+/)![0];
+			const alias = fixtureAlias(card);
+			assert.ok(alias);
 			const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
 			assert.ok(terminal, 'the agent has its editor terminal');
 			await until('its editor tab in front', async () => {
@@ -264,7 +304,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.strictEqual(fs.existsSync(`${RECORD}.received.${alias}`), false, 'the draft was never submitted');
 		} finally {
 			watching?.dispose();
-			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+			await stopAndHide(card.runId);
 		}
 	});
 
@@ -316,7 +356,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			shell.dispose();
 		} finally {
 			for (const run of cards) {
-				await vscode.commands.executeCommand('facade.stopAgent', { run_id: run }).then(undefined, () => undefined);
+				await stopAndHide(run).then(undefined, () => undefined);
 			}
 			await vscode.commands.executeCommand('workbench.action.closeAllGroups');
 		}
@@ -350,18 +390,22 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 	});
 
-	test('Continue Session uses the saved cwd and exact session ID; Pin and Unpin synchronize with the native tab', async function () {
+	test('Resuming opens the saved cwd and exact session ID, with the engine\'s Pin behavior', async function () {
 		if (CUSTOM) { this.skip(); }
-		const cwd = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'nested');
+		const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
+		// The Orchestrator matches the exact queried folder. The old history picker includes descendants.
+		const cwd = RUST ? folder : path.join(folder, 'nested');
 		fs.mkdirSync(cwd, { recursive: true });
 		const fixture = resumeFixture(cwd);
 		const before = new Set((await state()).cards.map(each => each.runId));
 		const started = async () => (await state()).cards.filter(each => !before.has(each.runId));
-		const history = vscode.commands.executeCommand('facade.continueSession');
+		const history = vscode.commands.executeCommand(RUST ? 'facade.resumeAgent' : 'facade.continueSession');
 		void history.then(undefined, () => undefined);
 		try {
+			let lastPicker: ResumePickerState | undefined;
 			await until('the Resume fixture ' + fixture.title + ' to be selected', async () => {
 				const picker = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
+				lastPicker = picker;
 				if (!picker || picker.busy || picker.active < 0) { return undefined; }
 				const target = picker.labels.indexOf(fixture.title);
 				if (target < 0) { return undefined; }
@@ -369,13 +413,14 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 				if (target === picker.active) { return true; }
 				await vscode.commands.executeCommand(target < picker.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
 				return undefined;
-			});
+			}).catch(error => { throw new Error(`${(error as Error).message}; picker: ${JSON.stringify(lastPicker)}`); });
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			await history;
 			// On the Rust engine its short ID and name come with core's answer to the start.
-			const card = await until('the resumed card', async () => (await started()).find(each => /#a\d+/.test(linesOf(each).join(' '))));
+			const card = await until('the resumed card', async () => (await started()).find(fixtureAlias));
 			assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
-			const alias = linesOf(card).join(' ').match(/#a\d+/)![0];
+			const alias = fixtureAlias(card);
+			assert.ok(alias);
 			const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 			assert.ok(sameFolder(launch.cwd, cwd));
 			const resumeAt = launch.args.indexOf(fixture.args[0]);
@@ -384,6 +429,16 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
 			await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 			await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
+			if (RUST) {
+				await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
+				await until('the unpinned workspace card', async () => (await state()).cards.find(each => each.runId === card.runId && !each.pinned));
+				await vscode.commands.executeCommand('workbench.action.pinEditor');
+				await until('the native tab to be marked', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
+					.find(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name && tab.isPinned));
+				const nativeOnly = (await state()).cards.find(each => each.runId === card.runId);
+				assert.ok(nativeOnly && !nativeOnly.pinned, 'native tab pinning leaves the workspace Pin alone');
+				return;
+			}
 			await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && tab.isPinned) ? true : undefined).catch(error => {
 				console.error('Native Pin state', JSON.stringify({ terminal: vscode.window.activeTerminal?.name, tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
 				throw error;
@@ -414,7 +469,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} finally {
 			await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
 			await history.then(undefined, () => undefined);
-			await Promise.all((await started()).map(card => vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId })));
+			await Promise.all((await started()).map(card => stopAndHide(card.runId)));
 			await until('the resumed cards to close', async () => (await started()).length === 0 || undefined);
 		}
 	});
@@ -441,7 +496,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			await new Promise(resolve => setTimeout(resolve, 500));
 			return (await state()).filter ? await state() : undefined;
 		}, 60_000);
-		await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
+		await stopAndHide(card.runId);
 		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
 		const said = await until('the page to say so', async () => {
 			const text = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '#empty p' });

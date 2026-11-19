@@ -14,14 +14,23 @@ export interface ResumePickerState {
 }
 
 /** The integration bundle can read the Resume picker's labels and its active row. */
+let observed: vscode.Disposable | undefined;
+
 function createQuickPick<T extends vscode.QuickPickItem>(): vscode.QuickPick<T> {
 	const picker = vscode.window.createQuickPick<T>();
+	observed?.dispose();
 	const observe = vscode.commands.registerCommand(RESUME_PICKER_STATE, (): ResumePickerState => ({
 		busy: picker.busy,
 		labels: picker.items.map(item => item.label),
 		active: picker.items.indexOf(picker.activeItems[0])
 	}));
-	picker.onDidHide(() => observe.dispose());
+	observed = observe;
+	picker.onDidHide(() => {
+		if (observed === observe) {
+			observe.dispose();
+			observed = undefined;
+		}
+	});
 	return picker;
 }
 

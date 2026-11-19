@@ -6,10 +6,12 @@ import * as assert from 'assert';
 import { execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { MessageRef, V2AgentInfo, V2WindowInfo, V2WindowRef, V3InspectResult } from '../../base/coreProtocol';
+import { isDeepStrictEqual } from 'util';
+import type { V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
+import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
 import { callInCore, endEditors, normalizeDriveLetter, until } from './editors';
-import type { PinIdentity, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
+import type { SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
 /** The workspace driver and the two helpers it uses beside either copy of the extension. */
@@ -104,12 +106,11 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 	}
 }
 
-async function expectAgent(window: DrivenWindow, id: string, pinned: boolean, opening?: string): Promise<void> {
-	const shown = opening === undefined ? '' : ` with opening ${JSON.stringify(opening)}`;
-	await until(`#${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}${shown}`, async () => {
+async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): Promise<void> {
+	await until(`${id}'s ${pinned ? 'pinned ' : ''}card and terminal in ${window.ready.folder}`, async () => {
 		const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
 		return cards.length === 1 && cards[0].id === id && cards[0].pinned === pinned && cards[0].column !== null
-			&& terminals === 1 && (opening === undefined || cards[0].line === opening) || undefined;
+			&& terminals === 1 && cards[0].running || undefined;
 	});
 }
 
@@ -221,38 +222,6 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	console.log('  ✔ Explicit removal cleared the saved member and Pin on reopen');
 }
 
-/** Read the real notification center, then use its Open Message button to check the ID. */
-async function expectNotice(window: DrivenWindow, message: MessageRef, text: string, earlier?: string): Promise<void> {
-	await window.act({ kind: 'notifications' });
-	const workbench = await window.workbench();
-	try {
-		const messages = await until(`a Facade notification in ${window.ready.folder}`, async () => {
-			const messages = await workbench.cdp.evaluate<string[]>(`Array.from(document.querySelectorAll(
-				'.notifications-center .notification-list-item-message'), item => item.textContent ?? '')`);
-			return messages.some(message => message.includes(text)) ? messages : undefined;
-		});
-		assert.strictEqual(messages.filter(message => message.includes(text)).length, 1);
-		if (earlier !== undefined) {
-			assert.ok(messages.every(message => !message.includes(earlier)), 'adoption does not show an older message');
-		}
-		const opened = await workbench.cdp.evaluate<boolean>(`(() => {
-			const item = Array.from(document.querySelectorAll('.notifications-center .notification-list-item'))
-				.find(item => item.querySelector('.notification-list-item-message')?.textContent?.includes(${JSON.stringify(text)}));
-			const button = Array.from(item?.querySelectorAll('.monaco-button') ?? [])
-				.find(button => button.textContent?.trim() === 'Open Message');
-			button?.click();
-			return !!button;
-		})()`);
-		assert.ok(opened, 'the notice offers Open Message');
-		const id = `#${message.message_id}`;
-		const address = `${id}@id:${message.machine_id.replace(/-/g, '')}`;
-		const document = await window.act<string>({ kind: 'message', address });
-		assert.ok(document.includes(id) && document.includes(text), document);
-	} finally {
-		workbench.cdp.close();
-	}
-}
-
 interface WindowJourney {
 	readonly home: string;
 	readonly remote: string | null;
@@ -260,22 +229,6 @@ interface WindowJourney {
 	readonly peer: string;
 	readonly shared: string;
 	readonly files: WindowFiles;
-	windows(): Promise<readonly V2WindowInfo[]>;
-}
-
-async function firstMember(window: DrivenWindow, agent: string): Promise<V2WindowRef> {
-	const members = await window.act<V2WindowRef[]>({ kind: 'members', agent });
-	assert.strictEqual(members.length, 1, JSON.stringify(members));
-	assert.strictEqual(members[0].machine_id, window.ready.machineId);
-	return members[0];
-}
-
-async function waitConnections(journey: WindowJourney, expected: readonly { readonly window: V2WindowRef; readonly connected: boolean }[]): Promise<void> {
-	await until('each logical window to have its expected connection', async () => {
-		const windows = await journey.windows();
-		return expected.every(({ window, connected }) => windows.some(each =>
-			each.window_id === window.window_id && each.machine_id === window.machine_id && each.connected === connected)) || undefined;
-	});
 }
 
 function assertSameRun(actual: RunningAgent, expected: RunningAgent, message?: string): void {
@@ -286,7 +239,12 @@ function assertSameRun(actual: RunningAgent, expected: RunningAgent, message?: s
 	);
 }
 
-/** Go to Agent shares the original run, and two pinned workspaces restore one stopped run. */
+async function expectViews(window: DrivenWindow, agent: string, count: number): Promise<void> {
+	await until(`${agent} to have ${count} terminal views`, async () =>
+		(await window.act<V3InspectResult>({ kind: 'inspect', agent })).viewers.length === count || undefined);
+}
+
+/** Go to Agent shares the same run. Both workspaces keep their Pin when it stops and restore one process. */
 export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney): Promise<void> {
 	const { folder, peer, home, remote } = journey;
 	let machineId: string | undefined;
@@ -298,117 +256,70 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 		}, { folder: normalizeDriveLetter(place), remote, home: normalizeDriveLetter(home), machineId });
 		return window;
 	};
-	const first = await start(folder, 'a');
-	const fresh = await first.act<RunningAgent>({ kind: 'start' });
-	await expectAgent(first, fresh.id, false, 'New session started');
-	await first.act({ kind: 'stop', agent: fresh.id });
-	await first.act({ kind: 'wait-for-exit', pid: fresh.pid });
-	const resumed = await first.act<RunningAgent>({ kind: 'resume', agent: fresh.id });
-	assertSameRun({ ...resumed, pid: fresh.pid }, fresh, 'Resume keeps the number, session and cwd');
-	assert.notStrictEqual(resumed.pid, fresh.pid);
-	await expectAgent(first, fresh.id, false, 'Agent resumed');
-	const other = await start(peer, 'b');
-	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: fresh.id }), resumed);
-	await expectAgent(other, fresh.id, false, '');
-	await first.act({ kind: 'stop', agent: fresh.id });
-	await other.act({ kind: 'wait-for-exit', pid: resumed.pid });
-	await until('both windows to close the stopped pair', async () => {
-		const views = await Promise.all([first, other].map(window => window.act<WindowView>({ kind: 'snapshot' })));
-		return views.every(view => view.cards.length === 0 && view.terminals === 0) || undefined;
-	});
-	console.log('  ✔ The starting window knows the new session and the same-number resume. A fresh window adopts it with no opening claim');
 
+	const first = await start(folder, 'a');
 	const screen = 'Shared agent screen';
 	const before = await first.act<RunningAgent>({ kind: 'start', screen });
-	const original = await firstMember(first, before.id);
-	const earlier = 'Sent before the other window joined';
-	const earlyId = await first.act<string>({ kind: 'send', agent: before.id, text: earlier });
-	await expectNotice(first, { machine_id: first.ready.machineId, message_id: earlyId }, earlier);
+	await expectAgent(first, before.id, false);
+	const other = await start(peer, 'b');
+	assert.deepStrictEqual((await other.act<WindowView>({ kind: 'snapshot' })).cards, [], 'an independent workspace starts without the agent');
 	assertSameRun(await other.act<RunningAgent>({ kind: 'adopt', agent: before.id }), before);
-	const both = await other.act<V2WindowRef[]>({ kind: 'members', agent: before.id });
-	assert.strictEqual(both.length, 2);
-	const member = both.find(window => window.window_id !== original.window_id);
-	assert.ok(member && member.machine_id === original.machine_id, JSON.stringify(both));
-	assert.ok(both.some(window => window.window_id === original.window_id && window.machine_id === original.machine_id));
-	await Promise.all([expectAgent(first, before.id, false), expectAgent(other, before.id, false)]);
-	const shared = 'Sent to both member windows';
-	const sharedId = await first.act<string>({ kind: 'send', agent: before.id, text: shared });
-	const sharedMessage = { machine_id: first.ready.machineId, message_id: sharedId };
-	await Promise.all([expectNotice(first, sharedMessage, shared), expectNotice(other, sharedMessage, shared, earlier)]);
-	console.log('  ✔ Both member windows show the same message once, and the new member does not show the earlier message');
+	await expectAgent(other, before.id, false);
+	await expectViews(first, before.id, 2);
+
+	const sender = await other.act<RunningAgent>({ kind: 'start' });
+	await other.act({ kind: 'send', agent: sender.id, to: before.id, text: 'Message from the other workspace' });
+	await other.act({ kind: 'remove', agent: sender.id });
 	await first.act({ kind: 'pin', agent: before.id });
 	await other.act({ kind: 'pin', agent: before.id });
 	await first.close();
-	await waitConnections(journey, [{ window: original, connected: false }, { window: member, connected: true }]);
+	await expectViews(other, before.id, 1);
 	await expectAgent(other, before.id, true);
 	assertSameRun(await other.act<RunningAgent>({ kind: 'running', agent: before.id, screen }), before);
 	const firstBack = await start(folder, 'a');
 	await expectAgent(firstBack, before.id, true);
+	await expectViews(other, before.id, 2);
 	assertSameRun(await firstBack.act<RunningAgent>({ kind: 'running', agent: before.id, screen }), before);
-	console.log('  ✔ Go to Agent shares the original process and closing one member window leaves it running in the other');
+	console.log('  ✔ Go to Agent shares the process and screen. Each workspace attaches and detaches its own view');
 
 	await firstBack.act({ kind: 'stop', agent: before.id });
 	await other.act({ kind: 'wait-for-exit', pid: before.pid });
-	await until('the stopped agent to close in the other member window', async () => {
-		const view = await other.act<WindowView>({ kind: 'snapshot' });
-		return view.cards.length === 0 && view.terminals === 0 || undefined;
+	await until('both workspaces to retain the stopped agent and its Pin', async () => {
+		const views = await Promise.all([firstBack, other].map(window => window.act<WindowView>({ kind: 'snapshot' })));
+		return views.every(view => view.terminals === 0 && view.cards.length === 1 &&
+			view.cards[0].id === before.id && view.cards[0].pinned && !view.cards[0].running) || undefined;
 	});
 	await Promise.all([firstBack.close(), other.close()]);
-	await waitConnections(journey, [{ window: original, connected: false }, { window: member, connected: false }]);
 	const restored = await Promise.all([start(folder, 'a'), start(peer, 'b')]);
 	await Promise.all(restored.map(window => expectAgent(window, before.id, true)));
 	const [left, right] = await Promise.all(restored.map(window => window.act<RunningAgent>({ kind: 'running', agent: before.id })));
-	assertSameRun(left, right, 'both workspaces restored the same process');
+	assertSameRun(left, right, 'both workspaces restore the same process');
 	assertSameRun({ ...left, pid: before.pid }, before, 'the resume kept the number, session and cwd');
 	assert.notStrictEqual(left.pid, before.pid, 'the original process ended before the resume');
-	console.log('  ✔ Stop Agent closes both member windows\' cards and tabs, and both Pins restore one process by the original number');
-	await deleteWorktree(restored[0], restored[1], original, member);
+	console.log('  ✔ Both Pins restore the same stopped agent with its original session');
+
+	await restored[0].act({ kind: 'remove', agent: before.id });
+	await worktreeLifetime(restored[0], restored[1]);
 	await Promise.all(restored.map(window => window.close()));
 	await sameWorkspace(start, journey);
 }
 
-async function deleteWorktree(source: DrivenWindow, peer: DrivenWindow, sourceRef: V2WindowRef, peerRef: V2WindowRef): Promise<void> {
-	const branch = 'agent-in-other-window';
-	const agent = await source.act<V2AgentInfo>({ kind: 'worktree', source: sourceRef, peer: peerRef, branch });
-	const shown = await source.act<WindowView>({ kind: 'snapshot' });
-	assert.ok(shown.cards.every(card => card.id !== agent.agent_id), 'the location source is outside the agent\'s member windows');
-	await until('the peer window to display its worktree agent', async () => {
-		const view = await peer.act<WindowView>({ kind: 'snapshot' });
-		return view.cards.some(card => card.id === agent.agent_id) || undefined;
-	});
-	const workbench = await source.workbench();
-	try {
-		await until('Change Working Location', () => workbench.cdp.evaluate<boolean | undefined>(`(() => {
-			const row = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row'))
-				.find(row => row.textContent?.includes('Change Working Location'));
-			if (!row) { return undefined; }
-			row.click();
-			return true;
-		})()`));
-		await until('the linked worktree\'s Delete Worktree button', () => workbench.cdp.evaluate<boolean | undefined>(`(() => {
-			const row = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row'))
-				.find(row => row.textContent?.includes(${JSON.stringify(branch)}));
-			const button = row?.querySelector('[aria-label="Delete Worktree"], a.codicon-close');
-			if (!button) { return undefined; }
-			button.click();
-			return true;
-		})()`));
-		const confirmation = await until('the Delete Worktree confirmation', () => workbench.cdp.evaluate<string | undefined>(
-			`document.querySelector('.monaco-dialog-box')?.textContent ?? undefined`));
-		assert.ok(confirmation.includes(agent.cwd) && confirmation.includes('Its agent will be stopped.'), confirmation);
-		const confirmed = await workbench.cdp.evaluate<boolean>(`(() => {
-			const button = Array.from(document.querySelectorAll('.monaco-dialog-box .monaco-button'))
-				.find(button => button.textContent?.trim() === 'Delete');
-			button?.click();
-			return !!button;
-		})()`);
-		assert.ok(confirmed, 'the confirmation offers Delete');
-		await source.act({ kind: 'worktree-removed', id: agent.agent_id, folder: agent.cwd });
-		await peer.act({ kind: 'wait-for-exit', pid: agent.pid! });
-		console.log('  ✔ Delete Worktree counts the running agent of another member window and waits for it to end before Git removes its working folder');
-	} finally {
-		workbench.cdp.close();
-	}
+async function worktreeLifetime(source: DrivenWindow, peer: DrivenWindow): Promise<void> {
+	const branch = 'agent-in-worktree';
+	const agent = await source.act<V3AgentInfo>({ kind: 'worktree', branch });
+	const parts = agent.cwd.split(/[\\/]/u);
+	assert.deepStrictEqual(parts.slice(-2), [source.ready.folder.split(/[\\/]/u).at(-1) + '.worktrees', branch]);
+	assert.deepStrictEqual((await source.act<WindowView>({ kind: 'snapshot' })).cards, [], 'a Shell start leaves the workspace unchanged');
+
+	const adopted = await peer.act<RunningAgent>({ kind: 'adopt', agent: agent.agent_id });
+	assert.strictEqual(adopted.pid, agent.pid);
+	assert.strictEqual(normalizeDriveLetter(adopted.cwd), normalizeDriveLetter(agent.cwd));
+	await source.act({ kind: 'delete-worktree', folder: agent.cwd });
+	const kept = await peer.act<RunningAgent>({ kind: 'running', agent: agent.agent_id });
+	assertSameRun(kept, adopted, 'Git deletion leaves the Orchestrator process running');
+	await peer.act({ kind: 'remove', agent: agent.agent_id });
+	await peer.act({ kind: 'wait-for-exit', pid: adopted.pid });
+	console.log('  ✔ Git owns worktree deletion. The other workspace keeps its original agent until Remove');
 }
 
 async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<void> {
@@ -417,45 +328,45 @@ async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<
 	const right = await open(folder, 'd');
 	const agentLeft = await left.act<RunningAgent>({ kind: 'start', screen: 'Agent in the first window', secondGroup: true });
 	const agentRight = await right.act<RunningAgent>({ kind: 'start', screen: 'Agent in the second window' });
-	const leftRef = await firstMember(left, agentLeft.id);
-	const rightRef = await firstMember(right, agentRight.id);
-	assert.notStrictEqual(leftRef.window_id, rightRef.window_id, 'the two active windows have independent references');
-	await Promise.all([expectAgent(left, agentLeft.id, false), expectAgent(right, agentRight.id, false)]);
-	// Both hosts have already read the workspace. Each changes a different Pin in its own window.
+	const pinned = [agentLeft.id, agentRight.id].sort();
+	for (const [window, local] of [[left, agentLeft], [right, agentRight]] as const) {
+		await until('both cards with one local terminal in each window', async () => {
+			const { cards, terminals } = await window.act<WindowView>({ kind: 'snapshot' });
+			return isDeepStrictEqual(cards.map(card => card.id).sort(), pinned) && terminals === 1 &&
+				cards.find(card => card.id === local.id)?.column !== null || undefined;
+		});
+	}
 	await left.act({ kind: 'pin', agent: agentLeft.id });
 	await right.act({ kind: 'pin', agent: agentRight.id });
 	const { file } = await right.act<SavedPin>({ kind: 'saved-pin', agent: agentRight.id });
-	const saved = JSON.parse(journey.files.read(file)) as { 'facade.pins': PinIdentity[] };
-	const pinOrder = saved['facade.pins'].map(pin => pin.agent);
-	const pinned = [agentLeft.id, agentRight.id].sort();
-	assert.deepStrictEqual([...pinOrder].sort(), pinned, 'both Pin changes are saved');
-	const lastPin = pinOrder.at(-1)!;
+	const saved = JSON.parse(journey.files.read(file)) as { readonly pins: RustPin[] };
+	const pinOrder = saved.pins.map(pin => pin.agent);
+	assert.deepStrictEqual([...pinOrder].sort(), pinned, 'both Pin changes are saved in the same workspace');
+	assert.ok(saved.pins.every(pin => pin.machine_id === left.ready.machineId));
 	await left.act({ kind: 'filter' });
+
 	const presentation = async (window: DrivenWindow, id: string) => {
 		const snapshot = await window.act<WindowView>({ kind: 'snapshot' });
-		const card = snapshot.cards.find(each => each.id === id);
-		return { selected: snapshot.cards.filter(each => each.selected).map(each => each.id), column: card?.column, filter: snapshot.filter };
+		return { column: snapshot.cards.find(each => each.id === id)?.column, filter: snapshot.filter };
 	};
 	const before = await Promise.all([presentation(left, agentLeft.id), presentation(right, agentRight.id)]);
 	assert.strictEqual(before[0].filter?.kind, 'location');
 	assert.strictEqual(before[1].filter, undefined);
-	assert.deepStrictEqual(before.map(each => [each.selected, each.column]), [[[agentLeft.id], 2], [[agentRight.id], 1]]);
+	assert.deepStrictEqual(before.map(each => each.column), [2, 1]);
 
 	await Promise.all([left.close(), right.close()]);
-	await waitConnections(journey, [{ window: leftRef, connected: false }, { window: rightRef, connected: false }]);
 	const firstBack = await open(folder, 'c');
-	await waitConnections(journey, [{ window: leftRef, connected: true }, { window: rightRef, connected: false }]);
 	const secondBack = await open(folder, 'd');
-	await waitConnections(journey, [{ window: rightRef, connected: true }]);
 	for (const window of [firstBack, secondBack]) {
 		await until('both Pins in the reopened workspace', async () => {
 			const snapshot = await window.act<WindowView>({ kind: 'snapshot' });
 			const shown = snapshot.cards.filter(card => card.pinned && card.column !== null).map(card => card.id).sort();
-			return JSON.stringify(shown) === JSON.stringify(pinned) || undefined;
+			return isDeepStrictEqual(shown, pinned) || undefined;
 		});
 	}
-	// LIFECYCLE-3.5 and PANEL-2.1 select the last Pin opened in saved order.
-	const restored = await Promise.all([presentation(firstBack, agentLeft.id), presentation(secondBack, agentRight.id)]);
-	assert.deepStrictEqual(restored, before.map(view => ({ ...view, selected: [lastPin] })));
-	console.log('  ✔ Two windows keep both Pin changes, keep their own filters and tab groups, and select the last restored Pin');
+	const filters = await Promise.all([presentation(firstBack, agentLeft.id), presentation(secondBack, agentRight.id)]);
+	assert.deepStrictEqual(filters.map(each => each.filter), before.map(each => each.filter));
+	await expectViews(firstBack, agentLeft.id, 2);
+	await expectViews(secondBack, agentRight.id, 2);
+	console.log('  ✔ Two windows persist both Pins and keep their filters separate');
 }
