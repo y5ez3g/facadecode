@@ -19,9 +19,9 @@ use serde::Serialize;
 
 use crate::cli::{Cli, exit_unknown};
 use crate::link::{Inbound, Link};
-use crate::log;
 use crate::supervisor::{Due, Supervisor};
 use crate::wake::Wake;
+use crate::{log, prune_log_if_due};
 
 /// Back-off after `poll` itself fails, so a lasting failure cannot spin the CPU.
 const WAIT_ERROR_DELAY: Duration = Duration::from_millis(100);
@@ -34,6 +34,7 @@ pub(super) struct Keeper {
     listener: UnixListener,
     wake: Wake,
     supervisor: Supervisor,
+    next_log_prune: Instant,
     /// The current daemon's connection; a newly proved one takes its place.
     link: Option<Link>,
     /// The CLIs held, by agent ID.
@@ -75,13 +76,15 @@ impl Keeper {
                 socket.display()
             ),
         );
-        let supervisor = Supervisor::new(&core, Instant::now());
+        let now = Instant::now();
+        let supervisor = Supervisor::new(&core, now);
         Ok(Keeper {
             core,
             socket,
             listener,
             wake,
             supervisor,
+            next_log_prune: now,
             link: None,
             clis: HashMap::new(),
         })
@@ -103,6 +106,7 @@ impl Keeper {
             .values()
             .filter_map(Cli::kill_deadline)
             .chain(self.supervisor.deadline())
+            .chain([self.next_log_prune])
             .min();
         let (sources, woken) = {
             let Keeper {
@@ -275,6 +279,7 @@ impl Keeper {
                 self.start_daemon(now);
             }
         }
+        prune_log_if_due(&self.core, now, &mut self.next_log_prune);
     }
 
     /// Launches the daemon; a failed launch counts as a daemon that ended at once, so the backoff

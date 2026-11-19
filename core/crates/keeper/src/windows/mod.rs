@@ -25,7 +25,7 @@ use self::console::ConPty;
 use self::link::{Inbound, Link, Listener};
 use self::port::Port;
 use self::supervisor::{Due, Supervisor};
-use crate::log;
+use crate::{log, prune_log_if_due};
 
 /// Back-off after the wait itself fails, so a lasting failure cannot spin the CPU.
 const WAIT_ERROR_DELAY: Duration = Duration::from_millis(100);
@@ -39,6 +39,7 @@ pub(super) struct Keeper {
     /// The pipe instance waiting for the next connection.
     listener: Listener,
     supervisor: Supervisor,
+    next_log_prune: Instant,
     /// The current daemon's connection; a newly proved one takes its place.
     link: Option<Link>,
     /// The CLIs held, by agent ID.
@@ -62,13 +63,15 @@ impl Keeper {
                 socket.display()
             ),
         );
-        let supervisor = Supervisor::new(&core, &mut port, Instant::now());
+        let now = Instant::now();
+        let supervisor = Supervisor::new(&core, &mut port, now);
         Ok(Keeper {
             core,
             socket,
             port,
             listener,
             supervisor,
+            next_log_prune: now,
             link: None,
             clis: HashMap::new(),
             conpty: None,
@@ -91,6 +94,7 @@ impl Keeper {
             .values()
             .filter_map(Cli::kill_deadline)
             .chain(self.supervisor.deadline())
+            .chain([self.next_log_prune])
             .min();
         let keys = match self.port.wait(deadline) {
             Ok(keys) => keys,
@@ -229,6 +233,7 @@ impl Keeper {
                 self.start_daemon(now);
             }
         }
+        prune_log_if_due(&self.core, now, &mut self.next_log_prune);
     }
 
     /// Launches the daemon; a failed launch counts as a daemon that ended at once, so the backoff

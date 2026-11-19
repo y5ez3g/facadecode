@@ -22,6 +22,7 @@ happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `fa
     `facade_base::paths::keeper_socket` gives, removed when the keeper exits; on Windows the named
     pipe at that path, `\\.\pipe\facade-core-keeper-<key>`, which goes with the process.
 - **Its log**, `<home>/core/logs/keeper.log`: its standard error, which whoever started it opened.
+  The keeper keeps the last 30 days of this log through `facade_base::log::prune`.
 
 ## Keeps
 
@@ -54,8 +55,8 @@ happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `fa
 - Replace itself with another build in place. A new keeper build runs only after the old keeper exited.
 - Stop a CLI the daemon did not ask it to stop. It does kill a CLI whose start failed after the
   spawn. On SIGTERM or SIGINT, only groups already being stopped get SIGKILL.
-- Wait for anything except in `poll` or the completion port. The only bounded wait is writing to
-  the daemon (`SEND_TIMEOUT`, 1 second; on Windows the write is then cancelled).
+- Wait separately for service events or deadlines. `poll` or the completion port handles both.
+  A write to the daemon can wait up to `SEND_TIMEOUT` (1 second). Windows then cancels the write.
 - On Windows: resize a terminal, load `conpty.dll` from anywhere but its build's ConPTY folder, or
   open a console window.
 - Queue messages for a daemon that is not connected. A CLI end with nobody to tell is not reported;
@@ -102,7 +103,7 @@ types in `facade_base::keeper`):
     - `descriptors` (lines with descriptors);
     - `unix_process` (birth, group signals, process observation, child exits);
     - `limits`, `paths`, `programs::launcher`;
-  - `log`, `time`.
+  - `log` (writes a line and prunes the service's own log), `time`.
 - **On Windows:** `sockets::server_pipe`, `service::authenticate_client`,
   `terminal_lines::{PeerProcess, add_terminal, take_terminal}`, `terminal::PtyMaster`,
   `unix_process::WaitPacket`, `programs::{quoted_command, bin_dir, CONPTY_FOLDER}`.
@@ -134,18 +135,21 @@ keeper after the previous one ended.
 
 ```mermaid
 flowchart TD
-    D[nearest deadline:<br/>SIGKILL deadlines, watchdog, next daemon start] --> P[poll]
+    D[nearest deadline:<br/>SIGKILL deadlines, watchdog, next daemon start, log maintenance] --> P[poll]
     P --> C[SIGCHLD: forked CLIs that exited, then the forked daemon]
     C --> T[SIGTERM / SIGINT: kill groups being stopped, exit]
     T --> R[ready descriptors: new connections, link lines,<br/>ends of adopted CLIs, end of an adopted daemon]
-    R --> X[deadlines that passed]
-    X --> D
+    R --> X[CLI stop and daemon supervision deadlines that passed]
+    X --> L[prune the keeper log when due]
+    L --> D
 ```
 
-Work that takes milliseconds (spawn, signal, duplicate a descriptor, write a line) is done in the
-loop. Anything that takes longer is a deadline or an event. SIGCHLD and SIGTERM/SIGINT reach `poll`
-as bytes their handlers write to two pipes (`wake.rs`). Exits are collected before a shutdown is
-handled, so the daemon still hears of them.
+SIGCHLD and SIGTERM/SIGINT reach `poll` as bytes their handlers write to two pipes (`wake.rs`). Exits
+are collected before a shutdown is handled, so the daemon still hears of them.
+
+The keeper prunes its log on its first turn after startup, then once an hour. The same deadline
+mechanism schedules it on Unix and Windows. Each turn handles its events and service deadlines
+before pruning. A prune failure is logged and the keeper continues.
 
 ### What it holds
 
