@@ -124,17 +124,11 @@ export function endMatching(text: string): void {
 		spawnSync('pkill', ['-TERM', '-f', text]);
 		return;
 	}
-	const script = [
-		'Get-CimInstance Win32_Process -OperationTimeoutSec 10 -ErrorAction Stop',
-		'| Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($env:FACADE_IT_END, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.ProcessId -ne $PID }',
-		'| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'
-	].join(' ');
 	const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-	const stop = () => spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+	const script = path.resolve(__dirname, '..', '..', '..', '..', 'scripts', 'stop-test-processes.ps1');
+	const stopped = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-RunnerPid', String(process.pid)], {
 		env: { ...process.env, FACADE_IT_END: text }, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 20_000, windowsHide: true
 	});
-	const first = stop();
-	const stopped = first.status === 0 ? first : stop();
 	if (stopped.status !== 0) {
 		const reason = stopped.error?.message || stopped.stderr?.trim() || `PowerShell exited with status ${stopped.status}`;
 		throw new Error(`Could not stop test processes for ${text}. ${reason}`);
