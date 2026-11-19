@@ -122,12 +122,10 @@ export function testProcessCleanup(root: string): (text: string) => void {
 	if (process.platform !== 'win32') {
 		return text => { spawnSync('pkill', ['-TERM', '-f', text]); };
 	}
-	const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+	const compiler = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
 	const source = path.resolve(__dirname, '..', '..', '..', '..', 'scripts', 'stop-test-processes.cs');
 	const program = path.join(root, 'stop-test-processes.exe');
-	execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command',
-		'Add-Type -Path $env:FACADE_IT_CLEANUP_SOURCE -OutputAssembly $env:FACADE_IT_CLEANUP_EXE -OutputType ConsoleApplication -ErrorAction Stop'], {
-		env: { ...process.env, FACADE_IT_CLEANUP_SOURCE: source, FACADE_IT_CLEANUP_EXE: program },
+	execFileSync(compiler, ['/nologo', '/target:exe', `/out:${program}`, source], {
 		stdio: ['ignore', 'inherit', 'inherit'], timeout: 30_000, windowsHide: true
 	});
 	return text => {

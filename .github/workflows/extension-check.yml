@@ -183,8 +183,18 @@ jobs:
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
         run: xvfb-run -a npm run test:integration 2>&1 | tee build/integration.log
-      - name: Isolated editor journeys on Windows and macOS
-        if: runner.os != 'Linux'
+      - name: Isolated editor journeys on Windows
+        if: runner.os == 'Windows'
+        env:
+          FACADE_IT_ENGINE: ${{ matrix.engine }}
+        run: |
+          # A detached Windows helper can keep a logging pipe open after the test runner exits.
+          status=0
+          npm run test:integration > build/integration.log 2>&1 || status=$?
+          cat build/integration.log
+          exit "$status"
+      - name: Isolated editor journeys on macOS
+        if: runner.os == 'macOS'
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
         run: npm run test:integration 2>&1 | tee build/integration.log

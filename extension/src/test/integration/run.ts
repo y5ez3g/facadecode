@@ -966,12 +966,14 @@ async function main(): Promise<void> {
 			if (keep) {
 				console.log(`Kept ${root}`);
 			} else {
+				console.log('Removing the isolated editor profiles.');
 				if (process.platform === 'win32') {
 					// Drain test-profile children that can outlive their editor and keep the run directory locked.
 					endMatching(`${root}${path.sep}`);
 				}
 				// On Windows a file a process just ended held can stay locked for a moment
 				fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+				console.log('Isolated editor profile cleanup finished.');
 			}
 		} catch (cleanup) {
 			throw suiteFailure === undefined ? cleanup : new AggregateError([suiteFailure, cleanup], 'Editor journey and final cleanup both failed.');
