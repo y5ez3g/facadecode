@@ -66,13 +66,17 @@ test('the staged product has usable README links and preserves both product and 
 	assert.doesNotMatch(notices, /^None$/m);
 });
 
-test('production manifest and executable bundles exclude the integration commands and CLI fixture (UX-3.2)', () => {
+test('production manifest and executable bundles include Stop and Dismiss and exclude integration commands and the CLI fixture (UX-3.2)', () => {
 	const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
 	const extension = fs.readFileSync(path.join(stage, 'dist', 'extension.js'), 'utf8');
 	const contributed = new Set(manifest.contributes.commands.map(command => command.command));
 	// Every command the bundle registers is a catalog command; test commands and retired IDs are absent
 	const registered = new Set([...extension.matchAll(/["'](_?facade\.[A-Za-z.]+)["']/g)].map(match => match[1]).filter(id => !/^facade\.(yolo|claude|codex|antigravity|muse|opencode|pi|locations|lastLaunch|panel)\b/.test(id)));
-	for (const id of ['facade.state', 'facade.selectRow', 'facade.probe', 'facade.stopAgent', 'facade.nextAgent', 'facade.startAgent']) {
+	for (const id of ['facade.stopAgent', 'facade.dismissAgent']) {
+		assert.ok(contributed.has(id), `Missing shipped command: ${id}`);
+		assert.ok(registered.has(id), `Missing from the production bundle: ${id}`);
+	}
+	for (const id of ['facade.state', 'facade.selectRow', 'facade.probe', 'facade.nextAgent', 'facade.startAgent']) {
 		assert.ok(!contributed.has(id), `Not a shipped command: ${id}`);
 		assert.ok(!registered.has(id), `Registered in the production bundle: ${id}`);
 	}
