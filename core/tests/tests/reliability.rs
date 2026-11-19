@@ -702,7 +702,7 @@ fn a_cancel_at_the_beginning_of_a_paste_wins_or_loses_whole() {
             ),
             _ => assert_eq!(
                 (
-                    answer["result"]["delivery"]["status"].as_str(),
+                    answer["result"]["message"]["delivery"]["status"].as_str(),
                     typed(&home, &text)
                 ),
                 (Some("success"), 1),

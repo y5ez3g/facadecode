@@ -1186,8 +1186,14 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     let add = ["machine", "add", "--home", home, "-p", "2222", "third"];
     first.run_facade_ok(&add);
     wait_for_route(&first, &third_id, &[&third_id]);
-    let shell_machines = machines_json(&first);
-    let daemon_machines = connect(&first).call("machine.list", json!({}));
+    let mut shell_machines = machines_json(&first);
+    let mut daemon_machines = connect(&first).call("machine.list", json!({}));
+    // The peers may be heard from between the Shell's request and the direct request.
+    for result in [&mut shell_machines, &mut daemon_machines["result"]] {
+        for machine in result["machines"].as_array_mut().unwrap() {
+            machine.as_object_mut().unwrap().shift_remove("last_seen");
+        }
+    }
     assert_eq!(
         shell_machines, daemon_machines["result"],
         "{daemon_machines}"

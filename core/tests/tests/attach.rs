@@ -392,7 +392,7 @@ fn detach_delivers_preceding_input() {
 #[cfg(unix)]
 #[test]
 fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     let home = TestHome::new("attachbadhello");
     home.start_fake("held");
     let mut command = home.command(&test_binaries().facade);
@@ -417,16 +417,20 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         arrived.send(()).unwrap();
         resume.recv_timeout(secs(10)).unwrap();
         stream.write_all(b"{malformed\n").unwrap();
+        // Keep the peer connected until Attach rejects the reply, even on a socket that
+        // would report a reset before giving the reader the last bytes of a closed peer.
+        stream.set_read_timeout(Some(secs(10))).unwrap();
+        assert_eq!(stream.read(&mut [0]).unwrap(), 0);
     });
     received.recv_timeout(secs(10)).unwrap();
     term.send(b"held keys");
     home.wait_for_gate("attach-buffered-input");
     release.send(()).unwrap();
     assert_eq!(
-        term.wait_exit(secs(5))
-            .expect("a permanent failure ends attach")
-            .code(),
-        Some(1)
+        term.wait_exit(secs(5)).and_then(|status| status.code()),
+        Some(1),
+        "{}",
+        term.text_with_scrollback()
     );
     assert!(
         term.wait_for_output(secs(2), "error: could not reconnect to Facade"),
