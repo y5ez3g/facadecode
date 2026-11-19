@@ -68,28 +68,20 @@ impl Roster {
             .map_or_else(|| session.to_string(), |(_, whole)| whole.clone())
     }
 
-    /// Lists a kept guest again, as a daemon started anew does.
-    pub(super) fn list(&mut self, record: &GuestRecord) {
-        let id = record.agent_id.clone();
-        if record.session.starts_with(MEMBER_PREFIX) {
-            self.members.insert(record.session.clone(), id);
-        } else {
-            let key = (record.cli.clone(), record.session.clone());
-            self.sessions.insert(key, id);
-        }
+    /// Lists a kept hook session again, as a daemon started anew does.
+    pub(super) fn list_session(&mut self, record: &GuestRecord) {
+        let key = (record.cli.clone(), record.session.clone());
+        self.sessions.insert(key, record.agent_id.clone());
     }
 
-    /// Lets go of `cli`'s `session` and its parts: the guest or member it was, if any.
+    /// Lets go of `cli`'s hook session and its parts.
     pub(super) fn end(&mut self, cli: &str, session: &str) -> Option<String> {
         let key = (cli.to_string(), session.to_string());
         self.watched.remove(&key);
         self.parts.remove(&key);
         self.parts
             .retain(|(part_cli, _), whole| !(part_cli == cli && whole == session));
-        let id = match self.sessions.remove(&key) {
-            Some(id) => id,
-            None => self.members.remove(session)?,
-        };
+        let id = self.sessions.remove(&key)?;
         self.forget(&id);
         Some(id)
     }

@@ -201,6 +201,7 @@ impl Store {
             initialize(&mut connection, held)
                 .map_err(|err| anyhow::anyhow!("could not initialize {}: {err}", path.display()))?;
         }
+        migrate_guest_yolo(&mut connection).map_err(unreadable)?;
         let (machine_id, machine_name) = connection
             .query_row(
                 "SELECT machine_id, name FROM machine WHERE singleton = 1",
@@ -469,6 +470,7 @@ impl Store {
     pub(crate) fn in_memory() -> Arc<Store> {
         let mut connection = Connection::open_in_memory().unwrap();
         initialize(&mut connection, &[]).unwrap();
+        migrate_guest_yolo(&mut connection).unwrap();
         Arc::new(Store {
             connection: Mutex::new(connection),
         })
@@ -608,6 +610,17 @@ fn initialize(connection: &mut Connection, held: &[String]) -> rusqlite::Result<
         params![machine_uuid(), machine_name],
     )?;
     transaction.commit()
+}
+
+fn migrate_guest_yolo(connection: &mut Connection) -> rusqlite::Result<()> {
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 0 {
+        let transaction = connection.transaction()?;
+        transaction.execute("ALTER TABLE guests ADD COLUMN yolo INTEGER", [])?;
+        transaction.pragma_update(None, "user_version", 1)?;
+        transaction.commit()?;
+    }
+    Ok(())
 }
 
 pub(super) fn machine_uuid() -> String {
