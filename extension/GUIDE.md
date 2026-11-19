@@ -1,87 +1,93 @@
 # Facade Code extension guide
 
-The details behind the [README](https://github.com/y5ez3g/facadecode/blob/main/extension/README.md): every feature of the panel and of agents working together, the two ways to work, and verified configurations and known limitations. The [specification](https://github.com/y5ez3g/facadecode/tree/main/docs/extension) defines the product; this guide describes it for users.
+The extension is Facade Code's VS Code entry point. It starts and opens agents through the Orchestrator on the
+machine that hosts the workspace. The [product documentation](../docs/facade-code.md) covers the three entry points.
 
-## Features
+## One panel for your workspace
 
-### One panel for every agent
+Use **New Agent** to pick a CLI. Choose **Change Working Location** to pick a workspace folder or a Git worktree.
+To use a saved machine, pick it in the same step, then choose a recent directory or its login home, or enter a
+path. Facade wakes an asleep machine when you select it and shows that machine's CLI choices and availability.
+To create a worktree while starting, choose a Git repository on either machine and enter a new branch name.
+Use your usual Git commands to remove a worktree.
 
-- **Cards**: Each card shows the CLI's avatar, the agent's name, a status dot and a second line; its ⓘ button (or **Show Agent Details**) opens its details: the conversation's title as the CLI keeps it (*No title yet* until there is one, or *Title unavailable* where Facade cannot read the CLI's history), the agent's name and `#aN`, when it started and who started it, where it works, and its path. Two agents of the window with the same name each show their `#aN`. The dot is green while the agent starts or works, and red when something is wrong: it could not start, it exited abnormally or lost its connection, its CLI reported an error, it cannot work with other agents, or its CLI reported no initial status within a minute of starting; any other time there is none. The second line says what was last sent to the agent - by you, with Enter, marked 🧑‍💻, or by another agent, marked 📨 - and before anything was, its start progress or *New conversation started* or *Conversation resumed*; a red card says why, and one that waits for permission, an answer or sign-in says what for. A busy agent's tab turns a spinner before its name. See [`PANEL.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/PANEL.md).
-- **Card actions**: Each card has three icon buttons: ⓘ for details, a gear menu with Rename Agent..., Move Up, Move Down and End Agent, and a pin button to pin or unpin; a right click on a card opens nothing. New agents join at the bottom; a card you pin goes to the bottom of the pinned cards, and one you unpin to the top of the others, just below them.
-- **A terminal for each agent**: Every agent runs in its own editor terminal, shown in at most one tab. Closing the tab hides it: the agent keeps running, its card opens it again, and End Agent ends it. A group can show any number of agent tabs, and an agent another agent starts shows its card alone. Splitting an agent's tab gives an ordinary terminal in the agent's folder. To give an agent a file, drag it onto its terminal with Shift held, as VS Code requires for terminals in the editor area. See [`LIFECYCLE.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/LIFECYCLE.md).
-- **Filter**: Show only the agents in one working location or workspace folder with **Filter by Working Location...** in the panel's title bar. Its first item shows every agent again; the panel's badge always counts them all.
-- **Resume Agent...**: Search Claude Code, Codex, Antigravity, Muse Code, OpenCode 2.x and Pi histories for this workspace, its subfolders and worktrees. Resume the exact conversation in its original CLI and folder, with current launch settings.
-- **Pin and Unpin**: Pin a conversation in any of the six built-in CLIs to restore it when this workspace opens again. Pinned cards stay above other agents, and the native terminal tab follows the same Pin/Unpin state. Pin or Unpin from a card, the Command Palette or a key shows the agent's tab, as clicking its card does, and pins or unpins it there; pinning an agent whose tab is hidden opens it, and unpinning a hidden one leaves it hidden. A reload or restart opens only pinned agents' tabs, one at a time in the Pins' order, ending on the last pinned agent's tab; unpinned agents' tabs stay hidden until you click their cards. Unpin keeps the agent running; ending an agent, or closing its tab while the tab shows its pin mark, removes its Pin. Pin is available from an agent's start, before its first message too: until its CLI names the conversation, the Pin keeps the agent's CLI, name and folder, and a workspace opened before then starts a new conversation there in its place. A resumed conversation can be pinned at once.
-- **Show Agent Launch... and Show Agents Log**: In the Command Palette. **Show Agent Launch...** shows how each CLI would start in a working location - its program, environment, arguments, YOLO, sandbox, approvals and folder trust - without starting it, with secrets hidden. **Show Agents Log** opens Facade's own log.
+Use **Go to Agent** beside **Resume** on the Panel, or from the Command Palette, to search the running managed agents
+that your Orchestrator can reach. Select one to open its terminal. The workspace remembers that agent and its
+helpers, including helpers that were already running. Helper cards appear without opening tabs or moving focus.
+Windows of the same workspace share the list and Pins.
 
-### Folders and worktrees
+Each card shows the agent's name, CLI, status and title. Open its information details to find the machine and
+working folder. **Copy Agent Reference** copies an address such as `a3@devbox` for use in Shell or MCP.
+Use **Filter** to narrow the cards and **Show Agents Log** for the extension's diagnostics.
 
-- **Any folder**: Start agents in any folder of a single-folder or multi-root workspace. Ordinary folders, repositories and worktrees work alike. See [`WORKTREES.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/WORKTREES.md).
-- **New Worktree**: Create a Git worktree from the chosen working location's current commit while starting an agent, or from the selected workspace folder's current checkout through the panel's `...` menu. In the standalone flow, review the source and path in the branch input and confirm to create directly. Prepare worktrees from other starting commits with Git; Facade discovers them too.
-- **Workspace folders and worktrees**: In **Change Working Location...**, add a folder to the workspace, remove one (its files stay on disk), or delete a linked worktree that is not a workspace folder and has no uncommitted changes (its branch is kept).
+## Attach, hide, stop or delete
 
-### Agents keep running
+Click a card or choose **Open Terminal** to Attach to the live terminal. Shell and VS Code can show the same
+terminal at once. Closing the terminal tab detaches that view. The agent can keep running after VS Code closes.
+After a disconnect, Attach shows the current screen and reports any dropped input in bytes.
 
-- **Reloads and workspace changes**: Agents keep running and keep their cards when the window reloads, when the extension host restarts, when a folder window becomes a multi-root workspace, and after **Save Workspace As...**. Only pinned agents' tabs open again, one at a time in the Pins' order, ending on the last pinned agent's tab; unpinned agents' tabs stay hidden until you click their cards.
-- **Remote - SSH**: Agents run on the remote host, with the CLIs and accounts there. Facade names the environment as VS Code does, for example `SSH: my-server`.
-- **Exits**: An agent whose CLI exits normally leaves the panel; one that exits abnormally keeps a red card until you end it with End Agent.
+| Card action | Effect |
+| --- | --- |
+| Open Terminal | Attach to the live terminal |
+| Hide | Clear this workspace's card and Pin; the agent keeps running |
+| Stop | End the agent's run and keep its card and Pin |
+| Remove | Stop a running agent, remove its record and clear its card and Pin |
+| Pin or Unpin | Choose whether to restore this agent when the workspace reopens |
+| Rename | Change the name and keep the address |
 
-### More CLIs
+## Resume and Pin
 
-- **A built-in CLI under settings of its own**: An entry of your own in `clis` of Facade's [`facade.json`](https://github.com/y5ez3g/facadecode/blob/main/extension/README.md#settings), with `type` set to a built-in CLI, runs that CLI under its own name beside your usual one - such as Claude Code on another Anthropic-compatible API through its `env`, or Codex with a profile of its own through `args`. It is that CLI in every way: messages, Facade's tools, status, folder trust, `yolo`, Resume and Pin. Its icon defaults to the type's icon; set `icon` to choose another built-in logo or a robot. Facade shows the names of the variables it sets, never their values.
-- **Any other program**: An entry of `type` `custom` adds any other interactive program, with its command, arguments and environment variables. **New Agent** offers it after the built-in CLIs, and its icon defaults to the pearl robot; set `icon` to choose another. Facade passes its arguments exactly as written: `yolo` does not change them, and Facade adds no sandbox, folder trust, tools or messages, and cannot resume its conversations. See [`CONFIGURATION.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/CONFIGURATION.md).
-- **Qwen Code** *(Under development)*: Qwen Code as a built-in CLI.
+**Resume Agent** shows ended agents with sessions and saved CLI sessions for the workspace. It uses the same
+Orchestrator results as `facade resume` for that scope. Resuming an ended agent uses its original address, folder,
+session, model and effort. Choosing a saved session creates an agent at a new address. If the session is already
+in use, Facade identifies the agent that holds it.
 
-### A team that works together
+Pin an agent after its CLI creates a session. On reopen, a running pinned agent reattaches. Facade makes one
+Resume attempt for each stopped or crashed pinned agent, and a red card explains a failure. Use **Unpin** before
+**Stop** to leave that agent stopped across reopens. Editor tab pins and closes leave Facade's Pin as it was.
 
-- **Agents start agents**: An agent can start other agents, with any of the six CLIs, in any folder or new worktree of any Facade window on your computer, and give them their first task. Their cards appear without taking your focus, and their ⓘ details say who started them. An agent can also stop the agents it can reach.
-- **Messages**: Agents send each other messages. Facade pastes the whole message into the other agent's input box once and sends it. While someone's unsent text, or a question of that CLI, is in the way, it waits, and never sends their text with it. Within 30 seconds the sender learns whether the message was delivered, refused, or its delivery could not be confirmed, with the reason, and nothing about it comes later; the other agent's reply is a message of its own. A message that was kept but not delivered stays for the other agent to read. Facade's notices to an agent that come together arrive in one paste. Agents can also message you: you get a notification in that agent's window with **Open Message** and **Show Agent**.
-- **No duplicates on retry**: An agent that retries starting an agent or sending a message with the same `request_id` never starts a second agent or types the message again: it gets the start's answer, or the message's current delivery state.
-- **A stuck helper is reported**: When an agent started by another agent waits 20 seconds for permission, an answer or a sign-in, the agent that started it is told once, with who can answer.
-- **Unsticking each other**: An agent can read another agent's terminal, type into it and press keys, to answer a prompt or help a stuck agent continue without interrupting you. Unlike messages, this typing does not wait for unsent text.
-- **Across windows**: With `yolo` on, an agent reaches every agent in your Facade windows on your computer, local and Remote - SSH alike; with it off, it reaches only its own group: the agent you started and every agent started from it.
-- **No approval prompts for Facade itself**: With `yolo` off, each CLI's own commands and file changes still ask for approval, but starting, stopping and messaging agents and the other actions above do not. Muse Code has no setting for this, so there its own approval rules decide.
-- **Standard MCP**: Facade adds these as standard MCP tools when it starts each agent, without changing your CLI settings. Some CLIs read them only from the agent's folder, so while such agents run there Facade also puts its files in it: `.agents/skills/facade/SKILL.md` for Codex and Muse Code, `.agents/plugins/facade` for Antigravity, and on Windows a `facade` entry in `.mcp.json` for Muse Code, next to your own entries. It removes them when the last of those agents ends, unless you changed them. Files an earlier Facade left there are brought up to date; a `facade` skill or server of your own is left as it is, and those agents then start without Facade's tools.
-- **Antigravity's first turn**: Antigravity loads Facade's tools only once it is in use. Facade opens and closes its MCP list right after it starts, so that its first task can already use them.
-- **Trusting the folder**: So that an agent starts without its CLI's trust question, Facade trusts the folder it starts in, as you would by answering that question: for that start alone with Codex, Muse Code and Pi, and in the CLI's own settings with Claude Code and Antigravity. It never trusts your home folder, a folder above it or a drive's root for Claude Code, which would trust every folder below; Claude Code asks there as usual.
+Ended records expire after 30 days. An unpinned card then disappears. After confirmed expiry, a pinned agent can
+continue from its saved session as a new agent. A machine that cannot be reached leaves a red card and its Pin.
+Remove from the card or `facade remove` clears the Pin and ends automatic recovery. If the session is confirmed gone,
+Facade clears the Pin and tells you. The first workspace open
+after upgrading imports the prior workspace's agents and Pins. If a machine is unavailable, Facade keeps the
+confirmed entries and reports which machine is pending. Restore access with `facade machine add` when needed.
+Pin restoration starts after the full import is saved.
 
-### Languages
+## SSH and agent collaboration
 
-The interface is in English, 简体中文, 繁體中文, Português (Brasil), Español, Русский, Deutsch, 日本語, Français, 한국어, Türkçe and Polski.
+A Remote-SSH editor connects to its remote host's Orchestrator. To reach more machines from that host, use Shell
+there to register them with `facade machine add`. WSL and Dev Containers that you want to reach as machines also use
+SSH configured inside those environments. You can use Facade directly inside either environment. See the
+[Shell and MCP setup](../README.md#install).
 
-## Two Ways to Work
+Agents use MCP to find and start agents, send messages, read screens, type and press keys. Ask an agent to start a
+helper and have the helper report back to it. You can follow their work in the terminal and Panel. Use Shell to
+send a message to an agent directly. An external MCP app joins as a Guest on its first tool call and can use the
+reply-wait call returned by `send_message`.
 
-| Workflow | **Super Engineer** | **Super Team** |
-|---|---|---|
-| **Your role** | Hands-on engineer | Engineering manager |
-| **Who you work with** | Several agents, directly | A lead agent, one to one |
-| **Who coordinates agents** | You | The lead agent |
-| **Best for** | Work that needs close guidance: exploration, design decisions you want to judge yourself, changing requirements | Large, well-defined features that split cleanly |
+## Settings and CLI behavior
 
-These are ways of using Facade, not modes in the interface, and you can move between them freely. Super Engineer: start several agents and direct each one yourself. Super Team: ask one lead agent for a large piece of work, and let it start and coordinate the other agents. Facade does not tell a lead when its agents finish: ask the lead to have its agents message it when they are done.
+Choose **Open Settings** to access the execution host's `facade.json`. Use `facade status --machine devbox` to find the
+settings on another machine and SSH there to edit it. YOLO defaults to on. With YOLO off, an agent uses its CLI's
+normal approval and sandbox settings, and its MCP reach is its creation tree. Settings are read at Start or Resume.
 
-## Why
+Use `clis` to add a named entry backed by a built-in CLI, for example Codex with a separate profile, or to launch a
+custom program. A local launch uses the initiator's environment. A launch on another machine uses its login
+environment. See the [settings example](README.md#settings) and the
+[CLI differences](../docs/facade-code.md#各个-cli-不一样的地方).
 
-You keep your editor, your projects, your CLIs and their accounts. Facade takes over the work of managing agents' terminals, without a new process to learn.
+## Old engine transition
 
-Facade runs the infrastructure, the CLIs do the work, and you decide the goals and permissions: what to ask, what to review, and when to commit or publish. Facade supplies no model service, account, billing or hosted compute.
+Set **Facade: Rust Engine** to `off` and reload to select the old engine. Its **Facade: Home** setting and Window
+Component requirement still apply. During the transition, the old engine retains its window grace periods and
+its own Stop, Dismiss and Pin behavior. The [old-engine lifetime rules](../docs/extension/RULES.md#41-ownership-reload-and-closure)
+describe those details.
 
-## Works the VS Code Way
-
-- Agents run in VS Code's own editor terminals. The panel uses VS Code's views, menus, Command Palette, settings and keyboard shortcuts.
-- An agent runs where its workspace runs, with that environment's CLIs, settings, Git and files. A local CLI never stands in for a missing remote one.
+If the editor falls back to the old engine, it reports the execution host and the failed step. After fixing the
+problem, set **Facade: Rust Engine** to `auto` and reopen the window.
 
 ## Status and Known Limitations
 
-- **Tested so far**: macOS (Apple silicon), Linux (x64) and Windows (x64) as the local computer, with local folders: each of the six CLIs started from the panel, and its Facade tools and messages, with a stand-in that draws its input box as that CLI does. Real agents, each starting a second agent of the same CLI with a first task and exchanging messages with it: with `yolo` off, Claude Code, Codex, Antigravity, OpenCode and Pi on macOS and Windows, and Claude Code and Codex on Linux; Muse Code with `yolo` on, on all three. Remote - SSH from a macOS client to Linux (x64) and Windows (x64) hosts, and between windows of both; a WSL window and a container window working with a local window; 100 agents in one window on Windows, with stand-ins; the minimum VS Code 1.105 on Linux.
-- **Resume and Pin on Linux x64**: Native checks cover Claude Code 2.1.316, Codex 0.166.0, Antigravity 1.4.12, Muse Code 1.4.14, OpenCode 2.2.5 and Pi 1.4.0: native histories, exact resume and session changes. Isolated VS Code 1.144.0 and minimum 1.105.0 checks cover all six adapters' Resume, Pin/Unpin, actual window reloads and folder-to-workspace conversion using fake CLIs. Current VS Code also checks immediate close/reopen for every built-in and exact Pin restoration after a closed local window's real 90-second grace. These new integrations still need native Windows, macOS and remote regression checks before a full platform-support claim.
-- **Antigravity multi-folder conversations**: Its native history saves the workspace folder set, without identifying the original working directory. Facade reuses a directory it previously recorded; otherwise Resume asks you to choose a working location from that conversation's folders in this window.
-- **Not yet verified**: Muse Code as a real agent with `yolo` off, where it applies its own approvals to Facade's tools; real Antigravity, OpenCode and Pi agents on Linux; Linux and Windows as Remote - SSH clients; running the suites inside a container window; other editors compatible with VS Code; the minimum VS Code 1.105 on macOS and Windows; 100 agents in one window on macOS and Linux; and long-running sessions.
-- **Muse Code on Windows**: Muse Code does not report its activity on Windows, so Facade reads it from Muse Code's own screen: working while it shows *esc to interrupt*, idle when its input is empty or holds a draft, and waiting at its sign-in screen. While it asks for approval, with `yolo` off, its card shows no dot. On Linux it reports as the other CLIs do.
-- **Window Component**: Facade Code needs its Window Component on your computer; VS Code installs it with Facade Code. If it is missing or turned off, the panel says so and offers **Show Window Component**; install or enable it, then reload the window. Agents that are already running go on for a while: five minutes in a Remote-SSH, WSL or container window, so a reload within that time shows them again, and 90 seconds in a local window, which leaves no time to install the component and reload.
-- **Updating**: Agents started before an update keep running and keep their cards and terminals; after updating from 0.0.5 or earlier their tabs come back hidden, pinned ones' opening in the active group. Where the update changes Facade's tool protocol, as 0.0.3 did from 0.0.2, their Facade tool calls are refused; end such an agent with End Agent and resume its conversation to give it the current tools.
-- **Rare runtime failures in English**: When Facade's own agent runtime fails unexpectedly - for example, its connection drops while an agent starts - the card and notification show its technical English message, which can name internal parts. Everyday reasons are in your language.
-- **Remote - SSH reconnects**: If VS Code stops reconnecting to an SSH host and asks you to reload the window, reload it once the network is back. The agents keep running on the host, and the reloaded window shows them again.
-- **Closing a window**: Facade ends a local window's agents 90 seconds after you close it, and a Remote-SSH, WSL or container window's five minutes after its extension host disconnects and nothing reconnects. Opening the folder or workspace again within that time reclaims them like a reload; after that, pinned conversations are restored by resuming them in the Pins' order, and unpinned ones stay findable with **Resume Agent...**.
-- **Reloads and focus**: A few keys typed while a reload opens its tabs can be lost. Reloads open only pinned agents' tabs, one at a time in the Pins' order, and leave the last pinned agent's tab in front rather than restoring the previous front editor.
-- **Custom programs**: Facade knows the activity of a `custom` program only if it reports it in its terminal with OSC 7501 sequences, as the built-in CLIs do. Otherwise the agent starts and works, and its card shows no dot: Facade cannot tell whether it is busy.
+See the [verification record](../docs/extension/engineering/VERIFICATION.md) for tested versions, native platforms,
+isolated editor journeys and open gates. Those records identify which engine and build each result covers.

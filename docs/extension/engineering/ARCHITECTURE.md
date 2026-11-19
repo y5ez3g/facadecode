@@ -1,5 +1,8 @@
 # Architecture and engineering
 
+Group 6 describes the Orchestrator-backed editor. Sections on old-engine execution, window lifetime and storage
+apply to the transition. Groups 4 and 5 also specify shared packaging and engineering safeguards.
+
 Layer 4. The product and shared rules decide behavior; this document chooses the implementation structure and
 engineering safeguards. A platform behavior that only native evidence can prove, such as how the editor's windows
 reload, restart and close, is a proof obligation here (2.2); [Verification](VERIFICATION.md) owns the gates and their
@@ -148,56 +151,13 @@ Worktree input and planning are shared under WORKTREES-4.3 rather than copied in
 
 ### 1.4 Two engines, one per window
 
-**A window runs its agents on one engine, chosen as it opens or reloads: Facade core, the Rust engine, or the extension's
-own, the old engine.**
+**The editor selects one engine at activation or reload.**
 
-`facade.rustEngine` (CONFIGURATION-1.2) is `auto` by default. Under `auto` a window takes the Rust engine where its package
-carries core's `facade` program (`bin/facade.exe` on Windows, `bin/facade` elsewhere), no run of the old engine is still running in its execution environment - ptyd lists none
-without `exited`, whatever window started it; a ptyd that does not answer has none, and none is started to ask - and core
-responds. Otherwise, and always under `off`, it takes the old engine. Failure to start or connect to core leaves the
-window on the old engine with one notification giving the reason and how to stop trying. Core can fail to start on
-WSL 1 or in a container that forbids process descriptors. On any old-engine window under `auto`, Pins with Rust identities remain in
-storage for a Rust activation (RULES-4.2). An old-engine window under `auto` whose reload would switch asks again
-whether old runs remain after each change of its own agents, every 10 seconds and before restoring Pins; once none does,
-it says once that a reload switches it, and the person's New Agent, Resume and Pin restoration then say so instead of
-starting on the old engine. Agents never run on both engines in one window.
-
-A Rust window is an `ide` client of core over the daemon protocol (`core/protocol/PROTOCOL.md`), under `host/rust`: the
-connection (`connection.ts`), which starts `facade daemon --detach` with the window's `FACADE_HOME` where no daemon
-responds, lets its own build take over an older one, and on Windows connects to the daemon's named pipe with Node's
-`net`, relying on the pipe's DACL alone, as PROTOCOL's "Connect to the daemon" allows an `ide` client, since Node has no
-API to check the pipe server's user; the agents (`agents.ts`), an `Agents` of core's records; the
-locations, CLIs and worktrees core lists for the window (`ports.ts`); the agents' tabs, today's terminals drawing core's
-screens, each watched only while its tab is open (`terminals.ts`); and the environment (`environment.ts`). Its
-`hello` sends the editor instance ID (2.2), name, environment, workspace key when it has folders, folders, Git branch
-prefix, terminal colors, first folder's terminal environment and the numbers this computer's counters gave
-(RULES-2.2). Core answers with its machine ID and the bound logical window reference. `window.update` sends the
-description as it changes, as the window regains focus and as a picker refreshes locations. Core applies it to that
-connection's bound window. The extension shares UI surfaces between engines and wires the Rust member search
-and restoration into them when on Rust. Core's errors show in the person's language by their reason, core's own
-words after. The window starts no ptyd, shim or Facade tools of its own,
-keeps no record of its agents, and offers no Show Agent Command Line. The window component is the same for both engines: an
-old-engine agent's request to a Rust window finds it unavailable.
-
-Stop Agent calls `agent.stop` for a running agent. Stops and exits record the conversation in `conversations/`
-for Resume and leave the agent's record in core (RULES-4.1). Go to Agent uses `agent.adopt` to add the editor's
-logical window to an existing agent. `agent.list` queries the network for Go to Agent. The `machines` topic gives New
-Agent its targets. `cli.list` and `location.list` read the chosen machine and `agent.start_preflight` checks the
-request before `agent.start`. The `agents` view keys each record by running machine and agent ID. A remote machine's
-synced snapshot replaces that machine's records. A pending, unreachable or missing snapshot keeps its known cards
-and pauses their terminal input. Losing the local core connection marks every remote card disconnected until its
-running machine syncs again. A temporarily ended screen watch retries while its agent remains reachable and its tab
-is open. The replacement watch draws a fresh screen before accepting input. Complete
-local snapshots verify Pins by machine ID and number. Pin restoration and manual Resume of a retained agent call `agent.resume` under its original `#aN`
-(RULES-4.2). The shared workspace file and logical-window presentation keys follow 3.1. A Rust window's terminals
-get `<home>/core/bin` before `PATH` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1`
-(CLIS-1.2), so `facade` there reaches the window's agents; an old-engine window's get neither.
-
-For a Rust Remote-SSH window the remote workspace host registers the logical window and supplies its packaged
-`facade machine serve --home-hex`, using its resolved Facade home. The local window component opens a `terminal`
-connection to local core and starts one temporary `machine.connect` with bridge transport. VS Code commands carry
-bounded byte chunks, EOF and stderr across the existing Remote-SSH connection. Closing or reloading a window closes
-its own bridge. The local component uses core's first-connection flag for the notice in EXPERIENCE-2.2.
+The **Facade: Rust Engine** setting is `auto` by default. In `auto`, use the bundled Orchestrator on its supported
+host after existing old-engine runs in that execution environment have ended. While they are still running, stay
+on the old engine. The editor offers to reload once it can switch. Explicit `off` selects the old engine. A failure
+to start or connect to the bundled Orchestrator can fall back to the old engine and display the notice in UX-6.2. Group 6
+defines the Orchestrator-backed connection and the one-time workspace import.
 
 ## 2 Ownership and recovery
 
@@ -224,16 +184,7 @@ not a product workflow.
 
 **Demonstrate reattachment of a window's runs under RULES-4.1 across reload, extension-host restart and temporary disconnect.**
 
-On Rust, core binds an editor instance to a logical window in `hello`. It first looks up that same instance,
-including after a daemon restart, then takes the first window allocated to the workspace with no effective connections,
-then allocates a window if necessary. Only windows with workspace folders supply a workspace key. Active instances of
-the same workspace use separate references. The same instance can have multiple connections. A reference remains
-connected while its current binding has a connection. A binding from an older instance cannot change a reassigned
-window. An instance reconnecting after reassignment obtains another reference through the same hello procedure.
-An empty workspace's disconnected reference can be discarded when it has no member records. Reconnect using the
-core-assigned reference and reconcile the window's members from the `agents` snapshot (RULES-4.1, LIFECYCLE-3.5).
-
-On the old engine, ptyd applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
+The execution supervisor applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
 seconds where the claim says its window is local, five minutes otherwise; a successor activation's claim cancels it, and
 a remote network outage that leaves the remote extension host connected starts no timer. Each claim says whether its
 window is local; one that does not is taken for a remote window's. A claim of the workspace within the grace takes its
@@ -283,7 +234,7 @@ When the local component survives, native terminal replacement uses its live run
 never a title, PID, private ID or an activation snapshot guess. Current session and monotonically increasing owner
 claims fence operations so that a late request from an older host cannot replace or dispose a newer binding of the
 same window. On the old engine, an activation whose workspace a newer activation claimed detaches its cards and
-terminals without ending a process (RULES-4.1). Rust presentation claims are scoped to the logical window under 3.1.
+terminals without ending a process (RULES-4.1).
 Normal close drops the exact object's binding. The workspace runtime serializes terminal creation: begin a
 capture bounded to ten seconds, create its terminal, wait for that object's public open event, then finish. The local
 component accepts only one still-live object opened during that capture; every extra open makes it ambiguous even if
@@ -340,17 +291,6 @@ every supported editor supplies a complete mechanism.
 ### 2.3 Execution ownership and input deadlines
 
 **The execution owner keeps process/screen facts and serializes input independently of the visible card.**
-
-On Rust, core serializes input and answers queries for the shared terminal. The editor reports its size and colors over
-the bound connection. An editor resize, including a repeated size, makes that member the color source. Terminal attach
-resizes the shared dimensions without changing that source. Until the first editor resize, prefer the creating
-editor's colors for a human start. For a child, prefer the parent's source window when it is also a member. Otherwise
-use the first member editor with known colors in reference order. Unknown colors leave the query unanswered.
-Theme updates from the source window change
-the colors. Its disconnect keeps the last value in core memory, and Resume uses it. A daemon restart or replacement
-clears it until the next eligible update or resize. Focus alone does not choose the color source.
-
-For ptyd, the following terminal and query handling applies.
 
 Keep process/run identity, screen snapshot/output sequence and actual input effects across extension-host reload. Attach
 without duplicating output; retain a dated final screen after exit where available. A snapshot or a read waits until
@@ -460,8 +400,6 @@ human-notification claim protocol or authenticated cleanup authority. Atomic upd
 are ordinary implementation tools, not new API promises. Closing a run does not replay its mail on a later run.
 Changing protocol does not convert old pending messages into new deliveries.
 
-Rust extension connections speak daemon protocol v2 with range `[2,2]`. A compatible daemon can hand over to a newer
-packaged build. A protocol refusal reaches the old-engine fallback under 1.4.
 
 Bound output buffers at 8 MiB per run and 32 MiB per window; headless scrollback is 10,000 logical lines / 8 MiB.
 The headless terminal reflows the cursor's line with the text during resize. Narrowing and restoring a window must
@@ -515,20 +453,13 @@ Windows node-pty's console worker - starts no program and says that its installa
 | Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group, which LIFECYCLE-3.5's restoration needs - for as long as ptyd runs (2.3) |
 | Execution Facade directory, `<Facade home>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
 | Editor workspace storage | Workspace key (2.2) and the old engine's workspace state mirror; old-engine pending updates coalesce within 100 ms and flush on deactivation, with synchronous Pin saves |
-| `workspaces/<key>/workspace-state.json` in the execution Facade directory | Rust's persistent source for workspaces' Pins, dismissed abnormal exits and launch history, and logical-window keys for tab positions, selection, filter and ordinary card order. The old engine also writes its workspace state here. |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing original cwd, Facade name and the associated CLI entry name/type; no transcript or environment-value copy (CONFIGURATION-3.4) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
-Two active Rust windows of the same workspace can each update workspace state. They read committed preferences on
-activation. Each write holds its claim lock and then the workspace sidecar lock through an atomic replacement, using
-the latest file and applying only its changes. This includes initial state, a flush, and an old-engine window using
-the same file. Pin mutations use the latest entries. An explicit Rust Pin reuses an entry for the same machine and
-agent, keeping its saved ID and position, or adds it if missing. A refresh or migration updates a still-present
-matching entry. An Unpin stays removed. The claim owner for the old engine is still the workspace; each active Rust
-logical window has a separate owner. A superseded claim cannot commit.
+The old engine's workspace claim guards its state writes. A superseded claim cannot commit.
 
-The Facade home is chosen as the window starts: an explicitly set **Facade: Home** (`facade.home`, machine scope)
+For the old engine, the Facade home is chosen as the window starts. An explicitly set **Facade: Home** (`facade.home`, machine scope)
 wins, then `FACADE_HOME`, then `~/.facade`. Blank strings and `null` count as unset. The setting's box shows
 `~/.facade`; that default does not override the environment variable. A setting value must be absolute or start with `~/` (`~\` on Windows). An unusable setting
 stops every start with an error and an Open Settings button at `facade.home`, on the Remote tab in a remote window
@@ -734,7 +665,7 @@ version, starts the release workflow: the extension checks workflow builds and t
 its two Windows packaging jobs signing in the `extension-signing` environment, the only one whose OIDC sign-in Azure
 accepts for the signing identity (its variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` name it); a manual run of that
 workflow with `sign` signs the same way without releasing. The release job puts all platform VSIX files, the window
-component and `SHA256SUMS` on the tag's GitHub Release, with the changelog's section as notes, marking the newest
+component, the installers and native archives, the stable version marker and `SHA256SUMS` on the tag's GitHub Release, with the changelog's section as notes, marking the newest
 extension version Latest. It then downloads the Release again and checks each file's hash and its own manifests
 (publisher, component, version, target). The stores job waits for approval in the `extension-stores` environment,
 downloads the Release's files, checks them against `SHA256SUMS`, publishes the window component before the platform
@@ -755,14 +686,12 @@ with vsce pinned at 4.1.0. The workspace manifest installs its local window comp
 `extensionDependencies`: in a remote window the editor installs the remote extension and activates it before it installs
 a local dependency, and an unmet dependency then blocks activation with no reload offered. The window component's
 manifest names the workspace extension in its own `extensionPack`, so installing either one installs both; alone, the
-window component shows nothing. At activation the workspace
-component waits up to 60 seconds for `facade.window.identity` and continues as soon as it appears, including when the
+window component shows nothing. When activating the old engine, the workspace component waits up to 60 seconds for `facade.window.identity` and continues as soon as it appears, including when the
 editor reports the component installed later. If it does not appear, the window cannot read its own identity (2.2),
 which the component reads, so it cannot tell which agents are its own and shows and starts none (RULES-4.1): the panel
 and one notification explain in plain words that the Facade Code Window Component must be installed and enabled on this
 computer, with an action that shows it in the Extensions view, Facade's commands repeat that explanation, and a reload
-is offered once the component is installed. Rust agents keep running in core. On the old engine, the running agents
-go on for RULES-4.1's grace. A remote window's grace leaves time to install the component and reload, which shows the
+is offered once the component is installed. The running agents go on for RULES-4.1's grace. A remote window's grace leaves time to install the component and reload, which shows the
 agents again. A local window has less time. A window component without the client network, too old to carry requests,
 leaves its window's agents shown and usable: they reach
 this window's agents alone, list_agents and name resolution report the other windows unavailable (`complete: false`,
@@ -842,12 +771,64 @@ isolated worktree; uncommitted content does not follow a new Git worktree automa
 refactor. Remove only generated artifacts owned by this task. Logs and completion reports identify what was changed,
 what was tested and what remains. Task assignments, pauses and discussion authority follow current user instructions.
 
+
+## 6 Connecting the editor to the Orchestrator
+
+### 6.1 One local Orchestrator connection per extension host
+
+**Connect to the Orchestrator in the host's Facade home using the core protocol.**
+
+Use RULES-6.6 for home selection and RULES-6.7 for remote-host ownership. The editor sends operations through
+the same Orchestrator as Shell and MCP. Running agent records, session enumeration, process state, agent state and
+titles come from that Orchestrator. The workspace has no Orchestrator registration or routing role.
+
+### 6.2 Workspace state and upgrade
+
+**Keep workspace agent addresses, Pins and terminal presentation on the editor side.**
+
+Windows of the same workspace consume and update the same list under RULES-6.1. On first open after upgrade,
+verify the saved `facade.workspaceKey` against the workspace URI ledger. Aggregate the previous protocol's logical
+windows for that key through `workspace.import_legacy`. The Orchestrator preserves the membership source during
+takeover. Each agent's machine verifies its part of the snapshot and returns agent references with per-machine results. The
+[core protocol](../../../core/protocol/PROTOCOL.md) defines the import operation.
+
+For a v2 window opened without a folder, the persisted native window token identifies its old record in
+`extension/windows/`. That record identifies the original workspace key, which locates the saved Pins even
+when the workspace sidecar is absent. Use the verified old instance ID to import its members. If evidence identifies
+old workspace data and the instance is unavailable, save the Pins that can be confirmed and leave the import pending.
+The recovery message directs the person to enable the Window Component in that window and reload. A new empty window
+stores its roster key in VS Code workspace state so the same workspace keeps its roster when the editor session changes.
+
+Merge confirmed members and the associated old `facade.pins` into the shared workspace list. Keep those members and
+Pins if some source machines are unavailable. Leave the import pending and report the missing machines, with
+`facade machine add` to re-establish access where needed. Record completion only after the full list and Pins are
+durably saved, then reconcile the list with current records and restore Pins. Regular connections carry agent
+records without window membership.
+
+### 6.3 Terminals and the Window Component
+
+**An open terminal is an Attach to the agent's terminal session.**
+
+Use RULES-6.3 for input on reconnect, size and colors. Terminal creation and display remain workspace presentation.
+The Window Component can clean up stale terminal tabs under RULES-6.8. A missing component leaves the
+Orchestrator-backed editor usable and skips that cleanup.
+
+### 6.4 Distribution
+
+**The extension packages an Orchestrator for the target on which its workspace host runs.**
+
+The editor package carries the corresponding programs and, on Windows, their required ConPTY files.
+The extension starts those packaged programs directly. The standalone archives reuse the same programs from the
+VSIX. The archives are `facade-core-darwin-<arch>.tar.gz`, `facade-core-linux-<arch>.tar.gz` and
+`facade-core-win32-<arch>.zip`, with `x64` and `arm64` as architecture values. The release publishes these with
+`install.sh`, `install.ps1`, `facade-core-version.txt` and `SHA256SUMS`. The stores serve the VSIX packages.
+
 ## Checks
 
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.4 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package; the journeys on each engine (`FACADE_IT_ENGINE`) and switching engines |
-| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; colour scheme reports with current and earlier supervisors (VERIFICATION E07); pressure/upgrades from every released build with agents running |
+| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; color scheme reports with current and earlier supervisors (VERIFICATION E07); pressure/upgrades from every released build with agents running |
 | 3.1–3.3 | Home precedence, User/Remote Settings tabs, reload after invalid-home correction, local home record writes/removal and remote use, reload on record changes, invalid paths and wrong JSON types preserving the record, Windows homes naming a drive or share, null/blank unset, same-folder reload suppression locally/remotely including links and fallback, a record written before the watch starts, disposal and failed watches, storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |
 | 5.1–5.4 | Evidence and command logs, isolated profile/config paths, dirty-tree preservation, no unrequested Git publication |

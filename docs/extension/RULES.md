@@ -1,6 +1,7 @@
 # Shared rules
 
-[Product](PRODUCT.md) sets scope. This document owns the meanings used by every feature and integration.
+[Facade Code](../facade-code.md) defines the product. Group 6 owns the Orchestrator-backed VS Code entry point.
+Groups 1–5 describe the old engine during the transition.
 
 | Group | Decides |
 | --- | --- |
@@ -9,6 +10,7 @@
 | 3 State and feedback | Status evidence, exits and error ownership |
 | 4 Lifetime and access | Window ownership, reach, YOLO and settings |
 | 5 Side effects | Validation, cancellation and simple retention |
+| 6 The VS Code entry point | Workspace ownership, agents, Attach, settings and the Window Component |
 
 ## 1 Agent messages
 
@@ -52,7 +54,6 @@ an MCP cancellation reaches no Facade window, and only a repeat with its request
 when the result is known. A creation prompt a start sends after its process starts (COLLABORATION-2.2) is no send of the caller's: its
 outcome goes into the start's own result (MCP-2.3). B's answer is a separate ordinary message.
 
-A Rust-engine send to `#human` answers the outcomes at its member windows' subscriptions under COLLABORATION-2.3.
 
 ### 1.3 Delivery means the recipient has the complete message
 
@@ -181,13 +182,12 @@ drop the undeliverable report. There is no chain of receipts about receipts.
 | B sends a reply to A | B |
 | Facade cannot return a message result | End the result handoff; no human fallback |
 | Known runtime/infrastructure failure requiring human handling, with no responsible agent | Person in the affected window |
-| Agent explicitly sends to `#human` | Person through the window or windows specified by COLLABORATION-2.3 |
+| Agent explicitly sends to `#human` | Person through the sender's window under COLLABORATION-2.3 |
 
 A retained red card is not permission to duplicate an agent's operation error as a human popup. Do not automatically
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
 to contact a person. One fact does go to an agent: a child whose CLI has waited twenty seconds on its own permission,
-question or sign-in is reported to its running creator once each time it starts waiting. They must share at least one
-member window on the Rust engine or belong to the same window on the old engine. The Facade result names
+question or sign-in is reported to its running creator in the same window once each time it starts waiting. The Facade result names
 who can answer - the person's permission and sign-in are theirs - because a child waiting on an unseen question can
 stall its creator's work. A person is never told by it. The notice reports the blocker without asking its creator to
 contact the person, forward the notice or escalate it. Whether an agent contacts the person follows the person's task
@@ -199,9 +199,7 @@ another window.
 
 **Message delivery follows the agent's lifetime under 4.1 and keeps its original deadline.**
 
-On the Rust engine, agents keep running after their windows close (4.1), and core continues delivering their messages.
-Explicit contact to the person needs an eligible member window at send time (COLLABORATION-2.3).
-On the old engine, a window's runs end under 4.1. If the recipient ends before submission, fail to the current sender if
+A window's runs end under 4.1. If the recipient ends before submission, fail to the current sender if
 reachable. A different still-open window continues its own work. If only A's window closes, already handed-off delivery at B may
 continue within its deadline; work still owned by the closing side can end with it. Do not add durable handover or
 recovery solely to guarantee this edge case, and do not cancel B's independent work just to enforce a global rule.
@@ -232,10 +230,7 @@ no agent workflow or general-purpose scheduler is added.
 
 **A window's connected scope and its execution environment have separate identities.**
 
-On the Rust engine, the core that serves a Facade home gives it one machine ID. A window's local machine is the core it
-connects to, including from a remote execution environment. Connected Rust machines can reach each other's agents under
-4.3. A Rust Remote-SSH window automatically connects its remote Facade home to the local core while that window is open
-(ARCHITECTURE-1.4). On the old engine, the window components route between
+The window components route between
 one user's windows on one client computer, including their local and remote execution environments.
 Each workspace runtime owns paths, CLI accounts, Git and process execution in its environment. Interpret a path in its
 owning environment. An open window with no folder can be discovered with an empty location catalog. Distinguish a known
@@ -249,22 +244,16 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | Identity | Meaning |
 | --- | --- |
 | Client network | This user's connected editor windows on one client computer on the old engine |
-| Facade machine | A Rust core's persistent ID for the home where agents and their records run |
 | Execution environment | Where files, CLIs and processes exist |
 | Window instance | One editor window through reload, identified by its local handover record (ARCHITECTURE-2.2). True reopening is a new instance. The old engine routes by this identity. |
-| Window reference | A Rust machine ID and logical window ID. Core binds an instance to it and can reuse it when the workspace reopens (4.1). |
 | Workspace | Saved editor workspace/folder context for preferences and Pin intent |
 | Conversation key | Execution environment, CLI and exact vendor session ID |
-| Pin | Saved intent to restore an exact conversation. A Rust Pin identifies the original agent on its machine (4.2). |
-| Agent ID | One agent from start until removal, unique on its Rust machine or across its old-engine client network and never reassigned there |
-| Agent reference | The Rust running machine ID and agent ID identify one record across the network |
-| Agent alias `#aN` | The agent's short reference, numbered by its Rust machine or the old-engine client network |
+| Pin | Saved intent to restore an exact conversation. |
+| Agent ID | One agent from start until removal, unique across the client network and never reassigned there |
+| Agent alias `#aN` | The agent's short reference, numbered by the client network |
 | Run | One start or Resume of the agent's CLI, until that CLI ends |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
 
-On the Rust engine core numbers agents and messages; a window's `hello` tells core the highest numbers this computer's
-counters gave, and core numbers on past them, so an update gives none twice. While old-engine windows still run, the two
-engines number apart and may repeat a number, which the switch's short overlap accepts.
 Keep the same agent ID and `#aN` through startup, rename, reattachment and Resume. A fresh start is a new agent with a new
 ID; Resume keeps the agent and starts a new run.
 Tree membership does not disappear when an ancestor closes. IDs are routing addresses, not credentials; no token
@@ -274,8 +263,7 @@ issuance or anti-impersonation system is required.
 
 **Use an exact ID, or a name that identifies one eligible agent; an ambiguous name requires an ID.**
 
-Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. Rust
-uses the full running-machine reference for a record and counts it once across its member windows. On the old engine an exact
+Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. An exact
 ID of an agent in the caller's window needs no other window, and a name resolves among agents of every window. While
 an old-engine window cannot be listed, only the exact ID of a listed agent can resolve. Once resolved, the operation
 stays with that target through rename. An optional display name accompanying an ID is descriptive. Return the error
@@ -292,9 +280,7 @@ whatever their case; any other name without `@` resolves as `@name` does.
 
 A plain folder is sufficient. Preserve the opened path for display and defaults; compare path components and canonical
 paths in the owning environment. Nested folders use the matching workspace association; related worktrees can be outside
-the folder. A successful Git read can discover worktrees made by any tool. For Rust, core records the window that
-provided the selected location (4.1). Only a removal confirmed for that source window can stop the agent for location
-loss. A member window can present the running agent without providing its location. In the old engine, removing a
+the folder. A successful Git read can discover worktrees made by any tool. Removing a
 workspace folder or deleting a worktree closes the agents belonging to that removed location. Finding a Resume cwd
 recorded within a location gone (WORKTREES-1.2, 3.3) ends the agents working in it while the location stays.
 Location loss requires confirmation in the owning execution environment.
@@ -359,8 +345,7 @@ New Agent launch failure retains the accepted pair even when no CLI process was 
 
 **Use native notifications, their Show action and Go to Agent; maintain no separate human-attention queue.**
 
-Human notifications follow 1.8. A Rust-engine notification to `#human` is shown independently in each eligible member
-window under COLLABORATION-2.3. The one-time settings migration notice follows
+Human notifications follow 1.8. The one-time settings migration notice follows
 CONFIGURATION-6.3 and appears only in the window that created the file. There is no universal exactly-once-per-error popup
 guarantee or durable notification claim/recovery protocol. This does not introduce repeated reminder popups. There is no
 unseen/seen attention state, attention ordering or Next Agent Needing Attention command. Opening a source does not erase
@@ -372,29 +357,11 @@ transition.
 
 ### 4.1 Ownership, reload and closure
 
-**On the Rust engine each member window presents the same agent, whose process and record core owns. The old engine keeps one owning window.**
+**The old engine keeps one owning window per agent.**
 
 Closing a creator leaves its children running in their own windows.
 
-Core keeps Rust agents running through window close, reload or host loss and a compatible daemon restart or replacement.
-A reload reconnects by window instance. A reopened workspace can reuse its available logical window reference. Two
-active editor windows of that workspace have distinct references (ARCHITECTURE-2.2). When the last effective connection
-for a window leaves, its membership and agents continue and the window becomes disconnected.
-
-An editor start adds its current window. An ordinary terminal start adds the machine's terminal window. An agent-created
-child inherits the parent's member windows at creation, including disconnected members, or uses the one explicitly
-selected member. Core records the source separately when a window provides the working location (2.4). A human can add
-their window to a non-guest agent through Go to Agent (LIFECYCLE-2.3), or through restoration of their workspace Pin
-(4.2). Membership stays until the agent record is removed. Closing a tab only affects the current window's presentation
-and its workspace's Pin under 4.2.
-
-Stop Agent handles the initiating pair under LIFECYCLE-3.1. Successful stop from any member or `facade stop` hides the
-card and tab in every connected member window. The number, membership, saved conversation and each workspace's Pin
-stay, and open windows wait for a later restoration. `facade remove` deletes the record and its membership and
-invalidates its Pins (4.2). A stop failure goes to the initiator. A still-running agent can reattach at the next
-opening or reload.
-
-The old engine uses the following policy until 0.2.0. Closing a window ends all its runs and removes their UI, preserving
+Closing a window ends all its runs and removes their UI, preserving
 Pin intent. No public editor signal tells a close from a reload, so a window's runs end a grace period
 after its extension host disconnects from the execution supervisor, unless a reloaded or reopened window of the same
 workspace claims them first: 90 seconds for a local window, whose reload or extension host restart claims them well
@@ -413,15 +380,15 @@ cleanup remain distinct facts in the operation record. The grace timer is cleanu
 the window: no other timer ends a process. Telling a close from a reload is a platform limitation; VERIFICATION G2
 verifies this policy.
 
-Until a person closes it, it ends normally or its location is removed (2.4), every owned or member agent stays shown
+Until a person closes it, it ends normally or its location is removed (2.4), every owned agent stays shown
 by its card, with the terminal in an editor tab or hidden until the person opens it (LIFECYCLE-2.2),
 across a reload, an extension host restart, an update and a lost connection alike; an agent started before an update
 keeps working through the execution supervisor that holds it (ARCHITECTURE-2.4). Where Facade cannot reach an agent's
 process, the card is red and says why (3.2); unknown activity alone shows no dot. Facade never leaves the agent out. The
 one exception is a window that cannot know its own identity, so cannot tell its agents from another window's: one whose
 identity record is damaged, where Facade does not start (ARCHITECTURE-2.2), and one without its window component, which
-is what reads that identity. It shows and starts no agents. Its running agents on the Rust engine stay with core. On
-the old engine they go on for the grace period above (ARCHITECTURE-4.3). On the old engine, a window that takes over
+is what reads that identity. It shows and starts no agents. Its running agents go on for the grace period above (ARCHITECTURE-4.3).
+A window that takes over
 that workspace shows its agents in place of the old window.
 
 ### 4.2 Restoration preserves conversation and location
@@ -441,28 +408,7 @@ hidden any other way preserve Pin. Unpin alone does not stop. Manual Resume does
 unpinned conversation. If the exact conversation already runs in Facade, a second agent does not launch it.
 Facade does not inspect or block an external application's writer. Vendor resume errors are returned as actual errors.
 
-On the Rust engine, each workspace's Pin stores the original machine ID and agent number. A window can pin agents
-running on its own Facade machine. A session-only Pin remains
-available to the old engine or can be replaced by pinning the original agent explicitly. With `facade.rustEngine` set
-to `auto`, a window using the old engine skips Pins identified by machine ID and agent number. Explicit `off` uses the
-old-engine Pin rules.
-
-Reopening or reloading the workspace verifies the original record, adds the current window if needed, and reattaches the
-running agent. A normal exit or an actual abnormal exit dismissed in that workspace is eligible for restoration by
-the original number. An undismissed abnormal exit keeps its red card and Pin. A failed automatic restoration shows its
-reason on a red card for that activation, with one attempt per opening or reload. If core already reports the same
-agent running in the window, the window reattaches it. An active agent with another number holding that session prevents
-automatic restoration under the pinned number. The Pin stays for later verification.
-
-Clearing a Pin because its record is gone requires its original machine's complete snapshot without the number, its
-record-removal event, or a `not_found` response to adopting that number. Loss of connection, an unknown outcome or any
-Resume error preserves the Pin. Stop Agent, Dismiss Agent and normal exit preserve all Rust Pins. Facade's Delete Worktree command unpins its
-affected agents in the initiating workspace (WORKTREES-3.2). Other location removal keeps the Pin.
-
-Manual Resume in any member window can restore the original number, including after its card was dismissed.
-Concurrent successful restoration requests for that number share one process and appear in the connected member windows.
-
-On the old engine, a Pin can initially have no conversation key (LIFECYCLE-3.4). Explicit agent close, normal exit or
+A Pin can initially have no conversation key (LIFECYCLE-3.4). Explicit agent close, normal exit or
 actual location removal unpins. Abnormal exit preserves Pin. Each activation,
 after reattachment, restores the Pins no run holds (LIFECYCLE-3.4's Pin restoration), so a reload restarts none that
 still run or were retained as failures; a failure is retained without a restart loop. Only their processes start in the
@@ -473,8 +419,7 @@ background, and their tabs then open in front by LIFECYCLE-3.5's tab procedure.
 **YOLO reaches the connected scope under 2.1; non-YOLO reads and writes only within the caller's whole creation tree.**
 
 The tree includes ancestors, descendants, siblings and other branches under the same root. Unrelated roots are outside
-normal non-YOLO reach. The caller's own run YOLO decides reach. Membership controls presentation. In the Rust engine the
-person can reach agents on connected Facade machines, including when an agent's window is disconnected.
+normal non-YOLO reach. The caller's own run YOLO decides reach.
 
 Every launch reads `yolo` from the destination execution environment's current Facade settings file (default true)
 when accepted and keeps that value for the run. This includes human starts, agent-created children, Resume and Pin
@@ -538,6 +483,96 @@ evict an in-progress delivery. Message records expire after 30 days with no manu
 copies expire under COLLABORATION-4.2. Creation-tree associations follow their runs, not message expiry.
 No arbitrary accumulated-operation counter may permanently disable an otherwise usable environment.
 
+## 6 The VS Code entry point
+
+### 6.1 Workspace presentation
+
+**Each workspace shares one list of agents and Pins across its windows.**
+
+The list contains agents started or opened there through Go to Agent, and their descendants in the creation tree.
+Descendants appear as cards automatically and open a terminal only on request. Store the list and Pins across
+reloads and reopens. On the first open after upgrade, start importing the prior workspace's agents and Pins under
+ARCHITECTURE-6.2. Keep confirmed entries while the import is pending. The Orchestrator owns agent records, processes
+and terminal state. The extension owns cards, Pins and tab placement. A remote extension host connects to the
+Orchestrator on the machine where it runs.
+
+### 6.2 References and results
+
+**The editor uses the Orchestrator's addresses, state, title and scoped query results.**
+
+An agent address is `a3@devbox` or `a3@9a0d44b2`; keep the full address for Copy Agent Reference. Go to Agent lists
+the same active managed agents that can Attach from Shell's `facade list`. Resume Agent uses the same scoped results
+as `facade resume`: ended agents with sessions and the CLI's own saved sessions. It resumes an ended agent at
+its original address or resumes a saved session as a new agent. Show an actionable error if a session is already
+in use. The Panel shows the CLI's TITLE and the same state as the list; details show the machine.
+
+### 6.3 Attach and card actions
+
+**Attach shows the running agent's terminal; closing a tab detaches that view.**
+
+Other views and the process keep running. Input entered during a disconnect is dropped, and the reconnected view
+reports the number of input bytes dropped after displaying the current screen. Use the last Attach or resize for terminal size and
+VS Code for terminal colors. Hide removes the card from this workspace and clears its Pin. Stop ends the agent's run
+and leaves its card and Pin. Remove stops the agent if it is running and removes its record. On a successful
+Remove, clear this workspace's card and Pin and close its terminal view. Rename keeps the address. The card menu
+offers Open Terminal, Hide, Stop, Remove, Pin or Unpin, and Rename. Copy Agent Reference, Filter,
+Add Folder, Show Agents Log and Open Settings stay available through their own surfaces.
+
+### 6.4 Pin and reopening
+
+**Pin is available for agents with a session, including agents on reachable remote machines.**
+
+When a workspace opens after its last window closed, make one recovery attempt per Pin. All windows share the
+result. Wake a sleeping machine for the stored reference, Attach to a running pinned agent or Resume a stopped or
+crashed agent. On an unresolved lookup or a failure,
+keep the Pin and show the reason on its red card. For a record confirmed to have expired, remove its unpinned
+card or resume its saved session as a new agent and update the card and Pin. If the session is confirmed gone,
+remove the Pin and tell the person. Explicit removal clears the card and Pin and ends automatic recovery for it.
+
+### 6.5 Start and location
+
+**Choose machine and folder in the working-location step and use the selected machine's CLI catalog.**
+
+On the editor's machine, show workspace folders and worktrees. For another machine, offer its login home, recent
+folders and direct path entry. Show the CLI choices and explain unavailable CLI entries using the selected
+machine's settings, chosen folder and environment (6.6). An ordinary folder works without Git. For a repository on either
+machine, Facade can create a worktree as part of a start under WORKTREES-5.1. Git owns deletion.
+When a folder is removed from the workspace or disappears on disk, the agent keeps running.
+A later start or resume follows the Orchestrator's path validation.
+
+### 6.6 Settings and permissions
+
+**The Orchestrator applies settings and permissions on the agent's machine.**
+
+Use that machine's `facade.json` and its `FACADE_HOME` or default home. `facade.home` applies to the old engine
+during the transition. A local start uses the initiating Shell, editor, or agent environment, including a Guest's
+relay environment. A start on another machine uses its SSH login environment. Resume keeps the original session,
+location, model, effort and CLI arguments, and uses the machine's current settings, including YOLO.
+
+YOLO defaults to on. A managed agent reads it at start or resume. A Guest reads it when it joins. With YOLO off,
+a caller's MCP reach is its creation tree and the CLI keeps its native sandbox and permissions. Both settings bypass
+the Facade tool confirmation. With YOLO on, the Orchestrator also handles CLI permission and folder trust
+questions and disables the CLI sandbox where available. CLI questions for the person still appear in the terminal.
+The [product's CLI table](../facade-code.md#各个-cli-不一样的地方) owns the summary of differences.
+
+### 6.7 Messages, machines and tools
+
+**The editor entry point handles starts, Attach and recovery; Shell handles machines and sending messages.**
+
+The Orchestrator owns the common Shell and MCP contracts, including Guest identity, delivery outcomes and the eight
+tools. A first prompt and a long wait produce results (🔔) for the agent that started it.
+The editor displays its own operation errors. Open the agent's terminal or inspect its state to see its work.
+WSL and Dev Containers reached as machines use SSH you configure and `facade machine add`. Remote-SSH itself opens
+an editor whose extension host uses that machine's Orchestrator.
+
+### 6.8 Window Component
+
+**The Window Component cleans up stale terminal tabs after reconnect or extension restart.**
+
+Its existing old-engine duties apply during the transition. In the VS Code entry point, the Orchestrator has no
+window membership or automatic Remote-SSH registration. The extension uses the one-time upgrade import in 6.1
+to read previous workspace visibility.
+
 ## Checks
 
 | Rules | Acceptance |
@@ -547,5 +582,6 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 | 3.1–3.4 | Work green, errors red, no dot otherwise, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
+| 6.1–6.8 | Shared workspace list and upgrade; Orchestrator agent list and Resume; Attach and card actions; Pin recovery; SSH locations; settings and transition cleanup |
 
 [Verification](engineering/VERIFICATION.md) owns actual evidence.

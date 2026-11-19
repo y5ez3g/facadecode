@@ -4,14 +4,14 @@
 
 # Facade Code
 
-**Orkestrator multi-agen untuk VS Code.**
+**Jalankan agen pemrograman AI di mesin Anda sendiri.**
 
-Jalankan CLI agen native, edit kode, dan tinjau perubahan dalam jendela IDE yang sama. Gunakan akun dan langganan Anda sendiri, dan biarkan agen berkolaborasi lintas jendela dan mesin.
+Facade Code menjalankan sejumlah CLI pemrograman AI di mesin Anda. Agen dapat saling menemukan, bertukar pesan, membaca layar, dan mengetik di terminal. Anda dapat mengarahkan mereka dari Shell, VS Code, atau aplikasi yang mendukung MCP. Setiap mesin menjalankan Orchestrator sendiri dan terhubung melalui SSH.
 
 [![Situs web: facadecode.com](https://img.shields.io/badge/Situs%20web-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![VS Code Marketplace: pasang](https://img.shields.io/badge/VS%20Code%20Marketplace-pasang-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
 [![Open VSX: pasang](https://img.shields.io/badge/Open%20VSX-pasang-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
-[![Releases: unduh IDE](https://img.shields.io/badge/Releases-unduh%20IDE-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Releases](https://img.shields.io/badge/Releases-GitHub-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
 [![Issues: laporkan bug](https://img.shields.io/badge/Issues-laporkan%20bug-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · **Bahasa Indonesia** · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
@@ -31,47 +31,71 @@ Jalankan CLI agen native, edit kode, dan tinjau perubahan dalam jendela IDE yang
 
 ## Instalasi
 
+### Shell
+
+Penginstal satu baris tersedia mulai rilis pertama yang menyertakan paket mandiri.
+Paket Shell tersedia untuk macOS, Linux, dan Windows pada x64 serta arm64.
+
+Jalankan perintah ini di macOS atau Linux.
+
+```sh
+sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://github.com/y5ez3g/facadecode/releases/latest/download/install.sh
+```
+
+Di Windows, jalankan perintah ini di PowerShell.
+
+```powershell
+$response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facadecode/releases/latest/download/install.ps1'; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())))
+```
+
+Penginstal menambahkan `facade` dan `facade-mcp` ke PATH. Buka terminal baru untuk menggunakan PATH yang diperbarui. Jalankan `facade upgrade` untuk memperbarui. Instal CLI yang dibutuhkan dan masuk di setiap mesin. Pilihan bawaan mencakup Claude Code, Codex, Antigravity, Muse Code, OpenCode, dan Pi.
+
+Peluncurnya juga bernama `facade`. Jika keduanya terpasang, Shell memakai entri pertama di PATH. Setelah pratinjau dihentikan, nama itu menjadi milik Orchestrator. Jalankan `facade version`. Baris berbentuk `facade <version>` mengonfirmasi bahwa perintah Shell yang digunakan.
+
+### VS Code
+
 ```sh
 code --install-extension facade.facadecode
 ```
 
-Atau pasang **Facade Code** dari [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) atau [Open VSX](https://open-vsx.org/extension/facade/facadecode). Ekstensi ini dapat dijalankan di macOS (Apple silicon), Linux (x64), dan Windows (x64).
+Ekstensi menyertakan Orchestrator. Buka **Facade Code** di bilah aktivitas, lalu pilih **New Agent**, **Go to Agent**, atau **Resume Agent**. Paket macOS, Linux, dan Windows dibuat untuk x64 dan arm64.
 
-Selanjutnya, pasang dan masuk ke CLI agen yang didukung yang ingin Anda gunakan: Claude Code, Codex, Antigravity, Muse Code, OpenCode, atau Pi. Facade Code menjalankan setiap CLI menggunakan akun dan langganan miliknya sendiri.
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) · [Open VSX](https://open-vsx.org/extension/facade/facadecode) · [VS Code](../../../extension/GUIDE.md)
 
-> **Agen berjalan tanpa konfirmasi persetujuan secara default.** Dengan `yolo` yang aktif secara default, agen dapat menjalankan perintah dan mengubah berkas tanpa meminta izin terlebih dahulu. Nonaktifkan pengaturan ini untuk memulihkan konfirmasi persetujuan standar setiap CLI. Lihat [README ekstensi](../../../extension/README.md#install).
+### MCP
 
-## Agent Panel
+Tambahkan `facade-mcp` sebagai server MCP stdio. Contoh ini memakai objek `mcpServers`.
 
-**Agen dan IDE Anda, dalam jendela yang sama.**
+```json
+{
+  "mcpServers": {
+    "facade": { "command": "facade-mcp" }
+  }
+}
+```
 
-Facade Code menjalankan CLI agen native (Claude Code, Codex, Antigravity, Muse Code, OpenCode, dan Pi) di tab terminal editor di samping berkas Anda, menggunakan perintah, alat, akun, dan langganan milik masing-masing CLI. Sebuah kartu di panel melacak status setiap agen.
+Koneksi eksternal bergabung sebagai Guest saat pertama kali memanggil alat. Setelah mengirim pesan, tunggu jawaban dengan panggilan `read_messages` yang dikembalikan `send_message`.
 
-- **Bekerja di samping kode Anda.** Setiap agen berjalan di tab terminalnya sendiri di area editor. Menutup tab hanya menyembunyikannya sementara agen tetap berjalan; mengeklik kartunya akan membukanya kembali.
-- **Lacak status di seluruh agen.** Kartu menampilkan apa yang terakhir dikirim ke setiap agen dan apakah agen sedang bekerja, memerlukan izin, atau mengalami kesalahan, dengan detail yang menampilkan judul, folder, dan siapa yang memulainya. Agen tetap berjalan melalui muat ulang jendela dan mulai ulang ekstensi.
-- **Folder dan worktree.** Jalankan agen di folder ruang kerja mana pun atau buat Git worktree secara instan untuk memisahkan perubahan kode. Sematkan percakapan untuk memulihkannya saat Anda membuka ruang kerja kembali, atau lanjutkan sesi sebelumnya dari riwayat.
+## Bekerja di beberapa mesin
 
-## Agent Use
+```sh
+facade start --name ada -d codex
+facade list
+facade attach ada
+```
 
-**Biarkan agen mengoperasikan agen lain, sama seperti Anda.**
+Gunakan alamat dari `facade list`. Daftarkan mesin lain memakai target dan opsi SSH yang biasa Anda pakai. Untuk menjangkau WSL atau Dev Container dari luar, siapkan SSH di lingkungan itu dan daftarkan dengan cara yang sama. Anda juga dapat menjalankan Facade langsung di dalamnya.
 
-Melalui MCP dan protokol terminal, agen dapat memulai, menghentikan, menemukan, dan mengirim pesan ke agen lain, membaca layar terminal mereka, mengetik teks, dan menekan tombol keyboard.
+```sh
+facade machine add -p 2222 aaron@devbox.lan
+facade start --machine devbox --folder /work/app --worktree feat-x claude
+```
 
-- **Mulai dan hentikan agen.** Agen dapat memulai agen lain dengan salah satu dari enam CLI, di folder mana pun atau worktree baru pada jendela Facade Anda di komputer ini, serta memberi mereka tugas pertama. Permintaan yang dicoba ulang dengan ID permintaan yang sama tidak akan pernah memulai agen kedua.
-- **Kirim pesan.** Agen saling bertukar pesan satu sama lain dan dapat mengirim pesan kepada Anda. Facade menempelkan seluruh pesan sekaligus dan mengirimkannya. Jika ada teks yang belum terkirim atau pertanyaan prompt yang menghalangi, pengiriman akan menunggu hingga input bersih.
-- **Kontrol terminal.** Agen dapat membaca layar agen lain, mengetik perintah, dan menekan tombol keyboard untuk menjawab prompt atau membantu rekan yang macet. Ketika agen turunan menunggu selama 20 detik untuk izin, jawaban, atau proses masuk, agen yang memulainya akan diberi tahu.
+Facade memasang versi yang sesuai pada mesin jarak jauh bila diperlukan. Facade memakai jalur instalasi tetap di mesin jarak jauh. Jika memasang secara manual, gunakan versi yang sama dengan Orchestrator lokal. Di VS Code, **Go to Agent** membuka terminal agen yang sedang berjalan. Ruang kerja mengingat agen yang dibuka, para pembantunya, dan Pin Anda. Menutup tab terminal membiarkan agen berjalan. **Resume Agent** dan `facade resume` menawarkan pekerjaan yang tersimpan.
 
-## Agent Mesh
+> **YOLO aktif secara default.** Agen dengan YOLO dapat menjangkau agen di mesin yang terhubung. Tetapkan `"yolo": false` di `facade.json` mesin itu untuk mempertahankan persetujuan dan sandbox CLI serta membatasi MCP ke pohon pembuatan pemanggil. Pengaturan berlaku pada start atau resume berikutnya. `facade status` menampilkan lokasi file.
 
-**Hubungkan agen lintas jendela, mesin, dan lokasi.**
-
-Facade Code menghubungkan agen di seluruh jendela Facade Anda di komputer ini ke dalam satu jaringan. Buka jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) untuk memperluas kolaborasi tersebut ke mesin lain.
-
-- **Lintas jendela.** Dengan `yolo` aktif, agen dapat menjangkau setiap agen di seluruh jendela Facade Anda di komputer ini, baik lokal maupun Remote - SSH. Dengan pengaturan tersebut nonaktif, agen hanya menjangkau grupnya sendiri: agen yang Anda mulai dan agen yang dimulai darinya.
-- **Perluas melalui SSH.** Di jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), agen berjalan langsung di mesin jarak jauh dengan alat, berkas, dan akun di sana. Agen lokal dapat memulai dan mengirim pesan ke agen di jendela Remote - SSH secara langsung.
-- **Koordinasikan dari ponsel Anda.** Hubungkan aplikasi seluler Claude ke sesi Claude Code di komputer Anda menggunakan [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Sesi tersebut dapat mengoordinasikan agen lain melalui Facade dan melaporkan kemajuan kembali ke ponsel Anda.
-
-<sub>Remote Control memerlukan versi Claude Code yang didukung, langganan yang memenuhi syarat, dan proses masuk dengan cakupan penuh. Lihat [persyaratan penyiapannya](https://code.claude.com/docs/en/remote-control#requirements).</sub>
+[Dokumentasi produk (中文)](../../facade-code.md) · [Glosarium](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 
@@ -81,11 +105,12 @@ Atur proyek, worktree fitur, dan tim agen dalam bilah ruang kerja khusus. Berali
 
 Unduh pratinjau IDE: [macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [Semua rilis](https://github.com/y5ez3g/facadecode/releases)
 
-IDE ini adalah fork dari VS Code yang dipasang berdampingan dengan editor Anda yang sudah ada dan tidak berbagi apa pun dengannya: pengaturan, ekstensi, dan perintah `facade` sepenuhnya terpisah. Ekstensinya berasal dari [Open VSX](https://open-vsx.org); beberapa ekstensi berpemilik Microsoft, seperti Remote Development dan C/C++, hanya dapat berjalan di build resmi Microsoft. Arsitektur dan spesifikasi tersedia di [`docs/ide/`](../../ide/).
+Pratinjau IDE dipasang berdampingan dengan editor Anda dan menggunakan pengaturan serta ekstensi sendiri. Ekstensinya berasal dari [Open VSX](https://open-vsx.org); beberapa ekstensi berpemilik Microsoft, seperti Remote Development dan C/C++, hanya dapat berjalan di build resmi Microsoft. Arsitektur dan spesifikasi tersedia di [`docs/ide/`](../../ide/).
 
 ## Membangun dari Sumber
 
 - **Ekstensi:** Berikan [`extension/AGENTS.md`](../../../extension/AGENTS.md) kepada agen coding Anda untuk membangun paket.
+- **Orchestrator / Shell.** [Petunjuk build](../../../core/README.md).
 - **IDE:** Berikan [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) kepada agen coding Anda untuk membangun aplikasi.
 
 Untuk panduan kontribusi dan aturan branch, lihat [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) dan [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).

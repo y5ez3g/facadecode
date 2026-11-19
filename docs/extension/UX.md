@@ -1,5 +1,8 @@
 # Interaction and interface
 
+Group 6 covers controls for the Orchestrator-backed editor. Groups 1–5 retain the old-engine transition rules
+and the existing native appearance and accessibility details where applicable.
+
 Layer 3. [Product](PRODUCT.md) prioritizes capability, familiarity and simplicity; [Rules](RULES.md) owns status/notification meaning.
 This document owns common surfaces, presentation, accessibility, commands and settings. Feature documents own behavior.
 
@@ -36,8 +39,7 @@ agent-to-person messages use native information notifications, even while that a
 news/warning/progress toasts. CONFIGURATION-6.3 adds one migration notice with an Open action after file creation.
 Facade home changes offer Reload Window under ARCHITECTURE-3.1; another spelling of the home in use offers nothing.
 Agent-operation errors return to the caller; no message-delivery or result-handoff failure
-creates a human popup. Show a permitted notification in its related window, with Rust `#human` handoff following
-COLLABORATION-2.3. Example: `Could not start Ada: {CLI error}.` Show opens the exact source run or final
+creates a human popup. Show a permitted notification in its related window under COLLABORATION-2.3. Example: `Could not start Ada: {CLI error}.` Show opens the exact source run or final
 screen; a launch refused by its CLI entry or a program that cannot start also offers Edit in facade.json. A Pin
 restore offers it for a file error before any card
 or a restored card's launch failure, including an entry refusal or a program that cannot start. Other restore
@@ -91,8 +93,7 @@ language's natural grammar while preserving placeholders, product names and the 
 | Corners/inset | 4 px rows/buttons, 2 px fields, 4 px list side inset |
 
 No contributed color palette. CLI images and robot colors follow CONFIGURATION-2.4; they carry no status meaning.
-Terminal logo glyphs use the theme's text color; robots retain their own gradients. The Rust CLI's color replies follow
-the shared terminal source in LIFECYCLE-2.2. PANEL-1.3 owns robot eye motion.
+Terminal logo glyphs use the theme's text color; robots retain their own gradients.
 High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never
 over keyboard focus. Do not fade high-contrast text. Other secondary selection text uses 80% opacity only where it
 keeps 4.5:1 on the theme's selection, the page measuring it as the theme draws it, and full opacity otherwise; a card's
@@ -180,7 +181,6 @@ are validated against current state, without falling back to the selection.
 | ID after `facade.` | Title | Availability / other surface | Owner |
 | --- | --- | --- | --- |
 | `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
-| `resumeAgent` | Resume Agent... | Rust engine; panel title and palette | LIFECYCLE-3.2 |
 | `continueSession` | Continue Session... | Both engines; palette and empty panel. Old engine panel title | LIFECYCLE-3.2 |
 | `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too; the card's Pin button | LIFECYCLE-3.4 |
 | `unpinAgent` | Unpin Agent | Pinned record; the card's Pin button | LIFECYCLE-3.4 |
@@ -306,6 +306,32 @@ release fixtures.
 Exercise light/dark/high-contrast/Solarized, representative widths/zoom, all language strings for overflow, keyboard and
 screen reader labels. Capture screenshots and scenario/version evidence. Automated DOM tests supplement this inspection;
 they cannot certify native picker placement, focus or remote terminal behavior. Never test in the owner's profile.
+
+
+## 6 Orchestrator-backed commands and labels
+
+### 6.1 Primary commands
+
+**Use the same names on the Panel, cards and Command Palette.**
+
+New Agent, Go to Agent and Resume Agent are the main entries. Go to Agent and Resume Agent use LIFECYCLE-5.2 and
+LIFECYCLE-5.4. Use Attach for opening the terminal, Hide for removing a workspace card, and Stop for ending the
+agent. PANEL-4 owns the card menu, state, title and details.
+
+### 6.2 Settings and languages
+
+**Use the shared [glossary](../core/GLOSSARY.md) and keep the product's command terms across locales.**
+
+Pin, Resume, Go to Agent, Attach, YOLO and Guest keep their names in all translations. Mark `facade.home` as an
+old-engine setting. Open Settings opens the machine's `facade.json` directly under
+CONFIGURATION-7.1. For a settings problem on that machine, Edit in facade.json opens the same file. For a
+settings problem on another machine, report the target and direct the person to the Shell and SSH steps in
+CONFIGURATION-7.1.
+
+Report agent and start errors using the machine or folder involved. Use window names for the editor and
+Attach viewers where relevant. If the editor falls back to the old engine, name the machine it runs on and
+the step that failed. Say that the window is using the old engine. Explain that after correcting the failure,
+the person can select `auto` in **Facade: Rust Engine** and reopen the window.
 
 ## Checks
 

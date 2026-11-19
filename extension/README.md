@@ -4,9 +4,9 @@
 
 # Facade Code
 
-**The multi-agent orchestrator for VS Code.**
+**The VS Code entry point for Facade Code.**
 
-Run native agent CLIs, edit code, and review changes in the same IDE window. Use your own accounts and coding plans, and let agents collaborate across windows and machines.
+Start coding agents in your workspace or on another machine. Open their terminals alongside your files and continue their work from VS Code or Shell.
 
 [![Website: facadecode.com](https://img.shields.io/badge/Website-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![GitHub: y5ez3g/facadecode](https://img.shields.io/badge/GitHub-y5ez3g%2Ffacadecode-335e78?style=flat)](https://github.com/y5ez3g/facadecode)
@@ -17,117 +17,66 @@ Run native agent CLIs, edit code, and review changes in the same IDE window. Use
 
 [![Watch the 2-minute demo on facadecode.com](https://raw.githubusercontent.com/y5ez3g/facadecode/main/docs/assets/readme/demo-poster.jpg)](https://facadecode.com)
 
-> Works with Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi. Qwen Code support is under development. For verified configurations and known limitations, see [Status and Known Limitations](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#status-and-known-limitations).
-
 ## Install
 
-Install **Facade Code** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). VS Code automatically installs the companion **Window Component** alongside it. The Window Component always runs on your local computer—even for remote windows—allowing Facade to recognize windows across reloads and connect them together.
+Install **Facade Code** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
+or [Open VSX](https://open-vsx.org/extension/facade/facadecode). The extension includes the Orchestrator for the machine
+where its VS Code workspace host runs. The accompanying Window Component cleans up stale terminal tabs after reconnect
+or extension restart.
 
-Packages are available for macOS (Intel x64 and Apple silicon), Linux (x64 and ARM64), and Windows (x64 and ARM64).
-
-**Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your local computer for local projects, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): Facade Code does not launch 1.x (`opencode-ai`) and explains how to upgrade. Git is required if you use worktrees.
-
-**Agents run without approval prompts by default.** By default, `yolo` is enabled in Facade's [settings](#settings), allowing agents to run commands and modify files without asking for confirmation. Turn it off to restore each CLI's standard approval prompts and supported sandbox; this change applies to agents started afterwards. Pi has no approvals or sandbox, so it runs without asking even with `yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. To open the settings, select **Open Settings** from the panel's `...` menu. Facade also trusts the folder an agent starts in, equivalent to accepting the CLI's own workspace trust prompt. With `yolo` on, agents can also stop, message, and type into every agent across your Facade windows. `custom` programs are the exception to launch mapping and folder trust: `yolo` does not alter how they start, and Facade grants them no folder trust.
+Packages are built for macOS, Linux and Windows on x64 and arm64. Install and sign in to the CLI you want to run on its
+machine. Facade Code can start **Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi**. Worktree
+creation uses Git.
 
 ## Quick Start
 
-1. **Open a folder**: Open your project directory via **File > Open Folder...**.
-2. **Start an agent**: Click **Facade Code** in the Activity Bar, select **New Agent...**, and choose an installed CLI. The agent opens in an editor terminal tab; type prompts as you would in any terminal.
-3. **Add more**: Launch additional agents the same way. Click any card in the panel to focus its terminal, or run **Go to Agent...** to search by name.
-4. **Let agents collaborate**: Instruct an agent in plain English, for example: "Start a Codex agent to write the tests, and have it message you when it is done."
+1. Open a project folder and select **Facade Code** in the Activity Bar.
+2. Choose **New Agent**. Use **Change Working Location** to choose a folder or worktree, or select a saved machine and
+   one of its folders. Select the CLI and begin in its terminal.
+3. Choose **Go to Agent** to open a running managed agent, including one started in Shell. Agents in your workspace and
+   their helpers appear in the Panel. Click a card to open its terminal.
+4. Use **Resume Agent** to resume an ended agent, or a saved CLI session as a new agent. Use **Pin** on a card to
+   restore it when the workspace reopens.
 
-## Agent Panel
+Cards show the agent's state and the CLI's title. The information button shows the machine and address. Closing a
+terminal tab detaches that view. **Hide** removes the card from the workspace and clears its Pin. **Stop** ends the
+agent's run and leaves its card available for Resume. **Remove** also removes the agent's record.
 
-**Your agents and your IDE, in the same window.**
-
-The **Facade Code** panel in the Activity Bar shows all agents in your window. Each card displays the agent's name, its CLI, and a status dot, with ⓘ details showing its title, folder, and creator.
-
-- **Start and configure.** Click **New Agent...** to choose a CLI. In the picker, select **Change Name...** to name your session or **Change Working Location...** to pick a folder or create a Git worktree.
-- **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it. In the card's gear menu, **Stop Agent** stops the process and **Dismiss Agent** closes an ended card.
-- **Custom keyboard shortcuts.** Replace any binding to `facade.closeAgent` in `keybindings.json` with `facade.stopAgent` for stopping or `facade.dismissAgent` for dismissing an ended card. Replace `facade.history` with `facade.resumeAgent` for the original Rust agent or `facade.continueSession` for CLI history. Replace `facade.showActiveAgents` with `facade.goToAgent`.
-- **Pin and resume.** Use **Pin Agent** to keep essential agents at the top of the panel and restore them when the workspace opens again. Use **Resume Agent...** to restore a Rust agent by its original number. Use **Continue Session...** to start a new agent with a saved session in its original folder.
-
-For details on agent cards, resuming sessions, pinning, git worktrees, and window reloads, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#one-panel-for-every-agent).
-
-## Agent Use
-
-**Let agents operate other agents, just like you.**
-
-You do not need special commands to have agents collaborate—simply ask any agent in your own words.
-
-- **Delegate tasks.** Tell an agent to start another agent for a specific task, for example: "Start a Codex agent in a new worktree to write tests, and message me when finished." The new agent appears in the panel without taking focus.
-- **Work as a team.** Have one agent write code and another review the changes. When agents message each other, the text appears in the recipient's terminal marked with a 📨 icon.
-- **Help stuck agents.** If an agent needs input or gets stuck at an interactive CLI prompt, other agents can inspect its screen, type answers, or send you a notification in VS Code.
-
-For details on cross-agent messaging, automatic retries, and workspace files, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#a-team-that-works-together).
-
-## Agent Mesh
-
-**Connect agents across windows, machines, and locations.**
-
-Facade Code connects agents across your Facade windows on this computer. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
-
-- **Work across windows.** Open multiple project folders in separate VS Code windows. With `yolo` on, agents in one window can see, message, and direct agents in any other window on your computer; with it off, agents reach only their own group.
-- **Connect over SSH.** In a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window, agents run directly on the remote machine with its tools, files, and accounts, and can be started and directed by local agents.
-- **Check in from your phone.** In a Claude Code terminal, type `/remote-control` to enable [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control), then connect using the Claude app on iOS or Android. From your phone, ask for progress updates and let that session coordinate other agents through Facade.
-
-<sub>Remote Control requires a supported Claude Code version, an eligible plan, and full-scope sign-in. See its [setup requirements](https://code.claude.com/docs/en/remote-control#requirements).</sub>
+In a Remote-SSH workspace, the extension uses the Orchestrator on the remote machine. Register other machines using
+`facade machine add` and the SSH options you normally use. For standalone Shell installation and connecting an MCP app
+as a Guest, see the [repository README](https://github.com/y5ez3g/facadecode#install).
 
 ## Settings
 
-Facade's settings are in `facade.json` in the Facade home, by default `~/.facade/facade.json`. Choose **Open Settings** in the panel's `...` menu or Command Palette, then **Edit in facade.json** under **Facade: Home**. In a remote window whose Settings open as JSON, **Open Settings** opens `facade.json` directly. The link creates the file if needed; remote windows open the remote file. **Facade: Home** (`facade.home`) overrides `FACADE_HOME`, which overrides `~/.facade`. Changing the home requires a window reload. Windows reach each other's agents only when they use the same Facade home.
+Choose **Open Settings** to access the execution machine's `facade.json`. The Orchestrator uses `FACADE_HOME`, defaulting to
+`~/.facade`; `facade status` shows the file's location. Edit the file on that machine. Changes apply to later starts and
+resumes. Already-running agents keep the settings they read at start.
 
-Saved changes apply to agents started afterwards; running agents keep their settings. The file is JSON with comments, and top-level fields are optional:
+**YOLO defaults to on.** With YOLO on, an agent can reach other agents across your connected machines. Set
+`"yolo": false` to use the CLI's own permissions and sandbox and limit MCP reach to the caller's creation tree.
+The CLI still asks you its own questions in the terminal. A start on this machine uses the starter's environment;
+a start on another machine uses its SSH login environment.
 
 ```jsonc
 {
-  // Ask for each CLI's own approvals
   "yolo": false,
   "clis": {
-    // A built-in, changed by its name
-    "codex": { "program": "/opt/homebrew/bin/codex", "model": "my-model" },
-    "pi": { "enabled": false },
-    // CLIs of your own, by names of your own
     "Codex · work": { "type": "codex", "args": ["--profile", "work"] },
-    "aider": { "type": "custom", "program": "aider", "args": ["--model", "sonnet"] }
+    "aider": { "type": "custom", "program": "aider" }
   }
 }
 ```
 
-| Setting | Default | What it does |
-|---|---|---|
-| `yolo` | `true` | Runs agents without approval prompts, and lets agents reach every agent in your Facade windows. Turn off to use each CLI's normal approvals and supported sandbox, with agents reaching only their own group. Applies to new agents only. |
-| `names` | 140 built-in names | Names suggested at random, excluding names already used in this window. Blank names are filled the same way; an empty or exhausted list uses the agent ID. |
-| `clis.<name>.type` | The built-in's own | `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` for a built-in CLI under settings of its own, or `custom` for any other program. Required for a name of your own. |
-| `clis.<name>.icon` | The type's icon; `facade-pearl` for `custom` | A built-in logo (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`) or one of the 16 `facade-` robots listed in the file. |
-| `clis.<name>.program` | The CLI's command on PATH | The program to start: a name found on the terminal's PATH, or a path. Required for `custom`. |
-| `clis.<name>.args` | `[]` | Arguments added to the command line, exactly as written. Facade refuses the options it sets itself, such as approvals, the model and the conversation. |
-| `clis.<name>.env` | `{}` | Environment variables: a string sets one, `null` removes one, and `${env:NAME}` reads one from the editor's environment. |
-| `clis.<name>.model`, `clis.<name>.effort` | The CLI's own | The model and reasoning effort new agents start with, for the CLIs that take them; a start that chooses its own wins. |
-| `clis.<name>.enabled` | `true` | Whether **New Agent** offers it. Turning it off does not stop agents that are running. |
+A named entry can use a built-in CLI with its own arguments, environment, model and effort where the CLI supports them.
+Use `${env:NAME}` to read a value from the launch environment. A custom program can be started and attached to,
+and its terminal accepts direct input. Its lack of a managed CLI session means it has no MCP messaging, Resume or Pin.
+The [product's CLI table](https://github.com/y5ez3g/facadecode/blob/main/docs/facade-code.md#各个-cli-不一样的地方)
+lists the differences between CLIs.
 
-The built-in CLIs' names are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`; leaving one out keeps its defaults. A name of your own adds a CLI that takes nothing from the built-in of its type. **New Agent** lists it after the built-in CLIs, and its icon defaults to its type's icon, or the pearl robot for `custom`. Set `icon` to choose a built-in logo or one of the 16 robots. A `custom` program starts exactly as written: Facade adds no approvals mapping, folder trust, tools or messages, and cannot resume its conversations. **Show Agent Launch...** shows what each agent starts with, and a mistake in the file says where it is. Settings saved in version 0.1.2 move into the file when it is first made. The file includes comments, all six built-ins and examples for another provider or a custom program.
+## Old engine transition
 
-To run Claude Code on another Anthropic-compatible API, give an entry the variables Claude Code reads, its key read from your environment rather than written in the file:
-
-```jsonc
-"Claude · work": {
-  "type": "claude",
-  "model": "my-large-model",
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://api.example.com/anthropic",
-    "ANTHROPIC_AUTH_TOKEN": "${env:WORK_API_KEY}",
-    "ANTHROPIC_API_KEY": null,
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-large-model",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-large-model",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-small-model"
-  }
-}
-```
-
-The generated file includes three commented examples: **Claude · Other**, **Codex · Other** and **Aider**. Uncomment any that you want. For the provider examples, replace `YOUR_PROVIDER_URL` and `YOUR_API_KEY` with your provider's address and key, and check its model names. Their comments give OpenRouter and Qwen Cloud addresses as samples; the sample model is DeepSeek V4.1 Flash. A key pasted into the file is stored in plain text. Use `${env:NAME}` to read it from the editor's environment and keep it out of this file.
-
-For Codex, the **Codex · Other** example defines its provider through `-c` options in `args` and supplies the key through `env`; no other configuration file is needed. The key then travels in the process environment, which Codex's shell snapshots may copy. You can instead keep a native profile such as `~/.codex/work.config.toml`, select it with `"args": ["--profile", "work"]`, and use its `auth` command to obtain the key without putting it in the environment. The [configuration guide](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/CONFIGURATION.md#5-using-another-api) shows both Codex setups and the other CLIs.
+Set **Facade: Rust Engine** to `off` and reload to use the old engine. Its window lifetime, settings and Window Component
+requirements follow the [transition guidance](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#old-engine-transition).
 
 ## Status and Known Limitations
 
@@ -141,8 +90,8 @@ Provide [`extension/AGENTS.md`](https://github.com/y5ez3g/facadecode/blob/main/e
 
 ### Working on it
 
-Read [AGENTS.md](AGENTS.md) before changing anything. The [extension's specification](../docs/extension/README.md) defines
-the target; [Verification](../docs/extension/engineering/VERIFICATION.md) defines the required evidence.
+Read [AGENTS.md](AGENTS.md) before changing anything. The [product documentation](../docs/facade-code.md) defines the product and the
+[extension's specification](../docs/extension/README.md) defines the editor's behavior; [Verification](../docs/extension/engineering/VERIFICATION.md) defines the required evidence.
 
 Use Node 24 (`.nvmrc`). Install the locked dependencies, then compile, build and test, all inside `extension/`:
 
@@ -179,8 +128,9 @@ separate evidence. Each target uploads its tested VSIX and the universal Window 
 ### Releases
 
 A release starts from a pushed tag `extension/<version>` that names `package.json`'s version. The `Extension release`
-workflow builds and tests that tag on all six native runners, then puts every platform VSIX, the universal Window Component
-and `SHA256SUMS` on the tag's GitHub Release, with the changelog's section as its notes; the newest extension version is
+workflow builds and tests that tag on all six native runners. It puts every platform VSIX, the universal Window Component,
+the standalone installers, native archives, version marker and `SHA256SUMS` on the tag's GitHub Release, with the
+changelog's section as its notes. The newest extension version is
 marked Latest. It downloads the Release again and checks every file. Only then, after approval in the `extension-stores`
 environment, it publishes the Release's own files to VS Code Marketplace and Open VSX, the Window Component first, skipping
 files a store already has, and waits until both stores serve the same bytes. Rerunning it for a tag whose Release is

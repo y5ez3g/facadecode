@@ -1,261 +1,81 @@
-# Experience
+# VS Code experience
 
-Read this after [Product](PRODUCT.md). It walks the whole product from a person's perspective. Exact shared semantics
-live in [Rules](RULES.md); feature specifications own controls and values. The journeys below are normative scenarios;
-[Verification](engineering/VERIFICATION.md) records which have been run.
+[Facade Code](../facade-code.md) defines the product. [Shared rules](RULES.md#6-the-vs-code-entry-point) and the feature
+specifications define how these journeys behave in the Orchestrator-backed editor. The old engine retains its
+transition rules in the corresponding feature specifications.
 
-| Group | Decides |
-| --- | --- |
-| 1 Starting the first agent | The common path and its failures |
-| 2 Following an agent's work | Status, direct access, ending, Resume and Pin |
-| 3 Working with other agents | Agent launches, discovery, messages and results |
-| 4 Completing the work | Both complete journeys, changes of direction and optional features |
+## 1 Start an agent
 
-## 1 Starting the first agent
+### 1.1 New Agent
 
-### 1.1 A common entry
+**New Agent lets you start one CLI in a chosen folder.**
 
-**New Agent is the same entry for a person directing agents and a person asking an agent to organize work.**
+Choose a CLI and give it instructions in its terminal. The CLI handles sign-in and its questions. Change Working
+Location offers the workspace's folders and worktrees, or a saved machine and one of its folders. A sleeping
+machine wakes when selected. See LIFECYCLE-5.1 and RULES-6.5.
 
-When the panel has no agents, it briefly explains New Agent, with that action. A new VS Code user can start from that
-explanation; there is no separate tutorial, team wizard or product-mode choice.
+### 1.2 Start in a worktree
 
-### 1.2 From starting to giving the first instruction
+**A worktree can be created as the agent starts.**
 
-**The person sees the location and suggested name, chooses a CLI, and continues in its editor terminal.**
-
-The picker opens with CLI choices in the window's execution environment. The last successfully used CLI is first
-and preselected. The person chooses a CLI to start the agent. Change Working Location and Change Name remain at
-the bottom of the same picker, with Change Name alone where there is no location to change (1.5).
-A name has an editable recommendation from `names` and may contain spaces or repeat. A blank name
-is filled in; an empty or exhausted list uses the agent ID (LIFECYCLE-2.1). CLI login and permissions remain in the terminal. The current name and actual location remain visible while searching for a
-CLI - the window's one place to work going without saying - as specified in LIFECYCLE-1.1. No account or CLI setup is
-silently performed by Facade. Open Settings shows Facade's section in the editor's Settings. Its Edit in facade.json
-link opens the file in the execution environment; remote windows whose Settings open as JSON open the file directly. The person can add `Codex · work` with `type: codex`, or a
-Claude setup for another API, and choose that entry in the picker
-(CONFIGURATION-2, CONFIGURATION-5). Saving affects later starts; existing agents keep running as they were.
-
-### 1.3 Default working location
-
-**Human New Agent opens on the window's machine, at the last successfully used location still offered there.**
-
-First use starts with the first folder's first location. An opened main checkout is first, or an opened worktree when that
-worktree is the folder opened. A plain folder is its own location. LIFECYCLE-1.2 defines the successful human launches
-that update this default and the fallback when a location is missing.
+Choose a Git repository and enter a new branch name. The agent starts in the new worktree. If Git or the CLI cannot
+complete its step, show the reason. A plain folder needs only the CLI. See WORKTREES-5.1.
 
 ### 1.4 Initial exceptions
 
-**A missing prerequisite is explained where the person can correct it without changing what they selected.**
+**Explain missing startup prerequisites where the person can correct them.**
 
-With no folder, the picker offers Open Folder and still lets the person choose an available remote working location
-when another Facade machine is listed (LIFECYCLE-1.1). When no CLI is available, the picker explains discovery in this
-environment and offers Open Settings. Choose Edit in facade.json there, or edit the file opened directly in a remote window whose Settings
-open as JSON (CONFIGURATION-1.2).
-A bad file blocks new starts with its error; a bad entry leaves other entries usable (CONFIGURATION-4.1).
-If old settings cannot be migrated together, the file link explains the conflict and opens the old editor settings
-JSON so the person can fix them (CONFIGURATION-6.2). Missing Git does
-not block either step. A removed location is reselected; no silent CLI substitution.
+If the chosen machine has no usable CLI, explain what is needed. The local Open Settings action opens the settings
+file under CONFIGURATION-7.1. A start on another machine uses that machine's settings. Return an actionable
+error when the machine or working folder is unavailable.
 
-### 1.5 Changing the working location
+## 2 Follow an agent
 
-**Change Working Location is an item in the same menu that shows the current location and CLI choices.**
+### 2.1 Find and attach
 
-With multiple Facade machines, choose the machine inside Change Working Location, then choose a working location on it.
-On this window's machine, choose a folder and its location or worktree, skipping single-choice steps. On another
-machine, choose a location there or its login home. The picker returns to the chosen location's CLIs with the same name
-(LIFECYCLE-1.3). Back preserves selections. Escape cancels without launching an agent or creating a worktree.
-Creating a worktree is an advanced choice in this flow, with the same contract as
-[Worktrees](features/WORKTREES.md).
+**Go to Agent opens a running managed agent that the Orchestrator can reach.**
 
-### 1.6 Seeing the agent start
+Start an agent from Shell, then select it in VS Code. Its terminal opens with the same screen and input as a Shell
+Attach. Closing either view leaves the agent running. Read terminal output directly or use the card's state and
+TITLE. The information button identifies its machine. See LIFECYCLE-5.2 and PANEL-4.
 
-**Choosing the CLI closes the menu and immediately creates the agent's card and terminal together.**
+### 2.2 Follow a team
 
-The card and terminal identify one launch throughout setup and startup. A human launch shows its terminal and selects
-its card, scrolled into view; an agent-created launch adds its card alone, its terminal hidden until the person opens
-it, without moving the list or taking focus (LIFECYCLE-2.2). Progress is shown in the existing surfaces.
+**When an agent starts helpers, their cards appear in its workspace list.**
 
-### 1.7 Startup outcomes and collaboration availability
+Their terminals open when selected. The person can monitor or intervene from the terminals while the agents
+coordinate using MCP. See COLLABORATION-5. Use Shell to configure connections between machines.
 
-**A failed accepted launch retains its card and terminal; a usable CLI remains available if its Facade tools fail.**
+## 3 Continue or finish
 
-The second line explains the actual error. Operation errors go to the initiator: human UI errors to that window's
-person, agent operation errors to that agent, with no extra human popup. Dismiss Agent removes the retained pair
-immediately; closing its tab only hides it. Native Git post-create preparation does not gate CLI startup once the
-worktree exists and Git recognizes it.
+### 3.1 Stop, Hide and Remove
 
-## 2 Following an agent's work
+**Choose the action that matches the intended effect.**
 
-### 2.1 Observing work and continuing in the terminal
+Stop leaves the card and saved work available. Hide removes the workspace's card and its Pin; the agent continues.
+Remove also removes the agent's record. Closing its terminal tab only detaches. See RULES-6.3.
 
-**The panel shows this window's agents; each editor terminal remains directly usable by the person.**
+### 3.2 Resume and Pin
 
-Starting or working is green and a problem is red; idle, native permission/answer/sign-in blockers and unavailable
-activity show no dot, the card's accessible label saying which in words and its second line what a blocker waits for
-(RULES-3.2, PANEL-1.4). Its details add no state (PANEL-1.5). The second line says what was last sent to the agent - before
-anything, whether its run began or resumed a conversation - unless Facade says, while it lasts, how it starts, why its
-dot is red or what the CLI waits for (PANEL-1.4); absence of reliable status is never claimed as idle. A turn ending
-removes the dot without a notification or a claim that the task is complete. A busy agent's tab turns a spinner before
-its name (LIFECYCLE-2.2). Clicking a card opens that same terminal. On Rust, Go to Agent can open another running
-agent on a reachable Facade machine in this window. The agent remains in its existing windows (LIFECYCLE-2.3).
+**Resume Agent offers saved work, and Pin opens an agent again when the workspace reopens.**
 
-### 2.2 Notifications go to the window that needs them
+Resume a stopped agent at its original address, or resume a CLI session as a new agent. A reopened workspace
+attaches to a running pinned agent or attempts to resume it once. A red card explains a failed attempt.
+Use the card's Pin or Unpin action to change the saved intent. See LIFECYCLE-5.4 and LIFECYCLE-5.5.
 
-**Human-operation errors, explicit calls to the person and Remote-SSH connection notices use native notifications.**
+### 3.3 Reconnect and upgrade
 
-Agent-operation errors return to the calling agent. Agent-to-agent delivery, replies and system-result handoff never
-automatically fall back to a person; if no agent can receive an error, the report ends. Native runtime failures follow
-RULES-1.8. No startup, idle, turn-end, permission or login news is announced. Explicit calls to the person can show
-independently in multiple connected Rust member windows under COLLABORATION-2.3.
-A Rust Remote-SSH window reports once if its local Facade core is missing. When that core first connects to a Facade
-machine through the window, the window explains which agents can control agents on the remote machine.
+**Reopen the workspace to see its agents and Pins again.**
 
-### 2.3 A turn ends, a process exits, or the person ends an agent
-
-**A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until Dismiss Agent.**
-
-Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. Stop Agent
-removes a local card and terminal immediately and cleans up the process in the background. A card for a process
-on another Facade machine stays until its stop is confirmed (LIFECYCLE-3.1). A successful Rust stop
-closes the other connected members' cards and tabs too (RULES-4.1). Closing one tab only hides that window's view
-(LIFECYCLE-2.2). Worktrees and the agents it started stay.
-
-### 2.4 Reloading, closing and reconnecting
-
-**Reload reconnects existing runs. A window's engine determines what happens when it closes.**
-
-Temporary remote loss retains observations and reconciles the original processes. On the Rust engine, agents keep
-running after the window closes. Reopening a workspace can reconnect its logical window and restore access to the
-same processes and screens. Two open windows of a workspace each have their own reference (RULES-4.1). On the old
-engine, agents end after RULES-4.1's grace unless the workspace reconnects first. Reloading reconnects running agents
-and opens only the pinned agents' tabs again. Every other agent's tab stays
-hidden until the person opens it from its card, and the last pinned tab opened is in front with its card selected
-(LIFECYCLE-3.5). An agent that cannot be pinned - a custom program (CONFIGURATION-2.3), or a run whose
-session integration failed - always comes back with its tab hidden. Other windows continue their work.
-Pending messages to ended runs fail to their agent senders where reachable. RULES-1.9 governs an original delivery
-across closure and reconnect. System results that cannot return simply end.
-
-### 2.5 Resume and Pin
-
-**Resume Agent restores the same numbered Rust agent. Continue Session starts a new agent with the chosen saved session.**
-
-Continue Session lists relevant CLI histories with the original CLI and location. On Rust, any member window can
-use Resume Agent to restore that numbered agent (LIFECYCLE-3.2). Pin and the native terminal tab's Pin are the
-same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
-Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
-card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a
-hidden one hidden. Closing a tab showing its pin mark unpins it. Stop Agent, Dismiss Agent and normal exit preserve the Pin on the
-Rust engine, and each workspace decides what it pins. On the old engine, all three unpin the agent. Whole-window close
-and abnormal exit preserve the intent on either engine. The pinned agents' tabs reopen one after another in the
-Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own
-restoration and capability limits.
-
-## 3 Working with other agents
-
-### 3.1 From one agent to collaboration
-
-**The user supplies the instructions; Facade supplies the operations.**
-
-The person may open several CLIs and direct them, or give one a prompt/skill that asks it to use others. No automatic
-manager, judge, team hierarchy or “all work done” state is imposed.
-
-### 3.2 An agent starts another agent
-
-**An agent chooses a working location and CLI. Window selection follows its engine's start contract.**
-
-A child joins its creator's creation tree and uses RULES-4.3's launch-time YOLO rule. The API cannot choose YOLO. It may
-request a new worktree as part of startup. On Rust, a child can inherit its creator's windows or appear in one selected
-window under RULES-4.1. Its working location is separate. On the old engine a child uses its selected destination,
-which can be another local or remote window with usable folders. An optional prompt
-follows COLLABORATION-2.2's native/post-start path. Process startup and prompt submission have separate results: the
-start answers once the process runs, never waiting on the prompt, and a pending prompt later reports its final outcome
-under MCP-2.3. Facade has no task concept and reports no child's work; its one automatic notice to a creator is
-RULES-1.8's, of a child waiting on a permission, question or sign-in. Explicit model/effort in this call takes
-precedence under CLIS-1.4.
-
-### 3.3 Discovering launch choices
-
-**Agents can query open windows, valid locations and available CLIs before starting an agent.**
-
-The current snapshot includes windows, folders/worktrees and CLI availability in the destination environment.
-Past requested model/effort choices and startup outcomes are available in diagnostic logs.
-Unknown choices are labeled unknown; omitting model/effort leaves the CLI's native defaults in control under CLIS-1.4.
-No side effect or reservation occurs during discovery. Existing-agent queries and operations obey the caller's
-YOLO/creation-tree scope.
-
-### 3.4 Sending a message and receiving a reply
-
-**Sending succeeds when the other agent has the complete message under RULES-1.3, without waiting for its answer.**
-
-The ordinary send returns its result within thirty seconds. The recipient's reply is a separate message. For Rust
-contact to `#human`, the send reports which member window subscriptions accepted it (COLLABORATION-2.3).
-[RULES-1](RULES.md#1-agent-messages) owns the complete flow; [MCP](engineering/MCP.md) owns the schema.
-
-### 3.5 When an ordinary message reaches the CLI
-
-**Ordinary messages attempt usable draft-free input even while the target works; direct input deliberately has no draft guard.**
-
-A message goes in as one full paste plus Enter. Another draft, a native menu or a question is waited for within the
-send's thirty seconds and never submitted with the message; then, as for an input box Facade cannot read, the send fails
-without anything typed, whatever the CLI's version (RULES-1.4, 1.5). No typing-idle timer or extra protection for human typing that
-starts after the check. A message's text goes into the input at most once; a later attempt only presses Enter over its
-own draft (RULES-1.6). If a person submits that pasted text themselves, the injected skill tells the model how to
-recognize the repeated message ID. Report actual partial or unknown effects if delivery fails. A message the recipient
-instead reads with read_messages counts as delivered and is not pasted again. Direct text/keys execute what the caller
-requests without a policy parameter or text-format/length restriction.
-
-### 3.6 Returning the final result and involving the person
-
-**Return the result to the agent that initiated the operation; an unreachable return path ends without notifying a person.**
-
-A system receipt is not B's own reply and does not generate another failure message for B. If B independently replies
-to a closed A, that send reports the error to B. If B also cannot receive it, drop the report. The original delivery
-outcome remains unchanged. An agent explicitly contacts the person through `#human` under COLLABORATION-2.3.
-
-## 4 Completing the work
-
-### 4.1 Both ways are followed through to the result
-
-**Both ways of working cover starting, doing, inspecting, changing direction and ending.**
-
-| Step | Super Engineer example | Super Team example | Facade's responsibility |
-| --- | --- | --- | --- |
-| Begin | Person starts two agents in chosen folders | Person starts one agent and supplies a prompt/skill | Launch and expose terminals |
-| Divide work | Person assigns work directly | Agent queries choices and starts another under the launch rules | Validated creation; background visibility |
-| Coordinate | Person asks agents to communicate | Agents exchange messages and inspect screens | Delivery, effects and failures |
-| Intervene | Person opens a terminal and corrects instructions | Person opens any worker and redirects it | Direct access; no creator gate |
-| Check results | Person reviews files, tests and replies | User's skill decides who reviews | No inferred acceptance from a dot or reply |
-| Integrate | Usual editor/Git tools, or ordinary files without Git | Agents integrate only as instructed | Optional worktree tools, no auto-merge |
-| End | Close agents; delete a clean linked worktree in Change Working Location or with Git | Agents stop selected runs as instructed | Independent lifetimes; immediate UI close and background cleanup |
-
-### 4.2 Changing direction and partial work
-
-**Stopping or cancellation does not undo completed input or user files.**
-
-Canceling an unaccepted picker changes nothing. Stop Agent on an accepted launch immediately removes UI and prevents
-later CLI startup; a worktree already created stays. Hiding its tab does neither. Facade does not manage Git
-initialization, initial commits, or native post-create preparation jobs; it deletes only a clean linked worktree the
-person confirms. External removal of a window folder/worktree closes its affected agents. An unconfirmed remote cleanup
-is not silently described as proven process exit.
-
-### 4.3 Optional features never block the core journey
-
-**Plain folders, optional Git and multi-folder/remote use follow the same agent flows.**
-
-Git discovery never blocks ordinary agent use. Worktree creation is available where Git/repository prerequisites exist,
-with no enable/disable setting and no initialization wizard. Panel filters affect display only: every created agent
-enters the normal panel data, and a filtered-out creation does not clear the person's filter.
-Creation trees do not group the list or imply a team workflow.
+The first open after upgrade brings forward the old window's agent list and Pins. The Window Component can clean up
+stale terminal tabs. Remote-SSH works against the Orchestrator on the remote editor host. See RULES-6.1 and RULES-6.8.
 
 ## Checks
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.7 | Walk first use, last location, location change, no Git, no CLI, cancel, immediate surfaces and both startup failures |
-| 2.1–2.3 | Observe actual activity, errors, native CLI prompts, normal exit, unknown abnormal exit and explicit closure |
-| 2.4 | Reload, disconnect, close and reopen under RULES-4.1 for each engine, pending messages to ended runs |
-| 2.5 | Resume an exact conversation; Pin from the card and the native tab, restored on reopening; Unpin keeps the agent running |
-| 3.1–3.6 | Two-way cross-window and local/remote operations; explicit launch choices; all initial/final message outcomes |
-| 4.1–4.3 | Walk both complete journeys including review, redirected work, cleanup, multi-folder and plain-folder use |
+| 1 | Start locally and over SSH, including in a plain folder and a new worktree |
+| 2 | Discover a Shell-started agent, attach from both entry points, and open a team including existing helpers |
+| 3 | Distinguish Close, Hide, Stop and Remove; reopen and resume Pins and confirm the first-open upgrade migration |
 
-Evidence is recorded in [Verification](engineering/VERIFICATION.md).
+[Verification](engineering/VERIFICATION.md) records evidence.

@@ -1,8 +1,10 @@
 # Locations and worktrees
 
+Group 5 covers worktrees in the Orchestrator-backed editor. Groups 1–4 cover the old-engine transition.
+
 Layer 3. Ordinary folders are the baseline; Git and worktrees are optional under PRODUCT-5.4. This document owns location
 catalogs, native creation, the confirmed deletion of a linked worktree and observation of external location removal.
-[Rules](../RULES.md) owns identities; [Lifecycle](LIFECYCLE.md) owns launch defaults.
+[Rules](../RULES.md) owns identities; [Lifecycle](LIFECYCLE.md) owns start defaults.
 
 | Group | Decides |
 | --- | --- |
@@ -183,12 +185,9 @@ alone, a worktree that contains such a link is refused the same way, before any 
 `Cannot delete worktree "{0}": it contains a link to another folder ({1}), which this version of Git would delete through.
 Remove the link, or update Git to 2.54 or later, then try again.`
 Otherwise it takes the worktree, every location inside it and every Resume cwd recorded within them (1.2) out of the
-catalog while deletion proceeds. For Rust, the confirmation count and execution check use core's complete records.
-Include agents whose location source is this window and whose working directory is the worktree or inside it, including
-ones without a card here, and this window's pending starts there (RULES-2.4). On the old engine, include agents whose
+catalog while deletion proceeds. Include agents whose
 launch location is the worktree or one inside it, including an associated Resume cwd. Close the affected agents and
-wait for confirmed stops or starts confirmed to have done nothing (LIFECYCLE-3.1). On Rust, only the initiating
-workspace cancels its affected Pins under RULES-4.2. If any result is unconfirmed, refuse deletion with
+wait for confirmed stops or starts confirmed to have done nothing (LIFECYCLE-3.1). If any result is unconfirmed, refuse deletion with
 `Cannot delete worktree "{0}": could not confirm that an agent process in it has ended. Try again once it has.`
 It then checks for changes again - what the agents wrote as they ended - refusing as above, and runs
 `git worktree remove <path>` without `--force`, with 4.1's Git and execution environment; the branch is kept. Git's own
@@ -203,10 +202,7 @@ delete its directory or branch.
 
 **Actual removal of a folder/worktree closes its associated agents.**
 
-On the Rust engine, apply RULES-2.4's location-source rule to confirmed location loss. Core stops the affected agents
-and their member windows remove the cards and tabs on observing the stop. Their Pins follow RULES-4.2.
-
-On the old engine, workspace-folder removal or confirmed external worktree deletion closes agents associated with
+Workspace-folder removal or confirmed external worktree deletion closes agents associated with
 the removed locations. A Resume cwd recorded within an anchor (1.2) and confirmed missing ends the agents working
 there, leaving its anchor and the anchor's other agents. Associate agents by their launch location. Remove their
 card and terminal immediately, unpin them and clean up owned processes in the background.
@@ -257,6 +253,19 @@ There is no delete command. Existing locations remain usable without requesting 
 Both human creation entries use the same branch input in `ui/pickers/location.ts`: branch-prefix lookup, required-value
 messages, asynchronous HEAD planning, validated-plan reuse and Back/Escape handling. The preview formatter and Copy Path
 action are shared too. Each entry owns its surrounding steps and final creation acceptance.
+
+
+## 5 Worktrees at start
+
+### 5.1 Create a worktree for New Agent
+
+**During New Agent, the person can request a worktree from the selected repository's current HEAD on either machine.**
+
+Follow RULES-6.5. Offer New Worktree for a repository confirmed by the target machine, including a manually entered
+remote folder. Pass the chosen branch as part of the start. The Orchestrator creates the worktree and starts
+the agent on that machine. Keep the branch path in the sibling `<repository>.worktrees/<branch>` folder.
+Report an existing branch, an occupied destination or a branch path the target system cannot represent. Use Git to
+delete a worktree. Workspace folder changes leave agent lifetimes to the Orchestrator.
 
 ## Checks
 

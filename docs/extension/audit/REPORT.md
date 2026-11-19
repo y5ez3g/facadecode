@@ -1,7 +1,7 @@
 # Specification audit
 
-`docs/extension/` is the maintained specification of the Facade Code extension. Its audit checks structure and
-references only. The normative set includes CONFIGURATION as the owner of file settings and CLI entries.
+`docs/extension/` specifies the VS Code entry point described in [Facade Code](../../facade-code.md). The audit
+checks rule structure and references.
 
 ## Reproducible checks
 
@@ -16,10 +16,9 @@ rules and local links checked, and every error; the extension's pull-request che
 
 ## Current result
 
-The command above returned **PASS** on 2026-11-10: **13 normative documents, 205 numbered rules and 101 local links**,
-with no errors. `git diff --check -- docs/extension` also passed. The link count includes repository and extension
-README links and can change as those documents change. These results establish structure and references, not
-implementation behavior.
+The command above returned **PASS** on 2026-11-19 with **13 normative documents, 228 numbered rules and
+123 local links**. `git diff --check -- docs/extension` also passed. The link count includes repository documents
+and the extension README.
 
 ## Evidence limits
 

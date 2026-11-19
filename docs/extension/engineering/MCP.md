@@ -1,7 +1,8 @@
 # MCP contract
 
-Layer 4. The old engine uses tool interface **2**. Rust uses interface **3** as defined by the
-[core tool descriptions](../../../core/crates/base/src/texts/tools.json). [Rules](../RULES.md) owns effects and
+Group 7 describes the active MCP boundary. Groups 1–6 preserve the old-engine interface during the transition.
+
+Layer 4. [Rules](../RULES.md) owns effects and
 [Collaboration](../features/COLLABORATION.md) owns message experience.
 
 | Group | Decides |
@@ -12,6 +13,7 @@ Layer 4. The old engine uses tool interface **2**. Rust uses interface **3** as 
 | 4 Messages and history | One recipient, result reports and own inbox |
 | 5 Terminal operations | Screen, direct text and keys |
 | 6 Technical design | Run routing, injection, versioning and schema ownership |
+| 7 Orchestrator | Active tools and generated contracts |
 
 ## 1 Common contract
 
@@ -53,8 +55,7 @@ type Result<T, FailureData = never> =
 ```
 
 Success includes `data` only when it has facts to return. stop_agent, type_text and press_keys return status alone.
-Failure has `status`, `reason` and `message`. Rust failures can also give structured facts in `data`, such as
-partially written input, retained worktrees, window delivery outcomes and protocol version details.
+Failure has `status`, `reason` and `message`.
 The message says what went wrong, whether anything was done, and what to do next. Partial or unknown effects must be
 stated in that message; unknown does not mean nothing happened. CLI/Git/transport errors keep their useful diagnostic.
 
@@ -69,16 +70,11 @@ Common failure reasons:
 | Reason | Meaning |
 | --- | --- |
 | `invalid_argument` | Missing, unknown or invalid arguments, including an invalid startup window, path or CLI |
-| `not_found` | No matching agent or message, or another missing target reported by the Rust daemon |
+| `not_found` | No matching agent or message |
 | `ambiguous_reference` | A name matches more than one agent; give an ID |
-| `refused` | Rust daemon refusal, including a target outside the caller's creation tree with YOLO off |
-| `out_of_reach` | Old-engine refusal for a target outside the caller's creation tree with YOLO off |
+| `out_of_reach` | A target outside the caller's creation tree with YOLO off |
 | `ended` | The target ended and cannot take the requested input |
 | `unsupported` | An unknown tool or a CLI without message input support |
-| `invalid_settings` | Rust could not read or validate Facade settings |
-| `caller_unavailable` | The Rust tool server cannot act for a caller, including when the session has its own server |
-| `incompatible_protocol` | The Rust daemon or its peer needs a different protocol version, with details in `data.protocol` when available |
-| `upgrading` | The Rust daemon is handing over to a newer build |
 | `configuration_invalid` | Invalid settings or a server without a caller on the old engine |
 | `unavailable` | Facade or a window cannot be reached, or the result is unknown |
 | `capacity_exceeded` | Input capacity is exhausted |
@@ -95,9 +91,7 @@ first. An unreachable agent is not proof that it ended. Lost answers to pure que
 read_messages is different because reading delivers messages. Agent-operation errors never notify the person
 automatically.
 
-The exact answers are locked by [MCP golden files](../../../core/tests/golden/mcp-responses.json) and
-[guest golden files](../../../core/tests/golden/mcp-guest-responses.json). Examples below copy those answers;
-`<test>` and `<time>` are the golden files' normalized test path and timestamp.
+The examples use `<test>` for a fixture path and `<time>` for a fixture timestamp.
 
 ### 1.3 Waits, progress and async completion
 
@@ -113,11 +107,10 @@ query API. Idle, delivery and input writes never establish task completion.
 send_message answers within thirty seconds from the relay's ingress, connection and queue time included. Delivery gets
 what remains less half a second reserved for the answer. The deadline is not extended by a draft, menu, pending prompt
 or daemon reconnection. A message that could not be typed in time is withdrawn; pasted input whose submission is
-uncertain cannot be withdrawn. A guest's message waits in its inbox and the send answers immediately.
+uncertain cannot be withdrawn.
 There is no later send result. The recipient's reply is a separate send.
 
-Each tool call opens its own daemon connection, so a waiting send holds up no other call. Connection setup waits up to
-ten seconds; failure to connect is `unavailable`. A transport timeout ends waiting, not an operation already started.
+Calls route to a window through the old engine's tool link. A transport timeout ends waiting for a reply.
 Locally measured elapsed time uses a monotonic clock; process clocks are never subtracted across environments.
 read_messages and read_screen each read once and never wait for new activity. A continuing call sends no MCP progress
 notification and produces no progress popup. Result delivery remains finite, with no automatic human fallback.
@@ -141,21 +134,6 @@ when a new choice is needed. Defaults and already specified values require no ex
 ### 2.2 start_agent arguments
 
 **Start a configured CLI in its launch folder.**
-
-On Rust, only `cli` is required. A local `folder` may be relative to the caller's working folder. A remote `folder`
-must be absolute on the running machine. When omitted, the daemon uses the caller's recorded folder for a local start
-or the running machine's login folder for a remote start. An explicitly empty folder is invalid.
-
-The optional `window` selects initial membership and can be qualified with a machine. The optional
-`location_source_window` selects the connected window on the running machine that supplies the folder and worktree
-independently (RULES-2.4, RULES-4.1). Use its bare ID or copy its `address` from `list_agents`. A qualified source window
-must match the running machine selected by `machine` or by its local default. The `worktree` argument is an object
-with a nonempty `branch` and optional nonempty
-`base_ref`, which defaults to `HEAD` of the selected checkout. It creates a new worktree. To start in an existing
-worktree, give its `folder`. Rust rejects `path` and a string `worktree` with `invalid_argument` and gives the
-corresponding argument or object to use.
-
-The table and examples below give the old-engine contract.
 
 | Field | Type / meaning |
 | --- | --- |
@@ -191,12 +169,7 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-On Rust, `data.folder` is the resulting launch directory, including the new worktree where one was made. The result
-also gives `id`, `name`, `address`, `machine_id` and member `windows` as window address strings. With a prompt,
-`result_message` can give the address of the result owed to the caller. A failure can give the worktree facts kept
-as `data.kept.branch` and `data.kept.folder`.
-
-An old-engine success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's
+A success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's
 folder. It does not expose process/tools state, requested settings, prompt details, effects or call correlation IDs.
 The golden start of helper answers:
 
@@ -223,9 +196,8 @@ A missing path answers:
 ```
 
 A start with a prompt has the same result fields. Its later Facade message says whether the prompt reached the agent;
-a prompt failure does not destroy a successfully started agent. A first prompt whose paste could not fit a whole
-delivery stage at its CLI's rates (RULES-1.5) refuses the start as `invalid_argument` before anything starts, asking
-for a shorter prompt. Until the editor extension runs on core, it still starts such an agent and gives the prompt up. Tool unavailability does not kill a usable CLI.
+a prompt failure does not destroy a successfully started agent. The old engine gives up a prompt its delivery window
+cannot accommodate. Tool unavailability leaves a usable CLI running.
 COLLABORATION-2.2 owns native/post-start prompt selection. A failure states any known or unknown startup effects in
 message, including the path of a worktree that was created and kept. There is no task object, completion expectation
 or automatic creator progress report.
@@ -235,26 +207,6 @@ or automatic creator progress report.
 ### 3.1 list_agents
 
 **One query returns window discovery and agents within the caller's reach.**
-
-On Rust, a disconnected window gives `id`, `address`, `machine_id`, `name` and `connected`. A connected window, including
-the terminal window, also gives `locations` and `clis` arrays, including when empty. A location gives `location_id`,
-`label`, its absolute path as `folder`, and `kind` as `folder`, `main_checkout` or `worktree`. Each CLI gives `cli`,
-`display_name`, `available` and `overrides` with `model` and `effort` booleans. It can also give `problem` and
-`not_installed: true`. A long result writes the complete list object to the file named by `data.file`, with the same rows.
-
-An agent row has its `id`, `address`, launch `folder` and `machine_id`. Its `windows` are window address strings, and
-`creator` is the creator's address or `#human`. Its `state` describes the CLI's last observed activity. If its running
-machine is unreachable, the row also gives `unreachable: true`. Bare role references name the caller's machine.
-Copy an object's machine-qualified `address` into a tool argument. A machine name is used when unique among the selectable machines.
-Otherwise, the selector uses an unambiguous `id:` prefix, with the full ID available when the machine set is unavailable.
-
-Machine rows in `data.machines` give `machine_id`, `name`, `build` when known, and `state` as `responded`, `failed`,
-`timed_out` or `unreachable`. For `responded` and `failed`, a received reply gives the origin's receive time as
-`responded_at`. An unreachable machine also gives `unreachable: true`. The file form carries the same machine rows.
-
-Agents, including ended ones, are listed oldest first by the creation time recorded on each agent's own machine.
-Equal timestamps are ordered by machine ID, then by numeric agent ID.
-The rest of this rule describes the old-engine result and its connected-window scope.
 
 No arguments. There are no filters, details mode or pagination. Ended agents are included, oldest first.
 YOLO permits every agent; otherwise only the creation tree is visible. Window/folder/CLI discovery is not restricted
@@ -269,7 +221,7 @@ Each agent has `id`, `name`, `cli`, `window`, `path`, `state` and `creator` (`#a
 State is `starting`, `working`, `waiting_for_you`, `just_done`, `idle`, `error`, `ended` or `unknown`.
 Only waiting_for_you adds `waiting_for`: `permission`, `question`, `auth` or `unknown`.
 State describes the CLI's observed activity, not task completion. Model, effort, YOLO, tools state and detailed process
-or terminal facts are not returned. Guests and MCP members use the same public rows.
+or terminal facts are not returned.
 
 Above 8,000 code points in the serialized data, return only `data.file`, a path to a JSON file holding the complete
 windows and agents object. Do not truncate or page it.
@@ -310,21 +262,14 @@ Raw terminal control is a separate tool. Never replace the body with a pointer a
 Text beginning with `[Earlier output truncated]` lost its beginning on its way: send_message, start_agent's prompt
 and type_text refuse it as invalid_argument before any effect, asking for shorter parts.
 
-Within thirty seconds (1.3), return the message's `id` and `delivery` in data for agent delivery and old-engine human
-contact, as below. Rust also gives the message's `address`. A Rust send to `#human` succeeds with `delivered_to_windows`
-when at least one window's subscription took it under COLLABORATION-2.3. Both success and failure use
-`data.window_delivery` for the observed outcomes. Each row gives a `window` address and a `state` of `delivered`,
-`not_delivered` or `outcome_unknown`. Only `not_delivered` has a `reason`. When there are no member windows, the
-failure gives an empty array. An unconfirmed send can give the retained message's `id` and `address` with its known
-outcomes. Argument errors before a send use the ordinary failure envelope.
+Within thirty seconds (1.3), return the message's `id` and `delivery`. Argument errors before a send use the
+ordinary failure envelope.
 
 | Delivery | Meaning |
 | --- | --- |
 | `typed_into_input` | Typed into the recipient's input and submitted |
 | `read_by_recipient` | The recipient read it with read_messages before it was typed |
 | `shown_to_person` | Handed to the person through the caller's editor window |
-| `delivered_to_windows` | Rust handed it to at least one member window's subscription |
-| `waiting_in_inbox` | A guest or MCP member takes it from its inbox later |
 
 Ordinary delivery follows RULES-1.4–1.6's input checks. A message's text is typed at most once.
 If delivery cannot start in time because of a draft, menu, unknown input box or timeout, withdraw the message from the
@@ -357,24 +302,11 @@ A missing recipient answers:
 }
 ```
 
-A send to a guest answers:
-
-```json
-{
-  "status": "success",
-  "data": {
-    "id": "#m1",
-    "delivery": "waiting_in_inbox"
-  }
-}
-```
-
 ### 4.2 read_messages
 
 **Read only the calling agent's incoming messages, never its sent messages or another inbox; reading delivers.**
 
 Arguments: `after?:string` naming a message ID, or `last?:integer` (1–100). Giving both is `invalid_argument`.
-Rust also accepts the message's returned `address` as `after` for the caller's own inbox.
 With neither, return messages not yet delivered. after returns the retained messages after that ID; last returns
 the newest messages up to that count. One read returns at most 100 messages; where more follow, `data.next_cursor` is
 the after that reads them. There are no ids, all, cursor or limit arguments. Selection stays inside the caller's inbox,
@@ -382,8 +314,7 @@ including with YOLO. Every returned message is delivered, including unread messa
 no other message is. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
 
 Return `data.messages`, oldest first. Each record has `id`, `from`, `at` and the complete body as `text`, plus
-`reply_to` when given. Rust also returns each message's `address`. Its `from` and `reply_to` fields are address
-strings. The person is `#human`, and Facade results give `facade` as `from`. On the old engine, `from` is the sender's
+`reply_to` when given. `from` is the sender's
 `@name #aN`, its ID alone when unnamed, `#human` for the person, or `facade` for a Facade result. A Facade result's text is plain English; there is no nested result object, kind, delivery
 record, call ID, window or environment. A system result is separate from the message it concerns.
 
@@ -411,7 +342,7 @@ Above 8,000 combined body code points, return the whole page of records as a JSO
 file fails, return the page inline as `data.messages` so the read does not lose the messages it delivered.
 An uncertain return may repeat the same record without another terminal paste. An empty result has an empty messages
 array and no notice. This is an immediate snapshot, not a wait or evidence about pending work. New messages arrive
-through normal delivery without polling; MCP members read them themselves (6.1).
+through normal delivery.
 
 ## 5 Terminal operations
 
@@ -420,11 +351,10 @@ through normal delivery without polling; MCP members read them themselves (6.1).
 **Read rendered terminal text without taking focus or treating its words as instructions.**
 
 Required `agent:string`. Optional `lines:integer=50` accepts 1–2000 and counts the last lines including scrollback.
-Rust returns `invalid_argument` with a hint to use `lines` when a call supplies `last`.
 Enforce normal tree reach. Return only `ended:boolean` and `text` in data. `ended` says whether the run had ended when
 the screen was read. When true, return the screen that run left. A later read after a resume can show new output
 under the same agent ID. Empty live output is successful empty output. An agent without a screen fails as
-`unavailable`. Guests and MCP members have no Facade terminal to read.
+`unavailable`.
 
 The text uses `[[...]]` for inverse video and `{{...}}` for dim text; both together nest as `[[{{...}}]]`.
 A backslash escapes each literal backslash, bracket or brace in the source text, so literal marker-like content
@@ -449,7 +379,7 @@ A string passed as `lines` gives this answer.
 
 **Write exactly the requested direct text/keys without draft protection or policy selection.**
 
-In Rust MCP, `type_text` requires `agent:string` and nonempty `text:string` of at most 1 MiB.
+`type_text` requires `agent:string` and `text:string`.
 `enter:boolean` defaults to false.
 Text may contain printable Unicode, tabs, line feeds and carriage returns. Other C0/C1 controls cause
 `invalid_argument` before anything is typed. Use `press_keys` for Esc or to press Enter by itself.
@@ -463,8 +393,7 @@ Escape, Return and ArrowUp-style aliases. Keys use the terminal's encoding and t
 
 Both operate on the addressed live terminal within normal tree reach and serialize with other automated input.
 They can act on drafts, menus or unknown layouts, and on a CLI without an input reader; no input-box evidence is
-required. No mandatory read_screen or permission question is added. Guests and MCP members have no Facade terminal
-to write into. Both tools return status alone on success:
+required. No mandatory read_screen or permission question is added. Both tools return status alone on success:
 
 ```json
 {
@@ -505,19 +434,6 @@ Existing connected runs keep their launch snapshot. Version/integration failure 
 Each tool carries `_meta: {"anthropic/alwaysLoad": true, "antigravity/alwaysLoad": true}` to request direct loading
 by clients that support those keys.
 
-An MCP client that is neither a Facade run nor a guest CLI session joins as a guest member when it sends initialize.
-It gets a new #aN, a default name, an inbox and its own creation tree. Its CLI name is clientInfo.name, or `mcp` when
-that name is absent or invalid. YOLO comes from the settings for the relay's folder. Initialization instructions name
-its ID and name, say how many messages wait, and tell it to read them with read_messages. All eight tools act for it.
-It appears in list_agents with state unknown, like a guest without a hook. It has no Facade screen or input terminal.
-Messages to it return waiting_in_inbox; it reads them itself, with no push notification.
-
-The member stays online while its relay is connected. An ordinary disconnect ends it, removes its list entry and
-discards undelivered inbox messages. A daemon restart or handover preserves it: the same relay process reconnects
-with the same ID and inbox. Members whose relays never return are removed by the normal hourly guest cleanup.
-A guest server that steps aside because a Facade run already has its own server still lists no tools and explains why;
-it does not join as another member.
-
 The relay speaks MCP 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05, answering in the client's version where it is
 one of these and otherwise in the newest, and answers a method it does not know with JSON-RPC's method-not-found, so a
 newer CLI is never left without tools. Its instructions tell a CLI that lists tools by name alone until they are
@@ -554,9 +470,7 @@ own its use, effects and success/retry boundaries; the skill provides cross-tool
 Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
 lack of draft protection, and the consequences of unknown input. The skill does not duplicate the eight argument
 schemas.
-Tool definitions, descriptions and argument validation share
-[tools.json](../../../core/crates/base/src/texts/tools.json). Tool names stay the same in v2; their arguments follow
-sections 2–5. The MCP annotations are:
+The old engine's tool definitions and descriptions live in [schema/tools.ts](../../../extension/src/schema/tools.ts). The MCP annotations are:
 
 | Tools | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
 | --- | --- | --- | --- | --- |
@@ -588,6 +502,65 @@ Task workflows, operation-query or deletion tools, input_policy and authenticati
 migration guide for published skills is required: Facade brings its own skill files up to date (CLIS-2.2), and a call
 with incompatible arguments fails explicitly.
 
+
+## 7 MCP through the Orchestrator
+
+### 7.1 The Orchestrator serves the eight tools
+
+**Agents and external applications use the Orchestrator's MCP tools through `facade-mcp`.**
+
+The [product](../../facade-code.md) describes machine-scoped starts, Guest identity, addressing and message delivery.
+The [generated tool descriptions](../../../core/crates/base/src/texts/tools.v3.json) define the tool arguments and
+results. The [core protocol](../../../core/protocol/PROTOCOL.md) defines the wire contract. VS Code starts and attaches through
+its own Orchestrator client. Agent messages, including the result of delivering a first prompt or a long
+wait, use the Orchestrator's contract and its delivery outcomes. See RULES-6.7.
+
+### 7.2 Connection identity and inline results
+
+**The first tool call fixes the connection's identity. Tool results carry content inline.**
+
+A Guest appears in `list` and can receive messages after its first tool call. Compatible service takeover
+preserves the identity rules for already-running managed agents through the end of that run. Subsequent starts and
+resumes use the current rules. A migrated Guest keeps its relay identity and inbox. If its saved YOLO value is
+missing, migration reads the machine's setting once and saves the value.
+
+`list_agents` rows and requested screen lines are returned in full inline. Use `after` to continue from `next_cursor` and
+`last` to select recent messages. Each delivered message has its full text in `data.messages`.
+
+### 7.3 Start on the selected machine
+
+**The target machine supplies the available CLI entries and creates the worktree a start asks for.**
+
+`start_agent` takes a CLI entry and can specify a machine, folder and worktree branch. The target's settings
+extend the built-in CLI catalog. If the selected entry is unavailable, report the reason and the entries available
+on that machine. A request for a model or effort the CLI does not accept uses the same refusal in Shell, MCP and
+settings validation. See the [product's CLI table](../../facade-code.md#各个-cli-不一样的地方).
+
+```json
+{"cli":"claude","machine":"devbox","folder":"/work/app","worktree":"feat-x"}
+```
+
+### 7.4 Find an eligible agent for each operation
+
+**An unqualified reference searches awake, reachable machines for an eligible agent.**
+
+Use a machine-qualified address such as `a3@devbox` to select its machine and wake it if it is sleeping. `stop_agent`, `type_text` and
+`press_keys` operate on running managed agents. `read_screen` can also read a stopped agent's saved screen.
+`stop_agent` explains a stopped target or an unconfirmed stop. An ambiguity reports the usable agent addresses
+the caller can choose from.
+
+```json
+{"agent":"a3@devbox","lines":50}
+```
+
+### 7.5 Delivery across reconnects
+
+**An automatic resend recovers the original delivery outcome.**
+
+Facade resends with the original caller, target and internal request identity. It reuses the outcome even when the
+original attempt was withdrawn. Calls to `send_message` create new sends. A Guest whose send succeeds receives the
+`read_messages` call for waiting on the reply.
+
 ## Checks
 
 | Rules | Acceptance |
@@ -597,6 +570,6 @@ with incompatible arguments fails explicitly.
 | 3.1–3.2 | Same-tree and ended-agent lists, duplicate names, retained screen after stop, no delete/query tools |
 | 4.1–4.2 | One recipient, `#human`, delivery modes, withdrawal, own inbox after/last, reading delivers, long files |
 | 5.1–5.2 | Current/final screen, last lines, text/key limits, drafts, rejected controls/aliases, partial input |
-| 6.1–6.2 | Run/guest/member identity, member reconnect/end, optional server, schemas, annotations, ID deduplication |
+| 6.1–6.2 | Run identity, optional server, schemas, annotations, ID deduplication |
 
 [Verification](VERIFICATION.md) owns the evidence.
