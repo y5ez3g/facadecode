@@ -14,7 +14,7 @@ import { callInCore, endEditors, normalizeDriveLetter, until } from './editors';
 import type { SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
-/** The workspace driver and the two helpers it uses beside either copy of the extension. */
+/** The workspace driver and its helpers beside either copy of the extension. */
 export function multiWindowDriverFiles(): Readonly<Record<string, string>> {
 	const source = (file: string) => fs.readFileSync(path.join(__dirname, file), 'utf8');
 	return {
@@ -24,6 +24,7 @@ export function multiWindowDriverFiles(): Readonly<Record<string, string>> {
 		}),
 		'extension.js': source('rustMultiWindowDriver.js'),
 		'rustWindowDriver.js': source('rustWindowDriver.js'),
+		'resumePickerFixture.js': source('resumePickerFixture.js'),
 		'editors.js': source('editors.js')
 	};
 }
@@ -330,8 +331,9 @@ async function sameWorkspace(open: OpenWindow, journey: WindowJourney): Promise<
 	const folder = journey.shared;
 	const left = await open(folder, 'c');
 	const right = await open(folder, 'd');
-	const agentLeft = await left.act<RunningAgent>({ kind: 'start', screen: 'Agent in the first window', secondGroup: true });
-	const agentRight = await right.act<RunningAgent>({ kind: 'start', screen: 'Agent in the second window' });
+	// The first terminal opens in a split whose narrow grid can wrap a longer marker.
+	const agentLeft = await left.act<RunningAgent>({ kind: 'start', screen: 'First window', secondGroup: true });
+	const agentRight = await right.act<RunningAgent>({ kind: 'start', screen: 'Second window' });
 	const pinned = [agentLeft.id, agentRight.id].sort();
 	for (const [window, local] of [[left, agentLeft], [right, agentRight]] as const) {
 		await until('both cards with one local terminal in each window', async () => {

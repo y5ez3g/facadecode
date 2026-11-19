@@ -14,7 +14,8 @@ import type { HelloResult, V3StartArgs, V3StartResult } from '../../base/corePro
 import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
 import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
-import { agentTab, facade, facadeAs, hasAgentTab, inspect, keepConversation, newCard, pickCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
+import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
+import { agentTab, facade, facadeAs, hasAgentTab, inspect, keepConversation, newCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 
 type Action =
 	| { readonly kind: 'snapshot' | 'notifications' | 'filter' | 'show-agent-picker' | 'window-component' }
@@ -74,6 +75,35 @@ async function view(): Promise<WindowView> {
 	};
 }
 
+async function goToCard(reference: string): Promise<PanelState['cards'][number]> {
+	const { agent } = await inspect(reference);
+	assert.strictEqual(agent.process, 'running', `${agent.address} can be attached`);
+	const picker = vscode.commands.executeCommand('facade.goToAgent');
+	let closed = false;
+	void picker.then(() => { closed = true; }, () => { closed = true; });
+	let observed: ResumePickerState | undefined;
+	await until(`Go to Agent to select ${agent.address}`, async () => {
+		if (closed) {
+			await picker;
+			throw new Error(`Go to Agent closed before selecting ${agent.address}`);
+		}
+		observed = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
+		if (!observed || observed.busy) { return undefined; }
+		const current = observed;
+		const target = current.descriptions.findIndex((description, index) =>
+			current.labels[index] === agent.name && description?.startsWith(`${agent.address} · `));
+		if (target < 0) { return undefined; }
+		if (target === current.active) { return true; }
+		await vscode.commands.executeCommand(target < current.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
+		return undefined;
+	}).catch(error => { throw new Error(`${(error as Error).message}; picker: ${JSON.stringify(observed)}`); });
+	await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+	const card = await until(`${agent.address}'s attached card`, async () => (await state()).cards.find(card =>
+		card.runId === `${agent.machine_id}/${agent.agent_id}` && card.orchestrator?.running));
+	await picker;
+	return card;
+}
+
 async function openSecondGroup(): Promise<void> {
 	const folder = vscode.workspace.workspaceFolders![0].uri.fsPath;
 	for (const column of [vscode.ViewColumn.One, vscode.ViewColumn.Two]) {
@@ -124,7 +154,7 @@ async function perform(action: Action): Promise<unknown> {
 			}
 			return true;
 		case 'open-shell-agent': {
-			const card = await pickCard('facade.goToAgent');
+			const card = await goToCard(action.address);
 			assert.strictEqual(card.name, action.name);
 			const terminal = await until('Go to Agent to select the attached terminal', () => {
 				const tab = agentTab(card);
@@ -164,7 +194,11 @@ async function perform(action: Action): Promise<unknown> {
 			keepConversation(agent.cwd, agent.session, screen ?? 'A session opened in this window');
 			if (screen !== undefined) {
 				facade('type', agent.id, screen, '--enter');
-				await until(`#${agent.id}'s screen text`, () => facade('screen', agent.id, '--lines', '120').includes(screen) || undefined);
+				let read = '';
+				await until(`#${agent.id}'s screen text`, () => {
+					read = facade('screen', agent.id, '--lines', '120');
+					return read.includes(screen) || undefined;
+				}).catch(error => { throw new Error(`${(error as Error).message}\n${read}`); });
 			}
 			return agent;
 		}
@@ -177,7 +211,7 @@ async function perform(action: Action): Promise<unknown> {
 			return savedPin(action.agent);
 		case 'adopt':
 		case 'resume': {
-			const card = await (action.kind === 'resume' ? resumeCard(action.agent) : pickCard('facade.goToAgent'));
+			const card = await (action.kind === 'resume' ? resumeCard(action.agent) : goToCard(action.agent));
 			assert.strictEqual(card.alias, action.agent, 'the picker opens the requested agent by its original number');
 			await until(`#${action.agent}'s terminal tab`, () => hasAgentTab(card) || undefined);
 			return running(action.agent);
