@@ -49,6 +49,8 @@ pub(crate) enum Problem {
     NotInteractive { given: String },
     /// `messages` outside an agent's terminal.
     NotAgentTerminal,
+    /// The start command omitted the CLI name.
+    MissingCli { available: Vec<String> },
     /// An option before `start`'s PROGRAM that Facade does not know.
     UnknownStartOption { option: String },
     /// The execution machine requires an absolute folder.
@@ -135,9 +137,10 @@ impl Problem {
     /// The exit code of a command that ends with this problem.
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
-            Problem::UnknownStartOption { .. } | Problem::Keys(_) | Problem::TypeControl { .. } => {
-                2
-            }
+            Problem::MissingCli { .. }
+            | Problem::UnknownStartOption { .. }
+            | Problem::Keys(_)
+            | Problem::TypeControl { .. } => 2,
             _ => 1,
         }
     }
@@ -192,6 +195,14 @@ impl Problem {
                 "'facade messages' reads an agent's inbox and must run in that agent's terminal"
                     .into(),
                 Some("messages for the human appear in the editor window".into()),
+            ),
+            Problem::MissingCli { available } => (
+                "choose a CLI to start".into(),
+                Some(if available.is_empty() {
+                    "check the CLI settings shown by 'facade status'".into()
+                } else {
+                    format!("available CLIs: {}", available.join(", "))
+                }),
             ),
             Problem::UnknownStartOption { option } => (
                 format!("unexpected option '{option}' before the program"),

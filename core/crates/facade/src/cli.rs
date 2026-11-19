@@ -42,6 +42,17 @@ pub(crate) struct Targets {
     pub(crate) agents: Vec<String>,
 }
 
+pub(crate) struct StartOptions {
+    pub(crate) name: Option<String>,
+    pub(crate) prompt: Option<String>,
+    pub(crate) machine: Option<String>,
+    pub(crate) folder: Option<String>,
+    pub(crate) worktree: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
+    pub(crate) cli_and_args: Vec<String>,
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Command {
     #[command(
@@ -183,24 +194,11 @@ pub(crate) enum Command {
             help = "Message text, up to 8,000 characters and 540 lines"
         )]
         text: String,
-        #[arg(
-            long,
-            value_name = "MESSAGE",
-            help = "ID of a message in your inbox to reply to"
-        )]
-        reply_to: Option<String>,
     },
-    #[command(about = "Read the inbox of the agent in this terminal")]
-    Messages,
     #[command(about = "Connect to Facade on other machines")]
     Machine {
         #[command(subcommand)]
         action: MachineAction,
-    },
-    #[command(about = "Let CLIs you start yourself join Facade")]
-    Integration {
-        #[command(subcommand)]
-        action: Integration,
     },
     #[command(about = "Show Facade's status")]
     Status {
@@ -236,30 +234,6 @@ pub(crate) enum Command {
     Daemon {
         #[arg(long)]
         detach: bool,
-    },
-}
-
-/// `facade integration`'s subcommands.
-#[derive(Subcommand)]
-pub(crate) enum Integration {
-    #[command(about = "Add Facade to a CLI's settings")]
-    Add {
-        #[arg(long, help = "Print the result as JSON")]
-        json: bool,
-        #[command(flatten)]
-        cli: IntegrationCli,
-    },
-    #[command(about = "Remove Facade from a CLI's settings")]
-    Remove {
-        #[arg(long, help = "Print the result as JSON")]
-        json: bool,
-        #[command(flatten)]
-        cli: IntegrationCli,
-    },
-    #[command(about = "List CLI integrations")]
-    List {
-        #[arg(long, help = "Print integrations as JSON")]
-        json: bool,
     },
 }
 
@@ -315,27 +289,6 @@ pub(crate) struct ServeArgs {
     pub(crate) home: Option<std::path::PathBuf>,
     #[arg(long)]
     pub(crate) home_hex: Option<String>,
-}
-
-/// The CLI an integration is for.
-#[derive(clap::Args)]
-pub(crate) struct IntegrationCli {
-    #[arg(
-        value_name = "CLI",
-        value_parser = PossibleValuesParser::new(facade_rules::integration::CLIS),
-        hide_possible_values = true,
-        help = integration_clis()
-    )]
-    pub(crate) cli: String,
-}
-
-/// `claude, codex, opencode, pi, muse or agy`, from the integration CLIs in their order.
-fn integration_clis() -> String {
-    let clis = facade_rules::integration::CLIS;
-    match clis.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
-        _ => clis.join(", "),
-    }
 }
 
 /// `start`'s Arguments section, which shows PROGRAM and its arguments as two arguments though
@@ -477,8 +430,7 @@ pub(crate) fn completion(shell: &str) {
     print_or_end!("{script}");
 }
 
-/// Every public command under `command` (at `path`) with a positional argument of fixed values,
-/// such as `integration add`'s CLIs and `completion`'s shells: its path and those values.
+/// Each public command path and the fixed values its positional argument accepts.
 fn argument_values(command: &clap::Command, path: &[String]) -> Vec<(Vec<String>, Vec<String>)> {
     let mut found = Vec::new();
     for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {

@@ -31,11 +31,13 @@ use std::io::{IsTerminal, Write};
 
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
 use facade_base::daemon_client::DaemonClient;
+use facade_base::machine::MachineQueryArgs;
 use facade_base::process::{EndReason, ProcessExit};
+use facade_base::v3::ResumeTarget;
 use unicode_width::UnicodeWidthStr;
 
-use cli::{Command, Integration, MachineAction, Target, Targets};
-use commands::{Format, IntegrationAction, Listing};
+use cli::{Command, MachineAction, StartOptions, Target, Targets};
+use commands::{Format, Listing};
 use daemon_client::{connect_or_start, reconnect};
 use errors::Problem;
 
@@ -267,14 +269,17 @@ fn run(command: Command) -> anyhow::Result<i32> {
             cli::check_start(&command_line)?;
             let terminal = shown_terminal(detach);
             let mut client = connect_or_start()?;
-            let shown = commands::start(
-                &mut client,
+            let options = StartOptions {
                 name,
                 prompt,
-                (machine, folder),
-                command_line,
-                terminal,
-            )?;
+                machine,
+                folder,
+                worktree: None,
+                model: None,
+                effort: None,
+                cli_and_args: command_line,
+            };
+            let shown = commands::start(&mut client, options, terminal)?;
             show(client, shown)
         }
         Command::Resume {
@@ -283,7 +288,12 @@ fn run(command: Command) -> anyhow::Result<i32> {
         } => {
             let terminal = shown_terminal(detach);
             let mut client = connect_or_start()?;
-            let shown = commands::resume(&mut client, agent, terminal)?;
+            let target = ResumeTarget {
+                reference: agent,
+                machine: None,
+                folder: None,
+            };
+            let shown = commands::resume(&mut client, target, terminal)?;
             show(client, shown)
         }
         Command::Attach(Target { agent }) => {
@@ -292,19 +302,18 @@ fn run(command: Command) -> anyhow::Result<i32> {
             }
             attach::attach(connect_or_start()?, &agent, Opening::Attached, &reconnect)
         }
-        Command::Messages => {
-            let Some(agent) = daemon_client::agent_of_terminal()? else {
-                return Err(Problem::NotAgentTerminal.into());
-            };
-            commands::messages(&mut daemon_client::connect_or_start_for(&agent)?).map(done)
-        }
         Command::List { quiet, json } => {
             let listing = match (quiet, json) {
                 (true, _) => Listing::Quiet,
                 (_, true) => Listing::Json,
                 _ => Listing::Table,
             };
-            commands::list(&mut connect_or_start()?, listing).map(done)
+            commands::list(
+                &mut connect_or_start()?,
+                MachineQueryArgs::default(),
+                listing,
+            )
+            .map(done)
         }
         Command::Inspect {
             json,
@@ -313,7 +322,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Screen {
             lines,
             target: Target { agent },
-        } => commands::screen(&mut connect_or_start()?, agent, lines).map(done),
+        } => commands::screen(&mut connect_or_start()?, agent, lines, Format::Text).map(done),
         Command::Type {
             target: Target { agent },
             text,
@@ -323,9 +332,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
             cli::check_type(text.as_deref(), &keys)?;
             commands::type_input(&mut connect_or_start()?, agent, text, enter, keys).map(done)
         }
-        Command::Send { to, text, reply_to } => {
-            commands::send(&mut connect_or_start()?, to, text, reply_to).map(done)
-        }
+        Command::Send { to, text } => commands::send(&mut connect_or_start()?, to, text).map(done),
         Command::Rename {
             target: Target { agent },
             name,
@@ -336,20 +343,9 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Remove(Targets { agents }) => {
             commands::remove(&mut connect_or_start()?, agents, &errors::report)
         }
-        Command::Integration { action } => {
-            let (action, json) = match action {
-                Integration::Add { json, cli } => (IntegrationAction::Add { cli: cli.cli }, json),
-                Integration::Remove { json, cli } => {
-                    (IntegrationAction::Remove { cli: cli.cli }, json)
-                }
-                Integration::List { json } => (IntegrationAction::List, json),
-            };
-            commands::integration(&mut connect_or_start()?, action, format(json)).map(done)
-        }
         Command::Status { json } => {
-            let home = facade_base::paths::facade_home()?;
-            let reply = daemon_client::probe()?;
-            commands::status(&home, reply.as_ref(), format(json)).map(done)
+            let mut client = daemon_client::probe()?;
+            commands::status(client.as_mut(), None, format(json)).map(done)
         }
         Command::Version { json } => commands::version(format(json)).map(done),
         Command::Completion { shell } => {

@@ -99,30 +99,9 @@ pub(super) fn connect_running(agent: Option<String>) -> Option<DaemonClient> {
         .flatten()
 }
 
-/// The agent of this command's terminal. A daemon that runs knows it by a CLI session the
-/// environment names: a guest, or an agent Facade started. Otherwise, and with no session named,
-/// it is the agent Facade started the terminal for, if any.
-pub(super) fn agent_of_terminal() -> anyhow::Result<Option<String>> {
-    let identity = identity_for(terminal_agent(), true);
-    if identity.sessions.is_empty() {
-        return Ok(identity.agent);
-    }
-    let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
-    let known = hello_if_running(&socket, &identity)
-        .map_err(explicit)?
-        .map(|client| client.hello_result.agent);
-    Ok(known.unwrap_or(identity.agent))
-}
-
 /// Connects to the daemon within one attempt, starting Facade where nothing answers.
 pub(super) fn connect_or_start() -> anyhow::Result<DaemonClient> {
     first_connection(&identity_for(terminal_agent(), true)).map_err(unreachable)
-}
-
-/// Connects as [`connect_or_start`] does, acting for `agent`.
-pub(super) fn connect_or_start_for(agent: &str) -> anyhow::Result<DaemonClient> {
-    let identity = identity_for(Some(agent.to_string()), false);
-    first_connection(&identity).map_err(unreachable)
 }
 
 /// Makes a command's first connection with default callbacks.

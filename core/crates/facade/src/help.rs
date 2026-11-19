@@ -26,10 +26,10 @@ pub(crate) const GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("Inspect and control", &["inspect", "screen", "type"]),
-    ("Messages", &["send", "messages"]),
+    ("Messages", &["send"]),
     (
         "Setup and info",
-        &["machine", "integration", "status", "version", "completion"],
+        &["machine", "status", "version", "completion"],
     ),
 ];
 
@@ -302,17 +302,6 @@ pub(crate) const PAGES: &[Page] = &[
         ],
     },
     Page {
-        path: "messages",
-        description: "Read up to 100 messages waiting for the agent of this terminal and mark them as delivered. \
-             Run this command in an agent's terminal.",
-        alias: None,
-        examples: &[direct(
-            "Read waiting messages in an agent's terminal",
-            "facade messages",
-            &["messages"],
-        )],
-    },
-    Page {
         path: "machine",
         description: "Work with agents on other machines. Facade connects over SSH and opens no port. Once two \
              machines are connected, you can list, start and message agents on both from either one.",
@@ -402,58 +391,6 @@ pub(crate) const PAGES: &[Page] = &[
         )],
     },
     Page {
-        path: "integration",
-        description: "Use Facade's tools and messages in CLIs you start yourself, outside Facade. Once you add \
-             an integration, new sessions of that CLI appear in 'facade list' as guests and keep their own \
-             terminals.",
-        alias: None,
-        examples: &[direct(
-            "Let Claude Code sessions you start yourself join Facade",
-            "facade integration add claude",
-            &["integration", "add", "claude"],
-        )],
-    },
-    Page {
-        path: "integration add",
-        description: "Let new sessions of this CLI join Facade as guests. Facade updates the CLI's user settings \
-             so that those sessions can use its tools and messages. Run this again to bring the settings up to \
-             date.",
-        alias: None,
-        examples: &[direct(
-            "Add Facade to Claude Code's settings",
-            "facade integration add claude",
-            &["integration", "add", "claude"],
-        )],
-    },
-    Page {
-        path: "integration remove",
-        description: "Remove the settings that let new sessions of this CLI join Facade. Facade keeps any changes \
-             you made and shows any settings that need attention.",
-        alias: None,
-        examples: &[direct(
-            "Remove Facade from Claude Code's settings",
-            "facade integration remove claude",
-            &["integration", "remove", "claude"],
-        )],
-    },
-    Page {
-        path: "integration list",
-        description: "Check which CLIs are set up to join Facade and which need attention.",
-        alias: None,
-        examples: &[
-            direct(
-                "See which CLIs are set up to join Facade",
-                "facade integration list",
-                &["integration", "list"],
-            ),
-            direct(
-                "Print every integration as JSON",
-                "facade integration list --json",
-                &["integration", "list", "--json"],
-            ),
-        ],
-    },
-    Page {
         path: "status",
         description: "Check whether Facade responds and see its Facade home, where it keeps settings and logs. If \
              it responds, you also see this command's version, Facade's services and the agent count. This \
@@ -505,7 +442,7 @@ pub(crate) const PAGES: &[Page] = &[
     },
 ];
 
-/// The page of command `path`, such as `integration add`.
+/// The page of command `path`, such as `machine add`.
 pub(crate) fn page(path: &str) -> Option<&'static Page> {
     PAGES.iter().find(|page| page.path == path)
 }

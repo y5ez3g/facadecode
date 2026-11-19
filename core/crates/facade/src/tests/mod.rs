@@ -1,5 +1,5 @@
-//! Tests of the command line's help definitions and of the words it prints, on the renderers
-//! themselves: no Facade runs. The scenario tests in `core/tests` run the built program.
+//! Tests of the command line's help definitions and of the words it prints. The scenario tests
+//! in the core workspace run the built program.
 
 mod attach;
 mod errors;
@@ -8,7 +8,7 @@ mod output;
 
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentInfo, AgentInspectResult, InputInfo};
+use facade_base::v3::{AgentInfo, AgentInspectResult};
 use serde_json::{Value, json};
 
 /// The one current time of a rendering: 2026-11-17 23:22:01 UTC.
@@ -16,27 +16,28 @@ fn now() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_957_721)
 }
 
-/// `seconds` before [`now`], as the protocol writes a time.
+/// Seconds before the rendering, in protocol time.
 fn before(seconds: u64) -> String {
-    let at = now() - Duration::from_secs(seconds);
-    facade_base::time::iso_time(at)
+    facade_base::time::iso_time(now() - Duration::from_secs(seconds))
 }
 
-/// An agent record: a running claude agent the human started, with `changes` over its fields.
+/// A running agent the command line started, with field overrides.
 fn agent(changes: Value) -> AgentInfo {
     let mut record = json!({
         "agent_id": "a3",
+        "address": "a3@laptop",
         "name": "Pixel",
+        "type": "managed",
         "cli": "claude",
+        "args": [],
         "cwd": "/work/site",
-        "machine_id": "m-1",
-        "windows": [{ "machine_id": "m-1", "window_id": "terminal" }],
-        "location_id": "loc-1",
+        "machine_id": "machine-1",
         "pid": 1234,
         "process": "running",
         "cols": 120,
         "rows": 30,
         "created_at": before(120),
+        "started_at": before(60),
         "root": "a3",
         "yolo": false,
         "state": "working",
@@ -52,27 +53,20 @@ fn agent(changes: Value) -> AgentInfo {
     serde_json::from_value(record).expect("a valid agent record")
 }
 
-/// An input box in `state`, with `hidden` draft rows where given.
-fn input(state: &str, hidden: Option<(u32, u32)>) -> InputInfo {
-    let mut input = json!({ "state": state, "evidence": "the input frame" });
-    if let Some((above, below)) = hidden {
-        input["hidden"] = json!({ "above": above, "below": below });
-    }
-    serde_json::from_value(input).expect("a valid input")
-}
-
-/// An inspection of `agent`, started by `rule`.
+/// An inspection with a rule and the people watching the terminal.
 fn inspection(
     agent: &AgentInfo,
     rule: Option<&str>,
-    input: InputInfo,
-    tracking: bool,
+    viewers: &[&str],
+    started_by: Option<Value>,
 ) -> AgentInspectResult {
     serde_json::from_value(json!({
         "agent": agent,
         "rule": rule,
-        "input": input,
-        "session_tracking": tracking,
+        "input": { "state": "usable", "evidence": "the input frame" },
+        "session_tracking": rule.is_some(),
+        "viewers": viewers,
+        "started_by": started_by,
     }))
     .expect("a valid inspection")
 }
