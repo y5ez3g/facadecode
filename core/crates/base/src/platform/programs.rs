@@ -127,6 +127,53 @@ pub fn direct_command(program: &Path, env: &BTreeMap<String, String>, cwd: &Path
     windows::direct_command(program, env, cwd)
 }
 
+/// Shows the final program and arguments in the launch platform's command-line syntax.
+/// Uses the launch environment for lookup and includes the keeper's batch wrapper on Windows.
+/// The caller must redact any sensitive arguments before showing or storing the result.
+pub fn display_command(
+    program: &str,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Option<String> {
+    if program.is_empty() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        let executable = if program.contains('/') {
+            let path = cwd.join(program);
+            runnable(&path).then_some(path)?
+        } else {
+            on_path(program, env.get("PATH").map(String::as_str), cwd)?
+        };
+        let words = std::iter::once(executable.to_str()?).chain(args.iter().map(String::as_str));
+        if words.clone().any(|word| word.contains('\0')) {
+            return None;
+        }
+        Some(words.map(quote_word).collect::<Vec<_>>().join(" "))
+    }
+    #[cfg(windows)]
+    {
+        let (_, command) = quoted_command(program, args, env, cwd).ok()?;
+        String::from_utf16(command.strip_suffix(&[0])?).ok()
+    }
+}
+
+/// A single POSIX shell word, with special characters and empty arguments preserved.
+#[cfg(unix)]
+fn quote_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&byte))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
 /// A command that runs `program` for the daemon, such as Git, or a CLI's own program as it adds
 /// its integration. On Windows it opens no console window.
 pub fn command(program: impl AsRef<OsStr>) -> std::process::Command {
