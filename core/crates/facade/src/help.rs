@@ -353,11 +353,13 @@ Options
         path: "upgrade",
         intro: r#"Upgrade Facade.
 
-Downloads and installs the latest release, then hands off running services
-without stopping active agents."#,
-        usage: r#"Usage: facade upgrade"#,
-        examples: r#"  facade upgrade"#,
+Installs the latest stable release or the specified version, then hands off
+running services without stopping active agents."#,
+        usage: r#"Usage: facade upgrade [--version X.Y.Z]"#,
+        examples: r#"  facade upgrade
+  facade upgrade --version 0.1.6"#,
         details: r#"Options
-  -h, --help  Show help"#,
+      --version X.Y.Z  Install this release version
+  -h, --help           Show help"#,
     },
 ];

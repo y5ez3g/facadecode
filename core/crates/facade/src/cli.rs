@@ -101,7 +101,10 @@ pub(crate) enum Command {
         #[arg(value_name = "AGENT")]
         agent: Option<String>,
     },
-    Upgrade,
+    Upgrade {
+        #[arg(long, value_name = "X.Y.Z", value_parser = upgrade_version)]
+        version: Option<String>,
+    },
     // Help and version are dispatch results, without subcommands of their own.
     #[command(skip)]
     Help(&'static Page),
@@ -121,6 +124,18 @@ pub(crate) enum Command {
         #[arg(long)]
         takeover: bool,
     },
+}
+
+fn upgrade_version(value: &str) -> Result<String, &'static str> {
+    if value.split('.').count() == 3
+        && value
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        Ok(value.to_owned())
+    } else {
+        Err("use three decimal numbers, such as 0.1.6")
+    }
 }
 
 #[derive(Subcommand)]
@@ -457,8 +472,11 @@ fn extra_argument(page: &Page, given: &str) -> ParseError {
         "attach" | "stop" | "screen" => format!("'facade {command}' accepts one agent."),
         "status" | "resume" => format!("'facade {command}' accepts at most one agent."),
         "list" => "'facade list' does not take positional arguments.".into(),
-        "machine list" | "upgrade" => {
+        "machine list" => {
             return usage(format!("error: 'facade {command}' does not take arguments.\n{}", page.usage));
+        }
+        "upgrade" => {
+            return usage(format!("error: 'facade upgrade' does not take positional arguments.\n{}", page.usage));
         }
         "machine remove" => "'facade machine remove' accepts one machine.".into(),
         "machine rename" => "'facade machine rename' accepts one machine and one name.".into(),
