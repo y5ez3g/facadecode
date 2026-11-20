@@ -71,6 +71,8 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 				return answer.result as Result;
 			} catch (error) {
 				console.error(`Editor output for ${profile}:\n${output}`);
+				const pinRestore = files.read(`${control}.pin-restore.log`);
+				if (pinRestore) { console.error(`Pin restore for ${profile}:\n${pinRestore}`); }
 				throw error;
 			}
 		};
@@ -150,25 +152,8 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.strictEqual(after.pid, before.pid);
 	assert.strictEqual(after.process, 'running');
 
-	const { spawn } = await import('node-pty');
-	const terminal = spawn(facade, ['attach', address], { cwd: folder, env, cols: 90, rows: 24, name: 'xterm-256color' });
-	let output = '';
-	let exitCode: number | undefined;
-	const data = terminal.onData(chunk => { output += chunk; });
-	const exit = terminal.onExit(event => { exitCode = event.exitCode; });
-	try {
-		await until('the Shell Attach to show the editor input', () => {
-			assert.strictEqual(exitCode, undefined, output);
-			return output.includes(marker) || undefined;
-		});
-		terminal.write('\x1d');
-		assert.strictEqual(await until('Ctrl-] to detach from the terminal', () => exitCode), 0, output);
-		assert.strictEqual((await inspect()).pid, before.pid);
-	} finally {
-		data.dispose();
-		exit.dispose();
-		if (exitCode === undefined) { terminal.kill(); }
-	}
+	execFileSync(process.execPath, [path.join(__dirname, 'shellAttachFixture.js'), facade, address, marker], { cwd: folder, env, timeout: 65_000 });
+	assert.strictEqual((await inspect()).pid, before.pid);
 	console.log('  ✔ Shell start, Go to Agent and Shell Attach used the same terminal after closing VS Code');
 
 	const session = await until('the fake CLI to report its session', async () => (await inspect()).session);

@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { randomBytes } from 'crypto';
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { disposeAll } from '../../base/lifecycle';
@@ -18,6 +19,13 @@ import { DaemonError, type OrchestratorLink } from './types';
 import type { RustWorkspace, WorkspacePinFailure } from './workspace';
 
 const INITIAL_TERMINAL_SIZE = { cols: 80, rows: 24 };
+declare const FACADE_TEST_MODE: boolean;
+
+function tracePinRestore(phase: string, detail: unknown): void {
+	if (typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE && process.env.FACADE_IT_WINDOW_CONTROL) {
+		fs.appendFileSync(`${process.env.FACADE_IT_WINDOW_CONTROL}.pin-restore.log`, `${JSON.stringify({ at: Date.now(), phase, detail })}\n`);
+	}
+}
 
 interface AgentDeps {
 	readonly link: OrchestratorLink;
@@ -247,7 +255,9 @@ export class OrchestratorAgents implements vscode.Disposable {
 
 	async restorePins(): Promise<void> {
 		if (this.disposed) { return; }
+		tracePinRestore('start', this.pins().map(pin => pin.agent));
 		const recovery = this.deps.workspace.restorePinsOnce(() => {
+			tracePinRestore('recover', undefined);
 			this.recoveringHere = true;
 			return this.recoverPins();
 		});
@@ -258,6 +268,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 		});
 		if (this.disposed) { return; }
 		const pins = this.pins();
+		tracePinRestore('shared outcome', { ...restored, pins: pins.map(pin => pin.agent) });
 		for (const failed of restored.failures) {
 			const run = agentKey(failed.reference);
 			if (pins.some(pin => pin.id === failed.id && agentKey(referenceOfPin(pin)) === run)) {
@@ -273,11 +284,15 @@ export class OrchestratorAgents implements vscode.Disposable {
 			if (this.failures.has(run) && known?.process !== 'running') { continue; }
 			try {
 				const record = restored.performed ? known : await this.inspect(reference);
+				tracePinRestore('record', { agent: pin.agent, process: record?.process, startedAt: record?.started_at });
 				if (record?.process === 'running') {
 					this.failures.delete(run);
+					tracePinRestore('attach', pin.agent);
 					await this.attach(record, true);
+					tracePinRestore('attached', pin.agent);
 				}
 			} catch (error) {
+				tracePinRestore('error', messageOf(error));
 				this.deps.notifyError(error);
 			}
 		}
@@ -501,6 +516,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 			const card = next.get(run);
 			const record = this.records.get(run);
 			if (!record || record.process === 'ended' || record.started_at !== startedAt || !card) {
+				tracePinRestore('close view', { run, startedAt, process: record?.process, recordStartedAt: record?.started_at, card: !!card });
 				this.closeView(run);
 			} else {
 				this.deps.terminals.setReachable(run, !this.unreachable(record));
