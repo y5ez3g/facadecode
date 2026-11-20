@@ -131,8 +131,13 @@ pub fn real_path(path: &Path) -> io::Result<PathBuf> {
     windows::real_path(path)
 }
 
-/// SQLite's URI for a quiet database. Escape filenames before adding the connection parameter.
+/// SQLite's URI for a quiet database.
 pub fn immutable_uri(path: &Path) -> Option<String> {
+    Some(format!("{}?immutable=1", sqlite_file_uri(path)?))
+}
+
+/// Encodes a path as a SQLite file URI so connection parameters can be appended safely.
+pub fn sqlite_file_uri(path: &Path) -> Option<String> {
     let raw = path.to_str()?;
     let windows;
     let raw = if cfg!(windows) {
@@ -146,7 +151,6 @@ pub fn immutable_uri(path: &Path) -> Option<String> {
         if let Some(unc) = raw.strip_prefix("UNC/") {
             uri.push_str("//");
             encode_uri_path(&mut uri, unc);
-            uri.push_str("?immutable=1");
             return Some(uri);
         }
         if !raw.starts_with('/') {
@@ -154,7 +158,6 @@ pub fn immutable_uri(path: &Path) -> Option<String> {
         }
     }
     encode_uri_path(&mut uri, raw);
-    uri.push_str("?immutable=1");
     Some(uri)
 }
 

@@ -210,16 +210,15 @@ impl Store {
     pub(crate) fn offline_machine_name(core: &Path) -> Option<String> {
         let path = core.join(FILE_NAME);
         let wal = core.join(format!("{FILE_NAME}-wal"));
-        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let db = if std::fs::metadata(wal).is_ok_and(|wal| wal.len() > 0) {
-            Connection::open_with_flags(&path, flags)
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI;
+        let uri = if std::fs::metadata(wal).is_ok_and(|wal| wal.len() > 0) {
+            format!("{}?mode=ro&readonly_shm=1", files::sqlite_file_uri(&path)?)
         } else {
-            Connection::open_with_flags(
-                files::immutable_uri(&path)?,
-                flags | OpenFlags::SQLITE_OPEN_URI,
-            )
-        }
-        .ok()?;
+            files::immutable_uri(&path)?
+        };
+        let db = Connection::open_with_flags(uri, flags).ok()?;
         db.query_row("SELECT name FROM machine WHERE singleton = 1", [], |row| {
             row.get(0)
         })
