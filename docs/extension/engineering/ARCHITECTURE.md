@@ -661,17 +661,21 @@ Artifacts and editor logs name the target. A configured CI target does not estab
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 
 Release candidates use the GitHub Pre-release of their `extension/<version>` tag. A pushed tag must name the manifest's
-version. The extension checks workflow builds and tests that tag on every native runner,
-its two Windows packaging jobs signing in the `extension-signing` environment, the only one whose OIDC sign-in Azure
-accepts for the signing identity (its variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` name it); a manual run of that
-workflow with `sign` signs the same way without releasing. The prepare action puts all platform VSIX files, the window
+version. Preparation builds, checks package contents and installs the Shell archive on every native runner.
+When a successful full Extension checks run from this repository recorded the exact checked-out Git tree,
+preparation records that run and reuses its source test results. Otherwise preparation also runs the full checks.
+The two Windows packaging jobs sign in `extension-signing`, the only environment whose OIDC sign-in Azure
+accepts for the signing identity. Its variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` name the identity. A manual
+run of the extension checks workflow with `sign` signs the same way without releasing.
+The prepare action puts all platform VSIX files, the window
 component, installers, native archives, version marker and `SHA256SUMS` on the tagged draft. It downloads the draft's
 files and checks their hashes and VSIX manifests. It then opens the candidate as a Pre-release with instructions for
 installing that exact version.
 
-After dogfood, the owner runs the release workflow with the candidate tag and the `publish` mode. The mirror job
+The `mirror` mode stages the Pre-release on the website for exact-version installs during dogfood. The mirror job
 copies the verified files to `/releases/<version>/<asset>` in the website's R2 bucket and reads every file back to
-compare its hash. The stores job waits for approval in the `extension-stores` environment,
+compare its hash. The stable version marker advances only in `publish` mode. After dogfood, the owner runs the release
+workflow with the candidate tag and `publish`. The stores job waits for approval in the `extension-stores` environment,
 downloads the Release's files, checks them against `SHA256SUMS`, publishes the window component before the platform
 packages to VS Code Marketplace and Open VSX, skips files a store already lists, and passes only once both stores serve
 every file byte for byte. Promotion updates the website's stable version marker and marks the same GitHub Release

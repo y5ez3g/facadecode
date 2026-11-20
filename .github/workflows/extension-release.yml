@@ -1,7 +1,7 @@
 name: Extension release
 
 # Tag extension/<version>: build, sign and verify a GitHub Pre-release.
-# A publish dispatch mirrors the candidate, publishes both stores after approval, then advances stable.
+# A mirror dispatch stages the candidate on the website. Publish also updates the stores and stable.
 on:
   push:
     tags:
@@ -12,9 +12,9 @@ on:
         description: An existing extension/<version> tag
         required: true
       mode:
-        description: Prepare the candidate or publish the accepted candidate
+        description: Prepare the candidate, stage it on Cloudflare, or publish after acceptance
         type: choice
-        options: [prepare, publish]
+        options: [prepare, mirror, publish]
         default: prepare
         required: true
 
@@ -32,10 +32,13 @@ jobs:
     # Checking a previous prepare's draft requires push access even for a read.
     permissions:
       contents: write
+      actions: read
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
       build: ${{ steps.plan.outputs.build }}
       mode: ${{ steps.plan.outputs.mode }}
+      source: ${{ steps.plan.outputs.source }}
+      package_only: ${{ steps.plan.outputs.package_only }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -52,13 +55,38 @@ jobs:
           if [[ ! "$TAG" =~ ^extension/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::$TAG is not extension/<major.minor.patch>"; exit 1; fi
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null
           build=$(node extension/scripts/release.mjs build-needed --tag "$TAG")
-          if [[ "$MODE" == publish && "$build" == true ]]; then
-            echo "::error::Prepare the complete candidate for $TAG before publishing."
+          if [[ "$MODE" != prepare && "$build" == true ]]; then
+            echo "::error::Prepare the complete candidate for $TAG before running $MODE."
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          package_only=false
+          if [[ "$build" == true ]]; then
+            git fetch --quiet --depth=2 --no-tags origin "refs/tags/$TAG"
+            source=$(git rev-parse 'FETCH_HEAD^{commit}')
+            tree=$(git rev-parse "$source^{tree}")
+            echo "source=$source" >> "$GITHUB_OUTPUT"
+
+            # A pull request run is indexed by its head but checks out the merge tree.
+            pr_head=$(git rev-parse --verify "$source^2" 2>/dev/null || true)
+            checks="repos/$GITHUB_REPOSITORY/actions/workflows/extension-check.yml/runs"
+            for sha in "$source" $pr_head; do
+              runs=$(gh api --method GET "$checks" -f head_sha="$sha" -f status=success -F per_page=10 \
+                --jq '.workflow_runs[] | select(.repository.id == .head_repository.id and (.event == "pull_request" or .event == "workflow_dispatch")) | .id') || continue
+              for run in $runs; do
+                evidence=$(mktemp -d "$RUNNER_TEMP/checked-tree.XXXXXX")
+                if gh run download "$run" --repo "$GITHUB_REPOSITORY" --name tested-extension-tree --dir "$evidence" &&
+                  [[ -f "$evidence/extension-tested-tree.txt" && $(<"$evidence/extension-tested-tree.txt") == "$tree" ]]; then
+                  printf 'Full checks passed for tree %s in %s/%s/actions/runs/%s\n' "$tree" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$run"
+                  package_only=true
+                  break 2
+                fi
+              done
+            done
+          fi
+          echo "package_only=$package_only" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build and test
@@ -70,8 +98,9 @@ jobs:
       id-token: write
     uses: ./.github/workflows/extension-check.yml
     with:
-      ref: ${{ needs.plan.outputs.tag }}
+      ref: ${{ needs.plan.outputs.source }}
       sign: true
+      package_only: ${{ needs.plan.outputs.package_only == 'true' }}
 
   release:
     name: GitHub Pre-release
@@ -101,9 +130,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
           BUILD: ${{ needs.plan.outputs.build }}
+          SOURCE: ${{ needs.plan.outputs.source }}
         run: |
           if [[ "$BUILD" == true ]]; then
             git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+            if [[ $(git rev-parse "$TAG^{commit}") != "$SOURCE" ]]; then
+              echo "::error::$TAG changed during the build. Prepare it again."
+              exit 1
+            fi
             node scripts/release.mjs github --tag "$TAG" --input-dir build/release-input
           else
             node scripts/release.mjs verify --tag "$TAG" --prepare
@@ -112,7 +146,7 @@ jobs:
   mirror:
     name: Website release mirror
     needs: plan
-    if: needs.plan.outputs.mode == 'publish'
+    if: needs.plan.outputs.mode == 'mirror' || needs.plan.outputs.mode == 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: extension-mirror
@@ -140,7 +174,7 @@ jobs:
   stores:
     name: VS Code Marketplace and Open VSX
     needs: [plan, mirror]
-    if: ${{ !cancelled() && needs.mirror.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'publish' && needs.mirror.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: extension-stores
