@@ -29,7 +29,7 @@ pub(crate) struct Target {
 
 #[derive(clap::Args)]
 pub(crate) struct StartOptions {
-    #[arg(short = 'n', long, value_name = "NAME")]
+    #[arg(short = 'n', long, value_name = "NAME", allow_hyphen_values = true)]
     pub(crate) name: Option<String>,
     #[arg(long, value_name = "MACHINE")]
     pub(crate) machine: Option<String>,
