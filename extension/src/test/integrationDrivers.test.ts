@@ -12,14 +12,14 @@ function required(file: string): string[] {
 	return [...new Set([...text.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)/g)].map(match => match[1]))].sort();
 }
 
-suite('Integration drivers: copied alone into a test window (VERIFICATION)', () => {
+suite('Integration drivers: staged in a test window (VERIFICATION)', () => {
 	const dir = path.join(__dirname, 'integration');
 
-	test('the drivers copied alone as an extension\'s extension.js require only fs, path and vscode at run time - the conversion driver\'s also Node\'s child_process, the focus probe\'s also its cdpInput, copied beside it - so they load where nothing of the extension is', () => {
+	test('staged drivers load using only editor APIs, Node built-ins and helpers copied beside them', () => {
 		const allowed = ['fs', 'path', 'vscode'];
 		const drivers: Readonly<Record<string, readonly string[]>> = {
-			// It asks core's `facade list` on the Rust engine: child_process is Node's own, there wherever the driver loads
-			'conversionDriver.js': [...allowed, 'child_process'],
+			'conversionDriver.js': [...allowed, './editors'],
+			'editors.js': ['assert', 'child_process', 'crypto', 'fs', 'net', 'path', 'readline'],
 			'pinsDriver.js': allowed,
 			'updateDriver.js': allowed,
 			'focusProbeDriver.js': [...allowed, './cdpInput'],
