@@ -114,21 +114,28 @@ done
 if [ -e "$data/current" ] && [ ! -L "$data/current" ]; then
     fail "$data/current is already used by another installation. Move it first."
 fi
+up_to_date=false
+if [ -L "$data/current" ] && [ "$(readlink "$data/current")" = "versions/$build" ] &&
+    [ -L "$bin/facade" ] && [ -L "$bin/facade-mcp" ]; then
+    up_to_date=true
+fi
 
 if "$activate"; then
     "$destination/facade" daemon --takeover
 fi
 
 # One switch selects the two programs together. Do not follow a directory symlink.
-ln -s "versions/$build" "$work/current"
-if [ "$os" = darwin ]; then
-    mv -fh -- "$work/current" "$data/current"
-else
-    mv -fT -- "$work/current" "$data/current"
+if ! "$up_to_date"; then
+    ln -s "versions/$build" "$work/current"
+    if [ "$os" = darwin ]; then
+        mv -fh -- "$work/current" "$data/current"
+    else
+        mv -fT -- "$work/current" "$data/current"
+    fi
+    for program in facade facade-mcp; do
+        [ -L "$bin/$program" ] || ln -s "../share/facade/current/$program" "$bin/$program"
+    done
 fi
-for program in facade facade-mcp; do
-    [ -L "$bin/$program" ] || ln -s "../share/facade/current/$program" "$bin/$program"
-done
 
 if "$add_path"; then
     # Add the same shell statement to login and interactive profiles once.
@@ -159,4 +166,8 @@ if "$add_path"; then
         *) printf 'Open a new terminal to use facade and facade-mcp.\n' ;;
     esac
 fi
-printf 'Installed Facade %s in %s.\n' "$build" "$bin"
+if "$up_to_date" && [ "${FACADE_UPGRADE_REPORT:-}" = 1 ]; then
+    printf 'Facade %s is already up to date in %s.\n' "$build" "$bin"
+else
+    printf 'Installed Facade %s in %s.\n' "$build" "$bin"
+fi
