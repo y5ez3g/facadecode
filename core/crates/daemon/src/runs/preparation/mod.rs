@@ -241,11 +241,10 @@ impl Preparation {
         if let Some(program) = request.program {
             launch.program = program.to_owned();
         }
-        // Only a resume's file starts with its session saved; a start's, even one that continues a
-        // session, starts as for a new session, so the session the CLI reports is committed.
-        let session = match (request.kind, request.session) {
-            (RunKind::Resume, Some(session)) => Some(Some(session)),
-            _ => captures.then_some(None),
+        // A chosen saved session belongs to this run until the CLI reports a change.
+        let session = match request.session {
+            Some(session) => Some(Some(session)),
+            None => captures.then_some(None),
         };
         let create = captures || !contents.is_empty();
         files.fill(session, contents);
