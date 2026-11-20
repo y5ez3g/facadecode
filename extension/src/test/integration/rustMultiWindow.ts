@@ -149,7 +149,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[] }
 		: undefined);
 	assert.deepStrictEqual(launch.args.filter(arg => arg === '--' || arg === prompt), ['--', prompt], 'the two Shell arguments each arrive once');
-	assert.strictEqual(launch.args[launch.args.indexOf('--') + 1], prompt, 'the prompt immediately follows its separator');
+	assert.deepStrictEqual(launch.args.slice(-2), ['--', prompt], 'the prompt follows its separator at the end of argv');
 	const window = await open(folder, 'sh');
 	assert.strictEqual(await window.act<boolean>({ kind: 'window-component' }), false);
 	const status = run('status');
