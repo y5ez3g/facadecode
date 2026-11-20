@@ -269,7 +269,10 @@ async function main(): Promise<void> {
 		for (const dir of [solo, second, path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...(nativeLifecycle ? terminalEnv(realEnv) : {}) }));
+		// The fake runtime registry keys leases by PID. A different journey's fixture must not reuse a stale lease.
+		const more = nativeLifecycle ? terminalEnv(realEnv)
+			: engine === 'old' && cli.id === 'muse' ? terminalEnv({ XDG_DATA_HOME: path.join(facade, 'agent-data') }) : {};
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
 		facadeSettings(facade, { ...alone(cli.id), ...nativeLifecycle ? { [cli.id]: { command: realPath, args: realArgs } } : {} }, nativeLifecycle ? false : undefined);
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'conversionDriver.js'), path.join(driver, 'extension.js'));
