@@ -5,13 +5,14 @@
 // What the integration runners share (ARCHITECTURE-5.2): the official VS Code they run, the environment they leave it, the flags of
 // the editors they start themselves, the repositories they open and how they see another editor's window join the Facade windows.
 
+import * as assert from 'assert';
 import { ChildProcess, execFileSync, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import { createConnection } from 'net';
 import * as path from 'path';
 import { createInterface } from 'readline';
-import type { Response, V2HelloParams, V3HelloParams } from '../../base/coreProtocol';
+import type { HelloResult, Response, V2HelloParams, V3HelloParams, V3Operations } from '../../base/coreProtocol';
 
 /** VS Code's fsPath lowercases the drive letter. Compare it like a path from Node or core. */
 export function normalizeDriveLetter(file: string): string {
@@ -243,6 +244,14 @@ export function coreProgram(bin: string): string {
 	return path.join(bin, process.platform === 'win32' ? 'facade.exe' : 'facade');
 }
 
+export function detachedStartReference(stdout: string, name: string): string {
+	const line = stdout.trimEnd();
+	const reference = /^Started .+ \((a\d+@[^\s]+)\) in the background\.$/u.exec(line)?.[1];
+	assert.ok(reference, stdout);
+	assert.strictEqual(line, `Started ${name} (${reference}) in the background.`);
+	return reference;
+}
+
 /** Reads the daemon's hello result as a terminal client. */
 export async function helloInCore(home: string, protocol: V3HelloParams['protocol']): Promise<Response> {
 	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' });
@@ -250,6 +259,12 @@ export async function helloInCore(home: string, protocol: V3HelloParams['protoco
 
 export async function callInCore(home: string, op: string, args: object, protocol: V3HelloParams['protocol']): Promise<Response> {
 	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
+}
+
+export async function coreCall<O extends keyof V3Operations>(home: string, op: O, args: V3Operations[O]['args']): Promise<V3Operations[O]['result']> {
+	const reply = await callInCore(home, op, args, [3, 3]);
+	if (reply.error) { throw new Error(`${op}: ${JSON.stringify(reply.error)}`); }
+	return reply.result as V3Operations[O]['result'];
 }
 
 async function readCore(home: string, hello: V2HelloParams | V3HelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
@@ -289,25 +304,26 @@ export async function until<T>(what: string, probe: () => Promise<T | undefined>
 }
 
 /**
- * Ends what a run left of Facade core in the Facade root `home`, as core's README cleans up a home: every agent removed through
- * `program`, the home's own `facade`, then a wait for the daemon, which exits five seconds after its last agent and client, to take
- * its socket away. Only processes of this `home` are touched - never one by name - and nothing where no daemon of it runs.
+ * Removes the active managed agents of the run's own Facade home, then waits for its idle daemon to take its socket away.
+ * The v3 client only connects to an existing daemon, identifies agents by exact reference, and closes before the idle wait.
  */
-export async function endCore(program: string, home: string, ms = 30_000): Promise<void> {
-	if (!fs.existsSync(program) || !coreListens(home)) {
-		return;
-	}
-	// Not as an agent: `facade` acts for the agent whose terminal it runs in
-	const { FACADE_AGENT: _agent, ...own } = process.env;
-	const env = { ...own, FACADE_HOME: home };
-	const call = (...args: string[]) => spawnSync(program, args, { env, encoding: 'utf8', timeout: 15_000 });
-	const listed = call('list', '--json');
-	const agents = listed.status === 0 ? (JSON.parse(listed.stdout) as { agents: { id?: string; agent_id?: string }[] }).agents : [];
-	for (const agent of agents) {
-		const reference = agent.id ?? agent.agent_id;
-		if (reference) {
-			call('remove', reference);
+export async function endCore(home: string, ms = 30_000): Promise<void> {
+	if (!coreListens(home)) { return; }
+	try {
+		const hello = await helloInCore(home, [3, 3]);
+		if (hello.error) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
+		const { machine_id: machine } = hello.result as HelloResult;
+		const { agents } = await coreCall(home, 'agent.list', { machine });
+		for (const agent of agents) {
+			if (agent.type === 'managed' && agent.reference.machine_id === machine) {
+				const removed = await coreCall(home, 'agent.remove', { reference: agent.reference });
+				assert.deepStrictEqual(removed.reference, agent.reference);
+			}
 		}
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if ((code === 'ENOENT' || code === 'ECONNREFUSED') && !coreListens(home)) { return; }
+		throw error;
 	}
 	const end = Date.now() + ms;
 	while (coreListens(home) && Date.now() < end) {

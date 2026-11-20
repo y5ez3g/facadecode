@@ -6,8 +6,8 @@ import * as assert from 'assert';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentListRow, V3InspectResult } from '../../base/coreProtocol';
-import { endEditors, until } from './editors';
+import type { AgentListEntry, V3InspectResult } from '../../base/coreProtocol';
+import { endEditors, normalizeDriveLetter, until } from './editors';
 import type { Step } from './rustWindowDriver';
 
 type Closed = Extract<Step, { readonly phase: 'closed' }>;
@@ -24,18 +24,20 @@ export function lifetimeDriverFiles(): Readonly<Record<string, string>> {
 /** The closed window's process and transcript survive the former window-dependent timeout. */
 export async function checkClosedAgent(
 	step: Extract<Closed, { readonly after: 'reload' }>,
-	call: (...args: string[]) => string,
+	screen: (agent: string) => string,
+	list: () => Promise<AgentListEntry[]>,
 	inspect: (agent: string) => Promise<V3InspectResult>,
 	remote = false
 ): Promise<void> {
 	await until('the closed window to detach from the agent', async () => (await inspect(step.before.id)).viewers.length === 0 || undefined);
 	console.log('    The closed editor detached its terminal.');
 	await new Promise(resolve => setTimeout(resolve, remote ? 305_000 : 95_000));
-	const { agents } = JSON.parse(call('list', '--json')) as { readonly agents: AgentListRow[] };
+	const agents = await list();
 	const { agent, viewers } = await inspect(step.before.id);
 	assert.deepStrictEqual(agents.map(each => each.id), [agent.address]);
 	assert.deepStrictEqual([agent.pid, agent.process, agent.session, viewers], [step.before.pid, 'running', step.before.session, []]);
-	assert.ok(call('screen', step.before.id, '--lines', '120').includes(step.screenText), 'the closed window’s screen still holds its transcript');
+	assert.strictEqual(normalizeDriveLetter(agent.cwd), normalizeDriveLetter(step.before.cwd));
+	assert.ok(screen(step.before.id).includes(step.screenText), 'the closed window’s screen still holds its transcript');
 }
 
 /** Restart with the same workspace and profile after the driver has closed the current editor window. */

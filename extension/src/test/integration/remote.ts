@@ -22,7 +22,7 @@
 //   ssh-local  an agent of an SSH window works with an agent of a local window
 //   ssh-lifetime  a Rust agent keeps its process and screen through the SSH window's lifecycle
 //   ssh-multi-window  two Rust editor windows share one Facade home on an SSH host
-//   ssh-network  each Rust Remote-SSH window links its workspace core to the local core
+//   ssh-network  two Rust Remote-SSH windows attach to one local agent over an explicit SSH connection
 //
 // and, given two hosts, `hosts`: an agent of an SSH window on the first works with an agent of an SSH window on the second.
 //
@@ -36,20 +36,13 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { V2AgentInfo, V2MachineConnection, V2MachineInfo, V3InspectResult } from '../../base/coreProtocol';
-import { EDITOR_FLAGS, editorProfile, endCore, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
+import type { V3Operations } from '../../base/coreProtocol';
+import { callInCore, coreCall, detachedStartReference, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
 
 const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime', 'ssh-multi-window', 'ssh-network'] as const;
 type Scenario = typeof SCENARIOS[number];
-
-type ListedMachine = Pick<V2MachineInfo, 'machine_id' | 'route'> & {
-	readonly connections: readonly {
-		readonly kind: V2MachineConnection['kind'];
-		readonly state: 'connected' | 'disconnected' | 'ssh_interaction_required';
-	}[];
-};
 
 /** A computer the run reaches over SSH, or a container it starts, as the editor and the run address it. */
 interface Host {
@@ -423,14 +416,15 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				`--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${host.uri(driver)}`, ...EDITOR_FLAGS];
 			const env = environment({ FACADE_IT_WINDOW_LIFETIME: out, FACADE_IT_WINDOW_LIFETIME_SSH: '1' });
 			const start = () => spawn(executable, [...args, `--extensionEnvironment=${JSON.stringify(env)}`], { env: { ...process.env, ...local.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
-			const call = (...args: string[]) => host.run(`unset FACADE_AGENT\nFACADE_HOME=${quoted(facade)} ${quoted(`${host.build}/extension-it/bin/facade`)} ${args.map(quoted).join(' ')}`);
-			const inspect = async (agent: string): Promise<V3InspectResult> => {
-				const probe = "require(process.argv[1]).callInCore(process.argv[2], 'agent.inspect', { agent: process.argv[3] }, [3, 3]).then(reply => { if (reply.error) { throw Error(reply.error.message); } console.log(JSON.stringify(reply.result)); }).catch(error => { console.error(error); process.exitCode = 1; });";
-				return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)} ${quoted(agent)}`)) as V3InspectResult;
+			const screen = (agent: string) => host.run(`unset FACADE_AGENT\nFACADE_HOME=${quoted(facade)} ${quoted(`${host.build}/extension-it/bin/facade`)} screen ${quoted(agent)} --lines 120`);
+			const query = async <O extends 'agent.list' | 'agent.inspect'>(op: O, args: V3Operations[O]['args']): Promise<V3Operations[O]['result']> => {
+				const probe = 'require(process.argv[1]).coreCall(process.argv[2], process.argv[3], JSON.parse(process.argv[4])).then(result => console.log(JSON.stringify(result))).catch(error => { console.error(error); process.exitCode = 1; });';
+				return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)} ${quoted(op)} ${quoted(JSON.stringify(args))}`)) as V3Operations[O]['result'];
 			};
 			await windowLifetime(start, () => host.run(`if [ -f ${quoted(out)} ]; then cat ${quoted(out)}; fi`), async step => {
 				if (step.after === 'reload') {
-					await checkClosedAgent(step, call, inspect, true);
+					await checkClosedAgent(step, screen, async () => (await query('agent.list', {})).agents,
+						agent => query('agent.inspect', { agent }), true);
 				}
 			});
 		};
@@ -475,18 +469,53 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 					});
 					return;
 				}
-				const call = (args: string[], agent?: string) => execFileSync(localCore, args, {
-					encoding: 'utf8', timeout: 20_000, cwd: local.app,
-					env: { ...process.env, ...environment(), ...(agent ? { FACADE_AGENT: agent } : {}) }
-				});
-				const localMachines = () => (JSON.parse(call(['machine', 'list', '--json'])) as { readonly machines: ListedMachine[] }).machines;
-				const myId = localMachines().find(row => row.route?.length === 0)!.machine_id;
-				call(['machine', 'rename', 'id:' + myId.replace(/-/g, ''), 'network-local']);
+				// Use the staged program at the bootstrap's fixed location inside a test-only SSH home.
+				const remoteHome = `${root}/ssh-home`;
+				const remoteBin = `${remoteHome}/.local/bin`;
+				const remoteCore = `${host.build}/extension-it/bin/facade`;
+				const localBin = path.join(root, 'ssh-network-bin');
+				const localHome = path.join(root, 'shell-home');
+				fs.mkdirSync(localBin, { recursive: true });
+				fs.mkdirSync(localHome, { recursive: true });
+				const remoteEnv = `env -i HOME=${quoted(remoteHome)} PATH=${quoted(`${remoteBin}:/usr/bin:/bin`)}`;
+				fs.writeFileSync(path.join(localBin, 'ssh'), `#!/bin/sh\nexec /usr/bin/ssh "$@" ${quoted(`exec ${remoteEnv} /bin/sh`)}\n`, { mode: 0o700 });
+				const env = {
+					...process.env, ...environment(), HOME: localHome, PATH: `${localBin}${path.delimiter}${process.env.PATH ?? ''}`,
+					XDG_CONFIG_HOME: path.join(localHome, '.config'), XDG_DATA_HOME: path.join(localHome, '.local', 'share'),
+					XDG_CACHE_HOME: path.join(localHome, '.cache'), XDG_STATE_HOME: path.join(localHome, '.local', 'state')
+				};
+				const call = (...args: string[]) => execFileSync(localCore, args, { encoding: 'utf8', timeout: 20_000, cwd: local.app, env });
+				const remoteVersion = host.run(`set -e
+umask 077
+mkdir -p ${quoted(remoteBin)}
+ln -sf ${quoted(remoteCore)} ${quoted(`${remoteBin}/facade`)}
+printf '%s\n' '#!/bin/sh' 'echo "Package downloads are disabled in this fixture" >&2' 'exit 1' > ${quoted(`${remoteBin}/curl`)}
+chmod +x ${quoted(`${remoteBin}/curl`)}
+${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
+				assert.strictEqual(remoteVersion.trim(), call('--version').trim(), 'the two isolated packages have the same version');
+				call('daemon', '--detach');
+				const localMachines = async () => (await coreCall(facade, 'machine.list', {})).machines;
+				const localMachine = (await localMachines()).find(row => row.route?.length === 0);
+				assert.ok(localMachine);
+				const myId = localMachine.machine_id;
+				const localName = 'network-local';
+				assert.strictEqual((await coreCall(facade, 'machine.rename', { machine: myId, name: localName })).machine_id, myId);
 				const first = await open(`${root}/app`, 'a');
 				const theirId = first.ready.machineId;
 				assert.notStrictEqual(theirId, myId);
-				const expectLinks = async (n: number) => {
-					return await until(n + ' Remote-SSH machine links', () => {
+				assert.strictEqual(first.ready.remote, 'ssh-remote');
+				const name = 'Network QA worker';
+				const address = detachedStartReference(call('start', '-d', '--name', name, 'claude'), name);
+				const inspect = () => coreCall(facade, 'agent.inspect', { agent: address });
+				const link = spawn(localCore, ['machine', 'connect', '--home', facade, '-F', config, '-o', 'BatchMode=yes', host.alias],
+					{ cwd: local.app, env, stdio: ['ignore', 'pipe', 'pipe'] });
+				let linkOutput = '';
+				const capture = (chunk: unknown) => { linkOutput = (linkOutput + String(chunk)).slice(-16_000); };
+				link.on('error', capture);
+				link.stdout.on('data', capture);
+				link.stderr.on('data', capture);
+				const expectLink = async (connected: boolean) => {
+					return await until(`the temporary SSH route to be ${connected ? 'connected' : 'closed'}`, async () => {
 						const sessions = new Set<string>();
 						const event = /daemon\[(\d+)\] info: machine (\S+) (opened|closed) session SessionId\((\d+)\)/gu;
 						for (const [, pid, id, action, session] of trace().matchAll(event)) {
@@ -494,71 +523,73 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 							if (action === 'opened') { sessions.add(`${pid}:${session}`); }
 							else { sessions.delete(`${pid}:${session}`); }
 						}
-						const machine = localMachines().find(row => row.machine_id === theirId);
-						const joined = machine?.route?.[0] === theirId && machine.connections.some(link => link.kind === 'temporary' && link.state === 'connected');
-						return joined && sessions.size === n ? sessions : undefined;
+						const machine = (await localMachines()).find(row => row.machine_id === theirId);
+						const routes = machine?.connections.filter(connection => connection.kind === 'temporary' && connection.state === 'connected') ?? [];
+						if (!connected) { return machine?.route === undefined && routes.length === 0 && sessions.size === 0 || undefined; }
+						return machine?.route?.length === 1 && machine.route[0] === theirId && routes.length === 1
+							&& routes[0].ssh_destination === host.alias && sessions.size === 1 ? [...sessions][0] : undefined;
 					}, 45_000).catch(error => {
-						console.error(JSON.stringify(localMachines()), trace());
+						console.error(linkOutput, trace());
 						throw error;
 					});
 				};
-				const [firstLink] = await expectLinks(1);
-				const second = await open(`${root}/remote-peer`, 'b');
-				assert.strictEqual(second.ready.machineId, theirId);
-				const both = await expectLinks(2);
-				assert.ok(both.has(firstLink));
-				const secondLink = [...both].find(id => id !== firstLink)!;
-				console.log('  ✔ Two Remote-SSH windows joined the local core automatically');
-				const name = 'Network QA worker';
-				const run = call(['start', '--name', name, 'claude']);
-				const id = /^a\d+$/u.exec(run.trim())?.[0];
-				assert.ok(id, run);
 				try {
-					const address = '#' + id + '@network-local';
-					await second.act({ kind: 'show-agent-picker' });
-					const picker = await second.workbench();
-					try {
-						await until('the network fixture in Go to Agent', () => picker.cdp.evaluate<boolean | undefined>(`(() => {
-							const row = Array.from(document.querySelectorAll('.quick-input-list .monaco-list-row'))
-								.find(row => row.textContent?.includes(${JSON.stringify(name)}));
-							if (!row) { return undefined; }
-							row.click();
-							return true;
-						})()`));
-					} finally {
-						picker.close();
-					}
-					assert.equal(await second.act<string>({ kind: 'remote-card', agent: address }), address);
-					const { agents } = JSON.parse(call(['list', '--json'])) as { readonly agents: V2AgentInfo[] };
-					const record = agents.find(agent => agent.agent_id === id && agent.machine_id === myId);
-					assert.ok(record?.windows?.some(window => window.machine_id === theirId), JSON.stringify(record));
-					console.log('  ✔ Go to Agent adopted the original remote agent and displayed the remote icon');
-					const message = 'Remote agent asks the person';
-					const sent = call(['send', '#human', message], id);
-					assert.match(sent, / delivered to the human in /u);
-					await second.act({ kind: 'notifications' });
-					const workbench = await second.workbench();
-					try {
-						await until('the remote agent notification', async () => {
-							const notices = await workbench.cdp.evaluate<string[]>(`Array.from(document.querySelectorAll(
-								'.notifications-center .notification-list-item-message'), item => item.textContent ?? '')`);
-							return notices.some(notice => notice.includes(message)) || undefined;
-						});
-					} finally {
-						workbench.cdp.close();
-					}
-					console.log('  ✔ The adopted agent sent #human to that window');
+					const session = await expectLink(true);
+					const before = await until('the local agent to report its PID and session', async () => {
+						const { agent } = await inspect();
+						return agent.pid && agent.session && agent.process === 'running' ? agent : undefined;
+					});
+					assert.strictEqual(before.machine_id, myId);
+					assert.strictEqual(before.address, address);
+					const expectViews = (count: number) => until(`${count} Remote-SSH terminal views of ${address}`, async () => {
+						const { agent, viewers } = await inspect();
+						assert.deepStrictEqual([agent.address, agent.machine_id, agent.pid, agent.process, agent.session, agent.cwd],
+							[address, myId, before.pid, 'running', before.session, before.cwd]);
+						return viewers.length === count ? viewers : undefined;
+					});
+					const firstText = 'Input from the first remote window';
+					assert.strictEqual(await first.act<string>({ kind: 'open-shell-agent', name, address, text: firstText }), address);
+					assert.strictEqual(await first.act<string>({ kind: 'remote-card', agent: address, machine: localName }), address);
+					const [firstViewer] = await expectViews(1);
+					const second = await open(`${root}/remote-peer`, 'b');
+					assert.strictEqual(second.ready.machineId, theirId);
+					assert.strictEqual(second.ready.remote, 'ssh-remote');
+					const secondText = 'Input from the second remote window';
+					assert.strictEqual(await second.act<string>({ kind: 'open-shell-agent', name, address, text: secondText }), address);
+					assert.strictEqual(await second.act<string>({ kind: 'remote-card', agent: address, machine: localName }), address);
+					const both = await expectViews(2);
+					assert.ok(both.includes(firstViewer));
+					const secondViewer = both.find(viewer => viewer !== firstViewer);
+					assert.ok(secondViewer, JSON.stringify(both));
+					const { agents } = await coreCall(facade, 'agent.list', {});
+					assert.deepStrictEqual(agents.map(row => [row.id, row.reference.machine_id, row.name]), [[address, myId, name]]);
+					const screen = () => call('screen', address, '--lines', '120');
+					assert.ok(screen().includes(firstText) && screen().includes(secondText));
+					const message = 'Unsupported human recipient marker';
+					const rejected = await callInCore(facade, 'agent.send', { to: '#human', text: message }, [3, 3]);
+					assert.strictEqual(rejected.error?.data.reason, 'not_found', JSON.stringify(rejected));
+					assert.strictEqual(rejected.error?.data.message_ref, undefined);
+					assert.ok(!screen().includes(message));
+					console.log('  ✔ Both Remote-SSH windows adopted the same local agent and sent input to its terminal');
 					await first.close();
-					assert.deepStrictEqual([...(await expectLinks(1))], [secondLink]);
+					assert.deepStrictEqual(await expectViews(1), [secondViewer]);
+					assert.strictEqual(await expectLink(true), session);
 					const back = await open(`${root}/app`, 'a');
 					assert.strictEqual(back.ready.machineId, theirId);
-					const rejoined = await expectLinks(2);
-					assert.ok(rejoined.has(secondLink) && !rejoined.has(firstLink), JSON.stringify([...rejoined]));
-					console.log('  ✔ Closing and reopening one window changed only its own temporary link');
+					await back.act({ kind: 'open-shell-agent', name, address, text: 'Input after reopening the first remote window' });
+					assert.deepStrictEqual((await expectViews(2)).sort(), [firstViewer, secondViewer].sort());
+					assert.strictEqual(await expectLink(true), session);
+					await Promise.all([back.close(), second.close()]);
+					await expectViews(0);
+					await endEditors([link]);
+					await expectLink(false);
+					assert.strictEqual((await inspect()).agent.pid, before.pid);
+					console.log('  ✔ Closing and reopening one window changed its viewer while the SSH route stayed open');
 				} finally {
-					call(['stop', id]);
+					await endEditors([link]);
+					call('stop', address);
 				}
-			}).finally(async () => { if (network) { await endCore(localCore, facade); } });
+			}).finally(async () => { if (network) { await endCore(facade); } });
 		};
 		const runs: { readonly scenario: Scenario; readonly title: string; readonly go: () => Promise<void> }[] = [];
 		for (const host of hosts) {

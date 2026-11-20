@@ -11,7 +11,7 @@ import type { V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
 import { isProcessRunning } from '../../base/system';
 import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
-import { callInCore, endEditors, normalizeDriveLetter, until } from './editors';
+import { callInCore, coreCall, detachedStartReference, endEditors, normalizeDriveLetter, until } from './editors';
 import type { SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
@@ -128,21 +128,27 @@ async function expectAgent(window: DrivenWindow, id: string, pinned: boolean): P
 /** Go to Agent attaches to a Shell run that survives closing the VS Code window. */
 export async function shellHandoff(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv): Promise<void> {
 	const run = (...args: string[]) => execFileSync(facade, args, { cwd: folder, env, encoding: 'utf8', timeout: 20_000 });
+	const home = env.FACADE_HOME!;
 	const name = 'shell-ada';
-	const address = run('start', '-d', '--name', name, 'codex').trim();
-	assert.match(address, /^a\d+@[^\s]+$/u);
-	const inspect = async () => {
-		const reply = await callInCore(env.FACADE_HOME!, 'agent.inspect', { agent: address }, [3, 3]);
-		assert.ok(!reply.error, JSON.stringify(reply.error));
-		return (reply.result as V3InspectResult).agent;
-	};
+	const prompt = 'Review the isolated Shell handoff';
+	const address = detachedStartReference(run('start', '-d', '--name', name, 'codex', '--', prompt), name);
+	const inspect = async () => (await coreCall(home, 'agent.inspect', { agent: address })).agent;
 	const before = await inspect();
 	assert.ok(before.pid && before.process === 'running');
+	assert.strictEqual(before.address, address);
+	const launchFile = `${env.FACADE_IT_RECORD}.args.#${before.agent_id}`;
+	const launch = await until('the Shell start argv at the fake CLI', () => fs.existsSync(launchFile)
+		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[] }
+		: undefined);
+	assert.deepStrictEqual(launch.args.slice(-2), ['--', prompt]);
 	const window = await open(folder, 'sh');
 	assert.strictEqual(await window.act<boolean>({ kind: 'window-component' }), false);
-	const { settings_file: settingsFile } = JSON.parse(run('status', '--json')) as { settings_file: string };
+	const status = run('status');
+	const settingsFile = /^Settings {2,}([^\r\n]+)$/mu.exec(status)?.[1];
+	assert.ok(settingsFile, status);
+	assert.strictEqual(settingsFile, (await coreCall(home, 'daemon.status', {})).settings_file);
 	assert.ok(path.isAbsolute(settingsFile ?? ''), 'status gives the absolute settings file');
-	assert.strictEqual(normalizeDriveLetter(settingsFile), normalizeDriveLetter(path.join(env.FACADE_HOME!, 'facade.json')));
+	assert.strictEqual(normalizeDriveLetter(settingsFile), normalizeDriveLetter(path.join(home, 'facade.json')));
 	await window.act({ kind: 'settings-path', file: settingsFile });
 	const marker = 'typed in the isolated editor';
 	await window.act({ kind: 'open-shell-agent', name, address, text: marker });
@@ -218,7 +224,8 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	await Promise.all([restoredWindow.close(), restoredPeer.close()]);
 	console.log('  ✔ Both windows shared the Pin, reopened one original session, and hid the card while it kept running');
 
-	run('rm', address);
+	const reference = { machine_id: before.machine_id, agent_id: before.agent_id };
+	assert.deepStrictEqual(await coreCall(home, 'agent.remove', { reference }), { reference, address });
 	const afterRemove = await open(folder, 'sh');
 	await until('explicit removal to clear the saved workspace member and Pin', () => {
 		const saved = roster();
@@ -277,7 +284,7 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	await expectViews(first, before.id, 2);
 
 	const sender = await other.act<RunningAgent>({ kind: 'start' });
-	await other.act({ kind: 'send', agent: sender.id, to: before.id, text: 'Message from the other workspace' });
+	await other.act({ kind: 'send', to: before.id, text: 'Message from the other workspace' });
 	await other.act({ kind: 'remove', agent: sender.id });
 	await first.act({ kind: 'pin', agent: before.id });
 	await other.act({ kind: 'pin', agent: before.id });
