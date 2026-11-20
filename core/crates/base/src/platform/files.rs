@@ -4,6 +4,7 @@
 //! access list: each file and folder inherits its folder's, and the default home is private through
 //! the user's profile.
 
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -128,6 +129,43 @@ pub fn real_path(path: &Path) -> io::Result<PathBuf> {
     return std::fs::canonicalize(path);
     #[cfg(windows)]
     windows::real_path(path)
+}
+
+/// SQLite's URI for a quiet database. Escape filenames before adding the connection parameter.
+pub fn immutable_uri(path: &Path) -> Option<String> {
+    let raw = path.to_str()?;
+    let windows;
+    let raw = if cfg!(windows) {
+        windows = raw.replace('\\', "/");
+        windows.strip_prefix("//?/").unwrap_or(&windows)
+    } else {
+        raw
+    };
+    let mut uri = String::from("file://");
+    if cfg!(windows) {
+        if let Some(unc) = raw.strip_prefix("UNC/") {
+            uri.push_str("//");
+            encode_uri_path(&mut uri, unc);
+            uri.push_str("?immutable=1");
+            return Some(uri);
+        }
+        if !raw.starts_with('/') {
+            uri.push('/');
+        }
+    }
+    encode_uri_path(&mut uri, raw);
+    uri.push_str("?immutable=1");
+    Some(uri)
+}
+
+fn encode_uri_path(uri: &mut String, path: &str) {
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b':' | b'-' | b'_' | b'.' | b'~') {
+            uri.push(byte as char);
+        } else {
+            write!(uri, "%{byte:02X}").expect("writing to a String cannot fail");
+        }
+    }
 }
 
 /// The form in which two folders are compared: two folders are the same where their keys are.

@@ -318,6 +318,11 @@ impl LifecycleActivity for Daemon {
     }
 }
 
+/// Reads the committed name of the local machine while its daemon is sleeping.
+pub fn offline_machine_name() -> Option<String> {
+    Store::offline_machine_name(&facade_base::paths::core_dir().ok()?)
+}
+
 /// Runs the daemon: `facade daemon`. The keeper starts it in the background; it can also run in
 /// the foreground.
 pub fn run() -> anyhow::Result<()> {

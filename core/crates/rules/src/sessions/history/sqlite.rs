@@ -2,10 +2,11 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::Path;
 
+use facade_base::files::immutable_uri;
 use facade_base::jsonrpc::ErrorBody;
 use rusqlite::{Connection, OpenFlags};
 
-use super::{metadata, paths::immutable_uri, store_error};
+use super::{metadata, store_error};
 
 /// A quiet index is immutable so SQLite creates no journal or shared-memory files. When a WAL
 /// holds changes, read the live index with its WAL so committed sessions are visible.

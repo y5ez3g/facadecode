@@ -61,6 +61,9 @@ public `run()` entry point.
   session. Authentication, probe, installation when needed and serve use that same SSH session.
 - The person's diagnostics read up to 200 lines of `core/logs/daemon.log`, with the home written
   as `~`. Only the daemon writes and prunes this log.
+- After a passive probe finds the service sleeping, Shell can call `offline_machine_name()`
+  to read the committed local machine name through Store. A read-only connection uses a
+  retained WAL and SQLite's shared memory. A checkpointed database is opened as immutable.
 
 ## Depends on
 

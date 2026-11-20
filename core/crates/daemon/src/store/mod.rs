@@ -29,7 +29,7 @@ use facade_base::process::{EndReason, ProcessExit, ProcessIdentity};
 use facade_base::{files, settings};
 use facade_rules::entries::{self, LaunchOptions};
 use rusqlite::config::DbConfig;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OpenFlags, Row, params};
 
 mod guests;
 mod integrations;
@@ -46,6 +46,7 @@ pub(crate) use messages::{
 pub(crate) use windows::{LegacyWindow, WindowTable};
 
 const SCHEMA_VERSION: i64 = 4;
+const FILE_NAME: &str = "facade.db";
 
 const SCHEMA: &str = "
 	CREATE TABLE numbers (next INTEGER NOT NULL);
@@ -204,10 +205,31 @@ pub(crate) struct Store {
 }
 
 impl Store {
+    /// Reads the recorded name while the service is sleeping. A nonempty WAL can hold the name
+    /// or the entire table after an ordinary idle exit, so SQLite must read it.
+    pub(crate) fn offline_machine_name(core: &Path) -> Option<String> {
+        let path = core.join(FILE_NAME);
+        let wal = core.join(format!("{FILE_NAME}-wal"));
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let db = if std::fs::metadata(wal).is_ok_and(|wal| wal.len() > 0) {
+            Connection::open_with_flags(&path, flags)
+        } else {
+            Connection::open_with_flags(
+                files::immutable_uri(&path)?,
+                flags | OpenFlags::SQLITE_OPEN_URI,
+            )
+        }
+        .ok()?;
+        db.query_row("SELECT name FROM machine WHERE singleton = 1", [], |row| {
+            row.get(0)
+        })
+        .ok()
+    }
+
     /// Opens the store in `core`, initializing it the first time with agent numbers above every
     /// agent in `held`, the CLIs the keeper holds. Blocks. A database that cannot be read fails.
     pub(crate) fn open(core: &Path, held: &[String]) -> anyhow::Result<OpenedStore> {
-        let path = core.join("facade.db");
+        let path = core.join(FILE_NAME);
         make_private(core, &path)
             .map_err(|err| anyhow::anyhow!("could not make {} private: {err}", core.display()))?;
         let mut connection = Connection::open(&path)
