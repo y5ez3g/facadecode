@@ -527,9 +527,8 @@ fn an_entry_s_args_are_merged_as_their_cli_reads_them() {
     assert_eq!(prompt, Some("--settings={\"a\": 1}"), "{claude:?}");
 }
 
-/// The MCP and CLI starts both diagnose an entry's executable by its setting (CONFIGURATION-2.2,
-/// 4.1): the default is missing from PATH, or the current or legacy field names a program that
-/// cannot be found or run.
+/// MCP names an entry's setting and lookup directory (CONFIGURATION-2.2, 4.1). Shell names the
+/// machine and program, distinguishing a PATH search from an explicit path.
 #[test]
 fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     let home = TestHome::new("configprogram");
@@ -546,6 +545,10 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         .as_str()
         .unwrap()
         .to_string();
+    let machines = connect(&home).call_ok("machine.list", json!({}));
+    let machine = machines["machines"][0]["name"]
+        .as_str()
+        .expect("the local machine name");
     // A path from the root names the drive of the folder it runs in on Windows.
     #[cfg(unix)]
     let gone = "/nope/facade-fakecli".to_string();
@@ -561,6 +564,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "opencode was not found on the PATH of a terminal in {folder}, and clis.oc.program \
                  does not name its location"
             ),
+            "opencode was not found on PATH.".to_string(),
         ),
         (
             "named",
@@ -568,6 +572,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "clis.named.command is \"no-such-cli\", which was not found on the PATH of a \
                  terminal in {folder}"
             ),
+            "no-such-cli was not found on PATH.".to_string(),
         ),
         (
             "canonical",
@@ -575,6 +580,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "clis.canonical.program is \"no-such-cli\", which was not found on the PATH of a \
                  terminal in {folder}"
             ),
+            "no-such-cli was not found on PATH.".to_string(),
         ),
         (
             "gone",
@@ -582,17 +588,23 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "clis.gone.command is \"/nope/facade-fakecli\", and {gone} is not a program that \
                  can be run"
             ),
+            format!("{gone} was not found."),
         ),
     ];
-    for (cli, problem) in said {
+    for (cli, problem, shell_detail) in said {
         let start = json!({ "name": "w", "cli": cli, "folder": folder });
         let mcp = ada.call("start_agent", start);
         assert_eq!(mcp["reason"], "not_found", "{mcp}");
         assert_settings_problem(&home, &mcp["message"], &problem);
-        let refused = refused(&home, cli);
-        assert!(
-            refused.contains(&problem) && !refused.contains("(not_found)"),
-            "{refused}"
+        let refused = facade(&home, &["start", "-d", "--name", "nope", cli], &[]);
+        assert_eq!(
+            (stdout(&refused), stderr(&refused), refused.status.code()),
+            (
+                String::new(),
+                format!("error: Could not start {cli:?} on {machine}. {shell_detail}\n"),
+                Some(1),
+            ),
+            "{cli}"
         );
     }
 }
@@ -772,8 +784,29 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
     }
 }
 
-/// A name of spaces alone is blank, by the spaces the editor trims, a byte order mark among them: a
-/// start and a rename given one name the agent from `names` (LIFECYCLE-2.1).
+/// Shell rejects a blank rename before changing the name. In v3, a blank rename picks a name
+/// from the settings.
+fn rename_blank_through_v3(home: &TestHome, agent: &str, blank: &str) {
+    let refused = facade(home, &["rename", agent, blank], &[]);
+    assert_eq!(
+        (
+            stdout(&refused).as_str(),
+            stderr(&refused).as_str(),
+            refused.status.code()
+        ),
+        (
+            "",
+            "error: Agent name cannot be empty.\n\
+             Usage: facade rename <AGENT> <NAME>\n\
+             Example: facade rename Nova review\n",
+            Some(2),
+        )
+    );
+    assert_eq!(home.inspect_agent(agent)["agent"]["name"], agent);
+    connect(home).call_ok("agent.rename", json!({ "agent": agent, "name": blank }));
+}
+
+/// An editor-blank name, including a byte order mark, uses `names` in start and the v3 rename.
 #[test]
 fn a_name_of_the_editor_s_spaces_alone_is_blank() {
     let home = TestHome::new("configblankname");
@@ -782,7 +815,7 @@ fn a_name_of_the_editor_s_spaces_alone_is_blank() {
     assert!(started.status.success(), "{}", stderr(&started));
     assert_eq!(home.agents()[0]["name"], "Solo", "{:?}", home.agents());
     settings(&home, &json!({ "names": ["Renamed"] }));
-    home.run_facade_ok(&["rename", "Solo", "\u{feff}"]);
+    rename_blank_through_v3(&home, "Solo", "\u{feff}");
     assert_eq!(home.agents()[0]["name"], "Renamed", "{:?}", home.agents());
 }
 
@@ -793,7 +826,7 @@ fn a_blank_rename_and_a_guest_are_named_from_names() {
     let home = TestHome::new("confignamed");
     settings(&home, &json!({ "names": ["Renamed"] }));
     home.start_named_fake("ada", &[]);
-    home.run_facade_ok(&["rename", "ada", " "]);
+    rename_blank_through_v3(&home, "ada", " ");
     assert!(
         home.agents().iter().any(|agent| agent["name"] == "Renamed"),
         "{:?}",

@@ -464,6 +464,16 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         json!({ "agent": agent_id, "raw": facade_base::base64::encode(b"x") }),
     );
     assert_eq!(error_reason(&typed), "ended", "{typed}");
+    let address = ended["address"].as_str().expect("the recovered reference");
+    let refused = home.run_facade(&["type", &agent_id, "x"]);
+    assert_eq!(
+        (stdout(&refused), stderr(&refused), refused.status.code()),
+        (
+            String::new(),
+            format!("error: survivor ({address}) has stopped and cannot accept input.\n"),
+            Some(1),
+        )
+    );
     let mut term = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .args(["attach", &agent_id]),
@@ -475,8 +485,13 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         .expect("an attachment to an ended agent is refused");
     assert_eq!(status.code(), Some(1), "attaching to an ended agent fails");
     let shown = |term: &TestTerminal| term.text_with_scrollback();
+    let stopped = format!("error: survivor ({address}) has stopped.");
+    let read = format!("Read its final screen with 'facade screen {address}'.");
     assert!(
-        wait_until(secs(2), || shown(&term).contains("has ended")),
+        wait_until(secs(2), || {
+            let text = shown(&term);
+            text.contains(&stopped) && text.contains(&read)
+        }),
         "{}",
         shown(&term)
     );

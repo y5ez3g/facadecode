@@ -388,7 +388,11 @@ fn machine_list_and_remove_on_a_lone_machine() {
     let local = &listed["machines"][0];
     let row = &table.rows[0];
     assert_eq!(table.cell(row, "NAME"), local["name"]);
-    assert_eq!(table.cell(row, "ID"), local["short_id"]);
+    let id = local["machine_id"].as_str().expect("a v3 machine ID");
+    assert_eq!(
+        table.cell(row, "ID"),
+        facade_base::address::short_machine_id(id)
+    );
     for (column, expected) in [("STATE", "Local"), ("ROUTE", "-"), ("SAVED", "-")] {
         assert_eq!(table.cell(row, column), expected, "{out}");
     }
@@ -433,6 +437,11 @@ fn status_on_an_empty_home_starts_nothing() {
     ] {
         assert_eq!(status_field(&out, label), path.to_str(), "{out}");
     }
+    assert_eq!(
+        status_field(&out, "Guest MCP"),
+        Some("Add \"facade-mcp\" as a stdio server."),
+        "{out}"
+    );
     assert!(
         !socket_exists(&home.daemon_socket()) && home.processes().is_empty(),
         "status started Facade"
@@ -468,6 +477,21 @@ fn status_shows_a_running_facade() {
     ] {
         assert_eq!(status_field(&out, label), Some(value.as_str()), "{out}");
     }
+    let launcher = home
+        .path
+        .join("core")
+        .join("bin")
+        .join(format!("facade-mcp{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        launcher.is_file(),
+        "missing launcher {}",
+        launcher.display()
+    );
+    assert_eq!(
+        status_field(&out, "Guest MCP"),
+        Some(format!("Add \"{}\" as a stdio server.", launcher.display()).as_str()),
+        "{out}"
+    );
     let result = connect(&home).call_ok("daemon.status", json!({}));
     assert_eq!(result["home"], home.path.to_str().unwrap());
     assert_eq!(

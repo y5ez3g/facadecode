@@ -227,7 +227,7 @@ fn a_session_counts_once_its_cli_saved_it() {
     let transcripts = home.project.parent().unwrap().join("transcripts");
     std::fs::create_dir_all(&transcripts).unwrap();
     let saved = transcripts.to_string_lossy().into_owned();
-    home.start_named_fake(
+    let unsaved = home.start_named_fake(
         "unsaved",
         &[("FAKECLI_SESSION", FIRST), ("FAKECLI_TRANSCRIPTS", &saved)],
     );
@@ -252,10 +252,16 @@ fn a_session_counts_once_its_cli_saved_it() {
     );
     home.run_facade_ok(&["stop", "unsaved"]);
     let refused = resume(&home, "unsaved");
-    assert!(
-        !refused.status.success() && stderr(&refused).contains("has no recorded session to resume"),
-        "{}",
-        stderr(&refused)
+    assert_eq!(
+        (stdout(&refused), stderr(&refused), refused.status.code()),
+        (
+            String::new(),
+            format!(
+                "error: unsaved ({}) has no saved session to resume.\n",
+                unsaved.address
+            ),
+            Some(1),
+        )
     );
     home.run_facade_ok(&["stop", "saved"]);
     let resumed = resume(&home, "saved");
@@ -571,19 +577,32 @@ fn a_resumed_agent_keeps_its_id_name_record_and_screen_and_continues_its_session
 fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
     let home = TestHome::new("resume-choices");
     let first_args = home.folder().join("first-argv.json");
+    let mut launch = home.command(&test_binaries().facade);
+    launch
+        .env("FAKECLI_SESSION", FIRST)
+        .env("FAKECLI_ARGS", &first_args);
+    let env = launch
+        .get_envs()
+        .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let original = connect(&home).call_ok(
         "agent.start",
         json!({
             "name": "ada", "cli": "fake", "folder": home.project,
             "model": "qa-original", "effort": "low",
             "args": ["qa-saved-argument"],
-            "env": { "FAKECLI_SESSION": FIRST, "FAKECLI_ARGS": first_args },
+            "cols": 80, "rows": 24,
+            "env": env,
         }),
     );
     let address = original["agent"]["address"].as_str().unwrap();
     assert!(address.contains('@'), "{original}");
     let inspect = || inspected_agent(&home, address);
-    assert!(wait_until(LOADED_TIMEOUT, || inspect()["session"] == FIRST));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || inspect()["session"] == FIRST),
+        "the first session was not recorded: {}",
+        inspect()
+    );
     let original = inspect();
     assert_eq!(original["address"], address);
     assert_eq!(original["model"], "qa-original");
@@ -808,7 +827,10 @@ fn resume_refuses_a_running_agent_one_without_a_rule_and_one_without_a_session()
     );
     let stopped = wire.call("agent.stop", json!({ "agent": raw }));
     assert!(stopped["result"].is_object(), "{stopped}");
-    let reply = wire.call("agent.resume", json!({ "reference": "raw" }));
+    let reply = wire.call(
+        "agent.resume",
+        json!({ "reference": "raw", "cols": 80, "rows": 24 }),
+    );
     assert!(reply["error"].is_object(), "{reply}");
     let custom = reply["error"]["message"].as_str().unwrap();
     assert!(
@@ -909,10 +931,17 @@ fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
         "held",
         &format!("session {FIRST}")
     ));
-    let again = stderr(&resume(&home, "held"));
-    assert!(
-        again == format!("error: agent {} is running or already resuming\n", held.id),
-        "{again}"
+    let again = resume(&home, "held");
+    assert_eq!(
+        (stdout(&again), stderr(&again), again.status.code()),
+        (
+            String::new(),
+            format!(
+                "error: held ({0}) is already running.\nOpen it with 'facade attach {0}'.\n",
+                held.address
+            ),
+            Some(1),
+        )
     );
 }
 

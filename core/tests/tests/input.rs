@@ -272,9 +272,8 @@ fn queued_calls_resume_when_input_room_returns() {
     );
 }
 
-/// `facade type` pastes text and presses keys, each call answered once its input reached the
-/// terminal: a multiline text is one message, keys edit the draft, and a call to an ended agent
-/// says that nothing was typed.
+/// Shell pastes single-line text and presses keys. A multiline paste through v3 stays one
+/// message, keys edit the draft, and a call to an ended agent says that nothing was typed.
 #[test]
 fn type_pastes_text_and_presses_keys() {
     let home = TestHome::new("type");
@@ -284,13 +283,34 @@ fn type_pastes_text_and_presses_keys() {
         .expect("an address")
         .to_string();
     home.run_facade_ok(&["type", "worker", "hello there", "--enter"]);
-    home.run_facade_ok(&["type", "a1", "two\nlines", "--enter"]);
+    let multiline = "two\nlines";
+    for (args, control) in [
+        (&["type", "a1", multiline, "--enter"][..], "U+000A"),
+        (&["type", "worker", "a\u{1b}b"][..], "U+001B"),
+    ] {
+        let refused = home.run_facade(args);
+        assert_eq!(
+            (stdout(&refused), stderr(&refused), refused.status.code()),
+            (
+                String::new(),
+                format!(
+                    "error: Text contains the control character {control}. Use '-k' or '--key' to press a key.\n\
+                     Example: facade type Nova --key Enter\n"
+                ),
+                Some(2),
+            )
+        );
+    }
+    connect(&home).call_ok(
+        "agent.type",
+        json!({ "agent": "a1", "text": multiline, "enter": true }),
+    );
     home.run_facade_ok(&["type", &address, "abc"]);
     home.run_facade_ok(&["type", "a1", "--key", "Backspace", "--key", "enter"]);
     home.run_facade_ok(&["type", "worker", "junk"]);
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     home.run_facade_ok(&["type", "worker", "ok", "--enter"]);
-    let wanted = ["hello there", "two\nlines", "ab", "ok"];
+    let wanted = ["hello there", multiline, "ab", "ok"];
     assert!(
         wait_until(secs(10), || home.submitted_messages().len() >= wanted.len()),
         "{:?}",
@@ -303,14 +323,6 @@ fn type_pastes_text_and_presses_keys() {
         unknown.status.code() == Some(2) && stderr(&unknown).contains("Unknown key \"F13\"."),
         "{}",
         stderr(&unknown)
-    );
-    let control = home.run_facade(&["type", "worker", "a\u{1b}b"]);
-    assert!(
-        control.status.code() == Some(2)
-            && stderr(&control).contains("control character U+001B")
-            && stderr(&control).contains("--key Esc"),
-        "{}",
-        stderr(&control)
     );
     home.run_facade_ok(&["stop", "worker"]);
     // Typing finds running agents alone: the error says the agent ended.

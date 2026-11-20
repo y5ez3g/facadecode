@@ -93,7 +93,10 @@ fn a_turn_is_working_then_just_done_until_a_terminal_shows_the_agent() {
         home.agent_from_watch("w1").unwrap().get("said").is_none(),
         "nothing was said yet"
     );
-    submit(&home, "w1", "fix the\nbuild");
+    connect(&home).call_ok(
+        "agent.type",
+        json!({ "agent": "w1", "text": "fix the\nbuild", "enter": true }),
+    );
     let working = reaches(&home, "w1", "working");
     assert_eq!(
         (&working["said"]["text"], &working["said"]["from"]),
@@ -173,7 +176,7 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
     for (name, how) in [
         ("normal", "normal"),
         ("crashed", "crashed"),
-        ("stopped", "Stopped"),
+        ("stopped", "stopped"),
     ] {
         let ended = reaches(&home, name, "ended");
         assert_eq!(ended["state_detail"], json!({ "how": how }), "{name}");
@@ -183,7 +186,7 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
     for (name, said) in [
         ("normal", "Exited (code 0)"),
         ("crashed", "Exited (code 3)"),
-        ("stopped", "stopped"),
+        ("stopped", "Stopped"),
     ] {
         let inspected = home.run_facade_ok(&["status", name]);
         assert!(
