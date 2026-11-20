@@ -313,15 +313,21 @@ session. It also defines the formats of Facade's hooks.
     When a hand-configured Facade entry uses that name, the run's extension registers its
     managed server under a different name and gives the model the managed tool names. The
     hand-configured Pi relay joins as a Guest.
-  - OpenCode's injected inline configuration follows the CLI into its child processes when they
-    inherit the environment. Antigravity keeps one plugin under the project for concurrent
-    runs. A process that loads the plugin and inherits another run's credential can attach to
-    that run.
+  - OpenCode's `OPENCODE_CLI_CONFIG_CONTENT` for a managed run sets `tabs.enabled` to `false` so the
+    terminal shows the run's own session. It also sets `tabs.mode` to `off` if the inline settings,
+    `cli.json`, or the `tui.json` used in its absence has a `tabs.mode` key. The overlay keeps the
+    person's other inline settings and takes plugins in order from the inline settings, `cli.json`,
+    or `tui.json`, then appends the run's session plugin. The CLI's child processes inherit this
+    overlay with the environment. Facade removes the run's session plugin when it uses that
+    environment to start another agent.
+  - Antigravity keeps one plugin under the project for concurrent runs. A process that loads the
+    plugin and inherits another run's credential can attach to that run.
   - Settings of the person's that Facade cannot read stay as they are, for the CLI to report; Facade then adds nothing
     to them, and the run reports no session that way.
   - The daemon writes managed settings into the run's folder. Antigravity's shared plugin is
     written and cleaned up by the daemon under the project's plugin lock.
-  - Whatever a run added to its CLI's environment, `remove_wiring_environment` takes out again.
+  - `remove_wiring_environment` takes the run's tools and session-reporting entries out of the
+    environment Facade uses to start another agent.
   - Codex's session-start hook is trusted under its synthetic session-flags layer: `/<session-flags>/config.toml`
     on Unix and `C:\<session-flags>\config.toml` on Windows, with a literal `C:` regardless of the run's drive.
     Hooks already in `hooks.json` keep Codex's one-time review.

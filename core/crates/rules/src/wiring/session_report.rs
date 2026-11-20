@@ -293,7 +293,8 @@ fn set_path(table: &mut toml::Table, path: &str, value: toml::Value) -> Option<(
 /// start names. OpenCode replaces a list of its CLI configuration whole, so the plugins the
 /// person's own configuration names come along, and the run's goes last: from their
 /// `OPENCODE_CLI_CONFIG_CONTENT`, else from their `cli.json`, else from the `tui.json` that came
-/// before it. A configuration Facade cannot read stays as it is, and the run reports no session.
+/// before it. The same overlay turns off tabs that would show other runs' sessions. A configuration
+/// Facade cannot read stays as it is, and the run reports no session.
 fn opencode_plugin(
     words: &[String],
     session: &SessionReport,
@@ -321,9 +322,17 @@ fn opencode_plugin(
     plugins.push(json!(
         session.folder().join(OPENCODE_PLUGIN).to_string_lossy()
     ));
-    overlay
-        .as_object_mut()?
-        .insert("plugins".into(), Value::Array(plugins));
+    let has_tab_mode = [&config, &legacy, &overlay]
+        .iter()
+        .any(|source| source["tabs"].get("mode").is_some());
+    let mut tabs = overlay["tabs"].as_object().cloned().unwrap_or_default();
+    tabs.insert("enabled".into(), json!(false));
+    if has_tab_mode {
+        tabs.insert("mode".into(), json!("off"));
+    }
+    let fields = overlay.as_object_mut()?;
+    fields.insert("plugins".into(), Value::Array(plugins));
+    fields.insert("tabs".into(), Value::Object(tabs));
     let manifest = json!({
         "name": OPENCODE_PLUGIN, "type": "module", "exports": { "./tui": "./tui.mjs" },
     });
