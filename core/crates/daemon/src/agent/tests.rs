@@ -487,7 +487,7 @@ async fn an_ended_run_whose_terminal_stays_open_tells_viewers_its_exit_after_the
     );
     let told = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if let Some(ViewerChange::Exit(told)) = changes.recv().await {
+            if let Some(ViewerChange::Exit(told, _)) = changes.recv().await {
                 return told;
             }
         }
@@ -1189,7 +1189,8 @@ async fn viewers_get_the_ended_run_before_the_next_and_one_that_never_reads_is_d
                 redrawn = bytes;
             }
             ViewerChange::Output(_) => kinds.push("output".to_string()),
-            ViewerChange::Exit(exit) => {
+            ViewerChange::Activity(_) => panic!("the viewer did not request activity"),
+            ViewerChange::Exit(exit, _) => {
                 assert_eq!(exit, exit_with(5));
                 kinds.push("exit".to_string());
                 last_redraw = std::mem::take(&mut redrawn);
@@ -1246,7 +1247,7 @@ async fn viewers_get_the_ended_run_before_the_next_and_one_that_never_reads_is_d
     let changes = matches!(
         next,
         Ok(Some(
-            ViewerChange::Redraw { .. } | ViewerChange::Output(_) | ViewerChange::Exit(_)
+            ViewerChange::Redraw { .. } | ViewerChange::Output(_) | ViewerChange::Exit(..)
         ))
     );
     assert!(
@@ -1275,6 +1276,8 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
             name: Some("terminal one".into()),
             attachment: None,
             allow_ended: false,
+            report_activity: false,
+            size: None,
             tx,
             keep_scrollback: false,
             include_scrollback: false,
@@ -1301,11 +1304,12 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
             .unwrap();
         match change {
             ViewerChange::Output(bytes) => incremental += bytes.len(),
+            ViewerChange::Activity(_) => panic!("the viewer did not request activity"),
             ViewerChange::Redraw { bytes, .. } => {
                 assert!(String::from_utf8_lossy(&bytes).contains("LAST LINE"));
                 redrawn = true;
             }
-            ViewerChange::Exit(exit) => {
+            ViewerChange::Exit(exit, _) => {
                 assert!(redrawn, "the redraw precedes the missed exit");
                 assert_eq!(exit, exit_with(0));
                 break;
@@ -2759,7 +2763,7 @@ fn viewer_bytes(change: &ViewerChange) -> usize {
     match change {
         ViewerChange::Output(bytes) => bytes.len(),
         ViewerChange::Redraw { bytes, .. } => bytes.len(),
-        ViewerChange::Exit(_) | ViewerChange::Removed => 0,
+        ViewerChange::Activity(_) | ViewerChange::Exit(..) | ViewerChange::Removed => 0,
     }
 }
 

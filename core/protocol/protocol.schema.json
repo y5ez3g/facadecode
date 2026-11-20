@@ -2512,6 +2512,23 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "activity"
+            },
+            "working": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "working"
+          ],
+          "description": "A change to whether the agent is starting or working, for an opted-in v3 screen watch."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "exit"
             },
             "exit": {
@@ -2521,6 +2538,10 @@
               "type": "integer",
               "format": "int32",
               "description": "The shell exit status calculated on the machine that ran the agent, if known."
+            },
+            "resume_hint": {
+              "type": "string",
+              "description": "The CLI's resume instructions at the end of the screen for a Shell attachment.\nEmpty when it printed none. An absent field leaves the finished screen visible."
             }
           },
           "required": [
@@ -2544,6 +2565,29 @@
         }
       ],
       "description": "A change to the `screen` topic. `exit` follows all output the CLI wrote before ending; processes\nstill holding its terminal may write afterward. On macOS, the terminal is taken from those\nprocesses when the CLI ends. `removed` is the watch's last change. Skip unknown change kinds.\n\n`snapshot.redraw`, `output.data`, and `redraw.data` contain standard base64 with padding. Decode\nthem to bytes and feed those bytes to the viewer's terminal parser. Set the viewer to\n`snapshot.cols` by `snapshot.rows` before the initial redraw. Each redraw change carries its own\n`cols` and `rows`; use that size before applying its `data`. Process changes for each watch in\narrival order. Apply `output` as continuation bytes; `redraw` supplies a replacement terminal\nsequence. Preserve parser state between messages. Do not treat the decoded bytes as plain text;\nuse `agent.screen` for plain text."
+    },
+    "ScreenSize": {
+      "type": "object",
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width in columns, at least 2."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height in rows, at least 1."
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ]
     },
     "ScreenSnapshot": {
       "$ref": "#/$defs/V3ScreenSnapshot"
@@ -5530,9 +5574,17 @@
           "format": "int32",
           "description": "The shell exit status calculated on the machine that ran the agent, if known."
         },
+        "resume_hint": {
+          "type": "string",
+          "description": "The CLI's resume instructions for a Shell attachment that opens an ended run.\nEmpty when it printed none."
+        },
         "process": {
           "description": "The agent's process state captured with this snapshot.",
           "$ref": "#/$defs/ProcessState"
+        },
+        "working": {
+          "type": "boolean",
+          "description": "Whether the agent is starting or working, when the watch requested activity."
         }
       },
       "required": [
@@ -5643,6 +5695,14 @@
         "allow_ended": {
           "type": "boolean",
           "description": "With an exact managed reference, allow the final snapshot of an ended run."
+        },
+        "report_activity": {
+          "type": "boolean",
+          "description": "Include the agent's working state in the snapshot and report changes to it."
+        },
+        "size": {
+          "description": "Request the viewer's size for the shared layout before the first snapshot of a live run.",
+          "$ref": "#/$defs/ScreenSize"
         }
       }
     },

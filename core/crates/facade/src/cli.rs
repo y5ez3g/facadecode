@@ -184,7 +184,25 @@ pub(crate) fn parse_from(argv: &[OsString]) -> Result<Arguments, ParseError> {
         [machine, help, rest @ ..] if machine == "machine" && help == "help" => {
             return requested_help("machine", rest);
         }
-        [machine] if machine == "machine" => return requested_help("machine", &[]),
+        [command]
+            if matches!(
+                command.to_str(),
+                Some(
+                    "start" | "attach" | "stop" | "screen" | "rename" | "send" | "type" | "machine"
+                )
+            ) =>
+        {
+            return requested_help("", words);
+        }
+        [machine, action]
+            if machine == "machine"
+                && matches!(
+                    action.to_str(),
+                    Some("add" | "connect" | "remove" | "rename")
+                ) =>
+        {
+            return requested_help("", words);
+        }
         _ => {}
     }
 

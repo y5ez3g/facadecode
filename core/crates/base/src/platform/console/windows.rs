@@ -5,10 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Console::{
-    CONSOLE_MODE, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
-    ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
-    GetConsoleMode, GetStdHandle, INPUT_RECORD, KEY_EVENT, ReadConsoleInputW, STD_HANDLE,
-    STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+    CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, COORD, DISABLE_NEWLINE_AUTO_RETURN,
+    ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, GetConsoleMode,
+    GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, KEY_EVENT, PeekConsoleInputW,
+    ReadConsoleInputW, ReadConsoleOutputCharacterW, STD_HANDLE, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
 };
 
 use super::{ConsoleRead, ConsoleSignal};
@@ -29,9 +31,11 @@ impl VtModes {
         // Window input makes the console report its size changes as input records.
         let wanted = ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT;
         set_mode(STD_INPUT_HANDLE, (input | wanted) & !keys)?;
+        // A VT line wraps on the next printable character. Cursor moves after a full line
+        // must still start from that line, as they do on the agent's screen.
         if let Err(error) = set_mode(
             STD_OUTPUT_HANDLE,
-            output | ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+            output | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN,
         ) {
             let _ = set_mode(STD_INPUT_HANDLE, input);
             return Err(error);
@@ -80,6 +84,51 @@ fn set_mode(which: STD_HANDLE, mode: CONSOLE_MODE) -> io::Result<()> {
     Ok(())
 }
 
+pub(super) fn visible_content_end() -> Option<u16> {
+    let output = std_handle(STD_OUTPUT_HANDLE).ok()?;
+    let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+    // SAFETY: `info` is writable and the console API checks the handle.
+    if unsafe { GetConsoleScreenBufferInfo(output, &mut info) } == 0 {
+        return None;
+    }
+    let window = info.srWindow;
+    let width = u16::try_from(i32::from(window.Right) - i32::from(window.Left) + 1).ok()?;
+    if width == 0 || window.Top > window.Bottom {
+        return None;
+    }
+    let cursor = info.dwCursorPosition.Y.clamp(window.Top, window.Bottom);
+    let mut cells = vec![0u16; usize::from(width)];
+    let mut end = cursor;
+    for row in (cursor..=window.Bottom).rev() {
+        let start = COORD {
+            X: window.Left,
+            Y: row,
+        };
+        let mut read = 0;
+        // SAFETY: `cells` holds `width` UTF-16 units and `read` is writable.
+        let got = unsafe {
+            ReadConsoleOutputCharacterW(
+                output,
+                cells.as_mut_ptr(),
+                u32::from(width),
+                start,
+                &mut read,
+            )
+        };
+        if got == 0 || read == 0 {
+            return None;
+        }
+        if cells[..read as usize]
+            .iter()
+            .any(|&cell| !matches!(cell, 0 | 0x20))
+        {
+            end = row;
+            break;
+        }
+    }
+    u16::try_from(i32::from(end) - i32::from(window.Top) + 1).ok()
+}
+
 /// How many input records one read takes at most.
 const RECORDS_PER_READ: usize = 64;
 
@@ -116,6 +165,44 @@ impl ConsoleReader {
             }
             self.read_records()?;
         }
+    }
+
+    pub(super) fn discard_key_prefix(&mut self, keys: &[u8]) -> io::Result<bool> {
+        if keys.is_empty() || !keys.is_ascii() || keys.contains(&0) {
+            return Ok(false);
+        }
+        let Ok(count) = u32::try_from(keys.len()) else {
+            return Ok(false);
+        };
+        let input = std_handle(STD_INPUT_HANDLE)?;
+        let mut records = vec![INPUT_RECORD::default(); keys.len()];
+        let mut read = 0;
+        // SAFETY: `records` holds `count` records and `read` is writable.
+        let got = unsafe { PeekConsoleInputW(input, records.as_mut_ptr(), count, &mut read) };
+        if got == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if read != count
+            || !records.iter().zip(keys).all(|(record, &byte)| {
+                if u32::from(record.EventType) != KEY_EVENT {
+                    return false;
+                }
+                // SAFETY: the record is a key event and UnicodeChar is its UTF-16 unit.
+                let key = unsafe { record.Event.KeyEvent };
+                key.bKeyDown != 0
+                    && key.wRepeatCount == 1
+                    && unsafe { key.uChar.UnicodeChar } == u16::from(byte)
+            })
+        {
+            return Ok(false);
+        }
+        // SAFETY: the buffers are still valid. This reader alone consumes input, so the peeked
+        // records are already queued and the read need not wait for more input.
+        let got = unsafe { ReadConsoleInputW(input, records.as_mut_ptr(), count, &mut read) };
+        if got == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(read == count)
     }
 
     /// Waits for input records, and keeps what their key-down records and size changes bring.

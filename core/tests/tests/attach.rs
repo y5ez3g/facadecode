@@ -28,6 +28,56 @@ fn assert_detach_receipt(term: &TestTerminal, name: &str, address: &str) {
     );
 }
 
+#[test]
+fn attach_reports_native_progress_during_work_and_clears_it_on_idle_and_detach() {
+    let home = TestHome::new("attachprogress");
+    let agent = home.start_named_fake(
+        "progress",
+        &[("FAKECLI_STATUS", "1"), ("FAKECLI_TURN_MS", "3000")],
+    );
+    let mut term = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &agent.address]),
+        120,
+        30,
+    );
+    assert!(term.wait_for(secs(10), |text| text.contains("❯")));
+    assert!(wait_until(secs(5), || {
+        home.agent_record(&agent.id)
+            .is_some_and(|record| record["state"] == "idle")
+    }));
+    let busy = "\x1b]9;4;3";
+    let clear = "\x1b]9;4;0";
+    let first = term.output_len();
+    term.send(b"first turn\r");
+    assert!(wait_until(secs(10), || {
+        let bytes = term.output_since(first);
+        let text = String::from_utf8_lossy(&bytes);
+        text.split_once(busy)
+            .is_some_and(|(_, rest)| rest.contains(clear))
+    }));
+
+    let second = term.output_len();
+    term.send(b"second turn\r");
+    assert!(wait_until(secs(5), || {
+        String::from_utf8_lossy(&term.output_since(second)).contains(busy)
+    }));
+    term.send(b"\x1d");
+    assert!(
+        term.wait_exit(secs(5))
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&term, "progress", &agent.address);
+    let bytes = term.output_since(second);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.find(clear)
+            .zip(text.find("Detached from progress"))
+            .is_some_and(|(cleared, detached)| cleared < detached),
+        "{text:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn attach_restores_bracketed_paste_and_cooked_mode_on_signal() {
@@ -272,7 +322,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
     );
 }
 
-/// Detach must recognize alternate-screen mode inside a combined mode sequence.
+/// Detach recognizes a combined alternate-screen sequence and restores the main-screen cursor.
 #[test]
 fn detach_leaves_alternate_screen_set_with_other_modes() {
     let home = TestHome::new("detachmixed");
@@ -282,7 +332,9 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
         &mut wire,
         &home,
         "mixed",
-        "echo READY; read go; printf '\\033[?1049;25hALT-READY'; sleep 60",
+        "echo READY; read go; printf '\\033[6;1HSAVED-MAIN-CONTEXT\\r\\n'; \
+         while [ ! -e alternate ]; do sleep 0.05; done; \
+         printf '\\033[?1049;25hALT-READY'; sleep 60",
     );
     assert!(wait_for_screen_text(&home, &agent, "READY"));
     let mut term = TestTerminal::spawn(
@@ -298,6 +350,12 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
     );
     type_raw(&mut wire, &agent, "go\r");
     assert!(
+        term.wait_for(secs(5), |text| text.contains("SAVED-MAIN-CONTEXT")),
+        "{}",
+        term.text()
+    );
+    std::fs::write(home.project.join("alternate"), b"").unwrap();
+    assert!(
         term.wait_for(secs(10), |text| text.contains("ALT-READY")) && term.on_alternate_screen(),
         "{}",
         term.text()
@@ -310,6 +368,13 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
     let address = address(&home, &agent);
     assert_detach_receipt(&term, "mixed", &address);
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
+    let rows = term.rows();
+    assert!(
+        rows.windows(2).any(|lines| {
+            lines[0].contains("SAVED-MAIN-CONTEXT") && lines[1].contains("Detached from mixed (")
+        }),
+        "the receipt should follow the saved main-screen context: {rows:?}"
+    );
 }
 
 /// Termination during the initial redraw must restore a terminal whose reader is slow.

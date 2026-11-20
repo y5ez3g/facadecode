@@ -27,6 +27,7 @@ mod machine;
 mod tests;
 mod upgrade;
 
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
 
@@ -36,6 +37,7 @@ use facade_base::daemon_client::DaemonClient;
 use facade_base::operations::NoArgs;
 use facade_base::process::{EndReason, ProcessExit};
 use facade_base::v3::{AgentTarget, MachineList};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use cli::{Command, MachineAction, ParseError, StartOptions, Target};
@@ -153,8 +155,30 @@ fn single_line(text: &str) -> String {
     )
 }
 
+enum TableLayout {
+    Full,
+    Roster(Option<usize>),
+}
+
 /// Align columns by the width of their headers and cells.
 pub(crate) fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    render_table(headers, rows, TableLayout::Full)
+}
+
+/// Fit roster titles and working directories to the viewer, keeping agent and session refs whole.
+pub(crate) fn roster_table(headers: &[&str; 8], rows: &[Vec<String>]) -> String {
+    let columns = if std::io::stdout().is_terminal() {
+        // Leave the rightmost cell free so writing the newline cannot wrap first.
+        attach::console_size().map(|(cols, _)| usize::from(cols) - 1)
+    } else {
+        None
+    };
+    render_table(headers, rows, TableLayout::Roster(columns))
+}
+
+const COLUMN_GAP: &str = "   ";
+
+fn render_table(headers: &[&str], rows: &[Vec<String>], layout: TableLayout) -> String {
     let rows: Vec<Vec<String>> = rows
         .iter()
         .map(|row| row.iter().map(|cell| single_line(cell)).collect())
@@ -163,6 +187,21 @@ pub(crate) fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row) {
             *width = (*width).max(cell.width());
+        }
+    }
+    if let TableLayout::Roster(columns) = layout {
+        const DIRECTORY: usize = 5;
+        const TITLE: usize = 7;
+        widths[TITLE] = widths[TITLE].min(40);
+        if let Some(columns) = columns {
+            let width = widths.iter().sum::<usize>() + COLUMN_GAP.len() * (headers.len() - 1);
+            let mut excess = width.saturating_sub(columns);
+            for column in [DIRECTORY, TITLE] {
+                let spare = widths[column] - headers[column].width();
+                let shorten = spare.min(excess);
+                widths[column] -= shorten;
+                excess -= shorten;
+            }
         }
     }
     let mut lines = Vec::with_capacity(rows.len() + 1);
@@ -177,15 +216,31 @@ fn table_row<'a>(cells: impl Iterator<Item = &'a str>, widths: &[usize]) -> Stri
     let mut line = String::new();
     for (column, (cell, width)) in cells.zip(widths).enumerate() {
         if column > 0 {
-            line.push_str("   ");
+            line.push_str(COLUMN_GAP);
         }
-        line.push_str(cell);
+        let cell = clip_cells(cell, *width);
+        line.push_str(&cell);
         if column + 1 < widths.len() {
             let _ = write!(line, "{:pad$}", "", pad = width - cell.width());
         }
     }
     line.truncate(line.trim_end_matches(' ').len());
     line
+}
+
+/// Fits a label within `width` display columns, keeping each grapheme whole.
+fn clip_cells(cell: &str, width: usize) -> Cow<'_, str> {
+    if cell.width() <= width {
+        return Cow::Borrowed(cell);
+    }
+    let mut taken = 0;
+    for (index, grapheme) in cell.grapheme_indices(true) {
+        taken += grapheme.width();
+        if taken >= width {
+            return Cow::Owned(format!("{}…", &cell[..index]));
+        }
+    }
+    Cow::Borrowed(cell)
 }
 
 /// Whether this program runs as a CLI's hook: `facade hook …`.

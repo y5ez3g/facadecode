@@ -34,6 +34,12 @@ impl Drop for VtModes {
     }
 }
 
+/// The lower of the cursor and the last row containing text, as a 1-based viewport row.
+/// Returns `None` if the viewport cannot be read or on Unix.
+pub fn visible_content_end() -> Option<u16> {
+    imp::visible_content_end()
+}
+
 /// What one read of the console brought.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleRead {
@@ -56,6 +62,12 @@ impl ConsoleReader {
     /// Waits for keys or a size change.
     pub fn read(&mut self, buf: &mut [u8]) -> io::Result<ConsoleRead> {
         self.0.read(buf)
+    }
+
+    /// Discards an exact ASCII key-down prefix of the native input queue without waiting for input.
+    /// Returns `false` if the prefix is absent or on Unix. The reader must own console input.
+    pub fn discard_key_prefix(&mut self, keys: &[u8]) -> io::Result<bool> {
+        self.0.discard_key_prefix(keys)
     }
 }
 

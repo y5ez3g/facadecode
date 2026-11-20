@@ -12,9 +12,14 @@ session during a machine connection.
 | Interact | `attach`, `send`, `screen`, `type` |
 | System | `status`, `machine`, `upgrade` |
 
-Help and `--version` run without starting services. `facade` by itself displays the root help. `-h`, `--help` and
-`facade help <command>` show the same command page. Put Facade startup options before the CLI name. Arguments
-after it go to the selected CLI. The Orchestrator validates the CLI, target machine, working directory and worktree.
+Help and `--version` run without starting services. `-h`, `--help` and `facade help <command>` show the same
+command page. The root and `machine` show their help when called on their own. Bare `start`, `attach`, `stop`,
+`screen`, `rename`, `send`, `type`, `machine add`, `machine connect`, `machine remove` and `machine rename`
+also show help. Calls with options or operands use the command's normal argument validation. Bare `list`, `status`,
+`resume`, `upgrade` and `machine list` run their default actions.
+
+Put Facade startup options before the CLI name. Arguments after it go to the selected CLI. The Orchestrator validates
+the CLI, target machine, working directory and worktree.
 
 Ordinary commands use a Terminal connection. A `facade` invocation from an agent's terminal has the same identity as
 any other invocation. The Orchestrator records the command line as the sender of `send`.
@@ -90,10 +95,17 @@ connection ends and counts keys typed while disconnected. It leaves keys already
 During a planned takeover, any write already in progress completes before Attach acknowledges `closing`. The
 reconnect shows the current screen before it resumes sending input. It shows a bottom-line notice on stderr when
 any bytes could not be sent. The same policy applies to a local or remote terminal. Shell resize reports the current
-rows and columns.
+rows and columns. A pane too small for a shared redraw reports the layout size and waits for a frame it can draw.
+A resize refreshes the pane even if its new size already matches the shared layout.
 
 The terminal is restored before the final diagnostic. A detach, an agent exit, a removal, and a permanent connection
-failure use their corresponding status and message.
+failure use their corresponding status and message. Detach closes an alternate-screen view or moves the main-screen
+view into scrollback. At normal exit it does the same when the daemon supplies the CLI's resume instructions, which
+can be empty. The instructions are shown with the exit receipt.
+Windows uses deferred wrapping during Attach so relative cursor moves after a full row use the same geometry as
+the agent's screen.
+Attach requests the agent's activity with its screen watch and sends terminal progress while the agent is starting
+or working. It clears progress when it reconnects or hands the terminal back.
 
 ### hooks
 

@@ -65,7 +65,13 @@ fn interactive_start_propagates_process_exit_status() {
     let home = TestHome::new("exitcode");
     // An end by a signal is Unix's alone.
     #[cfg_attr(windows, allow(unused_mut))]
-    let mut ends = vec![("a1", "sleep 1; exit 3", 3, "exited with code 3.")];
+    let mut ends = vec![(
+        "a1",
+        "printf 'INTERACTIVE-FRAME\n'; sleep 1; \
+         printf 'To continue this session, run:\n  demo resume stored-session\n'; exit 3",
+        3,
+        "exited with code 3.",
+    )];
     #[cfg(unix)]
     ends.push((
         "a2",
@@ -96,6 +102,15 @@ fn interactive_start_propagates_process_exit_status() {
             "{script}: {}",
             term.text()
         );
+        if id == "a1" {
+            let text = term.text_with_scrollback();
+            assert!(text.contains("INTERACTIVE-FRAME"), "{text}");
+            assert!(
+                text.trim_end()
+                    .ends_with(&format!("  demo resume stored-session\n\n{said}")),
+                "{text}"
+            );
+        }
     }
 }
 
