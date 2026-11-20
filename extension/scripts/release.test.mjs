@@ -3,10 +3,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
+import mirrorWorker from '../../.github/release-mirror/worker.mjs';
 import {
-	checksumsText, collectFromRun, fileFor, marketplaceFile, parseChecksums, releaseNotes, sha256, storeOrder, targetsFor,
+	candidateNeedsBuild, checksumsText, collectFromRun, fileFor, marketplaceFile, parseChecksums, releaseNotes,
+	requiredReleaseFiles, sha256, storeOrder, targetsFor,
 	validateCatalog, versionOfTag
 } from './release.mjs';
+import { publishMirror, pruneMirror } from './release-mirror.mjs';
 
 const catalog = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../archive/catalog.json'), 'utf8'));
 
@@ -77,12 +80,109 @@ test('only extension/<major.minor.patch> tags release', () => {
 	for (const tag of ['facade/0.1.2', 'extension/0.1', 'extension/v0.1.2', 'extension/0.1.2-rc1', undefined]) assert.throws(() => versionOfTag(tag));
 });
 
+test('a standalone release requires its complete native, editor and installation asset set', () => {
+	const assets = requiredReleaseFiles('0.1.6');
+	assert.equal(assets.length, 17);
+	assert.equal(new Set(assets).size, 17);
+	assert.equal(assets.filter(asset => asset.endsWith('.vsix')).length, 7);
+	assert.equal(assets.filter(asset => asset.startsWith('facade-core-') && !asset.endsWith('.txt')).length, 6);
+	for (const name of ['install.sh', 'install.ps1', 'facade-core-version.txt', 'SHA256SUMS']) assert.ok(assets.includes(name));
+	assert.equal(requiredReleaseFiles('0.1.5').length, 8);
+});
+
+test('a partial draft resumes with its original signatures instead of signing a new package', () => {
+	const version = '0.1.6';
+	const assets = requiredReleaseFiles(version).map(name => ({ name }));
+	assert.equal(candidateNeedsBuild(version), true);
+	assert.equal(candidateNeedsBuild(version, { isDraft: true, assets: [] }), true);
+	assert.equal(candidateNeedsBuild(version, { isDraft: true, assets }), false);
+	assert.throws(() => candidateNeedsBuild(version, { isDraft: true, assets: assets.slice(0, -1) }),
+		/reuse its signed artifacts/);
+});
+
 test('SHA256SUMS is what sha256sum -c reads, and a malformed line is refused', () => {
 	const artifacts = [{ file: 'a.vsix', sha256: 'a'.repeat(64) }, { file: 'b.vsix', sha256: 'b'.repeat(64) }];
 	const text = checksumsText(artifacts);
 	assert.equal(text, `${'a'.repeat(64)}  a.vsix\n${'b'.repeat(64)}  b.vsix\n`);
 	assert.deepEqual([...parseChecksums(text)], [['a.vsix', 'a'.repeat(64)], ['b.vsix', 'b'.repeat(64)]]);
 	assert.throws(() => parseChecksums('abc  a.vsix\n'), /Malformed/);
+	assert.throws(() => parseChecksums(text + text), /Duplicate/);
+});
+
+test('the official installer switches to a mirrored release after every asset is verified', async t => {
+	const version = '0.1.7';
+	const versionFile = 'facade-core-version.txt';
+	const contents = new Map([
+		['install.sh', 'new Unix installer'],
+		['install.ps1', 'new Windows installer'],
+		[versionFile, version + '\n'],
+		['facade-core-linux-x64.tar.gz', 'new archive'],
+	]);
+	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-mirror-test-'));
+	t.after(() => {
+		for (const file of contents.keys()) fs.unlinkSync(path.join(folder, file));
+		fs.rmdirSync(folder);
+	});
+	const assets = [...contents].map(([file, content]) => {
+		const local = path.join(folder, file);
+		fs.writeFileSync(local, content);
+		return { file, path: local, sha256: sha256(content) };
+	});
+	const objects = new Map([
+		[versionFile, Buffer.from('0.1.6\n')],
+		['releases/0.1.6/install.sh', Buffer.from('old Unix installer')],
+	]);
+	const RELEASES = {
+		get(key) {
+			const body = objects.get(key);
+			return body ? { body, size: body.length, text: async () => body.toString() } : null;
+		},
+	};
+	let interrupted = true;
+	const request = async (url, options) => {
+		const address = new URL(url);
+		if (address.hostname === 'facadecode.com') return mirrorWorker.fetch(new Request(url), { RELEASES });
+		assert.equal(address.hostname, 'api.cloudflare.com');
+		assert.equal(options.method, 'PUT');
+		const key = address.pathname.split('/objects/')[1];
+		if (interrupted && key.endsWith('.tar.gz')) return new Response(null, { status: 503 });
+		objects.set(key, options.body);
+		return Response.json({ success: true });
+	};
+	const credentials = { account: 'a'.repeat(32), token: 'test-token', request };
+	const installSh = 'https://facadecode.com/install.sh';
+	await assert.rejects(publishMirror(version, assets, true, credentials), /HTTP 503/);
+	assert.equal(await (await request(installSh)).text(), 'old Unix installer');
+	interrupted = false;
+	await publishMirror(version, assets, false, credentials);
+	assert.equal(await (await request(installSh)).text(), 'old Unix installer');
+	await publishMirror(version, assets, true, credentials);
+	assert.equal(await (await request(installSh)).text(), contents.get('install.sh'));
+	const windows = await request('https://facadecode.com/install.ps1');
+	assert.match(windows.headers.get('content-type'), /^text\/plain/);
+	assert.equal(await windows.text(), contents.get('install.ps1'));
+});
+
+test('website retention keeps ten formal releases and an unpublished candidate', async () => {
+	const stable = Array.from({ length: 11 }, (_, at) => `0.2.${10 - at}`);
+	const objects = [...stable, '0.2.11'].map(version => ({ key: `releases/${version}/SHA256SUMS` }));
+	objects.push({ key: 'facade-core-version.txt' });
+	const deleted = [];
+	await pruneMirror(stable[0], stable, {
+		account: 'a'.repeat(32),
+		token: 'test-token',
+		request: async (url, { method } = {}) => {
+			const location = new URL(url);
+			assert.equal(location.hostname, 'api.cloudflare.com');
+			if (method === 'DELETE') {
+				deleted.push(location.pathname.split('/objects/')[1]);
+				return new Response(null, { status: 204 });
+			}
+			assert.equal(location.searchParams.get('prefix'), 'releases/');
+			return Response.json({ success: true, result: objects });
+		},
+	});
+	assert.deepEqual(deleted, ['releases/0.2.0/SHA256SUMS']);
 });
 
 test('release notes are the changelog section of that version alone', () => {

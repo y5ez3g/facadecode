@@ -62,9 +62,10 @@ for the requested build to answer a new v3 hello.
 `facade daemon --detach` is the background entry for an editor or relay. The caller confirms readiness with hello.
 The installer's `facade daemon --takeover` entry checks the selected Facade home and exits 0 if the services are idle.
 For a running service, it waits for the installed build to answer with protocol 3. The installer activates the
-public `facade` and `facade-mcp` paths after this check succeeds. `facade upgrade` runs the same stable installer
-that a person can run directly and reports the actual installed version and launcher directory. Machine
-connections use a version-pinned invocation of the installer.
+public `facade` and `facade-mcp` paths after this check succeeds. `facade upgrade` runs the published stable
+installer. `facade upgrade --version X.Y.Z` runs the installer pinned to that release, including a candidate
+available under the exact version. Both report the actual installed version and launcher directory. Machine
+connections pin the installer to the local release.
 
 In debug builds, `FACADE_TEST_DAEMON_PROTOCOL` and `FACADE_TEST_KEEPER_PROTOCOL` take a `low,high` range for
 testing compatibility decisions. Release builds advertise the supported protocol ranges.

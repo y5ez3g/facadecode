@@ -35,20 +35,23 @@ runs its own Orchestrator, and your machines connect over SSH.
 
 ### Shell
 
-The one-line installers become available with the first release that includes standalone packages.
-Shell packages cover macOS, Linux and Windows on x64 and arm64.
+The one-line installers cover macOS, Linux and Windows on x64 and arm64. They download the package from GitHub
+and use the official website mirror when GitHub is unavailable.
 
 Run this command on macOS or Linux.
 
 ```sh
-sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://github.com/y5ez3g/facadecode/releases/latest/download/install.sh
+sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://facadecode.com/install.sh
 ```
 
 Run this command in PowerShell on Windows.
 
 ```powershell
-$response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facadecode/releases/latest/download/install.ps1'; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())))
+irm https://facadecode.com/install.ps1 | iex
 ```
+
+Each GitHub Pre-release includes commands to install that exact candidate version. To select a version in the installer,
+use `--version X.Y.Z` on macOS or Linux, or `-Version X.Y.Z` in PowerShell.
 
 The installer adds `facade` and `facade-mcp` to PATH. Open a new terminal to use the updated PATH.
 
@@ -56,7 +59,8 @@ The IDE preview's launcher also uses the name `facade`. If both programs are ins
 `facade` on PATH. Run `facade --version` and look for a line of the form `facade <version>` to verify that you have
 the Shell command. The launcher name belongs to the Orchestrator after the IDE preview is retired.
 
-Run `facade upgrade` to install a newer version. Install and sign in to the CLIs you want to run on each machine.
+Run `facade upgrade` for the stable version, or `facade upgrade --version X.Y.Z` to select an exact release.
+Install and sign in to the CLIs you want to run on each machine.
 The built-in choices are Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi.
 
 ### VS Code

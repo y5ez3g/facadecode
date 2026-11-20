@@ -168,8 +168,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.
-- `install::upgrade_command()` builds the command that runs the published stable installer with
-  the current environment. SSH pins the corresponding installer to the local release version.
+- `install::upgrade_command(version: Option<&str>) -> Command` builds a command that runs the published installer
+  with the current environment and an optional validated version pin. SSH pins the installer to the local release.
+  Both prefer GitHub and download the matching website script if acquisition from GitHub fails.
 - `console::{VtModes, ConsoleReader, ConsoleSignals, visible_content_end}`: what attach needs of
   the person's console beside crossterm's size and raw mode. On Windows, Attach can read the
   visible content boundary and consume an exact queued release from its detach chord.

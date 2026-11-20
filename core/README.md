@@ -11,8 +11,9 @@ This Rust workspace builds two programs.
 - `facade-mcp` is the stdio server a managed CLI or external MCP client runs. It relays MCP between the client and
   the daemon.
 
-The [installation guide](../README.md) gives the Shell and MCP setup commands. `facade upgrade` installs a newer
-version. Its build then takes over the running Orchestrator while agents keep running, or says why it cannot. The
+The [installation guide](../README.md) gives the Shell and MCP setup commands. `facade upgrade` selects the stable
+version and `facade upgrade --version X.Y.Z` selects an exact release. Its build then takes over the running
+Orchestrator while agents keep running, or says why it cannot. The
 VS Code extension ships with its own copy of the programs.
 
 ## Build and test
