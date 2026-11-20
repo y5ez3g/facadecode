@@ -527,6 +527,7 @@ impl Actor {
                 viewer,
                 name,
                 attachment,
+                allow_ended,
                 tx,
                 keep_scrollback,
                 include_scrollback,
@@ -534,7 +535,11 @@ impl Actor {
             } => {
                 self.add_viewer(ViewerRequest {
                     viewer,
-                    kind: ViewKind::Attach { name, attachment },
+                    kind: ViewKind::Attach {
+                        name,
+                        attachment,
+                        allow_ended,
+                    },
                     tx,
                     keep_scrollback,
                     include_scrollback,
@@ -953,10 +958,8 @@ impl Actor {
     }
 
     fn admit_viewers(&mut self) {
-        // A run with a known exit can still have output left for its final snapshot.
-        if self.exit.is_some() && !self.exit_sent {
-            return;
-        }
+        let draining = self.exit.is_some() && !self.exit_sent;
+        let exit = self.exit.as_ref().filter(|_| self.exit_sent);
         let screen = self
             .screen
             .as_ref()
@@ -964,9 +967,10 @@ impl Actor {
         let record = self.links.shared.record.lock().unwrap();
         self.viewers.admit(
             screen.screen(),
-            self.exit.as_ref(),
+            exit,
             self.process,
             &record.info.name,
+            draining,
         );
     }
 

@@ -57,6 +57,7 @@ pub(crate) enum ViewKind {
     Attach {
         name: Option<String>,
         attachment: Option<AttachmentInfo>,
+        allow_ended: bool,
     },
 }
 
@@ -154,11 +155,25 @@ impl Viewers {
         exit: Option<&ProcessExit>,
         process: ProcessState,
         name: &str,
+        draining: bool,
     ) {
         if screen.synchronized_update_deadline().is_some() {
             return;
         }
-        for request in self.waiting.drain(..) {
+        for request in std::mem::take(&mut self.waiting) {
+            // The final snapshot includes the remaining output and the exit together.
+            if draining
+                && matches!(
+                    request.kind,
+                    ViewKind::Attach {
+                        allow_ended: true,
+                        ..
+                    }
+                )
+            {
+                self.waiting.push(request);
+                continue;
+            }
             let snapshot = ViewerSnapshot {
                 name: name.to_owned(),
                 redraw: screen.redraw(request.keep_scrollback, request.include_scrollback),

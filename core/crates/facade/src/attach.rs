@@ -296,7 +296,7 @@ fn show_until_closed(screen: &mut ScreenWatch, input: &AgentInput) -> Option<Att
                 continue;
             }
             ScreenChange::Unknown => continue,
-            ScreenChange::Exit { exit } => AttachEnd::AgentExited(Some(exit)),
+            ScreenChange::Exit { exit, .. } => AttachEnd::AgentExited(Some(exit)),
             ScreenChange::Removed => AttachEnd::Removed,
         });
     }

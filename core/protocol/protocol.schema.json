@@ -2516,6 +2516,11 @@
             },
             "exit": {
               "$ref": "#/$defs/ProcessExit"
+            },
+            "exit_status": {
+              "type": "integer",
+              "format": "int32",
+              "description": "The shell exit status calculated on the machine that ran the agent, if known."
             }
           },
           "required": [
@@ -5519,6 +5524,11 @@
         "exit": {
           "description": "The recorded exit, if the agent has ended.",
           "$ref": "#/$defs/ProcessExit"
+        },
+        "exit_status": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The shell exit status calculated on the machine that ran the agent, if known."
         },
         "process": {
           "description": "The agent's process state captured with this snapshot.",

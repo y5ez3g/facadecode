@@ -78,7 +78,9 @@ contains only a short example terminal sequence.
 ```
 
 An exact screen watch may set `allow_ended` to read the final redraw of a managed run. The
-snapshot includes the process state and the exit if known. An ended snapshot admits no viewer.
+snapshot includes the process state and the exit if known. The ended snapshot and the exit
+change can also include `exit_status`: the original exit code, or 128 plus the running machine's
+number for the recorded signal. An ended snapshot admits no viewer.
 Ordinary watches require a running managed agent. Inspection lists the verified client kind and
 origin of each shell or editor attachment alongside the viewer names supplied by earlier clients.
 
@@ -1308,7 +1310,7 @@ The screen buffer a CLI shows.
 
 A change to the `screen` topic. `exit` follows all output the CLI wrote before ending; processes still holding its terminal may write afterward. On macOS, the terminal is taken from those processes when the CLI ends. `removed` is the watch's last change. Skip unknown change kinds.  `snapshot.redraw`, `output.data`, and `redraw.data` contain standard base64 with padding. Decode them to bytes and feed those bytes to the viewer's terminal parser. Set the viewer to `snapshot.cols` by `snapshot.rows` before the initial redraw. Each redraw change carries its own `cols` and `rows`; use that size before applying its `data`. Process changes for each watch in arrival order. Apply `output` as continuation bytes; `redraw` supplies a replacement terminal sequence. Preserve parser state between messages. Do not treat the decoded bytes as plain text; use `agent.screen` for plain text.
 
-`{ readonly kind: 'output'; readonly data: string } \| { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } \| { readonly kind: 'exit'; readonly exit: ProcessExit } \| { readonly kind: 'removed' }`
+`{ readonly kind: 'output'; readonly data: string } \| { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } \| { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number } \| { readonly kind: 'removed' }`
 
 ### ScreenSnapshot
 
@@ -1776,6 +1778,7 @@ The copyable agent address or the CLI session and its working location.
 | `rows` | `number` | yes | Terminal height required to apply the redraw. |
 | `redraw` | `string` | yes | Base64-encoded terminal bytes that redraw the screen at this size. Restores cursor state, charsets, and modes. On the main screen, up to 1,000 rows of agent scrollback come first unless `include_scrollback` is false. `keep_scrollback` controls whether the viewer's existing scrollback is cleared before the redraw. |
 | `exit` | `ProcessExit` | no | The recorded exit, if the agent has ended. |
+| `exit_status` | `number` | no | The shell exit status calculated on the machine that ran the agent, if known. |
 | `process` | `ProcessState` | no | The agent's process state captured with this snapshot. |
 
 ### V3ScreenText

@@ -142,6 +142,9 @@ pub struct ScreenSnapshot {
     /// The recorded exit, if the agent has ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit: Option<ProcessExit>,
+    /// The shell exit status calculated on the machine that ran the agent, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<i32>,
     /// The agent's process state captured with this snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessState>,

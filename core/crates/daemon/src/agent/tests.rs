@@ -1274,6 +1274,7 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
             viewer: 1,
             name: Some("terminal one".into()),
             attachment: None,
+            allow_ended: false,
             tx,
             keep_scrollback: false,
             include_scrollback: false,

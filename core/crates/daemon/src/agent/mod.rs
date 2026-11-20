@@ -149,6 +149,7 @@ pub(crate) enum AgentCommand {
         viewer: u64,
         name: Option<String>,
         attachment: Option<facade_base::v3::AttachmentInfo>,
+        allow_ended: bool,
         tx: ViewerSender,
         keep_scrollback: bool,
         include_scrollback: bool,

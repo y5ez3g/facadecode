@@ -8,7 +8,7 @@ use facade_base::daemon::{AgentsUpdate, WatchParams};
 use facade_base::jsonrpc::{AgentRemoval, ErrorBody, Reason, decode_arguments};
 use facade_base::machine::AgentRef;
 use facade_base::operations::Topic;
-use facade_base::process::ProcessState;
+use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::v3::{
     AgentTarget, AgentsChange, AgentsSnapshot, AgentsTopic, AttachmentInfo, AttachmentKind, Caller,
     MachinesChange, MachinesTopic, NoArgs, ScreenChange, ScreenSnapshot, ScreenTopic,
@@ -150,6 +150,7 @@ impl Daemon {
                 kind,
                 machine_id: caller.machine_id().to_owned(),
             }),
+            allow_ended: args.allow_ended,
             tx,
             keep_scrollback: args.keep_scrollback,
             include_scrollback: args.include_scrollback,
@@ -186,6 +187,7 @@ impl Daemon {
             cols: drawn.cols,
             rows: drawn.rows,
             redraw: facade_base::base64::encode(&drawn.redraw),
+            exit_status: drawn.exit.as_ref().and_then(shell_exit_status),
             exit: drawn.exit,
             process: Some(if ended {
                 ProcessState::Ended
@@ -475,7 +477,19 @@ fn screen_change(change: ViewerChange) -> ScreenChange {
         ViewerChange::Output(bytes) => ScreenChange::Output {
             data: facade_base::base64::encode(&bytes),
         },
-        ViewerChange::Exit(exit) => ScreenChange::Exit { exit },
+        ViewerChange::Exit(exit) => ScreenChange::Exit {
+            exit_status: shell_exit_status(&exit),
+            exit,
+        },
         ViewerChange::Removed => ScreenChange::Removed,
     }
+}
+
+fn shell_exit_status(exit: &ProcessExit) -> Option<i32> {
+    exit.code.or_else(|| {
+        exit.signal
+            .as_deref()
+            .and_then(facade_base::unix_process::signal_number)
+            .map(|number| 128 + number)
+    })
 }

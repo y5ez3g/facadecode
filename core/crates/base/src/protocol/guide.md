@@ -70,7 +70,9 @@ contains only a short example terminal sequence.
 ```
 
 An exact screen watch may set `allow_ended` to read the final redraw of a managed run. The
-snapshot includes the process state and the exit if known. An ended snapshot admits no viewer.
+snapshot includes the process state and the exit if known. The ended snapshot and the exit
+change can also include `exit_status`: the original exit code, or 128 plus the running machine's
+number for the recorded signal. An ended snapshot admits no viewer.
 Ordinary watches require a running managed agent. Inspection lists the verified client kind and
 origin of each shell or editor attachment alongside the viewer names supplied by earlier clients.
 

@@ -566,7 +566,7 @@ export type ScreenBuffer = 'normal' | 'alternate';
  * arrival order. Apply `output` as continuation bytes; `redraw` supplies a replacement terminal
  * sequence. Preserve parser state between messages. Do not treat the decoded bytes as plain text;
  * use `agent.screen` for plain text. */
-export type ScreenChange = { readonly kind: 'output'; readonly data: string } | { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } | { readonly kind: 'exit'; readonly exit: ProcessExit } | { readonly kind: 'removed' };
+export type ScreenChange = { readonly kind: 'output'; readonly data: string } | { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } | { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number } | { readonly kind: 'removed' };
 
 export type ScreenSnapshot = V3ScreenSnapshot;
 
@@ -1136,6 +1136,7 @@ export interface V3ScreenSnapshot {
 	readonly rows: number;
 	readonly redraw: string;
 	readonly exit?: ProcessExit;
+	readonly exit_status?: number;
 	readonly process?: ProcessState;
 }
 
