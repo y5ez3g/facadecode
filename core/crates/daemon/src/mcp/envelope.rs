@@ -45,7 +45,10 @@ pub(super) fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_
     let reason = error.data.reason.canonical_name();
     let mut refused = failure(reason, error.message.clone());
     if let Value::Object(mut details) = json!(error.data) {
-        details.remove("reason");
+        // The terminal's diagnostic rows belong to the daemon protocol.
+        for field in ["reason", "agents", "machines", "sessions", "available_clis"] {
+            details.remove(field);
+        }
         if let Some(message) = &error.data.message_ref {
             let id = format!("#{}", message.message_id);
             details.remove("message_ref");
