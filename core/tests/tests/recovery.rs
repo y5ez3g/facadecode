@@ -358,6 +358,8 @@ fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
     pause_process(keeper);
     home.kill_daemon();
     assert!(wait_until(secs(10), || home.hello_result().is_none()));
+    // The socket can disappear before Attach switches its input queue to disconnected.
+    home.wait_for_gate("attach-disconnected");
     let disconnected = term.output_len();
     let away = "界";
     term.send(away.as_bytes());
@@ -384,10 +386,13 @@ fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
         "{:?}",
         home.submitted_messages()
     );
-    std::fs::remove_file(home.path.join("core/reached-attach-buffered-input")).unwrap();
+    for point in ["attach-disconnected", "attach-buffered-input"] {
+        std::fs::remove_file(home.path.join(format!("core/reached-{point}"))).unwrap();
+    }
     pause_process(keeper);
     home.kill_daemon();
     assert!(wait_until(secs(10), || home.hello_result().is_none()));
+    home.wait_for_gate("attach-disconnected");
     term.send(b"never sent");
     home.wait_for_gate("attach-buffered-input");
     term.send(b"\x1d");
