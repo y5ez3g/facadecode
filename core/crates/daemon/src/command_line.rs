@@ -57,7 +57,12 @@ pub(crate) fn configure(
     let entries = entries::read(settings);
     let folder = Path::new(folder);
     let entry = entries::select(&entries, &args.cli, folder, &args.env).map_err(|error| {
-        with_available_clis(error, &available_clis(&entries, &args.env, folder))
+        let available = available_clis(&entries, &args.env, folder);
+        let mut error = with_available_clis(error, &available);
+        if error.data.reason == Reason::NotFound && error.data.entry.is_none() {
+            error.data.available_clis = available;
+        }
+        error
     })?;
     let (model, effort) = (args.model.as_deref(), args.effort.as_deref());
     if let Some(asked) = entry.refused_choice(model, effort) {

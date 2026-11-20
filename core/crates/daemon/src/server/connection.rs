@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use facade_base::daemon::{
     AgentResize, AgentType, CancelParams, ClientKind, ClosingParams, DaemonUpgrade, HelloParams,
-    UnwatchParams, WatchParams, WatchResult, methods,
+    UnwatchParams, WatchEndedParams, WatchParams, WatchResult, methods,
 };
 use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Notification, Reason, Response, decode_arguments, encode_line,
@@ -646,6 +646,19 @@ async fn forward(
                 if !outbox.change(number, change).await {
                     return;
                 }
+            }
+            WatchChange::Ended(error) => {
+                let params = WatchEndedParams {
+                    watch: number,
+                    error,
+                };
+                outbox
+                    .send(encode_line(&Notification::new(
+                        methods::WATCH_ENDED,
+                        params,
+                    )))
+                    .await;
+                return;
             }
             WatchChange::Disconnect => {
                 super::log(

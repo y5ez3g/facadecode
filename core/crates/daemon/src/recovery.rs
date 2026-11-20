@@ -305,6 +305,7 @@ impl Daemon {
             session: record.session,
         };
         let state = self.kept_state(&id, &info, run.as_ref()).await?;
+        let launch_command = blocking_in_place(|| self.store.launch_command(&id))?;
         let actor = ActorStart {
             colors: facade_screen::TerminalColors::default(),
             info,
@@ -313,6 +314,7 @@ impl Daemon {
             untouched_input: false,
             rule: record.rule,
             captures: follows_session,
+            launch_command,
             deliveries: self.messages.delivery_handle(),
             state,
         };
@@ -335,7 +337,7 @@ impl Daemon {
         let id = &record.agent_id;
         blocking_in_place(|| {
             self.store
-                .record_restart(id, run.pid, record.yolo, None, None)
+                .record_restart(id, run.pid, record.yolo, None, None, None)
         })?;
         log(
             "info",

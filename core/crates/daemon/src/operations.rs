@@ -16,7 +16,7 @@ use facade_base::instructions::{self, Creator, ManagedRun};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::{AgentRef, MachineQueryArgs, MessageRef};
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_base::v3::{Caller, StartArgs};
+use facade_base::v3::{self, Caller, StartArgs};
 use std::path::Path;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -610,6 +610,7 @@ impl Daemon {
         let store = self.store.clone();
         let source = origin.source();
         let options = configured.options;
+        let launch_command = prepared.launch_command.clone();
         let relay = RelayRunRecord {
             process: started.process.clone(),
             version: 3,
@@ -628,6 +629,7 @@ impl Daemon {
                                 source,
                                 options: &options,
                                 relay: &relay,
+                                command: launch_command.as_deref(),
                             }),
                         )
                         .map(|()| None)
@@ -662,6 +664,7 @@ impl Daemon {
                                 source,
                                 options: &options,
                                 relay: &relay,
+                                command: launch_command.as_deref(),
                             }),
                         )
                         .map(Some)
@@ -688,6 +691,7 @@ impl Daemon {
             untouched_input: info.session.is_none(),
             rule: rule.map(|rule| rule.cli.clone()),
             captures: prepared.captures,
+            launch_command: prepared.launch_command.take(),
             deliveries: self.messages.delivery_handle(),
             state: StateStart {
                 file: agent::state_file(&screen),
@@ -823,10 +827,11 @@ impl Daemon {
     pub(crate) async fn stop(
         self: &Arc<Self>,
         agent: &AgentHandle,
-    ) -> Result<AgentStopResult, ErrorBody> {
+    ) -> Result<(AgentStopResult, v3::AgentLabel), ErrorBody> {
         let _changing = agent.lock_run_change().await;
         gate_for_test("before-stop-run");
-        self.stop_run(agent).await
+        let result = self.stop_run(agent).await?;
+        Ok((result, self.agent_label(agent)?))
     }
 
     /// Stops `agent`'s run while the caller holds its run change: only the keeper signals a CLI.
@@ -1028,7 +1033,12 @@ impl Daemon {
             } else {
                 format!("{rule} session {session} is already in use")
             };
-            ErrorBody::refused(message)
+            let error = ErrorBody::refused(message);
+            if show_owner && let Some(agent) = self.get_agent(owner) {
+                self.with_agent_error(&agent, error)
+            } else {
+                error
+            }
         };
         if let Some(owner) = claimed_by {
             return Err(in_use(&owner));
@@ -1180,6 +1190,7 @@ impl Daemon {
         gate_for_test("before-restart-commit");
         let (store, committed, pid) = (self.store.clone(), id.clone(), started.pid);
         let started_at = facade_base::time::iso_now();
+        let launch_command = prepared.launch_command.clone();
         let relay = RelayRunRecord {
             process: started.process.clone(),
             version: 3,
@@ -1189,7 +1200,14 @@ impl Daemon {
                 .map(|credential| credential.digest),
         };
         if let Err(error) = blocking(move || {
-            store.record_restart(&committed, pid, yolo, Some(&started_at), Some(&relay))
+            store.record_restart(
+                &committed,
+                pid,
+                yolo,
+                Some(&started_at),
+                Some(&relay),
+                launch_command.as_deref(),
+            )
         })
         .await
         {
@@ -1203,6 +1221,7 @@ impl Daemon {
             master: started.master,
             pid: started.pid,
             captures: prepared.captures,
+            launch_command: prepared.launch_command.take(),
             version: prepared.version.clone(),
             tools: prepared.tools,
             reply,
@@ -1331,7 +1350,7 @@ impl Daemon {
         self: &Arc<Self>,
         agent: &AgentHandle,
         name: &str,
-    ) -> Result<AgentInfo, ErrorBody> {
+    ) -> Result<(AgentInfo, String), ErrorBody> {
         let id = agent.id().to_string();
         let name = name.trim_matches(facade_base::settings::is_space);
         let reserved = name.is_empty();
@@ -1347,6 +1366,7 @@ impl Daemon {
                 let agents = self.agents.lock().unwrap();
                 let gone = || ErrorBody::new(Reason::NotFound, "the guest is no longer connected");
                 let guest = agents.get(&id).ok_or_else(gone)?;
+                let previous = guest.info().name;
                 if !self
                     .store
                     .guest_table()
@@ -1357,13 +1377,15 @@ impl Daemon {
                 }
                 let renamed = guest.rename_guest(name.clone());
                 self.publish(renamed.clone());
-                Ok(renamed)
+                Ok((renamed, previous))
             });
             if reserved {
                 self.records.release_name(&name);
             }
             return renamed;
         }
+        let _changing = agent.lock_run_change().await;
+        let previous = agent.info().name;
         let (store, saved, saving) = (self.store.clone(), id.clone(), name.clone());
         let renamed = match blocking(move || store.rename(&saved, &saving)).await {
             Err(error) => Err(error),
@@ -1383,6 +1405,6 @@ impl Daemon {
         if reserved {
             self.records.release_name(&name);
         }
-        renamed
+        renamed.map(|info| (info, previous))
     }
 }

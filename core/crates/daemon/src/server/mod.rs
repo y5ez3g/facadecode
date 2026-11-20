@@ -49,6 +49,8 @@ pub(crate) struct Watch {
 pub(crate) enum WatchChange {
     /// A change, sent to the client as it is.
     Change(Value),
+    /// A remote watch ended with a reported reason.
+    Ended(ErrorBody),
     /// The client fell too far behind to catch up: the server disconnects it, and it can watch a
     /// fresh snapshot.
     Disconnect,

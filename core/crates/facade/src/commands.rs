@@ -353,6 +353,7 @@ pub(crate) fn send(client: &mut DaemonClient, to: String, text: String) -> anyho
         reply_to_machine_id: None,
         request_id: Some(made_request_id()),
         time_left_ms: None,
+        allow_unsupported_receipt: false,
     };
     let (result, _) = client
         .call_with_request_id::<AgentSend>(args, false)
@@ -370,7 +371,11 @@ pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> 
             name,
         })
         .map_err(|error| about_agent(&agent, error))?;
-    println_or_end!("{} {}", renamed.address, single_line(&renamed.name));
+    println_or_end!(
+        "{} {}",
+        renamed.agent.address,
+        single_line(&renamed.agent.name)
+    );
     Ok(())
 }
 

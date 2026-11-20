@@ -65,17 +65,22 @@ contains only a short example terminal sequence.
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"cli":"claude","folder":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","address":"a1@devbox","type":"managed","name":"Pixel","cli":"claude","args":[],"cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":1234,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:25:00.000Z","started_at":"2026-11-09T17:25:00.000Z","root":"a1","yolo":true,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"}}}}
-← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","address":"a1@devbox","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw=","process":"running"}}}
+← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","address":"a1@devbox","name":"Pixel","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw=","process":"running"}}}
 ← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"output","data":"aGVsbG8="}}}
 → {"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"raw":"aGk="}}}
 → {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"text":"run the tests","enter":true}}}
-← {"jsonrpc":"2.0","id":4,"result":{}}
+← {"jsonrpc":"2.0","id":4,"result":{"agent":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","name":"Pixel","cli":"claude","state":"idle","resumable":false}}}
 → {"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent":"a1@devbox"}}}
 ← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"exit","exit":{"signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}}}
 ← {"jsonrpc":"2.0","id":5,"result":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}
 → {"jsonrpc":"2.0","id":6,"method":"unwatch","params":{"watch":1}}
 ← {"jsonrpc":"2.0","id":6,"result":{}}
 ```
+
+An exact screen watch may set `allow_ended` to read the final redraw of a managed run. The
+snapshot includes the process state and the exit if known. An ended snapshot admits no viewer.
+Ordinary watches require a running managed agent. Inspection lists the verified client kind and
+origin of each shell or editor attachment alongside the viewer names supplied by earlier clients.
 
 ### Agent and machine addresses
 
@@ -91,6 +96,12 @@ workspace membership and to reconnect a terminal to the same agent. Calls taking
 supply exactly one of `agent` or `reference`. The same target's permissions and capabilities
 apply on both paths. A specified machine can be woken for the requested operation. An unspecified
 machine uses the routes already available to the caller.
+
+For a name, lookup prefers live records among the matches that support the operation. An ambiguous
+number can still match several machines. Receipts and error labels carry a stable reference and
+the copyable address in the requesting daemon's view. Agent error labels are limited to records
+within the caller's reach. Machine queries can report the current query failure separately from
+the last known SSH error.
 
 ### Listing and inspecting
 
@@ -160,9 +171,11 @@ a worktree or starting a process. A Git error can describe what was kept in `dat
 A start can include an initial prompt. A start result gives the agent record and prompt
 information. An automatic retry uses the same request ID and returns the original outcome.
 
-`agent.stop` returns the stable reference, current public address and recorded process exit.
-An already ended process reports `already_ended`. `agent.remove` returns the removed record's
-stable reference and address. A confirmed expiry or explicit removal also appears as
+`agent.stop` returns the stable reference, current public address, recorded process exit and
+agent label. A stop of an already ended process returns `ended`. A typed input receipt gives the
+agent label after its terminal accepts the input. Rename returns the renamed record's fields and
+the name it replaced. `agent.remove` returns the removed record's stable reference and address.
+A confirmed expiry or explicit removal also appears as
 `record_removal` in a precise missing-record error.
 
 ### Resume, locations and status
@@ -171,6 +184,9 @@ stable reference and address. A confirmed expiry or explicit removal also appear
 the returned `ResumeTarget` unchanged with `agent.resume`, adding `env`, `cols` and `rows`.
 For a remote CLI session the target includes its machine and actual folder. A client using a
 saved Pin may instead provide the exact `machine_id`, mutually exclusive with `machine`.
+`at` records when a managed run ended or when a saved session file changed. A saved session can
+also be selected by its full ID or eight-character prefix in the requested directory. The resume
+receipt indicates when it created a new agent from a saved session.
 `session_not_found` means the selected running machine confirmed the session is absent.
 
 `location.list` returns the working locations and Git kinds known on the selected machine.
@@ -178,6 +194,9 @@ Local results can identify their requested workspace roots as `source_folder`. `
 uses the selected machine's working folder and launch environment. `daemon.status` returns the
 home, settings path, version, process IDs, active count and machine results of the live service.
 A local Shell observation that the service is sleeping is reported locally without starting it.
+`agent.inspect` includes the current or last managed run's recorded display command when
+available. The running machine formats the executable and arguments and redacts Facade's
+injected run credential before saving the command. The environment is excluded.
 
 ### Agent messages
 
@@ -191,6 +210,10 @@ can return the original settlement after withdrawal from a private receipt. The 
 message is absent from the inbox and history. A managed agent's delivery is confirmed when its
 terminal takes the submission. A Guest reads complete messages inline. The `next_cursor` of an
 inbox page is passed as `after` to continue reading with the same reply filter.
+
+A terminal can set `allow_unsupported_receipt` to receive a numbered delivery failure if the
+selected managed program has no input rule. That outcome confirms no input was sent. By default
+such requests fail before the message receives a number.
 
 A send without `reply_to` that times out and is withdrawn may carry `expected_reply_to`, the
 message the Guest was waiting for the sender to answer. The sender can use the original message's
@@ -425,8 +448,8 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `cli.list` | `CliListArgs` | `CliListResult` | Lists CLIs available in the selected launch environment. |
 | `agent.stop` | `V3AgentArgs` | `V3StopResult` | Stops the agent's CLI and keeps the agent record. |
 | `agent.remove` | `V3AgentArgs` | `RemoveResult` | Removes a managed agent. |
-| `agent.rename` | `V3RenameArgs` | `V3AgentInfo` | Changes an agent's name. |
-| `agent.type` | `V3TypeArgs` | `EmptyResult` | Sends input to a managed agent's terminal. |
+| `agent.rename` | `V3RenameArgs` | `RenameResult` | Changes an agent's name. |
+| `agent.type` | `V3TypeArgs` | `TypeResult` | Sends input to a managed agent's terminal. |
 | `agent.send` | `V3SendArgs` | `V3SendResult` | Sends a message to an agent. |
 | `agent.resize` | `V3ResizeArgs` | `EmptyResult` | Resizes a managed agent's terminal. |
 | `agent.screen` | `V3ScreenArgs` | `V3ScreenText` | Reads the last logical lines of an agent's screen. |
@@ -488,6 +511,19 @@ The source of an agent's start, as displayed to the caller.
 ### AgentKind
 
 `'managed' \| 'guest'`
+
+### AgentLabel
+
+The identity and state of the reachable agent selected by an operation or offered as a match.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `AgentRef` | yes |  |
+| `address` | `string` | yes | The agent's address in the requesting daemon's machine view. |
+| `name` | `string` | yes |  |
+| `cli` | `string` | yes |  |
+| `state` | `V3AgentState` | yes |  |
+| `resumable` | `boolean` | yes | The managed agent has a recorded session that Facade can resume. |
 
 ### AgentListEntry
 
@@ -562,6 +598,17 @@ The recorded cause of an agent record's removal.
 ### AgentsSnapshot
 
 `V3AgentsSnapshot`
+
+### AttachmentInfo
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `kind` | `AttachmentKind` | yes |  |
+| `machine_id` | `string` | yes |  |
+
+### AttachmentKind
+
+`'shell' \| 'vs_code'`
 
 ### CallParams
 
@@ -734,12 +781,16 @@ Error details for clients to inspect.
 | `kept` | `Kept` | no | With `worktree.create`, or `agent.start` with a `worktree`, that failed after Git made part or all of the worktree: what it made, which stays. |
 | `entry` | `string` | no | With a refused start or resume that an entry of the settings file caused - its program not found, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot take - the entry's name, such as `claude`. A client offers to open the settings file. |
 | `protocol` | `ProtocolMismatch` | no |  |
-| `candidates` | `string[]` | no | Complete references that matched a name or machine ID prefix. |
+| `available_clis` | `string[]` | no | CLIs that can start here when the requested CLI is not configured. |
 | `message_ref` | `MessageRef` | no | The original kept message, where its delivery outcome is unknown. |
 | `record_removal` | `AgentRemoval` | no | A confirmed reason the addressed agent record was removed. |
 | `machine_id_conflict` | `MachineIdConflict` | no |  |
 | `ssh_interaction` | `SshInteraction` | no |  |
 | `unavailable` | `Unavailable` | no |  |
+| `candidates` | `string[]` | no | Complete references that matched a name or machine ID prefix. |
+| `agents` | `AgentLabel[]` | no | Reachable matches or the reachable agent whose operation failed. |
+| `machines` | `V3MachineQueryResult[]` | no | Matching machines or the selected machine whose connection failed. |
+| `sessions` | `SessionMatch[]` | no | Saved sessions matching the requested ID. |
 
 ### ExecutionOutcome
 
@@ -974,9 +1025,11 @@ Selects a machine for a query. An omitted selector uses the operation's default.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `machine_id` | `string` | yes |  |
+| `name` | `string` | no | The machine whose saved connection was removed. |
 | `ssh_destination` | `string` | yes |  |
 | `remote_home` | `string` | no |  |
 | `reachable` | `boolean` | yes |  |
+| `via` | `string` | no | The next machine on a remaining indirect route, in the client's machine view. |
 
 ### MachineRenameArgs
 
@@ -991,6 +1044,7 @@ Selects a machine for a query. An omitted selector uses the operation's default.
 |---|---|---|---|
 | `machine_id` | `string` | yes |  |
 | `name` | `string` | yes |  |
+| `previous_name` | `string` | no |  |
 
 ### MachineState
 
@@ -1112,6 +1166,46 @@ Error reasons shared by both protocols.
 
 `V3RenameArgs`
 
+### RenameResult
+
+An agent's details.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent_id` | `string` | yes | The stable ID is `a` followed by a number. It is unique within its Facade home while that home's SQLite database (`core/facade.db`) retains the agent number counter. |
+| `address` | `string` | yes | The copyable address, including a machine selector. The serving daemon fills client views. |
+| `type` | `AgentKind` | yes |  |
+| `label` | `string` | no | The label in the serving client's machine view. |
+| `unreachable` | `boolean` | no | The running machine is currently unreachable. |
+| `name` | `string` | yes | The display name. Names are nonempty but may repeat. |
+| `cli` | `string` | yes | The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a program started by its path or name. |
+| `args` | `string[]` | yes |  |
+| `model` | `string` | no |  |
+| `effort` | `string` | no |  |
+| `title` | `string` | no |  |
+| `cwd` | `string` | yes | The CLI's working folder at startup. |
+| `machine_id` | `string` | yes | The ID of the Facade machine that runs the agent. |
+| `pid` | `number` | no | The CLI's process ID. Omitted for a guest, whose process Facade does not know. |
+| `process` | `ProcessState` | yes | Whether the CLI is running or ended. |
+| `cols` | `number` | no | Terminal width in columns. Omitted for a guest, which has no terminal of Facade's. |
+| `rows` | `number` | no | Terminal height in rows. Omitted for a guest. |
+| `created_at` | `string` | yes | When the agent was first created, in UTC ISO 8601 format with milliseconds. |
+| `started_at` | `string` | yes | The latest start or resume time, in UTC ISO 8601 format with milliseconds. |
+| `creator_kind` | `CreatorKind` | no |  |
+| `creator` | `string` | no | The agent whose client started it. Omitted where the person started it, and for a guest. |
+| `creator_machine_id` | `string` | no | The creator's machine ID. Omitted when it is the record's own machine. |
+| `root` | `string` | yes | The first agent of its creation tree: itself where it has no creator, or else its creator's root. It stays when agents of the tree end or go. |
+| `root_machine_id` | `string` | no | The root agent's machine ID. Omitted when it is the record's own machine. |
+| `yolo` | `boolean` | yes | Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a guest as it joins. |
+| `exit` | `ProcessExit` | no | The recorded exit. Omitted while the agent is running. |
+| `session` | `string` | no | The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues. Omitted until one is reported. |
+| `state` | `V3AgentState` | yes | What the agent is doing. |
+| `state_detail` | `StateDetail` | no | More about the state: what the CLI waits for, its own words, how its process ended, or why the state is unknown. |
+| `said` | `Said` | no | The last thing that went into the agent's message input. Omitted until something has. |
+| `tools_state` | `ToolsState` | yes | Whether the agent's CLI can use Facade's tools. |
+| `tools_reason` | `ToolsReason` | no | Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable. |
+| `previous_name` | `string` | no | The name this operation replaced. |
+
 ### Request
 
 A method call. Calls with an ID receive a response; calls without an ID are notifications.
@@ -1152,8 +1246,10 @@ A response containing either a result or an error.
 | `machine_id` | `string` | yes |  |
 | `session` | `string` | yes |  |
 | `agent` | `AgentRef` | no |  |
+| `name` | `string` | no | The name of a managed agent. Omitted for a saved session. |
+| `stopped` | `boolean` | no | The managed run ended because Facade stopped it. |
 | `title` | `string` | no |  |
-| `at` | `string` | no |  |
+| `at` | `string` | no | The managed run's exit time or the saved session's modification time. |
 
 ### ResumeListArgs
 
@@ -1175,6 +1271,7 @@ A response containing either a result or an error.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `agent` | `V3AgentInfo` | yes |  |
+| `from_saved_session` | `boolean` | no | The call created a new agent to open a saved CLI session. |
 
 ### ResumeTarget
 
@@ -1238,6 +1335,16 @@ A change to the `screen` topic. `exit` follows all output the CLI wrote before e
 A response or notification received from a server.
 
 `Notification \| Response`
+
+### SessionMatch
+
+A saved session that matched the requested session ID.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes | The full CLI session ID. |
+| `cli` | `string` | yes |  |
+| `title` | `string` | no |  |
 
 ### SshInteraction
 
@@ -1328,6 +1435,12 @@ Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that
 ### TypeArgs
 
 `V3TypeArgs`
+
+### TypeResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `AgentLabel` | no | The target that took the input. Raw terminal input keeps the empty receipt. |
 
 ### Unavailable
 
@@ -1511,6 +1624,8 @@ Introduces a daemon client or a machine. Actor identity is supplied by the daemo
 | `session_tracking` | `boolean` | yes | Whether the running CLI reports its session to Facade. False for an ended agent. |
 | `started_by` | `AgentCreator` | no | The recorded startup source, where it is known. |
 | `viewers` | `string[]` | yes | The viewers currently attached to the terminal. |
+| `attachments` | `AttachmentInfo[]` | no | The verified client kinds and originating machines of those attachments. |
+| `launch_command` | `string` | no | The actual launch command formatted by the running machine, with run credentials redacted. Omitted if this run's launch command was not recorded. |
 
 ### V3LocationInfo
 
@@ -1600,6 +1715,7 @@ Introduces a daemon client or a machine. Actor identity is supplied by the daemo
 | `status` | `MachineQueryStatus` | yes | Whether this query obtained the machine's contribution. |
 | `last_seen` | `string` | no |  |
 | `ssh_error` | `string` | no |  |
+| `error` | `string` | no | The reason this query failed, when known. |
 
 ### V3MachineTransport
 
@@ -1654,6 +1770,7 @@ The copyable agent address or the CLI session and its working location.
 |---|---|---|---|
 | `agent_id` | `string` | yes | The ID of the agent being viewed. |
 | `address` | `string` | yes |  |
+| `name` | `string` | no |  |
 | `machine_id` | `string` | yes | The agent's running machine, for reconnecting to its exact reference. |
 | `cols` | `number` | yes | Terminal width required to apply the redraw. |
 | `rows` | `number` | yes | Terminal height required to apply the redraw. |
@@ -1667,6 +1784,7 @@ The copyable agent address or the CLI session and its working location.
 |---|---|---|---|
 | `agent_id` | `string` | yes |  |
 | `address` | `string` | yes |  |
+| `name` | `string` | no |  |
 | `process` | `ProcessState` | yes | Whether the agent's CLI is running. An ended agent's screen is the one it left. |
 | `observed_at` | `string` | yes | When the screen was read, in UTC ISO 8601 format with milliseconds; for an ended agent, when it ended, as its screen is the one it left. |
 | `buffer` | `ScreenBuffer` | yes |  |
@@ -1677,7 +1795,7 @@ The copyable agent address or the CLI session and its working location.
 
 ### V3ScreenWatchArgs
 
-`{ readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
+`{ readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string; readonly allow_ended?: boolean } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
 
 ### V3SendArgs
 
@@ -1689,6 +1807,7 @@ The copyable agent address or the CLI session and its working location.
 | `reply_to_machine_id` | `string` | no | The storage machine of the reply's reference, after the originating daemon verified it. |
 | `request_id` | `string` | no | The caller's own ID of this send, 1 to 200 characters. A retry within an hour with the same sender, sender machine, target, and ID joins its ongoing delivery or returns its original result. A withdrawn message keeps only a private record of the outcome for retries. |
 | `time_left_ms` | `number` | no | What is left of the send's 30 seconds as it leaves the client, in milliseconds: its delivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500. |
+| `allow_unsupported_receipt` | `boolean` | no | A terminal can request a numbered delivery outcome for a target without an input rule. |
 
 ### V3SendResult
 
@@ -1698,6 +1817,7 @@ The receipt of a send, with the address that can be used to wait for a reply.
 |---|---|---|---|
 | `id` | `string` | yes |  |
 | `message` | `V3Message` | yes |  |
+| `recipient` | `AgentLabel` | no | The recipient selected for this send, including when delivery fails. |
 | `repeated` | `boolean` | no |  |
 | `withdrawn` | `boolean` | no |  |
 | `expected_reply_to` | `MessageRef` | no | The original message the Guest was waiting for this sender to answer. It can be included when a send without `reply_to` timed out and was withdrawn. |
@@ -1751,6 +1871,7 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 |---|---|---|---|
 | `reference` | `AgentRef` | yes |  |
 | `address` | `string` | yes |  |
+| `agent` | `AgentLabel` | no | The record whose run this call stopped. |
 | `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
 | `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |

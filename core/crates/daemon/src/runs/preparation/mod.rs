@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::programs::Held;
+use facade_base::programs::{Held, display_command};
 use facade_base::start::StartCommand;
 use facade_base::system::env_var;
 use facade_rules::{CommandLine, ManagedServer, RUN_CREDENTIAL_ARG, Rule};
@@ -80,6 +80,7 @@ impl Preparation {
             };
             let launch = started_directly(None, launch, &env).await;
             return Ok(PreparedRun {
+                launch_command: shown_command(&launch, &env, None),
                 launch,
                 env,
                 captures: false,
@@ -254,6 +255,11 @@ impl Preparation {
         }
         let version = installed_version(rule, &launch.program, &env, request.cwd).await;
         let launch = started_directly(Some(rule), launch, &env).await;
+        let launch_command = shown_command(
+            &launch,
+            &env,
+            credential_args.as_ref().map(|[_, value]| value.as_str()),
+        );
         let tools = match tools {
             facade_rules::Tools::Injected => ToolsGiven::Injected,
             facade_rules::Tools::NotInjected => ToolsGiven::NotInjected,
@@ -268,6 +274,7 @@ impl Preparation {
         };
         Ok(PreparedRun {
             launch,
+            launch_command,
             env,
             captures,
             version,
@@ -390,6 +397,23 @@ impl Preparation {
     pub(crate) fn captures(&self, id: &str) -> bool {
         folder::find(&self.folders, id).is_some_and(|at| folder::session_file(&at).exists())
     }
+}
+
+fn shown_command(
+    launch: &StartCommand<String>,
+    env: &BTreeMap<String, String>,
+    credential: Option<&str>,
+) -> Option<String> {
+    let mut shown = display_command(
+        &launch.program,
+        &launch.args,
+        env,
+        Path::new(&launch.folder),
+    )?;
+    if let Some(credential) = credential {
+        shown = shown.replace(credential, "<redacted>");
+    }
+    Some(shown)
 }
 
 fn new_credential() -> String {

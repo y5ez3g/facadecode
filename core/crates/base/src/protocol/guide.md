@@ -57,17 +57,22 @@ contains only a short example terminal sequence.
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"cli":"claude","folder":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","address":"a1@devbox","type":"managed","name":"Pixel","cli":"claude","args":[],"cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":1234,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:25:00.000Z","started_at":"2026-11-09T17:25:00.000Z","root":"a1","yolo":true,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"}}}}
-← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","address":"a1@devbox","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw=","process":"running"}}}
+← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","address":"a1@devbox","name":"Pixel","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw=","process":"running"}}}
 ← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"output","data":"aGVsbG8="}}}
 → {"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"raw":"aGk="}}}
 → {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"text":"run the tests","enter":true}}}
-← {"jsonrpc":"2.0","id":4,"result":{}}
+← {"jsonrpc":"2.0","id":4,"result":{"agent":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","name":"Pixel","cli":"claude","state":"idle","resumable":false}}}
 → {"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent":"a1@devbox"}}}
 ← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"exit","exit":{"signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}}}
 ← {"jsonrpc":"2.0","id":5,"result":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}
 → {"jsonrpc":"2.0","id":6,"method":"unwatch","params":{"watch":1}}
 ← {"jsonrpc":"2.0","id":6,"result":{}}
 ```
+
+An exact screen watch may set `allow_ended` to read the final redraw of a managed run. The
+snapshot includes the process state and the exit if known. An ended snapshot admits no viewer.
+Ordinary watches require a running managed agent. Inspection lists the verified client kind and
+origin of each shell or editor attachment alongside the viewer names supplied by earlier clients.
 
 ### Agent and machine addresses
 
@@ -83,6 +88,12 @@ workspace membership and to reconnect a terminal to the same agent. Calls taking
 supply exactly one of `agent` or `reference`. The same target's permissions and capabilities
 apply on both paths. A specified machine can be woken for the requested operation. An unspecified
 machine uses the routes already available to the caller.
+
+For a name, lookup prefers live records among the matches that support the operation. An ambiguous
+number can still match several machines. Receipts and error labels carry a stable reference and
+the copyable address in the requesting daemon's view. Agent error labels are limited to records
+within the caller's reach. Machine queries can report the current query failure separately from
+the last known SSH error.
 
 ### Listing and inspecting
 
@@ -152,9 +163,11 @@ a worktree or starting a process. A Git error can describe what was kept in `dat
 A start can include an initial prompt. A start result gives the agent record and prompt
 information. An automatic retry uses the same request ID and returns the original outcome.
 
-`agent.stop` returns the stable reference, current public address and recorded process exit.
-An already ended process reports `already_ended`. `agent.remove` returns the removed record's
-stable reference and address. A confirmed expiry or explicit removal also appears as
+`agent.stop` returns the stable reference, current public address, recorded process exit and
+agent label. A stop of an already ended process returns `ended`. A typed input receipt gives the
+agent label after its terminal accepts the input. Rename returns the renamed record's fields and
+the name it replaced. `agent.remove` returns the removed record's stable reference and address.
+A confirmed expiry or explicit removal also appears as
 `record_removal` in a precise missing-record error.
 
 ### Resume, locations and status
@@ -163,6 +176,9 @@ stable reference and address. A confirmed expiry or explicit removal also appear
 the returned `ResumeTarget` unchanged with `agent.resume`, adding `env`, `cols` and `rows`.
 For a remote CLI session the target includes its machine and actual folder. A client using a
 saved Pin may instead provide the exact `machine_id`, mutually exclusive with `machine`.
+`at` records when a managed run ended or when a saved session file changed. A saved session can
+also be selected by its full ID or eight-character prefix in the requested directory. The resume
+receipt indicates when it created a new agent from a saved session.
 `session_not_found` means the selected running machine confirmed the session is absent.
 
 `location.list` returns the working locations and Git kinds known on the selected machine.
@@ -170,6 +186,9 @@ Local results can identify their requested workspace roots as `source_folder`. `
 uses the selected machine's working folder and launch environment. `daemon.status` returns the
 home, settings path, version, process IDs, active count and machine results of the live service.
 A local Shell observation that the service is sleeping is reported locally without starting it.
+`agent.inspect` includes the current or last managed run's recorded display command when
+available. The running machine formats the executable and arguments and redacts Facade's
+injected run credential before saving the command. The environment is excluded.
 
 ### Agent messages
 
@@ -183,6 +202,10 @@ can return the original settlement after withdrawal from a private receipt. The 
 message is absent from the inbox and history. A managed agent's delivery is confirmed when its
 terminal takes the submission. A Guest reads complete messages inline. The `next_cursor` of an
 inbox page is passed as `after` to continue reading with the same reply filter.
+
+A terminal can set `allow_unsupported_receipt` to receive a numbered delivery failure if the
+selected managed program has no input rule. That outcome confirms no input was sent. By default
+such requests fail before the message receives a number.
 
 A send without `reply_to` that times out and is withdrawn may carry `expected_reply_to`, the
 message the Guest was waiting for the sender to answer. The sender can use the original message's

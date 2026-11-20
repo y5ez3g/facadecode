@@ -327,10 +327,16 @@ pub struct MachineRemoveArgs {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MachineRemoveResult {
     pub machine_id: String,
+    /// The machine whose saved connection was removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub ssh_destination: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_home: Option<String>,
     pub reachable: bool,
+    /// The next machine on a remaining indirect route, in the client's machine view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -344,6 +350,8 @@ pub struct MachineRenameArgs {
 pub struct MachineRenameResult {
     pub machine_id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_name: Option<String>,
 }
 
 /// A change to the machine table visible to a client.

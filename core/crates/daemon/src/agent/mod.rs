@@ -101,7 +101,9 @@ pub(crate) struct Inspection {
     pub(crate) input: InputInfo,
     pub(crate) session_tracking: bool,
     pub(crate) viewers: Vec<String>,
+    pub(crate) attachments: Vec<facade_base::v3::AttachmentInfo>,
     pub(crate) title: Option<String>,
+    pub(crate) launch_command: Option<String>,
 }
 
 /// Says whether input was taken.
@@ -146,6 +148,7 @@ pub(crate) enum AgentCommand {
     AttachViewer {
         viewer: u64,
         name: Option<String>,
+        attachment: Option<facade_base::v3::AttachmentInfo>,
         tx: ViewerSender,
         keep_scrollback: bool,
         include_scrollback: bool,
@@ -156,7 +159,7 @@ pub(crate) enum AgentCommand {
     },
     ReadScreen {
         lines: usize,
-        reply: oneshot::Sender<facade_screen::Reading>,
+        reply: oneshot::Sender<(facade_screen::Reading, AgentInfo)>,
     },
     /// Reads the record, the input and whether the session is followed.
     Inspect {
@@ -187,6 +190,7 @@ pub(crate) enum AgentCommand {
         master: PtyMaster,
         pid: u32,
         captures: bool,
+        launch_command: Option<String>,
         /// The CLI's version as its installation names it.
         version: Option<String>,
         tools: ToolsGiven,
@@ -243,6 +247,7 @@ pub(crate) struct ActorStart {
     pub(crate) rule: Option<String>,
     /// Whether the running CLI reports its session.
     pub(crate) captures: bool,
+    pub(crate) launch_command: Option<String>,
     /// Where the typist settles the messages it delivers.
     pub(crate) deliveries: DeliveryHandle,
     pub(crate) state: StateStart,

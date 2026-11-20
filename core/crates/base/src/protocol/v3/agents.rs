@@ -131,8 +131,15 @@ pub struct ResumeCandidate {
     pub session: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentRef>,
+    /// The name of a managed agent. Omitted for a saved session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The managed run ended because Facade stopped it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The managed run's exit time or the saved session's modification time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
 }
@@ -210,6 +217,19 @@ fn resume_machine_selector(schema: &mut Schema) {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ResumeResult {
     pub agent: AgentInfo,
+    /// The call created a new agent to open a saved CLI session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_saved_session: bool,
+}
+
+/// A saved session that matched the requested session ID.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionMatch {
+    /// The full CLI session ID.
+    pub id: String,
+    pub cli: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -318,6 +338,19 @@ impl AgentInfo {
     }
 }
 
+/// The identity and state of the reachable agent selected by an operation or offered as a match.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentLabel {
+    pub reference: AgentRef,
+    /// The agent's address in the requesting daemon's machine view.
+    pub address: String,
+    pub name: String,
+    pub cli: String,
+    pub state: AgentState,
+    /// The managed agent has a recorded session that Facade can resume.
+    pub resumable: bool,
+}
+
 /// The agent's current state.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -387,6 +420,26 @@ pub struct AgentInspectResult {
     pub started_by: Option<AgentCreator>,
     /// The viewers currently attached to the terminal.
     pub viewers: Vec<String>,
+    /// The verified client kinds and originating machines of those attachments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentInfo>,
+    /// The actual launch command formatted by the running machine, with run credentials redacted.
+    /// Omitted if this run's launch command was not recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_command: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKind {
+    Shell,
+    VsCode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AttachmentInfo {
+    pub kind: AttachmentKind,
+    pub machine_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -415,6 +468,9 @@ pub struct StartResult {
 pub struct StopResult {
     pub reference: AgentRef,
     pub address: String,
+    /// The record whose run this call stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentLabel>,
     #[serde(flatten)]
     pub exit: ProcessExit,
     /// The CLI had ended before this stop, so the stop signaled nothing. Omitted when false.

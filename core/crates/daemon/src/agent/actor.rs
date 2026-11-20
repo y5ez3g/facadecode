@@ -98,6 +98,7 @@ pub(super) fn spawn(
         colors,
         rule,
         captures,
+        launch_command,
         deliveries,
         state,
     } = start;
@@ -153,6 +154,7 @@ pub(super) fn spawn(
         held: VecDeque::new(),
         input_rule: rule.map(|rule| &rule.input),
         captures,
+        launch_command,
         undrawn: None,
         process: info.process,
         exit: info.exit.clone(),
@@ -218,6 +220,7 @@ struct Actor {
     input_rule: Option<&'static InputRule>,
     /// Whether the running CLI reports its session.
     captures: bool,
+    launch_command: Option<String>,
     /// Why the screen may not show the CLI's input yet; cleared once the CLI writes.
     undrawn: Option<&'static str>,
     /// The process state viewers' snapshots carry.
@@ -523,6 +526,7 @@ impl Actor {
             AgentCommand::AttachViewer {
                 viewer,
                 name,
+                attachment,
                 tx,
                 keep_scrollback,
                 include_scrollback,
@@ -530,7 +534,7 @@ impl Actor {
             } => {
                 self.add_viewer(ViewerRequest {
                     viewer,
-                    kind: ViewKind::Attach(name),
+                    kind: ViewKind::Attach { name, attachment },
                     tx,
                     keep_scrollback,
                     include_scrollback,
@@ -542,7 +546,8 @@ impl Actor {
             AgentCommand::ReadScreen { lines, reply } => {
                 if self.screen_mut().hold().await {
                     self.record_title();
-                    let _ = reply.send(self.screen().screen().read(lines));
+                    let info = self.links.shared.record.lock().unwrap().info.clone();
+                    let _ = reply.send((self.screen().screen().read(lines), info));
                 }
             }
             AgentCommand::Inspect { reply } => {
@@ -563,7 +568,13 @@ impl Actor {
                     } else {
                         self.viewers.names()
                     },
+                    attachments: if self.ended() {
+                        Vec::new()
+                    } else {
+                        self.viewers.attachments()
+                    },
                     title,
+                    launch_command: self.launch_command.clone(),
                 });
             }
             AgentCommand::ProcessExited { run, exit, stopped } => {
@@ -594,6 +605,7 @@ impl Actor {
                 master,
                 pid,
                 captures,
+                launch_command,
                 version,
                 tools,
                 reply,
@@ -614,6 +626,7 @@ impl Actor {
                 (self.exit, self.exit_sent, self.drain_deadline) = (None, false, None);
                 self.process = ProcessState::Running;
                 self.captures = captures;
+                self.launch_command = launch_command;
                 self.undrawn = Some("the CLI has not written since it resumed");
                 self.links.settled.send_replace(false);
                 let _ = self.links.exit.send(None);
@@ -940,17 +953,21 @@ impl Actor {
     }
 
     fn admit_viewers(&mut self) {
-        let told = if self.exit_sent {
-            self.exit.clone()
-        } else {
-            None
-        };
+        // A run with a known exit can still have output left for its final snapshot.
+        if self.exit.is_some() && !self.exit_sent {
+            return;
+        }
         let screen = self
             .screen
             .as_ref()
             .expect("the screen exists while the actor runs");
-        self.viewers
-            .admit(screen.screen(), told.as_ref(), self.process);
+        let record = self.links.shared.record.lock().unwrap();
+        self.viewers.admit(
+            screen.screen(),
+            self.exit.as_ref(),
+            self.process,
+            &record.info.name,
+        );
     }
 
     fn catch_up(&mut self) {
@@ -1079,6 +1096,7 @@ impl Actor {
         (self.exit_sent, self.drain_deadline) = (true, None);
         self.links.settled.send_replace(true);
         self.viewers.send_exit(&exit);
+        self.admit_viewers();
     }
 
     /// Readies the screen for run `run`.

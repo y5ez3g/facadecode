@@ -5,8 +5,8 @@ use std::sync::Arc;
 use facade_base::daemon::{ClientKind, HelloParams, HelloResult};
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
-    AgentRef, ConnectionKind, MachineAddResult, MachineHello, MachineIdentity, MachineRemoveResult,
-    MachineRenameResult, MachineTransport,
+    AgentRef, ConnectionKind, MachineAddResult, MachineHello, MachineIdentity, MachineQueryStatus,
+    MachineRemoveResult, MachineRenameResult, MachineTransport,
 };
 use facade_base::sockets::{ServerReader, ServerWriter};
 use facade_base::ssh::parse_ssh_destination;
@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 
 use crate::lifecycle::Work;
 use crate::network::{Event, FrontConnection, SavedSsh, TargetReply};
+use crate::network_operations::{machine_query_failure, machine_query_result};
 use crate::records::root_of;
 use crate::server::Client;
 use crate::service::value_of;
@@ -332,9 +333,9 @@ impl Daemon {
         &self,
         selector: MachineSelector<'_>,
     ) -> Result<v3::MachineInfo, ErrorBody> {
-        let mut found: Vec<_> = self
-            .network
-            .machines_v3()
+        let machines = self.network.machines_v3();
+        let mut visible = identities(&machines);
+        let mut found: Vec<_> = machines
             .into_iter()
             .filter(|machine| {
                 selector.matches(&MachineIdentity {
@@ -348,6 +349,12 @@ impl Daemon {
                 .map_err(ErrorBody::internal)?;
             found.extend(known.into_iter().filter_map(|(machine_id, name)| {
                 let identity = MachineIdentity { machine_id, name };
+                if !visible
+                    .iter()
+                    .any(|machine| machine.machine_id == identity.machine_id)
+                {
+                    visible.push(identity.clone());
+                }
                 selector
                     .matches(&identity)
                     .then(|| offline_machine(identity))
@@ -364,14 +371,53 @@ impl Daemon {
                     Reason::AmbiguousReference,
                     "several machines match that address",
                 );
-                let visible = self.machine_identities()?;
-                error.data.candidates = found
-                    .into_iter()
-                    .filter_map(|machine| machine_address_part(&machine.machine_id, &visible).ok())
-                    .collect();
+                for machine in found {
+                    if let Ok(selector) = machine_address_part(&machine.machine_id, &visible) {
+                        error.data.candidates.push(selector);
+                    }
+                    let mut row = machine_query_result(machine, MachineQueryStatus::Unavailable);
+                    project_machine_query(&mut row, &visible);
+                    error.data.machines.push(row);
+                }
                 Err(error)
             }
         }
+    }
+
+    pub(crate) async fn ensure_machine_route(&self, machine_id: &str) -> Result<(), ErrorBody> {
+        self.network
+            .ensure_route(machine_id)
+            .await
+            .map_err(|error| self.machine_failure(machine_id, error))
+    }
+
+    pub(crate) fn machine_failure(&self, machine_id: &str, mut error: ErrorBody) -> ErrorBody {
+        if error.data.machines.is_empty() {
+            let machines = self.network.machines_v3();
+            let visible = identities(&machines);
+            let machine = machines
+                .into_iter()
+                .find(|machine| machine.machine_id == machine_id)
+                .unwrap_or_else(|| {
+                    let identity = error
+                        .data
+                        .unavailable
+                        .as_ref()
+                        .and_then(|failure| failure.machine.as_ref())
+                        .filter(|machine| machine.machine_id == machine_id)
+                        .cloned()
+                        .unwrap_or_else(|| MachineIdentity {
+                            machine_id: machine_id.to_owned(),
+                            name: machine_id.to_owned(),
+                        });
+                    offline_machine(identity)
+                });
+            let mut row = machine_query_result(machine, machine_query_failure(&error));
+            project_machine_query(&mut row, &visible);
+            row.error = Some(error.message.clone());
+            error.data.machines.push(row);
+        }
+        error
     }
 
     pub(crate) async fn add_machine_v3(
@@ -407,15 +453,31 @@ impl Daemon {
 
     pub(crate) async fn remove_machine(
         &self,
-        machine_id: &str,
+        target: v3::MachineInfo,
     ) -> Result<MachineRemoveResult, ErrorBody> {
         let _changing = self.machine_changes.lock().await;
+        let machine_id = &target.machine_id;
+        if *machine_id == self.machine_id {
+            return Err(self.machine_failure(
+                machine_id,
+                ErrorBody::invalid_argument("cannot remove the local machine"),
+            ));
+        }
+        let name = self
+            .network
+            .machines_v3()
+            .into_iter()
+            .find(|machine| machine.machine_id == *machine_id)
+            .map_or(target.name, |machine| machine.name);
         let saved = blocking_in_place(|| self.store.delete_connection(machine_id))
             .map_err(ErrorBody::internal)?
             .ok_or_else(|| {
-                ErrorBody::new(
-                    Reason::NotFound,
-                    "this machine has no saved connection to remove",
+                self.machine_failure(
+                    machine_id,
+                    ErrorBody::new(
+                        Reason::NotFound,
+                        "this machine has no saved connection to remove",
+                    ),
                 )
             })?;
         self.network.remove_saved(machine_id);
@@ -423,13 +485,23 @@ impl Daemon {
             .network
             .machines()
             .iter()
-            .any(|row| row.machine_id == machine_id && !row.is_unreachable());
+            .any(|row| row.machine_id == *machine_id && !row.is_unreachable());
+        let via = self
+            .network
+            .machines_v3()
+            .into_iter()
+            .find(|machine| machine.machine_id == *machine_id)
+            .and_then(|machine| machine.route)
+            .filter(|route| route.len() > 1 && reachable)
+            .and_then(|route| self.machine_address_part(&route[0]).ok());
         self.publish_machine_table();
         Ok(MachineRemoveResult {
             machine_id: saved.machine_id,
+            name: Some(name),
             ssh_destination: saved.ssh_destination,
             remote_home: saved.remote_home,
             reachable,
+            via,
         })
     }
 
@@ -443,12 +515,32 @@ impl Daemon {
             ));
         }
         let _changing = self.machine_changes.lock().await;
+        let previous_name = self
+            .network
+            .machines_v3()
+            .into_iter()
+            .find(|machine| machine.machine_id == self.machine_id)
+            .map(|machine| machine.name);
         blocking_in_place(|| self.store.rename_machine(&name)).map_err(ErrorBody::internal)?;
         self.network.rename_local(name.clone());
         Ok(MachineRenameResult {
             machine_id: self.machine_id.clone(),
             name,
+            previous_name,
         })
+    }
+}
+
+pub(crate) fn project_machine_query(row: &mut v3::MachineQueryResult, visible: &[MachineIdentity]) {
+    row.selector = machine_address_part(&row.machine_id, visible)
+        .unwrap_or_else(|_| addresses::exact_machine_selector(&row.machine_id));
+    row.short_id = addresses::short_machine_id(&row.machine_id);
+    if addresses::parse_machine_selector(&row.short_id).is_ok_and(|short| {
+        visible
+            .iter()
+            .any(|machine| machine.machine_id != row.machine_id && short.matches(machine))
+    }) {
+        row.short_id = row.machine_id.clone();
     }
 }
 

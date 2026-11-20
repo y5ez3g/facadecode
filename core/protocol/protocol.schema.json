@@ -111,6 +111,40 @@
         "guest"
       ]
     },
+    "AgentLabel": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string",
+          "description": "The agent's address in the requesting daemon's machine view."
+        },
+        "name": {
+          "type": "string"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/V3AgentState"
+        },
+        "resumable": {
+          "type": "boolean",
+          "description": "The managed agent has a recorded session that Facade can resume."
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "name",
+        "cli",
+        "state",
+        "resumable"
+      ],
+      "description": "The identity and state of the reachable agent selected by an operation or offered as a match."
+    },
     "AgentListEntry": {
       "type": "object",
       "properties": {
@@ -267,6 +301,28 @@
     },
     "AgentsSnapshot": {
       "$ref": "#/$defs/V3AgentsSnapshot"
+    },
+    "AttachmentInfo": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AttachmentKind"
+        },
+        "machine_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "machine_id"
+      ]
+    },
+    "AttachmentKind": {
+      "type": "string",
+      "enum": [
+        "shell",
+        "vs_code"
+      ]
     },
     "CallParams": {
       "oneOf": [
@@ -1033,12 +1089,12 @@
         "protocol": {
           "$ref": "#/$defs/ProtocolMismatch"
         },
-        "candidates": {
+        "available_clis": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Complete references that matched a name or machine ID prefix."
+          "description": "CLIs that can start here when the requested CLI is not configured."
         },
         "message_ref": {
           "description": "The original kept message, where its delivery outcome is unknown.",
@@ -1056,6 +1112,34 @@
         },
         "unavailable": {
           "$ref": "#/$defs/Unavailable"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Complete references that matched a name or machine ID prefix."
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentLabel"
+          },
+          "description": "Reachable matches or the reachable agent whose operation failed."
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineQueryResult"
+          },
+          "description": "Matching machines or the selected machine whose connection failed."
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionMatch"
+          },
+          "description": "Saved sessions matching the requested ID."
         }
       },
       "required": [
@@ -1612,6 +1696,10 @@
         "machine_id": {
           "type": "string"
         },
+        "name": {
+          "type": "string",
+          "description": "The machine whose saved connection was removed."
+        },
         "ssh_destination": {
           "type": "string"
         },
@@ -1620,6 +1708,10 @@
         },
         "reachable": {
           "type": "boolean"
+        },
+        "via": {
+          "type": "string",
+          "description": "The next machine on a remaining indirect route, in the client's machine view."
         }
       },
       "required": [
@@ -1651,6 +1743,9 @@
           "type": "string"
         },
         "name": {
+          "type": "string"
+        },
+        "previous_name": {
           "type": "string"
         }
       },
@@ -1978,6 +2073,166 @@
     "RenameArgs": {
       "$ref": "#/$defs/V3RenameArgs"
     },
+    "RenameResult": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "The stable ID is `a` followed by a number. It is unique within its Facade home while\nthat home's SQLite database (`core/facade.db`) retains the agent number counter."
+        },
+        "address": {
+          "type": "string",
+          "description": "The copyable address, including a machine selector. The serving daemon fills client views."
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "label": {
+          "type": "string",
+          "description": "The label in the serving client's machine view."
+        },
+        "unreachable": {
+          "type": "boolean",
+          "description": "The running machine is currently unreachable."
+        },
+        "name": {
+          "type": "string",
+          "description": "The display name. Names are nonempty but may repeat."
+        },
+        "cli": {
+          "type": "string",
+          "description": "The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or\nan added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a\nprogram started by its path or name."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "The CLI's working folder at startup."
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "The ID of the Facade machine that runs the agent."
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The CLI's process ID. Omitted for a guest, whose process Facade does not know."
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState",
+          "description": "Whether the CLI is running or ended."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width in columns. Omitted for a guest, which has no terminal of Facade's."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height in rows. Omitted for a guest."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "When the agent was first created, in UTC ISO 8601 format with milliseconds."
+        },
+        "started_at": {
+          "type": "string",
+          "description": "The latest start or resume time, in UTC ISO 8601 format with milliseconds."
+        },
+        "creator_kind": {
+          "$ref": "#/$defs/CreatorKind"
+        },
+        "creator": {
+          "type": "string",
+          "description": "The agent whose client started it. Omitted where the person started it, and for a guest."
+        },
+        "creator_machine_id": {
+          "type": "string",
+          "description": "The creator's machine ID. Omitted when it is the record's own machine."
+        },
+        "root": {
+          "type": "string",
+          "description": "The first agent of its creation tree: itself where it has no creator, or else its creator's\nroot. It stays when agents of the tree end or go."
+        },
+        "root_machine_id": {
+          "type": "string",
+          "description": "The root agent's machine ID. Omitted when it is the record's own machine."
+        },
+        "yolo": {
+          "type": "boolean",
+          "description": "Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With\nYOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation\ntree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a\nguest as it joins."
+        },
+        "exit": {
+          "description": "The recorded exit. Omitted while the agent is running.",
+          "$ref": "#/$defs/ProcessExit"
+        },
+        "session": {
+          "type": "string",
+          "description": "The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues.\nOmitted until one is reported."
+        },
+        "state": {
+          "$ref": "#/$defs/V3AgentState",
+          "description": "What the agent is doing."
+        },
+        "state_detail": {
+          "description": "More about the state: what the CLI waits for, its own words, how its process ended, or why\nthe state is unknown.",
+          "$ref": "#/$defs/StateDetail"
+        },
+        "said": {
+          "description": "The last thing that went into the agent's message input. Omitted until something has.",
+          "$ref": "#/$defs/Said"
+        },
+        "tools_state": {
+          "$ref": "#/$defs/ToolsState",
+          "description": "Whether the agent's CLI can use Facade's tools."
+        },
+        "tools_reason": {
+          "description": "Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable.",
+          "$ref": "#/$defs/ToolsReason"
+        },
+        "previous_name": {
+          "type": "string",
+          "description": "The name this operation replaced."
+        }
+      },
+      "required": [
+        "agent_id",
+        "address",
+        "type",
+        "name",
+        "cli",
+        "args",
+        "cwd",
+        "machine_id",
+        "process",
+        "created_at",
+        "started_at",
+        "root",
+        "yolo",
+        "state",
+        "tools_state"
+      ],
+      "description": "An agent's details."
+    },
     "Request": {
       "type": "object",
       "properties": {
@@ -2061,11 +2316,20 @@
         "agent": {
           "$ref": "#/$defs/AgentRef"
         },
+        "name": {
+          "type": "string",
+          "description": "The name of a managed agent. Omitted for a saved session."
+        },
+        "stopped": {
+          "type": "boolean",
+          "description": "The managed run ended because Facade stopped it."
+        },
         "title": {
           "type": "string"
         },
         "at": {
-          "type": "string"
+          "type": "string",
+          "description": "The managed run's exit time or the saved session's modification time."
         }
       },
       "required": [
@@ -2116,6 +2380,10 @@
       "properties": {
         "agent": {
           "$ref": "#/$defs/V3AgentInfo"
+        },
+        "from_saved_session": {
+          "type": "boolean",
+          "description": "The call created a new agent to open a saved CLI session."
         }
       },
       "required": [
@@ -2297,6 +2565,26 @@
         }
       ],
       "description": "A response or notification received from a server."
+    },
+    "SessionMatch": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The full CLI session ID."
+        },
+        "cli": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "cli"
+      ],
+      "description": "A saved session that matched the requested session ID."
     },
     "SshInteraction": {
       "type": "object",
@@ -2534,6 +2822,15 @@
     },
     "TypeArgs": {
       "$ref": "#/$defs/V3TypeArgs"
+    },
+    "TypeResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "description": "The target that took the input. Raw terminal input keeps the empty receipt.",
+          "$ref": "#/$defs/AgentLabel"
+        }
+      }
     },
     "Unavailable": {
       "type": "object",
@@ -4603,6 +4900,17 @@
             "type": "string"
           },
           "description": "The viewers currently attached to the terminal."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttachmentInfo"
+          },
+          "description": "The verified client kinds and originating machines of those attachments."
+        },
+        "launch_command": {
+          "type": "string",
+          "description": "The actual launch command formatted by the running machine, with run credentials redacted.\nOmitted if this run's launch command was not recorded."
         }
       },
       "required": [
@@ -4850,6 +5158,10 @@
         },
         "ssh_error": {
           "type": "string"
+        },
+        "error": {
+          "type": "string",
+          "description": "The reason this query failed, when known."
         }
       },
       "required": [
@@ -5179,6 +5491,9 @@
         "address": {
           "type": "string"
         },
+        "name": {
+          "type": "string"
+        },
         "machine_id": {
           "type": "string",
           "description": "The agent's running machine, for reconnecting to its exact reference."
@@ -5226,6 +5541,9 @@
           "type": "string"
         },
         "address": {
+          "type": "string"
+        },
+        "name": {
           "type": "string"
         },
         "process": {
@@ -5311,6 +5629,10 @@
         },
         "viewer": {
           "type": "string"
+        },
+        "allow_ended": {
+          "type": "boolean",
+          "description": "With an exact managed reference, allow the final snapshot of an ended run."
         }
       }
     },
@@ -5342,6 +5664,10 @@
           "format": "uint64",
           "minimum": 0,
           "description": "What is left of the send's 30 seconds as it leaves the client, in milliseconds: its\ndelivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500."
+        },
+        "allow_unsupported_receipt": {
+          "type": "boolean",
+          "description": "A terminal can request a numbered delivery outcome for a target without an input rule."
         }
       },
       "required": [
@@ -5357,6 +5683,10 @@
         },
         "message": {
           "$ref": "#/$defs/V3Message"
+        },
+        "recipient": {
+          "description": "The recipient selected for this send, including when delivery fails.",
+          "$ref": "#/$defs/AgentLabel"
         },
         "repeated": {
           "type": "boolean"
@@ -5504,6 +5834,10 @@
         },
         "address": {
           "type": "string"
+        },
+        "agent": {
+          "description": "The record whose run this call stopped.",
+          "$ref": "#/$defs/AgentLabel"
         },
         "code": {
           "type": "integer",

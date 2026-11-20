@@ -217,6 +217,7 @@ fn watch_screen(
         keep_scrollback: true,
         include_scrollback,
         viewer: Some(viewer.into()),
+        allow_ended: false,
     })
 }
 
