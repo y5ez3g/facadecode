@@ -1,0 +1,15 @@
+{
+	"$schema": "https://unpkg.com/wrangler/config-schema.json",
+	"name": "facadecode-release-mirror",
+	"main": "worker.mjs",
+	"compatibility_date": "2026-11-20",
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [
+		{ "pattern": "facadecode.com/install.sh", "zone_name": "facadecode.com" },
+		{ "pattern": "facadecode.com/install.ps1", "zone_name": "facadecode.com" },
+		{ "pattern": "facadecode.com/facade-core-version.txt", "zone_name": "facadecode.com" },
+		{ "pattern": "facadecode.com/releases/*", "zone_name": "facadecode.com" }
+	],
+	"r2_buckets": [{ "binding": "RELEASES", "bucket_name": "facadecode-releases" }]
+}

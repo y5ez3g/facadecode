@@ -1,7 +1,7 @@
 name: Extension release
 
-# Tag extension/<version>: build and test every platform, put VSIX and core assets on that tag's GitHub Release first,
-# then, once approved in the extension-stores environment, publish the Release's files to VS Code Marketplace and Open VSX.
+# Tag extension/<version>: build, sign and verify a GitHub Pre-release.
+# A publish dispatch mirrors the candidate, publishes both stores after approval, then advances stable.
 on:
   push:
     tags:
@@ -9,7 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: An existing extension/<version> tag to finish releasing
+        description: An existing extension/<version> tag
+        required: true
+      mode:
+        description: Prepare the candidate or publish the accepted candidate
+        type: choice
+        options: [prepare, publish]
+        default: prepare
         required: true
 
 permissions:
@@ -23,29 +29,41 @@ jobs:
   plan:
     name: Plan the release
     runs-on: ubuntu-latest
+    # Checking a previous prepare's draft requires push access even for a read.
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
       build: ${{ steps.plan.outputs.build }}
+      mode: ${{ steps.plan.outputs.mode }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: extension/.nvmrc
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
+          MODE: ${{ inputs.mode || 'prepare' }}
         run: |
           if [[ ! "$TAG" =~ ^extension/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::$TAG is not extension/<major.minor.patch>"; exit 1; fi
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          # A Release that already has its SHA256SUMS holds every file; a rerun then only finishes the stores.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx SHA256SUMS; then
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=true" >> "$GITHUB_OUTPUT"
+          build=$(node extension/scripts/release.mjs build-needed --tag "$TAG")
+          if [[ "$MODE" == publish && "$build" == true ]]; then
+            echo "::error::Prepare the complete candidate for $TAG before publishing."
+            exit 1
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build and test
     needs: plan
-    if: needs.plan.outputs.build == 'true'
+    if: needs.plan.outputs.mode == 'prepare' && needs.plan.outputs.build == 'true'
     # Its Windows jobs sign in to Azure to sign the packages' programs
     permissions:
       contents: read
@@ -56,9 +74,9 @@ jobs:
       sign: true
 
   release:
-    name: GitHub Release
+    name: GitHub Pre-release
     needs: [plan, build]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.mode == 'prepare' && (needs.build.result == 'success' || (needs.plan.outputs.build == 'false' && needs.build.result == 'skipped')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -69,24 +87,60 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.plan.outputs.tag }}
+          ref: ${{ github.workflow_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: extension/.nvmrc
       - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.build == 'true'
         with:
           pattern: extension-*
           path: extension/build/release-input
-      - name: Put the tested VSIX and core assets on the Release and check them again
+      - name: Prepare the tagged candidate
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
-        run: node scripts/release.mjs github --tag "$TAG" --input-dir build/release-input
+          BUILD: ${{ needs.plan.outputs.build }}
+        run: |
+          if [[ "$BUILD" == true ]]; then
+            git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+            node scripts/release.mjs github --tag "$TAG" --input-dir build/release-input
+          else
+            node scripts/release.mjs verify --tag "$TAG" --prepare
+          fi
+
+  mirror:
+    name: Website release mirror
+    needs: plan
+    if: needs.plan.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: extension-mirror
+    outputs:
+      manifest: ${{ steps.mirror.outputs.manifest }}
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: extension/.nvmrc
+      - name: Mirror the verified Release files
+        id: mirror
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/release.mjs mirror --tag "$TAG"
 
   stores:
     name: VS Code Marketplace and Open VSX
-    needs: [plan, release]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.release.result == 'success' || (needs.plan.outputs.build == 'false' && needs.release.result == 'skipped')) }}
+    needs: [plan, mirror]
+    if: ${{ !cancelled() && needs.mirror.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: extension-stores
@@ -96,7 +150,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.plan.outputs.tag }}
+          ref: ${{ github.workflow_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: extension/.nvmrc
@@ -106,4 +160,33 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: node scripts/release.mjs stores --tag "$TAG"
+          MANIFEST: ${{ needs.mirror.outputs.manifest }}
+        run: node scripts/release.mjs stores --tag "$TAG" --manifest-digest "$MANIFEST"
+
+  promote:
+    name: Promote the verified stable release
+    needs: [plan, mirror, stores]
+    if: needs.plan.outputs.mode == 'publish' && needs.stores.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    environment: extension-mirror
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: extension/.nvmrc
+      - name: Switch the website and GitHub stable versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MANIFEST: ${{ needs.mirror.outputs.manifest }}
+        run: node scripts/release.mjs promote --tag "$TAG" --manifest-digest "$MANIFEST"
