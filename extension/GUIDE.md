@@ -68,8 +68,8 @@ reply-wait call returned by `send_message`.
 
 ## Settings and CLI behavior
 
-Choose **Open Settings** to access the execution host's `facade.json`. Use `facade status --machine devbox` to find the
-settings on another machine and SSH there to edit it. YOLO defaults to on. With YOLO off, an agent uses its CLI's
+Choose **Open Settings** to access the execution host's `facade.json`. To find the settings file on another machine,
+connect over SSH and run `facade status` there. YOLO defaults to on. With YOLO off, an agent uses its CLI's
 normal approval and sandbox settings, and its MCP reach is its creation tree. Settings are read at Start or Resume.
 
 Use `clis` to add a named entry backed by a built-in CLI, for example Codex with a separate profile, or to launch a

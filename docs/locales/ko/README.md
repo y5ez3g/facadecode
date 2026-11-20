@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 설치 프로그램은 `facade`와 `facade-mcp`를 PATH에 추가합니다. 새 터미널을 열어 갱신된 PATH를 사용합니다. `facade upgrade`로 업데이트하세요. 각 머신에 필요한 CLI를 설치하고 로그인합니다. 기본 제공 CLI는 Claude Code, Codex, Antigravity, Muse Code, OpenCode, Pi입니다.
 
-IDE 실행 명령도 `facade`입니다. 둘 다 설치된 경우 Shell은 PATH에서 먼저 찾은 프로그램을 실행합니다. IDE 미리 보기가 종료되면 이 이름은 Orchestrator에서 사용합니다. `facade version`을 실행합니다. `facade <version>` 형식의 줄이 나오면 Shell 명령입니다.
+IDE 실행 명령도 `facade`입니다. 둘 다 설치된 경우 Shell은 PATH에서 먼저 찾은 프로그램을 실행합니다. IDE 미리 보기가 종료되면 이 이름은 Orchestrator에서 사용합니다. `facade --version`을 실행합니다. `facade <version>` 형식의 줄이 나오면 Shell 명령입니다.
 
 ### VS Code
 
@@ -88,7 +88,7 @@ facade attach ada
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 필요하면 Facade가 원격 머신에 해당 버전을 설치합니다. Facade는 원격 머신에서 고정된 설치 경로를 사용합니다. 수동으로 설치할 때는 로컬 Orchestrator와 같은 버전을 사용하세요. VS Code에서 **Go to Agent**를 선택하면 실행 중인 에이전트의 터미널을 열 수 있습니다. 작업 영역은 열었던 에이전트와 그 도우미, Pin을 기억합니다. 터미널 탭을 닫아도 에이전트는 계속 실행됩니다. **Resume Agent**와 `facade resume`은 저장된 작업을 표시합니다.

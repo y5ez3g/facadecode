@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 Kurucu `facade` ve `facade-mcp` komutlarını PATH'e ekler. Güncellenen PATH'i kullanmak için yeni bir terminal açın. Güncellemek için `facade upgrade` komutunu çalıştırın. Gerekli CLI'ları her makineye kurup oturum açın. Yerleşik seçenekler Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi'dir.
 
-Başlatıcısının adı da `facade`'dır. İkisi de kuruluysa Shell, PATH'te ilk bulunan programı kullanır. Önizleme kaldırıldığında komut adı Orchestrator'a kalır. `facade version` komutunu çalıştırın. `facade <version>` biçimindeki satır Shell komutunu kullandığınızı doğrular.
+Başlatıcısının adı da `facade`'dır. İkisi de kuruluysa Shell, PATH'te ilk bulunan programı kullanır. Önizleme kaldırıldığında komut adı Orchestrator'a kalır. `facade --version` komutunu çalıştırın. `facade <version>` biçimindeki satır Shell komutunu kullandığınızı doğrular.
 
 ### VS Code
 
@@ -88,7 +88,7 @@ facade attach ada
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 Facade gerektiğinde uzak makineye ilgili sürümü kurar. Facade uzak makinede sabit kurulum yolunu kullanır. Elle kurmanız gerekirse yerel Orchestrator ile aynı sürümü kullanın. VS Code'daki **Go to Agent**, çalışan bir aracının terminalini açar. Çalışma alanı açılan aracıları, yardımcılarını ve Pin'leri hatırlar. Terminal sekmesi kapandığında aracı çalışmaya devam eder. **Resume Agent** ve `facade resume` kayıtlı çalışmaları gösterir.

@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 インストーラーは `facade` と `facade-mcp` を PATH に追加します。新しい端末を開いて、更新された PATH を使用します。更新は `facade upgrade` で行います。使う CLI を各マシンにインストールし、ログインしてください。組み込み CLI は Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi です。
 
-IDE の起動コマンドも `facade` です。両方をインストールした場合、Shell は PATH の先頭にある方を使います。IDE プレビューの終了後、この名前は Orchestrator 用になります。`facade version` を実行し、`facade <version>` 形式の行が表示されれば Shell のコマンドを使用しています。
+IDE の起動コマンドも `facade` です。両方をインストールした場合、Shell は PATH の先頭にある方を使います。IDE プレビューの終了後、この名前は Orchestrator 用になります。`facade --version` を実行し、`facade <version>` 形式の行が表示されれば Shell のコマンドを使用しています。
 
 ### VS Code
 
@@ -88,7 +88,7 @@ facade attach ada
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 必要に応じて、Facade がリモートマシンに対応するバージョンをインストールします。Facade はリモートマシンで固定のインストールパスを使います。手動でインストールする場合は、ローカルの Orchestrator と同じバージョンを使います。VS Code の **Go to Agent** で実行中のエージェントの端末を開けます。ワークスペースは開いたエージェント、そこから起動したエージェント、Pin を記憶します。端末タブを閉じてもエージェントは動き続けます。**Resume Agent** と `facade resume` は再開できる作業を表示します。

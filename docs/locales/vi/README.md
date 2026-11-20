@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 Trình cài đặt thêm `facade` và `facade-mcp` vào PATH. Mở terminal mới để dùng PATH đã cập nhật. Chạy `facade upgrade` để cập nhật. Cài đặt và đăng nhập các CLI cần dùng trên từng máy. Các lựa chọn tích hợp gồm Claude Code, Codex, Antigravity, Muse Code, OpenCode và Pi.
 
-Trình khởi chạy cũng có tên `facade`. Khi cài cả hai, Shell chạy chương trình xuất hiện trước trong PATH. Sau khi ngừng phát hành bản xem trước, tên lệnh thuộc về Orchestrator. Chạy `facade version`. Dòng có dạng `facade <version>` xác nhận bạn đang dùng lệnh Shell.
+Trình khởi chạy cũng có tên `facade`. Khi cài cả hai, Shell chạy chương trình xuất hiện trước trong PATH. Sau khi ngừng phát hành bản xem trước, tên lệnh thuộc về Orchestrator. Chạy `facade --version`. Dòng có dạng `facade <version>` xác nhận bạn đang dùng lệnh Shell.
 
 ### VS Code
 
@@ -88,7 +88,7 @@ Dùng địa chỉ do `facade list` hiển thị. Đăng ký máy khác bằng �
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 Facade cài phiên bản tương ứng trên máy từ xa khi cần. Facade dùng đường dẫn cài đặt cố định trên máy từ xa. Khi cài thủ công, hãy dùng cùng phiên bản với Orchestrator cục bộ. Trong VS Code, **Go to Agent** mở terminal của agent đang chạy. Không gian làm việc nhớ các agent đã mở, các agent hỗ trợ và Pin. Đóng thẻ terminal vẫn để agent chạy. **Resume Agent** và `facade resume` hiển thị công việc đã lưu.
