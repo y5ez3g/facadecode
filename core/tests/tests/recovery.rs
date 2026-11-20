@@ -336,11 +336,19 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
 fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
     let home = TestHome::new("offlinekeys");
     let agent = home.start_fake("w1");
+    let away = "界";
+    let note = format!(
+        "Reconnected to w1 ({}). {} bytes typed while disconnected were not sent; check the screen and retype if needed.",
+        agent.address,
+        away.len()
+    );
+    // Allow the whole notice plus the terminal's last column, even with a long runner hostname.
+    let cols = u16::try_from(note.len() + 1).expect("the reconnect notice fits a terminal");
     let mut term = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .env("FACADE_TEST_GATES", "attach-evidence")
             .args(["attach", "w1"]),
-        100,
+        cols,
         30,
     );
     assert!(
@@ -361,15 +369,9 @@ fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
     // The socket can disappear before Attach switches its input queue to disconnected.
     home.wait_for_gate("attach-disconnected");
     let disconnected = term.output_len();
-    let away = "界";
     term.send(away.as_bytes());
     home.wait_for_gate("attach-buffered-input");
     resume_process(keeper);
-    let note = format!(
-        "Reconnected to w1 ({}). {} bytes typed while disconnected were not sent",
-        agent.address,
-        away.len()
-    );
     assert!(term.wait_for_output(secs(15), &note), "{}", term.text());
     let written = term.output_since(disconnected);
     let written = String::from_utf8_lossy(&written);
