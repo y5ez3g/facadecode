@@ -534,14 +534,8 @@ impl Daemon {
 pub(crate) fn project_machine_query(row: &mut v3::MachineQueryResult, visible: &[MachineIdentity]) {
     row.selector = machine_address_part(&row.machine_id, visible)
         .unwrap_or_else(|_| addresses::exact_machine_selector(&row.machine_id));
-    row.short_id = addresses::short_machine_id(&row.machine_id);
-    if addresses::parse_machine_selector(&row.short_id).is_ok_and(|short| {
-        visible
-            .iter()
-            .any(|machine| machine.machine_id != row.machine_id && short.matches(machine))
-    }) {
-        row.short_id = row.machine_id.clone();
-    }
+    row.short_id =
+        addresses::display_machine_id(&row.machine_id, visible).unwrap_or_else(|_| "-".into());
 }
 
 fn checked_ssh_args(destination: &str, argv: Vec<String>) -> Result<Vec<String>, ErrorBody> {

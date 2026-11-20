@@ -2,16 +2,16 @@
 
 use std::time::SystemTime;
 
-use facade_base::address::short_machine_id;
 use facade_base::daemon::display_name;
 use facade_base::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::{MachineRemoveArgs, MachineRenameArgs};
 use facade_base::operations::NoArgs;
 use facade_base::time::parse_iso_time;
+use facade_base::v3::address::display_machine_id;
 use facade_base::v3::{
-    ConnectionKind, MachineConnection, MachineInfo, MachineList, MachineRemove, MachineRename,
-    MachineState,
+    ConnectionKind, MachineConnection, MachineIdentity, MachineInfo, MachineList, MachineRemove,
+    MachineRename, MachineState,
 };
 
 use crate::errors::{about_machine, repair_command};
@@ -19,6 +19,7 @@ use crate::{single_line, table};
 
 pub(super) fn list(daemon: &mut DaemonClient) -> anyhow::Result<()> {
     let listed = daemon.call::<MachineList>(NoArgs {})?;
+    let visible = identities(&listed.machines);
     let local_id = daemon.hello_result.machine_id.as_str();
     let mut ordered: Vec<_> = listed.machines.iter().collect();
     ordered.sort_by_key(|machine| machine.machine_id != local_id);
@@ -37,7 +38,8 @@ pub(super) fn list(daemon: &mut DaemonClient) -> anyhow::Result<()> {
                     && connection.machine_id == machine.machine_id
                     && connection.ssh_destination.is_some()
             });
-            let id = shown_id(&machine.machine_id, &listed.machines);
+            let id =
+                display_machine_id(&machine.machine_id, &visible).unwrap_or_else(|_| "-".into());
             if !local {
                 diagnostics.extend(diagnostic(machine, &id, saved));
             }
@@ -122,7 +124,10 @@ pub(super) fn rename(
     });
     let id = listed.as_ref().map_or_else(
         || renamed.machine_id.clone(),
-        |listed| shown_id(&renamed.machine_id, &listed.machines),
+        |listed| {
+            display_machine_id(&renamed.machine_id, &identities(&listed.machines))
+                .unwrap_or_else(|_| "-".into())
+        },
     );
     let name = display_name(&renamed.name);
     if let Some(previous) = previous {
@@ -172,7 +177,7 @@ fn edit_error(
                 let id = &row.short_id;
                 let state = state_label(row.state, row.machine_id == *local_id);
                 let _ = write!(message, "\n  {id}  {state}");
-                if row.machine_id != *local_id {
+                if row.machine_id != *local_id && id != "-" {
                     example = Some(id);
                 }
             }
@@ -197,16 +202,14 @@ fn edit_error(
     }
 }
 
-fn shown_id(machine_id: &str, machines: &[MachineInfo]) -> String {
-    let short = short_machine_id(machine_id);
-    if machines.iter().any(|machine| {
-        machine.machine_id != machine_id
-            && (short == short_machine_id(&machine.machine_id) || short == machine.name)
-    }) {
-        machine_id.to_owned()
-    } else {
-        short
-    }
+fn identities(machines: &[MachineInfo]) -> Vec<MachineIdentity> {
+    machines
+        .iter()
+        .map(|machine| MachineIdentity {
+            machine_id: machine.machine_id.clone(),
+            name: machine.name.clone(),
+        })
+        .collect()
 }
 
 fn state_label(state: MachineState, local: bool) -> &'static str {
