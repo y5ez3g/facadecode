@@ -402,35 +402,42 @@ fn release_version(version: &str) -> Result<&str, SshArgumentError> {
 }
 
 fn unix_pinned_command(script: &str, version: &str, remote_home: Option<&str>) -> String {
-    let url = install::pinned(version, "sh");
-    let mut arguments = vec![url.as_str(), version];
+    let [github, website] = install::script_urls(Some(version), "sh");
+    let mut arguments = vec![github.as_str(), website.as_str(), version];
     arguments.extend(remote_home);
     sh_command(script, &arguments)
 }
 
 fn unix_install_script(remote_home: Option<&str>) -> String {
     let home = if remote_home.is_some() {
-        r#"export FACADE_HOME="$3"; "#
+        r#"export FACADE_HOME="$4"; "#
     } else {
         ""
     };
-    format!(r#"{home}script=$(curl -fsSL "$1") && sh -c "$script" -- --version "$2" >&2"#)
+    let download = install::UNIX_DOWNLOAD;
+    format!(
+        r#"{download}{home}fetch_installer "$1" "$2" || {{
+    printf '%s\n' 'Could not download Facade installer.' >&2
+    exit "$status"
+}}
+sh -c "$script" -- --version "$3" >&2"#
+    )
 }
 
 fn windows_install_script(version: &str, remote_home: Option<&str>) -> String {
-    let url = install::pinned(version, "ps1");
     let prefix = remote_home.map_or_else(String::new, |home| {
         let bytes = STANDARD.encode(home);
         format!(
             "$env:FACADE_HOME = [Text.Encoding]::UTF8.GetString(\
-             [Convert]::FromBase64String('{bytes}')); "
+             [Convert]::FromBase64String('{bytes}'))"
         )
     });
-    let arguments = format!(
-        " -Version '{version}' | ForEach-Object {{ \
-         [Console]::Error.WriteLine($_) }}"
-    );
-    install::powershell_install(&url, &prefix, &arguments)
+    install::powershell_install(
+        Some(version),
+        &prefix,
+        "throw 'Could not download Facade installer.'",
+        " | ForEach-Object { [Console]::Error.WriteLine($_) }",
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -543,7 +550,7 @@ fn bootstrap_command(
                 "printf '%s\\n' missing",
             );
             let install = if wake {
-                format!("{} || exit 1", unix_install_script(remote_home))
+                format!("{} || exit $?", unix_install_script(remote_home))
             } else {
                 "printf '%s\\n' 'Facade installation requires an active connection' >&2; exit 1"
                     .to_owned()

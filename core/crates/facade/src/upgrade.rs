@@ -8,8 +8,8 @@ use facade_base::v3::AgentLabel;
 
 use crate::single_line;
 
-pub(crate) fn run() -> anyhow::Result<()> {
-    let output = facade_base::install::upgrade_command()
+pub(crate) fn run(version: Option<&str>) -> anyhow::Result<()> {
+    let output = facade_base::install::upgrade_command(version)
         .env("FACADE_UPGRADE_REPORT", "1")
         .stdin(Stdio::inherit())
         .output()

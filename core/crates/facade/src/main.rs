@@ -445,7 +445,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Status { agent: None } => {
             commands::status(daemon_client::probe()?.as_mut()).map(done)
         }
-        Command::Upgrade => upgrade::run().map(done),
+        Command::Upgrade { version } => upgrade::run(version.as_deref()).map(done),
     }
 }
 

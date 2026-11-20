@@ -1,12 +1,14 @@
 Upgrade Facade.
 
-Downloads and installs the latest release, then hands off running services
-without stopping active agents.
+Installs the latest stable release or the specified version, then hands off
+running services without stopping active agents.
 
-Usage: facade upgrade
+Usage: facade upgrade [--version X.Y.Z]
 
 Examples
   facade upgrade
+  facade upgrade --version 0.1.6
 
 Options
-  -h, --help  Show help
+      --version X.Y.Z  Install this release version
+  -h, --help           Show help
