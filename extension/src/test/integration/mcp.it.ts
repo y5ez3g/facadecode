@@ -69,7 +69,13 @@ interface Line {
 /** The fake CLI's record of its tool calls: every answer, as a JSON line. */
 function linesOf(alias: string): Line[] {
 	const file = `${RECORD}.mcp.${alias}`;
-	return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Line) : [];
+	const lines: Line[] = [];
+	if (fs.existsSync(file)) {
+		// The fake CLI can still be appending the last record while this test reads it.
+		const read = lineReader(line => lines.push(JSON.parse(line) as Line), error => { throw error; });
+		read(fs.readFileSync(file));
+	}
+	return lines;
 }
 
 const phases = new Map<string, number>();
