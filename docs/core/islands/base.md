@@ -170,8 +170,9 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `unix_process::calling_program()` for a hook's CLI.
 - `install::upgrade_command()` builds the command that runs the published stable installer with
   the current environment. SSH pins the corresponding installer to the local release version.
-- `console::{VtModes, ConsoleReader, ConsoleSignals}`: what attach needs of the person's console
-  beside crossterm's size and raw mode.
+- `console::{VtModes, ConsoleReader, ConsoleSignals, visible_content_end}`: what attach needs of
+  the person's console beside crossterm's size and raw mode. On Windows, Attach can read the
+  visible content boundary and consume an exact queued release from its detach chord.
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.

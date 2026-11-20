@@ -48,7 +48,13 @@ fn reconnect_rows_say_when_keys_are_discarded_and_how_many_bytes_were_lost() {
 #[test]
 fn the_line_after_the_screen_says_how_the_attachment_ended() {
     let ended = |end: AttachEnd| result_line(&end, "Pixel (a3@devbox)", "a3@devbox");
-    let agent_exited = |exit| ended(AttachEnd::AgentExited { exit, status: None });
+    let agent_exited = |exit| {
+        ended(AttachEnd::AgentExited {
+            exit,
+            status: None,
+            resume_hint: None,
+        })
+    };
     assert_eq!(
         ended(AttachEnd::Detached),
         "Detached from Pixel (a3@devbox). The agent is still running.\nReattach with 'facade attach a3@devbox'."

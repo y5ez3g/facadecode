@@ -285,6 +285,7 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
     assert!(wait_for_screen_text(&home, &agent_id, "READY"));
     let mut term = TestTerminal::spawn(
         home.command(&test_binaries().facade)
+            .env("FACADE_TEST_GATES", "attach-evidence")
             .args(["attach", &agent_id]),
         80,
         24,
@@ -295,6 +296,10 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
         term.text()
     );
     for round in 1..=2 {
+        let reconnected = home.path.join("core/reached-attach-reconnected");
+        if round > 1 {
+            std::fs::remove_file(&reconnected).unwrap();
+        }
         let previous = term.output_len();
         let old = home.kill_daemon();
         home.wait_for_daemon_after(old, secs(30))
@@ -304,6 +309,8 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
             "attempt {round}: {}",
             term.text()
         );
+        // The first visible bytes can arrive while the rest of the frame is still being drawn.
+        home.wait_for_gate("attach-reconnected");
     }
     assert_eq!(term.output_count(ATTACH_RECONNECT_NOTE), 0);
     assert_eq!(

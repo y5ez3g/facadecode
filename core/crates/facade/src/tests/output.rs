@@ -6,11 +6,12 @@ use facade_base::v3::{
     AgentListResult, AgentListRow, AttachmentInfo, AttachmentKind, SendResult, StatusResult,
 };
 use serde_json::{Value, json};
+use unicode_width::UnicodeWidthStr;
 
 use super::{agent, before, inspection, now};
 use crate::commands::{age, inspect_text, list_text, sleeping_text, state_words, status_text};
 use crate::errors::delivery_receipt;
-use crate::table;
+use crate::{TableLayout, render_table, table};
 
 /// Remove the last column's padding from each line.
 fn trimmed(text: &str) -> String {
@@ -83,6 +84,37 @@ fn a_table_pads_each_column_to_its_widest_cell_and_keeps_each_row_on_one_line() 
          a10   名前        waiting for you: question\n\
          a4    two lines   idle"
     );
+}
+
+#[test]
+fn a_narrow_resume_table_fits_wide_titles_and_keeps_the_full_session_ref() {
+    let headers = [
+        "NAME",
+        "REF",
+        "STATE",
+        "CLI",
+        "TYPE",
+        "WORKING DIRECTORY",
+        "UPDATED",
+        "TITLE",
+    ];
+    let reference = "01234567-1234-4000-8000-000000000001";
+    let folder = "/work/a/deep/working/directory/for/the/saved/session";
+    let title = "会话🚀".repeat(15);
+    let row = [
+        "-", reference, "Saved", "claude", "Session", folder, "16d ago", &title,
+    ];
+    let rows = [row.map(str::to_owned).to_vec()];
+    let terminal = render_table(&headers, &rows, TableLayout::Roster(Some(119)));
+    assert!(terminal.lines().all(|row| row.width() <= 119), "{terminal}");
+    assert!(
+        terminal.contains(reference) && terminal.ends_with('…'),
+        "{terminal}"
+    );
+    let pipe = render_table(&headers, &rows, TableLayout::Roster(None));
+    assert!(pipe.contains(reference) && pipe.contains(folder), "{pipe}");
+    let title = pipe.rsplit("   ").next().unwrap();
+    assert!(title.ends_with('…') && title.width() <= 40, "{title}");
 }
 
 #[test]

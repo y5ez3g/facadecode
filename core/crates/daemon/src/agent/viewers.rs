@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_base::v3::AttachmentInfo;
+use facade_base::v3::{AttachmentInfo, AttachmentKind};
 use facade_screen::{ParsedOutput, Screen};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -24,20 +24,24 @@ pub(crate) enum ViewerChange {
     },
     /// Terminal output since the previous change.
     Output(Arc<[u8]>),
+    /// Whether the agent is starting or working changed.
+    Activity(bool),
     /// The run ended after all its screen changes.
-    Exit(ProcessExit),
+    Exit(ProcessExit, Option<String>),
     /// The agent was removed. No changes follow.
     Removed,
 }
 
-/// A viewer's initial screen, size, recorded exit, and process state, captured together.
+/// A viewer's initial screen, size, process state and requested activity, captured together.
 pub(crate) struct ViewerSnapshot {
     pub(crate) name: String,
     pub(crate) redraw: Vec<u8>,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
     pub(crate) exit: Option<ProcessExit>,
+    pub(crate) resume_hint: Option<String>,
     pub(crate) process: ProcessState,
+    pub(crate) working: Option<bool>,
 }
 
 /// A viewer asking for its snapshot.
@@ -58,10 +62,37 @@ pub(crate) enum ViewKind {
         name: Option<String>,
         attachment: Option<AttachmentInfo>,
         allow_ended: bool,
+        report_activity: bool,
+        wait_for_size: bool,
     },
 }
 
 impl ViewKind {
+    fn reports_activity(&self) -> bool {
+        matches!(
+            self,
+            Self::Attach {
+                report_activity: true,
+                ..
+            }
+        )
+    }
+
+    /// A Shell attachment shows the CLI's final instructions next to its exit receipt.
+    fn resume_hint(&self, screen: &Screen) -> Option<String> {
+        matches!(
+            self,
+            Self::Attach {
+                attachment: Some(AttachmentInfo {
+                    kind: AttachmentKind::Shell,
+                    ..
+                }),
+                ..
+            }
+        )
+        .then(|| final_resume_hint(screen))
+    }
+
     /// Whether the viewer stays once told the run's exit. An attached viewer ends with the run.
     fn outlives_exit(&self) -> bool {
         match self {
@@ -76,6 +107,7 @@ impl ViewKind {
 pub(crate) struct Viewers {
     active: Vec<Viewer>,
     waiting: Vec<ViewerRequest>,
+    working: bool,
 }
 
 /// What must precede a viewer's next incremental output.
@@ -101,6 +133,7 @@ impl Viewers {
         Self {
             active: Vec::new(),
             waiting: Vec::new(),
+            working: false,
         }
     }
 
@@ -156,20 +189,19 @@ impl Viewers {
         process: ProcessState,
         name: &str,
         draining: bool,
+        resizing: bool,
     ) {
         if screen.synchronized_update_deadline().is_some() {
             return;
         }
         for request in std::mem::take(&mut self.waiting) {
-            // The final snapshot includes the remaining output and the exit together.
-            if draining
-                && matches!(
-                    request.kind,
-                    ViewKind::Attach {
-                        allow_ended: true,
-                        ..
-                    }
-                )
+            // An initial frame can wait for the final output or for the requested layout.
+            if let ViewKind::Attach {
+                allow_ended,
+                wait_for_size,
+                ..
+            } = request.kind
+                && ((draining && allow_ended) || (resizing && wait_for_size))
             {
                 self.waiting.push(request);
                 continue;
@@ -180,7 +212,13 @@ impl Viewers {
                 cols: screen.cols(),
                 rows: screen.rows(),
                 exit: exit.cloned(),
+                resume_hint: if process == ProcessState::Ended {
+                    request.kind.resume_hint(screen)
+                } else {
+                    None
+                },
                 process,
+                working: request.kind.reports_activity().then_some(self.working),
             };
             if request.reply.send(snapshot).is_err()
                 || (process != ProcessState::Running
@@ -196,6 +234,16 @@ impl Viewers {
                 drawing: Drawing::Current,
             });
         }
+    }
+
+    /// Sends a working-state transition to the viewers that requested activity.
+    pub(crate) fn set_working(&mut self, working: bool) {
+        if self.working == working {
+            return;
+        }
+        self.working = working;
+        self.active
+            .retain(|v| !v.kind.reports_activity() || v.tx.send(ViewerChange::Activity(working)));
     }
 
     /// Sends parsed output, or marks watches for the redraw the parser requires.
@@ -244,10 +292,11 @@ impl Viewers {
     }
 
     /// Queues the run's exit immediately for current watches, after redraw for others.
-    pub(crate) fn send_exit(&mut self, exit: &ProcessExit) {
+    pub(crate) fn send_exit(&mut self, screen: &Screen, exit: &ProcessExit) {
         self.active.retain_mut(|v| match v.drawing {
             Drawing::Current => {
-                v.tx.send(ViewerChange::Exit(exit.clone())) && v.kind.outlives_exit()
+                v.tx.send(ViewerChange::Exit(exit.clone(), v.kind.resume_hint(screen)))
+                    && v.kind.outlives_exit()
             }
             _ => {
                 v.drawing = Drawing::RedrawThenExit;
@@ -293,11 +342,32 @@ impl Viewer {
         };
         let mut alive = self.tx.send(frame);
         if let Some(exit) = exit.filter(|_| owes_exit) {
-            alive &= self.tx.send(ViewerChange::Exit(exit.clone()));
+            alive &= self.tx.send(ViewerChange::Exit(
+                exit.clone(),
+                self.kind.resume_hint(screen),
+            ));
             alive &= self.kind.outlives_exit();
         }
         alive
     }
+}
+
+/// Keeps the CLI's own recovery instruction at the bottom, including its command lines.
+fn final_resume_hint(screen: &Screen) -> String {
+    let lines = screen.text(6);
+    let Some(start) = lines.iter().rposition(|line| {
+        line.starts_with("To resume this session:") || line == "To continue this session, run:"
+    }) else {
+        return String::new();
+    };
+    let following = lines[start + 1..]
+        .iter()
+        .take_while(|line| line.starts_with(' ') || line.starts_with("Or run "));
+    std::iter::once(&lines[start])
+        .chain(following)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The sending side of a viewer queue, accounting for bytes until reception.

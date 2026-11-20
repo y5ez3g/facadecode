@@ -20,7 +20,7 @@ use tokio::sync::{broadcast::error::RecvError, mpsc, oneshot};
 use crate::agent::{AgentCommand, AgentHandle, ViewerChange, viewer_channel};
 use crate::records::{OperationTarget, Reach};
 use crate::server::{Client, Watch, WatchChange};
-use crate::service::{actor_stopped, decode_or_default, value_of};
+use crate::service::{actor_stopped, check_size, decode_or_default, value_of};
 use crate::store::RemovalCause;
 use crate::{Daemon, blocking_in_place};
 
@@ -133,6 +133,9 @@ impl Daemon {
         args: ScreenWatchArgs,
         viewer: u64,
     ) -> Result<Watch, ErrorBody> {
+        if let Some(size) = args.size {
+            check_size(size.cols, size.rows)?;
+        }
         let reference = agent.info().reference();
         let address = self.agent_address(&reference)?;
         let (tx, mut feed) = viewer_channel();
@@ -151,6 +154,8 @@ impl Daemon {
                 machine_id: caller.machine_id().to_owned(),
             }),
             allow_ended: args.allow_ended,
+            report_activity: args.report_activity,
+            size: args.size,
             tx,
             keep_scrollback: args.keep_scrollback,
             include_scrollback: args.include_scrollback,
@@ -189,11 +194,13 @@ impl Daemon {
             redraw: facade_base::base64::encode(&drawn.redraw),
             exit_status: drawn.exit.as_ref().and_then(shell_exit_status),
             exit: drawn.exit,
+            resume_hint: drawn.resume_hint,
             process: Some(if ended {
                 ProcessState::Ended
             } else {
                 drawn.process
             }),
+            working: drawn.working,
         };
         let (changes, sent) = mpsc::channel(CHANGES_WAITING);
         if ended {
@@ -477,9 +484,11 @@ fn screen_change(change: ViewerChange) -> ScreenChange {
         ViewerChange::Output(bytes) => ScreenChange::Output {
             data: facade_base::base64::encode(&bytes),
         },
-        ViewerChange::Exit(exit) => ScreenChange::Exit {
+        ViewerChange::Activity(working) => ScreenChange::Activity { working },
+        ViewerChange::Exit(exit, resume_hint) => ScreenChange::Exit {
             exit_status: shell_exit_status(&exit),
             exit,
+            resume_hint,
         },
         ViewerChange::Removed => ScreenChange::Removed,
     }

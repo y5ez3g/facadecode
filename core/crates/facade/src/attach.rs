@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use facade_base::console::{ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes};
+use facade_base::console::{
+    ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes, visible_content_end,
+};
 use facade_base::daemon;
 use facade_base::daemon_client::{Cut, DaemonClient, RECONNECT_DELAY, takeover_timeout};
 use facade_base::jsonrpc::{self, ErrorBody, Reason};
@@ -38,6 +40,8 @@ const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
 
 /// Whether raw mode is on and the person's terminal still has to be restored.
 static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// The progress indicator we have set in the person's terminal.
+static TERMINAL_WORKING: AtomicBool = AtomicBool::new(false);
 /// The console modes entered after raw mode, which the restoration puts back.
 static VT_MODES: Mutex<Option<VtModes>> = Mutex::new(None);
 /// Whether the agent's output has switched to the alternate screen.
@@ -87,6 +91,7 @@ pub(crate) fn attach(
                 let end = AttachEnd::AgentExited {
                     exit: agent.and_then(|agent| agent.exit),
                     status: None,
+                    resume_hint: None,
                 };
                 let code = end.code();
                 let mut stderr = std::io::stderr().lock();
@@ -110,6 +115,7 @@ pub(crate) fn attach(
         client,
         watch,
         snapshot,
+        visible_frame: false,
     };
     // Register before entering raw mode so a termination signal can be handled even during setup.
     let signals = ConsoleSignals::new()?;
@@ -155,6 +161,7 @@ pub(crate) enum AttachEnd {
     AgentExited {
         exit: Option<ProcessExit>,
         status: Option<i32>,
+        resume_hint: Option<String>,
     },
     Removed,
     Unreachable(String),
@@ -165,7 +172,7 @@ impl AttachEnd {
     fn code(&self) -> i32 {
         match self {
             AttachEnd::Detached => 0,
-            AttachEnd::AgentExited { exit, status } => {
+            AttachEnd::AgentExited { exit, status, .. } => {
                 status.unwrap_or_else(|| exit.as_ref().map_or(1, exit_code))
             }
             AttachEnd::Removed | AttachEnd::Unreachable(_) => 1,
@@ -313,6 +320,7 @@ struct ScreenWatch {
     client: DaemonClient,
     watch: u64,
     snapshot: ScreenSnapshot,
+    visible_frame: bool,
 }
 
 /// Watches the agent's screen. The scrollback comes only on the first watch; after a reconnect
@@ -324,13 +332,40 @@ fn watch_screen(
     include_scrollback: bool,
     allow_ended: bool,
 ) -> anyhow::Result<(u64, ScreenSnapshot)> {
-    client.watch::<ScreenTopic>(v3::ScreenWatchArgs {
+    let args = v3::ScreenWatchArgs {
         target,
         keep_scrollback: true,
         include_scrollback,
         viewer: Some(viewer.into()),
         allow_ended,
-    })
+        report_activity: true,
+        size: console_size()
+            .filter(|&(cols, _)| cols >= 2)
+            .map(|(cols, rows)| v3::ScreenSize { cols, rows }),
+    };
+    let (watch, snapshot) = client.watch::<ScreenTopic>(args.clone())?;
+    // An older daemon may ignore the initial size. Request a fresh snapshot with its
+    // scrollback after resizing; a regular redraw has only the visible screen.
+    if let Some(size) = args.size
+        && include_scrollback
+        && snapshot.process != Some(ProcessState::Ended)
+        && snapshot.exit.is_none()
+        && snapshot.exit_status.is_none()
+        && (snapshot.cols > size.cols || snapshot.rows > size.rows)
+    {
+        let target = AgentTarget::Reference {
+            reference: snapshot.reference(),
+        };
+        client.unwatch(watch)?;
+        client.call::<v3::AgentResize>(v3::AgentResizeArgs {
+            target: target.clone(),
+            cols: size.cols,
+            rows: size.rows,
+            colors: None,
+        })?;
+        return client.watch::<ScreenTopic>(v3::ScreenWatchArgs { target, ..args });
+    }
+    Ok((watch, snapshot))
 }
 
 /// Shows the agent through one connection after another until the attachment ends.
@@ -353,6 +388,9 @@ fn follow_agent(
         };
         let closing = screen.client.closing.is_some();
         input.disconnected(closing);
+        if let Some(_terminal) = attached_terminal() {
+            show_activity(false);
+        }
         service::mark_for_test("attach-disconnected");
         if input.is_detached() {
             return Ok(AttachEnd::Detached);
@@ -382,11 +420,20 @@ fn show_snapshot(
     let Some(_terminal) = attached_terminal() else {
         return Ok(Some(AttachEnd::Detached));
     };
-    write_screen(&screen.snapshot.redraw);
+    screen.visible_frame = draw_frame(
+        &screen.snapshot.redraw,
+        screen.snapshot.cols,
+        screen.snapshot.rows,
+    );
+    show_activity(screen.snapshot.working.unwrap_or_default());
     {
         let mut queue = input.lock();
         queue.agent_name.clone_from(&screen.snapshot.name);
         queue.address.clone_from(&screen.snapshot.address);
+        queue.reported_size = Some((screen.snapshot.cols, screen.snapshot.rows));
+        queue
+            .waiting
+            .retain(|item| !matches!(item, Outgoing::Resize));
     }
     let status = screen.snapshot.exit_status;
     if screen.snapshot.process == Some(ProcessState::Ended)
@@ -396,6 +443,7 @@ fn show_snapshot(
         return Ok(Some(AttachEnd::AgentExited {
             exit: screen.snapshot.exit.take(),
             status,
+            resume_hint: screen.snapshot.resume_hint.take(),
         }));
     }
     input.push_resize();
@@ -430,14 +478,33 @@ fn show_until_closed(
             return Ok(Some(AttachEnd::Detached));
         }
         return Ok(Some(match change {
-            ScreenChange::Output { data } | ScreenChange::Redraw { data, .. } => {
-                write_output(&data);
+            ScreenChange::Output { data } => {
+                if screen.visible_frame {
+                    write_output(&data);
+                }
+                continue;
+            }
+            ScreenChange::Redraw { data, cols, rows } => {
+                if let Some(_terminal) = attached_terminal() {
+                    screen.visible_frame = draw_frame(&data, cols, rows);
+                }
+                continue;
+            }
+            ScreenChange::Activity { working } => {
+                if let Some(_terminal) = attached_terminal() {
+                    show_activity(working);
+                }
                 continue;
             }
             ScreenChange::Unknown => continue,
-            ScreenChange::Exit { exit, exit_status } => AttachEnd::AgentExited {
+            ScreenChange::Exit {
+                exit,
+                exit_status,
+                resume_hint,
+            } => AttachEnd::AgentExited {
                 exit: Some(exit),
                 status: exit_status,
+                resume_hint,
             },
             ScreenChange::Removed => AttachEnd::Removed,
         }));
@@ -483,6 +550,7 @@ fn reconnect_screen(
                     client,
                     watch,
                     snapshot,
+                    visible_frame: false,
                 });
             }
             Err(error) => error,
@@ -497,7 +565,11 @@ fn reconnect_screen(
                 if input.is_detached() {
                     break;
                 }
-                return Err(AttachEnd::AgentExited { exit, status: None });
+                return Err(AttachEnd::AgentExited {
+                    exit,
+                    status: None,
+                    resume_hint: None,
+                });
             }
             _ if retryable_watch(&error) => {
                 keep_reconnect_failure(&mut last_failure, error);
@@ -617,12 +689,38 @@ fn read_keys(input: &AgentInput) {
             let detach_at = detach_position(keys);
             // Keys before Ctrl-] in the same read still go.
             input.push_keys(&keys[..detach_at.unwrap_or(read)]);
-            if detach_at.is_some() {
+            if let Some(at) = detach_at {
+                finish_detach_release(&mut console, &keys[at..]);
                 break;
             }
         }
     }
     input.detach_after_sending();
+}
+
+/// Removes the queued releases of the ConPTY Ctrl-] chord, including a record split by the read.
+fn finish_detach_release(console: &mut ConsoleReader, keys: &[u8]) {
+    let Some(mut rest) = keys.strip_prefix(b"\x1b[221;27;29;1;8;1_") else {
+        return;
+    };
+    // The bracket key-up may carry either zero or the character from its key-down event.
+    for release in [b"\x1b[221;27;0;0;8;1_".as_slice(), b"\x1b[221;27;29;0;8;1_"] {
+        if let Some(tail) = rest.strip_prefix(release) {
+            rest = tail;
+            break;
+        }
+        if let Some(missing) = release.strip_prefix(rest)
+            && console.discard_key_prefix(missing).unwrap_or(false)
+        {
+            rest = &[];
+            break;
+        }
+    }
+    if let Some(missing) = b"\x1b[17;29;0;0;0;1_".strip_prefix(rest)
+        && !missing.is_empty()
+    {
+        let _ = console.discard_key_prefix(missing);
+    }
 }
 
 /// Where the first Ctrl-] begins in `keys`, in any of its forms.
@@ -672,6 +770,8 @@ struct InputQueue {
     /// Display identity from the snapshot most recently drawn.
     agent_name: Option<String>,
     address: String,
+    /// The last viewport size confirmed by a snapshot or queued by the person's terminal.
+    reported_size: Option<(u16, u16)>,
     waiting: VecDeque<Outgoing>,
     /// The key bytes in `waiting`.
     waiting_key_bytes: usize,
@@ -786,9 +886,16 @@ impl AgentInput {
         );
     }
 
-    /// Queues a size change, unless one already waits.
+    /// Queues a changed viewport size, coalescing repeated console events and waiting resizes.
     fn push_resize(&self) {
         let mut queue = self.lock();
+        let Some(size) = console_size() else {
+            return;
+        };
+        if queue.reported_size == Some(size) {
+            return;
+        }
+        queue.reported_size = Some(size);
         let waits = queue.waiting.iter().any(|o| matches!(o, Outgoing::Resize));
         if !waits {
             queue.waiting.push_back(Outgoing::Resize);
@@ -959,6 +1066,18 @@ fn write_terminal(bytes: &[u8]) {
     let _ = stdout.flush();
 }
 
+/// Reports indeterminate or cleared progress to a terminal that supports OSC 9;4.
+/// The caller holds the terminal lock.
+fn show_activity(working: bool) {
+    if TERMINAL_WORKING.swap(working, SeqCst) != working {
+        write_terminal(if working {
+            b"\x1b]9;4;3;0\x07"
+        } else {
+            b"\x1b]9;4;0;0\x07"
+        });
+    }
+}
+
 /// Writes the agent's terminal bytes, base64 as the daemon sends them, while the person's terminal
 /// is the attachment's. After the restoration more output would turn the agent's modes back on and
 /// cover the result.
@@ -966,6 +1085,19 @@ fn write_output(data: &str) {
     if let Some(_terminal) = attached_terminal() {
         write_screen(data);
     }
+}
+
+/// Draws a full frame only where its layout fits. The caller holds [`TERMINAL`].
+fn draw_frame(data: &str, cols: u16, rows: u16) -> bool {
+    let fits = console_size().is_none_or(|(width, height)| width >= cols && height >= rows);
+    if fits {
+        write_screen(data);
+    } else {
+        show_status(&format!(
+            "The shared layout is {cols}×{rows}. Enlarge this terminal to see the current screen."
+        ));
+    }
+    fits
 }
 
 /// Writes base64 screen data while the caller holds [`TERMINAL`].
@@ -1076,10 +1208,39 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
     if !RAW_MODE_ACTIVE.swap(false, SeqCst) {
         return;
     }
-    write_terminal(&restoration());
+    show_activity(false);
+    let alternate = ALTERNATE_SCREEN_ACTIVE.load(SeqCst);
+    write_terminal(&restoration(alternate));
+    if !alternate {
+        let retire = matches!(
+            &end,
+            Ok(AttachEnd::Detached
+                | AttachEnd::AgentExited {
+                    resume_hint: Some(_),
+                    ..
+                })
+        );
+        if let Some((_, rows)) = console_size().filter(|_| retire) {
+            // Index at the bottom of the main screen moves the view into scrollback.
+            let scroll = "\x1bD".repeat(usize::from(rows));
+            write_terminal(format!("\x1b[?6l\x1b[{rows};1H{scroll}\x1b[H").as_bytes());
+        } else {
+            let row = visible_content_end().unwrap_or(999);
+            write_terminal(format!("\x1b[{row};1H\r\n").as_bytes());
+        }
+    }
     drop(lock_vt_modes().take());
     let _ = crossterm::terminal::disable_raw_mode();
 
+    let hint = match &end {
+        Ok(AttachEnd::AgentExited {
+            resume_hint: Some(hint),
+            ..
+        }) if !hint.is_empty() => {
+            Some(hint.lines().map(single_line).collect::<Vec<_>>().join("\n"))
+        }
+        _ => None,
+    };
     let line = match end {
         Ok(end) => {
             let queue = input.lock();
@@ -1089,22 +1250,23 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
         Err(error) => format!("error: attachment failed: {error:#}"),
     };
     let mut stderr = std::io::stderr().lock();
+    if let Some(hint) = hint {
+        let _ = writeln!(stderr, "{hint}\n");
+    }
     let _ = writeln!(stderr, "{line}");
     if let Some(warning) = unsent_line(input.unsent_bytes()) {
         let _ = writeln!(stderr, "{warning}");
     }
 }
 
-/// What restores the person's terminal and moves below the agent's screen.
-fn restoration() -> Vec<u8> {
+/// Restores the terminal's display modes and returns from the alternate screen when active.
+fn restoration(alternate: bool) -> Vec<u8> {
     // CAN ends any escape sequence the agent's output left open.
     let mut restoration = b"\x18".to_vec();
-    if ALTERNATE_SCREEN_ACTIVE.load(SeqCst) {
+    if alternate {
         restoration.extend_from_slice(b"\x1b[?1049l");
     }
     restoration.extend_from_slice(RESTORE_TERMINAL_SEQUENCE);
-    // From the last row, the line feed scrolls the agent's screen up above the result.
-    restoration.extend_from_slice(b"\x1b[999;1H\r\n");
     restoration
 }
 

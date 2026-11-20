@@ -16,6 +16,10 @@ impl VtModes {
     pub(super) fn restore(&self) {}
 }
 
+pub(super) fn visible_content_end() -> Option<u16> {
+    None
+}
+
 pub(super) struct ConsoleReader(io::Stdin);
 
 impl ConsoleReader {
@@ -30,6 +34,10 @@ impl ConsoleReader {
                 read => return read.map(ConsoleRead::Keys),
             }
         }
+    }
+
+    pub(super) fn discard_key_prefix(&mut self, _keys: &[u8]) -> io::Result<bool> {
+        Ok(false)
     }
 }
 

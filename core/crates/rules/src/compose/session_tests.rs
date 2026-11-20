@@ -434,7 +434,9 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
     let config = home.join(".config/opencode");
     std::fs::create_dir_all(&config).unwrap();
     let ours = json!(in_run("facade-session"));
-    let plugins = |environment: &BTreeMap<String, String>| {
+    let disabled_tabs = json!({ "enabled": false });
+    let disabled_tabs_with_mode = json!({ "enabled": false, "mode": "off" });
+    let configuration = |environment: &BTreeMap<String, String>| {
         let launch = start_command_line(
             rule("opencode"),
             &words(&["x"]),
@@ -443,58 +445,68 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
             environment,
             None,
         );
-        opencode_overlay(&launch).map(|overlay| (launch.captures, overlay["plugins"].clone()))
+        opencode_overlay(&launch).map(|overlay| {
+            (
+                launch.captures,
+                overlay["plugins"].clone(),
+                overlay["tabs"].clone(),
+            )
+        })
     };
     assert_eq!(
-        plugins(&home_environment(&home, &[])),
-        Some((true, json!([ours]))),
+        configuration(&home_environment(&home, &[])),
+        Some((true, json!([ours]), disabled_tabs.clone())),
         "no configuration of the person's"
     );
     std::fs::write(
         config.join("tui.json"),
-        r#"{"plugin": [["pkg", {"a": 1}], "other"], "plugin_enabled": {"p": true, "q": false}}"#,
+        r#"{"plugin": [["pkg", {"a": 1}], "other"], "plugin_enabled": {"p": true, "q": false}, "tabs": {"mode": "workspace"}}"#,
     )
     .unwrap();
     let legacy = json!([{ "package": "pkg", "options": { "a": 1 } }, "other", "p", "-q", ours]);
     assert_eq!(
-        plugins(&home_environment(&home, &[])),
-        Some((true, legacy)),
+        configuration(&home_environment(&home, &[])),
+        Some((true, legacy, disabled_tabs_with_mode.clone())),
         "the older tui.json, as OpenCode reads it"
     );
     std::fs::write(
         config.join("cli.json"),
-        "// theirs\n{\"plugins\": [\"theirs\"],}",
+        "// theirs\n{\"plugins\": [\"theirs\"], \"tabs\": {\"enabled\": true},}",
     )
     .unwrap();
     assert_eq!(
-        plugins(&home_environment(&home, &[])),
-        Some((true, json!(["theirs", ours]))),
+        configuration(&home_environment(&home, &[])),
+        Some((true, json!(["theirs", ours]), disabled_tabs.clone())),
         "cli.json goes before tui.json"
     );
     let elsewhere = home.join("settings");
     std::fs::create_dir_all(elsewhere.join("opencode")).unwrap();
     std::fs::write(
         elsewhere.join("opencode/cli.json"),
-        r#"{"plugins": ["elsewhere"]}"#,
+        r#"{"plugins": ["elsewhere"], "tabs": {"mode": "workspace"}}"#,
     )
     .unwrap();
     let xdg = home_environment(&home, &[("XDG_CONFIG_HOME", elsewhere.to_str().unwrap())]);
     assert_eq!(
-        plugins(&xdg),
-        Some((true, json!(["elsewhere", ours]))),
+        configuration(&xdg),
+        Some((
+            true,
+            json!(["elsewhere", ours]),
+            disabled_tabs_with_mode.clone()
+        )),
         "their XDG_CONFIG_HOME's"
     );
     let relative = home_environment(&home, &[("XDG_CONFIG_HOME", "settings")]);
     assert_eq!(
-        plugins(&relative),
-        Some((true, json!(["theirs", ours]))),
+        configuration(&relative),
+        Some((true, json!(["theirs", ours]), disabled_tabs)),
         "a relative XDG_CONFIG_HOME is not used"
     );
     let variable = home_environment(
         &home,
         &[(
             OPENCODE_CLI_CONFIG,
-            r#"{"plugins": ["mine"], "theme": "dark"}"#,
+            r#"{"plugins": ["mine"], "theme": "dark", "tabs": {"enabled": true, "mode": "workspace"}}"#,
         )],
     );
     let launch = start_command_line(
@@ -507,7 +519,9 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
     );
     assert_eq!(
         opencode_overlay(&launch),
-        Some(json!({ "plugins": ["mine", ours], "theme": "dark" })),
+        Some(
+            json!({ "plugins": ["mine", ours], "theme": "dark", "tabs": disabled_tabs_with_mode })
+        ),
         "the variable goes first"
     );
     let (name, package) = &launch.files[0];
@@ -533,7 +547,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
     rule("opencode").remove_wiring_environment(&mut child);
     assert_eq!(
         serde_json::from_str::<Value>(&child[OPENCODE_CLI_CONFIG]).unwrap(),
-        json!({ "plugins": ["mine"], "theme": "dark" })
+        json!({ "plugins": ["mine"], "theme": "dark", "tabs": disabled_tabs_with_mode })
     );
     for (file, text) in [
         ("cli.json", "{not json"),

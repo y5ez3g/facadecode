@@ -22,7 +22,7 @@ use facade_base::v3::{
 
 use crate::cli::StartOptions;
 use crate::errors::{self, AgentCommand, Problem};
-use crate::{ExitText, Opening, Shown, single_line, table};
+use crate::{ExitText, Opening, Shown, roster_table, single_line};
 
 const ROSTER_COLUMNS: [&str; 8] = [
     "NAME",
@@ -605,7 +605,7 @@ pub(crate) fn list_text(agents: &[&AgentListRow], now: SystemTime) -> String {
             ]
         })
         .collect();
-    table(&ROSTER_COLUMNS, &rows)
+    roster_table(&ROSTER_COLUMNS, &rows)
 }
 
 pub(crate) fn resume_list_text(items: &[ResumeCandidate], now: SystemTime) -> String {
@@ -644,7 +644,7 @@ pub(crate) fn resume_list_text(items: &[ResumeCandidate], now: SystemTime) -> St
         .collect();
     let mut columns = ROSTER_COLUMNS;
     columns[6] = "UPDATED";
-    table(&columns, &rows)
+    roster_table(&columns, &rows)
 }
 
 fn session_prefix(id: &str) -> &str {

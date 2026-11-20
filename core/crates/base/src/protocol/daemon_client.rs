@@ -332,8 +332,13 @@ impl DaemonClient {
     /// Takes a topic snapshot and immediately ends its watch.
     pub fn snapshot<T: Topic>(&mut self, args: T::Args) -> anyhow::Result<T::Snapshot> {
         let (watch, snapshot) = self.watch::<T>(args)?;
-        self.tell(methods::UNWATCH, UnwatchParams { watch })?;
+        self.unwatch(watch)?;
         Ok(snapshot)
+    }
+
+    /// Ends a watch without waiting for a reply.
+    pub fn unwatch(&mut self, watch: u64) -> io::Result<()> {
+        self.tell(methods::UNWATCH, UnwatchParams { watch })
     }
 
     /// Reads the next change for this watch. Returns None on disconnection, or once a newer Facade

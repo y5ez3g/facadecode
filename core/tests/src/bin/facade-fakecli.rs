@@ -1114,7 +1114,7 @@ fn run() -> anyhow::Result<()> {
     };
     let resumed = arguments
         .iter()
-        .position(|arg| arg == "--resume")
+        .position(|arg| arg == "--resume" || (agy && arg == "--conversation"))
         .and_then(|at| arguments.get(at + 1))
         .cloned();
     #[cfg(windows)]

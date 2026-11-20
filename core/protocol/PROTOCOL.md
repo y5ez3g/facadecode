@@ -272,6 +272,13 @@ bytes to the viewer's terminal parser. Process changes for each watch in arrival
 `redraw` supplies a terminal sequence that replaces the visible screen. Preserve parser state between messages. Do not treat
 the decoded bytes as plain text; use `agent.screen` when you want plain text.
 
+A v3 screen watch can set `report_activity`. Its snapshot then includes `working`, which is true while the agent is
+starting or working. The watch receives an `activity` change each time that answer changes.
+
+A v3 screen watch can also request `size` with `cols` and `rows`. For a live run it sets the shared
+layout before the initial snapshot. If the size waits for a checkpoint, this watch waits for
+that checkpoint too. Always use the dimensions in the snapshot to draw its frame.
+
 An agent has one terminal size. Set the viewer to `snapshot.cols` columns and `snapshot.rows` rows before applying
 `snapshot.redraw`. `agent.resize` changes the size for every viewer, and the last resize wins. When the size changes, every
 viewer receives a `redraw` with its own `cols` and `rows`. Resize the viewer to those dimensions before applying its `data`.
@@ -1310,7 +1317,14 @@ The screen buffer a CLI shows.
 
 A change to the `screen` topic. `exit` follows all output the CLI wrote before ending; processes still holding its terminal may write afterward. On macOS, the terminal is taken from those processes when the CLI ends. `removed` is the watch's last change. Skip unknown change kinds.  `snapshot.redraw`, `output.data`, and `redraw.data` contain standard base64 with padding. Decode them to bytes and feed those bytes to the viewer's terminal parser. Set the viewer to `snapshot.cols` by `snapshot.rows` before the initial redraw. Each redraw change carries its own `cols` and `rows`; use that size before applying its `data`. Process changes for each watch in arrival order. Apply `output` as continuation bytes; `redraw` supplies a replacement terminal sequence. Preserve parser state between messages. Do not treat the decoded bytes as plain text; use `agent.screen` for plain text.
 
-`{ readonly kind: 'output'; readonly data: string } \| { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } \| { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number } \| { readonly kind: 'removed' }`
+`{ readonly kind: 'output'; readonly data: string } \| { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } \| { readonly kind: 'activity'; readonly working: boolean } \| { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number; readonly resume_hint?: string } \| { readonly kind: 'removed' }`
+
+### ScreenSize
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cols` | `number` | yes | Terminal width in columns, at least 2. |
+| `rows` | `number` | yes | Terminal height in rows, at least 1. |
 
 ### ScreenSnapshot
 
@@ -1779,7 +1793,9 @@ The copyable agent address or the CLI session and its working location.
 | `redraw` | `string` | yes | Base64-encoded terminal bytes that redraw the screen at this size. Restores cursor state, charsets, and modes. On the main screen, up to 1,000 rows of agent scrollback come first unless `include_scrollback` is false. `keep_scrollback` controls whether the viewer's existing scrollback is cleared before the redraw. |
 | `exit` | `ProcessExit` | no | The recorded exit, if the agent has ended. |
 | `exit_status` | `number` | no | The shell exit status calculated on the machine that ran the agent, if known. |
+| `resume_hint` | `string` | no | The CLI's resume instructions for a Shell attachment that opens an ended run. Empty when it printed none. |
 | `process` | `ProcessState` | no | The agent's process state captured with this snapshot. |
+| `working` | `boolean` | no | Whether the agent is starting or working, when the watch requested activity. |
 
 ### V3ScreenText
 
@@ -1798,7 +1814,7 @@ The copyable agent address or the CLI session and its working location.
 
 ### V3ScreenWatchArgs
 
-`{ readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string; readonly allow_ended?: boolean } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
+`{ readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string; readonly allow_ended?: boolean; readonly report_activity?: boolean; readonly size?: ScreenSize } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
 
 ### V3SendArgs
 

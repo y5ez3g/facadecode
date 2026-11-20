@@ -129,7 +129,8 @@ fn forms<'a>(path: &[&'a str]) -> Vec<Vec<&'a str>> {
 }
 
 /// `facade`, `facade -h`, `facade --help` and `facade help` print the root page, every command's
-/// three forms print its page. The machine group is also its no-argument page. Help starts no Facade.
+/// three forms print its page. Commands without a default action show help on their own.
+/// Help starts no Facade.
 #[test]
 fn every_help_page_is_its_golden_file_whichever_way_it_is_asked_for() {
     let home = TestHome::new("helppages");
@@ -140,10 +141,17 @@ fn every_help_page_is_its_golden_file_whichever_way_it_is_asked_for() {
         &[vec![], vec!["-h"], vec!["--help"], vec!["help"]],
         WIDTH,
     );
+    let defaults: &[&[&str]] = &[
+        &["list"],
+        &["resume"],
+        &["status"],
+        &["upgrade"],
+        &["machine", "list"],
+    ];
     for path in PAGES {
         let mut requests = forms(path);
-        if *path == ["machine"] {
-            requests.push(vec!["machine"]);
+        if !defaults.contains(path) {
+            requests.push(path.to_vec());
         }
         pages.check(&home, &path.join("-"), &requests, WIDTH);
     }

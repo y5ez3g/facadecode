@@ -566,7 +566,12 @@ export type ScreenBuffer = 'normal' | 'alternate';
  * arrival order. Apply `output` as continuation bytes; `redraw` supplies a replacement terminal
  * sequence. Preserve parser state between messages. Do not treat the decoded bytes as plain text;
  * use `agent.screen` for plain text. */
-export type ScreenChange = { readonly kind: 'output'; readonly data: string } | { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } | { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number } | { readonly kind: 'removed' };
+export type ScreenChange = { readonly kind: 'output'; readonly data: string } | { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } | { readonly kind: 'activity'; readonly working: boolean } | { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number; readonly resume_hint?: string } | { readonly kind: 'removed' };
+
+export interface ScreenSize {
+	readonly cols: number;
+	readonly rows: number;
+}
 
 export type ScreenSnapshot = V3ScreenSnapshot;
 
@@ -1137,7 +1142,9 @@ export interface V3ScreenSnapshot {
 	readonly redraw: string;
 	readonly exit?: ProcessExit;
 	readonly exit_status?: number;
+	readonly resume_hint?: string;
 	readonly process?: ProcessState;
+	readonly working?: boolean;
 }
 
 export interface V3ScreenText {
@@ -1153,7 +1160,7 @@ export interface V3ScreenText {
 	readonly trimmed: boolean;
 }
 
-export type V3ScreenWatchArgs = { readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string; readonly allow_ended?: boolean } & ({ readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef });
+export type V3ScreenWatchArgs = { readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string; readonly allow_ended?: boolean; readonly report_activity?: boolean; readonly size?: ScreenSize } & ({ readonly agent: string; readonly reference?: never } | { readonly agent?: never; readonly reference: AgentRef });
 
 export interface V3SendArgs {
 	readonly to: string;

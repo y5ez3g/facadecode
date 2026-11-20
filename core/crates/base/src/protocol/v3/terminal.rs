@@ -96,6 +96,14 @@ pub struct AgentResizeArgs {
     pub colors: Option<TerminalColors>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ScreenSize {
+    /// Terminal width in columns, at least 2.
+    pub cols: u16,
+    /// Terminal height in rows, at least 1.
+    pub rows: u16,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "V3ScreenWatchArgs")]
 pub struct ScreenWatchArgs {
@@ -118,6 +126,12 @@ pub struct ScreenWatchArgs {
     /// With an exact managed reference, allow the final snapshot of an ended run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_ended: bool,
+    /// Include the agent's working state in the snapshot and report changes to it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub report_activity: bool,
+    /// Request the viewer's size for the shared layout before the first snapshot of a live run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<ScreenSize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -145,9 +159,16 @@ pub struct ScreenSnapshot {
     /// The shell exit status calculated on the machine that ran the agent, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_status: Option<i32>,
+    /// The CLI's resume instructions for a Shell attachment that opens an ended run.
+    /// Empty when it printed none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_hint: Option<String>,
     /// The agent's process state captured with this snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessState>,
+    /// Whether the agent is starting or working, when the watch requested activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working: Option<bool>,
 }
 
 impl ScreenSnapshot {

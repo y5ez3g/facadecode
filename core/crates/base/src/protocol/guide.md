@@ -264,6 +264,13 @@ bytes to the viewer's terminal parser. Process changes for each watch in arrival
 `redraw` supplies a terminal sequence that replaces the visible screen. Preserve parser state between messages. Do not treat
 the decoded bytes as plain text; use `agent.screen` when you want plain text.
 
+A v3 screen watch can set `report_activity`. Its snapshot then includes `working`, which is true while the agent is
+starting or working. The watch receives an `activity` change each time that answer changes.
+
+A v3 screen watch can also request `size` with `cols` and `rows`. For a live run it sets the shared
+layout before the initial snapshot. If the size waits for a checkpoint, this watch waits for
+that checkpoint too. Always use the dimensions in the snapshot to draw its frame.
+
 An agent has one terminal size. Set the viewer to `snapshot.cols` columns and `snapshot.rows` rows before applying
 `snapshot.redraw`. `agent.resize` changes the size for every viewer, and the last resize wins. When the size changes, every
 viewer receives a `redraw` with its own `cols` and `rows`. Resize the viewer to those dimensions before applying its `data`.

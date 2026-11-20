@@ -528,17 +528,26 @@ impl Actor {
                 name,
                 attachment,
                 allow_ended,
+                report_activity,
+                size,
                 tx,
                 keep_scrollback,
                 include_scrollback,
                 reply,
             } => {
+                if let Some(size) = size
+                    && (self.pending_size.is_some() || self.size() != (size.cols, size.rows))
+                {
+                    self.take_size(size.cols, size.rows, None);
+                }
                 self.add_viewer(ViewerRequest {
                     viewer,
                     kind: ViewKind::Attach {
                         name,
                         attachment,
                         allow_ended,
+                        report_activity,
+                        wait_for_size: size.is_some(),
                     },
                     tx,
                     keep_scrollback,
@@ -799,7 +808,7 @@ impl Actor {
 
     /// Size requested by a client. An agent without a terminal keeps its last screen.
     fn take_size(&mut self, cols: u16, rows: u16, colors: Option<TerminalColors>) {
-        if !self.terminal.is_open() {
+        if self.process != ProcessState::Running || !self.terminal.is_open() {
             return;
         }
         if let Some(colors) = colors {
@@ -815,8 +824,17 @@ impl Actor {
             return;
         }
         self.nudge_until = None;
+        self.apply_requested_size(cols, rows);
+    }
+
+    /// A viewer may have just reached the shared layout's size and still need its frame.
+    fn apply_requested_size(&mut self, cols: u16, rows: u16) {
         if self.resize(cols, rows) {
             self.publish_soon();
+        } else {
+            self.viewers.redraw_all();
+        }
+        if self.viewers.is_behind() {
             self.catch_up_at = Some(Instant::now());
         }
     }
@@ -846,14 +864,12 @@ impl Actor {
         if self.screen().is_full() {
             return;
         }
-        if let Some((cols, rows)) = self.pending_size.take()
-            && self.terminal.is_open()
-        {
-            if self.resize(cols, rows) {
-                self.publish_soon();
-                self.catch_up_at = Some(Instant::now());
+        if let Some((cols, rows)) = self.pending_size.take() {
+            if self.process == ProcessState::Running && self.terminal.is_open() {
+                self.apply_requested_size(cols, rows);
             }
             self.links.room.notify_waiters();
+            self.admit_viewers();
         }
         if let Some((cols, rows, reply)) = self.pending_restart.take() {
             self.restart_screen(cols, rows);
@@ -965,12 +981,17 @@ impl Actor {
             .as_ref()
             .expect("the screen exists while the actor runs");
         let record = self.links.shared.record.lock().unwrap();
+        self.viewers.set_working(matches!(
+            record.info.state,
+            AgentState::Starting | AgentState::Working
+        ));
         self.viewers.admit(
             screen.screen(),
             exit,
             self.process,
             &record.info.name,
             draining,
+            self.process == ProcessState::Running && self.pending_size.is_some(),
         );
     }
 
@@ -1099,7 +1120,11 @@ impl Actor {
         }
         (self.exit_sent, self.drain_deadline) = (true, None);
         self.links.settled.send_replace(true);
-        self.viewers.send_exit(&exit);
+        let screen = self
+            .screen
+            .as_ref()
+            .expect("the screen exists while the actor runs");
+        self.viewers.send_exit(screen.screen(), &exit);
         self.admit_viewers();
     }
 
@@ -1512,6 +1537,10 @@ impl Actor {
             Viewing::Unwatched
         };
         let reading = self.state.read(Instant::now(), viewing);
+        self.viewers.set_working(matches!(
+            reading.state,
+            AgentState::Starting | AgentState::Working
+        ));
         self.state_at = reading.wake;
         if let Some(kept) = self.kept.as_ref() {
             let facts = self.state.kept();

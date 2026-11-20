@@ -2443,12 +2443,18 @@ pub enum ScreenChange {
         /// Terminal height required to apply this redraw.
         rows: u16,
     },
+    /// A change to whether the agent is starting or working, for an opted-in v3 screen watch.
+    Activity { working: bool },
     /// The recorded exit of the agent.
     Exit {
         exit: ProcessExit,
         /// The shell exit status calculated on the machine that ran the agent, if known.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_status: Option<i32>,
+        /// The CLI's resume instructions at the end of the screen for a Shell attachment.
+        /// Empty when it printed none. An absent field leaves the finished screen visible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume_hint: Option<String>,
     },
     /// The agent was removed. No changes follow on this watch.
     Removed,
@@ -3453,6 +3459,7 @@ mod tests {
             serde_json::to_value(ScreenChange::Exit {
                 exit,
                 exit_status: None,
+                resume_hint: None,
             })
             .unwrap(),
             json!({ "kind": "exit", "exit": { "code": 0, "at": "2026-11-09T17:22:05.123Z" } })
