@@ -13,7 +13,7 @@ import * as vscode from 'vscode';
 import type { AgentListEntry, HelloResult, V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
 import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
-import { coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
+import { CoreConnectionClosed, coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
 
 type Card = PanelState['cards'][number];
 
@@ -100,7 +100,9 @@ async function servicePids(): Promise<{ readonly daemon: number; readonly keeper
 		hello = await helloInCore(HOME, [3, 3]);
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
-		if (code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ECONNRESET') { return undefined; }
+		if (error instanceof CoreConnectionClosed || code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ECONNRESET') {
+			return undefined;
+		}
 		throw error;
 	}
 	assert.ok(!hello.error, JSON.stringify(hello.error));

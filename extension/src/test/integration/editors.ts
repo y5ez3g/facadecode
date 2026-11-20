@@ -267,6 +267,12 @@ export async function coreCall<O extends keyof V3Operations>(home: string, op: O
 	return reply.result as V3Operations[O]['result'];
 }
 
+export class CoreConnectionClosed extends Error {
+	constructor() {
+		super('The test driver connection closed before it received a response');
+	}
+}
+
 async function readCore(home: string, hello: V2HelloParams | V3HelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
 	const socket = createConnection(coreSocket(home));
 	const lines = createInterface({ input: socket });
@@ -276,7 +282,7 @@ async function readCore(home: string, hello: V2HelloParams | V3HelloParams, next
 		return await new Promise<Response>((resolve, reject) => {
 			socket.once('connect', () => send(1, 'hello', hello));
 			socket.once('error', reject);
-			socket.once('close', () => reject(new Error('The test driver connection closed')));
+			socket.once('close', () => reject(new CoreConnectionClosed()));
 			lines.on('line', line => {
 				try {
 					const response = JSON.parse(line) as Response;
