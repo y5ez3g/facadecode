@@ -304,12 +304,13 @@ class PinRestoreRound implements Disposable {
 			if (this.disposed || round?.generation !== this.generation) { return { performed: false, failures: [] }; }
 			if (round.failures !== undefined) { return { performed: false, failures: round.failures }; }
 			const failures = await perform();
-			withFileLock(this.file, () => {
+			// A concurrently opening window can hold this lock while checking process identities.
+			await withLongFileLock(this.file, async () => {
 				const latest = readRound(this.file);
 				if (latest?.generation === this.generation) {
 					replaceFile(this.file, `${JSON.stringify({ ...latest, failures })}\n`);
 				}
-			}, { keepLive: true });
+			}, Infinity);
 			return { performed: true, failures };
 		}, Infinity);
 	}

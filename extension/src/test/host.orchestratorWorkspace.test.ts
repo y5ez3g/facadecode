@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import type { AgentRef, V3AgentInfo } from '../base/coreProtocol';
+import { withLongFileLock } from '../base/lock';
 import { WINDOW_LEGACY_INSTANCE_COMMAND } from '../base/windowIdentity';
 import { windowAddress } from '../host/windowNetwork';
 import { keepWindowKey, workspaceRecord } from '../record/workspace';
@@ -120,9 +121,10 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 suite('Orchestrator workspace roster (RULES-6.1)', () => {
 	test('keeps equal numbers distinct and removes records only from an authoritative machine view', async () => {
 		const temp = tempDir('fd-orchestrator-roster-');
+		const uri = 'file:///workspace';
 		const load = (sessionId: string) => withModules({ vscode: {
 			env: { sessionId },
-			workspace: { workspaceFolders: [{ uri: { toString: () => 'file:///workspace' } }] },
+			workspace: { workspaceFolders: [{ uri: { toString: () => uri } }] },
 			EventEmitter: TestEmitter,
 		} })<typeof import('../host/orchestrator/workspace')>(require.resolve('../host/orchestrator/workspace'))
 			.openRustWorkspace({ workspaceState: { get: () => undefined } } as never, { home: temp.dir, log: { event: assert.fail } });
@@ -185,10 +187,20 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 				return failures;
 			});
 			await started.promise;
+			// A window can still be registering when recovery finishes. Its registration must be able to release the lock.
+			const roundFile = path.join(workspaceRecord(uri, temp.dir).dir, 'orchestrator-pin-restore.json');
+			const registered = Promise.withResolvers<void>();
+			const registration = withLongFileLock(roundFile, () => registered.promise, 0);
 			const join = other.restorePinsOnce(async () => assert.fail('A second open window cannot restore the Pins again.'));
+			const outcomes = Promise.allSettled([restore, join]);
 			finish.resolve();
-			assert.deepStrictEqual(await restore, { performed: true, failures });
-			assert.deepStrictEqual(await join, { performed: false, failures });
+			await new Promise<void>(resolve => setImmediate(resolve));
+			registered.resolve();
+			await registration;
+			assert.deepStrictEqual(await outcomes, [
+				{ status: 'fulfilled', value: { performed: true, failures } },
+				{ status: 'fulfilled', value: { performed: false, failures } },
+			]);
 			assert.deepStrictEqual(other.snapshot().pins.map(each => [each.id, each.machine_id, each.agent]), [
 				[failed.id, local, localAgent.agent_id], [continued.id, server, newAgent.agent_id],
 			]);

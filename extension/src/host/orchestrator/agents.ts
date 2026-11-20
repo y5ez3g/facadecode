@@ -265,6 +265,9 @@ export class OrchestratorAgents implements vscode.Disposable {
 		const restored = await recovery.finally(() => {
 			this.recoveringHere = false;
 			this.pinRecovery = undefined;
+		}).catch(error => {
+			tracePinRestore('recovery error', messageOf(error));
+			throw error;
 		});
 		if (this.disposed) { return; }
 		const pins = this.pins();
