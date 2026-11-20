@@ -20,16 +20,22 @@ pub(super) const MAX_RECORD_BYTES: u64 = MAX_FEED_BYTES as u64 + 32;
 pub(crate) struct Checkpoint {
     cols: u16,
     rows: u16,
+    pub(super) title: Option<String>,
     redraw: Vec<u8>,
 }
 
 impl Checkpoint {
     /// Captures the retained scrollback and active screen without taking a lock.
     pub(crate) fn capture(screen: &Screen) -> Checkpoint {
+        Self::capture_with_title(screen, None)
+    }
+
+    pub(super) fn capture_with_title(screen: &Screen, title: Option<&str>) -> Checkpoint {
         Self {
             redraw: screen.redraw_with_all_scrollback(),
             cols: screen.cols(),
             rows: screen.rows(),
+            title: title.map(str::to_owned),
         }
     }
 
@@ -44,13 +50,17 @@ impl Checkpoint {
     }
 
     pub(super) fn encode(&self) -> Vec<u8> {
+        let title = self.title.as_deref().unwrap_or_default();
         let mut data = format!(
-            "facade screen checkpoint\nsize {} {}\ntitle 0\n\nredraw {}\n",
+            "facade screen checkpoint\nsize {} {}\ntitle {}\n",
             self.cols,
             self.rows,
-            self.redraw.len()
+            title.len()
         )
         .into_bytes();
+        data.extend_from_slice(title.as_bytes());
+        write!(&mut data, "\nredraw {}\n", self.redraw.len())
+            .expect("writing to a vector cannot fail");
         data.extend(&self.redraw);
         let digest = checksum(&data);
         write!(&mut data, "\nchecksum {digest}\n").expect("writing to a vector cannot fail");
@@ -64,13 +74,14 @@ impl Checkpoint {
         let dimensions = cursor.line()?.strip_prefix("size ")?;
         let (width, height) = dimensions.split_once(' ')?;
         let size = (width.parse().ok()?, height.parse().ok()?);
-        cursor.field("title")?;
+        let title = std::str::from_utf8(cursor.field("title")?).ok()?;
         let drawing = cursor.field("redraw")?.to_vec();
         let digest_end = data.len().checked_sub(cursor.remaining.len() + 1)?;
         let expected = cursor.line()?.strip_prefix("checksum ")?;
         (cursor.remaining.is_empty() && checksum(&data[..digest_end]) == expected).then_some(Self {
             cols: size.0,
             rows: size.1,
+            title: (!title.is_empty()).then(|| title.to_owned()),
             redraw: drawing,
         })
     }
@@ -117,15 +128,14 @@ pub(super) enum LogRecord {
     SyncEnd,
 }
 impl LogRecord {
-    pub(super) fn apply(self, screen: &mut Screen) {
+    pub(super) fn apply(self, screen: &mut Screen) -> Option<String> {
         match self {
-            Self::Resize(width, height) => screen.resize(width, height),
-            Self::Output(data) => {
-                screen.feed(&data);
+            Self::Resize(width, height) => {
+                screen.resize(width, height);
+                None
             }
-            Self::SyncEnd => {
-                screen.end_synchronized_update();
-            }
+            Self::Output(data) => screen.feed(&data).title_change,
+            Self::SyncEnd => screen.end_synchronized_update().title_change,
         }
     }
 }

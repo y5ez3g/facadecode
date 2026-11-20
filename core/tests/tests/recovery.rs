@@ -58,9 +58,6 @@ fn read_pid(home: &TestHome, file: &str) -> i32 {
         .unwrap()
 }
 
-/// The note shown while the attachment reconnects.
-const LOST_NOTE: &str = "Reconnecting to Facade. Recent keys may be lost.";
-
 fn agent(home: &TestHome, id: &str) -> Option<Value> {
     home.agents()
         .into_iter()
@@ -165,7 +162,7 @@ fn a_daemon_that_stops_answering_is_replaced() {
         home.keeper_log()
     );
     assert!(
-        home.agent_from_list_json("w1")
+        home.agent_from_watch("w1")
             .is_some_and(|agent| agent["process"] == "running")
             && alive(&agent.process)
     );
@@ -215,11 +212,7 @@ fn a_removal_interrupted_after_its_record_is_deleted_is_finished_by_the_next_dae
     let listed = home.run_facade(&["list"]);
     assert_eq!(
         (listed.status.code(), stdout(&listed), stderr(&listed)),
-        (
-            Some(0),
-            String::new(),
-            "No agents. Run 'facade start claude' to start one.\n".to_string()
-        )
+        (Some(0), String::new(), "No agents.\n".to_string())
     );
     assert!(
         wait_until(LOADED_TIMEOUT, || !home
@@ -253,8 +246,9 @@ fn a_start_interrupted_before_its_record_is_undone_and_its_number_never_reused()
         .and_then(|hello| hello["pid"].as_i64())
         .unwrap() as i32;
     let args = json!({
-        "command": [SH.as_str(), "-c", "echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > orphan-pid; sleep 60"], "name": "orphan",
-        "cwd": home.project, "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
+        "cli": home.shell_cli(),
+        "args": ["-c", "echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > orphan-pid; sleep 60"],
+        "name": "orphan", "folder": home.project, "env": { "PATH": SYSTEM_PATH.as_str() },
         "cols": 80, "rows": 24,
     });
     wire.send("call", json!({ "op": "agent.start", "args": args }));
@@ -304,7 +298,8 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
     for round in 1..=2 {
         let old = home.kill_daemon();
         assert!(
-            term.wait_for(secs(10), |_| term.output_count(LOST_NOTE) == round),
+            term.wait_for(secs(10), |_| term.output_count(ATTACH_RECONNECT_NOTE)
+                == round),
             "attempt {round}: {}",
             term.text()
         );
@@ -312,11 +307,12 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
             .expect("a replacement daemon");
         // The redraw after reconnecting replaces the note.
         assert!(
-            term.wait_for(secs(10), |text| !text.contains(LOST_NOTE)),
+            term.wait_for(secs(10), |text| !text.contains(ATTACH_RECONNECT_NOTE)),
             "attempt {round}: {}",
             term.text()
         );
     }
+    assert_eq!(term.output_count("Keys not sent:"), 0);
     term.send(b"after\r");
     assert!(
         term.wait_for(secs(10), |text| text.contains("got:after")),
@@ -338,14 +334,15 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
     );
 }
 
-/// Keys typed while the attachment is disconnected are sent once it reconnects. Keys still waiting
-/// when it ends are counted.
+/// Disconnected input is discarded. Attach redraws the screen before reporting its UTF-8 bytes.
 #[test]
-fn keys_typed_while_attach_is_disconnected_are_sent_after_it_reconnects() {
+fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
     let home = TestHome::new("offlinekeys");
     home.start_fake("w1");
     let mut term = TestTerminal::spawn(
-        home.command(&test_binaries().facade).args(["attach", "w1"]),
+        home.command(&test_binaries().facade)
+            .env("FACADE_TEST_GATES", "attach-evidence")
+            .args(["attach", "w1"]),
         100,
         30,
     );
@@ -354,37 +351,52 @@ fn keys_typed_while_attach_is_disconnected_are_sent_after_it_reconnects() {
         "{}",
         term.text()
     );
+    let marker = "the retained terminal screen";
+    term.send(format!("{marker}\r").as_bytes());
+    assert!(term.wait_for(secs(10), |text| text.contains(marker)));
+    assert!(wait_until(secs(10), || home.submitted_messages() == [marker]));
     let keeper = home.keeper_pid().expect("a keeper");
     // The paused keeper starts no daemon, so the attachment stays disconnected while the keys are
     // typed.
     pause_process(keeper);
     home.kill_daemon();
-    assert!(term.wait_for_output(secs(10), LOST_NOTE), "{}", term.text());
-    term.send(b"typed while away\r");
-    std::thread::sleep(Duration::from_millis(500));
-    resume_process(keeper);
     assert!(
-        wait_until(secs(15), || home.submitted_messages()
-            == ["typed while away"]),
-        "{:?}",
-        home.submitted_messages()
+        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
+        "{}",
+        term.text()
+    );
+    let disconnected = term.output_len();
+    let away = "界";
+    term.send(away.as_bytes());
+    home.wait_for_gate("attach-buffered-input");
+    resume_process(keeper);
+    let note = format!("Keys not sent: {} bytes.", away.len());
+    assert!(term.wait_for_output(secs(15), &note), "{}", term.text());
+    let written = term.output_since(disconnected);
+    let written = String::from_utf8_lossy(&written);
+    assert!(
+        written
+            .find(marker)
+            .zip(written.find(&note))
+            .is_some_and(|(screen, notice)| screen < notice),
+        "{written:?}"
     );
     term.send(b"after\r");
     assert!(
-        wait_until(secs(10), || home.submitted_messages()
-            == ["typed while away", "after"]),
+        wait_until(secs(10), || home.submitted_messages() == [marker, "after"]),
         "{:?}",
         home.submitted_messages()
     );
+    std::fs::remove_file(home.path.join("core/reached-attach-buffered-input")).unwrap();
     pause_process(keeper);
     home.kill_daemon();
     assert!(
-        term.wait_for(secs(10), |text| text.contains(LOST_NOTE)),
+        term.wait_for(secs(10), |text| text.contains(ATTACH_RECONNECT_NOTE)),
         "{}",
         term.text()
     );
     term.send(b"never sent");
-    std::thread::sleep(Duration::from_millis(500));
+    home.wait_for_gate("attach-buffered-input");
     term.send(b"\x1d");
     let status = term
         .wait_exit(secs(5))
@@ -403,7 +415,7 @@ fn keys_typed_while_attach_is_disconnected_are_sent_after_it_reconnects() {
 /// When the keeper and the daemon both end, no Facade process holds the terminals any more. The
 /// next daemon recovers the saved screens and lists the agents as ended because their terminals
 /// closed. A CLI that ignores the hangup may still run; Facade never signals its recorded process
-/// ID. Stop returns the recorded exit, input is refused, and remove deletes the record.
+/// ID. Stop, input and attach refuse the ended agent, and remove deletes the record.
 #[test]
 fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_nothing_is_signalled()
 {
@@ -439,11 +451,7 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         wait_until(secs(15), || !alive(&survivor_process)),
         "the CLI outlived its console"
     );
-    assert_eq!(
-        home.list_state("survivor").as_deref(),
-        Some("ended"),
-        "the agent stays listed"
-    );
+    home.run_facade_ok(&["inspect", &agent_id]);
     let ended = agent(&home, &agent_id).unwrap();
     assert!(
         ended["process"] == "ended"
@@ -455,17 +463,14 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         home.screen(&agent_id).contains("SURVIVOR-READY"),
         "the saved screen comes back"
     );
-    let stop = home.run_facade(&["stop", &agent_id]);
-    assert!(stop.status.success(), "{}", stderr(&stop));
-    let typed = open(&home).call(
+    let mut wire = open(&home);
+    let stopped = wire.call("agent.stop", json!({ "agent": agent_id }));
+    assert_eq!(error_reason(&stopped), "ended", "{stopped}");
+    let typed = wire.call(
         "agent.type",
         json!({ "agent": agent_id, "raw": facade_base::base64::encode(b"x") }),
     );
-    assert_eq!(
-        typed["error"]["message"],
-        format!("#{agent_id} ended"),
-        "{typed}"
-    );
+    assert_eq!(error_reason(&typed), "ended", "{typed}");
     let mut term = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .args(["attach", &agent_id]),
@@ -474,16 +479,11 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
     );
     let status = term
         .wait_exit(secs(10))
-        .expect("an attachment to an ended agent ends");
-    assert_eq!(
-        status.code(),
-        Some(1),
-        "an unknown exit never becomes code 0"
-    );
+        .expect("an attachment to an ended agent is refused");
+    assert_eq!(status.code(), Some(1), "attaching to an ended agent fails");
     let shown = |term: &TestTerminal| term.text_with_scrollback();
     assert!(
-        wait_until(secs(2), || shown(&term)
-            .contains("'s terminal closed. Its CLI may still be running.")),
+        wait_until(secs(2), || shown(&term).contains("has ended")),
         "{}",
         shown(&term)
     );
@@ -569,10 +569,12 @@ fn an_ended_run_whose_terminal_a_descendant_holds_does_not_hold_up_recovery() {
     // The saved exit released the run, so no keeper holds it and none restarts the daemon. A
     // command starts the next one.
     let started = Instant::now();
+    let inspected = home.run_facade_ok(&["inspect", &agent_id]);
     assert!(
-        home.list_state("parent").as_deref() == Some("exited: code 3"),
-        "{:?}",
-        home.list_table()
+        inspected
+            .lines()
+            .any(|line| line.starts_with("State:") && line[6..].trim() == "exited: code 3"),
+        "{inspected}"
     );
     assert!(
         started.elapsed() < secs(4),
@@ -984,11 +986,15 @@ fn a_reconnect_keeps_the_cursor_the_agent_saved() {
         term.text()
     );
     let old = home.kill_daemon();
-    assert!(term.wait_for_output(secs(10), LOST_NOTE), "{}", term.text());
+    assert!(
+        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
+        "{}",
+        term.text()
+    );
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
     assert!(
-        term.wait_for(secs(10), |text| !text.contains(LOST_NOTE)),
+        term.wait_for(secs(10), |text| !text.contains(ATTACH_RECONNECT_NOTE)),
         "{}",
         term.text()
     );
@@ -1105,7 +1111,11 @@ fn attach_keeps_retrying_while_recovery_waits_and_detaches_at_once() {
     let keeper = home.keeper_pid().expect("a keeper");
     pause_process(keeper);
     home.kill_daemon();
-    assert!(term.wait_for_output(secs(10), LOST_NOTE), "{}", term.text());
+    assert!(
+        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
+        "{}",
+        term.text()
+    );
     term.send(b"held keys");
     std::thread::sleep(secs(12));
     assert_eq!(

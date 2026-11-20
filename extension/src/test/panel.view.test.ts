@@ -23,6 +23,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let settings: Record<string, unknown>;
 	let configChanged: TestEmitter<{ affectsConfiguration(section: string): boolean }>;
 	let front: SelectedAgent | undefined;
+	let orchestrator: boolean;
 	let placesShown = true;
 	let changed: TestEmitter<PanelState>;
 	let said: TestEmitter<unknown>;
@@ -33,6 +34,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let panel: PanelView;
 	/** The commands the panel ran, other than its context keys. */
 	let ran: string[];
+	let copied: unknown[];
 
 	const page = (n: number) => n.toString(16).padStart(32, '0');
 	const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -54,7 +56,11 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: [base.path, ...parts].join('/') }) },
 			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) },
 			env: { language: 'en' },
-			commands: { executeCommand: async (command: string, key: string, value: unknown) => { if (command === 'setContext') { contexts[key] = value; } else { ran.push(command); } } },
+			commands: { executeCommand: async (command: string, arg: unknown, value: unknown) => {
+				if (command === 'setContext') { contexts[String(arg)] = value; }
+				else if (command === 'facade.copyAgentReference') { copied.push(arg); }
+				else { ran.push(command); }
+			} },
 			window: { withProgress: async () => void progress++ },
 			workspace: {
 				onDidChangeConfiguration: configChanged.event,
@@ -63,7 +69,9 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		};
 		(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
 		const { PanelView: View } = withModules({ vscode: api })<typeof import('../ui/panel')>(require.resolve('../ui/panel'));
-		const model = { onDidChange: changed.event, state: () => state, selectedAgent: () => front, placesShown: () => placesShown };
+		const model = { onDidChange: changed.event, state: () => state, selectedAgent: () => front,
+			placesShown: () => placesShown, usesOrchestrator: () => orchestrator,
+			runFacts: (id: string) => id === 'devbox/a1' ? { id, address: 'a1@devbox' } : undefined };
 		const actions: PanelActions = async (what, target) => {
 			acts.push([what, target]);
 			return answer();
@@ -93,6 +101,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 
 	setup(() => {
 		posted = []; acts = []; contexts = {}; progress = 0; logged = []; motions = []; ran = [];
+		copied = []; orchestrator = false;
 		settings = {};
 		configChanged = new TestEmitter();
 		state = stateOf(1);
@@ -180,6 +189,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'rename' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'pin' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'unpin' },
+			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'copyReference' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'new', target: '1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'unknown' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'clearFilter', target: '1' },
@@ -221,6 +231,13 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		await say({ type: 'act', page: page(1), action: `${page(1)}-3`, what: 'open', target: 'run-1' });
 		await say({ type: 'act', page: page(1), action: `${page(1)}-4`, what: 'open', revision: 4, target: 'run-1' });
 		assert.deepStrictEqual([before, acts, logged.length], [[], [['open', 'run-1']], 1]);
+		orchestrator = true;
+		await say({ type: 'act', page: page(2), action: `${page(2)}-5`, what: 'copyReference', target: 'devbox/a1' });
+		await say({ type: 'act', page: page(1), action: `${page(1)}-6`, what: 'copyReference', target: 'devbox/a1' });
+		await say({ type: 'act', page: page(1), action: `${page(1)}-7`, what: 'copyReference', target: 'other/a1' });
+		assert.deepStrictEqual(copied, [{ run_id: 'devbox/a1' }]);
+		assert.deepStrictEqual(posted.filter(message => message.type === 'outcome').slice(-2).map(({ ok, reason }) => [ok, reason]),
+			[[true, undefined], [false, 'gone']]);
 	});
 
 	test('U02: the outcome goes to the page that asked alone - not to the page made in its place since', async () => {
@@ -249,16 +266,19 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		await update(stateOf(2, { cardCount: 1, filter: { kind: 'location', id: 'loc-1', label: 'shop · main' }, capabilities: { remote: true } }));
 		badges.push(view.badge);
 		const selected = [view.description, { ...contexts }];
+		front = { run: 'run-1', ended: false, running: true };
+		await update(stateOf(3, { cardCount: 1 }));
+		assert.strictEqual(contexts['facade.agentSelectedRunning'], true);
 		front = undefined;
 		// Every agent in the window's one place to work: nothing to filter by
 		placesShown = false;
-		await update(stateOf(3, { cardCount: 0 }));
+		await update(stateOf(4, { cardCount: 0 }));
 		badges.push(view.badge);
 		assert.deepStrictEqual([badges, selected, view.description, contexts], [
 			[{ value: 2, tooltip: '2 agents' }, { value: 1, tooltip: '1 agent' }, undefined],
-			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.agentSelectedVisible': false, 'facade.filtered': true, 'facade.onePlace': false }],
+			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedRunning': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.agentSelectedVisible': false, 'facade.filtered': true, 'facade.onePlace': false }],
 			undefined,
-			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.agentSelectedVisible': false, 'facade.filtered': false, 'facade.onePlace': true }
+			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedRunning': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.agentSelectedVisible': false, 'facade.filtered': false, 'facade.onePlace': true }
 		]);
 	});
 
@@ -278,6 +298,11 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.deepStrictEqual([...html.matchAll(/(?:src|href)="webview:([^"]+)"/g)].map(match => match[1]), ['/extension/media/panel.css', '/extension/dist/webview/webview.js']);
 		const words = html.slice(html.indexOf('window.FACADE_STRINGS'), html.indexOf('</script>', html.indexOf('window.FACADE_STRINGS')));
 		assert.ok(words.includes('Start an agent in this workspace.') && !words.includes('<'), 'the embedded words, with no raw <');
+		assert.match(words, /"continueSession":"Continue Session"/);
+		panel.dispose();
+		orchestrator = true;
+		make();
+		assert.match(view.webview.html, /"continueSession":"Resume Agent","copyReference":"Copy Agent Reference"/);
 	});
 
 	test('the shipped build answers no probe; the integration build has the page shown answer one (UX-3.2)', async () => {

@@ -52,7 +52,35 @@ fn an_ended_agent_s_screen_leaves_memory_and_comes_back_when_read_or_shown() {
     let home = TestHome::new("letgo");
     start_marking(&home);
     let mut wire = connect(&home);
-    let id = start_script(&mut wire, &home, "printer", &printer(400, "FINAL", 3));
+    let script = format!(
+        "while [ ! -e go ]; do sleep 0.05; done; {}",
+        printer(400, "FINAL", 3)
+    );
+    let id = start_script(&mut wire, &home, "printer", &script);
+    // The screen topic follows an active terminal, delivering its last output before the exit.
+    let watching = wire.request(
+        "watch",
+        json!({ "topic": "screen", "args": { "agent": id } }),
+    );
+    let watch = watching["result"]["watch"]
+        .as_u64()
+        .expect("a screen watch");
+    assert_eq!(watching["result"]["snapshot"]["process"], "running");
+    std::fs::write(home.project.join("go"), "").unwrap();
+    let exit = |event: &Value| event["change"]["kind"] == "exit";
+    assert!(wait_until(secs(30), || wire
+        .changes(watch)
+        .iter()
+        .any(exit)));
+    let changes = wire.changes(watch);
+    let last = changes.iter().position(exit).unwrap();
+    assert_eq!(changes[last]["change"]["exit"]["code"], 3);
+    let output: Vec<_> = changes[..last]
+        .iter()
+        .filter_map(|event| event["change"]["data"].as_str())
+        .flat_map(|data| facade_base::base64::decode(data).unwrap())
+        .collect();
+    assert!(String::from_utf8_lossy(&output).contains("FINAL"));
     assert!(
         reaches(&home, &format!("screen-dropped-{id}")),
         "the ended agent's screen did not leave memory: {}",
@@ -78,28 +106,11 @@ fn an_ended_agent_s_screen_leaves_memory_and_comes_back_when_read_or_shown() {
         "the screen stayed after the read"
     );
 
-    // A viewer gets the final screen and the exit; once it goes, the screen goes too.
-    forget(&home, &format!("screen-dropped-{id}"));
-    let watching = wire.request(
+    let ended = wire.request(
         "watch",
         json!({ "topic": "screen", "args": { "agent": id } }),
     );
-    let snapshot = &watching["result"]["snapshot"];
-    assert_eq!(snapshot["exit"]["code"], 3, "{watching}");
-    let redraw = facade_base::base64::decode(snapshot["redraw"].as_str().unwrap()).unwrap();
-    assert!(
-        String::from_utf8_lossy(&redraw).contains("FINAL"),
-        "{watching}"
-    );
-    assert!(
-        !mark(&home, &format!("screen-dropped-{id}")).exists(),
-        "the screen stays while a viewer shows it"
-    );
-    wire.request("unwatch", json!({ "watch": watching["result"]["watch"] }));
-    assert!(
-        reaches(&home, &format!("screen-dropped-{id}")),
-        "the screen stayed after its viewer went"
-    );
+    assert_eq!(error_reason(&ended), "ended", "{ended}");
 }
 
 #[test]
@@ -111,7 +122,7 @@ fn a_resumed_agent_goes_on_from_the_screen_its_files_hold() {
     // The resume below needs the session the CLI reports, which its record shows a moment after the
     // start.
     assert!(wait_until(secs(30), || home
-        .agent_from_list_json("worker")
+        .agent_from_watch("worker")
         .is_some_and(|agent| agent["session"] == SESSION)));
     type_raw(&mut connect(&home), &agent.id, "said before\r");
     assert!(wait_for_screen_text(&home, &agent.id, "said before"));
@@ -120,7 +131,7 @@ fn a_resumed_agent_goes_on_from_the_screen_its_files_hold() {
     let resumed = home
         .command(&test_binaries().facade)
         .env("PATH", home.path_with_test_programs())
-        .args(["resume", &agent.id])
+        .args(["resume", "-d", &agent.id])
         .stdin(Stdio::null())
         .output()
         .unwrap();

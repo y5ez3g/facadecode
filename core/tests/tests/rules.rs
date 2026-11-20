@@ -1,31 +1,32 @@
-//! CLI rules: a rule's name starts its CLI as the rule says, any other program runs as given, and
-//! `inspect` reads an agent's input from its screen without typing.
+//! CLI rules: a rule's name starts its CLI as the rule says, a custom program of the settings file
+//! runs as given, and `inspect` reads an agent's input from its screen without typing.
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
-/// `facade inspect --json` for an agent.
+/// `agent.inspect` for an agent.
 fn inspect(home: &TestHome, agent: &str) -> Value {
-    serde_json::from_str(&home.run_facade_ok(&["inspect", agent, "--json"]))
-        .expect("inspect prints JSON")
+    let inspected = connect(home).call("agent.inspect", json!({ "agent": agent }));
+    inspected["result"].clone()
 }
 
 #[test]
-fn a_rule_s_name_runs_its_cli_and_a_path_runs_the_program_as_given() {
+fn a_rule_s_name_runs_its_cli_and_a_custom_program_runs_as_given() {
     let home = TestHome::new("named");
     home.start_named_fake("named", &[]);
-    home.start_fake("raw");
+    home.add_custom_cli("raw", &test_binaries().fakecli);
+    home.run_facade_ok(&["start", "-d", "--name", "raw", "raw"]);
     let named = home.agent_from_list_json("named").unwrap();
     let raw = home.agent_from_list_json("raw").unwrap();
     assert_eq!(
         (named["cli"].as_str(), raw["cli"].as_str()),
-        (Some("fake"), Some("facade-fakecli")),
-        "a path keeps its program's name"
+        (Some("fake"), Some("raw")),
+        "a custom program keeps its entry's name"
     );
     assert_eq!(inspect(&home, "named")["rule"], "fake");
     assert!(
         inspect(&home, "raw").get("rule").is_none(),
-        "a program started by its path has no rule"
+        "a custom program has no rule"
     );
     let plain = home.run_facade_ok(&["inspect", "raw"]);
     let label = |name: &str| {
@@ -35,7 +36,7 @@ fn a_rule_s_name_runs_its_cli_and_a_path_runs_the_program_as_given() {
             .map(str::trim)
     };
     assert!(
-        label("Kind") == Some("plain program") && label("Session") == Some("none (not tracked)"),
+        label("CLI") == Some("raw (custom program)") && label("Session") == Some("none"),
         "{plain}"
     );
     let help = home.run_facade_ok(&["start", "--help"]);
@@ -46,8 +47,8 @@ fn a_rule_s_name_runs_its_cli_and_a_path_runs_the_program_as_given() {
 }
 
 /// A CLI of the settings file whose program cannot run where it starts is `not_found`, said by its
-/// setting; a program started by its path that cannot run, and a folder that cannot be used, are
-/// `unavailable`; a relative folder is refused.
+/// setting, and so is a program that is no CLI of the settings file; a folder that does not exist
+/// is refused, saying so, and so is a relative folder.
 #[test]
 fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too() {
     let home = TestHome::new("unusable");
@@ -60,15 +61,18 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
         r"{}\no\such\folder",
         &home.project.display().to_string()[..2]
     );
-    let start =
-        |wire: &mut DaemonTestClient, command: Value, cwd: &str, path: &str| {
-            wire.call("agent.start", json!({
-                "command": command, "cwd": cwd, "env": { "PATH": path, "FACADE_HOME": home.path },
+    let shell = home.shell_cli();
+    let start = |wire: &mut DaemonTestClient, cli: &str, folder: &str, path: &str| {
+        wire.call(
+            "agent.start",
+            json!({
+                "cli": cli, "folder": folder, "env": { "PATH": path, "FACADE_HOME": home.path },
                 "cols": 80, "rows": 24,
-            }))
-        };
+            }),
+        )
+    };
     let project = home.project.display().to_string();
-    let missing = start(&mut wire, json!(["fake"]), &project, SYSTEM_PATH.as_str());
+    let missing = start(&mut wire, "fake", &project, SYSTEM_PATH.as_str());
     assert_eq!(
         error_reason(&missing),
         "not_found",
@@ -79,48 +83,38 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
         missing["error"]["message"]
             .as_str()
             .is_some_and(|message| message.starts_with(said)
-                && message.ends_with(", and clis.fake.program does not name its location")),
+                && message.ends_with(
+                    ", and clis.fake.program does not name its location\nAvailable CLIs: sh."
+                )),
         "{missing}"
     );
     assert_eq!(
         error_reason(&start(
             &mut wire,
-            json!(["/no/such/program"]),
+            "/no/such/program",
             &project,
             SYSTEM_PATH.as_str()
         )),
-        "unavailable",
-        "a missing program"
+        "not_found",
+        "a program that is no CLI of the settings file"
     );
-    let fake = test_binaries().fakecli.display().to_string();
-    assert_eq!(
-        error_reason(&start(
-            &mut wire,
-            json!([fake]),
-            no_folder.as_str(),
-            SYSTEM_PATH.as_str()
-        )),
-        "unavailable",
-        "a missing folder"
-    );
+    let program = start(&mut wire, shell, no_folder.as_str(), SYSTEM_PATH.as_str());
     let named = start(
         &mut wire,
-        json!(["fake"]),
+        "fake",
         no_folder.as_str(),
         &home.path_with_test_programs(),
     );
+    let gone = format!("the folder {no_folder} does not exist");
+    for refused in [program, named] {
+        assert_eq!(
+            (error_reason(&refused), refused["error"]["message"].as_str()),
+            ("invalid_argument", Some(gone.as_str())),
+            "a missing folder, for a custom program and a rule's CLI: {refused}"
+        );
+    }
     assert_eq!(
-        error_reason(&named),
-        "unavailable",
-        "a missing folder for a rule's CLI"
-    );
-    assert_eq!(
-        error_reason(&start(
-            &mut wire,
-            json!([fake]),
-            "project",
-            SYSTEM_PATH.as_str()
-        )),
+        error_reason(&start(&mut wire, shell, "project", SYSTEM_PATH.as_str())),
         "invalid_argument",
         "a relative folder"
     );
@@ -204,17 +198,18 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
         [
             "ID",
             "Name",
+            "Type",
+            "State",
+            "Machine",
             "CLI",
             "Folder",
-            "Created",
+            "Args",
+            "Model",
+            "Effort",
+            "Session",
             "Started by",
-            "Process",
-            "YOLO",
-            "State",
-            "Facade tools",
-            "Input box",
-            "Last input",
-            "Session"
+            "Viewers",
+            "YOLO"
         ],
         "{plain}"
     );
@@ -224,32 +219,39 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
             .is_some_and(|folder| folder.is_absolute() && folder.ends_with("project")),
         "{plain}"
     );
+    let address = home.agent_record(&agent.id).unwrap()["address"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let machine = address.split_once('@').map(|(_, machine)| machine);
     assert_eq!(
         (
             value("ID"),
             value("Name"),
+            value("Type"),
+            value("Machine"),
             value("CLI"),
-            value("Started by"),
-            value("Process"),
-            value("YOLO"),
-            value("State"),
-            value("Facade tools"),
-            value("Input box"),
-            value("Last input"),
+            value("Args"),
+            value("Model"),
+            value("Effort"),
             value("Session"),
+            value("Started by"),
+            value("Viewers"),
+            value("YOLO"),
         ),
         (
-            Some(agent.id.as_str()),
+            Some(address.as_str()),
             Some("reader"),
+            Some("managed"),
+            machine,
             Some("fake"),
-            Some("human"),
-            Some(format!("running, pid {}", agent.pid).as_str()),
-            Some("on: can address every agent"),
-            Some("starting"),
-            Some("available"),
-            Some("draft"),
             Some("none"),
-            Some("none")
+            Some("none"),
+            Some("none"),
+            Some("none"),
+            Some("command line"),
+            Some("none"),
+            Some("on")
         ),
         "{plain}"
     );

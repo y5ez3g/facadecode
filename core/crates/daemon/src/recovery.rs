@@ -245,6 +245,28 @@ impl Daemon {
                 cwd,
                 exit_sink(tx.clone()),
             )?;
+            if process == ProcessState::Running {
+                let identity = facade_base::process::ProcessIdentity {
+                    pid: run.pid,
+                    birth: run.birth.clone(),
+                };
+                let kept = blocking_in_place(|| {
+                    self.store.adopt_legacy_run(&id, &identity)?;
+                    self.store.relay_run(&id)
+                })?;
+                if let Some(kept) = kept.filter(|kept| kept.version == 3)
+                    && let Some(digest) = kept.digest
+                {
+                    self.runs.restore_credential(
+                        run,
+                        agent::FIRST_RUN,
+                        crate::runs::RunCredentialRecord {
+                            digest,
+                            process: kept.process,
+                        },
+                    );
+                }
+            }
         }
         let follows_session = process == ProcessState::Running && self.runs.captures(&id);
         if follows_session {
@@ -311,7 +333,10 @@ impl Daemon {
         run: &KeeperHeldAgent,
     ) -> anyhow::Result<()> {
         let id = &record.agent_id;
-        blocking_in_place(|| self.store.record_restart(id, run.pid, record.yolo))?;
+        blocking_in_place(|| {
+            self.store
+                .record_restart(id, run.pid, record.yolo, None, None)
+        })?;
         log(
             "info",
             &format!("committed the resumed run of {id}, process {}", run.pid),

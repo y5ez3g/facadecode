@@ -2,21 +2,25 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { monotonic } from '../base/clock';
 import { expiredRoute, RouteExpired, spendRouteTime, withinRoute } from '../base/routeBudget';
-import { WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND, type DamagedWindowIdentity, type UnreadableWindowIdentity, type WindowIdentity } from '../base/windowIdentity';
+import {
+	WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND,
+	type DamagedWindowIdentity, type LegacyWindowInstance, type UnreadableWindowIdentity, type WindowIdentity, type WindowTerminalIdentity
+} from '../base/windowIdentity';
 import {
 	AGENTS_ROUTE_COMMAND, Allocation, Directory, isDirectoryAgent, isRouteRequest, PublishStatus, RouteResponse, ServedRoute, WINDOW_ALLOCATE_COMMAND,
 	WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND, WORKSPACE_REPUBLISH_COMMAND
 } from '../base/windowNetwork';
-import { facadeHome, facadeRoot } from '../record/paths';
+import { facadeHome } from '../record/paths';
 import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
 import { editorEnvironment } from './editorEnvironment';
 import { homeRecordOf, homeReloadText, rememberHome, UnusableHome, useFacadeHome, useRememberedHome } from './home';
-import { startRemoteSshMachine } from './remoteSsh';
-import { NotServed, WindowNetwork } from './windowNetwork';
+import { NotServed, windowAddress, WindowNetwork } from './windowNetwork';
 import { WindowTerminals } from './windowTerminals';
 
 /** Serves a request another window routed here through this window's workspace extension, within the request's own time. */
@@ -37,10 +41,56 @@ async function serveHere(request: ServedRoute): Promise<unknown> {
 	}
 }
 
-let remoteSsh: ReturnType<typeof startRemoteSshMachine> | undefined;
-
-/** The local component's commands and temporary machine link serve this window alone. */
+/** The local component's terminal registry and the entry to its old-engine window services. */
 export function activate(context: vscode.ExtensionContext): void {
+	const directory = context.logUri.fsPath;
+	const here = (session: unknown) => session === vscode.env.sessionId;
+	const log = (line: string) => console.error(line);
+	const terminals = new WindowTerminals({ directory, log });
+	let oldStarted: boolean | undefined;
+	let token: string | undefined;
+	let previousInstance: string | undefined;
+	const handover = () => {
+		if (!token) {
+			const previous = fs.existsSync(path.join(directory, 'handover.json'));
+			token = windowToken(directory);
+			if (previous) { previousInstance = windowAddress(token); }
+		}
+		return token;
+	};
+	context.subscriptions.push(
+		terminals,
+		vscode.commands.registerCommand(WINDOW_TERMINALS_COMMAND, (request: unknown, terminal?: unknown) => terminals.request(request, terminal)),
+		vscode.commands.registerCommand(WINDOW_TERMINAL_OWNER_COMMAND, (session: unknown): WindowTerminalIdentity | undefined => {
+			if (!here(session)) { return undefined; }
+			return { version: 1, token: handover(), session: vscode.env.sessionId };
+		}),
+		vscode.commands.registerCommand(WINDOW_LEGACY_INSTANCE_COMMAND, (session: unknown): LegacyWindowInstance | undefined => {
+			if (!here(session)) { return undefined; }
+			if (!token && fs.existsSync(path.join(directory, 'handover.json'))) { handover(); }
+			return token && previousInstance ? { version: 1, token, session: vscode.env.sessionId, instanceId: previousInstance } : undefined;
+		}),
+		vscode.commands.registerCommand(WINDOW_IDENTITY_COMMAND, (session: unknown): WindowIdentity | DamagedWindowIdentity | UnreadableWindowIdentity | undefined => {
+			if (!here(session)) { return undefined; }
+			const id = { version: 1 as const, session: vscode.env.sessionId };
+			let token: string;
+			try {
+				token = handover();
+			} catch (error) {
+				console.error('Could not read the local window handover record.', error);
+				return error instanceof DamagedWindowRecord ? { ...id, damaged: true } : { ...id, unreadable: messageOf(error) };
+			}
+			oldStarted ??= startOldWindow(context, token);
+			if (!oldStarted) { return undefined; }
+			// Only the local host sees the Remote-SSH authority; the workspace's folders are file URIs there.
+			const remote = vscode.env.remoteName === undefined ? undefined : vscode.workspace.workspaceFolders?.[0]?.uri.authority || vscode.workspace.workspaceFile?.authority;
+			return { ...id, token, ...(remote ? { remote } : {}), component: String(context.extension.packageJSON.version) };
+		}),
+	);
+}
+
+/** The legacy host asks for its window identity before it uses these services. */
+function startOldWindow(context: vscode.ExtensionContext, token: string): boolean {
 	// The Facade home first, before the window registry reads it (ARCHITECTURE-3.1): this computer's. A local window's workspace
 	// extension shares this process, sets the same and says what is wrong with it; this component writes it down, now and as it changes.
 	// In a remote window VS Code gives no extension this computer's Facade: Home - it keeps machine settings for the remote one - so its
@@ -60,24 +110,11 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (!(err instanceof UnusableHome)) {
 				throw err;
 			}
-			return;
+			return false;
 		}
 	} else {
 		useRememberedHome(context, homeReloadText);
 	}
-	let token: string;
-	try {
-		token = windowToken(context.logUri.fsPath);
-	} catch (error) {
-		console.error('Could not read the local window handover record.', error);
-		// No other identity is invented (ARCHITECTURE-2.2). The workspace component asks, and says what helps: damaged, not a reload,
-		// which reads this record again; not read or written now - a lock, no file handles left - a reload, which may not meet it again
-		const unreadable = error instanceof DamagedWindowRecord ? undefined : messageOf(error);
-		context.subscriptions.push(vscode.commands.registerCommand(WINDOW_IDENTITY_COMMAND, (session: unknown): DamagedWindowIdentity | UnreadableWindowIdentity | undefined =>
-			session !== vscode.env.sessionId ? undefined : unreadable !== undefined ? { version: 1, session, unreadable } : { version: 1, session, damaged: true }));
-		return;
-	}
-	const terminals = new WindowTerminals({ directory: context.logUri.fsPath, log: line => console.error(line) });
 	// This window on the client network: registered on this computer, reachable by the others (ARCHITECTURE-2.1)
 	const network = new WindowNetwork({
 		home: facadeHome(),
@@ -124,25 +161,6 @@ export function activate(context: vscode.ExtensionContext): void {
 				return undefined;
 			}
 			return network.allocate(kind, count, typeof floor === 'number' ? floor : 0);
-		}),
-		terminals,
-		vscode.commands.registerCommand(WINDOW_TERMINALS_COMMAND, (request: unknown, terminal?: unknown) => terminals.request(request, terminal)),
-		vscode.commands.registerCommand(WINDOW_IDENTITY_COMMAND, (session: unknown): WindowIdentity | undefined => {
-		if (session !== vscode.env.sessionId) {
-			return undefined;
-		}
-		// The workspace extension host has its folders as file: URIs; the remote host's name is the local window's alone
-		const remote = vscode.env.remoteName === undefined ? undefined : vscode.workspace.workspaceFolders?.[0]?.uri.authority || vscode.workspace.workspaceFile?.authority;
-		return { version: 1, token, session: vscode.env.sessionId, ...(remote ? { remote } : {}), component: String(context.extension.packageJSON.version) };
-	}));
-	if (vscode.env.remoteName === 'ssh-remote') {
-		remoteSsh = startRemoteSshMachine(context, facadeRoot(), vscode.env.sessionId, token);
-		context.subscriptions.push(remoteSsh);
-	}
-}
-
-export function deactivate(): Promise<void> | undefined {
-	const closing = remoteSsh?.close();
-	remoteSsh = undefined;
-	return closing;
+		}));
+	return true;
 }

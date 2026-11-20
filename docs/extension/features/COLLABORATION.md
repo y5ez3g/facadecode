@@ -1,5 +1,7 @@
 # Collaboration
 
+Group 5 covers collaboration through the Orchestrator. Groups 1–4 retain the old-engine transition rules.
+
 Layer 3. Facade exposes operations, not a team workflow. [RULES-1](../RULES.md#1-agent-messages) owns delivery;
 [MCP](../engineering/MCP.md) owns schemas. This document owns visible messages, message records and collaboration
 surfaces.
@@ -17,9 +19,7 @@ surfaces.
 
 **Agents operate within their YOLO or creation-tree reach. Human actions and presentation use the current editor window.**
 
-RULES-2.1 and RULES-4.3 define scope and reach. On Rust, core owns operations on its machine and member windows show
-their agents under RULES-4.1. The person can adopt another running agent on that machine through Go to Agent
-(LIFECYCLE-2.3). On the old engine, the caller's window answers each call and the destination window performs its
+RULES-2.1 and RULES-4.3 define scope and reach. The caller's window answers each call and the destination window performs its
 effect. Startup discovery (MCP-3.1) includes open windows, valid locations and actual CLI choices, including
 empty-agent windows. A new child joins its creator's tree even when displayed in different windows. Startup arguments
 follow MCP-2.2. Agent-created runs appear in their windows without changing human focus.
@@ -115,23 +115,12 @@ task result, child completion report or replay of a creation prompt.
 
 ### 2.3 Contacting the person
 
-**An explicit send to the person offers a native notification in each eligible member window on the Rust engine. The old engine uses the sender's window.**
+**An explicit send to the person offers a native notification in the sender's window.**
 
 Use a native information notification that names the source agent with its short ID and shows the message's first
 line, with Open Message, which opens the complete saved message (3.2), and Show Agent, which opens the agent's terminal
 (UX-1.2). Existing terminal visibility does not suppress an explicit call. Distinct calls remain distinct records.
 
-On Rust, the sender's running machine assigns one message ID. The storage machine ID and message ID together identify
-the notice and its reply reference. Use the member windows present at send time across the connected machines.
-Only a connected window with a current message subscription can receive it. Success means at least one
-subscription accepted the notification. The response gives the windows that accepted it and the reasons for each
-missed window. Zero accepted subscriptions return an error to the sender. Forwarded delivery without a reply keeps
-the assigned message ID and reports that the outcome is unknown.
-A repeated request ID returns the same settled outcome, waits for it while in flight, or returns an unknown outcome
-if core stopped before settling it. A repeated ID never sends another notification.
-
-The window displays new notices from its subscription. Snapshot records support deduplication. A newly added window
-does not replay previous notices. Opening, dismissing or replying to a notice leaves other windows' notices alone.
 The old engine sends only to the sender's window and returns a delivery failure when it cannot hand off there.
 Eligibility comes from explicit contact, without automatic escalation from an agent-to-agent error or inactivity.
 
@@ -182,8 +171,6 @@ content as text; do not execute links or commands embedded in it.
 A start or stop result records its operation and execution window explicitly, with the target's recorded short
 identity, never inferred from its prose. A reserved receipt ID is not a fabricated record. Missing/expired original
 messages keep their references without invented content.
-On Rust, the person can reply through `facade send --reply-to`. Core checks the original message in the person's
-inbox. Viewing the record in another member window does not change its identity or outcomes.
 
 ### 3.3 History retention
 
@@ -224,6 +211,23 @@ if any included message expires, delete the whole file; a later read regenerates
 Screen-result files use the ordinary thirty-day diagnostic cleanup. The person's view of a message is 3.2's read-only
 document, not a result file. Do not add protected-storage or authentication protocols to this generated-content
 transport.
+
+
+## 5 Collaboration through the Orchestrator
+
+### 5.1 Visible helpers
+
+**Show descendants of agents in the workspace list as cards.**
+
+Existing and new descendants follow RULES-6.1. Opening a terminal is an explicit action. YOLO and MCP reach follow
+RULES-6.6.
+
+### 5.2 Interaction through MCP, Shell and Attach
+
+**Agents collaborate through MCP and the person can follow their work through Attach.**
+
+The Orchestrator owns [messages and terminal operations](../../facade-code.md#3-交互). Shell sends as the command
+line. The editor presents its own operation errors and shows the agent's terminal and its state. See RULES-6.7.
 
 ## Checks
 

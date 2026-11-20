@@ -12,6 +12,8 @@ import { TestEmitter } from './withModules';
 import { placeOf } from './detailLines';
 
 const WORDS: CardWords = {
+	orchestrator: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
+		machine: value => `Machine: ${value}`, address: value => `Address: ${value}` },
 	title: value => `Title: ${value}`,
 	location: value => `Location: ${value}`,
 	path: value => `Path: ${value}`,
@@ -110,8 +112,9 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 	let states: PanelState[];
 	let settle: () => void;
 
-	const make = (ready: Promise<unknown> = Promise.resolve()) => {
-		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(storage), words: WORDS, remote: false, ready, timers: clock });
+	const make = (ready: Promise<unknown> = Promise.resolve(), orchestrator = false) => {
+		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(storage, undefined, orchestrator),
+			words: WORDS, remote: false, ready, timers: clock, orchestrator });
 		model.onDidChange(state => states.push(state));
 		models.push(model);
 		return model;
@@ -202,7 +205,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([leading, held, trailing, title, sent() - first, model.state().cards[0].dot], [1, 1, 2, 'Three', 3, 'error']);
 	});
 
-	test('U05: the badge counts every card - starting, failed and filtered out alike; a new card goes last; the order is kept in workspace storage (PANEL-2.1)', async () => {
+	test('U05, RULES-6.1: the badge counts all cards; order and a workspace card selection survive a new model', async () => {
 		let model = make();
 		agents.add(run(1, { lifecycle: 'starting', phase: 'launching_cli' }));
 		agents.add(run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }));
@@ -229,6 +232,30 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 			['Agent 2', 'Agent 1', 'Agent 3'],
 			['Agent 2', 'Agent 1', 'Agent 3', 'Agent 4']
 		]);
+		model.dispose();
+		agents = new Agents();
+		storage = new Memory();
+		const first = run(1, { orchestrator: { reference: { machine_id: 'machine-one', agent_id: 'a1' }, state: 'idle' } });
+		const second = run(2, { alias: '#a1', orchestrator: { reference: { machine_id: 'machine-two', agent_id: 'a1' }, state: 'ended' },
+			lifecycle: 'ended', remoteMachine: 'gpu', pinnable: true });
+		model = make(Promise.resolve(), true);
+		agents.add(second);
+		agents.add(first);
+		model.select(second.id);
+		await tick();
+		assert.deepStrictEqual(storage.values.get('facade.panel.order'), ['machine-two/a1', 'machine-one/a1']);
+		assert.strictEqual(storage.values.get('facade.panel.selection'), 'machine-two/a1');
+		model.dispose();
+		agents = new Agents();
+		agents.add({ ...first, id: id(3) });
+		agents.add({ ...second, id: id(4) });
+		model = make(Promise.resolve(), true);
+		await tick();
+		assert.deepStrictEqual(model.state().cards.map(card => [card.runId, card.alias, card.selected, card.orchestrator?.running, card.menu]), [
+			[id(4), 'a1', true, false, { pin: true, moveUp: false, moveDown: false }],
+			[id(3), 'a1', false, true, { moveUp: false, moveDown: false }]
+		]);
+		assert.deepStrictEqual(model.selectedAgent(), { run: id(4), ended: true, running: false, pinnable: true });
 	});
 
 	test('Move Up/Down trades places with the next card; the menu offers each only where it moves (PANEL-2.1, 2.2)', async () => {

@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import { createConnection } from 'net';
 import * as path from 'path';
 import { createInterface } from 'readline';
-import type { HelloParams, Response, WatchResult, WindowInfo } from '../../base/coreProtocol';
+import type { Response, V2HelloParams, V3HelloParams } from '../../base/coreProtocol';
 
 /** VS Code's fsPath lowercases the drive letter. Compare it like a path from Node or core. */
 export function normalizeDriveLetter(file: string): string {
@@ -22,8 +22,8 @@ export function normalizeDriveLetter(file: string): string {
 export function officialEditor(): string {
 	const standard = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
 	const executable = process.env.VSCODE_EXECUTABLE || (process.platform === 'darwin' && fs.existsSync(standard) ? standard : undefined);
-	if (!executable) {
-		throw new Error('Set VSCODE_EXECUTABLE to an official VS Code executable, for example "/Applications/Visual Studio Code.app/Contents/MacOS/Code".');
+	if (!executable || !path.isAbsolute(executable) || !fs.statSync(executable, { throwIfNoEntry: false })?.isFile()) {
+		throw new Error('Set VSCODE_EXECUTABLE to the absolute path of an official VS Code executable, for example "/Applications/Visual Studio Code.app/Contents/MacOS/Code".');
 	}
 	officialVsCode(executable);
 	return executable;
@@ -57,10 +57,21 @@ function officialVsCode(executable: string): void {
  */
 export const EDITOR_FLAGS = ['--no-sandbox', '--disable-gpu-sandbox', '--disable-updates', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'];
 
+/** The portable root keeps VS Code's argv.json inside the test as well as the three directory arguments. */
+export function editorProfile(root: string, name: string, extensions?: string) {
+	const portable = path.join(root, name);
+	const user = path.join(portable, 'user-data');
+	return {
+		user,
+		args: ['--user-data-dir', user, '--extensions-dir', extensions ?? path.join(portable, 'extensions'), '--shared-data-dir', path.join(portable, 'shared-data')],
+		env: { VSCODE_PORTABLE: portable }
+	};
+}
+
 /** Variables an editor, Git or a CLI session could pass on: none of them may reach the test editor. */
 export function sanitizedEnvironment(): void {
 	for (const name of Object.keys(process.env)) {
-		if (/^(VSCODE_|CLAUDE_|CODEX_|GEMINI_|ANTIGRAVITY_|MUSE_|OPENCODE_|PI_|ANTHROPIC_|OPENAI_|QWEN_|FACADE_|ELECTRON_RUN_AS_NODE$|GIT_ASKPASS$|SSH_ASKPASS$)/.test(name) && name !== 'VSCODE_EXECUTABLE') {
+		if (/^(VSCODE_|CLAUDE_|CODEX_|GEMINI_|ANTIGRAVITY_|MUSE_|OPENCODE_|PI_|ANTHROPIC_|OPENAI_|QWEN_|FACADE_|ELECTRON_RUN_AS_NODE$|GIT_ASKPASS$|SSH_ASKPASS$)/i.test(name) && name.toUpperCase() !== 'VSCODE_EXECUTABLE') {
 			delete process.env[name];
 		}
 	}
@@ -105,16 +116,34 @@ export async function registeredWindow(facade: string, matches: (label: string) 
 }
 
 /**
- * Ends every process whose command line contains `text` - the editors, ptyds and CLIs a run leaves, never anything else - as
- * `pkill -f` does; on Windows, which has none, by each process's command line, the text given by name rather than quoted.
+ * Prepare cleanup for a run's own editors, ptyds and CLIs. Build the Windows helper before starting any editor.
  */
-export function endMatching(text: string): void {
+export function testProcessCleanup(root: string): (text: string) => void {
 	if (process.platform !== 'win32') {
-		spawnSync('pkill', ['-TERM', '-f', text]);
-		return;
+		return text => { spawnSync('pkill', ['-TERM', '-f', text]); };
 	}
-	const script = 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:FACADE_IT_END) -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
-	spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, FACADE_IT_END: text }, stdio: 'ignore' });
+	const compiler = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+	const source = path.resolve(__dirname, '..', '..', '..', '..', 'scripts', 'stop-test-processes.cs');
+	const program = path.join(root, 'stop-test-processes.exe');
+	execFileSync(compiler, ['/nologo', '/target:exe', `/out:${program}`, source], {
+		stdio: ['ignore', 'inherit', 'inherit'], timeout: 30_000, windowsHide: true
+	});
+	return text => {
+		const relative = path.relative(root, text);
+		if (!path.isAbsolute(text) || path.isAbsolute(relative) || relative.split(path.sep)[0] === '..') {
+			throw new Error(`Expected a cleanup path in ${root}, got ${text}.`);
+		}
+		// A child that inherits a pipe can keep spawnSync waiting after the helper has exited.
+		const diagnostics = path.join(root, 'process-cleanup.log');
+		const file = fs.openSync(diagnostics, 'w');
+		try {
+			const stopped = spawnSync(program, [text, String(process.pid)], { stdio: ['ignore', 'ignore', file], timeout: 20_000, windowsHide: true });
+			if (stopped.status !== 0) {
+				const reason = stopped.error?.message || fs.readFileSync(diagnostics, 'utf8').trim() || `Helper exited with status ${stopped.status}`;
+				throw new Error(`Could not stop test processes for ${text}. ${reason}`);
+			}
+		} finally { fs.closeSync(file); }
+	};
 }
 
 /**
@@ -215,22 +244,15 @@ export function coreProgram(bin: string): string {
 }
 
 /** Reads the daemon's hello result as a terminal client. */
-export async function helloInCore(home: string): Promise<Response> {
-	return await readCore(home, { build: 'facade-editor-test', protocol: [2, 2], kind: 'terminal' });
+export async function helloInCore(home: string, protocol: V3HelloParams['protocol']): Promise<Response> {
+	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' });
 }
 
-/** Reads a windows snapshot as a terminal client without keeping an editor window connected. */
-export async function windowsInCore(home: string): Promise<readonly WindowInfo[]> {
-	const response = await readCore(home, { build: 'facade-editor-test', protocol: [2, 2], kind: 'terminal' }, { method: 'watch', params: { topic: 'windows' } });
-	if (response.error) { throw new Error(response.error.message); }
-	return (response.result as WatchResult).snapshot as WindowInfo[];
+export async function callInCore(home: string, op: string, args: object, protocol: V3HelloParams['protocol']): Promise<Response> {
+	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
 }
 
-export async function callInCore(home: string, op: string, args: object): Promise<Response> {
-	return await readCore(home, { build: 'facade-editor-test', protocol: [2, 2], kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
-}
-
-async function readCore(home: string, hello: HelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
+async function readCore(home: string, hello: V2HelloParams | V3HelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
 	const socket = createConnection(coreSocket(home));
 	const lines = createInterface({ input: socket });
 	const timer = setTimeout(() => socket.destroy(new Error(`The test driver could not read core within ${timeout} ms`)), timeout);
@@ -280,10 +302,11 @@ export async function endCore(program: string, home: string, ms = 30_000): Promi
 	const env = { ...own, FACADE_HOME: home };
 	const call = (...args: string[]) => spawnSync(program, args, { env, encoding: 'utf8', timeout: 15_000 });
 	const listed = call('list', '--json');
-	const agents = listed.status === 0 ? (JSON.parse(listed.stdout) as { agents: { agent_id?: string }[] }).agents : [];
+	const agents = listed.status === 0 ? (JSON.parse(listed.stdout) as { agents: { id?: string; agent_id?: string }[] }).agents : [];
 	for (const agent of agents) {
-		if (agent.agent_id) {
-			call('remove', agent.agent_id);
+		const reference = agent.id ?? agent.agent_id;
+		if (reference) {
+			call('remove', reference);
 		}
 	}
 	const end = Date.now() + ms;

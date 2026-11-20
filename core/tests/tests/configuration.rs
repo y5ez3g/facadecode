@@ -2,7 +2,7 @@
 //! CLIS-1.4): `facade start`, `start_agent` and `facade resume` run a CLI as its entry in
 //! `facade.json` says - its program, `args`, `env`, `model` and `effort` - an added CLI of a
 //! built-in's type as that built-in runs, and one of type `custom` as a program; an entry that is
-//! wrong, or turned off, refuses its own starts alone; `list_agents` lists the entries; and an
+//! wrong, or turned off, refuses its own starts alone; `cli.list` lists the entries; and an
 //! agent started without a name is named from `names`. The test CLI's rule, `fake`, is a built-in
 //! of the test build.
 
@@ -17,6 +17,37 @@ const SESSION: &str = "86da4482-2bae-4a45-b193-a5664c19826a";
 fn settings(home: &TestHome, settings: &Value) {
     std::fs::create_dir_all(&home.path).unwrap();
     std::fs::write(home.path.join("facade.json"), settings.to_string()).unwrap();
+}
+
+/// Asserts that `message` says `problem` at its place in the settings file, then the CLIs that
+/// can start: the test CLI alone.
+fn assert_settings_problem(home: &TestHome, message: &Value, problem: &str) {
+    let file = facade_base::files::real_path(&home.path.join("facade.json")).unwrap();
+    let said = message
+        .as_str()
+        .and_then(|message| message.strip_prefix(&format!("{}:", file.display())))
+        .and_then(|message| message.split_once(": "))
+        .map(|(_, said)| said);
+    assert_eq!(
+        said,
+        Some(format!("{problem}\nAvailable CLIs: fake.").as_str()),
+        "{message}"
+    );
+}
+
+/// Waits until `facade inspect` shows the agent `name` with the test CLI's session.
+fn has_session(home: &TestHome, name: &str) {
+    let session = || {
+        let inspected = home.run_facade(&["inspect", name, "--json"]);
+        facade_scenarios::serde_json::from_slice::<Value>(&inspected.stdout)
+            .map(|inspected| inspected["session"].clone())
+            .unwrap_or_default()
+    };
+    assert!(
+        wait_until(secs(10), || session() == SESSION),
+        "{name} reported no session: {}",
+        session()
+    );
 }
 
 /// The file the test CLI writes its arguments to, by its `FAKECLI_ARGS`: one for each `label`.
@@ -100,7 +131,7 @@ fn an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says() {
         home.screen("worker")
     );
     assert_eq!(
-        args_in(&file),
+        without_wiring(&home, args_in(&file)),
         ["--model", "m1", "--effort", "low", "--flag", "x", "--more"]
     );
     assert_eq!(
@@ -114,14 +145,33 @@ fn an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says() {
             .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
             .map(str::trim)
     };
+    assert_eq!(label("CLI"), Some("fake work"), "{inspected}");
+    let rule = connect(&home).call("agent.inspect", json!({ "agent": "worker" }));
+    assert_eq!(rule["result"]["rule"], "fake", "{rule}");
+}
+
+/// `args` without the `--mcp-config <file>` the test CLI's rule gives its run: Facade's server, in
+/// a file of the run's own.
+fn without_wiring(home: &TestHome, mut args: Vec<String>) -> Vec<String> {
+    let wiring = args
+        .iter()
+        .position(|arg| arg == "--mcp-config")
+        .expect("the fake CLI's MCP configuration");
+    let config = std::path::Path::new(&args[wiring + 1]);
+    let runs = home.path.join("core/runs");
     assert!(
-        label("CLI") == Some("fake work") && label("Kind") == Some("fake"),
-        "{inspected}"
+        config.starts_with(&runs)
+            || config.starts_with(facade_base::files::real_path(&runs).unwrap()),
+        "{args:?}"
     );
+    assert!(config.is_file(), "{args:?}");
+    drop(args.drain(wiring..wiring + 2));
+    args
 }
 
 /// A CLI of type `custom` runs its `command` and `args` as a program, which Facade gives nothing of
-/// its own: no rule, no tools.
+/// its own: no rule, no tools. It takes no messages, so a start with a first prompt is refused
+/// before it starts anything.
 #[test]
 fn a_custom_cli_runs_its_program_as_it_is() {
     let home = TestHome::new("configprogram");
@@ -141,35 +191,29 @@ fn a_custom_cli_runs_its_program_as_it_is() {
     let inspected = home.run_facade_ok(&["inspect", "tool", "--json"]);
     let inspected: Value = facade_scenarios::serde_json::from_str(&inspected).unwrap();
     assert_eq!(
-        (
-            inspected.get("rule"),
-            &inspected["agent"]["cli"],
-            &inspected["agent"]["tools_state"]
-        ),
-        (None, &json!("tool"), &json!("not_injected")),
+        (&inspected["cli"], &inspected["custom_program"]),
+        (&json!("tool"), &json!(true)),
         "{inspected}"
     );
-    // Facade reads no input of a program's: it starts with a first message all the same, which
-    // fails as unsupported (CONFIGURATION-2.3).
+    let inspected = connect(&home).call("agent.inspect", json!({ "agent": "tool" }));
+    assert_eq!(
+        (
+            inspected["result"].get("rule"),
+            &inspected["result"]["agent"]["tools_state"]
+        ),
+        (None, &json!("not_injected")),
+        "{inspected}"
+    );
     let prompted = facade(
         &home,
         &["start", "--name", "prompted", "--prompt", "hi", "tool"],
         &[],
     );
-    assert!(prompted.status.success(), "{}", stderr(&prompted));
-    let reason = || {
-        let store = rusqlite::Connection::open(home.path.join("core/facade.db")).ok()?;
-        store
-            .query_row("SELECT reason FROM messages WHERE number = 1", [], |row| {
-                row.get::<_, Option<String>>(0)
-            })
-            .ok()
-            .flatten()
-    };
+    assert!(!prompted.status.success(), "{}", stdout(&prompted));
     assert!(
-        wait_until(secs(10), || reason().as_deref() == Some("unsupported")),
-        "{:?}",
-        reason()
+        home.agent_from_list_json("prompted").is_none(),
+        "nothing started: {}",
+        stderr(&prompted)
     );
 }
 
@@ -198,12 +242,11 @@ fn an_entry_wrong_or_turned_off_refuses_its_own_starts_alone() {
     );
 }
 
-/// `start_agent` starts a CLI of the settings file by its name, its own model and effort over its
-/// entry's, each on its own; a CLI that takes no effort refuses one as `unsupported`, in the tool's
-/// words. `list_agents` lists the built-ins, then the added CLIs, each with what a start can
-/// choose. A turned-off CLI is left out, and requesting a malformed entry explains its problem.
+/// `start_agent` starts a CLI of the settings file by name and honors the requested launch choices.
+/// A CLI that takes no effort refuses it. The CLI catalog lists built-ins and added CLIs with their
+/// launch choices. The catalog excludes disabled entries and explains malformed ones.
 #[test]
-fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
+fn start_agent_and_the_cli_catalog_use_the_settings_file() {
     let home = TestHome::new("configmcp");
     let file = args_file(&home, "mcp");
     let clis = json!({
@@ -215,10 +258,14 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
         "bad": { "type": "fake", "icon": "facade-cyan" },
     });
     settings(&home, &json!({ "clis": clis }));
-    home.start_named_fake("ada", &[]);
+    let started = home.run_facade_ok(&["start", "-d", "--name", "ada", "fake"]);
+    let (id, _) = started
+        .trim()
+        .split_once('@')
+        .expect("start gives an address");
     let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
-    let mut ada = McpTestClient::open(&home, "a1");
-    let rows = ada.call("list_agents", json!({}))["data"]["windows"][0]["clis"].clone();
+    let mut ada = McpTestClient::open_configured(&home, id);
+    let rows = connect(&home).call("cli.list", json!({}))["result"]["clis"].clone();
     let rows = rows.as_array().unwrap();
     let named: Vec<&str> = rows
         .iter()
@@ -238,15 +285,36 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
     assert_eq!(info("oc")["overrides"]["effort"], false);
     let bad_row = info("bad");
     assert_eq!(bad_row["available"], false, "{bad_row}");
-    assert!(
-        bad_row["problem"]
+    let settings_file = facade_base::files::real_path(&home.path.join("facade.json")).unwrap();
+    let prefix = format!("{}:", settings_file.display());
+    let size = std::fs::read_to_string(&settings_file)
+        .unwrap()
+        .chars()
+        .count();
+    let assert_bad_icon = |problem: &Value| {
+        let (location, message) = problem
             .as_str()
-            .unwrap()
-            .starts_with("clis.bad.icon must be one of"),
-        "{bad_row}"
-    );
+            .and_then(|problem| problem.strip_prefix(&prefix))
+            .and_then(|problem| problem.split_once(": "))
+            .unwrap_or_else(|| {
+                panic!("settings error starts with the file and position: {problem}")
+            });
+        let column: usize = location
+            .strip_prefix("1:")
+            .and_then(|column| column.parse().ok())
+            .expect("the column in the one-line settings file");
+        assert!(
+            (1..=size).contains(&column),
+            "column {column} is outside the settings line"
+        );
+        assert!(
+            message.starts_with("clis.bad.icon must be one of"),
+            "{problem}"
+        );
+    };
+    assert_bad_icon(&bad_row["problem"]);
     let start = |cli: &str, more: Value| {
-        let mut call = json!({ "name": "worker", "cli": cli, "window": "terminal", "folder": cwd });
+        let mut call = json!({ "name": "worker", "cli": cli, "folder": cwd });
         call.as_object_mut()
             .unwrap()
             .extend(more.as_object().unwrap().clone());
@@ -255,7 +323,7 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
     let started = ada.call("start_agent", start("fake work", json!({ "model": "m2" })));
     assert_eq!(started["status"], "success", "{started}");
     assert_eq!(
-        args_in(&file),
+        without_wiring(&home, args_in(&file)),
         ["--model", "m2", "--effort", "low"],
         "the start's model, the entry's effort"
     );
@@ -269,26 +337,22 @@ fn start_agent_and_list_agents_name_the_clis_of_the_settings_file() {
     );
     let bad = ada.call("start_agent", start("bad", json!({})));
     assert_eq!(bad["reason"], "invalid_settings", "{bad}");
-    assert!(
-        bad["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("clis.bad.icon must be one of"),
-        "{bad}"
-    );
+    assert_bad_icon(&bad["message"]);
     let off = ada.call("start_agent", start("off", json!({})));
     assert_eq!(off["reason"], "unavailable", "{off}");
-    assert_eq!(
-        off["message"], "off is turned off by clis.off.enabled",
-        "{off}"
+    let off = off["message"].as_str().unwrap_or_default();
+    assert!(
+        off.contains("off is turned off by clis.off.enabled")
+            && off.ends_with("\nAvailable CLIs: fake, fake work, oc."),
+        "refused, with the CLIs that can start: {off}"
     );
 }
 
-/// A resume runs the entry the agent ran as the settings file has it now, its `args` too; it
-/// refuses an entry that now runs another CLI, and one the file no longer has, rather than run
-/// another in its place (CONFIGURATION-3.4).
+/// A resume runs the CLI with the arguments its start recorded, though the entry's `args` changed
+/// since; it refuses an entry that now runs another CLI, and one the file no longer has, rather
+/// than run another in its place (CONFIGURATION-3.4).
 #[test]
-fn a_resume_runs_the_entry_as_it_is_now_and_refuses_one_retyped_or_gone() {
+fn a_resume_runs_its_start_s_args_and_refuses_an_entry_retyped_or_gone() {
     let home = TestHome::new("configresume");
     let file = args_file(&home, "resume");
     let entry = |args: Value, kind: &str| {
@@ -305,9 +369,7 @@ fn a_resume_runs_the_entry_as_it_is_now_and_refuses_one_retyped_or_gone() {
         "fake work",
         &[("FAKECLI_SESSION", SESSION)],
     );
-    assert!(wait_until(secs(10), || home
-        .agent_from_list_json("worker")
-        .is_some_and(|agent| agent["session"] == SESSION)));
+    has_session(&home, "worker");
     home.run_facade_ok(&["stop", "worker"]);
     settings(&home, &entry(json!(["--then"]), "fake"));
     std::fs::remove_file(&file).unwrap();
@@ -316,8 +378,8 @@ fn a_resume_runs_the_entry_as_it_is_now_and_refuses_one_retyped_or_gone() {
     let args = args_in(&file);
     assert!(
         args.windows(2).any(|pair| pair == ["--resume", SESSION])
-            && args.contains(&"--then".to_string())
-            && !args.contains(&"--first".to_string()),
+            && args.contains(&"--first".to_string())
+            && !args.contains(&"--then".to_string()),
         "{args:?}"
     );
     home.run_facade_ok(&["stop", "worker"]);
@@ -346,22 +408,22 @@ fn a_resume_runs_the_entry_as_it_is_now_and_refuses_one_retyped_or_gone() {
     );
 }
 
-/// An agent started without a name is named from the settings file's `names`, trimmed: one no agent
-/// of its window has; with every one taken, by its ID (LIFECYCLE-2.1).
+/// An agent started without a name takes an unused name from the machine's `names`, trimmed.
+/// With every one taken, it reuses a name from the list.
 #[test]
 fn an_agent_started_without_a_name_is_named_from_names() {
     let home = TestHome::new("confignames");
-    settings(&home, &json!({ "names": [" Solo "] }));
-    for _ in 0..2 {
+    settings(&home, &json!({ "names": [" Solo ", " Duo "] }));
+    home.start_named_fake("sOlO", &[]);
+    let start = || {
         let started = facade(&home, &["start", "fake"], &[]);
         assert!(started.status.success(), "{}", stderr(&started));
-    }
-    let names: Vec<String> = home
-        .agents()
-        .iter()
-        .map(|agent| agent["name"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(names, ["Solo", "#a2"]);
+        let id = started_id(&stdout(&started));
+        home.agent_record(&id).unwrap()["name"].clone()
+    };
+    assert_eq!(start(), "Duo", "a running agent already has Solo");
+    let reused = start();
+    assert!(matches!(reused.as_str(), Some("Solo" | "Duo")), "{reused}");
 }
 
 /// Runs `facade start --name <label> <label> <words>` of an entry of `kind`'s type named `label`,
@@ -548,10 +610,10 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         ),
     ];
     for (cli, problem) in said {
-        let start = json!({ "name": "w", "cli": cli, "window": "terminal", "folder": folder });
+        let start = json!({ "name": "w", "cli": cli, "folder": folder });
         let mcp = ada.call("start_agent", start);
         assert_eq!(mcp["reason"], "not_found", "{mcp}");
-        assert_eq!(mcp["message"], problem, "{mcp}");
+        assert_settings_problem(&home, &mcp["message"], &problem);
         let refused = refused(&home, cli);
         assert!(
             refused.contains(&problem) && !refused.contains("(not_found)"),
@@ -560,9 +622,8 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     }
 }
 
-/// An entry its `enabled` turns off is left out of `list_agents` while it is right, and listed with
-/// what is wrong where it is not: a variable its `env` reads that the agent's environment has not
-/// too (CONFIGURATION-2.2, 4.1).
+/// An entry its `enabled` turns off is refused with what is wrong where it is wrong: a variable its
+/// `env` reads that the agent's environment has not (CONFIGURATION-2.2, 4.1).
 #[test]
 fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     let home = TestHome::new("configoffwrong");
@@ -578,29 +639,34 @@ fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
-        json!({ "name": "w", "cli": "off reads", "window": "terminal", "folder": cwd }),
+        json!({ "name": "w", "cli": "off reads", "folder": cwd }),
     );
     let said = "clis[\"off reads\"].env.A reads ${env:NOT_SET_FOR_THIS}, but NOT_SET_FOR_THIS is \
                 not in the environment it starts with; set it there, or write the value";
     assert_eq!(refused["reason"], "invalid_settings", "{refused}");
-    assert_eq!(refused["message"], said, "{refused}");
+    assert_settings_problem(&home, &refused["message"], said);
 }
 
 /// A settings file wrong as a whole lists no CLI: its problems, which stand for every start, are
-/// said once among the window's (CONFIGURATION-4.1), and what was read of the window stays
-/// `complete`.
+/// said once beside the catalog (CONFIGURATION-4.1).
 #[test]
 fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
     let home = TestHome::new("configwhole");
     home.start_named_fake("ada", &[]);
     settings(&home, &json!({ "yolo": "no" }));
     let mut ada = McpTestClient::open(&home, "a1");
-    let window = ada.call("list_agents", json!({}))["data"]["windows"][0].clone();
-    assert_eq!(window["clis"], json!([]), "{window}");
+    let catalog = connect(&home).call("cli.list", json!({}))["result"].clone();
+    let problem = catalog["settings_problem"].as_str().unwrap_or_default();
+    assert!(
+        catalog["clis"] == json!([])
+            && problem.contains("yolo must be true or false; received string")
+            && problem.matches("yolo must be").count() == 1,
+        "{catalog}"
+    );
     let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
-        json!({ "name": "w", "cli": "fake", "window": "terminal", "folder": cwd }),
+        json!({ "name": "w", "cli": "fake", "folder": cwd }),
     );
     let message = refused["message"].as_str().unwrap();
     assert!(
@@ -622,7 +688,7 @@ fn start_agent_refuses_a_blank_model_or_effort() {
     let refused = ada.call(
         "start_agent",
         json!({
-            "name": "w", "cli": "fake", "window": "terminal", "folder": cwd, "model": "  ",
+            "name": "w", "cli": "fake", "folder": cwd, "model": "  ",
             "effort": "\u{feff}",
         }),
     );
@@ -655,9 +721,7 @@ fn a_resume_refuses_an_entry_turned_off_or_wrong() {
         "fake work",
         &[("FAKECLI_SESSION", SESSION)],
     );
-    assert!(wait_until(secs(10), || home
-        .agent_from_list_json("worker")
-        .is_some_and(|agent| agent["session"] == SESSION)));
+    has_session(&home, "worker");
     home.run_facade_ok(&["stop", "worker"]);
     for (more, said) in [
         (
@@ -712,8 +776,16 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
     for (name, cli) in [("h", "homed"), ("r", "here")] {
         start(&home, name, cli, &[]);
     }
-    let mut w = McpTestClient::open(&home, "a1");
-    let rows = w.call("list_agents", json!({}))["data"]["windows"][0]["clis"].clone();
+    let launch: Value = home
+        .isolating_env()
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), json!(value)))
+        .collect::<facade_scenarios::serde_json::Map<_, _>>()
+        .into();
+    let rows =
+        connect(&home).call("cli.list", json!({ "folder": home.project, "env": launch }))["result"]
+            ["clis"]
+            .clone();
     for cli in ["fake", "homed", "here"] {
         assert!(
             rows.as_array()
@@ -723,55 +795,6 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
             "{cli} listed available: {rows}"
         );
     }
-}
-
-/// A name from `names` is one no agent of the agent's own window has: an agent of another window
-/// with it does not take it (LIFECYCLE-2.1).
-#[test]
-fn a_name_from_names_is_one_no_agent_of_its_window_has() {
-    let home = TestHome::new("configwindows");
-    settings(&home, &json!({ "names": ["Solo"] }));
-    let folder = facade_base::files::real_path(&home.project)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let (mut window, window_ref) = ide_binding(
-        &home,
-        &json!({
-            "id": "win-1", "label": "win-1 window", "environment": "local", "workspace": null,
-            "folders": [folder],
-        }),
-    );
-    let env = json!({ "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path });
-    let start = json!({
-        "command": ["fake"], "cwd": folder, "location_source_window": window_ref, "env": env, "cols": 80,
-        "rows": 24,
-    });
-    assert_eq!(
-        window.call("agent.start", start.clone())["result"]["agent"]["name"],
-        "Solo"
-    );
-    assert_eq!(
-        window.call("agent.start", start)["result"]["agent"]["name"],
-        "#a2",
-        "every name of the list taken in its window"
-    );
-    let terminal = facade(&home, &["start", "fake"], &[]);
-    assert!(terminal.status.success(), "{}", stderr(&terminal));
-    let names: Vec<(String, String)> = home
-        .agents()
-        .iter()
-        .map(|agent| {
-            (
-                agent["windows"][0]["window_id"].as_str().unwrap().into(),
-                agent["name"].as_str().unwrap().into(),
-            )
-        })
-        .collect();
-    assert!(
-        names.contains(&("terminal".into(), "Solo".into())),
-        "the terminal window's first agent takes it: {names:?}"
-    );
 }
 
 /// A name of spaces alone is blank, by the spaces the editor trims, a byte order mark among them: a
@@ -788,8 +811,8 @@ fn a_name_of_the_editor_s_spaces_alone_is_blank() {
     assert_eq!(home.agents()[0]["name"], "Renamed", "{:?}", home.agents());
 }
 
-/// An agent renamed to a blank name, and a guest of a CLI the person started, are named as a start
-/// without a name is: from `names` (LIFECYCLE-2.1).
+/// An agent renamed to a blank name, and a guest, are named as a start without a name is: from
+/// `names` (LIFECYCLE-2.1).
 #[test]
 fn a_blank_rename_and_a_guest_are_named_from_names() {
     let home = TestHome::new("confignamed");
@@ -802,22 +825,15 @@ fn a_blank_rename_and_a_guest_are_named_from_names() {
         home.agents()
     );
     settings(&home, &json!({ "names": ["Guestly"] }));
-    let _wire = connect(&home);
-    let mut hook = home.command(&test_binaries().facade);
-    hook.args(["hook", "session-start", "--cli", "claude"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut joining = hook.spawn().unwrap();
-    let input = json!({ "hook_event_name": "SessionStart", "session_id": "s1" }).to_string();
-    std::io::Write::write_all(&mut joining.stdin.take().unwrap(), input.as_bytes()).unwrap();
-    assert!(joining.wait().unwrap().success());
+    let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    let roster = guest.call("list_agents", json!({}));
     assert!(
-        home.agents()
-            .iter()
-            .any(|agent| agent["session"] == "s1" && agent["name"] == "Guestly"),
-        "{:?}",
-        home.agents()
+        roster["data"]["agents"]
+            .as_array()
+            .is_some_and(|agents| agents
+                .iter()
+                .any(|agent| agent["type"] == "guest" && agent["name"] == "Guestly")),
+        "{roster}"
     );
 }
 
@@ -869,27 +885,11 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
     );
     let repo = facade_base::files::real_path(&repo).unwrap();
     let folder = repo.to_string_lossy().into_owned();
-    let (mut window, reference) = ide_binding(
-        &home,
-        &json!({
-            "id": "win-1", "label": "win-1 window", "environment": "local", "workspace": "k1",
-            "folders": [folder],
-        }),
-    );
-    let env = json!({ "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path });
-    let boss = window.call(
-        "agent.start",
-        json!({
-            "command": ["fake"], "name": "boss", "cwd": folder, "location_source_window": reference, "env": env,
-            "cols": 80, "rows": 24,
-        }),
-    );
-    let mut boss =
-        McpTestClient::open(&home, boss["result"]["agent"]["agent_id"].as_str().unwrap());
+    let boss = home.start_fake("boss");
+    let mut boss = McpTestClient::open(&home, &boss.id);
     let mut start = |cli: &str, more: Value| {
         let mut call = json!({
-            "name": "w", "cli": cli, "window": reference.window_id, "location_source_window": reference.window_id, "folder": folder,
-            "worktree": { "branch": format!("{cli}-branch") },
+            "name": "w", "cli": cli, "folder": folder, "worktree": format!("{cli}-branch"),
         });
         call.as_object_mut()
             .unwrap()
@@ -980,7 +980,7 @@ fn an_agent_starts_agents_with_its_own_environment() {
     for (name, cli) in [("kid", "fake"), ("dumper", "dump")] {
         let started = ada.call(
             "start_agent",
-            json!({ "name": name, "cli": cli, "window": "terminal", "folder": cwd }),
+            json!({ "name": name, "cli": cli, "folder": cwd }),
         );
         assert_eq!(started["status"], "success", "{started}");
     }
@@ -1011,39 +1011,22 @@ fn an_agent_starts_agents_with_its_own_environment() {
     );
 }
 
-/// An editor window that gives the environment its agents start with lists, to its own client,
-/// the CLIs a start can run there, each found on that environment's `PATH` or not. A window that
-/// gives none lists no CLIs.
+/// The CLI catalog of a client that gives the environment its agents start with lists the CLIs a
+/// start can run there, each found on that environment's `PATH` or not.
 #[test]
-fn an_editor_window_s_environment_lists_the_clis_it_can_start() {
+fn a_client_s_launch_environment_lists_the_clis_it_can_start() {
     let home = TestHome::new("configide");
     let gone = json!({ "type": "fake", "command": "/nowhere/facade-fakecli" });
     settings(&home, &json!({ "clis": { "gone": gone } }));
     let folder = std::fs::canonicalize(&home.project).unwrap();
-    let window = |id: &str| {
-        json!({
-            "id": id, "label": format!("{id} window"), "environment": "local", "workspace": id,
-            "folders": [folder],
-        })
-    };
-    let mut described = window("win-env");
-    described["env"] = json!({ "PATH": home.path_with_test_programs() });
-    let (mut editor, environment) = ide_binding(&home, &described);
-    let (_bare, empty) = ide_binding(&home, &window("win-bare"));
-    let watching = editor.request("watch", json!({ "topic": "windows" }));
-    let listed = |id: &str| {
-        watching["result"]["snapshot"]
-            .as_array()
-            .unwrap_or_else(|| panic!("{watching}"))
-            .iter()
-            .find(|listed| listed["window_id"] == id)
-            .cloned()
-            .unwrap_or_else(|| panic!("no window {id}: {watching}"))
-    };
-    let clis = listed(&environment.window_id)["clis"].clone();
+    let listed = connect(&home).call(
+        "cli.list",
+        json!({ "folder": folder, "env": { "PATH": home.path_with_test_programs() } }),
+    );
+    let clis = listed["result"]["clis"].clone();
     let cli = |name: &str| {
         clis.as_array()
-            .unwrap_or_else(|| panic!("{clis}"))
+            .unwrap_or_else(|| panic!("{listed}"))
             .iter()
             .find(|cli| cli["cli"] == name)
             .cloned()
@@ -1051,11 +1034,6 @@ fn an_editor_window_s_environment_lists_the_clis_it_can_start() {
     };
     assert_eq!(cli("fake")["available"], true, "{clis}");
     assert_eq!(cli("gone")["available"], false, "{clis}");
-    assert!(
-        listed(&empty.window_id).get("clis").is_none(),
-        "{}",
-        listed(&empty.window_id)
-    );
 }
 
 /// A start that an entry of the settings file refuses names the entry in the error's data, so that
@@ -1067,7 +1045,7 @@ fn a_start_an_entry_refuses_names_the_entry() {
     settings(&home, &json!({ "clis": { "gone": gone } }));
     let mut wire = connect(&home);
     let args = json!({
-        "command": ["gone"], "name": "nope", "cwd": home.project,
+        "cli": "gone", "name": "nope", "folder": home.project,
         "env": { "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path },
         "cols": 80, "rows": 24,
     });

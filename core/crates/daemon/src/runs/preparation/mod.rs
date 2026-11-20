@@ -14,11 +14,11 @@ use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::programs::Held;
 use facade_base::start::StartCommand;
 use facade_base::system::env_var;
-use facade_rules::{CommandLine, Rule};
+use facade_rules::{CommandLine, ManagedServer, RUN_CREDENTIAL_ARG, Rule};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::{PreparedRun, RunEvent, RunKind, RunRequest};
+use super::{PreparedRun, RunEvent, RunKind, RunRequest, credential_digest};
 use crate::ToolsGiven;
 
 pub(crate) use folder::RunFiles;
@@ -50,18 +50,26 @@ impl Preparation {
 
     /// Composes tools, command line and environment; writes a start's private files. Waits on
     /// file work and installation version reads. Failure removes a start's folders.
-    pub(crate) async fn prepare(&self, request: RunRequest<'_>) -> Result<PreparedRun, ErrorBody> {
+    pub(crate) async fn prepare(
+        &self,
+        request: RunRequest<'_>,
+        managed_instructions: Option<String>,
+    ) -> Result<PreparedRun, ErrorBody> {
         self.sessions.starting(request.id);
         let start = request.kind == RunKind::Start;
         let id = request.id.to_owned();
-        let prepared = self.compose(request).await;
+        let prepared = self.compose(request, managed_instructions).await;
         if start && prepared.is_err() {
             self.remove_folders(&id);
         }
         prepared
     }
 
-    async fn compose(&self, request: RunRequest<'_>) -> Result<PreparedRun, ErrorBody> {
+    async fn compose(
+        &self,
+        request: RunRequest<'_>,
+        managed_instructions: Option<String>,
+    ) -> Result<PreparedRun, ErrorBody> {
         let home = facade_base::paths::facade_home().map_err(ErrorBody::internal)?;
         let mut env = environment::build(request.inherited.clone(), request.cwd, &home, request.id);
         let Some(rule) = request.rule else {
@@ -81,6 +89,7 @@ impl Preparation {
                 files: RunFiles::default(),
                 rule: None,
                 kind: request.kind,
+                credential_digest: None,
             });
         };
         let mut files = RunFiles::new(&self.folders, request.id);
@@ -94,17 +103,22 @@ impl Preparation {
         let captures = request.session.is_some()
             || rule.session.capture == facade_rules::Capture::SessionStart;
         let report = captures.then_some(&report);
-        let place = facade_base::instructions::Place {
-            window: request.window,
-            location_id: request.location_id,
-            folder: request.cwd,
-        };
-        let run = facade_base::instructions::Run {
-            place,
-            creator: request.creator,
-            yolo: request.yolo,
-        };
-        let instructions = facade_base::instructions::for_agent(request.id, Some(&run));
+        let credential_args = managed_instructions
+            .is_some()
+            .then(|| [RUN_CREDENTIAL_ARG.to_owned(), new_credential()]);
+        let instructions = managed_instructions.unwrap_or_else(|| {
+            let place = facade_base::instructions::Place {
+                window: request.window,
+                location_id: request.location_id,
+                folder: request.cwd,
+            };
+            let run = facade_base::instructions::Run {
+                place,
+                creator: request.creator,
+                yolo: request.yolo,
+            };
+            facade_base::instructions::for_agent(request.id, Some(&run))
+        });
         let mcp = self.held.facade_mcp();
         let server_env = [
             ("FACADE_AGENT".to_owned(), request.id.to_owned()),
@@ -121,8 +135,34 @@ impl Preparation {
             cwd: Path::new(request.cwd),
             facade: &facade.to_string_lossy(),
         };
-        let compose = |server| {
+        let managed_server = credential_args
+            .as_ref()
+            .map(|args| ManagedServer { server, args });
+        let compose = |give_tools: bool| {
             let trusted = request.yolo.then_some(Path::new(request.cwd));
+            if let Some(server) = managed_server.as_ref() {
+                let server = give_tools.then_some(server);
+                return match request.session {
+                    Some(session) => facade_rules::resume_managed_launch_command(
+                        rule,
+                        session,
+                        request.words,
+                        report,
+                        server,
+                        &env,
+                        trusted,
+                    ),
+                    None => Some(facade_rules::start_managed_launch_command(
+                        rule,
+                        request.words,
+                        report,
+                        server,
+                        &env,
+                        trusted,
+                    )),
+                };
+            }
+            let server = give_tools.then_some(&server);
             match request.session {
                 Some(session) => facade_rules::resume_command_line(
                     rule,
@@ -143,7 +183,7 @@ impl Preparation {
                 )),
             }
         };
-        let mut command_line = with_tools(&mcp, compose(Some(&server))).ok_or_else(|| {
+        let mut command_line = with_tools(&mcp, compose(true)).ok_or_else(|| {
             ErrorBody::new(
                 Reason::Unavailable,
                 format!("{} sessions cannot be resumed", rule.cli),
@@ -165,14 +205,27 @@ impl Preparation {
                 .await
                 .unwrap_or_else(|error| Err(format!("the plugin could not be placed: {error}")));
             match placed {
-                Ok(hold) => Some(hold),
+                Ok(hold) => {
+                    command_line.uses_run_credential &= hold.installed;
+                    Some(hold)
+                }
                 Err(why) => {
-                    command_line =
-                        compose(None).expect("a command line that already composed still composes");
+                    command_line = compose(false)
+                        .expect("a command line that already composed still composes");
                     command_line.tools = facade_rules::Tools::NotGiven(why);
                     None
                 }
             }
+        };
+        let credential_digest = match (
+            credential_args.as_ref(),
+            command_line.uses_run_credential,
+            &command_line.tools,
+        ) {
+            (Some([_, credential]), true, facade_rules::Tools::Injected) => {
+                Some(credential_digest(credential))
+            }
+            _ => None,
         };
         let CommandLine {
             command,
@@ -223,6 +276,7 @@ impl Preparation {
             files,
             rule: Some(rule),
             kind: request.kind,
+            credential_digest,
         })
     }
 
@@ -336,6 +390,18 @@ impl Preparation {
     pub(crate) fn captures(&self, id: &str) -> bool {
         folder::find(&self.folders, id).is_some_and(|at| folder::session_file(&at).exists())
     }
+}
+
+fn new_credential() -> String {
+    use facade_base::random_u64;
+
+    format!(
+        "{:016x}{:016x}{:016x}{:016x}",
+        random_u64(),
+        random_u64(),
+        random_u64(),
+        random_u64()
+    )
 }
 
 fn with_tools(program: &Path, composed: Option<CommandLine>) -> Option<CommandLine> {

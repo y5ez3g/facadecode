@@ -13,8 +13,7 @@ use crate::hooks::HookEvent;
 /// The shells `facade completion` writes a script for.
 const SHELLS: [&str; 4] = ["bash", "zsh", "fish", "powershell"];
 
-const MACHINE_SELECTOR_HELP: &str =
-    "Machine name or 'id:' followed by 8 to 32 hex digits from 'facade machine list'";
+const MACHINE_SELECTOR_HELP: &str = "Machine name or ID from 'facade machine list'";
 
 #[derive(Parser)]
 #[command(name = "facade", bin_name = "facade", version)]
@@ -27,7 +26,7 @@ pub(crate) struct Arguments {
 pub(crate) struct Target {
     #[arg(
         value_name = "AGENT",
-        help = "Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu"
+        help = "Agent address such as a17@gpu, or an agent ID or name"
     )]
     pub(crate) agent: String,
 }
@@ -37,82 +36,114 @@ pub(crate) struct Targets {
     #[arg(
         value_name = "AGENT",
         required = true,
-        help = "Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu"
+        help = "Agent addresses, IDs or names"
     )]
     pub(crate) agents: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct StartOptions {
+    #[arg(
+        long,
+        value_name = "NAME",
+        allow_hyphen_values = true,
+        help = "Name the agent [default: chosen by the Orchestrator]"
+    )]
+    pub(crate) name: Option<String>,
+    #[arg(
+        long,
+        value_name = "TEXT",
+        allow_hyphen_values = true,
+        help = "Give the agent its first prompt when the CLI is ready"
+    )]
+    pub(crate) prompt: Option<String>,
+    #[arg(long, value_name = "MACHINE", help = MACHINE_SELECTOR_HELP)]
+    pub(crate) machine: Option<String>,
+    #[arg(
+        long,
+        value_name = "FOLDER",
+        value_parser = clap::builder::NonEmptyStringValueParser::new(),
+        help = "Start in this folder [default: current folder here, login home on another machine]"
+    )]
+    pub(crate) folder: Option<String>,
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        help = "Create a worktree and a branch from the current HEAD"
+    )]
+    pub(crate) worktree: Option<String>,
+    #[arg(long, value_name = "MODEL", help = "Use this model for the CLI")]
+    pub(crate) model: Option<String>,
+    #[arg(long, value_name = "EFFORT", help = "Use this effort for the CLI")]
+    pub(crate) effort: Option<String>,
+    #[arg(value_name = "CLI", trailing_var_arg = true, allow_hyphen_values = true, num_args = 1.., hide = true)]
+    pub(crate) cli_and_args: Vec<String>,
 }
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
     #[command(
         about = "Start an agent",
-        override_usage = "facade start [OPTIONS] <PROGRAM> [ARGS]..."
+        override_usage = "facade start [OPTIONS] <CLI> [ARGS]..."
     )]
     Start {
-        #[arg(
-            long,
-            value_name = "NAME",
-            allow_hyphen_values = true,
-            help = "Name the agent [default: chosen by Facade]"
-        )]
-        name: Option<String>,
-        #[arg(
-            long,
-            value_name = "TEXT",
-            allow_hyphen_values = true,
-            help = "Give the agent its first prompt when its CLI is ready; use a CLI that supports Facade \
-                    messages, such as claude or codex"
-        )]
-        prompt: Option<String>,
+        #[command(flatten)]
+        options: StartOptions,
         #[arg(
             short = 'd',
             long,
-            help = "Start in the background and print the agent's ID"
+            help = "Start in the background and print the agent's address"
         )]
         detach: bool,
+    },
+    #[command(about = "List active agents", visible_alias = "ls")]
+    List {
+        #[arg(
+            short,
+            long,
+            conflicts_with = "json",
+            help = "Print only agent addresses"
+        )]
+        quiet: bool,
+        #[arg(long, help = "Print agents and machines as JSON")]
+        json: bool,
         #[arg(long, value_name = "MACHINE", help = MACHINE_SELECTOR_HELP)]
         machine: Option<String>,
-        #[arg(
-            long,
-            value_name = "FOLDER",
-            value_parser = clap::builder::NonEmptyStringValueParser::new(),
-            help = "Folder for the agent. Relative paths use the shell's current folder here. On another machine, \
-                    give an absolute path [default: current folder here, login home on another machine]"
-        )]
-        folder: Option<String>,
-        // PROGRAM and its arguments: one trailing list, so that every word after PROGRAM is the
-        // program's own, its `--help` included.
-        #[arg(
-            value_name = "PROGRAM",
-            required = true,
-            trailing_var_arg = true,
-            allow_hyphen_values = true,
-            num_args = 1..,
-            hide = true
-        )]
-        command_line: Vec<String>,
-    },
-    #[command(about = "List agents", visible_alias = "ls")]
-    List {
-        #[arg(short, long, conflicts_with = "json", help = "Print only agent IDs")]
-        quiet: bool,
-        #[arg(long, help = "Print agents as JSON")]
-        json: bool,
     },
     #[command(about = "Watch an agent and use its terminal")]
     Attach(Target),
     #[command(about = "Stop one or more agents")]
     Stop(Targets),
-    #[command(about = "Resume an ended agent's session")]
+    #[command(about = "List resumable sessions or resume one")]
     Resume {
         #[arg(
             short = 'd',
             long,
-            help = "Resume in the background and print the agent's ID"
+            requires = "reference",
+            help = "Resume in the background and print the agent's address"
         )]
         detach: bool,
-        #[command(flatten)]
-        target: Target,
+        #[arg(long, value_name = "MACHINE", help = MACHINE_SELECTOR_HELP)]
+        machine: Option<String>,
+        #[arg(long, value_name = "FOLDER", help = "Select a folder for CLI sessions")]
+        folder: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "reference",
+            help = "List ended agents beyond this folder"
+        )]
+        all: bool,
+        #[arg(
+            long,
+            conflicts_with = "reference",
+            help = "Print resumable sessions as JSON"
+        )]
+        json: bool,
+        #[arg(
+            value_name = "REFERENCE",
+            help = "Agent address, agent name, or CLI session such as claude:7f3e9a1c"
+        )]
+        reference: Option<String>,
     },
     #[command(about = "Remove one or more agents", visible_alias = "rm")]
     Remove(Targets),
@@ -122,7 +153,7 @@ pub(crate) enum Command {
         target: Target,
         #[arg(
             value_name = "NAME",
-            help = "New name, or \" \" for one chosen by Facade"
+            help = "New name, or \" \" for one chosen by the Orchestrator"
         )]
         name: String,
     },
@@ -135,6 +166,8 @@ pub(crate) enum Command {
     },
     #[command(about = "Print an agent's recent output")]
     Screen {
+        #[arg(long, help = "Print the screen as JSON")]
+        json: bool,
         #[arg(
             short = 'n',
             long,
@@ -157,7 +190,7 @@ pub(crate) enum Command {
         target: Target,
         #[arg(
             value_name = "TEXT",
-            help = "Text to type; put '--' before text that starts with '-'"
+            help = "Text to type. Put '--' before text that starts with '-'"
         )]
         text: Option<String>,
         #[arg(long, requires = "text", help = "Press Enter after the text")]
@@ -170,43 +203,30 @@ pub(crate) enum Command {
         )]
         keys: Vec<String>,
     },
-    #[command(about = "Send a message to an agent or the human")]
+    #[command(about = "Send a message to an agent")]
     Send {
-        #[arg(
-            value_name = "RECIPIENT",
-            help = "Agent ID or name, such as a17@gpu on another machine, or human for the human\nIf an agent is also named human, quote '#human' \
-                    for the human or use the agent's ID"
-        )]
+        #[arg(value_name = "RECIPIENT", help = "Agent address, ID or name")]
         to: String,
         #[arg(
             value_name = "TEXT",
             help = "Message text, up to 8,000 characters and 540 lines"
         )]
         text: String,
-        #[arg(
-            long,
-            value_name = "MESSAGE",
-            help = "ID of a message in your inbox to reply to"
-        )]
-        reply_to: Option<String>,
     },
-    #[command(about = "Read the inbox of the agent in this terminal")]
-    Messages,
-    #[command(about = "Connect to Facade on other machines")]
+    #[command(about = "Connect to other machines over SSH")]
     Machine {
         #[command(subcommand)]
         action: MachineAction,
     },
-    #[command(about = "Let CLIs you start yourself join Facade")]
-    Integration {
-        #[command(subcommand)]
-        action: Integration,
-    },
-    #[command(about = "Show Facade's status")]
+    #[command(about = "Show Orchestrator status")]
     Status {
         #[arg(long, help = "Print the status as JSON")]
         json: bool,
+        #[arg(long, value_name = "MACHINE", help = MACHINE_SELECTOR_HELP)]
+        machine: Option<String>,
     },
+    #[command(about = "Upgrade Facade Code")]
+    Upgrade,
     #[command(about = "Print the version")]
     Version {
         #[arg(long, help = "Print the version as JSON")]
@@ -222,7 +242,7 @@ pub(crate) enum Command {
         )]
         shell: String,
     },
-    // For CLIs: the hooks a CLI's settings run in Facade's runs and in a guest's sessions.
+    // For CLIs: the hooks a CLI's settings run in a managed session.
     #[command(hide = true)]
     Hook {
         #[command(subcommand)]
@@ -231,42 +251,20 @@ pub(crate) enum Command {
     // For Facade: the keeper, which a command starts with Facade.
     #[command(hide = true)]
     Keeper,
-    // For editors and other programs: the daemon, or with --detach Facade in the background.
+    // The daemon service, an editor's background launcher, or the installer's takeover entry.
     #[command(hide = true)]
     Daemon {
-        #[arg(long)]
+        #[arg(long, conflicts_with = "takeover")]
         detach: bool,
-    },
-}
-
-/// `facade integration`'s subcommands.
-#[derive(Subcommand)]
-pub(crate) enum Integration {
-    #[command(about = "Add Facade to a CLI's settings")]
-    Add {
-        #[arg(long, help = "Print the result as JSON")]
-        json: bool,
-        #[command(flatten)]
-        cli: IntegrationCli,
-    },
-    #[command(about = "Remove Facade from a CLI's settings")]
-    Remove {
-        #[arg(long, help = "Print the result as JSON")]
-        json: bool,
-        #[command(flatten)]
-        cli: IntegrationCli,
-    },
-    #[command(about = "List CLI integrations")]
-    List {
-        #[arg(long, help = "Print integrations as JSON")]
-        json: bool,
+        #[arg(long)]
+        takeover: bool,
     },
 }
 
 /// `facade machine`'s subcommands.
 #[derive(Subcommand)]
 pub(crate) enum MachineAction {
-    #[command(about = "Connect to a machine and keep the connection")]
+    #[command(about = "Connect to a machine and save its SSH arguments")]
     Add(SshTarget),
     #[command(about = "Connect to a machine while this command runs")]
     Connect(SshTarget),
@@ -287,25 +285,32 @@ pub(crate) enum MachineAction {
         #[arg(value_name = "NAME", help = "New name")]
         name: String,
     },
+    // Holds the SSH session after the public add command returns.
+    #[command(hide = true)]
+    Link(SshTarget),
     // For Facade: the far end of a machine connection, which SSH runs on the other machine.
     #[command(hide = true)]
     Serve(ServeArgs),
 }
 
-/// The machine `machine add` and `machine connect` reach over SSH.
+/// The remote home and SSH arguments for a foreground machine connection.
 #[derive(clap::Args)]
 pub(crate) struct SshTarget {
     #[arg(
-        value_name = "DESTINATION",
-        help = "SSH host from your SSH config, or user@host"
-    )]
-    pub(crate) ssh_destination: String,
-    #[arg(
         long,
         value_name = "PATH",
-        help = "Facade home on that machine [default: that user's Facade home]"
+        help = "Remote Facade home. Put this option before the SSH arguments"
     )]
     pub(crate) home: Option<String>,
+    #[arg(
+        value_name = "SSH-ARG",
+        required = true,
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        num_args = 1..,
+        help = "The arguments you would use after ssh, including the destination"
+    )]
+    pub(crate) ssh_args: Vec<String>,
 }
 
 /// The Facade home `machine serve` serves, as a path or, from a daemon, hex-encoded.
@@ -315,39 +320,18 @@ pub(crate) struct ServeArgs {
     pub(crate) home: Option<std::path::PathBuf>,
     #[arg(long)]
     pub(crate) home_hex: Option<String>,
+    /// A passive machine link can use a running daemon without starting one.
+    #[arg(long)]
+    pub(crate) no_start: bool,
 }
 
-/// The CLI an integration is for.
-#[derive(clap::Args)]
-pub(crate) struct IntegrationCli {
-    #[arg(
-        value_name = "CLI",
-        value_parser = PossibleValuesParser::new(facade_rules::integration::CLIS),
-        hide_possible_values = true,
-        help = integration_clis()
-    )]
-    pub(crate) cli: String,
-}
-
-/// `claude, codex, opencode, pi, muse or agy`, from the integration CLIs in their order.
-fn integration_clis() -> String {
-    let clis = facade_rules::integration::CLIS;
-    match clis.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
-        _ => clis.join(", "),
-    }
-}
-
-/// `start`'s Arguments section, which shows PROGRAM and its arguments as two arguments though
-/// they parse as one list.
-const START_ARGUMENTS: &str = "  <PROGRAM>  Built-in or configured CLI, such as claude or codex, or another program name or path\n  \
-     [ARGS]...  Arguments for the program; put Facade's options before PROGRAM";
+/// The start command parses the CLI and its trailing arguments as one list.
+const START_ARGUMENTS: &str = "  <CLI>      A built-in or configured CLI\n  [ARGS]...  Arguments for the CLI. Put Facade options before the CLI name";
 
 /// `type`'s Arguments section, which shows TEXT as clap shows a required argument: it is required
 /// unless keys are given, as the two usage lines say.
-const TYPE_ARGUMENTS: &str =
-    "  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
-  <TEXT>   Text to type; put '--' before text that starts with '-'";
+const TYPE_ARGUMENTS: &str = "  <AGENT>  Agent address such as a17@gpu, or an agent ID or name
+  <TEXT>   Text to type. Put '--' before text that starts with '-'";
 
 /// The key option's help, using the names and count the command checks.
 fn key_help() -> &'static str {
@@ -419,13 +403,30 @@ fn dress_children(mut command: clap::Command, path: &str) -> clap::Command {
 
 /// Parses the program's arguments; clap's own errors and help end the program as clap does.
 pub(crate) fn parse() -> Result<Arguments, clap::Error> {
-    let matches = cli().try_get_matches()?;
-    Arguments::from_arg_matches(&matches)
+    let words: Vec<_> = std::env::args_os().collect();
+    let matches = cli().try_get_matches_from(&words)?;
+    let mut arguments = Arguments::from_arg_matches(&matches)?;
+    if let Some(Command::Machine {
+        action:
+            MachineAction::Add(target) | MachineAction::Connect(target) | MachineAction::Link(target),
+    }) = arguments.command.as_mut()
+    {
+        let ssh_start = match words.get(3) {
+            Some(word) if word == "--home" => 5,
+            _ if target.home.is_some() => 4,
+            _ => 3,
+        };
+        // Clap consumes a leading -- before it starts the trailing argument list.
+        if words.get(ssh_start).is_some_and(|word| word == "--") {
+            target.ssh_args.insert(0, "--".into());
+        }
+    }
+    Ok(arguments)
 }
 
-/// Refuses an option of `start`'s that Facade does not know, which came before PROGRAM.
-pub(crate) fn check_start(command_line: &[String]) -> Result<(), Problem> {
-    match command_line.first() {
+/// Refuses an option of `start`'s that Facade does not know, which came before the CLI name.
+pub(crate) fn check_start(cli_and_args: &[String]) -> Result<(), Problem> {
+    match cli_and_args.first() {
         Some(first) if first.starts_with('-') => Err(Problem::UnknownStartOption {
             option: first.clone(),
         }),
@@ -477,8 +478,7 @@ pub(crate) fn completion(shell: &str) {
     print_or_end!("{script}");
 }
 
-/// Every public command under `command` (at `path`) with a positional argument of fixed values,
-/// such as `integration add`'s CLIs and `completion`'s shells: its path and those values.
+/// Each command path and the fixed values its positional argument accepts.
 fn argument_values(command: &clap::Command, path: &[String]) -> Vec<(Vec<String>, Vec<String>)> {
     let mut found = Vec::new();
     for sub in command.get_subcommands().filter(|sub| !sub.is_hide_set()) {

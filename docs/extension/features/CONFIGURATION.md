@@ -1,14 +1,17 @@
 # Configuration
 
+Group 7 covers the Orchestrator-backed editor. Groups 1–6 retain the old-engine settings, examples and migration
+rules for the transition.
+
 Facade reads its settings from one file: `facade.json` in the Facade home. Edit it to choose how agents start, add another
-setup for a familiar CLI, or run a different program. An empty object uses the defaults:
+entry for a familiar CLI, or run a different program. An empty object uses the defaults:
 
 ```json
 {}
 ```
 
 Layer 3. This document owns the file, fields, validation and migration. [CLI integrations](../engineering/CLIS.md)
-owns native invocation and environment handling. [Lifecycle](LIFECYCLE.md) owns the pickers and launch flow.
+owns native invocation and environment handling. [Lifecycle](LIFECYCLE.md) owns the pickers and start flow.
 
 | Group | Decides |
 | --- | --- |
@@ -602,7 +605,7 @@ proof of a successful model request (CLIS-5).
 | `custom` | The program's own arguments and environment | `"args": ["--config", "/path/to/program.json"]` |
 
 Facade preserves native user settings and merges the integration pieces under CLIS-3.4. The only lasting changes
-it writes into a CLI's own global settings are folder-trust entries, as CLIS-3.3 defines; the README explains this.
+it writes into a CLI's own global settings are folder-trust entries, as CLIS-3.3 defines for the old engine.
 Project integration files have CLIS-2.2's ownership and cleanup rules. Neither API-key confirmation nor Claude's
 first-use bypass prompt is silently accepted. Antigravity's newer sandbox option has no newly promised mapping here;
 CLIS-1.3 states the supported mapping.
@@ -694,6 +697,28 @@ The editor's Facade Code section shows Facade: Home with Edit in facade.json. Un
 a legacy key the person still has set appears there as deprecated, saying Moved to facade.json and linking to it.
 Facade creates no backup or separate migration marker. Deleting the new file while old values remain causes another migration. For example,
 to reset to product defaults, keep the file and write `{}` instead of deleting it.
+
+
+## 7 Orchestrator settings
+
+### 7.1 Machine settings
+
+**Edit the machine's `facade.json` directly.**
+
+The Orchestrator uses `FACADE_HOME`, defaulting to `~/.facade`. Open Settings opens the machine's
+`facade.json` at the settings path returned by the Orchestrator's status. `facade.home` applies to the old engine
+during the transition.
+YOLO, the name pool and CLI entries appear in `facade.json`. Mark any editor settings still used by the old
+engine for that engine.
+A malformed section affects starts that use it and the error points to its source. Use
+`facade status --machine devbox` to find a different machine's file and SSH to it to edit.
+
+### 7.2 Settings at start
+
+**Start and resume use RULES-6.6 for environment and settings.**
+
+A start on this machine uses the starter's environment. A start on another machine uses that machine's login
+environment. Running agents keep the settings they read at start.
 
 ## Checks
 

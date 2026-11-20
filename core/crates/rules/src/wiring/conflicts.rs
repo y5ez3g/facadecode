@@ -13,7 +13,7 @@ use super::config_files::{
     MCP_FILE, config_home, folder_named, home, muse_settings_file, project_files, read_config,
 };
 use super::integration::written_by_facade;
-use super::servers::{SERVER, is_muse_guest_entry, runs_facade_mcp};
+use super::servers::{SERVER, is_muse_guest_entry, is_server_program, runs_facade_mcp};
 use crate::formats::parse_jsonc;
 
 /// What every refusal of a server of the person's own ends with.
@@ -21,18 +21,19 @@ const LEFT_AS_IT_IS: &str = "Facade leaves it as it is, and the run has no Facad
 
 /// Why a run of `cli` in `cwd`, with the CLI's own `environment`, is not given Facade's tools: a
 /// `facade` server of the person's own that `cli` reads. None where there is none. Muse Code's
-/// refusals are [`muse_refusal`]. Antigravity has no such check: Antigravity names a plugin's
+/// refusals are checked by [`muse_config`]. Antigravity has no such check: it names a plugin's
 /// server after the plugin, so Facade's is `facade_facade`, and neither it nor a `facade` server
 /// of the person's own takes the other's place.
 pub(super) fn persons_server(
     cli: &str,
     cwd: &Path,
     environment: &BTreeMap<String, String>,
+    managed: bool,
 ) -> Option<String> {
     let found = match cli {
         "claude" => claude_servers(cwd, environment),
         "codex" => codex_servers(environment),
-        "opencode" => opencode_servers(cwd, environment),
+        "opencode" => opencode_servers(cwd, environment, managed),
         "pi" => return pi_registration(cwd, environment),
         _ => Vec::new(),
     };
@@ -97,7 +98,11 @@ const OPENCODE_CONFIG_FILE: &str = "OPENCODE_CONFIG";
 
 /// OpenCode's: `mcp.facade` in its global configuration, in `$OPENCODE_CONFIG`, in each project
 /// configuration it reads, and in the person's own inline configuration.
-fn opencode_servers(cwd: &Path, environment: &BTreeMap<String, String>) -> Vec<(String, Value)> {
+fn opencode_servers(
+    cwd: &Path,
+    environment: &BTreeMap<String, String>,
+    managed: bool,
+) -> Vec<(String, Value)> {
     let names = ["opencode.json", "opencode.jsonc"];
     let global = config_home(environment).map(|config| config.join("opencode"));
     let mut files: Vec<PathBuf> = global
@@ -108,15 +113,31 @@ fn opencode_servers(cwd: &Path, environment: &BTreeMap<String, String>) -> Vec<(
     files.extend(project_files(cwd, &names));
     let mut found: Vec<(String, Value)> = files
         .iter()
-        .filter_map(|file| facade_in(file, &read_config(file)?["mcp"]))
+        .filter_map(|file| {
+            let config = read_config(file)?;
+            let entry = opencode_server(&config, managed)?;
+            Some((file.display().to_string(), entry.clone()))
+        })
         .collect();
     let inline = environment
         .get(OPENCODE_CONFIG)
         .and_then(|text| parse_jsonc(text).ok());
-    if let Some(entry) = inline.as_ref().and_then(|inline| inline["mcp"].get(SERVER)) {
+    if let Some(entry) = inline
+        .as_ref()
+        .and_then(|inline| opencode_server(inline, managed))
+    {
         found.push((format!("its {OPENCODE_CONFIG}"), entry.clone()));
     }
     found
+}
+
+fn opencode_server(config: &Value, managed: bool) -> Option<&Value> {
+    let mcp = &config["mcp"];
+    // In OpenCode 2, native server definitions take precedence over the legacy map.
+    if managed && let Some(entry) = mcp["servers"].get(SERVER) {
+        return Some(entry);
+    }
+    mcp.get(SERVER)
 }
 
 /// An extension Pi loads that registers a `facade` server: Pi does not start at all beside a second
@@ -125,10 +146,8 @@ fn opencode_servers(cwd: &Path, environment: &BTreeMap<String, String>) -> Vec<(
 /// start Pi. Pi loads extensions from `.pi/extensions` of the folder it starts in and from
 /// `extensions` of its agent folder, `$PI_CODING_AGENT_DIR` or `.pi/agent` in the home folder.
 fn pi_registration(cwd: &Path, environment: &BTreeMap<String, String>) -> Option<String> {
-    let agent = folder_named(environment, "PI_CODING_AGENT_DIR")
-        .or_else(|| home(environment).map(|home| home.join(".pi").join("agent")));
     let folders = std::iter::once(cwd.join(".pi"))
-        .chain(agent)
+        .chain(pi_agent_folder(environment))
         .map(|f| f.join("extensions"));
     let file = folders
         .flat_map(|folder| pi_extension_files(&folder))
@@ -140,6 +159,75 @@ fn pi_registration(cwd: &Path, environment: &BTreeMap<String, String>) -> Option
         "{} registers a {SERVER} server that is not Facade's; {LEFT_AS_IT_IS}",
         file.display()
     ))
+}
+
+fn pi_agent_folder(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
+    folder_named(environment, "PI_CODING_AGENT_DIR")
+        .or_else(|| home(environment).map(|home| home.join(".pi").join("agent")))
+}
+
+/// Pi's distinct managed namespace when the user's native configuration already names `facade`.
+pub(super) const PI_MANAGED_SERVER: &str = "facade_managed";
+
+/// Pi gives its native MCP files precedence over a server registered by an extension. Check only
+/// the two files it can load for this run, leaving the project trust decision with Pi.
+pub(super) fn pi_has_server(
+    cwd: &Path,
+    environment: &BTreeMap<String, String>,
+) -> Result<bool, String> {
+    let project = cwd.join(".pi").join("mcp.json");
+    let files =
+        std::iter::once(project.clone()).chain(pi_agent_folder(environment).map(|folder| {
+            let folder = folder
+                .strip_prefix("~")
+                .ok()
+                .and_then(|relative| Some(home(environment)?.join(relative)))
+                .unwrap_or(folder);
+            cwd.join(folder).join("mcp.json")
+        }));
+    let mut configured = false;
+    let mut alternate_source = None;
+    for file in files {
+        let text = match std::fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => return Err(format!("{} could not be read: {err}", file.display())),
+        };
+        let config: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+            .map_err(|_| format!("{} is not plain JSON, as Pi reads it", file.display()))?;
+        let servers = &config["mcpServers"];
+        let defines_server =
+            |entry: &Value| entry["command"].is_string() || entry["url"].is_string();
+        // Pi normalizes hyphens to underscores when comparing namespaces.
+        if alternate_source.is_none()
+            && [PI_MANAGED_SERVER, "facade-managed"]
+                .into_iter()
+                .any(|name| servers.get(name).is_some_and(defines_server))
+        {
+            alternate_source = Some(file.clone());
+        }
+        let Some(entry) = servers.get(SERVER) else {
+            continue;
+        };
+        if file == project && !defines_server(entry) {
+            // A project entry can adjust a user's server without defining one of its own.
+            continue;
+        }
+        if !is_server_program(entry["command"].as_str()) {
+            return Err(format!(
+                "{} names a {SERVER} server that is not Facade's; {LEFT_AS_IT_IS}",
+                file.display()
+            ));
+        }
+        configured = true;
+    }
+    if configured && let Some(file) = alternate_source {
+        return Err(format!(
+            "{} already uses the {PI_MANAGED_SERVER} namespace; {LEFT_AS_IT_IS}",
+            file.display()
+        ));
+    }
+    Ok(configured)
 }
 
 /// The extension files Pi loads from `folder`: each `.ts` or `.js` file in it, and in each folder
@@ -192,12 +280,13 @@ fn registers_facade(text: &str) -> bool {
     })
 }
 
-/// Why Muse Code would refuse to run in `cwd` with Facade's server: its own settings, as
-/// `environment` places them, or a project MCP file it reads there names a `facade` server, or a
-/// project MCP file it reads cannot be loaded. None where nothing is in the way. Facade's guest
-/// entry in the settings is the run's own server, and not in the way.
-pub(super) fn muse_refusal(cwd: &Path, environment: &BTreeMap<String, String>) -> Option<String> {
-    let names_ours = |config: &Value| config["mcpServers"].get(SERVER).is_some();
+/// Whether a run can use a configured Facade server, or why its MCP configuration precludes it.
+pub(super) fn muse_config(
+    cwd: &Path,
+    environment: &BTreeMap<String, String>,
+    managed: bool,
+) -> Result<bool, String> {
+    let mut has_server = false;
     let named = |file: &Path| {
         format!(
             "{} names a {SERVER} server, beside which Muse Code refuses to run with Facade's; \
@@ -207,10 +296,22 @@ pub(super) fn muse_refusal(cwd: &Path, environment: &BTreeMap<String, String>) -
     };
     if let Some(file) = muse_settings_file(environment)
         && let Some(settings) = read_config(&file)
-        && names_ours(&settings)
-        && !is_muse_guest_entry(&settings["mcpServers"][SERVER])
+        && let Some(entry) = settings
+            .get("mcpServers")
+            .or_else(|| managed.then(|| settings.get("mcp_servers")).flatten())
+            .and_then(|servers| servers.get(SERVER))
     {
-        return Some(named(&file));
+        has_server = if managed {
+            is_server_program(entry["command"].as_str())
+        } else {
+            is_muse_guest_entry(entry)
+        };
+        if !has_server {
+            return Err(named(&file));
+        }
+        if managed && entry["enabled"] == false {
+            return Err(format!("{} disables the {SERVER} server", file.display()));
+        }
     }
     for file in project_files(cwd, &[MCP_FILE]) {
         let text = match std::fs::read_to_string(&file) {
@@ -220,16 +321,25 @@ pub(super) fn muse_refusal(cwd: &Path, environment: &BTreeMap<String, String>) -
             }
             Err(err) => {
                 let file = file.display();
-                return Some(format!(
+                return Err(format!(
                     "{file} could not be read: {err}; Facade leaves it as it is"
                 ));
             }
         };
         match muse_project_config(&text) {
-            Ok(config) if names_ours(&config) => return Some(named(&file)),
-            Ok(_) => {}
+            Ok(config) => {
+                if let Some(entry) = config["mcpServers"].get(SERVER) {
+                    if !managed || !is_server_program(entry["command"].as_str()) {
+                        return Err(named(&file));
+                    }
+                    if entry["enabled"] == false {
+                        return Err(format!("{} disables the {SERVER} server", file.display()));
+                    }
+                    has_server = true;
+                }
+            }
             Err(why) => {
-                return Some(format!(
+                return Err(format!(
                     "{} {why}, and Muse Code refuses to run with Facade's server beside a project \
                      MCP file it cannot load; Facade leaves it as it is",
                     file.display()
@@ -237,7 +347,7 @@ pub(super) fn muse_refusal(cwd: &Path, environment: &BTreeMap<String, String>) -
             }
         }
     }
-    None
+    Ok(has_server)
 }
 
 /// A project MCP file's `text` as Muse Code loads it, or why it cannot: text that is not plain JSON

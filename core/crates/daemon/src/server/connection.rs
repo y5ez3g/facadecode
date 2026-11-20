@@ -8,17 +8,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::daemon::{
-    AgentResize, AgentType, CancelParams, ClientKind, ClosingParams, DAEMON_PROTOCOL_VERSION,
-    DaemonUpgrade, HelloParams, MIN_DAEMON_PROTOCOL_VERSION, UnwatchParams, WatchParams,
-    WatchResult, methods,
+    AgentResize, AgentType, CancelParams, ClientKind, ClosingParams, DaemonUpgrade, HelloParams,
+    UnwatchParams, WatchParams, WatchResult, methods,
 };
 use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Notification, Reason, Response, decode_arguments, encode_line,
     parse_request,
 };
-use facade_base::machine::{MachineConnect, ProtocolMismatch};
+use facade_base::machine::{AgentRef, MachineConnect, ProtocolMismatch};
 use facade_base::operations::{CallParams, EmptyResult, Operation};
 use facade_base::sockets::{ServerPeer, ServerReader, ServerSocket};
+use facade_base::v3::{self, DAEMON_PROTOCOL_RANGE, TAKEOVER_DAEMON_PROTOCOL_RANGE};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -36,6 +36,7 @@ const MAX_CALLS_IN_FLIGHT: usize = 16;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a client has to answer `closing`; one that does not, such as an older one, is cut off.
 const CLOSING_ANSWERED_WITHIN: Duration = Duration::from_millis(200);
+const LEGACY_VERSION: u32 = TAKEOVER_DAEMON_PROTOCOL_RANGE[0];
 
 pub(super) type Reader = BufReader<ServerReader>;
 
@@ -92,12 +93,29 @@ struct Watching {
     viewer: u64,
 }
 
+/// Whether this hello opened the current protocol or only its legacy takeover path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Protocol {
+    Current,
+    Takeover,
+}
+
+impl Protocol {
+    fn version(self) -> u32 {
+        match self {
+            Self::Current => DAEMON_PROTOCOL_RANGE[1],
+            Self::Takeover => LEGACY_VERSION,
+        }
+    }
+}
+
 pub(super) struct Connection<S: Service> {
     pub(super) service: Arc<S>,
     pub(super) peer: Arc<Peer>,
     pub(super) outbox: Outbox,
     pub(super) peer_pid: Option<u32>,
-    client: Option<Arc<Client>>,
+    verified_actor: Option<AgentRef>,
+    client: Option<(Arc<Client>, Protocol)>,
     /// What the service gave the hello, held until the connection is cleaned up.
     hold: Option<S::Hold>,
     lanes: Lanes,
@@ -129,7 +147,14 @@ struct MachineHandoff<M> {
 }
 
 /// Serves `socket` until the client closes, and cleans up after it.
-pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> anyhow::Result<()> {
+pub(super) async fn serve<S: Service>(
+    service: Arc<S>,
+    socket: ServerSocket,
+    verified_actor: Option<AgentRef>,
+) -> anyhow::Result<()> {
+    let Some(work) = service.work() else {
+        return Ok(());
+    };
     let peer_pid = socket.peer_pid();
     let (read, write, peer) = socket.into_split();
     let peer = Arc::new(Peer {
@@ -143,6 +168,7 @@ pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> 
         peer,
         outbox,
         peer_pid,
+        verified_actor,
         client: None,
         hold: None,
         lanes: Lanes::default(),
@@ -168,6 +194,8 @@ pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> 
             .write_all(&encode_line(&Response::ok(id, response)))
             .await?;
         write.flush().await?;
+        // The handshake is finished. The machine session counts its own active work.
+        drop(work);
         return service.serve_machine(machine, reader, write).await;
     }
     Ok(())
@@ -204,6 +232,10 @@ impl<S: Service> Connection<S> {
                 self.outbox.fail(ErrorBody::line_too_long()).await;
                 return Ok(None);
             }
+            if !line.ends_with(b"\n") {
+                self.peer.closed.send_replace(true);
+                return Ok(None);
+            }
             match self.request(&line).await {
                 Next::Read => {}
                 Next::End => return Ok(None),
@@ -227,22 +259,32 @@ impl<S: Service> Connection<S> {
         let (id, params) = (request.id, request.params);
         let method = request.method.as_str();
         if method == methods::HELLO {
-            if let Some(refused) = self.service.draining() {
+            if self.client.is_some() {
+                let refused =
+                    ErrorBody::invalid_argument("hello was already received on this connection");
                 self.outbox.answer(id, Err(refused)).await;
-            } else if super::is_relay_hello(&params) {
+            } else if let Some(refused) = self.service.draining() {
+                self.outbox.answer(id, Err(refused)).await;
+            } else if self.verified_actor.is_none() && super::is_relay_hello(&params) {
                 return Next::Relay(id, params);
             } else {
                 return self.hello(id, params).await;
             }
             return Next::Read;
         }
-        let Some(client) = self.client.clone() else {
+        let Some((client, protocol)) = self.client.clone() else {
             let refused = ErrorBody::invalid_argument("send hello first");
             self.outbox.answer(id, Err(refused)).await;
             return Next::Read;
         };
+        if protocol == Protocol::Takeover
+            && !matches!(method, methods::CALL | methods::CANCEL | methods::CLOSING)
+        {
+            self.outbox.answer(id, Err(reopen_client())).await;
+            return Next::End;
+        }
         match method {
-            methods::CALL => return self.call(client, id, params, line.len()).await,
+            methods::CALL => return self.call(client, protocol, id, params, line.len()).await,
             methods::CANCEL => {
                 let result = self.cancel(params);
                 self.outbox.answer(id, result).await;
@@ -275,14 +317,20 @@ impl<S: Service> Connection<S> {
     }
 
     async fn hello(&mut self, id: Option<u64>, params: Value) -> Next<S::Machine> {
-        let machine_hello = self.client.is_none() && params["kind"] == "machine";
-        let hello = match self.hello_params(params) {
+        let machine_hello = params["kind"] == "machine";
+        let (hello, protocol) = match hello_params(params) {
             Ok(hello) => hello,
             Err(error) => {
                 self.outbox.answer(id, Err(error)).await;
                 return if machine_hello { Next::End } else { Next::Read };
             }
         };
+        if (hello.kind == ClientKind::Mcp) != self.verified_actor.is_some() {
+            let refused =
+                ErrorBody::refused("an internal MCP connection requires a verified actor");
+            self.outbox.answer(id, Err(refused)).await;
+            return Next::End;
+        }
         if hello.kind == ClientKind::Machine {
             let Some(id) = id else { return Next::End };
             let accepted = self
@@ -292,7 +340,7 @@ impl<S: Service> Connection<S> {
                 .map(|(result, machine)| (value_of(result), machine));
             return self.switch_to_machine(id, accepted, Next::End).await;
         }
-        let result = self.say_hello(hello).await;
+        let result = self.say_hello(hello, protocol).await;
         let said = result.is_ok();
         self.outbox.answer(id, result).await;
         if said {
@@ -301,40 +349,21 @@ impl<S: Service> Connection<S> {
         Next::Read
     }
 
-    fn hello_params(&self, params: Value) -> Result<HelloParams, ErrorBody> {
-        if self.client.is_some() {
-            return Err(ErrorBody::invalid_argument(
-                "hello was already received on this connection",
-            ));
+    async fn say_hello(
+        &mut self,
+        hello: HelloParams,
+        protocol: Protocol,
+    ) -> Result<Value, ErrorBody> {
+        let (mut result, mut client, hold) = self.service.hello(hello, self.peer_pid).await?;
+        if protocol == Protocol::Takeover {
+            result.topics.clear();
+            result.ops = vec![DaemonUpgrade::NAME.to_string()];
+            result.agent = None;
+            result.window = None;
         }
-        let hello: HelloParams = decode_arguments(params)?;
-        let [oldest, newest] = hello.protocol_range;
-        if newest.min(DAEMON_PROTOCOL_VERSION) < oldest.max(MIN_DAEMON_PROTOCOL_VERSION) {
-            let local_build = facade_base::build_id();
-            let message = format!(
-                "daemon {local_build} supports daemon protocol versions \
-                 {MIN_DAEMON_PROTOCOL_VERSION}-{DAEMON_PROTOCOL_VERSION}; client supports \
-                 {oldest}-{newest}; update Facade"
-            );
-            let mut error = ErrorBody::new(Reason::IncompatibleProtocol, message);
-            error.data.protocol = Some(ProtocolMismatch {
-                local_build,
-                local_protocol: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
-                remote_build: hello.build,
-                remote_protocol: hello.protocol_range,
-            });
-            return Err(error);
-        }
-        if hello.kind == ClientKind::Unknown {
-            let message = "unsupported client kind; update Facade";
-            return Err(ErrorBody::new(Reason::IncompatibleProtocol, message));
-        }
-        Ok(hello)
-    }
-
-    async fn say_hello(&mut self, hello: HelloParams) -> Result<Value, ErrorBody> {
-        let (result, client, hold) = self.service.hello(hello, self.peer_pid).await?;
-        self.client = Some(Arc::new(client));
+        result.protocol = protocol.version();
+        client.verified_actor = self.verified_actor.take();
+        self.client = Some((Arc::new(client), protocol));
         self.hold = Some(hold);
         Ok(value_of(result))
     }
@@ -343,6 +372,7 @@ impl<S: Service> Connection<S> {
     async fn call(
         &mut self,
         client: Arc<Client>,
+        protocol: Protocol,
         id: Option<u64>,
         params: Value,
         size: usize,
@@ -354,6 +384,10 @@ impl<S: Service> Connection<S> {
                 return Next::Read;
             }
         };
+        if protocol == Protocol::Takeover && (id.is_none() || call.op != DaemonUpgrade::NAME) {
+            self.outbox.answer(id, Err(reopen_client())).await;
+            return Next::End;
+        }
         let typing = matches!(call.op.as_str(), AgentType::NAME | AgentResize::NAME);
         // While a newer Facade takes over, a new call does nothing. An attached terminal's keys and
         // size, sent without an ID, are no new calls: they reach the agent until `closing` is
@@ -528,12 +562,75 @@ impl<S: Service> Connection<S> {
             let _ = teller.await;
         }
         let watches: Vec<Watching> = self.watches.drain().map(|(_, watching)| watching).collect();
-        if let Some(client) = self.client.clone() {
+        if let Some((client, _)) = self.client.clone() {
             for watching in watches {
                 Self::end(&self.service, &client, watching).await;
             }
         }
     }
+}
+
+fn hello_params(params: Value) -> Result<(HelloParams, Protocol), ErrorBody> {
+    let hello: v3::HelloParams = decode_arguments(params)?;
+    if hello.kind == ClientKind::Unknown {
+        let message = "unsupported client kind; run 'facade upgrade' to update Facade Code";
+        return Err(ErrorBody::new(Reason::IncompatibleProtocol, message));
+    }
+    let [oldest, newest] = hello.protocol_range;
+    let range = oldest..=newest;
+    let protocol = if hello.kind == ClientKind::Machine {
+        if hello.protocol_range != DAEMON_PROTOCOL_RANGE {
+            return Err(protocol_mismatch(hello));
+        }
+        Protocol::Current
+    } else if range.contains(&DAEMON_PROTOCOL_RANGE[1]) {
+        Protocol::Current
+    } else if range.contains(&LEGACY_VERSION) {
+        if hello.kind != ClientKind::Terminal {
+            return Err(reopen_client());
+        }
+        Protocol::Takeover
+    } else {
+        return Err(protocol_mismatch(hello));
+    };
+    Ok((
+        HelloParams {
+            protocol_range: [protocol.version(); 2],
+            build: hello.build,
+            kind: hello.kind,
+            agent: None,
+            sessions: Vec::new(),
+            window: None,
+            numbers_given: None,
+            machine: hello.machine,
+        },
+        protocol,
+    ))
+}
+
+fn protocol_mismatch(hello: v3::HelloParams) -> ErrorBody {
+    let [oldest, newest] = hello.protocol_range;
+    let local_build = facade_base::build_id();
+    let version = DAEMON_PROTOCOL_RANGE[1];
+    let message = format!(
+        "daemon {local_build} uses daemon protocol {version}; client supports \
+         {oldest}-{newest}. Update Facade and reopen this client."
+    );
+    let mut error = ErrorBody::new(Reason::IncompatibleProtocol, message);
+    error.data.protocol = Some(ProtocolMismatch {
+        local_build,
+        local_protocol: DAEMON_PROTOCOL_RANGE,
+        remote_build: hello.build,
+        remote_protocol: hello.protocol_range,
+    });
+    error
+}
+
+fn reopen_client() -> ErrorBody {
+    ErrorBody::new(
+        Reason::IncompatibleProtocol,
+        "This client uses an older daemon protocol. Update Facade and reopen this client.",
+    )
 }
 
 /// Sends a watch's changes until it ends or the connection closes.

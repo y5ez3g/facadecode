@@ -1,5 +1,8 @@
 # CLI integrations
 
+Group 6 defines the active editor integration boundary and the current CLI configuration. Groups 1–5 describe the old-engine transition and its
+adapters.
+
 Layer 4. This document specifies the CLI adapters and the effective launch configuration: how each CLI is found,
 started, given the Facade tools, read, resumed and inspected. A recorded vendor observation is a test lead, never
 current-platform certification (5.1).
@@ -11,6 +14,7 @@ current-platform certification (5.1).
 | 3 Launch configuration | Literal arguments/environment, adapter internals and trust |
 | 4 Inspection and design | Launch inspection, persistence and adapter ownership |
 | 5 Evidence baseline | What recorded vendor behavior proves and the evidence a support claim needs |
+| 6 Orchestrator integration | Editor boundary and current MCP configuration |
 
 ## 1 Discovery and permissions
 
@@ -77,12 +81,6 @@ and session tracking set (2.2, 2.4). Never copy credentials from the client to a
 extension, Claude Code installs that extension and shows a welcome that waits for Enter, past which no message goes.
 Claude Code never runs with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`, whichever layer sets it: that switch also turns off
 its OSC 7501 reports (2.3), so its run settings clear it as well for the copy its settings files carry.
-On the Rust engine (ARCHITECTURE-1.4) the window sends core these layers but the entry's own `env`, which core applies,
-with `TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` where no layer sets it and
-`FACADE_HOME`; core keeps every other rule of this section. The window's own terminals get
-`CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` too, so a Claude Code that `facade start` runs there shows no welcome; a Claude Code
-run directly there then does not install its VS Code extension, and one installed by hand works as before.
-
 An omitted `program` uses the type's command on PATH; `custom` requires one (CONFIGURATION-2.2). A simple name is
 searched on that PATH; a relative path is from launch cwd; leading `~` uses that environment's home; an absolute path
 is exact. Empty or whitespace-only is invalid. There is no silent fallback to another CLI.
@@ -279,6 +277,8 @@ ptyd that reads no input (ARCHITECTURE-2.4), gives no such text.
 ### 2.2 MCP files and cleanup
 
 **Use per-run launch files first; write project files only where the CLI requires them and preserve user content.**
+
+The table below describes the old-engine adapters. CLIS-6.2 describes the current Orchestrator configuration.
 
 Each built-in receives the `facade` server, the skill and an approval of Facade's own tools as its CLI takes them:
 
@@ -712,6 +712,29 @@ regression is VERIFICATION-2.1's.
 Verify concrete installed versions, stores, flags and supported APIs before making a release-support claim. A vendor's
 documentation states its contract, as Claude Code's session-picker naming does for 2.4; an isolated check of the
 installed CLI is the runtime evidence.
+
+
+## 6 CLI behavior owned by the Orchestrator
+
+### 6.1 Use the Orchestrator's CLI catalog and data
+
+**The VS Code entry point obtains CLI choices, start results, titles and saved sessions from the Orchestrator.**
+
+The [product's CLI table](../../facade-code.md#各个-cli-不一样的地方) summarizes CLI-specific behavior, including
+custom-program capabilities. The [rules implementation and specification](../../core/islands/rules.md) describe
+adapter details. The editor uses RULES-6.6 for settings and LIFECYCLE-5.4 for Resume.
+
+### 6.2 MCP configuration for Antigravity and OpenCode
+
+**The Orchestrator configures the Facade MCP server through Antigravity's project plugin and OpenCode's launch environment.**
+
+Antigravity loads the shared project plugin at `.agents/plugins/facade/`. The server uses the run identity from
+the Antigravity launch environment. Another Antigravity process that inherits that environment and loads the
+plugin can be recognized as the same managed run.
+
+OpenCode receives its MCP configuration through `OPENCODE_CONFIG_CONTENT`. Another OpenCode process that
+inherits that configuration can be recognized as the same managed run. The product CLI table linked in 6.1
+summarizes the user-visible limits.
 
 ## Checks
 

@@ -43,7 +43,7 @@ export type Generated = { readonly kind: 'exists' }
  * beside it first and then linked into place, which is atomic and never replaces a file; a file system without hard links is said
  * as a failure, never given a file another window could read half written.
  */
-function createExclusively(file: string, text: string): boolean {
+export function createExclusively(file: string, text: string): boolean {
 	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 	const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`);
 	try {

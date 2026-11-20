@@ -10,6 +10,7 @@ use std::os::windows::io::{
 use std::os::windows::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
@@ -19,7 +20,9 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
 };
-use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, SetStdHandle};
+use windows_sys::Win32::System::Console::{
+    GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+};
 use windows_sys::Win32::System::IO::OVERLAPPED;
 use windows_sys::Win32::System::Pipes::{
     GetNamedPipeClientProcessId, GetNamedPipeServerProcessId, PeekNamedPipe,
@@ -96,13 +99,29 @@ pub fn lock_record(core: &Path, service: Service) -> io::Result<Option<ProcessId
     Ok(serde_json::from_slice(&text).ok())
 }
 
-/// Points this process's standard error at `file`, appended to and made where it is missing. The
-/// handle it pointed at before stays open, as a thread may be writing to it.
+/// Points this process's standard error at `file`, appended to and made where it is missing.
 pub fn redirect_stderr(file: &Path) -> io::Result<()> {
+    static REBOUND_STDERR: Mutex<Option<OwnedHandle>> = Mutex::new(None);
+
     let log = OpenOptions::new().append(true).create(true).open(file)?;
-    // SAFETY: the handle is open, and from here on standard error's for good.
-    if unsafe { SetStdHandle(STD_ERROR_HANDLE, log.into_raw_handle()) } == 0 {
+    let _stderr = io::stderr().lock();
+    let mut installed = REBOUND_STDERR.lock().unwrap();
+    // SAFETY: these queries only read the process's standard handle slots.
+    let (stderr, stdout) = unsafe {
+        (
+            GetStdHandle(STD_ERROR_HANDLE),
+            GetStdHandle(STD_OUTPUT_HANDLE),
+        )
+    };
+    // SAFETY: log remains open through the call and is retained on success.
+    if unsafe { SetStdHandle(STD_ERROR_HANDLE, log.as_raw_handle()) } == 0 {
         return Err(io::Error::last_os_error());
+    }
+    if let Some(previous) = installed.replace(log.into())
+        && (previous.as_raw_handle() != stderr || previous.as_raw_handle() == stdout)
+    {
+        // The previous handle can still be in use. Close only our displaced stderr-only handle.
+        let _ = previous.into_raw_handle();
     }
     Ok(())
 }

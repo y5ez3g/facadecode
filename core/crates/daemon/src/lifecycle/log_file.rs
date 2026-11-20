@@ -1,18 +1,16 @@
 //! `core/logs/daemon.log`, the daemon's own log and core's agents log: one line for each operation
 //! and lifecycle fact, which the keeper points the daemon's standard error at. It keeps 30 days,
-//! pruned by the hourly sweep, with no size cap, and the person's clients read its last lines for
-//! the diagnostics report (`daemon.log`). It holds no message text, prompt, terminal content or
-//! environment value.
+//! pruned when the daemon starts and on the hourly sweep, with no size cap. Clients read its last
+//! lines for the diagnostics report (`daemon.log`). It holds no message text, prompt, terminal
+//! content or environment value.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use facade_base::jsonrpc::ErrorBody;
 
 /// The most lines `daemon.log` gives.
 pub(crate) const MAX_LOG_LINES: u32 = 200;
-/// How long the log keeps a line.
-const KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
 /// The daemon's log file.
 fn log_file() -> anyhow::Result<PathBuf> {
@@ -21,64 +19,11 @@ fn log_file() -> anyhow::Result<PathBuf> {
         .join("daemon.log"))
 }
 
-/// The time a line begins with, as `facade_base::log` writes it: `2026-11-15T12:46:57.955Z`.
-fn time_of(line: &str) -> Option<&str> {
-    let time = line.get(..24)?;
-    let shape = time.bytes().enumerate().all(|(at, byte)| match at {
-        4 | 7 => byte == b'-',
-        10 => byte == b'T',
-        13 | 16 => byte == b':',
-        19 => byte == b'.',
-        23 => byte == b'Z',
-        _ => byte.is_ascii_digit(),
-    });
-    shape.then_some(time)
-}
-
-/// The lines of `text` written at `since` or later. A line that begins with no time, as one a
-/// program the daemon started wrote, goes with the line before it.
-fn kept_lines<'a>(text: &'a str, since: &str) -> Vec<&'a str> {
-    let mut keep = false;
-    text.lines()
-        .filter(|line| {
-            if let Some(time) = time_of(line) {
-                keep = time >= since;
-            }
-            keep
-        })
-        .collect()
-}
-
-/// Drops the lines older than 30 days at `now` from the daemon's log, then points the daemon's
-/// standard error at the file again: the daemon is its only writer. Blocks.
+/// Drops lines older than 30 days at `now` and redirects standard error if the file is replaced.
+/// The daemon is the only writer. Blocks.
 pub(crate) fn prune(now: SystemTime) -> anyhow::Result<()> {
-    let file = log_file()?;
-    let text = match std::fs::read_to_string(&file) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err.into()),
-    };
-    let since =
-        facade_base::time::iso_time(now.checked_sub(KEPT_FOR).unwrap_or(SystemTime::UNIX_EPOCH));
-    let kept = kept_lines(&text, &since);
-    if kept.len() == text.lines().count() {
-        return Ok(());
-    }
-    let pruned = file.with_extension("log.pruned");
-    let mut written = kept.join("\n");
-    if !written.is_empty() {
-        written.push('\n');
-    }
-    write_private(&pruned, &written)?;
-    std::fs::rename(&pruned, &file)?;
-    facade_base::service::redirect_stderr(&file)?;
+    facade_base::log::prune(&log_file()?, now)?;
     Ok(())
-}
-
-fn write_private(file: &Path, text: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut out = facade_base::files::create_private_file(file)?;
-    out.write_all(text.as_bytes())
 }
 
 /// The last `lines` lines of the daemon's log, oldest first, the home folder written `~`
@@ -124,23 +69,4 @@ fn with_home_as_tilde(line: &str, home: &str) -> String {
     }
     written.push_str(rest);
     written
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Lines older than the cutoff go, and a line with no time goes or stays with the one before.
-    #[test]
-    fn old_lines_go_with_the_lines_that_follow_them() {
-        let text = "2026-10-01T00:00:00.000Z daemon[1] info: old\nno time, old\n\
-                    2026-11-15T00:00:00.000Z daemon[1] info: new\nno time, new\n";
-        assert_eq!(
-            kept_lines(text, "2026-10-16T00:00:00.000Z"),
-            vec![
-                "2026-11-15T00:00:00.000Z daemon[1] info: new",
-                "no time, new"
-            ]
-        );
-    }
 }

@@ -7,7 +7,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { withModules } from './withModules';
 
 suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-2.4)', () => {
@@ -38,6 +38,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			registerCommand: (id: string, handler: (...args: unknown[]) => unknown) => { commands.set(id, handler); return none; },
 			executeCommand: async (id: string, ...args: unknown[]) => {
 				executed.push(id);
+				if (id === 'setContext') { return undefined; }
 				const handler = commands.get(id);
 				if (!handler) {
 					throw new Error(`command '${id}' not found`);
@@ -46,6 +47,9 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			}
 		},
 		window: {
+			terminals: [],
+			onDidOpenTerminal: () => none,
+			onDidCloseTerminal: () => none,
 			registerWebviewViewProvider: () => none,
 			showErrorMessage: async (text: string, ...items: string[]) => { shown.push({ text, items }); return choose; },
 			showInformationMessage: async (text: string, ...items: string[]) => { informed.push({ text, items }); return answer(); }
@@ -61,12 +65,36 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 	});
 	/** The extension's context: its terminals' environment is what the test reads. */
 	const context = () => ({
+		extensionPath: temp,
 		subscriptions: [] as unknown[],
 		environmentVariableCollection: {
 			replace: (variable: string, value: string) => { terminalHome.push(`${variable}=${value}`); },
 			delete: (variable: string) => { terminalHome.push(`${variable} removed`); }
 		}
 	});
+
+	function openOldWindow(storage: string, subscriptions: { dispose(): void }[], files: object = fs): void {
+		const vscode = api();
+		const noNetwork = {
+			WindowNetwork: class {
+				async start(): Promise<void> {}
+				async dispose(): Promise<void> {}
+			},
+			windowAddress: () => 'win-0000000000000000'
+		};
+		const { activate } = withModules({ vscode, fs: files, './windowNetwork': noNetwork })<typeof import('../host/window')>(require.resolve('../host/window'));
+		activate({
+			logUri: { fsPath: temp }, globalStorageUri: { fsPath: storage }, subscriptions,
+			extension: { packageJSON: { version: '0.1.6' } }
+		} as never);
+		commands.get(WINDOW_IDENTITY_COMMAND)!(session);
+	}
+
+	function assertOnlyTerminalCommands(): void {
+		assert.deepStrictEqual([...commands.keys()].sort(), [
+			WINDOW_IDENTITY_COMMAND, WINDOW_LEGACY_INSTANCE_COMMAND, WINDOW_TERMINAL_OWNER_COMMAND, WINDOW_TERMINALS_COMMAND
+		].sort());
+	}
 
 	/**
 	 * The files as they are, with watches the test tells of each change itself as it makes it: the system's own notice comes when it
@@ -114,7 +142,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		const windowContext = { logUri: { fsPath: temp }, globalStorageUri: { fsPath: path.join(temp, 'storage') }, subscriptions: [] as unknown[] };
 		activate(windowContext as never);
 		assert.strictEqual(fs.readFileSync(path.join(temp, 'handover.json'), 'utf8'), '{', 'no other identity is written');
-		assert.deepStrictEqual([...commands.keys()], [WINDOW_IDENTITY_COMMAND], 'no terminal registry without an identity');
+		assertOnlyTerminalCommands();
 		assert.deepStrictEqual(await commands.get(WINDOW_IDENTITY_COMMAND)!(session), { version: 1, session, damaged: true });
 		assert.strictEqual(await commands.get(WINDOW_IDENTITY_COMMAND)!('session-before'), undefined, 'a late request of another editor session is not answered');
 		const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
@@ -133,7 +161,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		fs.mkdirSync(path.join(temp, 'handover.json'));
 		const { activate } = withModules({ vscode })<typeof import('../host/window')>(require.resolve('../host/window'));
 		activate({ logUri: { fsPath: temp }, globalStorageUri: { fsPath: path.join(temp, 'storage') }, subscriptions: [] } as never);
-		assert.deepStrictEqual([...commands.keys()], [WINDOW_IDENTITY_COMMAND], 'no terminal registry without an identity');
+		assertOnlyTerminalCommands();
 		const answer = await commands.get(WINDOW_IDENTITY_COMMAND)!(session) as { unreadable?: unknown };
 		assert.deepStrictEqual([typeof answer.unreadable, 'damaged' in answer, 'token' in answer], ['string', false, false]);
 		const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
@@ -155,7 +183,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual(shown, Array(3).fill({ text: failure.message, items: ['Reload Window'] }));
 	});
 
-	test('a missing window component uses its installation wait and missing-component explanation, without inventing an identity', async () => {
+	test('the old engine uses the installation wait and missing-component explanation, without inventing an identity', async () => {
 		const vscode = api();
 		let missing = 0;
 		let disposed = 0;
@@ -277,20 +305,17 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		const before = process.env.FACADE_HOME;
 		const subscriptions: { dispose(): void }[] = [];
 		try {
-			// A damaged handover record stops the component right after the home is decided
-			fs.writeFileSync(path.join(temp, 'handover.json'), '{');
 			const storage = path.join(temp, 'storage');
 			const record = path.join(storage, 'home.json');
-			const windowContext = () => ({ logUri: { fsPath: temp }, globalStorageUri: { fsPath: storage }, subscriptions });
 			// A local window: the setting is this window's Facade home, and written down
 			home = '~/facade-local';
-			withModules({ vscode: api() })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
+			openOldWindow(storage, subscriptions);
 			const local = path.join(os.homedir(), 'facade-local');
 			assert.deepStrictEqual([process.env.FACADE_HOME, JSON.parse(fs.readFileSync(record, 'utf8'))], [local, { home: local }]);
 			// Another local window of the same home leaves it as it was: a remote window watching it sees no change
 			const stamp = () => { const { ino, mtimeMs } = fs.statSync(record); return [ino, mtimeMs]; };
 			const written = stamp();
-			withModules({ vscode: api() })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
+			openOldWindow(storage, subscriptions);
 			assert.deepStrictEqual(stamp(), written);
 			// The setting changed in a local window that stays open: written down at once; unset, removed; unusable, of any type, kept
 			const change = () => configurationChanged.forEach(listener => listener({ affectsConfiguration: (each: string) => each === 'facade.home' }));
@@ -317,7 +342,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			remoteName = 'ssh-remote';
 			process.env.FACADE_HOME = '/somewhere/else';
 			const told = toldFiles();
-			withModules({ vscode: api(), fs: told.files })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
+			openOldWindow(storage, subscriptions, told.files);
 			assert.deepStrictEqual([process.env.FACADE_HOME, shown], [local, []]);
 			// A local window writes down another: the remote window offers the reload that uses it, once
 			fs.writeFileSync(record, JSON.stringify({ home: path.join(os.homedir(), 'facade-new') }));
@@ -335,14 +360,14 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			// Unset there, nothing is written down, and a remote window goes by FACADE_HOME as the local windows do
 			remoteName = undefined;
 			home = undefined;
-			withModules({ vscode: api() })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
+			openOldWindow(storage, subscriptions);
 			assert.ok(!fs.existsSync(record));
 			// An unusable value changes nothing written down: the local windows start nothing until it is fixed
 			home = '~/facade-kept';
-			withModules({ vscode: api() })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
+			openOldWindow(storage, subscriptions);
 			for (const unusable of ['not a path', 42]) {
 				home = unusable;
-				withModules({ vscode: api() })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
+				openOldWindow(storage, subscriptions);
 			}
 			assert.deepStrictEqual(JSON.parse(fs.readFileSync(record, 'utf8')), { home: path.join(os.homedir(), 'facade-kept') });
 		} finally {
@@ -355,7 +380,6 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		const before = process.env.FACADE_HOME;
 		const subscriptions: { dispose(): void }[] = [];
 		try {
-			fs.writeFileSync(path.join(temp, 'handover.json'), '{');
 			const storage = path.join(temp, 'storage');
 			const record = path.join(storage, 'home.json');
 			const used = path.join(temp, 'facade-env');
@@ -365,8 +389,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			let choose: (choice: string | undefined) => void = () => undefined;
 			answer = () => new Promise(resolve => { choose = resolve; });
 			const told = toldFiles();
-			const start = (files = told.files) => withModules({ vscode: api(), fs: files })<typeof import('../host/window')>(require.resolve('../host/window'))
-				.activate({ logUri: { fsPath: temp }, globalStorageUri: { fsPath: storage }, subscriptions } as never);
+			const start = (files = told.files) => openOldWindow(storage, subscriptions, files);
 			start();
 			// The folder it uses, written down: nothing to reload
 			fs.mkdirSync(storage, { recursive: true });

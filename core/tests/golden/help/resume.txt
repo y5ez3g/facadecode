@@ -1,19 +1,30 @@
-Resume an ended agent's session
+List resumable sessions or resume one
 
-Usage: facade resume [OPTIONS] <AGENT>
+Usage: facade resume [OPTIONS] [REFERENCE]
 
-Pick up where an ended agent that Facade started left off, with the same ID, name and screen, if its
-CLI supports resuming and saved a session. In an interactive terminal it opens here; press Ctrl-] to
-detach and leave it running. Use '--detach' to resume it in the background instead.
+Without a reference, list resumable agents and CLI sessions for the current folder. Use '--folder'
+or '--machine' to look elsewhere. With a reference, resume the agent or start a new agent from a CLI
+session. In an interactive terminal, Ctrl-] detaches and returns 0. If the agent exits first, this
+command returns the CLI's exit code. Use '-d' to run in the background.
 
 Arguments:
-  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
+  [REFERENCE]  Agent address, agent name, or CLI session such as claude:7f3e9a1c
 
 Options:
-  -d, --detach  Resume in the background and print the agent's ID
-  -h, --help    Print help
+  -d, --detach             Resume in the background and print the agent's address
+      --machine <MACHINE>  Machine name or ID from 'facade machine list'
+      --folder <FOLDER>    Select a folder for CLI sessions
+      --all                List ended agents beyond this folder
+      --json               Print resumable sessions as JSON
+  -h, --help               Print help
 
 Examples:
+  # List resumable agents and CLI sessions
+  facade resume
+
+  # List ended agents across awake machines
+  facade resume --all
+
   # Resume agent a3 and work with it here
   facade resume a3
 

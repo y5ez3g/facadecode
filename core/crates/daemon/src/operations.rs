@@ -4,37 +4,94 @@
 //! the record, the record before the actor and the list, and the transaction before the list
 //! changes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, hash_map::Entry};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
-    AgentInfo, AgentResumeArgs, AgentStartArgs, AgentStartResult, AgentState, AgentStopResult,
-    AgentsUpdate, Message, TERMINAL_WINDOW, ToolsState, WindowRef,
+    AgentInfo, AgentResumeArgs, AgentStartResult, AgentState, AgentStopResult, AgentsUpdate,
+    Message, ToolsState, location_id,
 };
+use facade_base::instructions::{self, Creator, ManagedRun};
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{AgentRef, Caller, MessageRef};
+use facade_base::machine::{AgentRef, MachineQueryArgs, MessageRef};
 use facade_base::process::{ProcessExit, ProcessState};
+use facade_base::v3::{Caller, StartArgs};
+use std::path::Path;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::agent::{
-    self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStart, StateStart, WindowColors,
-};
+use crate::agent::{self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStart, StateStart};
 use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
 use crate::messages::OwedResult;
-use crate::records::{self, Named, Reach};
+use crate::records;
 use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
-use crate::store::AgentRecord;
+use crate::store::{AgentRecord, CreationSource, InitialLaunch, RelayRunRecord, RemovalCause};
 use crate::windows::Destination;
-use crate::{Daemon, HUMAN, Sender, WindowBinding, blocking, gate_for_test, log, pause_for_test};
+use crate::{Daemon, Sender, blocking, gate_for_test, log, pause_for_test};
 
 /// The exit wait once the keeper took `agent.stop`, its 3 seconds before SIGKILL included.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a resume waits for the ended run's exit to be saved and its session read.
 const PREVIOUS_RUN_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a request ID answers again.
-const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
+pub(crate) const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
+
+struct RunInstructions<'a> {
+    address: String,
+    folder: &'a str,
+    machine: String,
+    source: Option<CreationSource>,
+    creator_address: Option<String>,
+    creator_name: Option<&'a str>,
+    yolo: bool,
+}
+
+impl RunInstructions<'_> {
+    fn context(&self) -> ManagedRun<'_> {
+        let creator = match self.source {
+            Some(CreationSource::Agent) => {
+                self.creator_address
+                    .as_deref()
+                    .map(|address| Creator::Agent {
+                        address,
+                        name: self.creator_name,
+                    })
+            }
+            Some(CreationSource::CommandLine) => Some(Creator::CommandLine),
+            Some(CreationSource::VsCode) => Some(Creator::VsCode),
+            None => None,
+        };
+        ManagedRun {
+            folder: self.folder,
+            machine: &self.machine,
+            creator,
+            yolo: self.yolo,
+        }
+    }
+}
+
+/// The CLI rule and session ID on this machine.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct SessionKey {
+    rule: String,
+    session: String,
+}
+
+struct SessionClaim<'a> {
+    daemon: &'a Daemon,
+    key: SessionKey,
+}
+
+impl Drop for SessionClaim<'_> {
+    fn drop(&mut self) {
+        self.daemon
+            .claimed_sessions
+            .lock()
+            .unwrap()
+            .remove(&self.key);
+    }
+}
 
 /// A request is scoped to its caller and the machine holding the start.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -49,15 +106,14 @@ pub(crate) struct StartOrigin {
     pub(crate) caller: Caller,
     pub(crate) sender: Sender,
     pub(crate) by_model: bool,
-    pub(crate) from_window: Option<String>,
-    pub(crate) colors: Option<facade_base::daemon::TerminalColors>,
 }
 
 impl StartOrigin {
-    fn editor(&self) -> Option<WindowRef> {
-        match &self.caller {
-            Caller::Ide { window } => Some(window.clone()),
-            _ => None,
+    fn source(&self) -> CreationSource {
+        match self.caller {
+            Caller::Agent { .. } => CreationSource::Agent,
+            Caller::Terminal { .. } => CreationSource::CommandLine,
+            Caller::Ide { .. } => CreationSource::VsCode,
         }
     }
 
@@ -68,18 +124,13 @@ impl StartOrigin {
                 Caller::Agent { agent, .. } => Some(agent.agent_id.clone()),
                 _ => None,
             },
-            window_id: self.editor().map(|window| window.window_id),
+            window_id: None,
             request_id,
         }
     }
 }
 /// A start's answer, once it has one.
 pub(crate) type StartAnswer = Option<Result<AgentStartResult, ErrorBody>>;
-
-struct StartWindows {
-    members: Vec<WindowRef>,
-    colors: Option<WindowColors>,
-}
 
 /// A start under way with a request ID: the calls that repeat it meanwhile get its answer. It
 /// lets go of its key once it answers, or ends without one; the record keeps the ID from then on.
@@ -146,7 +197,7 @@ pub(crate) fn an_hour_ago() -> String {
 pub(crate) fn agent_stopped(id: &str) -> ErrorBody {
     ErrorBody::new(
         Reason::Unavailable,
-        format!("agent #{id} is unavailable: its actor stopped"),
+        format!("agent {id} is unavailable: its actor stopped"),
     )
 }
 
@@ -175,120 +226,39 @@ impl Daemon {
         });
     }
 
-    /// The reach of a client acting for `caller`, or for the person.
-    pub(crate) fn reach_of(&self, caller: Option<&str>) -> Reach {
-        let info = caller
-            .and_then(|id| self.get_agent(id))
-            .map(|agent| agent.info());
-        records::reach_of(caller, info.as_ref())
-    }
-
-    /// What `reference` names among the agents in `reach` (RULES-2.3).
-    pub(crate) fn resolve_named(
-        &self,
-        reference: &str,
-        reach: &Reach,
-        running_only: bool,
-    ) -> Result<Option<AgentHandle>, ErrorBody> {
-        match records::resolve(&self.agent_infos(), reference, reach, running_only)? {
-            Named::Person => Ok(None),
-            Named::Agent(id) => self.get_agent(&id).map(Some).ok_or_else(|| {
-                ErrorBody::new(
-                    Reason::NotFound,
-                    format!("no agent {reference}; nothing was done"),
-                )
-            }),
-        }
-    }
-
-    /// The agent `reference` names among the agents in `reach`; the person is no agent.
-    pub(crate) fn resolve_agent(
-        &self,
-        reference: &str,
-        reach: &Reach,
-    ) -> Result<AgentHandle, ErrorBody> {
-        self.resolve_named(reference, reach, false)?.ok_or_else(|| {
-            ErrorBody::invalid_argument(format!("{} is the person, not an agent", reference.trim()))
-        })
-    }
-
-    /// Reserves a default name across the initial members, under the list's lock before records'.
-    pub(crate) fn reserve_name(
-        &self,
-        windows: &[WindowRef],
-        id: &str,
+    /// Uses the same active roster as list, then checks local names under the reservation lock.
+    pub(crate) async fn reserve_name(
+        self: &Arc<Self>,
         names: Option<&[String]>,
-    ) -> String {
+    ) -> Result<String, ErrorBody> {
+        let caller = Caller::Terminal {
+            machine_id: self.machine_id.clone(),
+        };
+        let snapshot = self
+            .list_agents_v3(&caller, MachineQueryArgs { machine: None })
+            .await?;
+        let mut taken: Vec<String> = snapshot
+            .agents
+            .into_iter()
+            .filter(|agent| agent.reference.machine_id != self.machine_id)
+            .map(|agent| agent.row.name)
+            .collect();
         let agents = self.agents.lock().unwrap();
-        let listed: Vec<AgentInfo> = agents.values().map(AgentHandle::info).collect();
-        self.records.reserve_name(windows, &listed, id, names)
+        taken.extend(agents.values().filter_map(|agent| {
+            let info = agent.info();
+            (info.process == ProcessState::Running).then_some(info.name)
+        }));
+        Ok(self.records.reserve_active_name(&taken, names))
     }
 
-    fn start_windows(
-        &self,
-        explicit: Option<WindowRef>,
-        editor: Option<WindowRef>,
-        sender: &Sender,
-    ) -> Result<StartWindows, ErrorBody> {
-        // A CLI can start a child before its own record is listed.
-        let parent = if sender.from == HUMAN {
-            None
-        } else {
-            self.get_agent(&sender.from)
-        };
-        let mut members = match explicit {
-            Some(window) => {
-                if window.machine_id == self.machine_id {
-                    self.windows.check_member(&window)?;
-                }
-                vec![window]
-            }
-            None => match &parent {
-                Some(parent) => parent.info().windows,
-                None => vec![
-                    editor
-                        .clone()
-                        .unwrap_or_else(|| self.local_window(TERMINAL_WINDOW)),
-                ],
-            },
-        };
-        members.sort();
-        members.dedup();
-        if members.is_empty() {
-            return Err(ErrorBody::internal(
-                "the starting agent has no member window",
-            ));
-        }
-        let preferred = editor
-            .or_else(|| parent.and_then(|parent| parent.color_source()))
-            .filter(|window| members.contains(window));
-        let colors = preferred
-            .and_then(|window| {
-                self.window_colors(&window)
-                    .map(|colors| WindowColors { window, colors })
-            })
-            .or_else(|| self.first_member_colors(&members));
-        Ok(StartWindows { members, colors })
-    }
-
-    fn instructions_window<'a>(&self, windows: &'a [WindowRef]) -> Option<(String, &'a str)> {
-        let [window] = windows else {
-            return None;
-        };
-        Some((self.windows.name(window), window.window_id.as_str()))
-    }
-
-    /// Starts a CLI as [`facade_base::daemon::AgentStart`] says. A start with its creator's own
-    /// request ID looks for it first: a start with that ID under way, whose answer it waits for,
-    /// or an agent the same creator started with it within the hour, which it answers as it stands
-    /// now, starting nothing. A start that failed keeps no ID.
+    /// Starts and installs a managed run, with the same request key on retries.
     pub(crate) async fn start(
         self: &Arc<Self>,
-        args: AgentStartArgs,
+        args: StartArgs,
         origin: StartOrigin,
     ) -> Result<AgentStartResult, ErrorBody> {
         let Some(request_id) = args.request_id.clone() else {
-            return self.start_once(args, origin).await;
+            return self.start_once(args, origin, None).await;
         };
         check_request_id(&request_id)?;
         let key = origin.key(request_id.clone());
@@ -318,7 +288,7 @@ impl Daemon {
         };
         let mut answered = match under_way {
             Ok(held) => {
-                let answer = self.start_once(args, origin).await;
+                let answer = self.start_once(args, origin, None).await;
                 held.answer(answer.clone());
                 return answer;
             }
@@ -378,149 +348,109 @@ impl Daemon {
     /// its worktree says that the worktree stays.
     async fn start_once(
         self: &Arc<Self>,
-        mut args: AgentStartArgs,
+        args: StartArgs,
         origin: StartOrigin,
+        session: Option<String>,
     ) -> Result<AgentStartResult, ErrorBody> {
-        let folder = self.prepare_start(&mut args, origin.by_model).await?;
         gate_for_test("before-start-run");
-        // One reading of the settings file gives the start its YOLO, names and entry (RULES-4.3).
-        let settings = command_line::read_settings()?;
-        let configured = self.configure_start(&settings, &args, &origin, &folder)?;
-        let windows = self.windows_for_start(&mut args, &origin)?;
-        let Some(worktree) = args.worktree.take() else {
+        let (settings, mut configured, destination) =
+            self.check_local_start(&args, origin.by_model).await?;
+        if let Some(session) = session.as_deref() {
+            command_line::check_session(&configured, session)?;
+        }
+        let Some(branch) = args.worktree.as_deref() else {
             return self
-                .start_in(args, origin, &settings, configured, windows, &folder)
+                .start_in(args, origin, &settings, configured, destination, session)
                 .await;
         };
-        self.windows
-            .check_destination(args.location_source_window.as_ref(), &folder)?;
-        let branch = worktree.branch.clone();
+        let branch = branch.to_owned();
         let made = self
-            .create_worktree(facade_base::daemon::WorktreeCreateArgs {
-                window_id: args.location_source_window.as_ref().map_or_else(
-                    || TERMINAL_WINDOW.to_owned(),
-                    |window| window.window_id.clone(),
-                ),
-                cwd: folder,
-                worktree,
-            })
+            .windows
+            .create_local_worktree(Path::new(&destination.cwd), &branch)
             .await?;
-        self.start_in(args, origin, &settings, configured, windows, &made.path)
-            .await
-            .map_err(|mut error| {
-                error.message.push_str(&format!(
-                    "; the worktree {} on branch {branch} was created and stays",
-                    made.path
-                ));
-                error.data.kept = Some(facade_base::daemon::Kept {
-                    branch: Some(branch),
-                    path: Some(made.path),
-                });
-                error
-            })
-    }
-
-    fn configure_start(
-        &self,
-        settings: &facade_base::settings::Settings,
-        args: &AgentStartArgs,
-        origin: &StartOrigin,
-        folder: &str,
-    ) -> Result<Configured, ErrorBody> {
-        let configured = command_line::configure(settings, args, folder, origin.by_model)?;
-        let program = &args.launch.program;
-        if let Some(session) = args.session.as_deref() {
-            command_line::check_session(&configured, program, session)?;
-        }
-        if let Some(prompt) = args.prompt.as_deref() {
-            command_line::check_start_prompt(prompt, &configured, program)?;
-            let widest = Message {
-                from_machine_id: (origin.caller.machine_id() != self.machine_id)
-                    .then(|| origin.caller.machine_id().to_string()),
-                from_window: origin.from_window.clone(),
-                ..crate::delivery::pending_message(
-                    origin.sender.clone(),
-                    "a999999999",
-                    prompt.to_owned(),
-                    None,
-                    None,
-                )
+        let start = async {
+            configured.find_program(&made.path, &settings, &args.env)?;
+            let destination = Destination {
+                cwd: made.path.clone(),
+                location_id: made.location_id,
             };
-            crate::delivery::check_fits(
-                configured.rule,
-                "the new agent",
-                &widest,
-                "start it with a shorter prompt and send the rest as messages",
-                |message| self.message_text(message),
-            )?;
-        }
-        Ok(configured)
-    }
-
-    fn windows_for_start(
-        &self,
-        args: &mut AgentStartArgs,
-        origin: &StartOrigin,
-    ) -> Result<StartWindows, ErrorBody> {
-        let Some(mut members) = args.initial_windows.take() else {
-            return self.start_windows(args.window.take(), origin.editor(), &origin.sender);
+            self.start_in(args, origin, &settings, configured, destination, session)
+                .await
         };
-        members.sort();
-        members.dedup();
-        if members.is_empty() {
-            return Err(ErrorBody::invalid_argument(
-                "the forwarded start has no member window",
+        start.await.map_err(|mut error| {
+            error.message.push_str(&format!(
+                "; the worktree {} on branch {branch} was created and stays",
+                made.path
             ));
-        }
-        let colors = origin
-            .editor()
-            .filter(|window| members.contains(window))
-            .zip(
-                origin
-                    .colors
-                    .as_ref()
-                    .and_then(|colors| crate::presence::terminal_colors(colors).ok()),
-            )
-            .map(|(window, colors)| WindowColors { window, colors })
-            .or_else(|| self.first_member_colors(&members));
-        Ok(StartWindows { members, colors })
+            error.data.kept = Some(facade_base::daemon::Kept {
+                branch: Some(branch),
+                path: Some(made.path),
+            });
+            error
+        })
     }
 
     pub(crate) async fn preflight_start(
         &self,
-        mut args: AgentStartArgs,
-        origin: &StartOrigin,
+        args: &StartArgs,
+        by_model: bool,
     ) -> Result<(), ErrorBody> {
-        let folder = self.prepare_start(&mut args, origin.by_model).await?;
-        let settings = command_line::read_settings()?;
-        let mut configured = self.configure_start(&settings, &args, origin, &folder)?;
-        self.windows_for_start(&mut args, origin)?;
-        self.start_destination(&args, &mut configured, &folder)?;
+        self.check_local_start(args, by_model).await?;
         Ok(())
     }
 
-    fn start_destination(
-        &self,
-        args: &AgentStartArgs,
-        configured: &mut Configured,
-        folder: &str,
-    ) -> Result<Destination, ErrorBody> {
-        let destination = self
-            .windows
-            .check_destination(args.location_source_window.as_ref(), folder)?;
-        configured.find_program(&destination.cwd)?;
-        Ok(destination)
+    pub(crate) async fn start_saved_session(
+        self: &Arc<Self>,
+        args: StartArgs,
+        origin: StartOrigin,
+        session: String,
+    ) -> Result<AgentStartResult, ErrorBody> {
+        self.start_once(args, origin, Some(session)).await
     }
 
-    /// Starts the CLI in `folder`, in the order a start keeps (docs/core/ARCHITECTURE.md).
+    async fn check_local_start(
+        &self,
+        args: &StartArgs,
+        by_model: bool,
+    ) -> Result<(facade_base::settings::Settings, Configured, Destination), ErrorBody> {
+        let folder = args
+            .folder
+            .as_deref()
+            .ok_or_else(|| ErrorBody::internal("start folder was not resolved"))?;
+        crate::service::check_size(args.cols, args.rows)?;
+        let settings = command_line::read_settings()?;
+        let mut configured = command_line::configure(&settings, args, folder, by_model)?;
+        if let Some(prompt) = args.prompt.as_deref() {
+            facade_base::daemon::check_message_text(prompt).map_err(|why| {
+                ErrorBody::invalid_argument(format!("the prompt cannot go as a message: {why}"))
+            })?;
+            if configured.rule.is_none() {
+                return Err(ErrorBody::new(
+                    Reason::Unsupported,
+                    format!(
+                        "{} is a custom program and cannot receive a prompt",
+                        configured.cli
+                    ),
+                ));
+            }
+        }
+        crate::windows::locations::preflight(Path::new(folder), args.worktree.as_deref()).await?;
+        let destination = Destination {
+            cwd: folder.to_string(),
+            location_id: location_id(folder),
+        };
+        configured.find_program(&destination.cwd, &settings, &args.env)?;
+        Ok((settings, configured, destination))
+    }
+
     async fn start_in(
         self: &Arc<Self>,
-        args: AgentStartArgs,
+        args: StartArgs,
         origin: StartOrigin,
         settings: &facade_base::settings::Settings,
-        mut configured: Configured,
-        windows: StartWindows,
-        folder: &str,
+        configured: Configured,
+        destination: Destination,
+        session: Option<String>,
     ) -> Result<AgentStartResult, ErrorBody> {
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(ErrorBody::new(
@@ -528,13 +458,16 @@ impl Daemon {
                 "Facade is exiting; start the agent again",
             ));
         };
-        let destination = self.start_destination(&args, &mut configured, folder)?;
         let folder = destination.cwd;
         let location = destination.location_id;
         let yolo = settings.yolo;
         let rule = configured.rule;
         let reservation = self.runs.reserve_start();
         let id = self.records.next_id().await?;
+        let _session = rule
+            .zip(session.as_deref())
+            .map(|(rule, session)| self.claim_session(&id, &rule.cli, session, !origin.by_model))
+            .transpose()?;
         let (creator, root) = match &origin.caller {
             Caller::Agent { agent, root, .. } => (Some(agent.clone()), root.clone()),
             _ => (
@@ -553,35 +486,47 @@ impl Daemon {
             .filter(|name| !name.is_empty());
         let name = match given {
             Some(name) => name.to_string(),
-            None => self.reserve_name(&windows.members, &id, settings.names.as_deref()),
+            None => self.reserve_name(settings.names.as_deref()).await?,
+        };
+        let release_name = || {
+            if given.is_none() {
+                self.records.release_name(&name);
+            }
         };
         if let Err(error) = reservation.wait_for_keeper().await {
-            self.records.release_name(&name);
+            release_name();
             return Err(error);
         }
         let creator_name = sender.from_name.as_deref();
-        let place = self.instructions_window(&windows.members);
         let request = RunRequest {
             id: &id,
             rule,
-            words: &configured.words,
+            words: &configured.options.args,
             program: configured.program.as_deref(),
-            plain_program: &args.launch.program,
+            plain_program: &args.cli,
             inherited: configured.env.clone(),
             cwd: &folder,
             location_id: &location,
-            window: place.as_ref().map(|(label, id)| (label.as_str(), *id)),
+            window: None,
             creator: creator
                 .as_ref()
                 .map(|creator| (creator.agent_id.as_str(), creator_name)),
             yolo,
-            session: args.session.as_deref(),
+            session: session.as_deref(),
             kind: RunKind::Start,
         };
-        let mut prepared = match self.runs.prepare(request).await {
+        let prepared = self
+            .prepare_run(
+                request,
+                Some(origin.source()),
+                creator.as_ref(),
+                creator_name,
+            )
+            .await;
+        let mut prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                self.records.release_name(&name);
+                release_name();
                 return Err(error);
             }
         };
@@ -601,7 +546,7 @@ impl Daemon {
         let started = match started {
             Ok(started) => started,
             Err(error) => {
-                self.records.release_name(&name);
+                release_name();
                 return Err(error);
             }
         };
@@ -616,8 +561,8 @@ impl Daemon {
             location_id: location,
             cwd: folder,
             machine_id: self.machine_id.clone(),
-            windows: windows.members,
-            location_source_window: args.location_source_window,
+            windows: Vec::new(),
+            location_source_window: None,
             pid: Some(started.pid),
             process: ProcessState::Running,
             cols: Some(args.cols),
@@ -629,7 +574,7 @@ impl Daemon {
             root_machine_id: Some(root.machine_id.clone()),
             yolo,
             exit: None,
-            session: None,
+            session,
             state: AgentState::Starting,
             state_detail: None,
             said: None,
@@ -646,13 +591,13 @@ impl Daemon {
             created_at: info.created_at.clone(),
             exit: None,
             rule: rule.map(|rule| rule.cli.clone()),
-            session: None,
+            session: info.session.clone(),
             windows: info.windows.clone(),
             location_source_window: info.location_source_window.clone(),
             creator: info.creator.clone(),
             creator_machine_id: info.creator_machine_id.clone(),
             start_machine_id: origin.caller.machine_id().to_string(),
-            start_window_id: origin.editor().map(|window| window.window_id),
+            start_window_id: None,
             root: root.agent_id,
             root_machine_id: root.machine_id,
             yolo,
@@ -663,17 +608,41 @@ impl Daemon {
         // The prompt is committed with the record, so that a start answered with it never loses
         // it; its delivery time begins once the CLI's tools connected or will not.
         let store = self.store.clone();
+        let source = origin.source();
+        let options = configured.options;
+        let relay = RelayRunRecord {
+            process: started.process.clone(),
+            version: 3,
+            digest: started
+                .credential
+                .as_ref()
+                .map(|credential| credential.digest),
+        };
         let kept = match args.prompt.clone() {
-            None => blocking(move || store.insert(&record).map(|()| None)).await,
+            None => {
+                blocking(move || {
+                    store
+                        .insert_launch(
+                            &record,
+                            Some(&InitialLaunch {
+                                source,
+                                options: &options,
+                                relay: &relay,
+                            }),
+                        )
+                        .map(|()| None)
+                })
+                .await
+            }
             Some(text) => {
                 let message = Message {
                     call_id: args.call_id.clone(),
                     from_machine_id: (origin.caller.machine_id() != self.machine_id)
                         .then(|| origin.caller.machine_id().to_string()),
-                    from_window: origin.from_window.clone(),
+                    from_window: None,
                     ..crate::delivery::pending_message(sender.clone(), &id, text, None, None)
                 };
-                let owes = sender.from != HUMAN;
+                let owes = creator.is_some();
                 let reserved = args
                     .result_message_machine_id
                     .clone()
@@ -684,7 +653,17 @@ impl Daemon {
                     });
                 blocking(move || {
                     store
-                        .insert_with_prompt(&record, &message, owes, reserved.as_ref())
+                        .insert_launch_with_prompt(
+                            &record,
+                            &message,
+                            owes,
+                            reserved.as_ref(),
+                            Some(&InitialLaunch {
+                                source,
+                                options: &options,
+                                relay: &relay,
+                            }),
+                        )
                         .map(Some)
                 })
                 .await
@@ -693,7 +672,7 @@ impl Daemon {
         let kept = match kept {
             Ok(kept) => kept,
             Err(error) => {
-                self.records.release_name(&name);
+                release_name();
                 self.runs.remove_folders(&id);
                 self.runs.abandon(&id);
                 return Err(error);
@@ -702,14 +681,11 @@ impl Daemon {
         gate_for_test("after-start-record");
         let screen = self.screens.folder(&id);
         let actor = ActorStart {
-            colors: windows
-                .colors
-                .as_ref()
-                .map_or_else(Default::default, |colors| colors.colors),
+            colors: Default::default(),
             info: info.clone(),
             master: Some(started.master),
             screen: ScreenStart::New(screen.clone()),
-            untouched_input: args.session.is_none(),
+            untouched_input: info.session.is_none(),
             rule: rule.map(|rule| rule.cli.clone()),
             captures: prepared.captures,
             deliveries: self.messages.delivery_handle(),
@@ -719,22 +695,19 @@ impl Daemon {
                 started: tokio::time::Instant::now(),
             },
         };
-        let color_source = windows.colors.map(|colors| colors.window);
-        let handle =
-            match agent::spawn_with_color_source(actor, rx, tx, self.changes.clone(), color_source)
-            {
-                Ok(handle) => handle,
-                Err(err) => {
-                    self.records.release_name(&name);
-                    self.runs.remove_folders(&id);
-                    let (store, removed) = (self.store.clone(), id.clone());
-                    let _ = blocking(move || store.delete(&removed)).await;
-                    self.runs.abandon(&id);
-                    return Err(ErrorBody::internal(format!(
-                        "could not read agent {id}'s terminal: {err}"
-                    )));
-                }
-            };
+        let handle = match agent::spawn(actor, rx, tx, self.changes.clone()) {
+            Ok(handle) => handle,
+            Err(err) => {
+                release_name();
+                self.runs.remove_folders(&id);
+                let (store, removed) = (self.store.clone(), id.clone());
+                let _ = blocking(move || store.delete(&removed)).await;
+                self.runs.abandon(&id);
+                return Err(ErrorBody::internal(format!(
+                    "could not read agent {id}'s terminal: {err}"
+                )));
+            }
+        };
         // A prompt holds the run's messages from before the agent is listed, so that none goes
         // ahead of it.
         let prompt = match kept {
@@ -756,9 +729,9 @@ impl Daemon {
         let early_exit = {
             let mut agents = self.agents.lock().unwrap();
             agents.insert(id.clone(), handle.clone());
-            self.records.release_name(&name);
+            release_name();
             self.publish(info.clone());
-            self.runs.installed(&id)
+            self.runs.installed_run(&id, agent::FIRST_RUN)
         };
         // Listed now: the plugin's hold goes, and the session is followed.
         prepared.let_go_of_plugin();
@@ -766,7 +739,7 @@ impl Daemon {
             self.runs.follow_session(
                 &id,
                 agent::FIRST_RUN,
-                None,
+                info.session.clone(),
                 handle.output_seen(),
                 FirstRead::Now,
             );
@@ -821,13 +794,13 @@ impl Daemon {
         let unreadable = |why: String| {
             ErrorBody::new(
                 Reason::Unavailable,
-                format!("#{id}'s environment is unavailable: {why}; nothing was started"),
+                format!("{id}'s environment is unavailable: {why}; nothing was started"),
             )
         };
         let agent = self.get_agent(id).ok_or_else(|| {
             ErrorBody::new(
                 Reason::NotFound,
-                format!("#{id}, the agent this start acts for, is not listed"),
+                format!("{id}, the agent this start acts for, is not listed"),
             )
         })?;
         if agent.is_guest() {
@@ -869,7 +842,7 @@ impl Daemon {
         }
         if agent.is_closed() {
             return Err(ErrorBody::internal(format!(
-                "agent #{id} cannot be stopped: its actor stopped; nothing was sent"
+                "agent {id} cannot be stopped: its actor stopped; nothing was sent"
             )));
         }
         let _stopping = self.lifecycle.begin(Work::Stop);
@@ -889,7 +862,7 @@ impl Daemon {
             Err(_) => Err(ErrorBody::new(
                 Reason::Unavailable,
                 format!(
-                    "agent #{id} did not end within the {}-second stop wait",
+                    "agent {id} did not end within the {}-second stop wait",
                     STOP_TIMEOUT.as_secs()
                 ),
             )),
@@ -951,41 +924,6 @@ impl Daemon {
         self.runs.keep_exit_task(&writer, task);
     }
 
-    /// Adds the calling editor to an agent. The actor publishes the committed member set.
-    pub(crate) async fn adopt(
-        &self,
-        agent: &AgentHandle,
-        window: &WindowRef,
-        binding: Option<&WindowBinding>,
-    ) -> Result<AgentInfo, ErrorBody> {
-        if agent.is_guest() {
-            return Err(ErrorBody::refused("a guest stays in its original window"));
-        }
-        let id = agent.id();
-        let missing =
-            || ErrorBody::new(Reason::NotFound, format!("agent #{id} is no longer listed"));
-        let _changing = agent.lock_run_change().await;
-        if self.get_agent(id).is_none() {
-            return Err(missing());
-        }
-        if binding.is_some_and(|binding| !self.windows.is_current(binding)) {
-            return Err(ErrorBody::refused("this editor window is no longer bound"));
-        }
-        let current = agent.info();
-        if current.windows.contains(window) {
-            return Ok(current);
-        }
-        let windows = self.records.add_window(id, window)?.ok_or_else(missing)?;
-        let (reply, updated) = oneshot::channel();
-        if !agent
-            .send(AgentCommand::UpdateWindows { windows, reply })
-            .await
-        {
-            return Err(agent_stopped(id));
-        }
-        updated.await.map_err(|_| agent_stopped(id))
-    }
-
     /// Removes an agent: stops it first, then deletes its record with its inbox in one transaction,
     /// then its actor, run, screen and run folders.
     pub(crate) async fn remove(self: &Arc<Self>, agent: &AgentHandle) -> Result<(), ErrorBody> {
@@ -993,10 +931,42 @@ impl Daemon {
         if agent.exit().borrow().is_none() {
             self.stop_run(agent).await?;
         }
+        self.remove_stopped(agent, RemovalCause::Removed).await
+    }
+
+    /// Expires stopped records under the same run lock that protects a resume.
+    pub(crate) async fn expire_agents(self: &Arc<Self>, before: &str) {
+        let expired = |agent: &AgentHandle| {
+            agent
+                .exit()
+                .borrow()
+                .as_ref()
+                .is_some_and(|exit| exit.at.as_str() < before)
+        };
+        for agent in self.agents().into_iter().filter(expired) {
+            let _changing = agent.lock_run_change().await;
+            if expired(&agent)
+                && self.get_agent(agent.id()).is_some()
+                && let Err(error) = self.remove_stopped(&agent, RemovalCause::Expired).await
+            {
+                log(
+                    "warn",
+                    &format!("could not expire agent {}: {}", agent.id(), error.message),
+                );
+            }
+        }
+    }
+
+    /// Removes the record and files of an agent whose run lock the caller holds.
+    async fn remove_stopped(
+        &self,
+        agent: &AgentHandle,
+        cause: RemovalCause,
+    ) -> Result<(), ErrorBody> {
         let id = agent.id().to_string();
         self.runs.end_session_following(&id).await;
         let (store, deleted) = (self.store.clone(), id.clone());
-        blocking(move || store.delete(&deleted)).await?;
+        blocking(move || store.delete_listed(&deleted, cause)).await?;
         pause_for_test("after-record-delete");
         if self.agents.lock().unwrap().remove(&id).is_some() {
             let _ = self.changes.send(AgentsUpdate::Removed {
@@ -1021,6 +991,60 @@ impl Daemon {
         Ok(())
     }
 
+    fn claim_session(
+        &self,
+        agent_id: &str,
+        rule: &str,
+        session: &str,
+        show_owner: bool,
+    ) -> Result<SessionClaim<'_>, ErrorBody> {
+        let key = SessionKey {
+            rule: rule.to_owned(),
+            session: session.to_owned(),
+        };
+        let claimed_by = {
+            let mut claims = self.claimed_sessions.lock().unwrap();
+            match claims.entry(key.clone()) {
+                Entry::Occupied(claim) => Some(claim.get().clone()),
+                Entry::Vacant(claim) => {
+                    claim.insert(agent_id.to_owned());
+                    None
+                }
+            }
+        };
+        let in_use = |owner: &str| {
+            let message = if show_owner {
+                let reference = AgentRef {
+                    agent_id: owner.to_owned(),
+                    machine_id: self.machine_id.clone(),
+                };
+                let address = self.agent_address(&reference).unwrap_or_else(|_| {
+                    facade_base::v3::address::format_agent_address(
+                        &reference,
+                        &facade_base::v3::address::exact_machine_selector(&reference.machine_id),
+                    )
+                });
+                format!("{rule} session {session} is in use by {address}; stop it before resuming")
+            } else {
+                format!("{rule} session {session} is already in use")
+            };
+            ErrorBody::refused(message)
+        };
+        if let Some(owner) = claimed_by {
+            return Err(in_use(&owner));
+        }
+        let claim = SessionClaim { daemon: self, key };
+        if let Some(owner) = self.agents().into_iter().find(|agent| {
+            agent.id() != agent_id
+                && agent.rule() == Some(rule)
+                && agent.exit().borrow().is_none()
+                && agent.info().session.as_deref() == Some(session)
+        }) {
+            return Err(in_use(owner.id()));
+        }
+        Ok(claim)
+    }
+
     /// Resumes an ended agent in its recorded folder and session. An overlapping request returns
     /// the current record if a new run was installed while it waited.
     pub(crate) async fn resume(
@@ -1030,7 +1054,7 @@ impl Daemon {
     ) -> Result<AgentInfo, ErrorBody> {
         let id = agent.id().to_string();
         let unavailable = |message: String| ErrorBody::new(Reason::Unavailable, message);
-        let busy = || unavailable(format!("agent #{id} is running or already resuming"));
+        let busy = || unavailable(format!("agent {id} is running or already resuming"));
         let (when_called, then) = agent.installed_record();
         if then.process == ProcessState::Running {
             return Err(busy());
@@ -1039,7 +1063,7 @@ impl Daemon {
         if self.get_agent(&id).is_none() {
             return Err(ErrorBody::new(
                 Reason::NotFound,
-                format!("agent #{id} is no longer listed"),
+                format!("agent {id} is no longer listed"),
             ));
         }
         let (installed, info) = agent.installed_record();
@@ -1053,24 +1077,25 @@ impl Daemon {
         };
         let Some(rule_name) = agent.rule() else {
             return Err(unavailable(format!(
-                "#{id} was not started by a CLI rule, so Facade cannot resume it"
+                "{id} was not started by a CLI rule, so Facade cannot resume it"
             )));
         };
         let rule = facade_rules::find(rule_name)
             .map_err(unavailable)?
             .ok_or_else(|| {
-                unavailable(format!("#{id}'s CLI rule {rule_name} is not in this build"))
+                unavailable(format!("{id}'s CLI rule {rule_name} is not in this build"))
             })?;
         let Some(session) = info.session.clone() else {
             let message = if self.runs.has_unsaved_session(&id).await {
                 format!(
-                    "#{id} has no session to resume yet: its CLI has not saved one, as when no turn has run"
+                    "{id} has no session to resume yet: its CLI has not saved one, as when no turn has run"
                 )
             } else {
-                format!("#{id} has no recorded session to resume")
+                format!("{id} has no recorded session to resume")
             };
             return Err(unavailable(message));
         };
+        let _session_claim = self.claim_session(&id, rule_name, &session, true)?;
         if !std::path::Path::new(&info.cwd).is_dir() {
             return Err(unavailable(format!(
                 "the folder {} no longer exists",
@@ -1081,13 +1106,14 @@ impl Daemon {
         // the entry of the same kind as the agent ran (RULES-4.2, CONFIGURATION-3.4).
         let settings = command_line::read_settings()?;
         let yolo = settings.yolo;
-        let resumed = command_line::resume_entry(&settings, rule, &info.cli, &info.cwd, &args.env)?;
-        let creator_name = info
-            .creator
-            .as_deref()
-            .and_then(|creator| self.get_agent(creator))
-            .map(|creator| creator.info().name);
-        let place = self.instructions_window(&info.windows);
+        let details = crate::blocking_in_place(|| self.store.launch_details(&id))
+            .map_err(ErrorBody::internal)?;
+        let options = details.options.ok_or_else(|| {
+            ErrorBody::internal(format!("the saved launch options for {id} are unavailable"))
+        })?;
+        let resumed =
+            command_line::resume_entry(&settings, rule, &info.cli, &info.cwd, &args.env, options)?;
+        let (creator, creator_name) = self.recorded_creator(&info);
         let request = RunRequest {
             id: &id,
             rule: Some(rule),
@@ -1097,7 +1123,7 @@ impl Daemon {
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
             location_id: &info.location_id,
-            window: place.as_ref().map(|(label, id)| (label.as_str(), *id)),
+            window: None,
             creator: info
                 .creator
                 .as_deref()
@@ -1106,14 +1132,21 @@ impl Daemon {
             session: Some(&session),
             kind: RunKind::Resume,
         };
-        let mut prepared = self.runs.prepare(request).await?;
+        let mut prepared = self
+            .prepare_run(
+                request,
+                details.source,
+                creator.as_ref(),
+                creator_name.as_deref(),
+            )
+            .await?;
         if !self
             .runs
             .previous_run_ended(&id, PREVIOUS_RUN_TIMEOUT)
             .await
         {
             return Err(unavailable(format!(
-                "#{id}'s ended run is still being saved; try again"
+                "{id}'s ended run is still being saved; try again"
             )));
         }
         let reservation = self.runs.reserve_start();
@@ -1146,7 +1179,20 @@ impl Daemon {
             .await?;
         gate_for_test("before-restart-commit");
         let (store, committed, pid) = (self.store.clone(), id.clone(), started.pid);
-        if let Err(error) = blocking(move || store.record_restart(&committed, pid, yolo)).await {
+        let started_at = facade_base::time::iso_now();
+        let relay = RelayRunRecord {
+            process: started.process.clone(),
+            version: 3,
+            digest: started
+                .credential
+                .as_ref()
+                .map(|credential| credential.digest),
+        };
+        if let Err(error) = blocking(move || {
+            store.record_restart(&committed, pid, yolo, Some(&started_at), Some(&relay))
+        })
+        .await
+        {
             self.runs.abandon(&id);
             return Err(error);
         }
@@ -1162,12 +1208,16 @@ impl Daemon {
             reply,
         };
         if !agent.send(install).await {
+            self.runs.abandon(&id);
             return Err(agent_stopped(&id));
         }
-        let info = installed.await.map_err(|_| agent_stopped(&id))?;
+        let info = installed.await.map_err(|_| {
+            self.runs.abandon(&id);
+            agent_stopped(&id)
+        })?;
         let early_exit = {
             let _agents = self.agents.lock().unwrap();
-            self.runs.installed(&id)
+            self.runs.installed_run(&id, number)
         };
         let captures = prepared.captures;
         prepared.let_go_of_plugin();
@@ -1187,22 +1237,133 @@ impl Daemon {
         Ok(info)
     }
 
+    async fn prepare_run(
+        &self,
+        request: RunRequest<'_>,
+        source: Option<CreationSource>,
+        creator: Option<&AgentRef>,
+        creator_name: Option<&str>,
+    ) -> Result<crate::runs::PreparedRun, ErrorBody> {
+        let projection = self.run_instructions(
+            request.id,
+            request.cwd,
+            request.yolo,
+            source,
+            creator,
+            creator_name,
+        )?;
+        self.runs
+            .prepare_managed(request, &projection.address, &projection.context())
+            .await
+    }
+
+    /// Renders instructions from the verified run's installed record and original creation source.
+    pub(super) fn instructions_for_current_run(
+        &self,
+        info: &AgentInfo,
+    ) -> Result<String, ErrorBody> {
+        let source = crate::blocking_in_place(|| self.store.launch_details(&info.agent_id))
+            .map_err(ErrorBody::internal)?
+            .source;
+        let (creator, creator_name) = self.recorded_creator(info);
+        let projection = self.run_instructions(
+            &info.agent_id,
+            &info.cwd,
+            info.yolo,
+            source,
+            creator.as_ref(),
+            creator_name.as_deref(),
+        )?;
+        Ok(instructions::for_managed(
+            &projection.address,
+            &projection.context(),
+        ))
+    }
+
+    fn recorded_creator(&self, info: &AgentInfo) -> (Option<AgentRef>, Option<String>) {
+        let creator = info.creator.as_ref().map(|agent_id| AgentRef {
+            agent_id: agent_id.clone(),
+            machine_id: info
+                .creator_machine_id
+                .clone()
+                .unwrap_or_else(|| self.machine_id.clone()),
+        });
+        let name = creator
+            .as_ref()
+            .filter(|creator| creator.machine_id == self.machine_id)
+            .and_then(|creator| self.get_agent(&creator.agent_id))
+            .map(|creator| creator.info().name);
+        (creator, name)
+    }
+
+    fn run_instructions<'a>(
+        &self,
+        id: &str,
+        folder: &'a str,
+        yolo: bool,
+        source: Option<CreationSource>,
+        creator: Option<&AgentRef>,
+        creator_name: Option<&'a str>,
+    ) -> Result<RunInstructions<'a>, ErrorBody> {
+        let reference = AgentRef {
+            machine_id: self.machine_id.clone(),
+            agent_id: id.to_owned(),
+        };
+        let machine = self.network.local_hello().name;
+        let address = self.agent_address(&reference)?;
+        let creator_address = creator
+            .map(|creator| self.agent_address(creator))
+            .transpose()?;
+        Ok(RunInstructions {
+            address,
+            folder,
+            machine,
+            source,
+            creator_address,
+            creator_name,
+            yolo,
+        })
+    }
+
     /// Renames an agent and returns its record. A blank name gets a default name, as a start
     /// without one does (LIFECYCLE-2.1).
     pub(crate) async fn rename(
-        &self,
+        self: &Arc<Self>,
         agent: &AgentHandle,
         name: &str,
     ) -> Result<AgentInfo, ErrorBody> {
         let id = agent.id().to_string();
-        let name = match name.trim_matches(facade_base::settings::is_space) {
-            "" => self.reserve_name(
-                &agent.info().windows,
-                &id,
-                command_line::settings_names().as_deref(),
-            ),
+        let name = name.trim_matches(facade_base::settings::is_space);
+        let reserved = name.is_empty();
+        let name = match name {
+            "" => {
+                self.reserve_name(command_line::settings_names().as_deref())
+                    .await?
+            }
             name => name.to_string(),
         };
+        if agent.is_guest() {
+            let renamed = crate::blocking_in_place(|| {
+                let agents = self.agents.lock().unwrap();
+                let gone = || ErrorBody::new(Reason::NotFound, "the guest is no longer connected");
+                let guest = agents.get(&id).ok_or_else(gone)?;
+                if !self
+                    .store
+                    .guest_table()
+                    .rename_guest(&id, &name)
+                    .map_err(ErrorBody::internal)?
+                {
+                    return Err(gone());
+                }
+                let renamed = guest.rename_guest(name.clone());
+                self.publish(renamed.clone());
+                Ok(renamed)
+            });
+            if reserved {
+                self.records.release_name(&name);
+            }
+            return renamed;
+        }
         let (store, saved, saving) = (self.store.clone(), id.clone(), name.clone());
         let renamed = match blocking(move || store.rename(&saved, &saving)).await {
             Err(error) => Err(error),
@@ -1219,22 +1380,9 @@ impl Daemon {
                 }
             }
         };
-        self.records.release_name(&name);
+        if reserved {
+            self.records.release_name(&name);
+        }
         renamed
     }
-}
-
-/// Refuses an operation on a guest's terminal, which is not Facade's.
-pub(crate) fn refuse_guest_terminal(agent: &AgentHandle) -> Result<(), ErrorBody> {
-    if !agent.is_guest() {
-        return Ok(());
-    }
-    Err(ErrorBody::new(
-        Reason::Unavailable,
-        format!(
-            "#{} runs in a terminal of its own; start it with `facade start` for Facade to read, \
-             type into or stop it",
-            agent.id()
-        ),
-    ))
 }

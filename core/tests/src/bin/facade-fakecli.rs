@@ -11,7 +11,8 @@
 //! instead, as Antigravity runs them (`run_hooks`). On Windows `FAKECLI_IGNORE_CLOSE=<file>` makes
 //! it hold its console's closing up and start a child outside the console, writing the child's
 //! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
-//! the frame it drew is written (`note_key_time`).
+//! the frame it drew is written (`note_key_time`). `FAKECLI_READ_GATE=<file>` holds input reads
+//! until the test creates the file.
 //!
 //! Sessions: `--resume <id>` selects session `<id>`, as `FAKECLI_SESSION=<id>` does for a new
 //! start. `FAKECLI_SESSION_HOOK` is the shell command of its session-start hook, which it runs with
@@ -46,6 +47,7 @@
 //! after a message it takes; `FAKECLI_DRAFT_AT_START=<text>` starts with `<text>` as
 //! a draft in color with the cursor before it, as a draft the person moved the cursor back over;
 //! what is typed goes in before it. `FAKECLI_KEYS=<file>` appends every byte it reads to `<file>`.
+//! `FAKECLI_SCREEN_FILE=<file>` prints the file's lines before drawing its input.
 //! `FAKECLI_IGNORE_KEYS` lists keys it ignores, `space` and `backspace`, comma-separated;
 //! `FAKECLI_NO_LEADING_SPACE=1` draws no space where its input starts; `FAKECLI_SPACE_SUGGESTS=<text>`
 //! draws `<text>` on the row under the input while the input starts with a space, as a CLI that
@@ -55,8 +57,9 @@
 //! CLI that picks its colors by the background does: OSC 10 and 12 ended by BEL, OSC 11 by ST. Its
 //! screen shows each answer as `color <number>;<color> <bel|st>`, ended as the answer was.
 //!
-//! Tools: `FAKECLI_MCP` names an MCP server it runs, as a CLI given Facade's tools does: with its
-//! own environment, starting the server's MCP session at once and holding it until it ends.
+//! Tools: `--mcp-config <file>` gives the CLI Facade's relay command, arguments and environment.
+//! It starts the server's MCP session at once and holds it until it ends. Older test launches
+//! supply the program through `FAKECLI_MCP`.
 //! `/fake mcp stop` ends the server while the CLI goes on. `FAKECLI_MCP_DELAY_MS` starts it that
 //! long after the CLI's start, as a server that starts slowly does.
 //!
@@ -70,9 +73,14 @@
 //! panel opens, as a server that starts slowly does.
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime};
+
+use anyhow::Context;
+use facade_scenarios::mcp_command;
 
 const PASTE_START: &[u8] = b"\x1b[200~";
 const PASTE_END: &[u8] = b"\x1b[201~";
@@ -229,8 +237,8 @@ struct FakeCli {
     cursor_hidden: bool,
     /// When the panel starts the plugin's server: `FAKECLI_PANEL_DELAY_MS` after it opened.
     server_due: Option<Instant>,
-    /// `FAKECLI_MCP`'s server and when it starts, where `FAKECLI_MCP_DELAY_MS` delays it.
-    delayed_server: Option<(std::ffi::OsString, Instant)>,
+    /// The configured server and when it starts, where `FAKECLI_MCP_DELAY_MS` delays it.
+    delayed_server: Option<(Command, Instant)>,
     /// The server answered the start of its MCP session.
     server_answered: Arc<AtomicBool>,
     /// The panel was last drawn with the server ready.
@@ -454,13 +462,13 @@ impl FakeCli {
         }
     }
 
-    /// Starts `FAKECLI_MCP`'s server once its delay is over.
+    /// Starts the configured server once its delay is over.
     fn start_delayed_server(&mut self) {
-        if let Some((program, _)) = self
+        if let Some((command, _)) = self
             .delayed_server
             .take_if(|(_, due)| *due <= Instant::now())
         {
-            self.server = start_server(&program, &[], self.server_answered.clone()).ok();
+            self.server = start_server(command, self.server_answered.clone()).ok();
         }
     }
 
@@ -470,26 +478,9 @@ impl FakeCli {
             return false;
         }
         self.server_due = None;
-        let entry = FakeCli::plugin_file("mcp_config.json")
-            .map(|config| config["mcpServers"]["facade"].clone());
-        let command = entry.as_ref().and_then(|entry| {
-            let command = entry["command"].as_str()?.to_string();
-            let args: Vec<String> = entry["args"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|arg| arg.as_str().map(str::to_string))
-                .collect();
-            Some((command, args))
-        });
-        self.server = command.and_then(|(command, args)| {
-            start_server(
-                std::ffi::OsStr::new(&command),
-                &args,
-                self.server_answered.clone(),
-            )
-            .ok()
-        });
+        self.server = FakeCli::plugin_file("mcp_config.json")
+            .and_then(|config| command_from_config(&config).ok())
+            .and_then(|command| start_server(command, self.server_answered.clone()).ok());
         self.server.is_some()
     }
 
@@ -933,19 +924,43 @@ fn main() -> anyhow::Result<()> {
     run()
 }
 
-/// Starts MCP server `program` and its MCP session, as a CLI does at its start: it initializes the
+fn command_from_config(config: &serde_json::Value) -> anyhow::Result<Command> {
+    let home = std::env::var_os("FACADE_HOME")
+        .map(PathBuf::from)
+        .context("the fake CLI needs an isolated Facade home")?;
+    mcp_command(config, &home, |program| Command::new(program))
+}
+
+fn configured_server(arguments: &[String]) -> anyhow::Result<Option<Command>> {
+    let Some(index) = arguments.iter().rposition(|arg| arg == "--mcp-config") else {
+        let Some(program) = std::env::var_os("FAKECLI_MCP") else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            std::path::Path::new(&program).is_absolute(),
+            "FAKECLI_MCP needs an absolute path"
+        );
+        return Ok(Some(Command::new(program)));
+    };
+    let file = arguments
+        .get(index + 1)
+        .context("--mcp-config needs a file")?;
+    let text = std::fs::read_to_string(file)
+        .with_context(|| format!("reading the test MCP configuration {file}"))?;
+    let config = serde_json::from_str(&text).context("reading the test MCP configuration JSON")?;
+    command_from_config(&config).map(Some)
+}
+
+/// Starts the configured MCP server and its MCP session, as a CLI does at its start: it initializes the
 /// session and asks for the server's tools. `answered` is set once the server answers the session's
 /// start; the rest of what it answers is read and dropped.
 fn start_server(
-    program: &std::ffi::OsStr,
-    args: &[String],
+    mut command: Command,
     answered: Arc<AtomicBool>,
 ) -> anyhow::Result<std::process::Child> {
     use std::io::BufRead;
     use std::process::Stdio;
-    let mut server = std::process::Command::new(program);
-    server.args(args);
-    let mut server = server
+    let mut server = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1059,18 +1074,12 @@ fn run() -> anyhow::Result<()> {
             reports: vec!["\x1b]7501;?\x1b\\".into()],
         });
     let server_answered = Arc::new(AtomicBool::new(false));
-    let delay = Duration::from_millis(
-        std::env::var("FAKECLI_MCP_DELAY_MS")
-            .ok()
-            .and_then(|ms| ms.parse().ok())
-            .unwrap_or(0),
-    );
-    let (server, delayed_server) = match std::env::var_os("FAKECLI_MCP") {
-        Some(program) if delay.is_zero() => (
-            Some(start_server(&program, &[], server_answered.clone())?),
-            None,
-        ),
-        Some(program) => (None, Some((program, Instant::now() + delay))),
+    let delay = milliseconds("FAKECLI_MCP_DELAY_MS").unwrap_or_default();
+    let (server, delayed_server) = match configured_server(&arguments)? {
+        Some(command) if delay.is_zero() => {
+            (Some(start_server(command, server_answered.clone())?), None)
+        }
+        Some(command) => (None, Some((command, Instant::now() + delay))),
         None => (None, None),
     };
     let agy = std::env::var("FAKECLI_LOOK").is_ok_and(|look| look == "agy");
@@ -1131,6 +1140,11 @@ fn run() -> anyhow::Result<()> {
     #[cfg(windows)]
     terminal_input()?;
     let mut out = std::io::stdout();
+    if let Some(file) = std::env::var_os("FAKECLI_SCREEN_FILE") {
+        for line in std::fs::read_to_string(file)?.lines() {
+            write!(out, "{line}\r\n")?;
+        }
+    }
     let _ = out.write_all(b"\x1b[?2004h");
     app.draw(&mut out);
 
@@ -1147,12 +1161,18 @@ fn run() -> anyhow::Result<()> {
     let ignores = |key: &str| ignored.split(',').any(|each| each.trim() == key);
     let (ignore_space, ignore_backspace) = (ignores("space"), ignores("backspace"));
     let takes_enter = std::env::var("FAKECLI_IGNORE_ENTER").is_err();
+    let read_gate = std::env::var_os("FAKECLI_READ_GATE").map(std::path::PathBuf::from);
     std::thread::spawn(move || {
         if !reads_input {
             // Hold the channel open without reading, so the CLI keeps running.
             let _tx = tx;
             loop {
                 std::thread::park();
+            }
+        }
+        if let Some(gate) = read_gate {
+            while !gate.is_file() {
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
         let mut stdin = std::io::stdin();

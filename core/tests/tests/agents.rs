@@ -20,16 +20,17 @@ fn remove_ends_a_running_agent_first_and_removes_an_ended_one() {
         home.agent_from_list_json("worker").is_none(),
         "the removed agent must not be listed"
     );
-    // An ended agent can be removed immediately.
+    // An ended agent can be removed immediately. The list shows running agents alone; the agents
+    // topic keeps the ended record.
     wire.call("agent.stop", json!({ "agent": ended.id }));
     assert!(
         wait_until(secs(10), || home
-            .agent_from_list_json("ended")
+            .agent_record(&ended.id)
             .is_some_and(|record| record["process"] == "ended")),
         "the agent did not end"
     );
     assert!(wire.call("agent.remove", json!({ "agent": ended.id }))["error"].is_null());
-    assert!(home.agent_from_list_json("ended").is_none());
+    assert!(home.agent_record(&ended.id).is_none());
     assert_eq!(
         error_reason(&wire.call("agent.remove", json!({ "agent": ended.id }))),
         "not_found"
@@ -88,8 +89,8 @@ fn remove_terminates_the_agent_process_group() {
     assert!(home.agents().is_empty());
 }
 
-/// Stop must respond with the recorded exit after the agent ends. A stop of an agent that had ended
-/// says so, with the same exit.
+/// Stop must respond with the recorded exit after the agent ends. A stop finds running agents
+/// alone, so a stop of an agent that had ended fails and says it ended.
 #[test]
 fn stop_returns_process_exit() {
     let home = TestHome::new("stopexit");
@@ -108,19 +109,19 @@ fn stop_returns_process_exit() {
         "{stopped}"
     );
     let again = wire.call("agent.stop", json!({ "agent": "w1" }));
-    assert_eq!(
-        (&again["result"]["already_ended"], &again["result"]["at"]),
-        (&json!(true), &stopped["result"]["at"]),
-        "{again}"
-    );
+    assert_eq!(error_reason(&again), "ended", "{again}");
 }
 
-/// Concurrent starts use distinct default names while unused suggestions remain.
+/// Concurrent starts use distinct default names while unused suggestions remain: a default name
+/// avoids those of the running agents.
 #[test]
 fn concurrent_starts_reserve_unused_default_names() {
     let home = TestHome::new("names40");
     let mut wire = connect(&home);
-    let args = json!({ "command": [SH.as_str(), "-c", "exit 0"], "cwd": home.project, "cols": 80, "rows": 24 });
+    let args = json!({
+        "cli": home.shell_cli(), "args": ["-c", "sleep 60"], "folder": home.project,
+        "cols": 80, "rows": 24,
+    });
     let asked: Vec<u64> = (0..40)
         .map(|_| wire.send("call", json!({ "op": "agent.start", "args": args })))
         .collect();
@@ -159,9 +160,10 @@ fn stop_sends_sigkill_after_the_kill_delay() {
     // The shell and its sleep subprocesses ignore SIGHUP.
     let started = home.run_facade_ok(&[
         "start",
+        "-d",
         "--name",
         "stubborn",
-        SH.as_str(),
+        home.shell_cli(),
         "-c",
         "trap '' HUP; echo ready; while :; do sleep 1; done",
     ]);
@@ -184,13 +186,11 @@ fn stop_sends_sigkill_after_the_kill_delay() {
     );
     assert!(!alive(&pid_process), "its process {pid} still runs");
     assert!(
-        wait_until(secs(5), || home
-            .agent_from_list_json("stubborn")
-            .is_some_and(
-                |record| record["process"] == "ended" && record["exit"]["signal"] == "SIGKILL"
-            )),
+        wait_until(secs(5), || home.agent_from_watch("stubborn").is_some_and(
+            |record| record["process"] == "ended" && record["exit"]["signal"] == "SIGKILL"
+        )),
         "{:?}",
-        home.agent_from_list_json("stubborn")
+        home.agent_from_watch("stubborn")
     );
 }
 
@@ -233,30 +233,29 @@ fn a_stop_ends_a_cli_that_holds_its_console_s_closing_up_and_its_children_at_3_s
         "its child {child} still runs"
     );
     assert!(
-        wait_until(secs(5), || home
-            .agent_from_list_json("stubborn")
-            .is_some_and(
-                |record| record["process"] == "ended" && record["exit"]["code"].is_number()
-            )),
+        wait_until(secs(5), || home.agent_from_watch("stubborn").is_some_and(
+            |record| record["process"] == "ended" && record["exit"]["code"].is_number()
+        )),
         "{:?}",
-        home.agent_from_list_json("stubborn")
+        home.agent_from_watch("stubborn")
     );
 }
 
 #[test]
-fn immediate_exit_is_listed_with_exit_code() {
+fn immediate_exit_is_recorded_with_exit_code() {
     let home = TestHome::new("quick");
     // An immediate exit must be recorded even if it arrives before the agent is listed.
-    let started = home.run_facade_ok(&["start", "--name", "quick", SH.as_str(), "-c", "exit 3"]);
-    assert_eq!(started, "a1\n");
+    let sh = home.shell_cli();
+    let started = home.run_facade_ok(&["start", "-d", "--name", "quick", sh, "-c", "exit 3"]);
+    assert_eq!(started_id(&started), "a1", "{started}");
     assert!(
-        wait_until(secs(10), || home.agent_from_list_json("quick").is_some_and(
+        wait_until(secs(10), || home.agent_from_watch("quick").is_some_and(
             |record| record["process"] == "ended" && record["exit"]["code"] == 3
         )),
         "{:?}",
-        home.agent_from_list_json("quick")
+        home.agent_from_watch("quick")
     );
-    let record = home.agent_from_list_json("quick").expect("listed");
+    let record = home.agent_from_watch("quick").expect("recorded");
     assert!(
         record["exit"]["at"]
             .as_str()
@@ -264,17 +263,32 @@ fn immediate_exit_is_listed_with_exit_code() {
             && record["exit"].get("signal").is_none(),
         "{record}"
     );
-    assert_eq!(home.list_state("quick").as_deref(), Some("exited: code 3"));
+    // The list shows running agents alone; inspect shows the ended one with its exit.
+    assert_eq!(home.list_state("quick"), None);
+    let inspected = home.run_facade_ok(&["inspect", "quick"]);
+    assert!(
+        inspected
+            .lines()
+            .any(|line| line.starts_with("State:") && line[6..].trim() == "exited: code 3"),
+        "{inspected}"
+    );
 }
 
 #[test]
 fn blank_names_get_defaults_and_supplied_names_are_trimmed() {
     let home = TestHome::new("names");
-    home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", "--name", "", SH.as_str(), "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", "--name", "   ", SH.as_str(), "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", "--name", "  Bob  ", SH.as_str(), "-c", "sleep 60"]);
-    let agents = home.agents();
+    let sh = home.shell_cli();
+    home.run_facade_ok(&["start", "-d", sh, "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "-d", "--name", "", sh, "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "-d", "--name", "   ", sh, "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "-d", "--name", "  Bob  ", sh, "-c", "sleep 60"]);
+    // In the order they started.
+    let mut agents = home.agents();
+    agents.sort_by_key(|agent| {
+        agent["agent_id"].as_str().unwrap_or_default()[1..]
+            .parse::<u32>()
+            .unwrap_or_default()
+    });
     let names: Vec<&str> = agents
         .iter()
         .filter_map(|agent| agent["name"].as_str())

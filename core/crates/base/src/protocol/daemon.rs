@@ -1572,11 +1572,23 @@ pub struct PromptOutcome {
 /// tools are there, and what became of its prompt, with what of it reached the terminal and, where
 /// it was not delivered, why.
 pub fn start_result_text(outcome: &StartOutcome) -> String {
+    start_result_text_at(
+        outcome,
+        &format!("#{}", outcome.agent.agent_id),
+        &format!("#{}", outcome.prompt.message_id),
+    )
+}
+
+/// Formats a start result using the agent and prompt addresses resolved for the recipient.
+pub fn start_result_text_at(
+    outcome: &StartOutcome,
+    agent_address: &str,
+    prompt_address: &str,
+) -> String {
     let agent = &outcome.agent;
     let mut lines = vec![format!(
-        "{} (#{}) has started.",
-        display_name(&agent.name),
-        agent.agent_id
+        "{} ({agent_address}) has started.",
+        display_name(&agent.name)
     )];
     match (agent.tools_state, agent.tools_reason) {
         (ToolsState::Connecting, _) => lines.push("Its Facade tools are still connecting.".into()),
@@ -1589,10 +1601,7 @@ pub fn start_result_text(outcome: &StartOutcome) -> String {
         }
         _ => {}
     }
-    let (id, delivery) = (
-        format!("#{}", outcome.prompt.message_id),
-        &outcome.prompt.delivery,
-    );
+    let delivery = &outcome.prompt.delivery;
     let untouched =
         delivery.text_written == TextWritten::None && delivery.enter_written == Some(false);
     match delivery.status {
@@ -1600,35 +1609,36 @@ pub fn start_result_text(outcome: &StartOutcome) -> String {
             if delivery.delivered_via == Some(DeliveredVia::ReadByRecipient) =>
         {
             lines.push(format!(
-                "Your initial message {id} has been passed on through read_messages."
+                "Your initial message {prompt_address} has been passed on through read_messages."
             ));
             if !untouched {
                 lines.push(input_words(delivery, false));
             }
         }
-        DeliveryStatus::Success => {
-            lines.push(format!("Your initial message {id} has been passed on."))
-        }
+        DeliveryStatus::Success => lines.push(format!(
+            "Your initial message {prompt_address} has been passed on."
+        )),
         _ => {
             lines.push(match untouched {
                 true => format!(
-                    "Your initial message {id} could not be delivered. {}",
+                    "Your initial message {prompt_address} could not be delivered. {}",
                     input_words(delivery, true)
                 ),
                 false => format!(
-                    "Delivery of your initial message {id} could not be confirmed. {}",
+                    "Delivery of your initial message {prompt_address} could not be confirmed. {}",
                     input_words(delivery, true)
                 ),
             });
-            let why = delivery.failure_reason(&format!("#{}", agent.agent_id));
-            let mut letters = why.chars();
-            lines.push(
-                letters
+            let mut why = delivery.failure_reason(agent_address);
+            if !why.starts_with(agent_address) {
+                let mut letters = why.chars();
+                why = letters
                     .next()
                     .map(|first| first.to_uppercase().chain(letters).collect::<String>())
-                    .unwrap_or_default()
-                    + ".",
-            );
+                    .unwrap_or_default();
+            }
+            why.push('.');
+            lines.push(why);
         }
     }
     lines.join("\n")
@@ -2375,7 +2385,7 @@ pub struct ScreenWatchArgs {
     pub include_scrollback: bool,
 }
 
-fn include_scrollback_by_default() -> bool {
+pub(super) fn include_scrollback_by_default() -> bool {
     true
 }
 
@@ -3210,15 +3220,14 @@ mod tests {
             delivered_via,
             delivered_at: None,
         };
-        let words = |agent: &AgentInfo, delivery: Delivery| {
-            start_result_text(&StartOutcome {
-                agent: agent.clone(),
-                prompt: PromptOutcome {
-                    message_id: "m42".into(),
-                    delivery,
-                },
-            })
+        let outcome = |agent: &AgentInfo, delivery: Delivery| StartOutcome {
+            agent: agent.clone(),
+            prompt: PromptOutcome {
+                message_id: "m42".into(),
+                delivery,
+            },
         };
+        let words = |agent, delivery| start_result_text(&outcome(agent, delivery));
         let typed = delivery(
             DeliveryStatus::Success,
             None,
@@ -3264,10 +3273,15 @@ mod tests {
             None,
         );
         assert_eq!(
-            words(&agent, ended),
+            words(&agent, ended.clone()),
             "helper (#a5) has started.\nYour initial message #m42 could not be delivered. Nothing \
              was entered in the terminal.\n\
              #a5 ended before the message was delivered."
+        );
+        assert_eq!(
+            start_result_text_at(&outcome(&agent, ended), "a5@devbox", "m42@devbox"),
+            "helper (a5@devbox) has started.\nYour initial message m42@devbox could not be delivered. \
+             Nothing was entered in the terminal.\na5@devbox ended before the message was delivered."
         );
         let unconfirmed = delivery(
             DeliveryStatus::Failure,

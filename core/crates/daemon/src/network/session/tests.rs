@@ -1,5 +1,5 @@
 use facade_base::jsonrpc::Request;
-use facade_base::machine::MachineInfo;
+use facade_base::machine::{AdvertiseParams, MachineInfo};
 use serde_json::json;
 use tokio::io::{BufReader, duplex, split};
 
@@ -19,8 +19,8 @@ struct Forwarded {
 }
 
 impl SessionHandler for Handler {
-    fn replace_table(&self, table: AdvertiseParams) -> Result<(), ErrorBody> {
-        assert!(self.tables.send(table).is_ok());
+    fn replace_table(&self, table: Value) -> Result<(), ErrorBody> {
+        assert!(self.tables.send(decode_arguments(table)?).is_ok());
         Ok(())
     }
 

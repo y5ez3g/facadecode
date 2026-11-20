@@ -2,10 +2,11 @@ use std::convert::Infallible;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use facade_base::daemon::{DAEMON_PROTOCOL_VERSION, HelloResult, MIN_DAEMON_PROTOCOL_VERSION};
+use facade_base::daemon::HelloResult;
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::Reason;
 use facade_base::paths::ClientSocket;
+use facade_base::v3::DAEMON_PROTOCOL_RANGE;
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 
@@ -29,7 +30,7 @@ impl Service for Hellos {
     ) -> Result<(HelloResult, Client, ()), ErrorBody> {
         let result = HelloResult {
             machine: None,
-            protocol: DAEMON_PROTOCOL_VERSION,
+            protocol: hello.protocol_range[1],
             build: "test".into(),
             machine_id: String::new(),
             window: None,
@@ -47,8 +48,7 @@ impl Service for Hellos {
         };
         let client = Client {
             identity,
-            window: None,
-            agent: None,
+            verified_actor: None,
         };
         Ok((result, client, ()))
     }
@@ -145,7 +145,7 @@ fn hello() -> Value {
     json!({
         "jsonrpc": "2.0", "id": 1, "method": "hello",
         "params": {
-            "protocol": [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            "protocol": DAEMON_PROTOCOL_RANGE,
             "build": "test", "kind": "terminal"
         },
     })
@@ -159,7 +159,10 @@ async fn a_connection_made_while_a_newer_facade_takes_over_is_sent_only_its_hell
     });
     let (mut before, mut writer) = open(&service);
     send(&mut writer, hello());
-    assert!(receive(&mut before)["result"].is_object());
+    assert_eq!(
+        receive(&mut before)["result"]["protocol"],
+        DAEMON_PROTOCOL_RANGE[1]
+    );
     *service.draining.lock().unwrap() = true;
     service.closing.send_replace(Some("0.2.1".into()));
     assert_eq!(

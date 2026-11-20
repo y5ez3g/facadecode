@@ -1,19 +1,21 @@
-List agents
+List active agents
 
 Usage: facade list [OPTIONS]
 Alias: facade ls
 
-See what your agents are doing and which ones are waiting for you, oldest first. Ended agents stay
-listed until you remove them. Sessions that join through an integration are marked as guests.
+Show running managed agents and connected guests on machines already connected, with the latest
+starts and resumes first. Use 'facade resume' to find ended agents with saved sessions. '--machine'
+queries one machine and wakes it if needed.
 
 Options:
-  -q, --quiet  Print only agent IDs
-      --json   Print agents as JSON
-  -h, --help   Print help
+  -q, --quiet              Print only agent addresses
+      --json               Print agents and machines as JSON
+      --machine <MACHINE>  Machine name or ID from 'facade machine list'
+  -h, --help               Print help
 
 Examples:
   # See which agents are working or waiting for you
   facade list
 
-  # Print agent IDs, one per line
+  # Print agent addresses, one per line
   facade ls -q

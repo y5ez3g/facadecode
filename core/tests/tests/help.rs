@@ -21,20 +21,16 @@ const PAGES: &[&[&str]] = &[
     &["screen"],
     &["type"],
     &["send"],
-    &["messages"],
     &["machine"],
     &["machine", "add"],
     &["machine", "connect"],
     &["machine", "list"],
     &["machine", "remove"],
     &["machine", "rename"],
-    &["integration"],
-    &["integration", "add"],
-    &["integration", "remove"],
-    &["integration", "list"],
     &["status"],
     &["version"],
     &["completion"],
+    &["upgrade"],
 ];
 
 /// Each alias, and the command whose page it prints.
@@ -210,7 +206,7 @@ fn the_root_page_groups_the_commands() {
         "{root}"
     );
     assert!(
-        root.starts_with("Facade runs AI coding agents")
+        root.starts_with("Start AI coding agents and use their terminals from the Shell.")
             && root.contains("\nUsage: facade [OPTIONS] [COMMAND]\n")
             && root
                 .ends_with("\nRun 'facade <COMMAND> --help' for more information on a command.\n"),

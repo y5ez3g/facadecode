@@ -5,23 +5,23 @@
 - **Signed on Windows.** `facade.exe` and `facade-mcp.exe` now carry the publisher's code signature. Unsigned in 0.1.6,
   `facade.exe` was quarantined by Microsoft Defender as a trojan, a false positive, which stopped Facade core and every
   agent with it.
-- **Closing a window on the Rust engine leaves its agents running.** Reopen the workspace to return to the same
-  processes and screens. On the old engine, agents still stop after 90 seconds for a local window or five minutes for
-  a remote one if the workspace stays closed. The old engine remains available until 0.2.0.
-- **Stop Agent on the Rust engine keeps the record and Pin.** Resume Agent can restore the same agent number after
-  stopping. Reopening the workspace restores eligible Pins by machine and agent number. For session-only Pins from
-  the old engine, pin the agent again to enable automatic restoration.
-- **Open the same Rust agent in more than one window.** Go to Agent can open a running agent from another window on the
-  network. Both windows show the same process. Stop Agent closes its card and tab in every connected member
-  window. Resume Agent can bring back its original number from any member window.
-- **Rust agents can contact you in every connected member window.** A send to `#human` reports which window subscriptions
-  received it. Each window shows and dismisses its notification independently.
-- **Start agents on connected Facade machines.** New Agent opens with this window's CLIs. To run an agent on another
-  machine, choose Change Working Location, pick a machine and location, then select one of its CLIs. A remote icon
-  on each remote agent's card shows where it runs. In a terminal, use
-  `facade start --machine <MACHINE> <PROGRAM>`.
-- **Remote-SSH windows join the Facade network automatically.** With Facade core available locally, the window connects
-  its remote workspace to it for as long as the window is open.
+- **Three ways to use Facade Code.** Install `facade` and `facade-mcp` for Shell and external MCP apps. The VS Code
+  extension includes the Orchestrator for its workspace host.
+- **Work across machines.** Register hosts with your usual SSH options and start an agent there, including in a
+  new worktree. Facade installs or upgrades the matching version on reachable hosts when needed. An idle
+  Orchestrator can sleep until a command explicitly needs that machine.
+- **Open and resume from the same roster.** The Panel's Go to Agent opens running managed agents, including Shell
+  starts. Resume Agent and `facade resume` offer ended agents and saved CLI sessions from the Orchestrator.
+- **One list per workspace.** Agent cards show CLI titles and status. Helpers appear without opening terminal
+  tabs. Closing a tab detaches, Hide clears the card and its Pin, and Stop leaves the card so you can Resume.
+- **Attach from multiple windows.** Open the same running agent in more than one VS Code window. Each view
+  shows the same terminal, and you can close one view while the others stay attached.
+- **Pins across machines.** Reopening a workspace restores pinned agents, including stopped and crashed ones.
+  The first open after upgrade brings forward the earlier agent list and Pins.
+- **MCP Guests.** An external app joins with `facade-mcp`; sending a message returns the call it can use to wait for
+  a reply. Agents exchange messages through MCP and users can follow their work through Attach.
+- **Remote workspaces.** The extension connects to the Orchestrator on its own workspace host. The Window
+  Component cleans up stale terminal tabs. The old engine remains available during the transition.
 
 ## 0.1.6
 

@@ -1,4 +1,4 @@
-//! Agent records: the #aN numbers, default names, window memberships, and what a reference names
+//! Agent records: the #aN numbers, default names, and what a reference names
 //! within a client's reach (RULES-2.3, RULES-4.3).
 //!
 //! Reach decides which agents a client can find, list, read, type into, stop and send to. The
@@ -7,16 +7,22 @@
 //! its creation tree: those with its root. A name outside reach names nothing; an ID outside reach
 //! is refused. Windows, locations and CLIs are not limited by reach.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use facade_base::daemon::{AgentInfo, WindowRef, display_name};
+use facade_base::daemon::AgentInfo;
+#[cfg(test)]
+use facade_base::daemon::display_name;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::{AgentRef, Caller};
 use facade_base::process::ProcessState;
+use facade_base::v3::address::AgentKey;
+use facade_base::v3::{self, AgentListEntry, AgentListRow};
+use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::HUMAN;
-use crate::store::{MembershipTable, NumberTable};
+use crate::store::NumberTable;
 
 /// The agents a client reaches.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,8 +32,6 @@ pub(crate) enum Reach {
     /// The agents of the creation tree whose first agent is `root`: the reach of `agent`, whose run
     /// has YOLO off.
     Tree { agent: AgentRef, root: AgentRef },
-    /// A caller that left the local agent list, whose own number names its local tree's root.
-    LocalUnlisted { agent: String },
 }
 
 impl From<&Caller> for Reach {
@@ -51,14 +55,13 @@ impl From<&Caller> for Reach {
 impl Reach {
     /// Whether the client reaches the agent `info` describes.
     pub(crate) fn reaches(&self, info: &AgentInfo) -> bool {
+        self.reaches_root(&info.root, root_machine(info))
+    }
+
+    fn reaches_root(&self, root_id: &str, root_machine: &str) -> bool {
         match self {
             Reach::All => true,
-            Reach::Tree { root, .. } => {
-                info.root == root.agent_id && root_machine(info) == root.machine_id.as_str()
-            }
-            Reach::LocalUnlisted { agent } => {
-                info.root == *agent && root_machine(info) == info.machine_id.as_str()
-            }
+            Reach::Tree { root, .. } => root_id == root.agent_id && root_machine == root.machine_id,
         }
     }
 
@@ -67,7 +70,6 @@ impl Reach {
         let caller = match self {
             Reach::All => None,
             Reach::Tree { agent, .. } => Some(agent.agent_id.as_str()),
-            Reach::LocalUnlisted { agent } => Some(agent.as_str()),
         };
         let reason = caller.map_or_else(String::new, |agent| {
             format!(
@@ -83,6 +85,7 @@ impl Reach {
 
 /// What a reference names.
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum Named {
     /// The agent with this ID.
     Agent(String),
@@ -94,18 +97,16 @@ pub(crate) enum Named {
 /// starts not listed yet, and agents whose records this version cannot read.
 pub(crate) struct Records {
     numbers: NumberTable,
-    members: MembershipTable,
-    /// Names picked by `reserve_name` and not yet released.
-    reserved: Mutex<HashSet<String>>,
+    /// Names held by starts and renames until the record is listed or the operation fails.
+    reserved: Mutex<HashMap<String, usize>>,
     unreadable: Mutex<HashSet<String>>,
 }
 
 impl Records {
-    /// Records with their number and membership tables, with nothing reserved or unreadable yet.
-    pub(crate) fn new(numbers: NumberTable, members: MembershipTable) -> Records {
+    /// Records with their number table, with nothing reserved or unreadable yet.
+    pub(crate) fn new(numbers: NumberTable) -> Records {
         Records {
             numbers,
-            members,
             reserved: Mutex::default(),
             unreadable: Mutex::default(),
         }
@@ -122,50 +123,27 @@ impl Records {
         Ok(format!("a{number}"))
     }
 
-    /// Raises the counter so the next agent number is above `given`; one already above stays.
-    /// Blocks.
-    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
-        self.numbers.raise_above(given)
-    }
-
-    /// Picks a default name for `id` and holds it until `release_name`. Reserved names and names
-    /// of listed agents with a common member window are taken, ignoring case and surrounding
-    /// spaces. Uses the agent's ID, such as `#a7`, when no default name is free.
-    /// The caller holds the agents lock.
-    pub(crate) fn reserve_name(
-        &self,
-        windows: &[WindowRef],
-        listed: &[AgentInfo],
-        id: &str,
-        names: Option<&[String]>,
-    ) -> String {
-        let mut taken: Vec<String> = listed
-            .iter()
-            .filter(|info| info.windows.iter().any(|window| windows.contains(window)))
-            .map(|info| info.name.clone())
-            .collect();
+    /// Picks and holds a default name. The caller holds the agents lock and passes the names of
+    /// running managed agents and online Guests on this machine.
+    pub(crate) fn reserve_active_name(&self, taken: &[String], names: Option<&[String]>) -> String {
         let mut reserved = self.reserved.lock().unwrap();
-        taken.extend(reserved.iter().cloned());
-        let name = free_name(&taken, names).unwrap_or_else(|| format!("#{id}"));
-        reserved.insert(name.clone());
+        let name = default_name(
+            taken.iter().chain(reserved.keys()).map(String::as_str),
+            names,
+        );
+        *reserved.entry(name.clone()).or_default() += 1;
         name
     }
 
-    /// Lets other starts pick `name` again: its agent is listed, or its start failed.
+    /// Releases one reservation after its agent is listed or the operation fails.
     pub(crate) fn release_name(&self, name: &str) {
-        self.reserved.lock().unwrap().remove(name);
-    }
-
-    /// Adds a member and returns the committed, sorted memberships, or None if the record is gone.
-    /// Blocks.
-    pub(crate) fn add_window(
-        &self,
-        agent_id: &str,
-        window: &WindowRef,
-    ) -> Result<Option<Vec<WindowRef>>, ErrorBody> {
-        self.members
-            .add(agent_id, window)
-            .map_err(|err| ErrorBody::new(Reason::Internal, format!("{err:#}")))
+        let mut reserved = self.reserved.lock().unwrap();
+        if let Some(count) = reserved.get_mut(name) {
+            *count -= 1;
+            if *count == 0 {
+                reserved.remove(name);
+            }
+        }
     }
 
     /// Remembers agents whose records this version cannot read, so their runs are left alone.
@@ -191,19 +169,169 @@ fn root_machine(info: &AgentInfo) -> &str {
     info.root_machine_id.as_deref().unwrap_or(&info.machine_id)
 }
 
-/// The reach of a local client acting for an agent, or for the person. An unlisted caller can
-/// reach the local tree whose root is its own number.
-pub(crate) fn reach_of(caller: Option<&str>, info: Option<&AgentInfo>) -> Reach {
-    match (caller, info) {
-        (None, _) => Reach::All,
-        (Some(_), Some(info)) => Reach::from(&Caller::Agent {
+/// An operation's candidate set. Keys use the same terminal capability as Type.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OperationTarget {
+    Send,
+    Type,
+    Attach,
+    ReadScreen,
+    Inspect,
+    Stop,
+    Remove,
+    Rename,
+    /// A running record can still make a reference ambiguous. Resume checks its run at execution.
+    Resume,
+}
+
+/// A record with the running machine's rule information for internal lookups.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct LookupCandidate {
+    pub(crate) info: v3::AgentInfo,
+    pub(crate) has_rule: bool,
+}
+
+impl OperationTarget {
+    fn rejection(self, candidate: &LookupCandidate) -> Option<(Reason, &'static str)> {
+        use OperationTarget::*;
+
+        let info = &candidate.info;
+        if info.kind == v3::AgentKind::Guest {
+            return match self {
+                Inspect | Rename => None,
+                Send if info.state == v3::AgentState::Online => None,
+                Send => Some((Reason::Ended, "is offline and cannot receive messages")),
+                Type | Attach | ReadScreen => {
+                    Some((Reason::Unsupported, "is a Guest without a terminal"))
+                }
+                Stop => Some((
+                    Reason::Unsupported,
+                    "is a Guest and cannot be stopped by Facade",
+                )),
+                Remove => Some((Reason::Unsupported, "is a Guest and cannot be removed")),
+                Resume => Some((Reason::Unsupported, "is a Guest and cannot be resumed")),
+            };
+        }
+
+        match self {
+            Send | Type | Attach | Stop if info.process == ProcessState::Ended => {
+                Some((Reason::Ended, "has ended"))
+            }
+            Send if !candidate.has_rule => Some((
+                Reason::Unsupported,
+                "is a custom program and cannot receive messages",
+            )),
+            Resume if !candidate.has_rule => Some((
+                Reason::Unsupported,
+                "is a custom program and cannot be resumed",
+            )),
+            Resume if info.session.is_none() => {
+                Some((Reason::Unavailable, "has no recorded session to resume"))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Looks up a parsed number or literal name using the same reach and capability checks for any
+/// caller. The parent supplies the records of the selected, reachable machines.
+pub(crate) fn lookup(
+    key: AgentKey<'_>,
+    reach: &Reach,
+    operation: OperationTarget,
+    agents: &[LookupCandidate],
+) -> Result<AgentRef, ErrorBody> {
+    let mut usable = Vec::new();
+    let mut rejected = Vec::new();
+    let mut refused = false;
+    for candidate in agents {
+        let info = &candidate.info;
+        let matches = match key {
+            AgentKey::Number(number) => info.agent_id == number,
+            AgentKey::Name(name) => trimmed(&info.name) == trimmed(name),
+        };
+        if !matches {
+            continue;
+        }
+        let root_machine = info.root_machine_id.as_deref().unwrap_or(&info.machine_id);
+        if !reach.reaches_root(&info.root, root_machine) {
+            refused = true;
+            continue;
+        }
+        if let Some((reason, message)) = operation.rejection(candidate) {
+            rejected.push((&info.address, reason, message));
+        } else {
+            usable.push(info);
+        }
+    }
+
+    let (AgentKey::Number(input) | AgentKey::Name(input)) = key;
+    match usable.as_slice() {
+        [agent] => Ok(agent.reference()),
+        [] => {
+            // Report an ended match first. For equal reasons, use the first address.
+            rejected
+                .sort_unstable_by_key(|(address, reason, _)| (*reason != Reason::Ended, *address));
+            if let Some((address, reason, message)) = rejected.first() {
+                return Err(ErrorBody::new(
+                    *reason,
+                    format!("agent {address} {message}"),
+                ));
+            }
+            if refused {
+                return Err(ErrorBody::new(
+                    Reason::Refused,
+                    "that agent is outside your creation tree",
+                ));
+            }
+            Err(ErrorBody::new(
+                Reason::NotFound,
+                format!("no agent {input:?} was found"),
+            ))
+        }
+        _ => {
+            let mut addresses: Vec<_> = usable.iter().map(|info| info.address.clone()).collect();
+            addresses.sort_unstable();
+            let mut error = ErrorBody::new(
+                Reason::AmbiguousReference,
+                format!(
+                    "{input:?} names several agents; use one of {}",
+                    addresses.join(", ")
+                ),
+            );
+            error.data.candidates = addresses;
+            Err(error)
+        }
+    }
+}
+
+/// The shared Shell, MCP and Go to Agent row for a record with its canonical address filled in.
+pub(crate) fn list_row(info: &v3::AgentInfo) -> AgentListEntry {
+    AgentListEntry {
+        reference: info.reference(),
+        row: AgentListRow {
+            id: info.address.clone(),
+            name: info.name.clone(),
+            kind: info.kind,
+            state: info.state,
+            cli: info.cli.clone(),
+            title: info.title.clone(),
+            folder: info.cwd.clone(),
+            started_at: info.started_at.clone(),
+        },
+    }
+}
+
+/// The reach of the agent `caller` describes, or the person's where there is none.
+#[cfg(test)]
+pub(crate) fn reach_of(caller: Option<&AgentInfo>) -> Reach {
+    match caller {
+        None => Reach::All,
+        Some(info) => Reach::from(&Caller::Agent {
             agent: info.reference(),
             root: root_of(info),
             yolo: info.yolo,
         }),
-        (Some(agent), None) => Reach::LocalUnlisted {
-            agent: agent.to_string(),
-        },
     }
 }
 
@@ -213,6 +341,7 @@ pub(crate) fn reach_of(caller: Option<&str>, info: Option<&AgentInfo>) -> Reach 
 /// reach. `#human` names the person, and so do `human` and `@human` while no agent in reach has
 /// that name, in any case. With `running_only`, ended agents are left out of names, and a name only
 /// ended agents have fails as ended.
+#[cfg(test)]
 pub(crate) fn resolve(
     agents: &[AgentInfo],
     reference: &str,
@@ -270,6 +399,7 @@ pub(crate) fn agent_number(id: &str) -> u64 {
 
 /// An agent ID from the ways a person writes one: `a3`, `#a3` and `3` all give `a3`. Anything else
 /// loses only a leading `#`.
+#[cfg(test)]
 pub(crate) fn normalize_agent_reference(reference: &str) -> String {
     let rest = reference.strip_prefix('#').unwrap_or(reference);
     match rest.bytes().all(|byte| byte.is_ascii_digit()) && !rest.is_empty() {
@@ -280,6 +410,7 @@ pub(crate) fn normalize_agent_reference(reference: &str) -> String {
 
 /// `human` or `@human` (`text`) names the person while no agent in reach has that name; otherwise
 /// it is ambiguous.
+#[cfg(test)]
 fn person_unless_named(text: &str, in_reach: &[&AgentInfo]) -> Result<Named, ErrorBody> {
     let named: Vec<&AgentInfo> = in_reach
         .iter()
@@ -300,6 +431,7 @@ fn person_unless_named(text: &str, in_reach: &[&AgentInfo]) -> Result<Named, Err
 
 /// The failure of a reference that names no agent, listing the agents in reach so the caller can
 /// correct it.
+#[cfg(test)]
 fn no_agent(reference: &str, in_reach: &[&AgentInfo]) -> ErrorBody {
     let mut listed: Vec<(u64, String)> = in_reach
         .iter()
@@ -321,6 +453,7 @@ fn no_agent(reference: &str, in_reach: &[&AgentInfo]) -> ErrorBody {
 }
 
 /// The IDs of `agents` by number, joined as `a1, #a4` to follow a `#`.
+#[cfg(test)]
 fn ids(agents: &[&AgentInfo]) -> String {
     let mut ids: Vec<&str> = agents.iter().map(|info| info.agent_id.as_str()).collect();
     ids.sort_by_key(|id| agent_number(id));
@@ -329,6 +462,7 @@ fn ids(agents: &[&AgentInfo]) -> String {
 
 /// The ID at the end of a reference written as Facade writes an agent, a name and then its ID, such
 /// as `#a3` in `@Pixel #a3`.
+#[cfg(test)]
 fn id_at_end(reference: &str) -> Option<&str> {
     let (_, last) = reference.trim().rsplit_once(char::is_whitespace)?;
     let digits = last.strip_prefix("#a")?;
@@ -336,22 +470,30 @@ fn id_at_end(reference: &str) -> Option<&str> {
     is_id.then_some(last)
 }
 
-/// A name that is in neither `taken` nor empty, from `names`, else from `DEFAULT_NAMES`, at random;
-/// names compare without case and surrounding spaces. None where every one is taken.
-fn free_name(taken: &[String], names: Option<&[String]>) -> Option<String> {
+/// Picks a name from the configured pool, or the built-in pool when no names are configured.
+/// Prefer an unused name, comparing without case and surrounding spaces.
+fn default_name<'a>(taken: impl Iterator<Item = &'a str>, names: Option<&[String]>) -> String {
     let folded = |name: &str| trimmed(name).to_lowercase();
-    let taken: HashSet<String> = taken.iter().map(|name| folded(name)).collect();
-    let candidates: Vec<&str> = match names {
-        Some(names) => names.iter().map(String::as_str).collect(),
-        None => DEFAULT_NAMES.to_vec(),
-    };
-    let free: Vec<&str> = candidates
-        .into_iter()
-        .map(trimmed)
-        .filter(|name| !name.is_empty() && !taken.contains(&name.to_lowercase()))
+    let taken: HashSet<String> = taken.map(folded).collect();
+    let configured: Vec<&str> = names
+        .unwrap_or_default()
+        .iter()
+        .map(|name| trimmed(name))
+        .filter(|name| !name.is_empty())
         .collect();
-    let pick = facade_base::random_u64().checked_rem(free.len() as u64)?;
-    Some(free[pick as usize].to_string())
+    let pool = if configured.is_empty() {
+        DEFAULT_NAMES.as_slice()
+    } else {
+        configured.as_slice()
+    };
+    let free: Vec<&str> = pool
+        .iter()
+        .copied()
+        .filter(|name| !taken.contains(&name.to_lowercase()))
+        .collect();
+    let choices = if free.is_empty() { pool } else { &free };
+    let pick = facade_base::random_u64() % choices.len() as u64;
+    choices[pick as usize].to_owned()
 }
 
 /// `name` without the spaces the editor trims.
@@ -436,8 +578,13 @@ mod tests {
 
     /// The reach of `caller` among `agents`.
     fn reach(agents: &[AgentInfo], caller: Option<&str>) -> Reach {
-        let info = caller.and_then(|id| agents.iter().find(|info| info.agent_id == id));
-        reach_of(caller, info)
+        let info = caller.map(|id| {
+            agents
+                .iter()
+                .find(|info| info.agent_id == id)
+                .expect("a listed caller")
+        });
+        reach_of(info)
     }
 
     /// The agent `reference` names, from Cy's or another reach.
@@ -472,11 +619,6 @@ mod tests {
         );
         assert_eq!(reached(Some("a4")), ["a1", "a2", "a3", "a4", "a5"]);
         assert_eq!(reached(None), ["a1", "a2", "a3", "a4", "a5"], "the person");
-        assert_eq!(
-            reach(&agents, Some("a9")),
-            Reach::LocalUnlisted { agent: "a9".into() },
-            "an agent no longer listed"
-        );
 
         let cy = reach(&agents, Some("a3"));
         let unrelated = AgentInfo {
@@ -567,9 +709,8 @@ mod tests {
         );
     }
 
-    /// A name is one no agent has while one is left, ignoring case and surrounding spaces; with
-    /// every one taken, or a list of none, there is none. The settings file's names stand in for
-    /// the default ones.
+    /// A name is one no agent has while one is left, ignoring case and surrounding spaces.
+    /// A full pool can repeat a name, and an empty configured pool uses the built-in names.
     #[test]
     fn a_name_is_one_no_agent_has_while_one_is_left() {
         let mut taken: Vec<String> = DEFAULT_NAMES[1..]
@@ -577,22 +718,35 @@ mod tests {
             .map(|name| format!(" {} ", name.to_uppercase()))
             .collect();
         assert_eq!(
-            free_name(&taken, None).as_deref(),
-            Some(DEFAULT_NAMES[0]),
+            default_name(taken.iter().map(String::as_str), None),
+            DEFAULT_NAMES[0],
             "the unused name, ignoring case and spaces"
         );
         taken.push(DEFAULT_NAMES[0].to_string());
-        assert_eq!(free_name(&taken, None), None, "every one taken");
-        let names = ["Ada".to_string(), "Bo".to_string()];
-        assert_eq!(
-            free_name(&["ADA".into()], Some(&names)).as_deref(),
-            Some("Bo")
+        let repeated = default_name(taken.iter().map(String::as_str), None);
+        assert!(
+            DEFAULT_NAMES.contains(&repeated.as_str()),
+            "every one taken"
         );
-        assert_eq!(free_name(&[], Some(&[])), None, "a list of none");
+        let names = ["Ada".to_string(), "Bo".to_string()];
+        assert_eq!(default_name(["ADA"].into_iter(), Some(&names)), "Bo");
+        assert_eq!(
+            default_name(["Ada", "Bo"].into_iter(), Some(&names[1..])),
+            "Bo",
+            "a full configured pool repeats a configured name"
+        );
+        assert_eq!(
+            default_name(
+                taken[0..taken.len() - 1].iter().map(String::as_str),
+                Some(&[])
+            ),
+            DEFAULT_NAMES[0],
+            "an empty configured pool uses the built-in pool"
+        );
         // Spaces as the editor has them: a byte order mark is one
         assert_eq!(
-            free_name(&["\u{feff}Ada ".into()], Some(&names[..1])),
-            None,
+            default_name(["\u{feff}Ada "].into_iter(), Some(&names)),
+            "Bo",
             "taken, ignoring the editor's spaces"
         );
     }

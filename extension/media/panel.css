@@ -383,11 +383,11 @@ body.vscode-reduce-motion .dot.working::after {
 	padding-right: 38px;
 }
 
-.item.agent:is(.pinnable, .remote-agent):is(.hovered, .menu-open, .details-open) .line.top {
+.item.agent:is(.pinnable, .remote-agent, .orchestrator.pinned):is(.hovered, .menu-open, .details-open) .line.top {
 	padding-right: 58px;
 }
 
-.item.agent:is(.hovered, .menu-open, .details-open) .pin {
+.item.agent:not(.orchestrator):is(.hovered, .menu-open, .details-open) .pin {
 	display: none;
 }
 
@@ -400,10 +400,19 @@ body.vscode-reduce-motion .dot.working::after {
  * a letter has above its capitals or below its baseline still shows: its ellipsis clips that much further out.
  */
 .name,
+.card-meta,
 .title {
 	text-box: trim-both cap alphabetic;
 	padding-block: 4px;
 	margin-block: -4px;
+}
+
+.card-meta {
+	flex: 0 0 auto;
+	max-width: 100%;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 }
 
 /* A line its CLI has said nothing on yet as tall as one it has */
@@ -461,7 +470,7 @@ body.vscode-reduce-motion .dot.working::after {
 	visibility: visible;
 }
 
-.item.agent.remote-agent .actions {
+.item.agent:is(.remote-agent, .orchestrator.pinned) .actions {
 	right: 25px;
 }
 
@@ -591,6 +600,11 @@ body.vscode-reduce-motion .details.open {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
+}
+
+.details-facts > .button {
+	align-self: start;
+	margin-top: 4px;
 }
 
 .details-fact {

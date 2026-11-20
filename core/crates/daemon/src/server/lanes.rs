@@ -40,7 +40,33 @@ impl Lane {
 
 /// One connection's lanes, by the agent their requests name.
 #[derive(Default)]
-pub(super) struct Lanes(HashMap<String, Lane>);
+pub(super) struct Lanes(HashMap<LaneTarget, Lane>);
+
+#[derive(PartialEq, Eq, Hash)]
+enum LaneTarget {
+    Address(String),
+    Reference {
+        machine_id: String,
+        agent_id: String,
+    },
+}
+
+impl LaneTarget {
+    /// Groups repeated references without resolving an agent or choosing a machine.
+    fn from_args(args: &Value) -> Self {
+        let reference = &args["reference"];
+        match (
+            reference["machine_id"].as_str(),
+            reference["agent_id"].as_str(),
+        ) {
+            (Some(machine_id), Some(agent_id)) => Self::Reference {
+                machine_id: machine_id.to_string(),
+                agent_id: agent_id.to_string(),
+            },
+            _ => Self::Address(args["agent"].as_str().unwrap_or_default().to_string()),
+        }
+    }
+}
 
 /// What every lane of a connection runs with.
 pub(super) struct LaneContext<S> {
@@ -73,7 +99,7 @@ impl Lanes {
         args: Value,
         size: usize,
     ) {
-        let agent = args["agent"].as_str().unwrap_or_default().to_string();
+        let agent = LaneTarget::from_args(&args);
         if !self.0.contains_key(&agent) {
             // Forget idle lanes: a long connection keeps none for agents it no longer types into.
             self.0.retain(|_, lane| !lane.idle());

@@ -4,14 +4,14 @@
 
 # Facade Code
 
-**Der Multi-Agent-Orchestrator für VS Code.**
+**KI-Programmieragenten auf eigenen Rechnern ausführen.**
 
-Führen Sie native Agenten-CLIs aus, bearbeiten Sie Code und überprüfen Sie Änderungen im selben IDE-Fenster. Nutzen Sie Ihre eigenen Konten und Abonnements, und lassen Sie Agenten über Fenster und Rechner hinweg zusammenarbeiten.
+Facade Code führt KI-Programmier-CLIs auf Ihren Rechnern aus. Agenten finden einander, tauschen Nachrichten aus, lesen Bildschirme und bedienen Terminals. Sie steuern sie in der Shell, in VS Code oder einer MCP-fähigen Anwendung. Auf jedem Rechner läuft ein eigener Orchestrator. Die Rechner verbinden sich über SSH.
 
 [![Website: facadecode.com](https://img.shields.io/badge/Website-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![VS Code Marketplace: installieren](https://img.shields.io/badge/VS%20Code%20Marketplace-installieren-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
 [![Open VSX: installieren](https://img.shields.io/badge/Open%20VSX-installieren-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
-[![Releases: IDE herunterladen](https://img.shields.io/badge/Releases-IDE%20herunterladen-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Releases](https://img.shields.io/badge/Releases-GitHub-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
 [![Issues: Fehler melden](https://img.shields.io/badge/Issues-Fehler%20melden-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · **Deutsch** · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
@@ -31,47 +31,71 @@ Führen Sie native Agenten-CLIs aus, bearbeiten Sie Code und überprüfen Sie Ä
 
 ## Installation
 
+### Shell
+
+Die einzeiligen Installationsbefehle sind ab der ersten Veröffentlichung mit eigenständigen Paketen verfügbar.
+Shell-Pakete gibt es für macOS, Linux und Windows auf x64 und arm64.
+
+Führen Sie diesen Befehl unter macOS oder Linux aus.
+
+```sh
+sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://github.com/y5ez3g/facadecode/releases/latest/download/install.sh
+```
+
+Führen Sie diesen Befehl unter Windows in PowerShell aus.
+
+```powershell
+$response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facadecode/releases/latest/download/install.ps1'; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())))
+```
+
+Das Installationsprogramm fügt `facade` und `facade-mcp` zum PATH hinzu. Öffnen Sie ein neues Terminal, damit der neue PATH geladen wird. Aktualisieren Sie mit `facade upgrade`. Installieren Sie die benötigten CLIs auf jedem Rechner und melden Sie sich dort an. Integriert sind Claude Code, Codex, Antigravity, Muse Code, OpenCode und Pi.
+
+Ihr Startprogramm heißt ebenfalls `facade`. Sind beide installiert, verwendet die Shell den ersten Treffer im PATH. Nach Einstellung der IDE-Vorschau gehört der Befehlsname dem Orchestrator. Führen Sie `facade version` aus. Eine Zeile im Format `facade <version>` bestätigt den Shell-Befehl.
+
+### VS Code
+
 ```sh
 code --install-extension facade.facadecode
 ```
 
-Oder installieren Sie **Facade Code** über den [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) oder [Open VSX](https://open-vsx.org/extension/facade/facadecode). Es läuft unter macOS (Apple Silicon), Linux (x64) und Windows (x64).
+Die Erweiterung bringt ihren Orchestrator mit. Öffnen Sie **Facade Code** in der Aktivitätsleiste und wählen Sie **Neuer Agent**, **Go to Agent** oder **Resume Agent**. Pakete für macOS, Linux und Windows gibt es für x64 und arm64.
 
-Installieren Sie als Nächstes die unterstützten Agenten-CLIs, die Sie verwenden möchten, und melden Sie sich dort an: Claude Code, Codex, Antigravity, Muse Code, OpenCode oder Pi. Facade Code startet jede CLI mit deren eigener Anmeldung und eigenen Abonnements.
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) · [Open VSX](https://open-vsx.org/extension/facade/facadecode) · [VS Code](../../../extension/GUIDE.md)
 
-> **Agenten laufen standardmäßig ohne Bestätigungsabfragen.** Wenn `yolo` standardmäßig aktiviert ist, können Agenten Befehle ausführen und Dateien ändern, ohne zuvor nachzufragen. Deaktivieren Sie diese Option, um die gewohnten Bestätigungsabfragen der jeweiligen CLI wiederherzustellen. Siehe [extension README](../../../extension/README.md#install).
+### MCP
 
-## Agent Panel
+Fügen Sie `facade-mcp` als stdio-MCP-Server hinzu. Das Beispiel verwendet ein `mcpServers`-Objekt.
 
-**Ihre Agenten und Ihre IDE im selben Fenster.**
+```json
+{
+  "mcpServers": {
+    "facade": { "command": "facade-mcp" }
+  }
+}
+```
 
-Facade Code führt native Agenten-CLIs (Claude Code, Codex, Antigravity, Muse Code, OpenCode und Pi) in Editor-Terminal-Tabs neben Ihren Dateien aus – mit den eigenen Befehlen, Werkzeugen, Konten und Abonnements der jeweiligen CLI. Eine Karte im Panel zeigt den Status jedes Agenten an.
+Eine externe Verbindung tritt beim ersten Tool-Aufruf als Guest bei. Warten Sie nach dem Senden mit dem von `send_message` zurückgegebenen `read_messages`-Aufruf auf die Antwort.
 
-- **Arbeiten Sie direkt neben Ihrem Code.** Jeder Agent läuft in einem eigenen Terminal-Tab im Editorbereich. Das Schließen eines Tabs blendet diesen lediglich aus, während der Agent weiterläuft; ein Klick auf die Karte öffnet ihn wieder.
-- **Status aller Agenten im Blick behalten.** Die Karten zeigen, was zuletzt an den jeweiligen Agenten gesendet wurde und ob er arbeitet, eine Berechtigung benötigt oder auf einen Fehler gestoßen ist, während die Details seinen Titel, seinen Ordner und wer ihn gestartet hat zeigen. Agenten laufen bei Fenster-Reloads und Neustarts der Erweiterung unterbrechungsfrei weiter.
-- **Ordner und Worktrees.** Führen Sie Agenten in beliebigen Ordnern des Arbeitsbereichs aus oder erstellen Sie spontan einen Git-Worktree, um Codeänderungen voneinander getrennt zu halten. Heften Sie eine Unterhaltung an, um sie beim erneuten Öffnen des Arbeitsbereichs wiederherzustellen, oder setzen Sie frühere Sitzungen aus dem Verlauf fort.
+## Auf mehreren Rechnern arbeiten
 
-## Agent Use
+```sh
+facade start --name ada -d codex
+facade list
+facade attach ada
+```
 
-**Lassen Sie Agenten andere Agenten steuern – genau wie Sie.**
+Verwenden Sie die von `facade list` ausgegebene Adresse. Registrieren Sie weitere Rechner mit dem gewohnten SSH-Ziel und den üblichen Optionen. Um WSL oder einen Dev Container von außen zu erreichen, richten Sie SSH in der jeweiligen Umgebung ein und registrieren sie auf dieselbe Weise. Sie können Facade auch direkt darin ausführen.
 
-Über MCP und ein Terminalprotokoll können Agenten andere Agenten starten, stoppen, finden und ihnen Nachrichten senden, deren Terminalbildschirme lesen, Text eingeben und Tasten drücken.
+```sh
+facade machine add -p 2222 aaron@devbox.lan
+facade start --machine devbox --folder /work/app --worktree feat-x claude
+```
 
-- **Agenten starten und stoppen.** Ein Agent kann andere Agenten mit jeder der sechs CLIs in jedem beliebigen Ordner oder neuen Worktree Ihrer Facade-Fenster auf diesem Computer starten und ihnen die erste Aufgabe zuweisen. Eine wiederholte Anfrage mit derselben Anfrage-ID startet niemals einen zweiten Agenten.
-- **Nachrichten senden.** Agenten tauschen untereinander Nachrichten aus und können auch Ihnen Nachrichten schicken. Facade fügt die vollständige Nachricht auf einmal ein und sendet sie ab. Befindet sich noch ungesendeter Text oder eine Eingabeaufforderung im Eingabefeld, wartet die Zustellung, bis das Feld frei ist.
-- **Terminalsteuerung.** Ein Agent kann den Bildschirm eines anderen Agenten lesen, Befehle eingeben und Tasten drücken, um Eingabeaufforderungen zu beantworten oder einem feststeckenden Kollegen zu helfen. Wenn ein Kind-Agent 20 Sekunden lang auf eine Berechtigung, eine Antwort oder eine Anmeldung wartet, wird der Agent benachrichtigt, der ihn gestartet hat.
+Facade installiert bei Bedarf die passende Version auf dem entfernten Rechner. Facade verwendet auf dem entfernten Rechner den festen Installationspfad. Installieren Sie bei Bedarf manuell dieselbe Version wie auf Ihrem lokalen Orchestrator. **Go to Agent** öffnet in VS Code das Terminal eines laufenden Agenten. Der Arbeitsbereich merkt sich geöffnete Agenten, deren Helfer und Ihre Pins. Beim Schließen des Terminal-Tabs läuft der Agent weiter. **Resume Agent** und `facade resume` zeigen gespeicherte Arbeit.
 
-## Agent Mesh
+> **YOLO ist standardmäßig aktiv.** Ein Agent mit YOLO kann andere Agenten auf verbundenen Rechnern erreichen. Setzen Sie `"yolo": false` in der `facade.json` seines Rechners, um Freigaben und Sandbox der CLI beizubehalten und den MCP-Zugriff auf den Erstellungsbaum des Aufrufers zu begrenzen. Die Einstellung gilt ab dem nächsten Start oder Resume. `facade status` zeigt den Dateipfad.
 
-**Verbinden Sie Agenten über Fenster, Rechner und Standorte hinweg.**
-
-Facade Code verbindet die Agenten aller Ihrer Facade-Fenster auf diesem Computer zu einem gemeinsamen Netzwerk. Öffnen Sie ein [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)-Fenster, um diese Zusammenarbeit auf einen weiteren Rechner auszuweiten.
-
-- **Über Fenster hinweg.** Wenn `yolo` aktiviert ist, erreicht ein Agent jeden Agenten in allen Ihren Facade-Fenstern auf diesem Computer – gleichermaßen lokal wie über Remote - SSH. Ist es deaktiviert, erreicht ein Agent nur seine eigene Gruppe: den von Ihnen gestarteten Agenten und alle daraus hervorgegangenen.
-- **Über SSH erweitern.** In einem [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)-Fenster laufen Agenten direkt auf dem Remote-Rechner mit den dortigen Werkzeugen, Dateien und Konten. Lokale Agenten können Agenten in Remote - SSH-Fenstern direkt starten und ihnen Nachrichten senden.
-- **Vom Smartphone aus koordinieren.** Verbinden Sie die mobile Claude-App über [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) mit einer Claude Code-Sitzung auf Ihrem Computer. Diese Sitzung kann andere Agenten über Facade koordinieren und den Fortschritt direkt an Ihr Telefon melden.
-
-<sub>Remote Control erfordert eine unterstützte Version von Claude Code, ein geeignetes Abonnement und eine Anmeldung mit vollem Berechtigungsumfang. Siehe [Einrichtungsvoraussetzungen](https://code.claude.com/docs/en/remote-control#requirements).</sub>
+[Produktdokumentation (中文)](../../facade-code.md) · [Glossar](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 
@@ -81,11 +105,12 @@ Organisieren Sie Projekte, Feature-Worktrees und Agententeams in einer spezielle
 
 Laden Sie die Vorschau-Version der IDE herunter: [macOS (Apple Silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [Alle Versionen](https://github.com/y5ez3g/facadecode/releases)
 
-Die IDE ist ein Fork von VS Code, der neben Ihrem vorhandenen Editor installiert wird und nichts mit ihm teilt: Einstellungen, Erweiterungen und der Befehl `facade` sind vollständig voneinander getrennt. Die Erweiterungen stammen von [Open VSX](https://open-vsx.org); einige proprietäre Microsoft-Erweiterungen wie Remote Development und C/C++ laufen ausschließlich in offiziellen Microsoft-Builds. Architektur und Spezifikationen finden sich unter [`docs/ide/`](../../ide/).
+Die IDE-Vorschau läuft neben Ihrem Editor und verwendet eigene Einstellungen und Erweiterungen. Die Erweiterungen stammen von [Open VSX](https://open-vsx.org); einige proprietäre Microsoft-Erweiterungen wie Remote Development und C/C++ laufen ausschließlich in offiziellen Microsoft-Builds. Architektur und Spezifikationen finden sich unter [`docs/ide/`](../../ide/).
 
 ## Aus dem Quellcode kompilieren
 
 - **Erweiterung:** Übergeben Sie [`extension/AGENTS.md`](../../../extension/AGENTS.md) an Ihren Coding-Agenten, um das Paket zu kompilieren.
+- **Orchestrator / Shell.** [Build-Anleitung](../../../core/README.md).
 - **IDE:** Übergeben Sie [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) an Ihren Coding-Agenten, um die Anwendung zu kompilieren.
 
 Informationen zu Beitragsrichtlinien und Branch-Disziplin finden Sie unter [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) und [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).

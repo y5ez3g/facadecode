@@ -3,11 +3,11 @@ Remove one or more agents
 Usage: facade remove <AGENT>...
 Alias: facade rm
 
-Remove agents that Facade started, along with their screens and inboxes. Facade stops any that are
-still running, and each CLI keeps its saved session.
+Remove agents that the Orchestrator started, along with their screens and inboxes. The Orchestrator
+stops any that are still running, and each CLI keeps its saved session.
 
 Arguments:
-  <AGENT>...  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
+  <AGENT>...  Agent addresses, IDs or names
 
 Options:
   -h, --help  Print help

@@ -1,5 +1,5 @@
-//! The places an editor window's agents can work in (RULES-2.4, WORKTREES-1.1 to 1.3), and the
-//! worktrees Facade adds to them (WORKTREES-2.1 to 2.5).
+//! The places an agent can work in and the worktrees Facade adds to them. A start checks its
+//! folder on the running machine and can create a worktree at that checkout's current HEAD.
 //!
 //! Every folder of a window is a location. So is every checkout of the Git repository a folder sits
 //! in: the main checkout leads, the folder follows where it is a place of its own, and the other
@@ -16,11 +16,14 @@
 //! environment, so the turns are kept in memory.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::{Kept, LocationInfo, LocationKind, Worktree, location_id};
+#[cfg(test)]
+use facade_base::daemon::Worktree;
+use facade_base::daemon::{Kept, LocationInfo, LocationKind, location_id};
 use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 
@@ -44,6 +47,7 @@ const UNSET_FOR_GIT: [&str; 8] = [
 ];
 
 /// Characters a folder name cannot hold on some system; a branch's folder has `-` in their place.
+#[cfg(test)]
 const NOT_IN_FOLDER_NAMES: &str = "/\\<>:\"|?*";
 
 /// A window's locations, and what of them could not be read.
@@ -61,6 +65,7 @@ impl Catalog {
         &self.locations
     }
 
+    #[cfg(test)]
     pub(crate) fn problems(&self) -> &[String] {
         &self.problems
     }
@@ -70,24 +75,6 @@ impl Catalog {
         self.locations
             .iter()
             .find(|place| same_folder(&place.path, path))
-    }
-
-    /// The innermost location whose path is `path` or one of its parents, by whole path
-    /// components, `path` having its links resolved.
-    pub(crate) fn holding(&self, path: &str) -> Option<&LocationInfo> {
-        let path = folder_key(Path::new(path));
-        self.locations
-            .iter()
-            .filter(|place| Path::new(&path).starts_with(folder_key(Path::new(&place.path))))
-            .max_by_key(|place| Path::new(&place.path).components().count())
-    }
-
-    /// The paths of the locations that only folders missing from `folders` brought.
-    pub(crate) fn left_by(&self, folders: &[String]) -> Vec<String> {
-        self.with_sources()
-            .filter(|(_, source)| !folders.iter().any(|folder| same_folder(folder, source)))
-            .map(|(place, _)| place.path.clone())
-            .collect()
     }
 
     fn with_sources(&self) -> impl Iterator<Item = (&LocationInfo, &str)> {
@@ -377,6 +364,15 @@ impl<'a> Git<'a> {
         self.agrees(&["show-ref", "--verify", "--quiet", &reference])
             .await
     }
+
+    async fn require_new_branch(self, branch: &str) -> Result<(), ErrorBody> {
+        if self.has_branch(branch).await {
+            return Err(ErrorBody::invalid_argument(format!(
+                "a branch named {branch} already exists"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// The turns that keep creations into one `.worktrees` folder one at a time.
@@ -414,58 +410,58 @@ fn worktree_failed(message: String) -> ErrorBody {
     ErrorBody::new(Reason::WorktreeFailed, message)
 }
 
-/// A creation that passed every check that needs no turn.
-struct Creation<'a> {
+/// Checks the selected folder on the running machine. Git is only needed for a new worktree.
+pub(crate) async fn preflight(source: &Path, branch: Option<&str>) -> Result<(), ErrorBody> {
+    check_source_folder(source).await?;
+    if let Some(branch) = branch {
+        let repository = Repository::read(source).await?;
+        let destination = repository.destination(branch).await?;
+        repository.check_available(branch, &destination).await?;
+    }
+    Ok(())
+}
+
+/// Creates a branch at the source checkout's current HEAD and uses its name as the worktree path.
+pub(crate) async fn create_worktree(
+    source: &Path,
+    branch: &str,
+    creations: &Creations,
+) -> Result<LocationInfo, ErrorBody> {
+    check_source_folder(source).await?;
+    let repository = Repository::read(source).await?;
+    let destination = repository.destination(branch).await?;
+    let _turn = creations.wait_turn(&repository.parent).await?;
+    repository.check_available(branch, &destination).await?;
+    add_worktree(repository.git, branch, &destination, "HEAD").await
+}
+
+async fn check_source_folder(source: &Path) -> Result<(), ErrorBody> {
+    let shown = source.display();
+    match tokio::fs::metadata(source).await {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(ErrorBody::invalid_argument(format!(
+            "{shown} is not a folder"
+        ))),
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(ErrorBody::invalid_argument(
+            format!("the folder {shown} does not exist"),
+        )),
+        Err(error) => Err(ErrorBody::invalid_argument(format!(
+            "could not read the folder {shown}: {error}"
+        ))),
+    }
+}
+
+/// The source checkout and the paths Git already has registered in its repository.
+struct Repository<'a> {
     git: Git<'a>,
-    branch: &'a str,
-    base: &'a str,
     /// The `.worktrees` folder beside the main checkout.
     parent: PathBuf,
-    /// The folder name the branch gives.
-    folder: String,
-    /// The paths Git has worktrees registered at.
     registered: Vec<String>,
 }
 
-/// Makes a worktree from the checkout `source` is in, on a new branch `worktree.branch` starting at
-/// `worktree.base_ref`, in `<main checkout>.worktrees/<branch folder>`, and answers with the new
-/// location: kind Worktree, labelled with the branch, at its path with links resolved. Nothing is
-/// changed for a folder outside any repository, a repository with no commit, a base that is no
-/// commit, a branch name Git refuses or already has, or a folder name some system cannot hold.
-/// Creations into one `.worktrees` folder take turns, at most 120 seconds of waiting, and the branch
-/// is checked again in the turn. When Git fails partway, the error's `data.kept` names what stays.
-pub(crate) async fn create(
-    source: &Path,
-    worktree: &Worktree,
-    branch_prefix: Option<&str>,
-    creations: &Creations,
-) -> Result<LocationInfo, ErrorBody> {
-    let creation = Creation::check(source, worktree, branch_prefix).await?;
-    let _turn = creations.wait_turn(&creation.parent).await?;
-    // Whoever had the turn before may have made this branch.
-    if creation.git.has_branch(creation.branch).await {
-        return Err(ErrorBody::invalid_argument(format!(
-            "a branch named {} already exists",
-            creation.branch
-        )));
-    }
-    creation.make().await
-}
-
-impl<'a> Creation<'a> {
-    async fn check(
-        source: &'a Path,
-        worktree: &'a Worktree,
-        branch_prefix: Option<&str>,
-    ) -> Result<Self, ErrorBody> {
+impl<'a> Repository<'a> {
+    async fn read(source: &'a Path) -> Result<Self, ErrorBody> {
         let shown = source.display();
-        let branch = worktree.branch.trim();
-        let base = worktree.base_ref.trim();
-        if branch.is_empty() || base.is_empty() {
-            return Err(ErrorBody::invalid_argument(
-                "a worktree needs a branch and a base_ref",
-            ));
-        }
         let outside = || ErrorBody::invalid_argument(format!("{shown} is not in a Git repository"));
         let git = Git::in_folder(source);
         let checkouts = match git.checkouts().await {
@@ -483,6 +479,131 @@ impl<'a> Creation<'a> {
                 "{shown} has no commits yet"
             )));
         }
+        Ok(Self {
+            git,
+            parent: PathBuf::from(format!("{}.worktrees", main.path.trim_end_matches('/'))),
+            registered: checkouts
+                .into_iter()
+                .map(|checkout| checkout.path)
+                .collect(),
+        })
+    }
+
+    async fn destination(&self, branch: &str) -> Result<PathBuf, ErrorBody> {
+        let name = self
+            .git
+            .run(&["check-ref-format", "--branch", branch], READ_LIMIT)
+            .await
+            .map_err(|error| {
+                ErrorBody::invalid_argument(format!("invalid branch name {branch:?}: {error}"))
+            })?;
+        if name.lines().next() != Some(branch) {
+            return Err(ErrorBody::invalid_argument(format!(
+                "{branch:?} must name the new branch directly"
+            )));
+        }
+        let destination = self.parent.join(branch);
+        if !branch.split('/').all(facade_base::files::valid_folder_name) {
+            return Err(worktree_failed(format!(
+                "the worktree path {} contains a folder name this machine does not support",
+                destination.display()
+            )));
+        }
+        Ok(destination)
+    }
+
+    async fn check_available(&self, branch: &str, destination: &Path) -> Result<(), ErrorBody> {
+        self.git.require_new_branch(branch).await?;
+        let shown = destination.display();
+        let taken = || worktree_failed(format!("the worktree path {shown} is already in use"));
+        if registered_at(destination, &self.registered) {
+            return Err(taken());
+        }
+        match tokio::fs::symlink_metadata(destination).await {
+            Ok(_) => return Err(taken()),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(worktree_failed(format!(
+                    "could not use the worktree path {shown}: {error}"
+                )));
+            }
+        }
+        // A slash in the branch adds parent folders. A missing parent can be created by Git.
+        for parent in destination
+            .ancestors()
+            .skip(1)
+            .take_while(|path| path.starts_with(&self.parent))
+        {
+            let shown = parent.display();
+            match tokio::fs::metadata(parent).await {
+                Ok(metadata) if metadata.is_dir() => break,
+                Ok(_) => {
+                    return Err(worktree_failed(format!("{shown} is not a folder")));
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(worktree_failed(format!(
+                        "could not use the worktree parent {shown}: {error}"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A creation that passed every check that needs no turn.
+#[cfg(test)]
+struct Creation<'a> {
+    repository: Repository<'a>,
+    branch: &'a str,
+    base: &'a str,
+    /// The folder name the branch gives.
+    folder: String,
+}
+
+/// Makes a worktree from the checkout `source` is in, on a new branch `worktree.branch` starting at
+/// `worktree.base_ref`, in `<main checkout>.worktrees/<branch folder>`, and answers with the new
+/// location: kind Worktree, labelled with the branch, at its path with links resolved. Nothing is
+/// changed for a folder outside any repository, a repository with no commit, a base that is no
+/// commit, a branch name Git refuses or already has, or a folder name some system cannot hold.
+/// Creations into one `.worktrees` folder take turns, at most 120 seconds of waiting, and the branch
+/// is checked again in the turn. When Git fails partway, the error's `data.kept` names what stays.
+#[cfg(test)]
+pub(crate) async fn create(
+    source: &Path,
+    worktree: &Worktree,
+    branch_prefix: Option<&str>,
+    creations: &Creations,
+) -> Result<LocationInfo, ErrorBody> {
+    let creation = Creation::check(source, worktree, branch_prefix).await?;
+    let _turn = creations.wait_turn(&creation.repository.parent).await?;
+    // Whoever had the turn before may have made this branch.
+    creation
+        .repository
+        .git
+        .require_new_branch(creation.branch)
+        .await?;
+    creation.make().await
+}
+
+#[cfg(test)]
+impl<'a> Creation<'a> {
+    async fn check(
+        source: &'a Path,
+        worktree: &'a Worktree,
+        branch_prefix: Option<&str>,
+    ) -> Result<Self, ErrorBody> {
+        let shown = source.display();
+        let branch = worktree.branch.trim();
+        let base = worktree.base_ref.trim();
+        if branch.is_empty() || base.is_empty() {
+            return Err(ErrorBody::invalid_argument(
+                "a worktree needs a branch and a base_ref",
+            ));
+        }
+        let repository = Repository::read(source).await?;
+        let git = repository.git;
         if !git.names_a_commit(base).await {
             return Err(ErrorBody::invalid_argument(format!(
                 "Git knows no commit {base} in {shown}"
@@ -499,56 +620,49 @@ impl<'a> Creation<'a> {
             ))
         })?;
         Ok(Self {
-            git,
+            repository,
             branch,
             base,
-            parent: PathBuf::from(format!("{}.worktrees", main.path.trim_end_matches('/'))),
             folder,
-            registered: checkouts
-                .into_iter()
-                .map(|checkout| checkout.path)
-                .collect(),
         })
     }
 
     /// Runs `git worktree add` into the first free folder, and says what stayed when it fails.
     async fn make(self) -> Result<LocationInfo, ErrorBody> {
-        let destination = free_destination(&self.parent, &self.folder, &self.registered);
-        let destination = destination.to_string_lossy().into_owned();
-        let added = self
-            .git
-            .run(
-                &[
-                    "worktree",
-                    "add",
-                    "-b",
-                    self.branch,
-                    &destination,
-                    self.base,
-                ],
-                ADD_LIMIT,
-            )
-            .await;
-        let Err(error) = added else {
-            return Ok(place_at(
-                resolve(&destination),
-                self.branch.to_owned(),
-                LocationKind::Worktree,
-            ));
-        };
-        let kept = Kept {
-            branch: self
-                .git
-                .has_branch(self.branch)
-                .await
-                .then(|| self.branch.to_owned()),
-            path: Path::new(&destination)
-                .symlink_metadata()
-                .is_ok()
-                .then(|| destination.clone()),
-        };
-        Err(partial_failure(&destination, &error, kept))
+        let destination = free_destination(
+            &self.repository.parent,
+            &self.folder,
+            &self.repository.registered,
+        );
+        add_worktree(self.repository.git, self.branch, &destination, self.base).await
     }
+}
+
+async fn add_worktree(
+    git: Git<'_>,
+    branch: &str,
+    destination: &Path,
+    base: &str,
+) -> Result<LocationInfo, ErrorBody> {
+    let path = destination.to_string_lossy();
+    let added = git
+        .run(&["worktree", "add", "-b", branch, &path, base], ADD_LIMIT)
+        .await;
+    let Err(error) = added else {
+        return Ok(place_at(
+            resolve(&path),
+            branch.to_owned(),
+            LocationKind::Worktree,
+        ));
+    };
+    let kept = Kept {
+        branch: git.has_branch(branch).await.then(|| branch.to_owned()),
+        path: destination
+            .symlink_metadata()
+            .is_ok()
+            .then(|| path.to_string()),
+    };
+    Err(partial_failure(&path, &error, kept))
 }
 
 /// The error of a `git worktree add` that failed, naming the branch and folder it left behind.
@@ -573,6 +687,7 @@ fn partial_failure(destination: &str, error: &GitError, kept: Kept) -> ErrorBody
 /// The folder a worktree of `branch` gets (WORKTREES-2.2): the branch without a leading `prefix`,
 /// with `-` for every control character and every character in [`NOT_IN_FOLDER_NAMES`], the same on
 /// every system. None for a name some system cannot hold.
+#[cfg(test)]
 fn branch_folder(branch: &str, prefix: Option<&str>) -> Option<String> {
     let rest = match prefix {
         Some(prefix) if !prefix.is_empty() => branch.strip_prefix(prefix).unwrap_or(branch),
@@ -593,6 +708,7 @@ fn branch_folder(branch: &str, prefix: Option<&str>) -> Option<String> {
 
 /// Whether every system can hold a folder called `name`: not empty, `.` or `..`, not ending in a
 /// period or a space, and no Windows device name such as `CON` or `LPT1`, with or without a suffix.
+#[cfg(test)]
 fn holdable(name: &str) -> bool {
     if matches!(name, "" | "." | "..") || name.ends_with(['.', ' ']) {
         return false;
@@ -610,20 +726,22 @@ fn holdable(name: &str) -> bool {
 
 /// `<folder>` in `parent`, or else `<folder>-1`, `<folder>-2` and on: the first that no file,
 /// folder, link or registered worktree takes.
+#[cfg(test)]
 fn free_destination(parent: &Path, folder: &str, registered: &[String]) -> PathBuf {
-    let taken = |path: &Path| {
-        path.symlink_metadata().is_ok()
-            || registered
-                .iter()
-                .any(|other| folder_key(Path::new(other)) == folder_key(path))
-    };
     let mut candidate = parent.join(folder);
     let mut suffix = 0;
-    while taken(&candidate) {
+    while candidate.symlink_metadata().is_ok() || registered_at(&candidate, registered) {
         suffix += 1;
         candidate = parent.join(format!("{folder}-{suffix}"));
     }
     candidate
+}
+
+fn registered_at(path: &Path, registered: &[String]) -> bool {
+    let key = folder_key(path);
+    registered
+        .iter()
+        .any(|other| folder_key(Path::new(other)) == key)
 }
 
 #[cfg(test)]
@@ -761,13 +879,14 @@ mod tests {
         repository(&repo);
         std::fs::create_dir_all(repo.join("src")).unwrap();
         let creations = Creations::default();
-        let worktree = Worktree {
-            branch: "review".into(),
-            base_ref: "HEAD".into(),
-        };
-        let created = create(&repo, &worktree, None, &creations).await.unwrap();
+        let branch = "feature/review";
+        let destination = root.join("app.worktrees/feature/review");
+        preflight(&repo, Some(branch)).await.unwrap();
+        assert!(!root.join("app.worktrees").exists());
+        let created = create_worktree(&repo, branch, &creations).await.unwrap();
         let plain = root.join("notes");
         std::fs::create_dir_all(&plain).unwrap();
+        preflight(&plain, None).await.unwrap();
         let text = |path: &Path| resolve(&path.to_string_lossy());
         let folders = vec![text(&repo.join("src")), text(&plain), text(&repo)];
         let catalog = read(&folders, &Catalog::default()).await;
@@ -781,14 +900,11 @@ mod tests {
             [
                 (text(&repo), "main".into(), LocationKind::MainCheckout),
                 (text(&repo.join("src")), "src".into(), LocationKind::Folder),
-                (
-                    created.path.clone(),
-                    "review".into(),
-                    LocationKind::Worktree
-                ),
+                (text(&destination), branch.into(), LocationKind::Worktree),
                 (text(&plain), "notes".into(), LocationKind::Folder),
             ]
         );
+        assert_eq!(created.path, text(&destination));
         assert!(catalog.problems().is_empty(), "{:?}", catalog.problems());
         assert_eq!(
             catalog.locations()[0].location_id,
@@ -841,6 +957,18 @@ mod tests {
                 Reason::InvalidArgument,
                 "a branch named aaron/review-api already exists"
             )
+        );
+        // The legacy prefix produced this folder for a different branch. A new start keeps its
+        // destination fixed even when the branch itself is free.
+        let collision = preflight(&repo, Some("review-api")).await.unwrap_err();
+        assert_eq!(collision.data.reason, Reason::WorktreeFailed);
+        assert!(collision.message.ends_with("review-api is already in use"));
+        assert_eq!(
+            create_worktree(&repo, "review-api", &creations)
+                .await
+                .unwrap_err()
+                .message,
+            collision.message
         );
         let refused = |error: ErrorBody| (error.data.reason, error.data.kept);
         assert_eq!(

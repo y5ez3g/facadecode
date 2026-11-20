@@ -1,20 +1,23 @@
 //! Live links, full table replacement, and the table advertised to every neighbour.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use facade_base::address::is_machine_name;
 use facade_base::daemon::methods;
 use facade_base::jsonrpc::{ErrorBody, Notification, Reason};
-use facade_base::machine::{
+use facade_base::machine::{self, MachineIdConflict, MachineTransport};
+use facade_base::v3::{
     AdvertiseParams, ConnectionKind, ConnectionState, MachineConnection, MachineHello,
-    MachineIdConflict, MachineIdentity, MachineInfo, MachineTransport, SshInteraction,
+    MachineIdentity, MachineInfo, MachineState,
 };
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 
 use super::routes::{self, Conflict, LiveIdentities, is_uuid_v4};
 use super::session::Peer;
-use super::{Event, FrontConnection, SessionId, wire};
+use super::ssh::FailedAttempt;
+use super::{Event, FrontConnection, SessionId, advertise, wire};
 use crate::SavedConnection;
 
 pub(super) struct Topology {
@@ -23,16 +26,23 @@ pub(super) struct Topology {
     /// The identities already accepted during a handshake, held until it succeeds or closes.
     pub(super) pending_links: BTreeMap<SessionId, Link>,
     pub(super) saved: BTreeMap<String, Saved>,
+    pub(super) remembered_routes: BTreeMap<String, Vec<String>>,
     next: u64,
     selected: BTreeMap<String, Selected>,
 }
 
 pub(super) struct Saved {
     pub(super) config: SavedConnection,
+    pub(super) argv: Vec<String>,
     pub(super) generation: u64,
     pub(super) stop: watch::Sender<bool>,
+    pub(super) changed: Arc<Notify>,
     pub(super) waiters: Vec<oneshot::Sender<Result<MachineHello, ErrorBody>>>,
-    pub(super) interaction: Option<SshInteraction>,
+    pub(super) wake_waiters: Vec<oneshot::Sender<Result<MachineHello, ErrorBody>>>,
+    pub(super) connecting: bool,
+    pub(super) name: Option<String>,
+    pub(super) last_seen: Option<SystemTime>,
+    pub(super) failure: Option<FailedAttempt>,
     pub(super) active: Option<SessionId>,
 }
 
@@ -93,6 +103,7 @@ impl Topology {
             links: BTreeMap::new(),
             pending_links: BTreeMap::new(),
             saved: BTreeMap::new(),
+            remembered_routes: BTreeMap::new(),
             next: 1,
             selected: BTreeMap::new(),
         };
@@ -110,6 +121,14 @@ impl Topology {
         self.selected.values().map(|row| row.row.clone()).collect()
     }
 
+    pub(super) fn legacy_machines(&self) -> Vec<machine::MachineInfo> {
+        self.selected
+            .values()
+            .filter(|entry| entry.row.route.is_some())
+            .map(|entry| advertise::legacy_row(&entry.row))
+            .collect()
+    }
+
     pub(super) fn route(&self, machine: &str) -> Option<(&Arc<Peer>, &MachineInfo)> {
         let selected = self.selected.get(machine)?;
         let link = self.links.get(&selected.via?)?;
@@ -119,6 +138,31 @@ impl Topology {
     pub(super) fn direct(&self, machine: &str) -> Option<&Arc<Peer>> {
         let (peer, row) = self.route(machine)?;
         (row.route.as_ref()?.len() == 1).then_some(peer)
+    }
+
+    /// A local saved connection or a saved destination announced by an online machine.
+    pub(super) fn wake_path(&self, machine: &str) -> Option<Vec<String>> {
+        if self.saved.contains_key(machine) {
+            return Some(vec![machine.to_owned()]);
+        }
+        self.selected
+            .values()
+            .filter(|entry| entry.via.is_some())
+            .filter_map(|entry| {
+                let row = &entry.row;
+                row_has_saved(row, machine).then(|| {
+                    let mut path = row.route.clone().expect("selected route");
+                    path.push(machine.to_owned());
+                    path
+                })
+            })
+            .min_by(|a, b| (a.len(), a).cmp(&(b.len(), b)))
+            .or_else(|| {
+                let route = self.remembered_routes.get(machine)?;
+                let first = route.first()?;
+                (self.saved.contains_key(first) || self.direct(first).is_some())
+                    .then(|| route.clone())
+            })
     }
 
     pub(super) fn identity(&self, machine_id: &str) -> MachineIdentity {
@@ -176,17 +220,11 @@ impl Topology {
             })
             .map_err(conflicted)?;
         let mut rows = BTreeMap::new();
+        let mut offline = Vec::new();
+        let mut seen = BTreeSet::new();
         for mut row in table.machines {
-            let (Some(boot), Some(path), Some(_)) = (&row.boot_id, row.route.take(), &row.build)
-            else {
-                return Err(ErrorBody::invalid_argument(
-                    "The machine table has an incomplete row.",
-                ));
-            };
             if !is_uuid_v4(&row.machine_id)
-                || !is_uuid_v4(boot)
                 || !is_machine_name(&row.name)
-                || path.iter().any(|hop| !is_uuid_v4(hop))
                 || row.connections.iter().any(|connection| {
                     !is_uuid_v4(&connection.machine_id)
                         || !is_uuid_v4(&connection.initiator_machine_id)
@@ -194,6 +232,26 @@ impl Topology {
             {
                 return Err(ErrorBody::invalid_argument(
                     "The machine table has an invalid identity.",
+                ));
+            }
+            if !seen.insert(row.machine_id.clone()) {
+                return Err(ErrorBody::invalid_argument(
+                    "The machine table repeats a machine.",
+                ));
+            }
+            if row.route.is_none() && row.boot_id.is_none() && row.state != MachineState::Online {
+                offline.push(row);
+                continue;
+            }
+            let (Some(boot), Some(path), Some(_)) = (&row.boot_id, row.route.take(), &row.build)
+            else {
+                return Err(ErrorBody::invalid_argument(
+                    "The machine table has an incomplete row.",
+                ));
+            };
+            if !is_uuid_v4(boot) || path.iter().any(|hop| !is_uuid_v4(hop)) {
+                return Err(ErrorBody::invalid_argument(
+                    "The machine table has an invalid live route.",
                 ));
             }
             if row.machine_id == self.local.machine_id {
@@ -220,16 +278,24 @@ impl Topology {
                 })
                 .map_err(conflicted)?;
             row.route = Some(path);
-            if rows.insert(row.machine_id.clone(), row).is_some() {
-                return Err(ErrorBody::invalid_argument(
-                    "The machine table repeats a machine.",
-                ));
-            }
+            row.state = MachineState::Online;
+            rows.insert(row.machine_id.clone(), row);
         }
         if !rows.contains_key(&remote.machine_id) {
             return Err(ErrorBody::invalid_argument(
                 "The peer is missing from its machine table.",
             ));
+        }
+        // An offline row has an owner with a live route and a saved connection to it.
+        // Discard a row when its owner was filtered because the route leads back to us.
+        for row in offline {
+            if row.machine_id != self.local.machine_id
+                && rows
+                    .values()
+                    .any(|owner| owner.route.is_some() && row_has_saved(owner, &row.machine_id))
+            {
+                rows.insert(row.machine_id.clone(), row);
+            }
         }
         Ok(rows)
     }
@@ -250,8 +316,10 @@ impl Topology {
             }
             let source = link.origin.describe(&link.remote);
             for row in link.table.values() {
-                let boot = row.boot_id.as_deref().expect("validated boot ID");
-                let path = row.route.as_deref().expect("validated route");
+                let (Some(boot), Some(path)) = (row.boot_id.as_deref(), row.route.as_deref())
+                else {
+                    continue;
+                };
                 identities
                     .observe(&row.machine_id, boot, || describe_path(&source, path, boot))
                     .map_err(conflicted)?;
@@ -275,18 +343,27 @@ impl Topology {
                 .get(key)
                 .is_some_and(|old| old.via != current.via)
         });
+        self.remembered_routes
+            .extend(selected.values().filter_map(|entry| {
+                let route = entry.row.route.as_ref()?;
+                let (first, rest) = route.split_first()?;
+                if rest.is_empty() || !self.saved.contains_key(first) {
+                    return None;
+                }
+                let saved = route.windows(2).all(|edge| {
+                    selected
+                        .get(&edge[0])
+                        .is_some_and(|owner| row_has_saved(&owner.row, &edge[1]))
+                });
+                saved.then(|| (entry.row.machine_id.clone(), route.clone()))
+            }));
         self.selected = selected;
         if !changed && !switched && joined.is_none() {
             return;
         }
-        let machines = self.machines();
         if changed || joined.is_some() {
-            let table = Notification::new(
-                methods::ADVERTISE,
-                AdvertiseParams {
-                    machines: machines.clone(),
-                },
-            );
+            let params = advertise::encode(self.local.protocol_range[1], self.machines());
+            let table = Notification::new(methods::ADVERTISE, params);
             for (&id, link) in &self.links {
                 if changed || Some(id) == joined {
                     link.peer.notify(table.clone());
@@ -294,6 +371,7 @@ impl Topology {
             }
         }
         if changed || switched {
+            let machines = self.legacy_machines();
             let _ = events.send(Event::RoutesChanged { machines });
         }
     }
@@ -303,6 +381,10 @@ impl Topology {
             machine_id: self.local.machine_id.clone(),
             boot_id: Some(self.local.boot_id.clone()),
             name: self.local.name.clone(),
+            selector: facade_base::v3::address::exact_machine_selector(&self.local.machine_id),
+            state: MachineState::Online,
+            last_seen: None,
+            ssh_error: None,
             build: Some(self.local.build.clone()),
             route: Some(Vec::new()),
             connections: self.connections(),
@@ -316,11 +398,11 @@ impl Topology {
         )]);
         for (&via, link) in &self.links {
             for row in link.table.values() {
+                let Some(route) = row.route.as_deref() else {
+                    continue;
+                };
                 let better = selected.get(&row.machine_id).is_none_or(|current| {
-                    routes::preferred(
-                        row.route.as_deref().expect("validated route"),
-                        current.row.route.as_deref().expect("selected route"),
-                    )
+                    routes::preferred(route, current.row.route.as_deref().expect("selected route"))
                 });
                 if better {
                     selected.insert(
@@ -331,6 +413,37 @@ impl Topology {
                         },
                     );
                 }
+            }
+        }
+        let own = &selected[&self.local.machine_id].row;
+        let offline: Vec<_> = own
+            .connections
+            .iter()
+            .filter_map(|connection| {
+                let saved = self.saved.get(&connection.machine_id)?;
+                (connection.initiator_machine_id == self.local.machine_id
+                    && connection.kind == ConnectionKind::Saved)
+                    .then(|| {
+                        (
+                            connection.machine_id.clone(),
+                            saved.offline(connection.clone()),
+                        )
+                    })
+            })
+            .collect();
+        for (machine_id, row) in offline {
+            selected
+                .entry(machine_id)
+                .or_insert(Selected { row, via: None });
+        }
+        for link in self.links.values() {
+            for row in link.table.values().filter(|row| row.route.is_none()) {
+                selected
+                    .entry(row.machine_id.clone())
+                    .or_insert_with(|| Selected {
+                        row: row.clone(),
+                        via: None,
+                    });
             }
         }
         selected
@@ -346,13 +459,14 @@ impl Topology {
                 initiator_machine_id: local.clone(),
                 kind: ConnectionKind::Saved,
                 ssh_destination: Some(saved.config.ssh_destination.clone()),
+                ssh_args: saved.argv.clone(),
                 remote_home: saved.config.remote_home.clone(),
-                state: match (&saved.interaction, saved.active) {
+                state: match (saved.interaction(), saved.active) {
                     (_, Some(_)) => ConnectionState::Connected,
                     (Some(_), None) => ConnectionState::SshInteractionRequired,
                     (None, None) => ConnectionState::Disconnected,
                 },
-                ssh_interaction: saved.interaction.clone(),
+                ssh_interaction: saved.interaction().cloned(),
             })
             .collect();
         for link in self.links.values() {
@@ -372,6 +486,7 @@ impl Topology {
                             initiator_machine_id: local.clone(),
                             kind: front.kind,
                             ssh_destination,
+                            ssh_args: Vec::new(),
                             remote_home,
                             state: ConnectionState::Connected,
                             ssh_interaction: None,
@@ -398,6 +513,14 @@ impl Topology {
         connections.sort_by(|a, b| connection_key(a).cmp(&connection_key(b)));
         connections
     }
+}
+
+fn row_has_saved(row: &MachineInfo, machine: &str) -> bool {
+    row.connections.iter().any(|connection| {
+        connection.kind == ConnectionKind::Saved
+            && connection.machine_id == machine
+            && connection.initiator_machine_id == row.machine_id
+    })
 }
 
 fn connection_key(connection: &MachineConnection) -> (&str, &str, u8, Option<&str>, Option<&str>) {

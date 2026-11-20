@@ -1,9 +1,9 @@
 # Runs every test of the workspace in an empty temporary folder of its own, then lists any process the run left behind
 # and anything a test wrote to the home folder. The Windows version of test-all.sh.
 # Usage: scripts\test-all.ps1 [<log>]
-# The tests run with USERPROFILE, HOME, APPDATA and LOCALAPPDATA in the temporary folder and no FACADE_HOME, so a test
-# that writes to the person's home folder, as to `~\.facade`, writes there instead and is reported; cargo and rustup
-# keep their own folders. The log, target\test-all.log by default, gets the commit, cargo's exit code, how many tests
+# The tests run with USERPROFILE, HOME, APPDATA, LOCALAPPDATA and a fallback FACADE_HOME in the temporary folder.
+# Each scenario sets its own FACADE_HOME. Writes to the fallback home are reported; cargo and rustup keep their own
+# folders. The log, target\test-all.log by default, gets the commit, cargo's exit code, how many tests
 # passed and failed, the first failures, what was written to the home folder, and the leftover check; <log>.full gets
 # cargo's whole output. Exits 1 when a test failed, a test wrote to the home folder, or a process was left; the
 # temporary folder then stays for a look.
@@ -25,9 +25,10 @@ New-Item -ItemType Directory -Force $roaming, $local | Out-Null
 New-Item -ItemType Directory -Force (Split-Path $Log) | Out-Null
 
 # The tests' environment, put back at the end for a caller who dot-sources this script.
-$names = 'FACADE_AGENT', 'FACADE_CODE_SESSION_FILE', 'FACADE_HOME', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA',
-	'TMP', 'TEMP', 'TMPDIR', 'CARGO_HOME', 'RUSTUP_HOME', 'CARGO_INCREMENTAL', 'GIT_CONFIG_GLOBAL', 'PATH',
-	'VSCMD_SKIP_SENDTELEMETRY', 'FACADE_TEST_BINARIES_BUILT'
+$inherited = @(Get-ChildItem Env: | Where-Object Name -Match '^(FACADE_|CLAUDE_)' | Select-Object -ExpandProperty Name)
+$names = @('FACADE_HOME', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA',
+	'TMP', 'TEMP', 'TMPDIR', 'CARGO_HOME', 'RUSTUP_HOME', 'CARGO_INCREMENTAL', 'CARGO_BUILD_JOBS', 'GIT_CONFIG_GLOBAL', 'PATH',
+	'VSCMD_SKIP_SENDTELEMETRY', 'FACADE_TEST_BINARIES_BUILT') + $inherited
 $saved = @{}
 foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $profile_ = $env:USERPROFILE
@@ -39,12 +40,12 @@ try {
 	$cargoBin = Join-Path $env:CARGO_HOME 'bin'
 	if (Test-Path $cargoBin) { $env:PATH = "$cargoBin;$env:PATH" }
 	$env:CARGO_INCREMENTAL = '0'
+	$env:CARGO_BUILD_JOBS = '2'
 	# The MSVC linker's telemetry helper would outlive the build, with the run's folder in its environment.
 	$env:VSCMD_SKIP_SENDTELEMETRY = '1'
-	# Git keeps reading the person's own settings, such as the name its commits carry.
-	$gitconfig = Join-Path $profile_ '.gitconfig'
-	if (-not $env:GIT_CONFIG_GLOBAL -and (Test-Path $gitconfig)) { $env:GIT_CONFIG_GLOBAL = $gitconfig }
-	foreach ($name in 'FACADE_AGENT', 'FACADE_CODE_SESSION_FILE', 'FACADE_HOME') {
+	$env:GIT_CONFIG_GLOBAL = Join-Path $tmp 'gitconfig'
+	[IO.File]::WriteAllLines($env:GIT_CONFIG_GLOBAL, @('[user]', '    name = Facade QA', '    email = qa@example.invalid'))
+	foreach ($name in $inherited) {
 		[Environment]::SetEnvironmentVariable($name, $null, 'Process')
 	}
 
@@ -84,6 +85,7 @@ try {
 	$env:HOME = $home_
 	$env:APPDATA = $roaming
 	$env:LOCALAPPDATA = $local
+	$env:FACADE_HOME = Join-Path $home_ '.facade'
 	$env:TMP = $tmp
 	$env:TEMP = $tmp
 	$env:TMPDIR = $tmp
@@ -91,6 +93,7 @@ try {
 	# cmd.exe takes cargo's output and errors into one file as they come, as sh's 2>&1 does.
 	& cmd.exe /d /c "cargo test -q --workspace --no-fail-fast >> `"$Log.full`" 2>&1"
 	$tests = $LASTEXITCODE
+	[Environment]::SetEnvironmentVariable('FACADE_HOME', $null, 'Process')
 	foreach ($name in 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR') {
 		[Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')
 	}

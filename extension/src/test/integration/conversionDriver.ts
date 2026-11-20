@@ -27,15 +27,18 @@ const RUST = process.env.FACADE_IT_ENGINE === 'rust';
 
 /** The agents core keeps for this root, by ID: what `facade list --json` prints in the window's terminal. */
 function coreAgents(): string[] {
-	const { FACADE_AGENT: _agent, ...env } = process.env;
-	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
-	try { return (JSON.parse(run.stdout) as { agents: { agent_id: string }[] }).agents.map(agent => agent.agent_id); } catch { return [`unreadable: ${run.stdout}${run.stderr}`]; }
+	return coreJson<{ readonly agents: { readonly id: string }[] }>('list', '--json').agents.map(agent => agent.id);
 }
 
-/**
- * The conversation an agent runs: the old engine's file of the run, or - on the Rust engine - the `session` core keeps on the agent's
- * record, which `facade list` prints (the agent is `a1` where the card says `#a1`).
- */
+function coreJson<T>(...args: string[]): T {
+	const { FACADE_AGENT: _agent, ...env } = process.env;
+	const program = path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade');
+	const run = spawnSync(program, args, { env, encoding: 'utf8', timeout: 20_000 });
+	if (run.status !== 0) { throw new Error(run.stderr || String(run.error)); }
+	return JSON.parse(run.stdout) as T;
+}
+
+/** Read the native session from the old run file or the Orchestrator's Inspect response. */
 function sessionOf(runId: string, alias: string): string | undefined {
 	if (!RUST) {
 		try {
@@ -43,18 +46,17 @@ function sessionOf(runId: string, alias: string): string | undefined {
 			return typeof id === 'string' && id ? id : undefined;
 		} catch { return undefined; }
 	}
-	const { FACADE_AGENT: _agent, ...env } = process.env;
-	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
-	try {
-		return (JSON.parse(run.stdout) as { agents: { agent_id: string; session?: string }[] }).agents.find(agent => `#${agent.agent_id}` === alias)?.session || undefined;
-	} catch { return undefined; }
+	return coreJson<{ readonly session?: string }>('inspect', alias, '--json').session || undefined;
 }
 /** Agents started beside the journey's own before it reloads, so that each reload's claim is timed in a busy window (VERIFICATION G2). */
 const LOAD = Number(process.env.FACADE_IT_LOAD ?? 0);
 
 /** A native process is observed from this isolated window's launch log, never from the owner's process list. */
 function pidOf(alias: string): number | undefined {
-	if (!NATIVE) { return fs.existsSync(`${RECORD}.${alias}`) ? Number(fs.readFileSync(`${RECORD}.${alias}`, 'utf8').trim()) : undefined; }
+	if (!NATIVE) {
+		const file = `${RECORD}.${RUST ? '#' : ''}${alias}`;
+		return fs.existsSync(file) ? Number(fs.readFileSync(file, 'utf8').trim()) : undefined;
+	}
 	const dir = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
 	const logs = fs.existsSync(dir) ? fs.readdirSync(dir).map(key => path.join(dir, key, 'agents.log')).filter(file => fs.existsSync(file)) : [];
 	for (const file of logs) {
@@ -93,11 +95,11 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
  * the window hears it (LIFECYCLE-3.4), and a window closed before that restores a new conversation instead.
  */
 function pinHolds(session: string): boolean {
-	// The Rust engine keeps its Pins in the editor's own workspace state, not in the extension's file: only the pinned card and tab are seen
-	if (RUST) { return true; }
 	const root = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
+	const file = RUST ? 'orchestrator-workspace.json' : 'workspace-state.json';
+	const entry = RUST ? 'pins' : 'facade.pins';
 	const saved = (dir: string): unknown => {
-		try { return (JSON.parse(fs.readFileSync(path.join(root, dir, 'workspace-state.json'), 'utf8')) as Record<string, unknown>)['facade.pins']; } catch { return undefined; }
+		try { return (JSON.parse(fs.readFileSync(path.join(root, dir, file), 'utf8')) as Record<string, unknown>)[entry]; } catch { return undefined; }
 	};
 	try {
 		return fs.readdirSync(root).some(dir => {
@@ -133,7 +135,7 @@ async function pinState(runId: string, pinned: boolean): Promise<void> {
 	});
 	await vscode.commands.executeCommand('facade.revealAgent', { run_id: runId });
 	await until('its native tab to agree', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
-		.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && tab.isPinned === pinned) || undefined);
+		.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && (RUST || tab.isPinned === pinned)) || undefined);
 }
 
 export async function activate(): Promise<void> {
@@ -201,9 +203,8 @@ export async function activate(): Promise<void> {
 			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length, cards: cards.map(each => ({ alias: each.alias, dot: each.dot })), ...RUST ? { core: coreAgents() } : {} });
 			return;
 		}
-		// On the Rust engine the claimed run is known by its agent's ID, where the first window's was its start's own ID: found by its name
 		const first = steps[0] as unknown as { runId: string; name: string };
-		const runId = RUST ? (await until('the claimed card', async () => (await state()).cards.find(each => each.name === first.name)?.runId)) : first.runId;
+		const runId = first.runId;
 		if (!vscode.workspace.workspaceFile) {
 			if (!steps.some(step => step.phase === 'unpin')) {
 				await pinState(runId, true);
@@ -216,17 +217,38 @@ export async function activate(): Promise<void> {
 			}
 			await pinState(runId, false);
 			write({ phase: 'reload-unpinned', runId, ...claim });
-			await vscode.commands.executeCommand('workbench.action.pinEditor');
+			if (RUST) {
+				await vscode.commands.executeCommand('facade.pinAgent', { run_id: runId });
+			} else {
+				await vscode.commands.executeCommand('workbench.action.pinEditor');
+			}
 			await pinState(runId, true);
 			// As a folder dropped on the window adds it
 			vscode.workspace.updateWorkspaceFolders(1, 0, { uri: vscode.Uri.file(process.env.FACADE_IT_SECOND!) });
 			return;
 		}
+		if (RUST) {
+			// The new workspace URI has its own roster. Go to Agent attaches the original Orchestrator run.
+			void vscode.commands.executeCommand('facade.goToAgent');
+			await until('the original agent in the new workspace', async () => {
+				if ((await state()).cards.some(each => each.runId === runId)) { return true; }
+				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+				return undefined;
+			});
+			await vscode.commands.executeCommand('facade.pinAgent', { run_id: runId });
+		}
 		await pinState(runId, true);
 		const card = await until('the same card in the workspace', async () => (await state()).cards.find(each => each.runId === runId)).catch(() => undefined);
-		// The editor closes the terminals of the extension host it restarted in its own time: what the window settles to is judged
-		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => unspun(each.name) === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
-		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: vscode.window.terminals.map(each => unspun(each.name)) });
+		// A predecessor tab without a current pseudoterminal can remain after a workspace URI changes.
+		const terminals = () => vscode.window.terminals.filter(each => !RUST || 'pty' in each.creationOptions)
+			.map(each => unspun(each.name));
+		await until('one live terminal of the agent', async () => terminals().filter(name => name === card?.name).length === 1 || undefined);
+		if (RUST && card) {
+			await until('one Orchestrator view of the original agent', async () =>
+				coreJson<{ readonly viewers: string[] }>('inspect', card.alias, '--json').viewers.length === 1 || undefined);
+		}
+		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length,
+			card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: terminals() });
 	} catch (err) {
 		const screens = await Promise.race([state().then(current => Promise.all(current.cards.map(async card => ({ name: card.name, alias: card.alias,
 			text: await Promise.resolve(vscode.commands.executeCommand('facade.screen', card.runId, 500)).catch(() => undefined) }))), () => []), new Promise<never[]>(resolve => setTimeout(() => resolve([]), 5_000))]);

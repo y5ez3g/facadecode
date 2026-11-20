@@ -1,5 +1,8 @@
 # Panel
 
+Group 4 covers the Orchestrator-backed Panel. Groups 1–3 retain the old-engine transition rules and existing
+presentation and accessibility details where they apply.
+
 Layer 3. The panel displays this window's agents. [Rules](../RULES.md) owns meanings; [UX](../UX.md) owns common
 interaction and tokens. This document owns the card, list, filter and webview contract.
 
@@ -15,14 +18,10 @@ interaction and tokens. This document owns the card, list, filter and webview co
 
 **Facade Code has one webview view in its own activity-bar container and shows only this window's agents.**
 
-On the Rust engine, the current logical window's membership supplies its records (RULES-4.1). Another member window
-can show its own card and terminal for the same running agent. Go to Agent can search beyond this panel under LIFECYCLE-2.3.
-
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
-card loading. Filter by Working Location (`filter`, filled when active) comes first. Resume Agent (`resumeAgent`)
-on Rust or Continue Session (`continueSession`) on the old engine comes next, followed by New Agent. New Agent's icon is Facade's own copy of the `new-session` codicon,
+card loading. Filter by Working Location (`filter`, filled when active) comes first. Continue Session (`continueSession`) comes next, followed by New Agent. New Agent's icon is Facade's own copy of the `new-session` codicon,
 shipped with the extension and shown in every editor: VS Code has that codicon only from 1.111, later than the
 supported minimum. The view's native `Views and More Actions...` (`…`) menu holds Add Folder to Workspace... (the
 editor's command), then New Worktree... when a workspace folder is open, followed by Open Settings in a separate
@@ -166,8 +165,7 @@ the card and shows the connection status until the running machine can be reache
    with why its activity is unknown, such as `No initial state · check terminal`. Before any message, with no notable
    state, it says the known opening: `New session started` for a new session, `Agent resumed` when the same numbered
    agent returns, or `Session continued` when a new agent starts a saved session. Pin restoration follows the same
-   numbering distinction (LIFECYCLE-3.3, 3.4). A Rust window that reconnects to or adopts a running agent whose opening
-   it did not observe leaves this line blank until it has another item to show.
+   numbering distinction (LIFECYCLE-3.3, 3.4).
 
 What the second line says is the first of these that holds, in this order of precedence:
 
@@ -283,8 +281,7 @@ disappears when that record is removed. A failed launch remains selected; backgr
 While a reload, an extension-host restart or Pin restoration opens its pinned agents' tabs one after another the
 selection does not move; once they are open it is on the last one opened, in front of the active group, or where none
 opened as it was: LIFECYCLE-3.5's tab procedure owns that order, this list only its final selection.
-Keyboard focus and selection are independent. Each logical Rust window keeps its own selection and ordinary
-card order. Pin order is shared within the workspace under ARCHITECTURE-3.1.
+Keyboard focus and selection are independent. Persist selection, order and Pins under ARCHITECTURE-3.1.
 
 ### 2.2 Card menu
 
@@ -326,8 +323,7 @@ has; choosing any other folder filters by it directly. A window of one folder sh
 item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog does not list now
 stays choosable, last in the first step. The current filter, or in the first step its folder, is initially highlighted.
 Back returns to the first step; Escape leaves the filter unchanged. The view description names the filter; the icon
-fills. Persist environment-qualified location/folder association for the logical Rust window or in old-engine
-workspace state (ARCHITECTURE-3.1). Clear on the filtered empty state's
+fills. Persist environment-qualified location/folder association in workspace state (ARCHITECTURE-3.1). Clear on the filtered empty state's
 Clear Filter, the first step's first item or confirmed location removal, never on a failed Git read. A launch does not
 change the filter; every new agent enters the normal list data and is displayed only when it matches. Ordinary folders
 use “location,” not an implication that Git/worktrees are required.
@@ -427,6 +423,26 @@ hovered or dragged. Leaving the view fades it out; a scroll without hover reveal
 Reveal is 100 ms linear and hide is 800 ms linear, as in VS Code's lists; reduced motion makes both immediate. Release
 outside the view, canceled dragging and loss of window focus cannot leave it stuck visible. Keyboard Page Up/Down moves
 fully visible row count minus one (minimum one).
+
+
+## 4 Orchestrator-backed cards
+
+### 4.1 Card list and details
+
+**The Panel presents the workspace list defined by RULES-6.1.**
+
+Show a card's name, CLI, state and TITLE. Distinguish just done from idle. Show the machine and full address in the
+information details. Copy Agent Reference copies that address verbatim. Message text stays in the agent's terminal.
+The visible and accessible representations describe the same state.
+
+### 4.2 Card actions and toolbar
+
+**The card opens its terminal. Its menu applies RULES-6.3 and RULES-6.4.**
+
+Offer Open Terminal and Stop for a running agent. Offer Hide and Remove for running and ended agents. A pinned
+card offers Unpin. An unpinned card offers Pin once it has a saved session.
+Put Go to Agent beside Resume. Keep New Agent, Filter, Add Folder, Show Agents Log and Open Settings on their
+existing surfaces.
 
 ## Checks
 

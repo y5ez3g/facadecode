@@ -1,11 +1,71 @@
-//! What Facade's MCP server tells a model of Facade's tools: in its answer to `initialize`, and, for
-//! a CLI that shows its model no server's instructions, in the CLI's own place for them. Three
-//! readers get them: an agent Facade ran, a guest in a terminal of its own, and an MCP client that
-//! joined as a guest. The sentences they share are written once, here.
+//! The Orchestrator's MCP instructions for a connection or a known managed run.
 
 use crate::protocol::daemon::{
     AgentInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_NAME, WindowInfo, display_name,
 };
+
+const TOOLS: &str = "The Orchestrator's MCP tools start, list and stop agents, exchange messages, \
+                     and read or operate managed agents' terminals. \
+                     Use an address such as a3@devbox, an agent number such as a3, or a name. \
+                     Without a machine, a number or name resolves only on machines that are awake \
+                     and reachable.";
+
+const RESULT: &str = "A 🔔 message reports an Orchestrator result.";
+
+/// The instructions for MCP initialization before the connection has a known agent.
+pub fn for_connection() -> String {
+    format!(
+        "{TOOLS} Messages to a Guest are delivered when it takes them with read_messages within \
+         30 seconds. After sending as a Guest, use the returned data.next call to wait for the \
+         reply. Messages to a managed agent are typed into its terminal. {RESULT}"
+    )
+}
+
+/// The known facts of a managed run that its instructions give.
+pub struct ManagedRun<'a> {
+    pub folder: &'a str,
+    pub machine: &'a str,
+    pub creator: Option<Creator<'a>>,
+    pub yolo: bool,
+}
+
+/// Who started the managed agent, when known.
+pub enum Creator<'a> {
+    Agent {
+        address: &'a str,
+        name: Option<&'a str>,
+    },
+    CommandLine,
+    VsCode,
+}
+
+/// The instructions for a managed agent whose current run is known.
+pub fn for_managed(address: &str, run: &ManagedRun<'_>) -> String {
+    let creator = match &run.creator {
+        Some(Creator::Agent {
+            address,
+            name: Some(name),
+        }) => format!(" You were started by {} ({address}).", display_name(name)),
+        Some(Creator::Agent {
+            address,
+            name: None,
+        }) => format!(" You were started by {address}."),
+        Some(Creator::CommandLine) => " You were started from the command line.".into(),
+        Some(Creator::VsCode) => " You were started from VS Code.".into(),
+        None => String::new(),
+    };
+    let reach = if run.yolo {
+        "YOLO is on. Your tools reach agents on all reachable machines."
+    } else {
+        "YOLO is off. Your tools reach agents in your creation tree."
+    };
+    format!(
+        "You are managed agent {address}, working in {} on machine {}.{creator} {TOOLS} {reach} \
+         Messages are typed into your terminal. You can use read_messages to take messages before \
+         typing begins. {RESULT}",
+        run.folder, run.machine
+    )
+}
 
 /// How to name an agent in a call.
 const ADDRESS: &str = "Address an agent by its ID, such as #a3, its unique @name, or both.";
@@ -201,6 +261,45 @@ mod tests {
             rest(&placed).replacen(" Your run has YOLO on, so they reach every agent.", "", 1),
             rest(&for_agent("a3", None))
         );
+
+        for (creator, expected) in [
+            (
+                Some(Creator::Agent {
+                    address: "a2@laptop",
+                    name: Some("Ada"),
+                }),
+                " You were started by Ada (a2@laptop).",
+            ),
+            (
+                Some(Creator::Agent {
+                    address: "a2@laptop",
+                    name: None,
+                }),
+                " You were started by a2@laptop.",
+            ),
+            (
+                Some(Creator::CommandLine),
+                " You were started from the command line.",
+            ),
+            (Some(Creator::VsCode), " You were started from VS Code."),
+            (None, ""),
+        ] {
+            let text = for_managed(
+                "a3@devbox",
+                &ManagedRun {
+                    folder: "/work/app",
+                    machine: "devbox",
+                    creator,
+                    yolo: true,
+                },
+            );
+            assert_eq!(
+                text.split_once(" The Orchestrator's MCP tools").unwrap().0,
+                format!(
+                    "You are managed agent a3@devbox, working in /work/app on machine devbox.{expected}"
+                )
+            );
+        }
     }
 
     /// The instructions say what the agent's tools reach, which its run's YOLO decides.
@@ -217,6 +316,21 @@ mod tests {
             ),
             "{off}"
         );
+        let mut run = ManagedRun {
+            folder: "/work/app",
+            machine: "devbox",
+            creator: None,
+            yolo: true,
+        };
+        assert!(
+            for_managed("a3@devbox", &run)
+                .contains("YOLO is on. Your tools reach agents on all reachable machines.")
+        );
+        run.yolo = false;
+        assert!(
+            for_managed("a3@devbox", &run)
+                .contains("YOLO is off. Your tools reach agents in your creation tree.")
+        );
     }
 
     /// An agent's and a guest's instructions say what 🔔 brings: Facade's result, which is not a
@@ -228,5 +342,9 @@ mod tests {
             for_guest(Some("a3")).contains("🔔 is Facade's result, not an agent's reply."),
             "a guest's start owes it one too"
         );
+        assert!(for_connection().ends_with(
+            "Messages to a managed agent are typed into its terminal. \
+             A 🔔 message reports an Orchestrator result."
+        ));
     }
 }

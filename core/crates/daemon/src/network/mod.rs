@@ -1,25 +1,27 @@
 //! Machine connections and routing. The daemon supplies trusted streams, saved connection
 //! settings, and the handler for requests that reach this machine.
 
+mod advertise;
 mod routes;
 mod saved;
 mod session;
 mod ssh;
 mod topology;
+mod wake;
 mod wire;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{WatchParams, methods};
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
-    AdvertiseParams, Caller, ConnectFailedParams, ConnectedParams, ConnectionKind,
-    ConnectionOutcome, ExecutionOutcome, ForwardParams, MachineHello, MachineInfo,
-    MachineResponseState, MachineTransport,
+    ConnectFailedParams, ConnectedParams, ConnectionKind, ConnectionOutcome, ExecutionOutcome,
+    ForwardParams, MachineHello, MachineInfo, MachineResponseState, MachineTransport,
 };
+use facade_base::v3;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -30,8 +32,10 @@ use self::session::{
 use self::topology::{Link, Origin, Topology};
 use self::wire::{Forward, Reader};
 use crate::SavedConnection;
+use crate::lifecycle::WorkGuard;
 
 pub(crate) use self::session::Subscription;
+pub(crate) use self::wire::OutboundCaller;
 
 #[derive(Debug)]
 pub(crate) enum RequestFailure {
@@ -74,10 +78,15 @@ impl From<RequestFailure> for ErrorBody {
 #[derive(Clone)]
 pub(crate) struct Network(Arc<Inner>);
 
+type BeginForwardWork = dyn Fn() -> Option<WorkGuard> + Send + Sync;
+type DispatchV3Target = dyn Fn(V3TargetRequest) -> bool + Send + Sync;
+
 struct Inner {
     state: Mutex<Topology>,
     control_dir: Option<PathBuf>,
     events: mpsc::UnboundedSender<Event>,
+    forward_work: OnceLock<Box<BeginForwardWork>>,
+    dispatch_v3_target: OnceLock<Box<DispatchV3Target>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -87,6 +96,11 @@ pub(crate) struct FrontConnection {
     pub(crate) transport: MachineTransport,
     pub(crate) expected_machine_id: Option<String>,
     pub(crate) kind: ConnectionKind,
+}
+
+pub(crate) struct SavedSsh {
+    pub(crate) config: SavedConnection,
+    pub(crate) argv: Vec<String>,
 }
 
 pub(crate) enum Event {
@@ -108,11 +122,13 @@ pub(crate) enum Event {
     Target(TargetRequest),
 }
 
-pub(crate) struct TargetRequest {
-    pub(crate) forward: ForwardParams,
+pub(crate) struct TargetRequest<P = ForwardParams> {
+    pub(crate) forward: P,
     pub(crate) cancelled: watch::Receiver<bool>,
     pub(crate) reply: oneshot::Sender<TargetReply>,
 }
+
+pub(crate) type V3TargetRequest = TargetRequest<v3::ForwardParams>;
 
 pub(crate) enum TargetReply {
     Call(Result<Value, ErrorBody>),
@@ -132,7 +148,23 @@ impl Network {
             state: Mutex::new(Topology::new(local)),
             control_dir,
             events,
+            forward_work: OnceLock::new(),
+            dispatch_v3_target: OnceLock::new(),
         }))
+    }
+
+    pub(crate) fn set_forward_work(
+        &self,
+        begin: impl Fn() -> Option<WorkGuard> + Send + Sync + 'static,
+    ) {
+        assert!(self.0.forward_work.set(Box::new(begin)).is_ok());
+    }
+
+    pub(crate) fn set_target_v3(
+        &self,
+        dispatch: impl Fn(V3TargetRequest) -> bool + Send + Sync + 'static,
+    ) {
+        assert!(self.0.dispatch_v3_target.set(Box::new(dispatch)).is_ok());
     }
 
     pub(crate) fn local_hello(&self) -> MachineHello {
@@ -150,12 +182,11 @@ impl Network {
 
     /// The live table, including configured connections on the local row.
     pub(crate) fn machines(&self) -> Vec<MachineInfo> {
-        self.0.state.lock().unwrap().machines()
+        self.0.state.lock().unwrap().legacy_machines()
     }
 
-    pub(crate) fn has_connections(&self) -> bool {
-        let state = self.0.state.lock().unwrap();
-        !state.saved.is_empty() || !state.links.is_empty()
+    pub(crate) fn machines_v3(&self) -> Vec<v3::MachineInfo> {
+        self.0.state.lock().unwrap().machines()
     }
 
     pub(crate) fn rename_local(&self, name: String) {
@@ -164,12 +195,12 @@ impl Network {
         state.publish(&self.0.events, None);
     }
 
-    /// Takes over an authenticated stream after the server has answered its machine hello.
-    pub(crate) async fn accept<R, W>(
+    pub(crate) async fn accept_with_work<R, W>(
         &self,
         remote: MachineHello,
         read: R,
         mut write: W,
+        initial_work: Option<WorkGuard>,
     ) -> Result<(), ErrorBody>
     where
         R: AsyncBufRead + Unpin + Send,
@@ -180,21 +211,23 @@ impl Network {
             .handshake(&mut read, &mut write, remote, Origin::Incoming)
             .await?;
         registered.activate()?;
+        drop(initial_work);
         registered.run(read, write, output).await
     }
 
-    /// Takes over the foreground client stream after its connect authorization response.
-    pub(crate) async fn connect<R, W, F>(
+    /// Registers the existing session after the parent commits its saved connection.
+    pub(crate) async fn connect_with_saved<R, W, F>(
         &self,
         connection: FrontConnection,
         read: R,
         mut write: W,
+        initial_work: Option<WorkGuard>,
         on_connected: F,
     ) -> Result<(), ErrorBody>
     where
         R: AsyncBufRead + Unpin + Send,
         W: AsyncWrite + Unpin + Send,
-        F: FnOnce(&MachineHello) -> Result<bool, ErrorBody> + Send,
+        F: FnOnce(&MachineHello) -> Result<(bool, Option<SavedSsh>), ErrorBody> + Send,
     {
         let mut read = Reader::new(read);
         let prepared = async {
@@ -211,8 +244,8 @@ impl Network {
             let (registered, output) = self
                 .handshake(&mut read, &mut write, remote.clone(), origin)
                 .await?;
-            let first_connection = on_connected(&remote)?;
-            registered.activate()?;
+            let (first_connection, saved) = on_connected(&remote)?;
+            registered.activate_with_saved(saved)?;
             Ok::<_, ErrorBody>((registered, output, remote, first_connection))
         }
         .await;
@@ -233,13 +266,14 @@ impl Network {
         })
         .into_notification();
         wire::send(&mut write, &notification).await?;
+        drop(initial_work);
         registered.run(read, write, output).await
     }
 
     pub(crate) async fn call(
         &self,
         target: &str,
-        caller: Caller,
+        caller: impl Into<OutboundCaller>,
         method: String,
         params: Value,
         time_left: Option<Duration>,
@@ -261,22 +295,15 @@ impl Network {
     pub(crate) async fn call_with_receipt(
         &self,
         target: &str,
-        caller: Caller,
+        caller: impl Into<OutboundCaller>,
         method: String,
         params: Value,
         deadline: Option<tokio::time::Instant>,
         request_id: Option<String>,
     ) -> Result<(Value, SystemTime), RequestFailure> {
-        let forward = ForwardParams {
-            route: Vec::new(),
-            caller,
-            time_left_ms: None,
-            request_id,
-            method,
-            params,
-        };
+        let forward = Forward::from_origin(caller, method, params, request_id);
         match self
-            .request(target, Forward::from_origin(forward), deadline)
+            .request(target, forward, deadline)
             .map_err(RequestFailure::Unreachable)?
             .answer(deadline)
             .await?
@@ -297,7 +324,7 @@ impl Network {
     pub(crate) async fn watch(
         &self,
         target: &str,
-        caller: Caller,
+        caller: impl Into<OutboundCaller>,
         params: WatchParams,
         time_left: Option<Duration>,
     ) -> Result<Subscription, ErrorBody> {
@@ -309,21 +336,19 @@ impl Network {
     pub(crate) async fn watch_with_receipt(
         &self,
         target: &str,
-        caller: Caller,
+        caller: impl Into<OutboundCaller>,
         params: WatchParams,
         time_left: Option<Duration>,
     ) -> Result<Subscription, RequestFailure> {
         let deadline = deadline_after(time_left);
-        let forward = ForwardParams {
-            route: Vec::new(),
+        let forward = Forward::from_origin(
             caller,
-            time_left_ms: None,
-            request_id: None,
-            method: methods::WATCH.to_owned(),
-            params: serde_json::to_value(params).expect("watch parameters serialize"),
-        };
+            methods::WATCH.to_owned(),
+            serde_json::to_value(params).expect("watch parameters serialize"),
+            None,
+        );
         let mut pending = self
-            .request(target, Forward::from_origin(forward), deadline)
+            .request(target, forward, deadline)
             .map_err(RequestFailure::Unreachable)?;
         match pending.answer(deadline).await? {
             Reply::Watch {
@@ -369,7 +394,8 @@ impl Network {
         deadline: Deadline,
         cancelled: watch::Receiver<bool>,
     ) -> Result<Delivery, ErrorBody> {
-        let (peer, identity) = {
+        let wake = forward.method() == wake::METHOD;
+        let (next, identity, protocol) = {
             let state = self.0.state.lock().unwrap();
             let Some(source) = state.links.get(&source) else {
                 return Err(ErrorBody::new(
@@ -387,25 +413,51 @@ impl Network {
                 return Err(ErrorBody::invalid_argument("The route repeats a machine."));
             }
             let target = forward.route.last().expect("route starts here");
-            let identity = state.identity(target);
-            let peer = match forward.route.get(1) {
-                Some(next) => Some(state.direct(next).cloned().ok_or_else(|| {
+            (
+                forward.route.get(1),
+                state.identity(target),
+                source.remote.protocol_range[1],
+            )
+        };
+
+        if let Some(next) = next {
+            let _work = match self.0.forward_work.get() {
+                Some(begin) if forward.method() != methods::WATCH => {
+                    Some(begin().ok_or_else(|| {
+                        wire::unavailable(
+                            identity.clone(),
+                            ExecutionOutcome::NotExecuted,
+                            "The machine is shutting down.",
+                        )
+                    })?)
+                }
+                _ => None,
+            };
+            if wake {
+                self.ensure_saved_hop(next).await?;
+            }
+            let peer = self
+                .0
+                .state
+                .lock()
+                .unwrap()
+                .direct(next)
+                .cloned()
+                .ok_or_else(|| {
                     wire::unavailable(
                         identity.clone(),
                         ExecutionOutcome::NotExecuted,
                         &format!("The next machine on the route, {next}, is unavailable."),
                     )
-                })?),
-                None => None,
-            };
-            (peer, identity)
-        };
-
-        if let Some(peer) = peer {
+                })?;
             forward.route.remove(0);
             let mut pending = peer.request(forward, deadline, identity)?;
             let response = pending.answer(deadline).await?;
             return Ok(Delivery::Relayed(pending, response));
+        }
+
+        if wake {
+            return Ok(Delivery::Local(TargetReply::Call(Ok(Value::Null))));
         }
 
         forward.time_left_ms = remaining(deadline);
@@ -416,22 +468,35 @@ impl Network {
                 wire::TIMEOUT_BEFORE_TARGET,
             ));
         }
-        let forward = decode_arguments(forward.encode())?;
+        let params = forward.encode();
         let (reply, result) = oneshot::channel();
-        self.0
-            .events
-            .send(Event::Target(TargetRequest {
-                forward,
+        let dispatched = if protocol >= v3::DAEMON_PROTOCOL_RANGE[0] {
+            let request = TargetRequest {
+                forward: decode_arguments(params)?,
                 cancelled,
                 reply,
-            }))
-            .map_err(|_| {
-                wire::unavailable(
-                    identity.clone(),
-                    ExecutionOutcome::NotExecuted,
-                    "The machine is shutting down.",
-                )
-            })?;
+            };
+            self.0
+                .dispatch_v3_target
+                .get()
+                .is_some_and(|dispatch| dispatch(request))
+        } else {
+            self.0
+                .events
+                .send(Event::Target(TargetRequest {
+                    forward: decode_arguments(params)?,
+                    cancelled,
+                    reply,
+                }))
+                .is_ok()
+        };
+        if !dispatched {
+            return Err(wire::unavailable(
+                identity.clone(),
+                ExecutionOutcome::NotExecuted,
+                "The machine is shutting down.",
+            ));
+        }
         tokio::select! {
             biased;
             answer = result => {
@@ -452,7 +517,8 @@ impl Network {
         remote: MachineHello,
         origin: Origin,
     ) -> Result<(Registered, mpsc::UnboundedReceiver<Output>), ErrorBody> {
-        wire::exchange_tables(read, write, self.machines(), |table| {
+        let protocol = remote.protocol_range[1];
+        wire::exchange_tables(read, write, protocol, self.machines_v3(), |table| {
             self.reserve(remote, origin, table)
         })
         .await
@@ -462,7 +528,7 @@ impl Network {
         &self,
         remote: MachineHello,
         origin: Origin,
-        table: AdvertiseParams,
+        table: v3::AdvertiseParams,
     ) -> Result<(Registered, mpsc::UnboundedReceiver<Output>), ErrorBody> {
         let mut state = self.0.state.lock().unwrap();
         state.check_peer(&remote, &origin)?;
@@ -488,7 +554,7 @@ impl Network {
         ))
     }
 
-    fn replace_table(&self, session: SessionId, table: AdvertiseParams) -> Result<(), ErrorBody> {
+    fn replace_table(&self, session: SessionId, table: Value) -> Result<(), ErrorBody> {
         let mut state = self.0.state.lock().unwrap();
         let Some(link) = state.links.get(&session) else {
             return Err(ErrorBody::new(
@@ -496,7 +562,10 @@ impl Network {
                 "The machine session closed.",
             ));
         };
-        let table = match state.validate_table(Some(session), &link.remote, &link.origin, table) {
+        let protocol = link.remote.protocol_range[1];
+        let table = match advertise::decode(protocol, table).and_then(|table| {
+            state.validate_table(Some(session), &link.remote, &link.origin, table)
+        }) {
             Ok(table) => table,
             Err(error) => {
                 self.close_link(&mut state, session);
@@ -520,6 +589,8 @@ impl Network {
                 && saved.generation == generation
             {
                 saved.active = None;
+                saved.last_seen = Some(SystemTime::now());
+                saved.changed.notify_one();
             }
             let _ = self.0.events.send(Event::SessionClosed {
                 session: id,
@@ -543,7 +614,7 @@ struct SessionHandle {
 }
 
 impl SessionHandler for SessionHandle {
-    fn replace_table(&self, table: AdvertiseParams) -> Result<(), ErrorBody> {
+    fn replace_table(&self, table: Value) -> Result<(), ErrorBody> {
         self.network.replace_table(self.source, table)
     }
 
@@ -562,9 +633,17 @@ impl SessionHandler for SessionHandle {
 impl Registered {
     /// Turns the reserved identities into visible routes once both sides confirmed.
     fn activate(&self) -> Result<(), ErrorBody> {
+        self.activate_with_saved(None)
+    }
+
+    fn activate_with_saved(&self, saved: Option<SavedSsh>) -> Result<(), ErrorBody> {
         let mut state = self.network.0.state.lock().unwrap();
-        let link = state.pending_links.remove(&self.id).expect("reserved link");
-        if let Origin::Saved {
+        let mut link = state.pending_links.remove(&self.id).expect("reserved link");
+        if let Some(saved) = saved {
+            link.origin = self
+                .network
+                .adopt_saved(&mut state, saved, self.id, &link.remote);
+        } else if let Origin::Saved {
             machine_id,
             generation,
             ..
@@ -577,11 +656,7 @@ impl Registered {
                 .ok_or_else(|| {
                     ErrorBody::new(Reason::Cancelled, "The saved connection was replaced.")
                 })?;
-            saved.active = Some(self.id);
-            saved.interaction = None;
-            for waiting in saved.waiters.drain(..) {
-                let _ = waiting.send(Ok(link.remote.clone()));
-            }
+            saved.opened(self.id, &link.remote);
         }
         let events = &self.network.0.events;
         let _ = events.send(Event::SessionOpened {

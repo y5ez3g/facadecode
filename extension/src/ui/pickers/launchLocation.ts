@@ -4,13 +4,87 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { isInsideFolder } from '../../base/files';
 import type { Catalog, Location, LocationPort, LogPort, WorkspaceFolderInfo } from '../../core/ports';
-import { catalogStep, folderRow, inStepOrder, locationRow, locationsIn } from './location';
+import { addFolder, addFolderItem, catalogStep, folderRow, inStepOrder, locationRow, locationsIn, removeFolderButton, removeWorkspaceFolder } from './location';
 import { BACK, Flow } from './stepping';
 
 /** An item: the location it chooses - a folder's own row choosing its only one - else the folder whose own step it opens. */
 type Item = vscode.QuickPickItem & { readonly location?: Location; readonly folder?: WorkspaceFolderInfo };
 type Locations = Pick<LocationPort, 'snapshot' | 'refresh' | 'onDidChange'>;
+
+export function launchWorktreeButton(): vscode.QuickInputButton {
+	return { iconPath: new vscode.ThemeIcon('git-branch'), tooltip: vscode.l10n.t("New Worktree...") };
+}
+
+/** The runtime creates the branch from HEAD once the person chooses a CLI (WORKTREES-5.1). */
+export async function askLaunchBranch(flow: Flow, value = ''): Promise<string | typeof BACK | undefined> {
+	const branch = await flow.text({
+		title: vscode.l10n.t("New Agent · New Worktree"), value, placeholder: vscode.l10n.t("Branch name"), back: true,
+		prompt: vscode.l10n.t("Starts from {0}", 'HEAD'),
+		validate: value => value.trim() ? undefined : vscode.l10n.t("Enter a branch name.")
+	});
+	return typeof branch === 'string' ? branch.trim() : branch;
+}
+
+interface WorkspaceLaunchLocation {
+	readonly location: Location;
+	readonly worktree?: string;
+}
+
+/** New Agent on the editor host offers its catalog and the editor's workspace actions (RULES-6.5). */
+export async function chooseWorkspaceLocation(flow: Flow, locations: Locations, startAt?: WorkspaceLaunchLocation): Promise<WorkspaceLaunchLocation | typeof BACK | undefined> {
+	type Row = Item & { readonly add?: true };
+	const remove = removeFolderButton();
+	const worktree = launchWorktreeButton();
+	let at = startAt?.location.id;
+	for (;;) {
+		const catalog = locations.snapshot();
+		const itemsOf = (now: Catalog): Row[] => [
+			...now.locations.map(location => {
+				const folder = now.folders.length > 1 && now.folders.find(folder => folder.uri === location.uri);
+				const git = location.kind === 'checkout' || now.locations.some(other => other.kind === 'checkout' && isInsideFolder(location.path, other.path));
+				return { ...locationRow(location), ...(folder ? { folder } : {}), buttons: [...(git ? [worktree] : []), ...(folder ? [remove] : [])] };
+			}),
+			...(now.locations.length ? [{ label: '', kind: vscode.QuickPickItemKind.Separator }] : []),
+			addFolderItem()
+		];
+		const items = itemsOf(catalog);
+		const picked = await flow.pick<Row>({
+			title: vscode.l10n.t("New Agent · Working Location"),
+			placeholder: vscode.l10n.t("Select a working location"),
+			items,
+			active: at === undefined ? undefined : items.find(row => row.location?.id === at),
+			back: true,
+			busy: catalog.pending,
+			matchOnDescription: true,
+			live: picker => locations.onDidChange(() => {
+				const active = picker.activeItems[0];
+				const now = locations.snapshot();
+				const next = itemsOf(now);
+				const kept = active && next.find(row => row.location?.id === active.location?.id && row.add === active.add);
+				picker.items = next;
+				picker.busy = now.pending;
+				if (kept) { picker.activeItems = [kept]; }
+			})
+		});
+		if (!picked || picked === BACK) { return picked; }
+		const { item, button } = picked;
+		if (item.add) {
+			const added = await flow.aside(() => addFolder(locations));
+			at = locations.snapshot().locations.find(location => location.uri === added?.uri)?.id ?? at;
+		} else if (item.folder && button === remove) {
+			const { folder } = item;
+			await flow.aside(() => removeWorkspaceFolder(locations, folder));
+		} else if (item.location) {
+			if (button !== worktree) { return { location: item.location }; }
+			at = item.location.id;
+			const branch = await askLaunchBranch(flow, startAt?.location.id === at ? startAt.worktree : undefined);
+			if (branch === BACK) { continue; }
+			return branch === undefined ? undefined : { location: item.location, worktree: branch };
+		}
+	}
+}
 
 /** What an item stands for, whatever its step: a folder's row by the folder - whether it opens a step or chooses at once - else its location. */
 function keyOf(item: Item): string | undefined {

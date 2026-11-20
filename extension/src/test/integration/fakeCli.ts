@@ -32,12 +32,20 @@ const ANSWER = `${ESC}]7501;?:`;
 
 const record = process.env.FACADE_IT_RECORD!;
 // The old engine says `#a1`, core `a1`: the files this fixture leaves, and the tests that read them, name it `#a1` on both
-const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '')}`;
+const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '').split('@')[0]}`;
 const args = process.argv.slice(2);
+const redactCredential = (text: string) => text.replace(/("--run-credential"\s*,\s*)"[^"]+"/g, '$1"<redacted>"');
+const recordedArgs = args.map((word, index) => args[index - 1] === '--run-credential' ? '<redacted>' : redactCredential(word));
 // With the variables of Facade's that reach it: the run's own, and OpenCode's inline configuration
-const facadeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name)));
-fs.writeFileSync(`${record}.args.${agent}`, JSON.stringify({ cwd: process.cwd(), args, env: facadeEnv }));
+const facadeEnv = Object.fromEntries(Object.entries(process.env)
+	.filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name))
+	.map(([name, value]) => [name, value && redactCredential(value)]));
+const launchRecord = `${record}.args.${agent}`;
+const nextLaunch = `${launchRecord}.${process.pid}.next`;
+fs.writeFileSync(nextLaunch, JSON.stringify({ cwd: process.cwd(), args: recordedArgs, env: facadeEnv }), { mode: 0o600 });
+fs.renameSync(nextLaunch, launchRecord);
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
+fs.appendFileSync(`${record}.starts.${agent}`, `${process.pid}\n`, { mode: 0o600 });
 // Simulate the vendor's identity report explicitly; a launch argument alone no longer enables Pin.
 const sessionFile = process.env.FACADE_CODE_SESSION_FILE;
 if (sessionFile) {
@@ -87,7 +95,10 @@ if (sessionFile) {
 		if (file) {
 			const flag = args.findIndex(arg => ['--resume', '--conversation', '--session', 'resume'].includes(arg));
 			const session = flag >= 0 ? args[flag + 1] : process.env.FACADE_IT_AS === 'opencode' ? `ses_fake${randomUUID().replace(/-/g, '').slice(0, 12)}` : randomUUID();
-			fs.writeFileSync(file, `${session}\n`);
+			// The native report replaces the file atomically. An empty file clears the session.
+			const next = `${file}.${process.pid}.next`;
+			fs.writeFileSync(next, `${session}\n`);
+			fs.renameSync(next, file);
 		}
 	}
 	if (hook && !sessionFile) {
@@ -377,7 +388,12 @@ function start(): void {
 	// What a test asks of its screen shows within a fifth of a second
 	let quirked = '';
 	setInterval(() => {
-		const now = fs.existsSync(QUIRKS) ? fs.readFileSync(QUIRKS, 'utf8') : '';
+		let now = '';
+		try {
+			now = fs.readFileSync(QUIRKS, 'utf8');
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { throw error; }
+		}
 		if (now !== quirked) {
 			quirked = now;
 			const { title, reportedTitle, ask } = quirks();

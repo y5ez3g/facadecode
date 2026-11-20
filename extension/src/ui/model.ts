@@ -7,7 +7,7 @@ import type { Agents, Catalog, Disposable, Event, Location, LocationId, Location
 import { repeatedNames } from '../core/names';
 import { canDismiss } from '../core/ports';
 import type { CardMenu, PanelFilter, PanelState, PlaceKind } from '../webview/protocol';
-import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel, onePlaceOf } from './cardView';
+import { cardOf, CardPlace, CardWords, folderPrefixOf, isAgentRunning, locationLabel, onePlaceOf } from './cardView';
 import { arranged, atEnd, atStart, moved, PanelPrefs, withNew } from './order';
 
 /** Reported text and activity reach the page at most this often; lifecycle changes and errors go at once (PANEL-3.1, UX-5.2). */
@@ -45,6 +45,7 @@ interface PanelModelDeps {
 	readonly locations: Pick<LocationPort, 'snapshot' | 'onDidChange' | 'onDidRemove' | 'removalOf'>;
 	readonly prefs: PanelPrefs;
 	readonly words: CardWords;
+	readonly orchestrator?: boolean;
 	readonly remote: boolean;
 	/** Settles once this window's runs are reconciled: until then the panel is loading (PANEL-1.1). */
 	readonly ready: Promise<unknown>;
@@ -61,6 +62,7 @@ interface PanelModelDeps {
 export interface SelectedAgent {
 	readonly run: RunId;
 	readonly ended: boolean;
+	readonly running?: boolean;
 	readonly pinned?: boolean;
 	readonly pinnable?: boolean;
 }
@@ -79,6 +81,7 @@ export class PanelModel implements Disposable {
 	private readonly pinByRun = new Map<RunId, string | undefined>();
 	private filter: PanelFilter | undefined;
 	private selectedRun: RunId | undefined;
+	private pendingSelection: string | undefined;
 	private loading = true;
 	private reconciling: Promise<unknown> | undefined;
 	/** Every location seen, kept while it is only unavailable, gone on confirmed removal alone (PANEL-1.3, RULES-2.4). */
@@ -103,7 +106,7 @@ export class PanelModel implements Disposable {
 		this.timers = deps.timers ?? REAL_TIMERS;
 		this.order = deps.prefs.order();
 		this.filter = deps.prefs.filter();
-		this.selectedRun = deps.prefs.selection();
+		this.pendingSelection = deps.prefs.selection();
 		// A removal confirmed as the host restarted, before this panel listened, clears the filter it kept (PANEL-2.3, RULES-2.4)
 		if (this.filter && this.removedFor(this.filter)) {
 			this.setFilter(undefined);
@@ -130,7 +133,8 @@ export class PanelModel implements Disposable {
 	rebind(ready: Promise<unknown>): void {
 		this.order = this.deps.prefs.order();
 		this.filter = this.deps.prefs.filter();
-		this.selectedRun = this.deps.prefs.selection();
+		this.selectedRun = undefined;
+		this.pendingSelection = this.deps.prefs.selection();
 		this.known.clear();
 		this.exited.clear();
 		this.pinByRun.clear();
@@ -175,12 +179,22 @@ export class PanelModel implements Disposable {
 		return this.selection;
 	}
 
+	usesOrchestrator(): boolean {
+		return this.deps.orchestrator === true;
+	}
+
+	runFacts(run: RunId): RunFacts | undefined {
+		return this.deps.agents.get(run);
+	}
+
 	/** Selects a card: a click, Go to Agent, a person's own launch (PANEL-2.1). */
-	select(run: RunId): void {
-		if (this.deps.agents.get(run)) {
+	select(run: RunId): RunFacts | undefined {
+		const facts = this.runFacts(run);
+		if (facts) {
 			this.choose(run);
 			this.schedule();
 		}
+		return facts;
 	}
 
 	/**
@@ -196,6 +210,7 @@ export class PanelModel implements Disposable {
 
 	private choose(run: RunId | undefined): void {
 		if (run === this.selectedRun) { return; }
+		this.pendingSelection = undefined;
 		this.selectedRun = run;
 		this.deps.prefs.setSelection(run === undefined ? undefined : this.layoutKeys.get(run) ?? run);
 	}
@@ -399,6 +414,15 @@ export class PanelModel implements Disposable {
 		const catalog = this.deps.locations.snapshot();
 		this.learn(catalog);
 		const runs = this.deps.agents.list();
+		if (this.pendingSelection !== undefined) {
+			const restored = runs.find(run => this.deps.prefs.keyOf(run) === this.pendingSelection);
+			if (restored) {
+				this.selectedRun = restored.id;
+			}
+			if (restored || !this.loading) {
+				this.pendingSelection = undefined;
+			}
+		}
 		const byId = new Map(runs.map(run => [run.id, run]));
 		const ids = this.arrangedIds(runs);
 		const filter = this.filter && this.labeled(this.filter, catalog);
@@ -407,17 +431,18 @@ export class PanelModel implements Disposable {
 		// Counted among all of this window's cards, those the filter hides too (PANEL-1.3)
 		const repeated = repeatedNames(runs);
 		const icon = this.deps.icons?.();
+		const orchestrator = this.usesOrchestrator();
 		const visible = (id: string) => shownSet.has(id);
 		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
-			const local = facts.remoteMachine === undefined;
+			const canPin = orchestrator || facts.remoteMachine === undefined;
 			const withinArea = (other: string) => visible(other) && !!byId.get(other)?.pin === !!facts.pin;
 			const menu: CardMenu = {
-				...canDismiss(facts) ? { dismiss: true } : {},
-				...(local && facts.pinnable && !facts.pin ? { pin: true } : {}),
-				...(local && facts.pin ? { unpin: true } : {}),
-				moveUp: moved(ids, id, -1, withinArea) !== undefined,
-				moveDown: moved(ids, id, 1, withinArea) !== undefined
+				...(!orchestrator && canDismiss(facts) ? { dismiss: true } : {}),
+				...(canPin && facts.pinnable && !facts.pin ? { pin: true } : {}),
+				...(canPin && facts.pin ? { unpin: true } : {}),
+				moveUp: !orchestrator && moved(ids, id, -1, withinArea) !== undefined,
+				moveDown: !orchestrator && moved(ids, id, 1, withinArea) !== undefined
 			};
 			return cardOf(facts, { place: this.placeOf(facts, catalog), repeated: repeated.has(facts.name.trim()), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.readsTitles ? { readsTitles: this.deps.readsTitles(facts.builtIn ?? facts.cli) } : {}, ...icon ? { icon: icon(facts.cli) } : {} });
 		});
@@ -425,7 +450,7 @@ export class PanelModel implements Disposable {
 		this.exited.clear();
 		const empty: PanelState['empty'] = this.loading || cards.length ? undefined : filter ? 'noMatch' : catalog.folders.length ? 'noAgents' : 'noFolder';
 		const selected = this.selectedRun === undefined ? undefined : byId.get(this.selectedRun);
-		const selectedLocal = selected?.remoteMachine === undefined;
+		const canPinSelected = orchestrator || selected?.remoteMachine === undefined;
 		return {
 			state: {
 				revision,
@@ -437,7 +462,7 @@ export class PanelModel implements Disposable {
 				capabilities: { remote: this.deps.remote },
 				...(exited.length ? { exited } : {})
 			},
-			...(selected ? { selection: { run: selected.id, ended: canDismiss(selected), ...(selectedLocal && selected.pin ? { pinned: true } : {}), ...(selectedLocal && selected.pinnable ? { pinnable: true } : {}) } } : {})
+			...(selected ? { selection: { run: selected.id, ended: canDismiss(selected), ...(orchestrator ? { running: isAgentRunning(selected) } : {}), ...(canPinSelected && selected.pin ? { pinned: true } : {}), ...(canPinSelected && selected.pinnable ? { pinnable: true } : {}) } } : {})
 		};
 	}
 

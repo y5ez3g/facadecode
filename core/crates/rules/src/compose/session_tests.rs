@@ -80,6 +80,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         files: Vec::new(),
         plugin: Vec::new(),
         tools: Tools::NotInjected,
+        uses_run_credential: false,
     };
     assert_eq!(launch, launched);
     let launch = start_command_line(

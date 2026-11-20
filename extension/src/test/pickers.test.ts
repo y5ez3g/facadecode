@@ -7,12 +7,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { tempDir } from './util';
 import { folderKeyOf } from '../base/files';
-import type { CliListResult, MachineInfo, MachinesChange } from '../base/coreProtocol';
+import type { AgentListEntry, CliListArgs, LocationListArgs, ResumeCandidate, ResumeListArgs, ResumeTarget, V3MachineInfo, V3StartArgs } from '../base/coreProtocol';
 import { locationIdOf } from '../core/locations/catalog';
 import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunChange, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
-import type { MachineLaunch, RemoteLaunchRequest } from '../ui/pickers/machineLaunch';
-import type { DaemonLink, WatchListener } from '../host/rust/types';
+import type { MachineLaunch } from '../ui/pickers/machineLaunch';
+import type { RustPickerDeps } from '../ui/pickers/orchestrator';
 import { TestEmitter, withModules } from './withModules';
 
 const BACK_BUTTON = { id: 'back' };
@@ -104,6 +104,7 @@ class Input {
 
 function vscodeFor(ui: Ui) {
 	return {
+		EventEmitter: TestEmitter,
 		window: {
 			createQuickPick: () => new Input('pick', ui),
 			createInputBox: () => new Input('text', ui),
@@ -112,7 +113,11 @@ function vscodeFor(ui: Ui) {
 		QuickInputButtons: { Back: BACK_BUTTON },
 		QuickPickItemKind: { Separator: -1, Default: 0 },
 		ThemeIcon: class { constructor(readonly id: string) { } },
-		Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: [base.path, ...parts].join('/') }), parse: (uri: string) => ({ path: uri }) },
+		Uri: {
+			joinPath: (base: { path: string }, ...parts: string[]) => ({ path: [base.path, ...parts].join('/') }),
+			file: (path: string) => ({ path }),
+			parse: (uri: string) => ({ path: uri, with: ({ path }: { path: string }) => ({ toString: () => new URL(path, uri).href }) })
+		},
 		workspace: {
 			get workspaceFolders() { return ui.workspaceFolders.map(each => ({ index: each.index, name: each.name, uri: { toString: () => each.uri } })); },
 			getConfiguration: (section: string) => ({ get: (key: string) => section === 'git' && key === 'branchPrefix' ? ui.branchPrefix : undefined }),
@@ -168,6 +173,23 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		ui = new Ui();
 		load = withModules({ vscode: vscodeFor(ui) });
 	});
+
+	function rustPickers(overrides: Partial<RustPickerDeps>) {
+		const { createRustPickers } = load<typeof import('../ui/pickers/orchestrator')>(require.resolve('../ui/pickers/orchestrator'));
+		const unexpected = () => assert.fail('unexpected picker operation');
+		return createRustPickers({
+			media: { path: '/extension/media' } as never,
+			locations: {
+				snapshot: () => ({ locations: [], folders: ui.workspaceFolders, pending: false }),
+				resolve: unexpected, refresh: unexpected, removalOf: unexpected,
+				onDidChange: unexpected, onDidRemove: unexpected
+			},
+			hostMachineId: () => 'local-id', machines: () => [], listAgents: unexpected, listLocations: unexpected,
+			listClis: unexpected, listResumes: unexpected, start: unexpected, open: unexpected, resume: unexpected,
+			select: unexpected, notifyError: unexpected, icons: cli => cli,
+			...overrides
+		});
+	}
 
 	test('shared worktree input copies only the current validated destination without accepting, including out-of-order checks and cancel', async () => {
 		const { Flow } = load<typeof import('../ui/pickers/stepping')>(require.resolve('../ui/pickers/stepping'));
@@ -409,196 +431,201 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			};
 		});
 
-		test('LIFECYCLE-1.1, 1.3: New Agent opens with window CLIs, then follows a remote location and preserves choices after a refused preflight', async () => {
-			const location = { label: 'GPU workspace', cwd: '/server/app', source: { machine_id: 'gpu-id', window_id: 'win-server' } };
-			const attempts: [string, RemoteLaunchRequest][] = [];
-			const starts: [string, RemoteLaunchRequest][] = [];
-			const queried: string[] = [];
-			last = { location: LOGIN.id, cli: 'codex' };
-			choices = [cli('claude', 'Claude Code'), cli('codex', 'Codex')];
-			const network: MachineLaunch = {
-				machines: () => ({ local: { id: 'local-id', name: 'mbp' }, others: [{ id: 'gpu-id', name: 'gpu' }] }),
-				catalog: async machine => {
-					queried.push(machine);
-					return { locations: [{ ...location, source: { ...location.source } }], clis: [cli('muse', 'Muse Code')] };
+		test('RULES-6.5: New Agent chooses a saved machine and folder before loading its CLIs; the branch is sent at launch', async () => {
+			const { OrchestratorLocations } = load<typeof import('../host/orchestrator/catalog')>(require.resolve('../host/orchestrator/catalog'));
+			const calls: unknown[][] = [];
+			const starts: V3StartArgs[] = [];
+			const foldersChanged = new TestEmitter<void>();
+			ui.workspaceFolders = [SHOP, DOCS];
+			const locations = new OrchestratorLocations({
+				folders: () => ui.workspaceFolders,
+				onDidChangeFolders: foldersChanged.event,
+				list: async args => {
+					calls.push(['local locations', args]);
+					const shared = { location_id: LOGIN.id, path: LOGIN.path, label: LOGIN.label, kind: 'worktree' as const };
+					return { locations: [
+						{ location_id: MAIN.id, path: SHOP.path, label: MAIN.label, kind: 'main', source_folder: SHOP.path },
+						{ ...shared, source_folder: SHOP.path },
+						{ location_id: GUIDE.id, path: DOCS.path, label: GUIDE.label, kind: 'folder', source_folder: DOCS.path },
+						{ ...shared, source_folder: DOCS.path }
+					] };
 				},
-				preflight: async (machine, request) => {
-					attempts.push([machine, request]);
-					if (attempts.length === 1) { throw new Error('Directory unavailable'); }
-				},
-				launch: (machine, request) => {
-					starts.push([machine, request]);
-					return 'remote-run';
-				}
-			};
-			const done = start(undefined, network);
-			await settle();
-			assert.strictEqual(ui.current!.title, 'New Agent · Ada · login-fix');
-			assert.deepStrictEqual(ui.current!.labels(), ['Codex', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...']);
-			assert.deepStrictEqual(ui.current!.activeItems.map(item => item.label), ['Codex']);
-			assert.deepStrictEqual(ui.current!.buttons, []);
-			assert.deepStrictEqual(queried, []);
-			ui.current!.accept('Change Name...');
-			await settle();
-			ui.current!.type('  Chosen Name  ');
-			ui.current!.accept();
-			await settle();
-			ui.current!.accept('Change Working Location...');
-			await settle();
-			assert.strictEqual(ui.current!.title, 'New Agent · Machine');
-			assert.deepStrictEqual(ui.current!.activeItems.map(item => [item.label, item.description]), [['This machine', 'mbp']]);
-			assert.deepStrictEqual(ui.current!.buttons, [BACK_BUTTON]);
-			ui.current!.accept('gpu');
-			await settle();
-			assert.deepStrictEqual(ui.current!.labels(), ['~', 'GPU workspace', 'Change Working Location...']);
-			ui.current!.accept('GPU workspace');
-			await settle();
-			assert.strictEqual(ui.current!.title, 'New Agent · Chosen Name · gpu · GPU workspace');
-			assert.deepStrictEqual(ui.current!.labels(), ['Muse Code', 'Options', 'Change Working Location...', 'Change Name...']);
-			assert.deepStrictEqual(ui.current!.buttons, []);
-			ui.current!.accept('Change Working Location...');
-			await settle();
-			assert.deepStrictEqual(ui.current!.activeItems.map(item => item.label), ['gpu']);
-			ui.current!.accept();
-			await settle();
-			assert.deepStrictEqual(ui.current!.activeItems.map(item => item.label), ['GPU workspace']);
-			ui.current!.accept('Change Working Location...');
-			await settle();
-			assert.strictEqual(ui.current!.value, '/server/app');
-			ui.current!.type('/another/path');
-			ui.current!.back();
-			await settle();
-			assert.strictEqual(ui.current!.title, 'New Agent · Working Location');
-			ui.current!.back();
-			await settle();
-			assert.deepStrictEqual(ui.current!.activeItems.map(item => item.label), ['gpu']);
-			ui.current!.accept('This machine');
-			await settle();
-			assert.deepStrictEqual(ui.current!.activeItems.map(item => item.label), ['login-fix']);
-			ui.current!.back();
-			await settle();
-			assert.deepStrictEqual(ui.current!.activeItems.map(item => item.label), ['This machine']);
-			ui.current!.back();
-			await settle();
-			ui.current!.accept('Muse Code');
-			await settle();
-			assert.strictEqual(ui.current!.title, 'New Agent · Chosen Name · gpu · GPU workspace');
-			assert.strictEqual(ui.current!.activeItems[0]?.detail, 'Directory unavailable');
-			assert.deepStrictEqual([launched, starts], [[], []]);
-			ui.current!.accept();
-			await done;
-			const wanted: [string, RemoteLaunchRequest] = ['gpu-id', { name: 'Chosen Name', cli: 'muse', location }];
-			assert.deepStrictEqual([attempts, starts, selected, listed, queried], [[wanted, wanted], [wanted], ['remote-run'], [LOGIN.id, LOGIN.id], ['gpu-id', 'gpu-id']]);
+				log: { event: assert.fail }
+			});
+			try {
+				const pickers = rustPickers({
+					locations,
+					machines: () => [
+						{ machine_id: 'local-id', name: 'mbp', selector: 'mbp', state: 'online', connections: [] },
+						{ machine_id: 'gpu-id', name: 'gpu', selector: '1234abcd', state: 'sleeping', connections: [] }
+					],
+					listLocations: async (args: LocationListArgs) => {
+						calls.push(['remote locations', args]);
+						const folder = args.folders?.[0];
+						if (folder) {
+							return { locations: [{ location_id: 'loc-entered', path: '/canonical/work path', label: 'main', kind: 'main', source_folder: folder }] };
+						}
+						return { locations: [
+							{ location_id: 'loc-home', path: '/home/dev', label: 'dev', kind: 'folder' },
+							{ location_id: 'loc-app', path: '/server/app', label: 'GPU workspace', kind: 'main' }
+						] };
+					},
+					listClis: async args => {
+						calls.push(['clis', args]);
+						const overrides = { model: false, effort: false };
+						return { clis: args.machine ? [
+							{ cli: 'muse', display_name: 'Muse Code', available: true, overrides },
+							{ cli: 'codex', display_name: 'Codex', available: false, not_installed: true, overrides },
+							{ cli: 'claude', display_name: 'Claude Code', available: false, problem: 'Disabled in facade.json', overrides }
+						] : [{ cli: 'codex', display_name: 'Codex', available: true, overrides }] };
+					},
+					start: async args => { starts.push(args); return 'remote-run'; },
+					select: run => selected.push(run)
+				});
+				assert.deepStrictEqual(calls, []);
+				const done = pickers.newAgent(LOGIN.id);
+				assert.strictEqual(ui.current!.busy, true);
+				await settle();
+				assert.strictEqual(ui.current!.title, 'New Agent · login-fix');
+				assert.deepStrictEqual(locations.resolve(LOGIN.id)?.folders, [SHOP, DOCS]);
+				assert.deepStrictEqual(calls, [['local locations', { folders: [SHOP.path, DOCS.path] }], ['clis', { folder: LOGIN.path }]]);
+				ui.current!.accept('Change Name...');
+				await settle();
+				ui.current!.type('  Chosen Name  ');
+				ui.current!.accept();
+				await settle();
+				ui.current!.accept('Change Working Location...');
+				await settle();
+				assert.strictEqual(ui.current!.title, 'New Agent · Machine');
+				assert.deepStrictEqual(ui.current!.activeItems.map(item => [item.label, item.description]), [['This machine', 'mbp']]);
+				ui.current!.accept('gpu');
+				await settle();
+				assert.deepStrictEqual(ui.current!.items.map(item => [item.label, item.description]), [
+					['dev', '/home/dev'], ['GPU workspace', '/server/app'], ['Enter Path...', undefined]
+				]);
+				assert.deepStrictEqual(buttonsOf(ui.current!), [['GPU workspace', 'git-branch: New Worktree...']]);
+				const remoteList = ['remote locations', { machine: '1234abcd', folders: [] }];
+				const enteredPath = ['remote locations', { machine: '1234abcd', folders: ['/another/work path'] }];
+				assert.deepStrictEqual(calls.slice(2), [remoteList]);
+				ui.current!.accept('Enter Path...');
+				await settle();
+				ui.current!.type('/another/work path');
+				ui.current!.accept();
+				await settle();
+				assert.deepStrictEqual(calls.slice(2), [remoteList, enteredPath]);
+				assert.deepStrictEqual(ui.current!.labels(), ['/another/work path', 'New Worktree...']);
+				ui.current!.accept('New Worktree...');
+				await settle();
+				assert.strictEqual(ui.current!.title, 'New Agent · New Worktree');
+				assert.deepStrictEqual(calls.slice(2), [remoteList, enteredPath]);
+				ui.current!.type('feat/ui');
+				ui.current!.accept();
+				await settle();
+				assert.strictEqual(ui.current!.title, 'New Agent · Chosen Name · feat/ui (new)');
+				assert.deepStrictEqual(ui.current!.labels(), ['Muse Code', 'Unavailable', 'Codex', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...']);
+				assert.deepStrictEqual([ui.current!.item('Codex').detail, ui.current!.item('Claude Code').detail], ['Not installed', 'Disabled in facade.json']);
+				assert.strictEqual(ui.current!.item('Change Working Location...').description, 'New worktree feat/ui from gpu · /another/work path');
+				assert.deepStrictEqual(starts, []);
+				ui.current!.accept('Muse Code');
+				await done;
+				assert.deepStrictEqual(calls.slice(2), [remoteList, enteredPath, ['clis', { machine: '1234abcd', folder: '/another/work path' }]]);
+				assert.deepStrictEqual(starts, [{ cli: 'muse', machine: '1234abcd', folder: '/another/work path', name: 'Chosen Name', worktree: 'feat/ui', cols: 80, rows: 24 }]);
+				assert.deepStrictEqual(selected, ['remote-run']);
+			} finally {
+				locations.dispose();
+			}
 		});
 
-		test('LIFECYCLE-1.3: selects separate Facade homes by ID from a lone plain folder or no folder, and blocks machines without a route', async () => {
-			const { RustMachines } = withModules({ vscode: {
-				EventEmitter: TestEmitter,
-				Disposable: { from: (...parts: { dispose(): void }[]) => ({ dispose: () => parts.forEach(part => part.dispose()) }) }
-			} })<typeof import('../host/rust/machines')>(require.resolve('../host/rust/machines'));
-			const [local, first, second, login, offline] = ['1', '2', '3', '4', '5'].map(digit => `${digit.repeat(8)}-0000-4000-8000-000000000000`);
-			const window = { machine_id: local, window_id: 'editor' };
-			const dispose = () => ({ dispose() { } });
-			let snapshot!: WatchListener<readonly MachineInfo[], MachinesChange>['snapshot'];
-			const queries: { op: string; machine: string }[] = [];
-			const clis: CliListResult = { clis: [{ cli: 'claude', display_name: 'Remote Claude', available: true, overrides: { model: false, effort: false } }] };
-			const link = {
-				window, windowId: window.window_id, machineId: local, connected: true, onDidBind: dispose,
-				watch: (topic: string, _args: object, listener: WatchListener<readonly MachineInfo[], MachinesChange>) => {
-					assert.strictEqual(topic, 'machines');
-					snapshot = listener.snapshot;
-					return dispose();
+		test('RULES-6.5: same-name machines keep their canonical selectors, including a saved sleeping machine', async () => {
+			const { OrchestratorLocations } = load<typeof import('../host/orchestrator/catalog')>(require.resolve('../host/orchestrator/catalog'));
+			const localId = '11111111-0000-4000-8000-000000000000';
+			const first: V3MachineInfo = { machine_id: '22222222-0000-4000-8000-000000000000', name: 'buildbox', selector: '22222222', state: 'online', connections: [] };
+			const second: V3MachineInfo = { machine_id: '33333333-0000-4000-8000-000000000000', name: 'buildbox', selector: '33333333-0000-4000-8000-000000000000', state: 'sleeping', connections: [] };
+			const local: V3MachineInfo = { machine_id: localId, name: 'editor', selector: 'editor', state: 'online', route: [], connections: [
+				{ machine_id: second.machine_id, initiator_machine_id: localId, kind: 'saved', ssh_destination: 'buildbox', state: 'unavailable' }
+			] };
+			const targets = [
+				{ machine: first, home: '/home/first', folders: [] },
+				{ machine: second, home: '/home/second', folders: [DOCS] }
+			];
+			const queries: [string, LocationListArgs | CliListArgs][] = [];
+			const starts: V3StartArgs[] = [];
+			const locations = new OrchestratorLocations({
+				folders: () => ui.workspaceFolders,
+				onDidChangeFolders: changed.event,
+				list: async args => {
+					assert.deepStrictEqual(args, { folders: [DOCS.path] });
+					return { locations: [{ location_id: GUIDE.id, path: DOCS.path, label: 'docs', kind: 'folder', source_folder: DOCS.path }] };
 				},
-				call: async (op: string, { machine }: { machine: string }) => {
-					queries.push({ op, machine });
-					assert.ok(op === 'cli.list' || op === 'location.list', op);
-					return op === 'cli.list' ? clis : { locations: [] };
-				}
-			} as unknown as DaemonLink;
-			const machines = new RustMachines(link, () => id => id);
-			const connection = (machine_id: string, remote_home: string, state: MachineInfo['connections'][number]['state']) =>
-				({ machine_id, initiator_machine_id: local, remote_home, state, kind: 'saved' as const, ssh_destination: 'buildbox' });
+				log: { event: assert.fail }
+			});
 			try {
-				snapshot([
-					{ machine_id: local, name: 'editor', route: [], connections: [
-						connection(first, '~/facade-one', 'connected'),
-						connection(second, '~/facade-two', 'ssh_interaction_required'),
-						connection(login, '~/facade-login', 'ssh_interaction_required'),
-						connection(offline, '~/facade-offline', 'unavailable')
-					] },
-					{ machine_id: first, name: 'buildbox', route: [first], connections: [] },
-					{ machine_id: second, name: 'buildbox', route: [first, second], connections: [] },
-					{ machine_id: login, name: 'other home', connections: [] },
-					{ machine_id: offline, name: 'offline', connections: [] }
-				]);
-				const checks: string[] = [];
-				const starts: string[] = [];
-				const network: MachineLaunch = {
-					onDidChange: machines.onDidChange, machines: () => machines.choices(), catalog: id => machines.catalog(id),
-					preflight: async (id, request) => { assert.deepStrictEqual(request, { name: 'Ada', cli: 'claude' }); checks.push(id); },
-					launch: (id, request) => { assert.deepStrictEqual(request, { name: 'Ada', cli: 'claude' }); starts.push(id); return 'remote-run'; }
-				};
-				for (const [index, id] of [[1, first], [2, second]] as const) {
-					catalog = index === 1 ? { locations: [], folders: [], pending: false } : { locations: [GUIDE], folders: [DOCS], pending: false };
-					const done = start(undefined, network);
+				const { newAgent } = rustPickers({
+					locations, hostMachineId: () => local.machine_id, machines: () => [local, first, second],
+					listLocations: async args => {
+						queries.push(['location.list', args]);
+						const found = targets.find(({ machine }) => machine.selector === args.machine);
+						assert.ok(found);
+						return { locations: [{ location_id: 'loc-home', path: found.home, label: 'Login home', kind: 'folder' }] };
+					},
+					listClis: async args => {
+						queries.push(['cli.list', args]);
+						return { clis: [{ cli: 'claude', display_name: args.machine ? 'Remote Claude' : 'Claude Code', available: true, overrides: { model: false, effort: false } }] };
+					},
+					start: async args => { starts.push(args); return 'remote-run'; },
+					select: run => selected.push(run)
+				});
+				for (const [index, { machine, home, folders }] of targets.entries()) {
+					ui.workspaceFolders = folders;
+					const done = newAgent();
 					await settle();
-					assert.deepStrictEqual(ui.current!.labels(), index === 1
-						? ['Open Folder...', 'Options', 'Change Working Location...']
-						: ['Claude Code', 'Options', 'Change Working Location...', 'Change Name...']);
+					assert.strictEqual(ui.current!.labels()[0], folders.length ? 'Claude Code' : 'Open Folder...');
 					ui.current!.accept('Change Working Location...');
 					await settle();
 					const picker = ui.current!;
-					assert.deepStrictEqual(picker.items.map(item => [
-						item.label, item.detail, (item.iconPath as { id: string }).id
-					]), [
-						['This machine', undefined, 'device-desktop'],
-						['buildbox (22222222)', undefined, 'globe'],
-						['buildbox (33333333)', undefined, 'globe'],
-						['other home', 'Needs SSH login', 'globe'],
-						['offline', 'Unavailable', 'globe']
+					assert.deepStrictEqual(picker.items.map(item => [item.label, item.description]), [
+						['This machine', local.name], ['buildbox', first.selector], ['buildbox', second.selector]
 					]);
-					const before = queries.length;
-					for (const blocked of [3, 4]) {
-						picker.activate(blocked);
-						picker.accept();
-						await settle();
-						assert.strictEqual(ui.current, picker);
-					}
-					assert.strictEqual(queries.length, before);
-					picker.activate(index);
+					picker.activate(index + 1);
 					picker.accept();
 					await settle();
 					assert.strictEqual(ui.current!.title, 'New Agent · Working Location');
-					ui.current!.accept('~');
+					assert.strictEqual(ui.current!.item('Login home').description, home);
+					ui.current!.accept('Login home');
 					await settle();
 					assert.deepStrictEqual(ui.current!.labels(), ['Remote Claude', 'Options', 'Change Working Location...', 'Change Name...']);
-					if (index === 2) {
-						// Returning to this window selects its only location, and the CLIs are the window's again.
+					if (folders.length) {
 						ui.current!.accept('Change Working Location...');
 						await settle();
-						assert.strictEqual(ui.current!.activeItems[0]?.label, 'buildbox (33333333)');
+						assert.strictEqual(ui.current!.activeItems[0]?.description, machine.selector);
 						ui.current!.accept('This machine');
 						await settle();
-						assert.strictEqual(ui.current!.title, 'New Agent · Ada');
-						assert.deepStrictEqual(ui.current!.labels(), ['Claude Code', 'Options', 'Change Working Location...', 'Change Name...']);
+						ui.current!.accept('docs');
+						await settle();
+						assert.strictEqual(ui.current!.labels()[0], 'Claude Code');
 						ui.current!.accept('Change Working Location...');
 						await settle();
 						assert.strictEqual(ui.current!.activeItems[0]?.label, 'This machine');
-						ui.current!.accept('buildbox (33333333)');
+						ui.current!.activate(index + 1);
+						ui.current!.accept();
 						await settle();
-						ui.current!.accept('~');
+						ui.current!.accept('Login home');
 						await settle();
 					}
 					ui.current!.accept('Remote Claude');
 					await done;
-					const expectedQuery = ['location.list', 'cli.list'].map(op => ({ op, machine: `id:${id.replace(/-/g, '')}` }));
-					assert.deepStrictEqual(queries.slice(before), index === 1 ? expectedQuery : [...expectedQuery, ...expectedQuery]);
 				}
-				assert.deepStrictEqual([checks, starts, selected, ui.commands, listed, launched], [
-					[first, second], [first, second], ['remote-run', 'remote-run'], [], [GUIDE.id, GUIDE.id], []
+				assert.deepStrictEqual(queries, [
+					['location.list', { machine: first.selector, folders: [] }], ['cli.list', { machine: first.selector, folder: targets[0].home }],
+					['cli.list', { folder: DOCS.path }],
+					['location.list', { machine: second.selector, folders: [] }], ['cli.list', { machine: second.selector, folder: targets[1].home }],
+					['cli.list', { folder: DOCS.path }],
+					['location.list', { machine: second.selector, folders: [] }], ['cli.list', { machine: second.selector, folder: targets[1].home }]
 				]);
+				assert.deepStrictEqual(starts, targets.map(({ machine, home }) => ({ machine: machine.selector, folder: home, cli: 'claude', cols: 80, rows: 24 })));
+				assert.deepStrictEqual(selected, ['remote-run', 'remote-run']);
 			} finally {
-				machines.dispose();
+				locations.dispose();
 			}
 		});
 
@@ -1587,29 +1614,35 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('LIFECYCLE-3.2: identities stay distinct when two ended agents share a session', async () => {
-			const { pickSession } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
-			const entry = { key: { environment: 'local', cli: 'claude', sessionId: 'shared' }, cwd: MAIN.path, title: 'Saved title' };
-			const picked: string[] = [];
-			const done = pickSession({
-				kind: 'resume',
-				retained: () => [
-					{ agent: 'a1@id:machine', alias: '#a1', name: 'Ada', entry },
-					{ agent: 'a2@id:machine', alias: '#a2', name: 'Ada', entry }
-				],
-				resume: async agent => { picked.push(agent); return agent; },
-				locations: { snapshot: () => ({ locations: [], folders: [], pending: false }) },
-				running: () => false, reveal: async () => undefined, select: () => undefined,
-				notifyError: assert.fail, media: { path: '/extension/media' } as never, language: 'en'
+		test('LIFECYCLE-5.4: Resume uses one query per root and preserves distinct agents with the same session', async () => {
+			ui.workspaceFolders = [SHOP, DOCS];
+			const candidate = { cli: 'claude', folder: MAIN.path, machine_id: 'local-id', session: 'shared', title: 'Saved title' };
+			const first: ResumeCandidate = { ...candidate, target: { reference: 'a1@mbp' }, agent: { machine_id: 'local-id', agent_id: 'a1' } };
+			const second: ResumeCandidate = { ...candidate, target: { reference: 'a2@mbp' }, agent: { machine_id: 'local-id', agent_id: 'a2' } };
+			const history: ResumeCandidate = { ...candidate, session: 'session', title: 'CLI history', target: { reference: 'claude:session', folder: MAIN.path } };
+			const queries: ResumeListArgs[] = [];
+			const picked: ResumeTarget[] = [];
+			const selected: string[] = [];
+			const { resumeAgent } = rustPickers({
+				listResumes: async args => {
+					queries.push(args);
+					return { items: args.folder === SHOP.path ? [first, second, history] : [second, history], machines: [] };
+				},
+				resume: async target => { picked.push(target); return target.reference; },
+				select: run => selected.push(run)
 			});
+			const done = resumeAgent();
 			await settle();
 			const picker = ui.current!;
 			assert.strictEqual(picker.title, 'Resume Agent');
-			assert.deepStrictEqual(picker.items.map(item => item.description?.split(' · ').at(-1)), ['#a1', '#a2']);
+			assert.deepStrictEqual(queries, [{ folder: SHOP.path }, { folder: DOCS.path }]);
+			assert.deepStrictEqual(picker.items.map(item => item.description?.split(' · ').at(-1)), ['a1@mbp', 'a2@mbp', 'claude:session']);
 			picker.activate(1);
 			picker.accept();
 			await done;
-			assert.deepStrictEqual(picked, ['a2@id:machine']);
+			assert.deepStrictEqual(picked, [second.target]);
+			assert.strictEqual(picked[0], second.target);
+			assert.deepStrictEqual(selected, ['a2@mbp']);
 		});
 	});
 
@@ -1962,29 +1995,40 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			activity: 'working', reporting: true, root: `run-${String(n).padStart(32, '0')}`, origin: 'human', tools: 'not_injected', ...more
 		});
 
-		test('LIFECYCLE-2.3: local rows appear while remote discovery runs, and a qualified reference adopts the remote record', async () => {
-			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
-			const local = run(1);
-			const remote = run(1, { id: 'gpu-a1', alias: '#a1@gpu', address: '#a1@id:1234abcd', name: 'Remote Ada' });
-			const adopted: string[] = [];
-			const report = new TestEmitter<void>();
-			const done = goToAgent({
-				model: { ordered: () => [local], placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' }), placesShown: () => true },
-				agents: { onDidChange: new TestEmitter<RunChange>().event },
-				media: { path: '/extension/media' } as never,
-				reveal: async () => undefined, copyReference: async () => undefined, stop: async () => undefined, dismiss: async () => undefined,
-				others: { list: () => [], query: async () => [{ facts: remote, windows: [] }], onDidChange: report.event,
-					open: async id => void adopted.push(id), copyReference: async () => undefined, stop: async () => false }
+		test('LIFECYCLE-5.2: Go to Agent lists managed rows in roster order and opens the exact matching record', async () => {
+			const local: AgentListEntry = {
+				reference: { machine_id: 'local-id', agent_id: 'a1' }, id: 'a1@mbp', name: 'Ada', type: 'managed',
+				state: 'working', cli: 'claude', folder: MAIN.path, started_at: '2026-11-19T01:00:00Z'
+			};
+			const remote: AgentListEntry = {
+				...local, reference: { machine_id: 'gpu-id', agent_id: 'a1' }, id: 'a1@1234abcd', name: 'Remote Ada',
+				title: 'Fix\nlogin', folder: '/server/app', started_at: '2026-11-19T01:01:00Z'
+			};
+			const guest: AgentListEntry = { ...local, reference: { machine_id: 'local-id', agent_id: 'a2' }, id: 'a2@mbp', type: 'guest', state: 'online' };
+			const opened: AgentListEntry[] = [];
+			const selected: string[] = [];
+			let queries = 0;
+			const { goToAgent } = rustPickers({
+				listAgents: async () => { queries++; return { agents: [remote, guest, local], machines: [] }; },
+				open: async entry => { opened.push(entry); return entry.id; },
+				select: run => selected.push(run)
 			});
+			assert.strictEqual(queries, 0);
+			const done = goToAgent();
 			const picker = ui.current!;
-			assert.deepStrictEqual(picker.items.map(item => item.label), ['Ada']);
+			assert.strictEqual(picker.busy, true);
 			await settle();
-			assert.deepStrictEqual(picker.items.map(item => item.label), ['Ada', 'Remote Ada']);
-			picker.type('@Old Name #a1@id:1234abcd');
-			assert.deepStrictEqual(picker.items.map(item => item.label), ['Remote Ada']);
+			assert.strictEqual(queries, 1);
+			assert.deepStrictEqual(picker.items.map(item => [item.label, item.description, item.buttons]), [
+				['Remote Ada', 'a1@1234abcd · claude · /server/app · Fix login', undefined],
+				['Ada', `a1@mbp · claude · ${MAIN.path}`, undefined]
+			]);
+			assert.strictEqual(picker.matchOnDescription, true);
 			picker.accept('Remote Ada');
 			await done;
-			assert.deepStrictEqual(adopted, [remote.id]);
+			assert.deepStrictEqual(opened, [remote]);
+			assert.strictEqual(opened[0], remote);
+			assert.deepStrictEqual(selected, ['a1@1234abcd']);
 		});
 
 		test('LIFECYCLE-2.3: a confirmed stop removes only the matching network candidate', async () => {

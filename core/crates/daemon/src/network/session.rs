@@ -17,7 +17,7 @@ use facade_base::daemon::{
 use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Notification, Reason, Response, decode_arguments,
 };
-use facade_base::machine::{AdvertiseParams, ExecutionOutcome, MachineIdentity};
+use facade_base::machine::{ExecutionOutcome, MachineIdentity};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -43,7 +43,7 @@ fn change_result(update: WatchUpdate) -> Change {
 
 /// Applies machine frames to the routes of this connection.
 pub(super) trait SessionHandler: Clone + Send + Sync + 'static {
-    fn replace_table(&self, table: AdvertiseParams) -> Result<(), ErrorBody>;
+    fn replace_table(&self, table: Value) -> Result<(), ErrorBody>;
 
     fn receive(
         &self,
@@ -517,9 +517,7 @@ impl Peer {
                             tokio::spawn(incoming.serve(handler.clone(), forward, deadline));
                         }
                         (methods::ADVERTISE, None) => {
-                            if let Err(error) =
-                                handler.replace_table(decode_arguments(request.params)?)
-                            {
+                            if let Err(error) = handler.replace_table(request.params) {
                                 return Ok(ReadEnd::Rejected(error));
                             }
                         }

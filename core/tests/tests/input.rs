@@ -279,10 +279,14 @@ fn queued_calls_resume_when_input_room_returns() {
 fn type_pastes_text_and_presses_keys() {
     let home = TestHome::new("type");
     home.start_fake("worker");
+    let address = home.agent_record("a1").expect("a1 is recorded")["address"]
+        .as_str()
+        .expect("an address")
+        .to_string();
     home.run_facade_ok(&["type", "worker", "hello there", "--enter"]);
     home.run_facade_ok(&["type", "a1", "two\nlines", "--enter"]);
-    home.run_facade_ok(&["type", "#a1", "abc"]);
-    home.run_facade_ok(&["type", "1", "--key", "Backspace", "--key", "enter"]);
+    home.run_facade_ok(&["type", &address, "abc"]);
+    home.run_facade_ok(&["type", "a1", "--key", "Backspace", "--key", "enter"]);
     home.run_facade_ok(&["type", "worker", "junk"]);
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     home.run_facade_ok(&["type", "worker", "ok", "--enter"]);
@@ -309,13 +313,16 @@ fn type_pastes_text_and_presses_keys() {
         stderr(&control)
     );
     home.run_facade_ok(&["stop", "worker"]);
-    for given in ["a1", "#a1", "1", "worker"] {
+    // Typing finds running agents alone: the error says the agent ended.
+    for given in ["a1", address.as_str(), "worker"] {
         let ended = home.run_facade(&["type", given, "late", "--enter"]);
         assert!(
             ended.status.code() == Some(1)
                 && stderr(&ended)
-                    == "error: a1 has ended\n  tip: run 'facade inspect a1' to check for a saved \
-                        session\n",
+                    == format!(
+                        "error: agent {address} has ended\n  tip: run 'facade screen {given}' for \
+                         the last screen or 'facade resume {given}' to continue\n"
+                    ),
             "{given}: {}",
             stderr(&ended)
         );
@@ -475,11 +482,8 @@ fn one_typed_call_carries_at_most_1_mib() {
         json!({ "agent": agent, "text": "x".repeat(limit + 1) }),
     );
     assert_eq!(error_reason(&over), "capacity_exceeded", "{over}");
-    assert!(
-        over["error"]["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("agent.type accepts at most 1024 KiB of input as written"),
+    assert_eq!(
+        over["error"]["message"], "agent.type accepts at most 1024 KiB of input",
         "{over}"
     );
     let at_limit = wire.call(

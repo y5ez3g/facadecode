@@ -21,6 +21,9 @@ mod wake;
 #[cfg(windows)]
 mod windows;
 
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime};
+
 use facade_base::service::{self, Locked, Service, StartupChannel};
 
 #[cfg(unix)]
@@ -75,4 +78,18 @@ fn prepare(channel: Option<&StartupChannel>) -> anyhow::Result<Option<Keeper>> {
 /// Writes a line to the keeper's log.
 fn log(level: &str, message: &str) {
     facade_base::log::write("keeper", level, message);
+}
+
+/// Maintains the log from the keeper's event loop after it takes its service lock.
+fn prune_log_if_due(core: &Path, now: Instant, next: &mut Instant) {
+    const INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+    if now < *next {
+        return;
+    }
+    *next = now + INTERVAL;
+    let path = core.join("logs").join("keeper.log");
+    if let Err(err) = facade_base::log::prune(&path, SystemTime::now()) {
+        log("warn", &format!("could not prune the keeper's log: {err}"));
+    }
 }

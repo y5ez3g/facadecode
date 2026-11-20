@@ -3,10 +3,15 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
 use facade_base::daemon::WindowDescription;
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
+#[cfg(test)]
+use rusqlite::params;
 
-use super::{Store, WindowRow, log};
+use super::Store;
+#[cfg(test)]
+use super::{WindowRow, log};
 
 pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
@@ -27,12 +32,41 @@ pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
 #[derive(Clone)]
 pub(crate) struct WindowTable(Arc<Store>);
 
+/// A selector from the v2 extension's persisted workspace or window binding.
+pub(crate) enum LegacyWindow<'a> {
+    Workspace(&'a str),
+    Logical(&'a str),
+    Instance(&'a str),
+}
+
 impl WindowTable {
     pub(super) fn new(store: Arc<Store>) -> WindowTable {
         WindowTable(store)
     }
 
+    /// Stable logical IDs matching the extension's v2 selector, including multiple windows of a
+    /// single workspace.
+    pub(crate) fn legacy_ids(&self, selector: LegacyWindow<'_>) -> anyhow::Result<Vec<String>> {
+        let (column, value) = match selector {
+            LegacyWindow::Workspace(key) => ("workspace", key),
+            LegacyWindow::Logical(id) => ("window_id", id),
+            LegacyWindow::Instance(id) => ("instance", id),
+        };
+        self.0.with(
+            || "read the legacy logical windows".to_string(),
+            |connection| {
+                connection
+                    .prepare(&format!(
+                        "SELECT window_id FROM windows WHERE {column} = ?1 ORDER BY window_id"
+                    ))?
+                    .query_map([value], |row| row.get(0))?
+                    .collect()
+            },
+        )
+    }
+
     /// Writes the logical window and its binding. Environment variables and colors live in memory.
+    #[cfg(test)]
     pub(crate) fn save_logical_window(&self, row: &WindowRow) -> anyhow::Result<()> {
         let window = &row.description;
         let folders = serde_json::to_string(&window.folders)?;
@@ -61,6 +95,7 @@ impl WindowTable {
     }
 
     /// Saved logical windows, in allocation order, with the last instance of each binding.
+    #[cfg(test)]
     pub(crate) fn logical_windows(&self) -> anyhow::Result<Vec<WindowRow>> {
         let rows = self.0.with(
             || "read the windows".to_string(),

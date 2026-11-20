@@ -5,7 +5,7 @@
 // The engine switch's driver, an extension beside Facade Code in an editor that runs no extension tests: the switch needs real reloads,
 // which end a test run's extension host. The window starts on the old engine (`facade.rustEngine` off) and starts two agents; the
 // driver sets the setting to `auto` and reloads: the agents go on, on the old engine. Both are ended: a new agent is refused. Reload:
-// the window is on the Rust engine, and Recent continues both conversations by their sessions. Each step is a line of
+// the window is on the Rust engine, and Resume Agent continues both saved conversations. Each step is a line of
 // FACADE_IT_SWITCH for the runner to judge; the editor's notice text is not readable by an extension, so the runner judges what
 // the window did instead: which engine ran, which agents ran, and that nothing was started where the notice says to reload.
 
@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
+import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 
 const OUT = process.env.FACADE_IT_SWITCH!;
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -131,30 +132,31 @@ export async function activate(): Promise<void> {
 			void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
 			return;
 		}
-		// The window opened on the Rust engine: Recent has both conversations, and each click continues one by its session
-		const resumed: { alias: string; session: string }[] = [];
-		const wanted = new Set(two.agents.map(agent => agent.session));
-		for (let attempt = 0; attempt < 6 && resumed.length < wanted.size; attempt++) {
+		const resumed: { runId: string; session: string }[] = [];
+		for (let at = 0; at < two.agents.length; at++) {
 			const before = new Set((await state()).cards.map(card => card.runId));
-			void vscode.commands.executeCommand('facade.continueSession');
-			await pause(1_500);
-			for (let skip = 0; skip < attempt % 2; skip++) {
-				await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
-			}
-			const card = await until('a card Recent starts', async () => {
-				const added = (await state()).cards.find(each => !before.has(each.runId));
-				if (added) { return added; }
-				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+			void vscode.commands.executeCommand('facade.resumeAgent');
+			const label = `Switch journey conversation ${at + 1}`;
+			await until(`Resume Agent to select ${label}`, async () => {
+				const picker = await vscode.commands.executeCommand<ResumePickerState>(RESUME_PICKER_STATE).then(value => value, () => undefined);
+				if (!picker || picker.busy || picker.active < 0) { return undefined; }
+				const wanted = picker.labels.indexOf(label);
+				if (wanted < 0) { return undefined; }
+				if (wanted === picker.active) { return true; }
+				await vscode.commands.executeCommand(wanted < picker.active ? 'workbench.action.quickOpenSelectPrevious' : 'workbench.action.quickOpenSelectNext');
 				return undefined;
-			}, 15_000).catch(() => undefined);
-			if (!card) {
-				await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
-				continue;
-			}
-			const alias = aliasOf(card);
-			const launch = await until('its CLI to start', () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { args: string[] } : undefined);
-			const at = launch.args.indexOf('--resume');
-			resumed.push({ alias, session: at >= 0 ? launch.args[at + 1] : `none: ${launch.args.join(' ')}` });
+			});
+			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+			const card = await until('the resumed Rust agent', async () => (await state()).cards.find(each =>
+				!before.has(each.runId) && each.orchestrator?.running));
+			const file = `${RECORD}.args.#${card.alias}`;
+			const session = await until('the fixture launch to contain the native resume argument', () => {
+				if (!fs.existsSync(file)) { return undefined; }
+				const { args } = JSON.parse(fs.readFileSync(file, 'utf8')) as { args: string[] };
+				const option = args.indexOf('--resume');
+				return option >= 0 ? args[option + 1] : undefined;
+			});
+			resumed.push({ runId: card.runId, session });
 		}
 		write({ phase: 'rust', core: coreRuns(), resumed, terminals: vscode.window.terminals.map(each => unspun(each.name)), cards: (await state()).cards.map(card => aliasOf(card)) });
 	} catch (err) {

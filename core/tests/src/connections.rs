@@ -1,6 +1,6 @@
 //! Line-by-line daemon and keeper protocol connections for scenario tests.
 
-use facade_base::daemon::{DAEMON_PROTOCOL_VERSION, MIN_DAEMON_PROTOCOL_VERSION, WindowRef};
+use facade_base::daemon::WindowRef;
 use facade_base::paths::ClientSocket;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use crate::*;
 
-/// The ordinary daemon protocol used by this checkout.
-pub const DAEMON_RANGE: [u32; 2] = [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION];
+/// Ordinary scenario clients use v3. The real v2 fixture negotiates its own range.
+pub const DAEMON_RANGE: [u32; 2] = [3, 3];
 
 /// A raw daemon protocol connection to the test's Facade home.
 pub struct DaemonTestClient {
@@ -262,8 +262,8 @@ pub fn connect(home: &TestHome) -> DaemonTestClient {
     }
 }
 
-/// Starts [`shell`] with `script` as agent `name` in the test project. Sets `FACADE_HOME` so
-/// cleanup can find the process. Returns the agent ID.
+/// Starts [`shell`], the custom program [`TestHome::shell_cli`], with `script` as agent `name` in
+/// the test project. Sets `FACADE_HOME` so cleanup can find the process. Returns the agent ID.
 pub fn start_script(
     wire: &mut DaemonTestClient,
     home: &TestHome,
@@ -275,7 +275,7 @@ pub fn start_script(
     #[cfg(windows)]
     let path = system_folders().join(PATH_SEPARATOR);
     let args = json!({
-        "command": [shell(), "-c", script], "name": name, "cwd": home.project,
+        "cli": home.shell_cli(), "args": ["-c", script], "name": name, "folder": home.project,
         "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
     });
     let started = wire.call("agent.start", args);

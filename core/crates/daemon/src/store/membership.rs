@@ -1,8 +1,10 @@
 //! The windows of each agent. A relation can remain while its window is disconnected.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use facade_base::daemon::WindowRef;
+use facade_base::machine::AgentRef;
 use rusqlite::{Connection, params};
 
 use super::Store;
@@ -48,7 +50,7 @@ pub(super) fn read(connection: &Connection, agent_id: &str) -> rusqlite::Result<
     rows.collect()
 }
 
-/// The handle records uses to join an existing agent to another window.
+/// Reads memberships of legacy logical windows for workspace import.
 #[derive(Clone)]
 pub(crate) struct MembershipTable(Arc<Store>);
 
@@ -57,25 +59,32 @@ impl MembershipTable {
         Self(store)
     }
 
-    /// Keeps the membership and returns the agent's full, sorted set. None if the agent was removed.
-    pub(crate) fn add(
-        &self,
-        agent_id: &str,
-        window: &WindowRef,
-    ) -> anyhow::Result<Option<Vec<WindowRef>>> {
-        self.0.transaction(
-            || format!("join {agent_id} to window {}", window.window_id),
-            |transaction| {
-                let exists = transaction.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM agents WHERE agent_id = ?1)",
-                    [agent_id],
-                    |row| row.get::<_, bool>(0),
+    /// Records held by this machine that belonged to one of the old logical windows.
+    pub(crate) fn legacy_agents(&self, windows: &[WindowRef]) -> anyhow::Result<Vec<AgentRef>> {
+        self.0.with(
+            || "read the legacy workspace members".to_owned(),
+            |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT aw.agent_id, (SELECT machine_id FROM machine WHERE singleton = 1) \
+                     FROM agent_windows aw JOIN agents a ON a.agent_id = aw.agent_id \
+                     WHERE aw.machine_id = ?1 AND aw.window_id = ?2",
                 )?;
-                if !exists {
-                    return Ok(None);
+                let mut agents = BTreeSet::new();
+                for window in windows {
+                    let rows = statement.query_map(
+                        params![window.machine_id, window.window_id],
+                        |row| {
+                            Ok(AgentRef {
+                                agent_id: row.get(0)?,
+                                machine_id: row.get(1)?,
+                            })
+                        },
+                    )?;
+                    for row in rows {
+                        agents.insert(row?);
+                    }
                 }
-                insert(transaction, agent_id, std::slice::from_ref(window))?;
-                read(transaction, agent_id).map(Some)
+                Ok(agents.into_iter().collect())
             },
         )
     }

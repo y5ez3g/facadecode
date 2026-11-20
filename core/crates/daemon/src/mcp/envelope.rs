@@ -5,12 +5,10 @@
 
 use facade_base::daemon::WindowDeliveryOutcome;
 use facade_base::jsonrpc::{ErrorBody, SendFailure};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::addresses::Addresses;
-
-/// The most characters a result carries inline. Longer messages, screens or lists go to a file.
-pub(super) const MAX_INLINE_CHARS: usize = 8000;
 
 /// A success, carrying `data` where it holds anything.
 pub(super) fn success(data: Value) -> Value {
@@ -20,6 +18,12 @@ pub(super) fn success(data: Value) -> Value {
         }
         _ => json!({ "status": "success" }),
     }
+}
+
+pub(super) fn encode(data: impl Serialize) -> Result<Value, ErrorBody> {
+    serde_json::to_value(data)
+        .map(success)
+        .map_err(ErrorBody::internal)
 }
 
 /// A failure for `reason`, a short word, saying in `message` what went wrong, whether anything was

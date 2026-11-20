@@ -31,6 +31,7 @@ pub(crate) trait LifecycleActivity: Send + Sync + 'static {
     fn guest_listed(&self) -> bool;
     fn screen_writes(&self) -> usize;
     fn running_count(&self) -> usize;
+    fn running_managed_addresses(&self) -> Vec<String>;
     fn keeper_protocol_range(&self) -> Option<[u32; 2]>;
     fn keeper_build(&self) -> Option<String>;
     fn settle_pastes(&self) -> impl Future<Output = Vec<oneshot::Receiver<()>>> + Send;

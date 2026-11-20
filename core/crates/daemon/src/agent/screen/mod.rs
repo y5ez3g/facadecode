@@ -65,6 +65,8 @@ pub(crate) struct ScreenLog {
     cleanup_after_sync: Option<u64>,
     follows_gap: bool,
     failure_logged: Option<bool>,
+    /// Passed with a recovered screen and taken when the actor installs it.
+    pub(super) recovered_title: Option<String>,
 }
 
 impl ScreenLog {
@@ -88,6 +90,7 @@ impl ScreenLog {
             cleanup_after_sync: None,
             follows_gap: false,
             failure_logged: None,
+            recovered_title: None,
         }
     }
 
@@ -356,6 +359,7 @@ pub(crate) struct LoggedScreen {
     held: bool,
     log_closed: bool,
     screen: Screen,
+    title: Option<String>,
     colors: TerminalColors,
     log: Option<ScreenLog>,
 }
@@ -380,14 +384,16 @@ impl LoggedScreen {
         folder: PathBuf,
         agent_id: &str,
         screen: Screen,
-        log: Option<ScreenLog>,
+        mut log: Option<ScreenLog>,
     ) -> LoggedScreen {
+        let title = log.as_mut().and_then(|log| log.recovered_title.take());
         Self {
             folder,
             id: agent_id.into(),
             held: true,
             log_closed: false,
             screen,
+            title,
             colors: TerminalColors::default(),
             log,
         }
@@ -400,6 +406,7 @@ impl LoggedScreen {
             held: false,
             log_closed: true,
             screen: Screen::new(2, 1, 0),
+            title: None,
             colors: TerminalColors::default(),
             log: None,
         }
@@ -413,6 +420,9 @@ impl LoggedScreen {
     pub(crate) fn screen(&self) -> &Screen {
         &self.screen
     }
+    pub(crate) fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
     /// Whether the screen is held in memory; does not wait or take a lock.
     pub(crate) fn is_held(&self) -> bool {
         self.held
@@ -422,7 +432,9 @@ impl LoggedScreen {
         if let Some(journal) = &mut self.log {
             blocking_in_place(|| journal.append_output(bytes));
         }
-        self.screen.feed(bytes)
+        let parsed = self.screen.feed(bytes);
+        self.record_title(&parsed);
+        parsed
     }
     /// Logs a changed size before applying it; may block on disk and takes no lock.
     pub(crate) fn resize(&mut self, cols: u16, rows: u16) {
@@ -441,7 +453,15 @@ impl LoggedScreen {
         if let Some(journal) = &mut self.log {
             blocking_in_place(|| journal.append_sync_end());
         }
-        self.screen.end_synchronized_update()
+        let parsed = self.screen.end_synchronized_update();
+        self.record_title(&parsed);
+        parsed
+    }
+
+    fn record_title(&mut self, parsed: &ParsedOutput) {
+        if let Some(title) = &parsed.title_change {
+            self.title = (!title.is_empty()).then(|| title.clone());
+        }
     }
     /// Schedules due, forced, or failed checkpoints; disk setup may block, with no locks held.
     pub(crate) fn checkpoint_if_due(&mut self) {
@@ -461,7 +481,12 @@ impl LoggedScreen {
                 forced_checkpoint_losses(&self.screen).join(" and ")
             ));
         }
-        blocking_in_place(|| journal.begin_checkpoint(Checkpoint::capture(&self.screen)));
+        blocking_in_place(|| {
+            journal.begin_checkpoint(Checkpoint::capture_with_title(
+                &self.screen,
+                self.title.as_deref(),
+            ));
+        });
     }
     /// Whether output must wait for the checkpoint; takes no lock and never waits.
     pub(crate) fn is_full(&self) -> bool {
@@ -511,6 +536,7 @@ impl LoggedScreen {
                     self.screen = recovered.screen;
                     self.screen.set_colors(self.colors);
                     self.log = recovered.log;
+                    self.title = self.log.as_mut().and_then(|log| log.recovered_title.take());
                     self.held = true;
                     self.log_closed = false;
                 }
@@ -519,8 +545,9 @@ impl LoggedScreen {
         } else if !self.held {
             let read = tokio::task::spawn_blocking(move || load(&folder, &id)).await;
             match read {
-                Ok(Ok(screen)) => {
+                Ok(Ok((screen, title))) => {
                     self.screen = screen;
+                    self.title = title;
                     self.screen.set_colors(self.colors);
                     self.held = true;
                     facade_base::service::mark_for_test(&format!("screen-loaded-{}", self.id));

@@ -6,39 +6,32 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::address::{
-    display_machine_selector, exact_machine_selector, parse_message_address,
-};
 use facade_base::daemon::{
-    AgentSendArgs, AgentSendResult, Delivery, DeliveryFailure, DeliveryStatus, Message,
-    MessagesChange, SendOutcome, TextWritten, WindowDelivery, WindowDeliveryOutcome, WindowRef,
+    Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, SendOutcome, StartOutcome,
+    TextWritten, start_result_text_at,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure, decode_arguments};
-use facade_base::machine::{
-    AgentDeliverStartResult, AgentDeliverStartResultArgs, Caller, ExecutionOutcome, ForwardCall,
-    MachineIdentity, MessageRef, WindowDeliver, WindowDeliverArgs, WindowDeliverResult,
-};
-use facade_base::operations::Operation;
-use facade_rules::Rule;
+use facade_base::machine::{AgentRef, ExecutionOutcome, MachineIdentity, MessageRef};
+use facade_base::operations::{CallParams, Operation};
+use facade_base::v3::address as addresses;
+use facade_base::v3::{self, AgentDeliverStartResult, Caller, ForwardCall};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::agent::{
     self, AgentCommand, AgentHandle, Input, InputRejection, MessageTyping, Submission,
 };
-use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedHuman, PostedResult, Settled};
+use crate::machine_service::machine_address_part;
+use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedResult, Settled};
 use crate::operations::{check_request_id, request_words};
-use crate::records::Reach;
-use crate::service::{sender_from, value_of};
+use crate::records::OperationTarget;
+use crate::service::{Forwarded, sender_from, value_of};
+use crate::store::SendRoute;
 use crate::{Cancel, Daemon, HUMAN, Sender, gate_for_test, log};
 
-pub(crate) const VERIFY_HUMAN_REPLY: &str = "machine.verify_human_reply";
-
 struct SendOrigin<'a> {
-    caller: &'a Caller,
+    machine: &'a str,
     sender: Sender,
-    from_window: Option<String>,
-    reply: Option<MessageRef>,
 }
 
 fn log_repeat(message: &Message, request_id: &str) {
@@ -59,37 +52,6 @@ pub(crate) enum InputWait {
     UntilCancelled(Cancel),
     /// It waits as long as its caller does: a message, which its deadline bounds.
     Always,
-}
-
-/// The widest number a message gets, so that a check of its length holds whatever number it gets.
-const WIDEST_NUMBER: &str = "m999999999";
-
-/// Refuses `message` where its recipient's CLI, by `rule`, could not take it within a delivery: its
-/// paste, its Enter and their confirmation at that CLI's rates here (RULES-1.5, MCP-4.1).
-/// `recipient` names the recipient in the error, and `instead` says what to do instead.
-pub(crate) fn check_fits(
-    rule: Option<&'static Rule>,
-    recipient: &str,
-    message: &Message,
-    instead: &str,
-    format_message: impl FnOnce(&Message) -> String,
-) -> Result<(), ErrorBody> {
-    let Some(rule) = rule else {
-        return Ok(());
-    };
-    let widest = Message {
-        message_id: WIDEST_NUMBER.into(),
-        ..message.clone()
-    };
-    let typed = format_message(&widest);
-    if agent::delivery_time(rule, &typed) <= messages::delivery_limit() {
-        return Ok(());
-    }
-    Err(ErrorBody::invalid_argument(format!(
-        "the message is too long for {recipient}'s CLI, {}, to take within thirty seconds at its \
-         paste rate here; {instead}",
-        rule.display_name
-    )))
 }
 
 /// A message from `from` to `to`, pending until `deadline`, or with no deadline: a start's prompt
@@ -127,26 +89,27 @@ pub(crate) fn pending_message(
     }
 }
 
-/// The answer to a send whose message came to `settled`: the message and whether its failure
-/// withdrew it; `cancelled` where the send's cancel withdrew it; or, with nothing settled, gone
-/// with its recipient `to`'s inbox.
+/// The message, its withdrawal status, and any reply the Guest was waiting for. A cancel and
+/// a removed inbox still answer with their respective errors.
 fn settled_answer(
     settled: Option<Settled>,
     to: &str,
     message_id: &str,
-) -> Result<(Message, bool), ErrorBody> {
+) -> Result<(Message, bool, Option<MessageRef>), ErrorBody> {
     match settled {
-        Some(Settled::Kept(message)) => Ok((*message, false)),
-        Some(Settled::Withdrawn(message)) => Ok((*message, true)),
+        Some(Settled::Kept(message)) => Ok((*message, false, None)),
+        Some(Settled::Withdrawn(message)) => Ok((*message, true, None)),
+        Some(Settled::WithdrawnWhileWaiting {
+            message,
+            expected_reply_to,
+        }) => Ok((*message, true, Some(expected_reply_to))),
         Some(Settled::Cancelled) => Err(ErrorBody::new(
             Reason::Cancelled,
             format!("{message_id} was withdrawn before anything of it was typed; it is not kept"),
         )),
         None => Err(ErrorBody::new(
             Reason::Ended,
-            format!(
-                "#{to} was removed with its messages; what became of {message_id} is not known"
-            ),
+            format!("{to} was removed with its messages; what became of {message_id} is not known"),
         )),
     }
 }
@@ -162,37 +125,83 @@ fn submission_of(message: &Message) -> Submission {
     }
 }
 
+/// Projects the result's agent and prompt, which both belong to the machine that started it.
+pub(crate) fn render_start_result(
+    result: &StartOutcome,
+    visible: &[MachineIdentity],
+) -> Result<String, ErrorBody> {
+    let agent = result.agent.reference();
+    let selector = machine_address_part(&agent.machine_id, visible)?;
+    let prompt = MessageRef {
+        machine_id: agent.machine_id.clone(),
+        message_id: result.prompt.message_id.clone(),
+    };
+    Ok(start_result_text_at(
+        result,
+        &addresses::format_agent_address(&agent, &selector),
+        &addresses::format_message_address(&prompt, &selector),
+    ))
+}
+
 impl Daemon {
     /// Projects durable machine IDs into the references read on this machine's terminal.
     pub(crate) fn message_text(&self, message: &Message) -> String {
-        let remote = |id: Option<&str>| id.is_some_and(|id| id != self.machine_id);
-        if !remote(message.from_machine_id.as_deref())
-            && !remote(message.reply_to_machine_id.as_deref())
-        {
-            return facade_base::daemon::typed_text(message);
+        if message.from == FACADE {
+            let projected = message.result.as_ref().and_then(|result| {
+                self.machine_identities()
+                    .and_then(|visible| render_start_result(result, &visible))
+                    .ok()
+            });
+            let text = projected.as_deref().unwrap_or(&message.text);
+            let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+            return if rest.is_empty() {
+                format!("🔔 {first} · {}", message.message_id)
+            } else {
+                format!("🔔 {first} · {}\n{rest}", message.message_id)
+            };
         }
-        let machines: Vec<_> = self
-            .network
-            .machines()
-            .into_iter()
-            .map(|row| MachineIdentity {
-                machine_id: row.machine_id,
-                name: row.name,
-            })
-            .collect();
-        let selector = |id: Option<&str>| {
-            let id = id.filter(|id| *id != self.machine_id)?;
-            let selected = machines
-                .iter()
-                .find(|machine| machine.machine_id == id)
-                .map(|machine| display_machine_selector(machine, &machines))
-                .unwrap_or_else(|| exact_machine_selector(id));
-            Some(selected)
+        let sender = if matches!(message.from.as_str(), "human" | "command_line") {
+            "the command line".to_owned()
+        } else {
+            let from = AgentRef {
+                agent_id: message.from.clone(),
+                machine_id: message
+                    .from_machine_id
+                    .clone()
+                    .unwrap_or_else(|| self.machine_id.clone()),
+            };
+            let address = self
+                .agent_address(&from)
+                .unwrap_or_else(|_| from.exact_address());
+            message.from_name.as_ref().map_or_else(
+                || address.clone(),
+                |name| format!("{} ({address})", facade_base::daemon::display_name(name)),
+            )
         };
-        facade_base::daemon::typed_text_with_machines(
-            message,
-            selector(message.from_machine_id.as_deref()).as_deref(),
-            selector(message.reply_to_machine_id.as_deref()).as_deref(),
+        let reply = message
+            .reply_to
+            .as_ref()
+            .map(|message_id| {
+                let reference = MessageRef {
+                    message_id: message_id.clone(),
+                    machine_id: message
+                        .reply_to_machine_id
+                        .clone()
+                        .unwrap_or_else(|| self.machine_id.clone()),
+                };
+                let address = if reference.machine_id == self.machine_id {
+                    reference.message_id
+                } else {
+                    self.message_address(&reference).unwrap_or_else(|_| {
+                        format!("{}@{}", reference.message_id, reference.machine_id)
+                    })
+                };
+                format!(" · Reply to {address}")
+            })
+            .unwrap_or_default();
+        format!(
+            "📨 Message from {sender} · {}{reply}\n{}",
+            message.message_id, message.text
         )
     }
 
@@ -229,7 +238,7 @@ impl Daemon {
             {
                 Ok(()) => return Ok(()),
                 Err(InputRejection::AgentExited) => {
-                    return Err(ErrorBody::new(Reason::Ended, format!("#{id} ended")));
+                    return Err(ErrorBody::new(Reason::Ended, format!("{id} ended")));
                 }
                 Err(InputRejection::Backpressured(back)) => input = back,
             }
@@ -238,7 +247,7 @@ impl Daemon {
                     return Err(ErrorBody::new(
                         Reason::CapacityExceeded,
                         format!(
-                            "agent #{id} cannot accept this input: its {} KiB of waiting input \
+                            "agent {id} cannot accept this input: its {} KiB of waiting input \
                              is full, or a resize is waiting to take effect",
                             agent::MAX_INPUT_BYTES / 1024
                         ),
@@ -258,298 +267,373 @@ impl Daemon {
         }
     }
 
-    /// Sends a message from `sender`, the agent a client acts for, or from the person
-    /// (`agent.send`). Answers once it is delivered or failed, within what is left of its 30
-    /// seconds; a message to the person once its window is handed it; one to a guest at once,
-    /// pending until its next turn. A send with its sender's request ID looks for it first, and a
-    /// cancel withdraws the message while its paste has not begun.
-    pub(crate) async fn send(
+    pub(crate) async fn route_send(
         self: &Arc<Self>,
         caller: &Caller,
-        args: AgentSendArgs,
-        cancel: Cancel,
-    ) -> Result<SendOutcome, SendFailure> {
-        let due = Due::within(args.time_left_ms);
-        let from = self.sending_agent(caller)?;
-        let reach = Reach::from(caller);
-        let Some(to) = self.resolve_named(&args.to, &reach, true)? else {
-            let Some(from) = from.as_ref() else {
-                return Err(ErrorBody::invalid_argument(
-                    "a message to the person must come from an agent",
-                )
-                .into());
-            };
-            return self.tell_person(caller, from, args, due, cancel).await;
-        };
-        let reply = self
-            .verified_reply(caller, args.reply_to.as_deref())
-            .await?;
-        let from_info = from.as_ref().map(AgentHandle::info);
-        let to_windows = to.info().windows;
-        let from_window = from_info
-            .as_ref()
-            .and_then(|info| match info.windows.as_slice() {
-                [window] if !to_windows.contains(window) => Some(self.windows.name(window)),
-                _ => None,
-            });
-        let sender = sender_from(caller, from_info.map(|info| info.name));
-        let origin = SendOrigin {
-            caller,
-            sender,
-            from_window,
-            reply,
-        };
-        self.send_to_agent(to, args, origin, due, cancel).await
-    }
-
-    pub(crate) fn sending_agent(&self, caller: &Caller) -> Result<Option<AgentHandle>, ErrorBody> {
-        let Caller::Agent { agent, .. } = caller else {
-            return Ok(None);
-        };
-        self.get_agent(&agent.agent_id).map(Some).ok_or_else(|| {
-            ErrorBody::new(
-                Reason::NotFound,
-                format!(
-                    "#{}, the agent this message would come from, is not listed",
-                    agent.agent_id
-                ),
-            )
-        })
-    }
-
-    /// A name can stop matching live recipients while its earlier send is still kept.
-    pub(crate) async fn replay_ended_local_send(
-        &self,
-        caller: &Caller,
-        to: &AgentHandle,
-        request_id: &str,
-        reply_to: Option<&str>,
-        cancel: Cancel,
-    ) -> Result<Option<SendOutcome>, ErrorBody> {
-        if to.exit().borrow().is_none() {
-            return Ok(None);
-        }
-        check_request_id(request_id)?;
-        let caller_window = match caller {
-            Caller::Ide { window } => Some(window.window_id.as_str()),
-            _ => None,
-        };
-        let sender = sender_from(caller, None);
-        let earlier = self.messages.find_request(
-            caller.machine_id(),
-            &sender.from,
-            to.id(),
-            request_id,
-            caller_window,
-        )?;
-        match earlier {
-            Some(earlier) => {
-                self.verified_reply(caller, reply_to).await?;
-                self.repeat_send(earlier, request_id, cancel)
-                    .await
-                    .map(Some)
-                    .map_err(Into::into)
-            }
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) async fn accept_forwarded_send(
-        self: &Arc<Self>,
-        caller: &Caller,
-        forwarded: ForwardCall,
-        request_id: Option<String>,
-        remaining: Option<Duration>,
-        cancel: Cancel,
+        mut args: v3::AgentSendArgs,
+        incoming: Option<Forwarded>,
+        mut cancel: Cancel,
     ) -> Result<Value, ErrorBody> {
-        let reply_machine = forwarded
-            .call
-            .args
-            .get("reply_to_machine_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let mut args: AgentSendArgs = decode_arguments(forwarded.call.args)?;
-        let reply = args
-            .reply_to
-            .clone()
-            .zip(reply_machine)
-            .map(|(message_id, machine_id)| MessageRef {
-                machine_id,
-                message_id,
+        let forwarded = incoming.is_some();
+        let limit = incoming
+            .as_ref()
+            .and_then(|call| call.remaining)
+            .map(|remaining| remaining.as_millis().min(u64::MAX as u128) as u64);
+        let budget = match (limit, args.time_left_ms) {
+            (Some(outer), Some(inner)) => Some(outer.min(inner)),
+            (outer, inner) => outer.or(inner),
+        };
+        let due = Due::within(budget);
+        let (recipient, sender, replay) = if let Some(call) = incoming {
+            let recipient = call
+                .recipient
+                .filter(|reference| {
+                    reference.machine_id == self.machine_id && reference.agent_id == args.to
+                })
+                .ok_or_else(|| {
+                    ErrorBody::invalid_argument(
+                        "a forwarded send needs the resolved local recipient",
+                    )
+                })?;
+            args.request_id = call.request_id;
+            (recipient, sender_from(caller, call.from_name), true)
+        } else {
+            let sender = sender_from(caller, self.caller_name(caller));
+            let request = args.request_id.as_deref();
+            if let Some(id) = request {
+                check_request_id(id)?;
+            }
+            let target = args.to.trim_matches(facade_base::settings::is_space);
+            let table = self.store.message_table();
+            let retained = if let Some(request) = request {
+                crate::blocking_in_place(|| table.send_target(&sender.from, request, target))
+                    .map_err(ErrorBody::internal)?
+            } else {
+                None
+            };
+            let (route, replay) = match retained {
+                Some(route) => (route, true),
+                None => {
+                    if args.reply_to_machine_id.is_some() {
+                        return Err(ErrorBody::invalid_argument("provide the reply in reply_to"));
+                    }
+                    self.check_message_sender(caller)?;
+                    let reply = self.original_reply(caller, args.reply_to.as_deref())?;
+                    let resolving = self.addressed_agent(
+                        caller,
+                        v3::AgentTarget::Address {
+                            agent: args.to.clone(),
+                        },
+                        OperationTarget::Send,
+                    );
+                    let recipient = tokio::time::timeout_at(due.instant, resolving)
+                        .await
+                        .map_err(|_| send_before_deadline())??;
+                    if let Some((_, original)) = &reply
+                        && original != &recipient
+                    {
+                        return Err(ErrorBody::invalid_argument(
+                            "reply_to belongs to a different sender; use the original sender's address or omit reply_to",
+                        ));
+                    }
+                    let route = SendRoute {
+                        recipient,
+                        reply: reply.map(|(message, _)| message),
+                    };
+                    if let Some(request) = request {
+                        crate::blocking_in_place(|| {
+                            table.keep_send_target(&sender.from, request, target, &route)
+                        })
+                        .map_err(ErrorBody::internal)?
+                    } else {
+                        (route, false)
+                    }
+                }
+            };
+            args.reply_to = route.reply.as_ref().map(|reply| reply.message_id.clone());
+            args.reply_to_machine_id = route.reply.map(|reply| reply.machine_id);
+            (route.recipient, sender, replay)
+        };
+        let allow_reply_hint = matches!(caller, Caller::Agent { .. }) && args.reply_to.is_none();
+        if recipient.machine_id != self.machine_id {
+            let target = &recipient.machine_id;
+            let routed =
+                tokio::time::timeout_at(due.instant, self.network.ensure_route(target)).await;
+            match routed {
+                Ok(Ok(())) => {}
+                _ if replay => return Err(send_unconfirmed()),
+                Ok(Err(error)) => return Err(error),
+                Err(_) => return Err(send_before_deadline()),
+            }
+            if cancel.is_requested() {
+                if replay {
+                    return Err(send_unconfirmed());
+                }
+                return Err(ErrorBody::new(
+                    Reason::Cancelled,
+                    "the send was cancelled before it was forwarded",
+                ));
+            }
+            args.to = recipient.agent_id.clone();
+            args.time_left_ms = None;
+            let request_id = args.request_id.clone();
+            let call = ForwardCall {
+                call: CallParams {
+                    op: v3::AgentSend::NAME.into(),
+                    args: value_of(args),
+                },
+                by_model: matches!(caller, Caller::Agent { .. }),
+                from_name: sender.from_name,
+                recipient: Some(recipient.clone()),
+            };
+            let delivering = async {
+                let mut response = self
+                    .forward_call(
+                        target,
+                        caller.clone(),
+                        call.clone(),
+                        Some(
+                            send_time_left(due.instant)
+                                .map_err(|error| if replay { send_unconfirmed() } else { error })?,
+                        ),
+                        request_id.clone(),
+                    )
+                    .await;
+                if request_id.is_some()
+                    && response.as_ref().is_err_and(|error| {
+                        error.data.unavailable.as_ref().is_some_and(|unavailable| {
+                            unavailable.execution == ExecutionOutcome::OutcomeUnknown
+                        })
+                    })
+                    && let Ok(Ok(())) =
+                        tokio::time::timeout_at(due.instant, self.network.ensure_route(target))
+                            .await
+                    && let Ok(left) = send_time_left(due.instant)
+                {
+                    let retried = self
+                        .forward_call(target, caller.clone(), call, Some(left), request_id)
+                        .await;
+                    if retried.is_ok()
+                        || retried
+                            .as_ref()
+                            .is_err_and(|err| err.data.reason == Reason::Cancelled)
+                    {
+                        response = retried;
+                    }
+                }
+                response.map_err(|error| {
+                    if replay
+                        && error.data.unavailable.as_ref().is_some_and(|unavailable| {
+                            unavailable.execution == ExecutionOutcome::NotExecuted
+                        })
+                    {
+                        send_unconfirmed()
+                    } else {
+                        error
+                    }
+                })
+            };
+            let mut result: v3::SendResult = tokio::select! {
+                biased;
+                result = delivering => decode_arguments(result?)?,
+                () = cancel.requested() => return Err(send_unconfirmed()),
+            };
+            let candidate = result.expected_reply_to.take().filter(|_| {
+                allow_reply_hint
+                    && result.withdrawn
+                    && result.message.delivery.reason == Some(DeliveryFailure::Timeout)
             });
-        if args.reply_to.is_some() && reply.is_none() {
-            return Err(ErrorBody::invalid_argument(
-                "a forwarded reply needs the verified message reference",
-            ));
+            result.expected_reply_to = self.checked_reply_hint(caller, &recipient, candidate);
+            let message = MessageRef {
+                machine_id: recipient.machine_id,
+                message_id: result.message.message_id.clone(),
+            };
+            result.id = self.message_address(&message)?;
+            return Ok(value_of(result));
         }
-        let to = self.resolve_agent(&args.to, &Reach::from(caller))?;
-        args.request_id = request_id;
-        let limit = remaining.map(|time| time.as_millis().min(u64::MAX as u128) as u64);
-        let time_left = match (limit, args.time_left_ms) {
-            (Some(forwarded), Some(given)) => Some(forwarded.min(given)),
-            (left, given) => left.or(given),
-        };
         let origin = SendOrigin {
-            caller,
-            sender: sender_from(caller, forwarded.from_name),
-            from_window: forwarded.from_window,
-            reply,
+            machine: caller.machine_id(),
+            sender,
         };
-        Ok(value_of(AgentSendResult::from(
-            self.send_to_agent(to, args, origin, Due::within(time_left), cancel)
-                .await?,
-        )))
+        let (sent, candidate) = self
+            .send_to_agent(caller, &recipient, args, origin, due, cancel)
+            .await?;
+        let candidate = candidate.filter(|_| allow_reply_hint);
+        let expected_reply_to = if forwarded {
+            candidate
+        } else {
+            self.checked_reply_hint(caller, &recipient, candidate)
+        };
+        let reference = MessageRef {
+            machine_id: self.machine_id.clone(),
+            message_id: sent.message.message_id.clone(),
+        };
+        Ok(value_of(v3::SendResult {
+            id: self.message_address(&reference)?,
+            message: self.public_message(sent.message)?,
+            repeated: sent.repeated,
+            withdrawn: sent.withdrawn,
+            expected_reply_to,
+        }))
     }
 
-    pub(crate) async fn verify_forwarded_reply(
-        &self,
-        caller: &Caller,
-        args: &mut Value,
-    ) -> Result<(), ErrorBody> {
-        let reply = args.get("reply_to").and_then(Value::as_str);
-        if let Some(reference) = self.verified_reply(caller, reply).await? {
-            args["reply_to"] = Value::String(reference.message_id);
-            args["reply_to_machine_id"] = Value::String(reference.machine_id);
+    pub(crate) fn message_address(&self, message: &MessageRef) -> Result<String, ErrorBody> {
+        let machine = self.machine_address_part(&message.machine_id)?;
+        Ok(addresses::format_message_address(message, &machine))
+    }
+
+    fn check_message_sender(&self, caller: &Caller) -> Result<(), ErrorBody> {
+        if let Caller::Agent { agent, .. } = caller {
+            let from = self.get_agent(&agent.agent_id).ok_or_else(|| {
+                ErrorBody::new(Reason::CallerUnavailable, "the sender is no longer listed")
+            })?;
+            if !from.is_guest() && from.rule().is_none() {
+                return Err(ErrorBody::new(
+                    Reason::Unsupported,
+                    "a custom program cannot send messages",
+                ));
+            }
         }
         Ok(())
     }
 
-    async fn verified_reply(
+    fn original_reply(
         &self,
         caller: &Caller,
         input: Option<&str>,
-    ) -> Result<Option<MessageRef>, ErrorBody> {
+    ) -> Result<Option<(MessageRef, AgentRef)>, ErrorBody> {
         let Some(input) = input else {
             return Ok(None);
         };
-        let address = parse_message_address(input)
+        let Caller::Agent { agent, .. } = caller else {
+            return Err(ErrorBody::invalid_argument(
+                "the command line has no inbox; omit reply_to to send a new message",
+            ));
+        };
+        let parsed = addresses::parse_message_address(input)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-        let machine_id = address
+        let machine_id = parsed
             .machine
             .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
             .transpose()?
             .unwrap_or_else(|| self.machine_id.clone());
         let reference = MessageRef {
             machine_id,
-            message_id: address.message_id.to_string(),
+            message_id: parsed.message_id.into(),
         };
-        let found = if reference.machine_id == self.machine_id {
-            let (owner, window) = match caller {
-                Caller::Agent { agent, .. } => (agent.agent_id.as_str(), None),
-                Caller::Ide { window } => (HUMAN, Some(window)),
-                Caller::Terminal { .. } => (HUMAN, None),
-            };
-            self.messages
-                .reply_in_inbox(owner, &reference, window)?
-                .is_some()
-        } else if matches!(caller, Caller::Agent { .. }) {
-            false
-        } else {
-            let replied = self
-                .network_call(
-                    &reference.machine_id,
-                    caller.clone(),
-                    VERIFY_HUMAN_REPLY,
-                    value_of(&reference),
-                    Some(Duration::from_secs(30)),
-                    None,
+        let original = self
+            .messages
+            .reply_in_inbox(&agent.agent_id, &reference, None)?
+            .ok_or_else(|| {
+                ErrorBody::new(
+                    Reason::NotFound,
+                    format!("no message {input} is in the sender's inbox"),
                 )
-                .await?;
-            decode_arguments::<bool>(replied)?
-        };
-        if !found {
-            return Err(ErrorBody::new(
-                Reason::NotFound,
-                format!("no message {input} is in the sender's inbox"),
-            ));
+            })?;
+        match original.from.as_str() {
+            "human" | "command_line" => Err(ErrorBody::invalid_argument(
+                "the original message came from the command line, which has no reply address",
+            )),
+            FACADE => Err(ErrorBody::invalid_argument(
+                "the original message is a Facade notification, which has no reply address",
+            )),
+            _ => Ok(Some((
+                reference.clone(),
+                AgentRef {
+                    machine_id: original.from_machine_id.unwrap_or(reference.machine_id),
+                    agent_id: original.from,
+                },
+            ))),
         }
-        Ok(Some(reference))
     }
 
-    pub(crate) fn verify_human_reply_at_store(
+    fn checked_reply_hint(
         &self,
         caller: &Caller,
-        reference: MessageRef,
-    ) -> Result<Value, ErrorBody> {
-        let window = match caller {
-            Caller::Ide { window } => Some(window),
-            Caller::Terminal { .. } => None,
-            _ => {
-                return Err(ErrorBody::refused(
-                    "only the person can verify a reply in the person's inbox",
-                ));
-            }
-        };
-        Ok(value_of(
-            self.messages
-                .reply_in_inbox(HUMAN, &reference, window)?
-                .is_some(),
-        ))
+        recipient: &AgentRef,
+        candidate: Option<MessageRef>,
+    ) -> Option<MessageRef> {
+        let candidate = candidate.filter(|reference| reference.machine_id == self.machine_id)?;
+        let (reference, original_sender) = self
+            .original_reply(caller, Some(&candidate.message_id))
+            .ok()??;
+        (reference == candidate && &original_sender == recipient).then_some(candidate)
     }
 
     async fn send_to_agent(
         self: &Arc<Self>,
-        to: AgentHandle,
-        args: AgentSendArgs,
+        caller: &Caller,
+        recipient: &AgentRef,
+        args: v3::AgentSendArgs,
         origin: SendOrigin<'_>,
         due: Due,
         mut cancel: Cancel,
-    ) -> Result<SendOutcome, SendFailure> {
+    ) -> Result<(SendOutcome, Option<MessageRef>), SendFailure> {
         let inbox = origin.sender.from.clone();
-        let machine = origin.caller.machine_id();
-        let window = match origin.caller {
-            Caller::Ide { window } => Some(window.window_id.as_str()),
-            _ => None,
-        };
+        let machine = origin.machine;
         if let Some(request_id) = args.request_id.as_deref() {
             check_request_id(request_id)?;
-            if let Some(earlier) =
-                self.messages
-                    .find_request(machine, &inbox, to.id(), request_id, window)?
-            {
+            if let Some(earlier) = self.messages.find_request(
+                machine,
+                &inbox,
+                &recipient.agent_id,
+                request_id,
+                None,
+            )? {
                 return self.repeat_send(earlier, request_id, cancel).await;
             }
         }
+        let to = self.local_target(caller, recipient, OperationTarget::Send)?;
         facade_base::daemon::check_message_text(&args.text).map_err(ErrorBody::invalid_argument)?;
+        let reply = match (args.reply_to, args.reply_to_machine_id) {
+            (Some(message_id), Some(machine_id)) if machine_id == machine => Some(MessageRef {
+                machine_id,
+                message_id,
+            }),
+            (None, None) => None,
+            _ => {
+                return Err(ErrorBody::invalid_argument(
+                    "a forwarded reply needs the checked message reference",
+                )
+                .into());
+            }
+        };
         if to.exit().borrow().is_some() {
             return Err(ErrorBody::new(
                 Reason::Ended,
-                format!("#{} ended; it takes no messages", to.id()),
+                format!(
+                    "{} ended; it takes no messages",
+                    self.agent_address(recipient)?
+                ),
             )
             .into());
         }
-        let deadline = (!to.is_guest()).then(|| due.at.clone());
+        if !to.is_guest() && to.rule().is_none() {
+            return Err(ErrorBody::new(
+                Reason::Unsupported,
+                format!(
+                    "{} is a custom program and cannot receive messages",
+                    to.info().name
+                ),
+            )
+            .into());
+        }
         let message = Message {
             from_machine_id: (machine != self.machine_id).then(|| machine.to_string()),
-            reply_to_machine_id: origin
-                .reply
-                .as_ref()
-                .map(|reference| reference.machine_id.clone()),
-            from_window: origin.from_window,
+            reply_to_machine_id: reply.as_ref().map(|reference| reference.machine_id.clone()),
+            from_window: None,
             ..pending_message(
                 origin.sender,
                 to.id(),
                 args.text,
-                origin.reply.map(|reference| reference.message_id),
-                deadline,
+                reply.map(|reference| reference.message_id),
+                Some(due.at.clone()),
             )
         };
-        if !to.is_guest() {
-            let rule = to
-                .rule()
-                .and_then(|name| facade_rules::find(name).ok().flatten());
-            check_fits(
-                rule,
-                &format!("#{}", to.id()),
-                &message,
-                "send it in shorter parts",
-                |message| self.message_text(message),
-            )?;
-        }
         let (message, mut settled) =
             match self
                 .messages
-                .post(message, args.request_id.as_deref(), window)?
+                .post(message, args.request_id.as_deref(), None)?
             {
                 Posted::New(message, settled) => (message, settled),
                 // A call with the same ID kept its message first: this one joins it.
@@ -567,18 +651,10 @@ impl Daemon {
                 request_words(args.request_id.as_deref())
             ),
         );
-        if to.is_guest() {
-            return Ok(SendOutcome {
-                message,
-                repeated: false,
-                withdrawn: false,
-                window_delivery: None,
-            });
-        }
         let number = messages::number(&message);
         {
             let delivered = async {
-                if self.hand_to_typist(&to, &message, due.instant).await {
+                if to.is_guest() || self.hand_to_typist(&to, &message, due.instant).await {
                     self.messages
                         .settle_by_deadline(number, &mut settled, due.instant)
                         .await;
@@ -608,13 +684,17 @@ impl Daemon {
         }
         gate_for_test("before-send-answer");
         let answer = settled.borrow().clone();
-        let (message, withdrawn) = settled_answer(answer, to.id(), &message.message_id)?;
-        Ok(SendOutcome {
-            message,
-            repeated: false,
-            withdrawn,
-            window_delivery: None,
-        })
+        let (message, withdrawn, expected_reply_to) =
+            settled_answer(answer, to.id(), &message.message_id)?;
+        Ok((
+            SendOutcome {
+                message,
+                repeated: false,
+                withdrawn,
+                window_delivery: None,
+            },
+            expected_reply_to,
+        ))
     }
 
     /// Answers a send that repeats an earlier one by its request ID with the message that one
@@ -625,30 +705,48 @@ impl Daemon {
         earlier: Earlier,
         request_id: &str,
         mut cancel: Cancel,
-    ) -> Result<SendOutcome, SendFailure> {
+    ) -> Result<(SendOutcome, Option<MessageRef>), SendFailure> {
         let (message, settled) = match earlier {
             Earlier::HumanReady(result) => {
                 log_repeat(&result.message, request_id);
-                return messages::human_result(result);
+                return messages::human_result(result).map(|sent| (sent, None));
             }
-            Earlier::HumanInFlight(mut settled) => {
-                let result = settled.wait_for(Option::is_some).await.map_err(|_| {
-                    ErrorBody::new(
-                        Reason::Unavailable,
-                        "the original delivery ended without a result",
+            Earlier::Withdrawn(message) => {
+                if message.delivery.reason.is_none() {
+                    return settled_answer(
+                        Some(Settled::Cancelled),
+                        &message.to,
+                        &message.message_id,
                     )
-                })?;
-                let result = result.as_ref().expect("a settled person message").clone();
-                if let Ok(sent) = &result {
-                    log_repeat(&sent.message, request_id);
+                    .map(|(message, withdrawn, expected_reply_to)| {
+                        (
+                            SendOutcome {
+                                message,
+                                repeated: true,
+                                withdrawn,
+                                window_delivery: None,
+                            },
+                            expected_reply_to,
+                        )
+                    })
+                    .map_err(Into::into);
                 }
-                return result;
+                log_repeat(&message, request_id);
+                return Ok((
+                    SendOutcome {
+                        message,
+                        repeated: true,
+                        withdrawn: true,
+                        window_delivery: None,
+                    },
+                    None,
+                ));
             }
             Earlier::Settled(message) => (message, None),
             Earlier::Delivering(message, settled) => (message, Some(settled)),
         };
         log_repeat(&message, request_id);
-        let (message, withdrawn) = match settled {
+        let (message, withdrawn, expected_reply_to) = match settled {
             // A guest's message waits with no deadline for its next turn.
             Some(mut settled) if message.delivery.deadline.is_some() => {
                 let number = messages::number(&message);
@@ -678,20 +776,24 @@ impl Daemon {
                 let answer = settled.borrow().clone();
                 settled_answer(answer, &message.to, &message.message_id)?
             }
-            _ => (message, false),
+            _ => (message, false, None),
         };
-        Ok(SendOutcome {
-            message,
-            repeated: true,
-            withdrawn,
-            window_delivery: None,
-        })
+        Ok((
+            SendOutcome {
+                message,
+                repeated: true,
+                withdrawn,
+                window_delivery: None,
+            },
+            expected_reply_to,
+        ))
     }
 
     /// Delivers `agent`'s start prompt once its start settled (`started`): its CLI's tools
     /// connected or will not. It goes before every message held for it. A run that ends first
     /// fails it as ended. Nobody waits on it; its result, where it owes one, and the log say how
-    /// it went. A prompt that is not typed in time stays in the inbox.
+    /// it went. A prompt not delivered in time fails: withdrawn where nothing of it was typed, kept
+    /// as failed otherwise.
     pub(crate) async fn send_start_prompt(
         self: Arc<Self>,
         agent: AgentHandle,
@@ -745,22 +847,23 @@ impl Daemon {
                 .settle(&[number], Outcome::untyped(DeliveryFailure::Ended));
         }
         let delivery = match &*settled.borrow() {
-            Some(Settled::Kept(message) | Settled::Withdrawn(message)) => {
-                Some(message.delivery.clone())
+            Some(Settled::Kept(message)) => Some((message.delivery.clone(), false)),
+            Some(Settled::Withdrawn(message) | Settled::WithdrawnWhileWaiting { message, .. }) => {
+                Some((message.delivery.clone(), true))
             }
             Some(Settled::Cancelled) | None => None,
         };
         let prompt_id = prompt.message_id;
         match delivery {
-            Some(delivery) if delivery.status == DeliveryStatus::Success => log(
+            Some((delivery, _)) if delivery.status == DeliveryStatus::Success => log(
                 "info",
                 &format!("#{id}'s start prompt, {prompt_id}, was delivered"),
             ),
-            Some(delivery) => log(
+            Some((delivery, withdrawn)) => log(
                 "warn",
                 &format!(
-                    "#{id}'s start prompt, {prompt_id}, was not delivered and stays in its inbox: \
-                     {}",
+                    "#{id}'s start prompt, {prompt_id}, was not delivered{}: {}",
+                    if withdrawn { " and was withdrawn" } else { "" },
                     delivery.failure_words(&format!("#{id}"))
                 ),
             ),
@@ -772,212 +875,16 @@ impl Daemon {
     }
 
     /// Selects the current member subscriptions before keeping one message under one number.
-    async fn tell_person(
+    pub(crate) async fn accept_start_result(
         self: &Arc<Self>,
         caller: &Caller,
-        from: &AgentHandle,
-        args: AgentSendArgs,
-        due: Due,
-        cancel: Cancel,
-    ) -> Result<SendOutcome, SendFailure> {
-        let request = args.request_id.as_deref();
-        if let Some(request) = request {
-            check_request_id(request)?;
-            if let Some(earlier) =
-                self.messages
-                    .find_request(&self.machine_id, from.id(), HUMAN, request, None)?
-            {
-                return self.repeat_send(earlier, request, cancel).await;
-            }
-        }
-        facade_base::daemon::check_message_text(&args.text).map_err(ErrorBody::invalid_argument)?;
-        let reply = self
-            .verified_reply(caller, args.reply_to.as_deref())
-            .await?;
-        let info = from.info();
-        let mut local = Vec::new();
-        let mut remote: std::collections::BTreeMap<String, Vec<WindowRef>> =
-            std::collections::BTreeMap::new();
-        let mut outcomes = Vec::new();
-        for window in info.windows {
-            if window.machine_id == self.machine_id {
-                match self.windows.person_target(&window) {
-                    Ok(target) => local.push((window, target)),
-                    Err(failure) => outcomes.push(failure),
-                }
-            } else {
-                remote
-                    .entry(window.machine_id.clone())
-                    .or_default()
-                    .push(window);
-            }
-        }
-        if local.is_empty() && remote.is_empty() {
-            if let Some(request) = request
-                && let Some(earlier) =
-                    self.messages
-                        .find_request(&self.machine_id, from.id(), HUMAN, request, None)?
-            {
-                return self.repeat_send(earlier, request, cancel).await;
-            }
-            return Err(messages::no_window_delivery(outcomes));
-        }
-        let sender = Sender {
-            from: from.id().to_owned(),
-            from_name: Some(info.name),
-        };
-        let message = Message {
-            reply_to_machine_id: reply.as_ref().map(|reference| reference.machine_id.clone()),
-            ..pending_message(
-                sender,
-                HUMAN,
-                args.text,
-                reply.map(|reference| reference.message_id),
-                None,
-            )
-        };
-        let message = match self.messages.begin_human(message, request)? {
-            PostedHuman::New(message) => message,
-            PostedHuman::Earlier(earlier) => {
-                return self
-                    .repeat_send(earlier, request.unwrap_or_default(), cancel)
-                    .await;
-            }
-        };
-        let change = value_of(MessagesChange::Updated {
-            message: Box::new(message.clone()),
-        });
-        for (window, target) in local {
-            match self.windows.deliver_to_person(&target, &change) {
-                Ok(()) => outcomes.push(WindowDeliveryOutcome::Delivered { window }),
-                Err(failure) => outcomes.push(failure),
-            }
-        }
-        let reference = MessageRef {
-            machine_id: self.machine_id.clone(),
-            message_id: message.message_id.clone(),
-        };
-        let mut offers = tokio::task::JoinSet::new();
-        for (machine_id, windows) in remote {
-            let daemon = self.clone();
-            let caller = caller.clone();
-            let payload = WindowDeliverArgs {
-                message_ref: reference.clone(),
-                message: message.clone(),
-                windows: windows.clone(),
-            };
-            let left = due
-                .instant
-                .saturating_duration_since(tokio::time::Instant::now());
-            offers.spawn(async move {
-                let result = daemon
-                    .network_call(
-                        &machine_id,
-                        caller,
-                        WindowDeliver::NAME,
-                        value_of(payload),
-                        Some(left),
-                        None,
-                    )
-                    .await;
-                (windows, result)
-            });
-        }
-        while let Some(offer) = offers.join_next().await {
-            let (windows, result) = offer.map_err(ErrorBody::internal)?;
-            match result {
-                Ok(value) => match decode_arguments::<WindowDelivery>(value) {
-                    Ok(receipt) => outcomes.extend(receipt.into_outcomes()),
-                    Err(_) => outcomes.extend(
-                        windows
-                            .into_iter()
-                            .map(|window| WindowDeliveryOutcome::OutcomeUnknown { window }),
-                    ),
-                },
-                Err(error)
-                    if error.data.unavailable.as_ref().is_some_and(|unavailable| {
-                        unavailable.execution == ExecutionOutcome::OutcomeUnknown
-                    }) =>
-                {
-                    outcomes.extend(
-                        windows
-                            .into_iter()
-                            .map(|window| WindowDeliveryOutcome::OutcomeUnknown { window }),
-                    );
-                }
-                Err(_) => outcomes.extend(windows.into_iter().map(|window| {
-                    WindowDeliveryOutcome::NotDelivered {
-                        window,
-                        reason: "machine_unavailable".to_string(),
-                    }
-                })),
-            }
-        }
-        outcomes.sort();
-        let result = self.messages.finish_human(&message, outcomes)?;
-        log(
-            "info",
-            &format!(
-                "#{} sent {} to #human{}",
-                message.from,
-                message.message_id,
-                request_words(request)
-            ),
-        );
-        Ok(result)
-    }
-
-    pub(crate) fn deliver_forwarded_human(
-        &self,
-        caller: &Caller,
-        args: WindowDeliverArgs,
-    ) -> Result<WindowDeliverResult, ErrorBody> {
-        let Caller::Agent { agent, .. } = caller else {
-            return Err(ErrorBody::refused(
-                "a message to the person must come from an agent",
-            ));
-        };
-        if agent.machine_id != args.message_ref.machine_id
-            || agent.agent_id != args.message.from
-            || args.message_ref.message_id != args.message.message_id
-            || args.message.to != HUMAN
-            || args
-                .windows
-                .iter()
-                .any(|window| window.machine_id != self.machine_id)
-        {
-            return Err(ErrorBody::invalid_argument(
-                "the notification does not name its source or its member windows",
-            ));
-        }
-        let change = value_of(MessagesChange::Updated {
-            message: Box::new(Message {
-                message_ref: Some(args.message_ref),
-                ..args.message
-            }),
-        });
-        let mut outcomes = Vec::new();
-        for window in args.windows {
-            match self
-                .windows
-                .person_target(&window)
-                .and_then(|target| self.windows.deliver_to_person(&target, &change))
-            {
-                Ok(()) => outcomes.push(WindowDeliveryOutcome::Delivered { window }),
-                Err(failure) => outcomes.push(failure),
-            }
-        }
-        Ok(WindowDeliverResult {
-            window_delivery: outcomes,
-        })
-    }
-
-    pub(crate) async fn deliver_forwarded_result(
-        self: &Arc<Self>,
-        caller: &Caller,
-        mut args: AgentDeliverStartResultArgs,
+        forwarded: v3::AgentDeliverStartResultArgs,
         remaining: Option<Duration>,
     ) -> Result<(), ErrorBody> {
+        let mut args = facade_base::machine::AgentDeliverStartResultArgs {
+            recipient: forwarded.recipient,
+            message: crate::service::stored_message(forwarded.message),
+        };
         if !matches!(caller, Caller::Terminal { .. })
             || args.recipient.machine_id != self.machine_id
             || args.message.from != facade_base::daemon::FACADE
@@ -1020,8 +927,8 @@ impl Daemon {
                     .and_then(|outcome| outcome.clone());
                 settled_answer(outcome, to, id)?.0
             }
-            Posted::Earlier(Earlier::Settled(message)) => message,
-            Posted::Earlier(Earlier::HumanReady(_) | Earlier::HumanInFlight(_)) => {
+            Posted::Earlier(Earlier::Settled(message) | Earlier::Withdrawn(message)) => message,
+            Posted::Earlier(Earlier::HumanReady(_)) => {
                 return Err(ErrorBody::internal(
                     "a start result was addressed to the person",
                 ));
@@ -1030,7 +937,7 @@ impl Daemon {
         if delivered.delivery.status != DeliveryStatus::Success {
             return Err(ErrorBody::new(
                 Reason::Unavailable,
-                delivered.delivery.failure_words(&format!("#{to}")),
+                delivered.delivery.failure_words(to),
             ));
         }
         Ok(())
@@ -1112,7 +1019,16 @@ pub(crate) async fn deliver_results(
                             &target,
                             caller,
                             AgentDeliverStartResult::NAME,
-                            value_of(args),
+                            value_of(v3::AgentDeliverStartResultArgs {
+                                recipient: args.recipient,
+                                message: match daemon.public_message(args.message) {
+                                    Ok(message) => message,
+                                    Err(error) => {
+                                        log("warn", &error.message);
+                                        return;
+                                    }
+                                },
+                            }),
                             Some(left),
                             None,
                         )
@@ -1129,19 +1045,43 @@ pub(crate) async fn deliver_results(
     }
 }
 
+fn send_time_left(deadline: tokio::time::Instant) -> Result<Duration, ErrorBody> {
+    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if left.is_zero() {
+        Err(send_before_deadline())
+    } else {
+        Ok(left)
+    }
+}
+
+fn send_unconfirmed() -> ErrorBody {
+    let mut error = ErrorBody::new(
+        Reason::Unavailable,
+        "the original send's delivery outcome is unknown",
+    );
+    error.data.unavailable = Some(facade_base::machine::Unavailable {
+        execution: ExecutionOutcome::OutcomeUnknown,
+        machine: None,
+        window: None,
+        matches: Vec::new(),
+        unanswered: Vec::new(),
+    });
+    error
+}
+
+fn send_before_deadline() -> ErrorBody {
+    ErrorBody::new(
+        Reason::Unavailable,
+        "the delivery time expired before the message was sent",
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{
-        Delivery, DeliveryStatus, MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES, Message, TextWritten,
-    };
+    use facade_base::daemon::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES};
 
-    use super::check_fits;
-
-    /// The longest message there is, 8,000 four-byte characters on 540 lines under the longest
-    /// header, its sender's window named in it too, either fits a whole delivery to each CLI or is
-    /// refused before it is sent, the refusal naming that CLI (RULES-1.5, MCP-4.1).
     #[test]
-    fn the_longest_message_fits_each_cli_or_is_refused_naming_it() {
+    fn accepts_a_message_at_both_public_limits() {
         let mut lines = vec!["\u{1D54F}".repeat(13); MAX_MESSAGE_LINES];
         let length = |lines: &[String]| {
             lines.iter().map(|line| line.chars().count()).sum::<usize>() + lines.len() - 1
@@ -1156,55 +1096,5 @@ mod tests {
             ),
             (MAX_MESSAGE_CHARS, Ok(()))
         );
-        let message = Message {
-            message_ref: None,
-            from_machine_id: None,
-            reply_to_machine_id: None,
-            message_id: String::new(),
-            from: "a999999999".into(),
-            from_name: Some("\u{1D54F}".repeat(200)),
-            to: "a1".into(),
-            text,
-            reply_to: Some("m999999999".into()),
-            from_window: Some("\u{1D54F}".repeat(200)),
-            call_id: None,
-            result: None,
-            at: facade_base::time::iso_now(),
-            delivery: Delivery {
-                status: DeliveryStatus::Pending,
-                reason: None,
-                text_written: TextWritten::None,
-                enter_written: Some(false),
-                deadline: None,
-                delivered_via: None,
-                delivered_at: None,
-            },
-        };
-        let widest = Message {
-            message_id: "m999999999".into(),
-            ..message.clone()
-        };
-        let typed = facade_base::daemon::typed_text(&widest);
-        for rule in facade_rules::rules().unwrap() {
-            let fits =
-                crate::agent::delivery_time(rule, &typed) <= crate::messages::delivery_limit();
-            match check_fits(
-                Some(rule),
-                "#a1",
-                &message,
-                "send it in shorter parts",
-                facade_base::daemon::typed_text,
-            ) {
-                Ok(()) => assert!(fits, "{} was let through", rule.cli),
-                Err(refused) => {
-                    assert!(!fits, "{} was refused: {}", rule.cli, refused.message);
-                    assert!(
-                        refused.message.contains(&rule.display_name),
-                        "{}",
-                        refused.message
-                    );
-                }
-            }
-        }
     }
 }

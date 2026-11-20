@@ -16,21 +16,20 @@ use std::time::Instant;
 use facade_base::daemon::{HelloParams, HelloResult, methods};
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::machine::AgentRef;
 use facade_base::sockets::{DaemonListener, ServerReader, ServerSocket, ServerWriter};
 use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::sync::{mpsc, watch};
 
-use crate::{Cancel, WindowBinding};
+use crate::Cancel;
 
 /// Who a connection is, as its hello settled it.
 pub(crate) struct Client {
     /// What the client said of itself in its hello.
     pub(crate) identity: Identity,
-    /// The editor window and generation bound to this `ide` connection.
-    pub(crate) window: Option<WindowBinding>,
-    /// The agent the client acts for, by ID: the one its hello named, or the one its sessions name.
-    pub(crate) agent: Option<String>,
+    /// The stable actor of an in-process connection, supplied by its authenticated caller.
+    pub(crate) verified_actor: Option<AgentRef>,
 }
 
 /// An ID shared by local and forwarded watches on this daemon.
@@ -69,12 +68,13 @@ pub(crate) trait Service: Send + Sync + 'static {
     /// Held for as long as a connection that said hello is open, such as an editor window's
     /// presence.
     type Hold: Send;
-    /// Counts a connection as the daemon's work until dropped.
+    /// Counts local client work until dropped.
     type Work: Send;
     /// An authorized machine session, held until its last RPC response is written.
     type Machine: Send;
 
-    /// Answers a hello whose protocol versions and kind the server accepted.
+    /// Answers an accepted hello. The server strips the old identity fields and attaches any
+    /// authenticated actor from its private entry point after this returns.
     fn hello(
         self: &Arc<Self>,
         hello: HelloParams,
@@ -213,20 +213,26 @@ pub(crate) async fn serve<S: Service>(
         if *closing.borrow() {
             continue;
         }
-        let Some(work) = service.work() else {
-            continue;
-        };
-        let service = service.clone();
-        tokio::spawn(async move {
-            serve_connection(service, socket).await;
-            drop(work);
-        });
+        tokio::spawn(serve_connection(service.clone(), socket));
     }
 }
 
-/// Serves one connected socket until it closes: a client's, or the daemon's own MCP server's.
+/// Serves one connected socket until it closes.
 pub(crate) async fn serve_connection<S: Service>(service: Arc<S>, socket: ServerSocket) {
-    if let Err(err) = connection::serve(service, socket).await {
+    serve_peer(service, socket, None).await;
+}
+
+/// Serves an in-process connection for an actor the daemon already authenticated.
+pub(crate) async fn serve_actor<S: Service>(
+    service: Arc<S>,
+    socket: ServerSocket,
+    actor: AgentRef,
+) {
+    serve_peer(service, socket, Some(actor)).await;
+}
+
+async fn serve_peer<S: Service>(service: Arc<S>, socket: ServerSocket, actor: Option<AgentRef>) {
+    if let Err(err) = connection::serve(service, socket, actor).await {
         log("warn", &format!("a connection ended: {err}"));
     }
 }

@@ -3,7 +3,7 @@
 //! does not know.
 
 use std::io::Write;
-use std::process::{Output, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
@@ -32,19 +32,22 @@ fn a_hook_line_this_build_cannot_use_does_nothing_and_exits_0() {
     let home = TestHome::new("hooklines");
     let file = home.project.join("session");
     let file = file.to_str().unwrap();
-    for words in [
-        ["hook", "later-event", file].as_slice(),
-        &["hook", "session-start", file, "--later"],
+    for (words, reason) in [
+        (
+            ["hook", "later-event", file].as_slice(),
+            "InvalidSubcommand",
+        ),
+        (
+            &["hook", "session-start", file, "--later"],
+            "UnknownArgument",
+        ),
     ] {
         let output = hook_line(&home, words);
         assert!(
             output.status.success() && output.stdout.is_empty(),
             "{words:?}: {output:?}"
         );
-        let why = format!(
-            "did nothing for `{}`, which this build cannot use",
-            words.join(" ")
-        );
+        let why = format!("ignored a hook this build cannot use: {reason}");
         assert!(
             stderr(&output).contains(&why),
             "{words:?}: {}",
@@ -56,43 +59,35 @@ fn a_hook_line_this_build_cannot_use_does_nothing_and_exits_0() {
         "a line this build cannot use wrote the session"
     );
     assert!(
-        !socket_exists(&home.daemon_socket()),
+        !socket_exists(&home.daemon_socket()) && !socket_exists(&home.keeper_socket()),
         "a hook line started Facade"
     );
     let typo = home.run_facade(&["lsit"]);
     assert_eq!(typo.status.code(), Some(2), "{typo:?}");
 }
 
-/// Every hook line of the six CLIs, a run's and a guest's, with an argument this build does not
-/// know, and each CLI's guest line with an event it does not know, does nothing and exits 0.
-/// Antigravity, which reads every hook's answer as a JSON object, gets an empty one.
+/// An unrecognized argument leaves the managed hooks idle. The Antigravity instructions hook
+/// still returns the empty JSON object its caller needs.
 #[test]
 fn every_cli_s_hook_lines_do_nothing_where_this_build_does_not_know_them() {
     let home = TestHome::new("clilines");
     let file = home.project.join("session");
     let file = file.to_str().unwrap();
-    let mut lines: Vec<Vec<&str>> = vec![
-        vec!["hook", "session-start", file, "--later"],
-        vec!["hook", "title", file, "--later"],
-        vec!["hook", "instructions", "muse", "--later"],
-        vec!["hook", "instructions", "agy", "--later"],
-        vec!["hook", "approve", "muse", "--later"],
+    let lines = [
+        (["hook", "session-start", file, "--later"], ""),
+        (["hook", "title", file, "--later"], ""),
+        (["hook", "instructions", "muse", "--later"], ""),
+        (["hook", "instructions", "agy", "--later"], "{}\n"),
+        (["hook", "approve", "muse", "--later"], ""),
     ];
-    for cli in ["claude", "codex", "opencode", "pi", "muse", "agy"] {
-        for event in ["session-start", "prompt", "turn-end", "idle", "session-end"] {
-            lines.push(vec!["hook", event, "--cli", cli, "--later"]);
-        }
-        lines.push(vec!["hook", "later-event", "--cli", cli]);
-    }
-    for words in &lines {
-        let output = hook_line(&home, words);
-        let answer = if words.contains(&"agy") { "{}\n" } else { "" };
+    for (words, answer) in lines {
+        let output = hook_line(&home, &words);
         assert!(
             output.status.success() && output.stdout == answer.as_bytes(),
             "{words:?}: {output:?}"
         );
         assert!(
-            stderr(&output).contains("which this build cannot use"),
+            stderr(&output).contains("ignored a hook this build cannot use: UnknownArgument"),
             "{words:?}: {}",
             stderr(&output)
         );
@@ -102,18 +97,15 @@ fn every_cli_s_hook_lines_do_nothing_where_this_build_does_not_know_them() {
         "a line this build cannot use wrote the session"
     );
     assert!(
-        !socket_exists(&home.daemon_socket()),
+        !socket_exists(&home.daemon_socket()) && !socket_exists(&home.keeper_socket()),
         "a hook line started Facade"
     );
 }
 
-/// Runs `facade-mcp <words>` with `env` as a CLI runs its server, asks for its tools, and returns
-/// its answers once its input ends, with how it ended.
-fn server_line(home: &TestHome, words: &[&str], env: &[(&str, &str)]) -> (Vec<Value>, Output) {
-    let mut command = home.command(&test_binaries().mcp);
+/// Runs a relay with an additional word, asks for its tools, and returns its answers and exit.
+fn server_line(mut command: Command) -> (Vec<Value>, Output) {
     command
-        .args(words)
-        .envs(env.iter().copied())
+        .arg("--later")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -145,16 +137,21 @@ fn server_line(home: &TestHome, words: &[&str], env: &[(&str, &str)]) -> (Vec<Va
 }
 
 /// facade-mcp passes on the words of its line this build does not know, and the daemon serves as
-/// the rest says: a run's server its agent's tools, a guest's server its CLI's sessions.
+/// the rest says: a run's server with its credential, and a Guest's server without one.
 #[test]
 fn facade_mcp_serves_a_line_with_words_this_build_does_not_know() {
     let home = TestHome::new("serverlines");
     let agent = home.start_fake("w1");
-    for (words, env) in [
-        (vec!["--later"], vec![("FACADE_AGENT", agent.id.as_str())]),
-        (vec!["--guest", "claude", "--later"], vec![]),
+    let run = facade_rules::run_folder(&home.path.join("core/runs"), &agent.id).unwrap();
+    let config: Value =
+        facade_scenarios::serde_json::from_slice(&std::fs::read(run.join("mcp.json")).unwrap())
+            .unwrap();
+    let managed = mcp_command(&config, &home.path, |program| home.command(program)).unwrap();
+    for (kind, command) in [
+        ("managed", managed),
+        ("guest", home.command(&test_binaries().mcp)),
     ] {
-        let (answers, output) = server_line(&home, &words, &env);
+        let (answers, output) = server_line(command);
         let tools = answers
             .iter()
             .find(|answer| answer["id"] == 2)
@@ -162,7 +159,7 @@ fn facade_mcp_serves_a_line_with_words_this_build_does_not_know() {
             .unwrap_or_default();
         assert!(
             output.status.success() && !tools.is_empty(),
-            "{words:?}: {answers:?} {output:?}"
+            "{kind}: {answers:?} {output:?}"
         );
     }
 }

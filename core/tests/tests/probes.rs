@@ -91,7 +91,7 @@ fn report_session(home: &TestHome, agent: &str, name: &str) {
     assert!(hook.wait().unwrap().success());
     assert!(
         wait_until(secs(10), || home
-            .agent_from_list_json(name)
+            .agent_from_watch(name)
             .is_some_and(|listed| listed["session"] == SESSION)),
         "the run's session is recorded"
     );

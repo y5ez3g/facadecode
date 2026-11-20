@@ -18,13 +18,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { freePort, Workbench } from './cdpInput';
-import { EDITOR_FLAGS, endEditors, endMatching } from './editors';
+import { EDITOR_FLAGS, editorProfile, endEditors } from './editors';
 
 export interface FocusProbeContext {
 	readonly executable: string;
 	/** The run's temporary folder, and the parent of each session's Facade root. */
 	readonly root: string;
 	readonly home: string;
+	readonly endMatching: (text: string) => void;
 	/** The suite's editor settings. */
 	readonly settings: { readonly [setting: string]: unknown };
 	/** Writes Facade's settings file in a session's Facade root: the built-ins but Claude Code's turned off (CONFIGURATION-1.1). */
@@ -75,7 +76,8 @@ interface Line { readonly phase: string; readonly at?: number; readonly [key: st
 async function session(ctx: FocusProbeContext, name: string, short: string, withFacade: boolean): Promise<{ lines: Line[]; output: string }> {
 	const folder = path.join(ctx.root, `fprobe-${name}`);
 	// VS Code's IPC socket lives below user data: short names, within the platform's limit
-	const user = path.join(ctx.root, `u-q${short}`), extensions = path.join(ctx.root, `x-q${short}`), shared = path.join(ctx.root, `s-q${short}`);
+	const profile = editorProfile(ctx.root, `q${short}`);
+	const { user } = profile;
 	const facade = path.join(ctx.home, `probe-${name}`);
 	const out = path.join(ctx.root, `probe-${name}.jsonl`);
 	const driver = path.join(ctx.root, `driver-probe-${name}`);
@@ -93,12 +95,12 @@ async function session(ctx: FocusProbeContext, name: string, short: string, with
 	}
 	const port = await freePort();
 	let output = '';
-	const editor = spawn(ctx.executable, [folder, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+	const editor = spawn(ctx.executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
 		...withFacade ? [`--extensionDevelopmentPath=${ctx.extension}`, `--extensionDevelopmentPath=${ctx.windowComponent}`] : [],
 		`--extensionDevelopmentPath=${driver}`, `--remote-debugging-port=${port}`, ...EDITOR_FLAGS], {
 		stdio: ['ignore', 'pipe', 'pipe'],
 		env: {
-			...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: ctx.record, FACADE_IT_PROBE: out, FACADE_IT_PROBE_PHASE: name, FACADE_IT_PROBE_PORT: String(port),
+			...process.env, ...profile.env, FACADE_HOME: facade, FACADE_IT_RECORD: ctx.record, FACADE_IT_PROBE: out, FACADE_IT_PROBE_PHASE: name, FACADE_IT_PROBE_PORT: String(port),
 			FACADE_IT_PROBE_FAKE: ctx.fake, CLAUDE_CONFIG_DIR: ctx.claudeConfig,
 			...Object.fromEntries(['FACADE_IT_PROBE_CASES', 'FACADE_IT_PROBE_KEYS'].filter(each => ctx.env[each]).map(each => [each, ctx.env[each]!]))
 		}
@@ -139,8 +141,8 @@ async function session(ctx: FocusProbeContext, name: string, short: string, with
 		try {
 			await endEditors([editor]);
 		} finally {
-			endMatching(user);
-			endMatching(path.join(facade, 'extension', 'ptyd'));
+			ctx.endMatching(user);
+			ctx.endMatching(path.join(facade, 'extension', 'ptyd'));
 		}
 	}
 }

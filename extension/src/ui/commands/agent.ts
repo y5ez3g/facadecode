@@ -7,6 +7,7 @@ import { FacadeError, invalid } from '../../core/errors';
 import { labelOf, normalizeName } from '../../core/names';
 import { canDismiss, type Agents, type ExecutionPort, type HumanPort, type RunFacts, type RunId } from '../../core/ports';
 import { referenceOf } from '../../core/reach';
+import { isAgentRunning } from '../cardView';
 import { COMMANDS } from '../catalog';
 import { PanelModel } from '../model';
 import { reasonOf } from '../presentation';
@@ -17,6 +18,15 @@ export interface AgentCommandDeps {
 	readonly model: PanelModel;
 	readonly execution: Pick<ExecutionPort, 'reveal' | 'tabOpen'>;
 	readonly notifyError: HumanPort['error'];
+}
+
+export interface RustCardActions {
+	open(run: RunId): Promise<boolean>;
+	hide(run: RunId): Promise<void>;
+	stop(run: RunId): Promise<void>;
+	remove(run: RunId): Promise<void>;
+	setPinned(run: RunId, pinned: boolean): Promise<void>;
+	rename(run: RunId, name: string): Promise<void>;
 }
 
 /**
@@ -123,14 +133,11 @@ export class AgentActions {
 		if (!facts) {
 			return;
 		}
-		const flow = new Flow();
-		const typed = await flow.text({ title: vscode.l10n.t("Rename Agent"), value: facts.name, placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"), prompt: vscode.l10n.t("Rename {0}", referenceOf(facts)) });
-		flow.close();
-		if (typed === undefined || typed === BACK) {
-			return;
-		}
-		const name = normalizeName(typed);
-		if (name === facts.name) {
+		const name = await askName(facts, {
+			placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"),
+			prompt: vscode.l10n.t("Rename {0}", referenceOf(facts))
+		});
+		if (name === undefined) {
 			return;
 		}
 		try {
@@ -142,6 +149,14 @@ export class AgentActions {
 			}
 		}
 	}
+}
+
+async function askName(facts: RunFacts, copy: { readonly placeholder: string; readonly prompt?: string }): Promise<string | undefined> {
+	const flow = new Flow();
+	const typed = await flow.text({ title: vscode.l10n.t("Rename Agent"), value: facts.name, ...copy });
+	flow.close();
+	const name = typed === undefined || typed === BACK ? undefined : normalizeName(typed);
+	return name === facts.name ? undefined : name;
 }
 
 /**
@@ -172,5 +187,57 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 		}),
 		on(COMMANDS.moveUp, false, run => model.move(run, -1)),
 		on(COMMANDS.moveDown, false, run => model.move(run, 1))
+	];
+}
+
+/** The workspace card's actions use its current run and the parent's Orchestrator callbacks (PANEL-4.2). */
+export function registerRustAgentCommands(deps: Pick<AgentCommandDeps, 'model' | 'notifyError'> & {
+	readonly agents: Pick<Agents, 'get'>;
+	readonly actions: RustCardActions;
+	readonly goToAgent: () => Promise<void>;
+}): vscode.Disposable[] {
+	const { agents, model, actions } = deps;
+	type Failure = (name: string, reason: string) => string;
+	const openFailure: Failure = (name, reason) => vscode.l10n.t("Could not open {0}: {1}", name, reason);
+	const on = (id: string, does: (facts: RunFacts) => Promise<unknown>, failure?: Failure, palette = true) =>
+		vscode.commands.registerCommand(id, async (arg?: unknown) => {
+			const run = targetOf(arg, model, agents, palette);
+			const facts = run === undefined ? undefined : agents.get(run);
+			if (!facts) { return undefined; }
+			try {
+				return await does(facts);
+			} catch (err) {
+				const reason = reasonOf(err);
+				deps.notifyError(failure ? failure(labelOf(facts), reason) : reason, {});
+				return undefined;
+			}
+		});
+	const open = async (facts: RunFacts): Promise<boolean> => isAgentRunning(facts) && await actions.open(facts.id);
+	return [
+		vscode.commands.registerCommand(COMMANDS.goToAgent, () => deps.goToAgent()),
+		on(COMMANDS.openTerminal, open, openFailure),
+		on(COMMANDS.hideAgent, facts => actions.hide(facts.id), (name, reason) => vscode.l10n.t("Could not hide {0}: {1}", name, reason)),
+		on(COMMANDS.stopAgent, async facts => {
+			if (isAgentRunning(facts)) { await actions.stop(facts.id); }
+		}, (name, reason) => vscode.l10n.t("Could not stop {0}: {1}", name, reason)),
+		on(COMMANDS.deleteAgent, facts => actions.remove(facts.id), (name, reason) => vscode.l10n.t("Could not remove {0}: {1}", name, reason)),
+		on(COMMANDS.pinAgent, async facts => {
+			if (facts.pinnable && !facts.pin) { await actions.setPinned(facts.id, true); }
+		}, (name, reason) => vscode.l10n.t("Could not pin {0}: {1}", name, reason)),
+		on(COMMANDS.unpinAgent, async facts => {
+			if (facts.pin) { await actions.setPinned(facts.id, false); }
+		}, (name, reason) => vscode.l10n.t("Could not unpin {0}: {1}", name, reason)),
+		on(COMMANDS.renameAgent, async facts => {
+			const name = await askName(facts, {
+				placeholder: vscode.l10n.t("Leave blank to choose a name automatically"),
+				...(facts.address ? { prompt: vscode.l10n.t("Rename {0}", facts.address) } : {})
+			});
+			if (name !== undefined && agents.get(facts.id)) { await actions.rename(facts.id, name); }
+		}, (name, reason) => vscode.l10n.t("Could not rename {0}: {1}", name, reason)),
+		on(COMMANDS.copyAgentReference, async facts => {
+			if (facts.address) { await vscode.env.clipboard.writeText(facts.address); }
+		}),
+		// Navigation from an error names its run explicitly (UX-3.2).
+		on(COMMANDS.revealAgent, open, openFailure, false)
 	];
 }

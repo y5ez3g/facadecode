@@ -1,22 +1,25 @@
-Connect to a machine and keep the connection
+Connect to a machine and save its SSH arguments
 
-Usage: facade machine add [OPTIONS] <DESTINATION>
+Usage: facade machine add [OPTIONS] <SSH-ARG>...
 
-Connect to a machine over SSH and keep the connection. Facade reconnects on its own, even after
-either machine restarts. The first connection runs here, so SSH can ask for a password or a host
-key. Set up SSH keys so Facade can reconnect in the background. Run this again to repair a
-connection that needs an SSH login.
+Connect over SSH and save the connection. Use the same arguments you would give ssh. Put '--home'
+before those arguments to use another remote Facade home. SSH can ask for a password or host key
+here. Saved machines connect automatically while awake. An operation that names a sleeping machine
+wakes it. Run the same command again when a saved connection needs a login.
 
 Arguments:
-  <DESTINATION>  SSH host from your SSH config, or user@host
+  <SSH-ARG>...  The arguments you would use after ssh, including the destination
 
 Options:
-      --home <PATH>  Facade home on that machine [default: that user's Facade home]
+      --home <PATH>  Remote Facade home. Put this option before the SSH arguments
   -h, --help         Print help
 
 Examples:
   # Connect to gpu from your SSH config
   facade machine add gpu
 
-  # Use another Facade home on that machine
-  facade machine add me@10.0.0.5 --home /srv/facade
+  # Connect as another user on port 2222
+  facade machine add -p 2222 me@10.0.0.5
+
+  # Use an SSH key and another remote Facade home
+  facade machine add --home /srv/facade -i ~/.ssh/work me@gpu

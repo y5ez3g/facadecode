@@ -40,6 +40,7 @@ mod presence;
 mod recovery;
 mod relays;
 mod remote_agents;
+mod resume;
 mod service;
 mod store;
 #[cfg(test)]
@@ -52,11 +53,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{
-    AgentsUpdate, DAEMON_PROTOCOL_VERSION, MIN_DAEMON_PROTOCOL_VERSION, WindowRef,
-};
+use facade_base::daemon::{AgentsUpdate, WindowRef};
 use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine::{MachineHello, MachineInfo, new_boot_id};
+use facade_base::machine::{MachineHello, new_boot_id};
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
 use serde::{Deserialize, Serialize};
@@ -64,10 +63,10 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use agent::{AgentCommand, AgentHandle, Screens};
 use guests::Guests;
-use lifecycle::{Lifecycle, LifecycleActivity};
+use lifecycle::{Lifecycle, LifecycleActivity, Work};
 use messages::Messages;
 use network::Network;
-use operations::{StartAnswer, StartKey};
+use operations::{SessionKey, StartAnswer, StartKey};
 use records::Records;
 use runs::{FoundKeeper, RunEvent, Runs};
 use store::Store;
@@ -91,13 +90,6 @@ pub(crate) struct SavedConnection {
     pub(crate) machine_id: String,
     pub(crate) ssh_destination: String,
     pub(crate) remote_home: Option<String>,
-}
-
-/// A window and the daemon-local generation of its current instance.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WindowBinding {
-    pub(crate) window: WindowRef,
-    pub(crate) generation: u64,
 }
 
 /// Who said something to an agent: an agent, by ID and its name then, or the person.
@@ -210,14 +202,16 @@ pub(crate) struct Daemon {
     machine_id: String,
     network: Network,
     machine_changes: tokio::sync::Mutex<()>,
-    machine_views: broadcast::Sender<Vec<MachineInfo>>,
+    machine_views: broadcast::Sender<()>,
     remote_agents: Mutex<remote_agents::RemoteAgents>,
+    remote_changes: broadcast::Sender<facade_base::v3::AgentsChange>,
     /// Changes for clients following the `agents` topic.
     changes: broadcast::Sender<AgentsUpdate>,
     lifecycle: Arc<Lifecycle>,
     /// The starts under way with a request ID: a second call with the same ID waits for the
     /// first one's answer.
     starting: Mutex<HashMap<StartKey, watch::Receiver<StartAnswer>>>,
+    claimed_sessions: Mutex<HashMap<SessionKey, String>>,
     screens: Screens,
     messages: Arc<Messages>,
     runs: Runs,
@@ -227,7 +221,7 @@ pub(crate) struct Daemon {
     /// `core/results/`, MCP results too long to return inline.
     results: PathBuf,
     /// What each open watch lets go of when it ends, by its viewer number.
-    watch_ends: Mutex<HashMap<u64, topics::WatchEnd>>,
+    watch_ends: Mutex<HashMap<u64, AgentHandle>>,
 }
 
 impl Daemon {
@@ -241,9 +235,6 @@ impl Daemon {
 
 impl LifecycleActivity for Daemon {
     fn holds_agents(&self) -> bool {
-        if self.network.has_connections() {
-            return true;
-        }
         self.agents
             .lock()
             .unwrap()
@@ -261,6 +252,19 @@ impl LifecycleActivity for Daemon {
 
     fn screen_writes(&self) -> usize {
         agent::screen_writes()
+    }
+
+    fn running_managed_addresses(&self) -> Vec<String> {
+        self.agents()
+            .into_iter()
+            .filter(|agent| !agent.is_guest() && agent.exit().borrow().is_none())
+            .map(|agent| {
+                let reference = agent.info().reference();
+                self.agent_address(&reference).unwrap_or_else(|_| {
+                    format!("{} on machine {}", reference.agent_id, reference.machine_id)
+                })
+            })
+            .collect()
     }
 
     fn running_count(&self) -> usize {
@@ -382,7 +386,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     };
     progress.advance();
     let store = opened.store.clone();
-    let records = Records::new(store.number_table(), store.membership_table());
+    let records = Records::new(store.number_table());
     let readable: std::collections::HashSet<String> = opened
         .records
         .iter()
@@ -393,7 +397,6 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         store.message_table(),
         opened.machine_id.clone(),
     ));
-    let (guest_events, guest_events_rx) = mpsc::unbounded_channel();
     let (network_events, network_events_rx) = mpsc::unbounded_channel();
     let home = core.parent().expect("core is inside the Facade home");
     let control_dir = facade_base::ssh::ssh_control_dir(home)?;
@@ -403,7 +406,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             boot_id: new_boot_id(),
             name: opened.machine_name,
             build: facade_base::build_id(),
-            protocol_range: [MIN_DAEMON_PROTOCOL_VERSION, DAEMON_PROTOCOL_VERSION],
+            protocol_range: facade_base::v3::DAEMON_PROTOCOL_RANGE,
             ssh_cleans_processes: facade_base::system::ssh_cleans_processes(Duration::from_secs(1))
                 .await,
         },
@@ -415,14 +418,10 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         changes: broadcast::channel(MAX_QUEUED_AGENT_CHANGES).0,
         lifecycle: Lifecycle::new(),
         starting: Mutex::default(),
+        claimed_sessions: Mutex::default(),
         screens: Screens::new(core.join("screens")),
-        windows: Windows::new(opened.machine_id.clone(), store.window_table()),
-        guests: Guests::new(
-            store.guest_table(),
-            store.integration_table(),
-            held.clone(),
-            guest_events,
-        ),
+        windows: Windows::default(),
+        guests: Guests::new(store.guest_table()),
         results: mcp::results_folder(&core),
         watch_ends: Mutex::default(),
         messages,
@@ -433,6 +432,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         machine_changes: tokio::sync::Mutex::new(()),
         machine_views: broadcast::channel(MAX_QUEUED_AGENT_CHANGES).0,
         remote_agents: Mutex::default(),
+        remote_changes: broadcast::channel(MAX_QUEUED_AGENT_CHANGES).0,
         store,
     });
     daemon.sweep(SystemTime::now());
@@ -440,12 +440,9 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     daemon
         .recover(held_agents, opened.records, &opened.agent_ids, &progress)
         .await?;
+    daemon.expire_agents(&kept_since(SystemTime::now())).await;
     daemon.restore_guests()?;
     daemon.take_up_messages()?;
-    // Restore logical windows before accepting clients.
-    daemon
-        .restore_windows()
-        .map_err(|error| anyhow::anyhow!("could not restore windows: {}", error.message))?;
     // A plugin whose runs ended while no daemon ran goes now.
     let users = daemon
         .agents()
@@ -453,21 +450,27 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         .filter_map(|agent| Some((agent.rule()?.to_string(), PathBuf::from(agent.info().cwd))))
         .collect();
     daemon.runs.let_go_of_unused_plugins(users);
-    // Integrations an earlier version wrote, as before a takeover, are written anew.
-    tokio::spawn({
-        let daemon = daemon.clone();
-        async move { daemon.guests.bring_integrations_up_to_date().await }
-    });
     daemon.runs.serve_keeper();
     if let Some(results) = daemon.messages.take_results() {
         tokio::spawn(delivery::deliver_results(daemon.clone(), results));
     }
     tokio::spawn(follow_runs(daemon.clone(), run_events_rx));
-    tokio::spawn(presence::follow_guests(daemon.clone(), guest_events_rx));
     tokio::spawn(sweep_every_hour(daemon.clone()));
     tokio::spawn(waits::follow_waits(daemon.clone()));
     // Clients are accepted only after recovery, so that they see every readable agent.
     let listener = server::bind()?;
+    let lifecycle = daemon.lifecycle.clone();
+    daemon
+        .network
+        .set_forward_work(move || lifecycle.begin(Work::Call));
+    let weak_daemon = Arc::downgrade(&daemon);
+    daemon.network.set_target_v3(move |request| {
+        let Some(daemon) = weak_daemon.upgrade() else {
+            return false;
+        };
+        tokio::spawn(async move { daemon.serve_target(request).await });
+        true
+    });
     daemon.restore_machine_connections()?;
     tokio::spawn(machine_service::follow_network(
         daemon.clone(),
@@ -559,11 +562,17 @@ async fn sweep_every_hour(daemon: Arc<Daemon>) {
     loop {
         hours.tick().await;
         let now = SystemTime::now();
-        let kept_since = now
-            .checked_sub(messages::KEPT_FOR)
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        daemon.end_unheard_guests(&facade_base::time::iso_time(kept_since));
+        let before = kept_since(now);
+        daemon.end_unheard_guests(&before);
+        daemon.expire_agents(&before).await;
         let sweeping = daemon.clone();
         let _ = tokio::task::spawn_blocking(move || sweeping.sweep(now)).await;
     }
+}
+
+fn kept_since(now: SystemTime) -> String {
+    facade_base::time::iso_time(
+        now.checked_sub(messages::KEPT_FOR)
+            .unwrap_or(SystemTime::UNIX_EPOCH),
+    )
 }

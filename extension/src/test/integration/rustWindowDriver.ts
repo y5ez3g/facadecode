@@ -10,18 +10,12 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentInfo, Said } from '../../base/coreProtocol';
-import type { Pin } from '../../core/ports';
+import type { AgentListRow, V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
+import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
-import { normalizeDriveLetter, until, windowsInCore } from './editors';
+import { callInCore, normalizeDriveLetter, until } from './editors';
 
 type Card = PanelState['cards'][number];
-type SavedPin = Pin & { readonly agent?: string; readonly home?: string; readonly machine_id?: string };
-
-export type ListedAgent = Omit<AgentInfo, 'cwd' | 'said'> & {
-	readonly folder: string;
-	readonly last_input?: Said;
-};
 
 export interface RunningAgent {
 	readonly id: string;
@@ -30,20 +24,13 @@ export interface RunningAgent {
 	readonly cwd: string;
 }
 
-export interface LegacyPinFixture {
-	readonly agent: RunningAgent;
-	readonly pin: Pin;
-	readonly mirror: string;
-}
-
 type Closing =
-	| { readonly after: 'reload'; readonly before: RunningAgent; readonly windowId: string; readonly screenText: string }
-	| { readonly after: 'pins'; readonly before: RunningAgent; readonly unpinned: RunningAgent; readonly removed: string; readonly legacy: LegacyPinFixture }
-	| { readonly after: 'repinned'; readonly before: RunningAgent };
+	| { readonly after: 'reload'; readonly before: RunningAgent; readonly screenText: string }
+	| { readonly after: 'pins'; readonly before: RunningAgent; readonly unpinned: RunningAgent; readonly removed: string };
 
 export type Step = { readonly phase: 'started'; readonly agent: RunningAgent }
 	| ({ readonly phase: 'closed' } & Closing)
-	| { readonly phase: 'reloaded' | 'reopened' | 'replaced' | 'pins' | 'legacy' | 'done' | 'error'; readonly detail?: unknown };
+	| { readonly phase: 'reloaded' | 'reopened' | 'replaced' | 'done' | 'error'; readonly detail?: unknown };
 
 // Kept on the screen by the fake CLI after Enter, even if the terminal is resized on reopening.
 const WINDOW_TEXT = 'Window lifetime screen';
@@ -56,23 +43,27 @@ export async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
 }
 
-export async function pickCard(command: string): Promise<Card> {
+export async function pickCard(command: string, resumeId?: string): Promise<Card> {
 	const before = new Set((await state()).cards.map(card => card.runId));
-	void vscode.commands.executeCommand(command);
-	return until(`a card from ${command}`, async () => {
-		const added = (await state()).cards.find(card => !before.has(card.runId));
-		if (added?.alias) { return added; }
-		if (!added) { await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem'); }
+	const picker = vscode.commands.executeCommand(command);
+	void picker.then(undefined, () => undefined);
+	const card = await until(`a card from ${command}`, async () => {
+		const added = (await state()).cards.find(card => card.orchestrator?.running &&
+			(resumeId === undefined ? !before.has(card.runId) : card.alias === resumeId));
+		if (added) { return added; }
+		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 		return undefined;
 	});
+	await picker;
+	return card;
 }
 
 export const newCard = () => pickCard('facade.newAgent');
-export const resumeCard = () => pickCard('facade.resumeAgent');
+export const resumeCard = (id?: string) => pickCard('facade.resumeAgent', id);
 
 export function aliasOf(card: Card): string {
-	assert.match(card.alias, /^#a\d+$/u, 'the card shows its agent number');
-	return card.alias;
+	assert.match(card.alias, /^a\d+$/u, 'the card shows its agent number');
+	return `#${card.alias}`;
 }
 
 export function agentTab(card: Card): vscode.Tab | undefined {
@@ -95,23 +86,33 @@ export function facadeAs(agent: string | undefined, ...args: string[]): string {
 	return execFileSync(program, args, { env, encoding: 'utf8', timeout: 20_000 });
 }
 
-export function listed(): ListedAgent[] {
-	return (JSON.parse(facade('list', '--json')) as { readonly agents: ListedAgent[] }).agents;
+export function listed(): AgentListRow[] {
+	return (JSON.parse(facade('list', '--json')) as { readonly agents: AgentListRow[] }).agents;
 }
 
-function windowOf(id: string): string {
-	const record = listed().find(each => each.agent_id === id);
-	assert.ok(record?.windows?.length === 1 && record.windows[0].window_id !== 'terminal', `#${id} belongs to one editor window`);
-	return record.windows[0].window_id;
+export async function inspect(id: string): Promise<V3InspectResult> {
+	const reply = await callInCore(HOME, 'agent.inspect', { agent: id }, [3, 3]);
+	assert.ok(!reply.error, JSON.stringify(reply.error));
+	return reply.result as V3InspectResult;
+}
+
+export async function recordOf(id: string): Promise<V3AgentInfo> {
+	return (await inspect(id)).agent;
 }
 
 /** The services of the Facade that responds, or undefined while none does: `facade status` never starts Facade. */
 function servicePids(): { readonly daemon: number; readonly keeper: number } | undefined {
-	const text = facade('status', '--json');
-	const status = JSON.parse(text) as { running?: boolean; daemon?: { pid?: number }; keeper?: { pid?: number } | null };
-	if (status.running !== true) { return undefined; }
-	assert.ok(typeof status.daemon?.pid === 'number' && typeof status.keeper?.pid === 'number', text);
-	return { daemon: status.daemon.pid, keeper: status.keeper.pid };
+	let text: string;
+	try {
+		text = facade('status', '--json');
+	} catch (error) {
+		if (String((error as { stderr?: string }).stderr).includes('Orchestrator is still starting')) { return undefined; }
+		throw error;
+	}
+	const status = JSON.parse(text) as { daemon_pid?: number; keeper_pid?: number };
+	if (status.daemon_pid === undefined) { return undefined; }
+	assert.ok(typeof status.daemon_pid === 'number' && typeof status.keeper_pid === 'number', text);
+	return { daemon: status.daemon_pid, keeper: status.keeper_pid };
 }
 
 /** The fake CLI reports the session to core. Give its transcript a title and an activity time for the Resume picker. */
@@ -135,25 +136,25 @@ function closeWindow(step: Closing): void {
 }
 
 export async function running(id: string): Promise<RunningAgent> {
-	return until(`#${id} to run with its session`, () => {
-		const agent = listed().find(each => each.agent_id === id);
-		if (!agent?.pid || !agent.session || agent.process !== 'running') { return undefined; }
+	return until(`${id} to run with its session`, async () => {
+		const agent = await recordOf(id);
+		if (!agent.pid || !agent.session || agent.process !== 'running') { return undefined; }
 		process.kill(agent.pid, 0);
-		return { id, pid: agent.pid, session: agent.session, cwd: agent.folder };
+		return { id, pid: agent.pid, session: agent.session, cwd: agent.cwd };
 	});
 }
 
 async function pinnedCard(id: string): Promise<Card> {
 	return until(`#${id}'s card and pinned terminal tab`, async () => {
-		const card = (await state()).cards.find(each => each.alias === `#${id}`);
-		return card?.pinned && agentTab(card)?.isPinned ? card : undefined;
+		const card = (await state()).cards.find(each => each.alias === id);
+		return card?.pinned && agentTab(card) ? card : undefined;
 	});
 }
 
 export async function pin(card: Card): Promise<void> {
 	await until('Pin to be offered', async () => (await state()).cards.find(each => each.alias === card.alias)?.menu.pin || undefined);
 	await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
-	await pinnedCard(card.alias.slice(1));
+	await pinnedCard(card.alias);
 }
 
 function verifyScreen(id: string): void {
@@ -166,40 +167,34 @@ async function checkLive(before: RunningAgent): Promise<void> {
 	assert.deepStrictEqual({ ...restored, cwd: normalizeDriveLetter(restored.cwd) },
 		{ ...before, cwd: normalizeDriveLetter(before.cwd) }, 'the original number, PID, session and working folder');
 	verifyScreen(before.id);
-	assert.deepStrictEqual(listed().map(each => each.agent_id), [before.id]);
+	assert.deepStrictEqual(listed().map(each => each.id.split('@')[0]), [before.id]);
 }
 
 export async function stop(card: Card): Promise<void> {
 	await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
-	await until(`#${card.alias.slice(1)} to stop and its card to close`, async () => {
-		const agent = listed().find(each => `#${each.agent_id}` === card.alias);
-		assert.ok(agent, `Stop Agent keeps ${card.alias}'s record`);
-		return agent.process === 'ended' && !(await state()).cards.some(each => each.alias === card.alias) && !hasAgentTab(card) || undefined;
+	await until(`${card.alias} to stop and retain its ended card`, async () => {
+		const agent = await recordOf(card.alias);
+		return agent.process === 'ended' && (await state()).cards.some(each => each.alias === card.alias && each.orchestrator?.running === false)
+			&& !hasAgentTab(card) || undefined;
 	});
 }
 
 function workspaceFile(): string {
 	const dir = path.join(HOME, 'extension', 'workspaces');
-	const stores = fs.readdirSync(dir).map(key => path.join(dir, key, 'workspace-state.json')).filter(file => fs.existsSync(file));
+	const stores = fs.readdirSync(dir).map(key => path.join(dir, key, 'orchestrator-workspace.json')).filter(file => fs.existsSync(file));
 	assert.strictEqual(stores.length, 1, 'one isolated workspace state');
 	return stores[0];
 }
 
-function pins(file = workspaceFile()): readonly SavedPin[] {
-	return (JSON.parse(fs.readFileSync(file, 'utf8'))['facade.pins'] ?? []) as SavedPin[];
-}
-
-function savedPin(agent: RunningAgent): SavedPin {
-	const machine = listed().find(record => record.agent_id === agent.id)?.machine_id;
-	const saved = pins().find(pin => pin.agent === agent.id && !!machine && pin.machine_id === machine);
-	assert.ok(saved, `#${agent.id} has a saved Pin for this Facade machine`);
-	return saved;
+function pins(): readonly RustPin[] {
+	return (JSON.parse(fs.readFileSync(workspaceFile(), 'utf8')) as { readonly pins: RustPin[] }).pins;
 }
 
 async function restored(before: RunningAgent): Promise<RunningAgent> {
 	await pinnedCard(before.id);
 	const after = await running(before.id);
 	assert.strictEqual(after.session, before.session);
+	assert.strictEqual(normalizeDriveLetter(after.cwd), normalizeDriveLetter(before.cwd));
 	assert.notStrictEqual(after.pid, before.pid, 'the stopped agent resumes in a new process');
 	return after;
 }
@@ -227,13 +222,12 @@ export async function activate(): Promise<void> {
 		if (!previous) {
 			await checkLive(began.agent);
 			write({ phase: 'reloaded', detail: began.agent });
-			closeWindow({ after: 'reload', before: began.agent, windowId: windowOf(began.agent.id), screenText: WINDOW_TEXT });
+			closeWindow({ after: 'reload', before: began.agent, screenText: WINDOW_TEXT });
 			return;
 		}
 		if (previous.after === 'reload') {
 			await checkLive(began.agent);
 			write({ phase: 'reopened', detail: began.agent });
-			const windowId = windowOf(began.agent.id);
 			const before = servicePids();
 			assert.ok(before && Number.isSafeInteger(before.daemon) && before.daemon > 1, 'Facade runs with this window');
 			process.kill(before.daemon, 'SIGKILL');
@@ -243,10 +237,10 @@ export async function activate(): Promise<void> {
 				return next && next.daemon !== before.daemon ? next : undefined;
 			});
 			assert.strictEqual(replacement.keeper, before.keeper, 'the same keeper starts the replacement daemon');
-			await until(`window ${windowId} to reconnect to the new daemon`, async () =>
-				(await windowsInCore(HOME)).some(window => window.window_id === windowId && window.connected) || undefined);
+			await until('the editor terminal to reattach to the replacement daemon', async () =>
+				(await inspect(began.agent.id)).viewers.length === 1 || undefined);
 			await checkLive(began.agent);
-			write({ phase: 'replaced', detail: { daemon: before.daemon, replacement: replacement.daemon, keeper: before.keeper, windowId, connected: true, agent: began.agent } });
+			write({ phase: 'replaced', detail: { daemon: before.daemon, replacement: replacement.daemon, keeper: before.keeper, agent: began.agent } });
 			if (remote) { write({ phase: 'done' }); return; }
 
 			const unpinned = await newCard();
@@ -254,43 +248,20 @@ export async function activate(): Promise<void> {
 			const removed = await newCard();
 			const removedAgent = await running(aliasOf(removed).slice(1));
 			await pin(removed);
-			const legacyCard = await newCard();
-			const legacyAgent = await running(aliasOf(legacyCard).slice(1));
-			await pin(legacyCard);
 			await stop(unpinned);
 			await stop(await pinnedCard(began.agent.id));
-			await stop(legacyCard);
-			const { home: _home, agent: _agent, machine_id: _machine, ...pinWithoutIdentity } = savedPin(legacyAgent);
-			savedPin(began.agent);
-			savedPin(removedAgent);
-			keepConversation(legacyAgent.cwd, legacyAgent.session, 'Legacy Pin conversation');
-			const legacy = { agent: legacyAgent, pin: pinWithoutIdentity, mirror: workspaceFile() };
-			closeWindow({ after: 'pins', before: began.agent, unpinned: unpinnedAgent, removed: removedAgent.id, legacy });
+			assert.deepStrictEqual(pins().map(pin => pin.agent).sort(), [began.agent.id, removedAgent.id].sort());
+			closeWindow({ after: 'pins', before: began.agent, unpinned: unpinnedAgent, removed: removedAgent.id });
 			return;
 		}
-		if (previous.after === 'pins') {
-			// Waiting for the restored Pin's marked tab lets the automatic restoration finish before we use Resume Agent.
-			const again = await restored(previous.before);
-			await until('the removed agent’s Pin to clear', () => pins().every(pin => pin.agent !== previous.removed) || undefined);
-			const others = listed().filter(each => each.agent_id !== again.id);
-			const { agent, pin: oldPin } = previous.legacy;
-			assert.deepStrictEqual(others.map(each => [each.agent_id, each.pid, each.process]).sort(),
-				[previous.unpinned, agent].map(each => [each.id, each.pid, 'ended']).sort(), 'the unpinned and legacy agents remain ended, and the removed agent is gone');
-			assert.deepStrictEqual((await state()).cards.map(each => each.alias), [`#${again.id}`]);
-			assert.strictEqual(vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length, 1);
-			write({ phase: 'pins', detail: { ...again, stopped: previous.unpinned.id, removed: previous.removed } });
-			assert.deepStrictEqual(pins().find(pin => pin.id === oldPin.id), oldPin, 'the legacy Pin stays in workspace storage');
-			const card = await resumeCard();
-			assert.strictEqual(aliasOf(card), `#${agent.id}`);
-			const resumed = await running(agent.id);
-			await pin(card);
-			assert.strictEqual(savedPin(resumed).id, oldPin.id, 'pinning the card updates the original Pin with its home and number');
-			await stop(card);
-			write({ phase: 'legacy', detail: resumed });
-			closeWindow({ after: 'repinned', before: resumed });
-			return;
-		}
-		write({ phase: 'done', detail: await restored(previous.before) });
+		const again = await restored(previous.before);
+		await until('the removed agent’s Pin to clear', () => pins().every(pin => pin.agent !== previous.removed) || undefined);
+		const ended = await recordOf(previous.unpinned.id);
+		assert.deepStrictEqual([ended.process, ended.session], ['ended', previous.unpinned.session]);
+		assert.deepStrictEqual(listed().map(each => each.id.split('@')[0]), [again.id], 'only the pinned agent resumed');
+		assert.deepStrictEqual((await state()).cards.map(each => each.alias).sort(), [again.id, previous.unpinned.id].sort());
+		assert.strictEqual(vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length, 1);
+		write({ phase: 'done', detail: { ...again, stopped: previous.unpinned.id, removed: previous.removed } });
 	} catch (error) {
 		write({ phase: 'error', detail: error instanceof Error ? error.stack : String(error) });
 	}

@@ -1,7 +1,9 @@
 # Agent lifecycle
 
+Group 5 covers the Orchestrator-backed editor. Groups 1–4 retain the old-engine transition rules.
+
 Layer 3. [Experience](../EXPERIENCE.md) explains use; [Rules](../RULES.md) owns identity, state and lifetime. This
-document owns launch, naming, terminal, finding, closing, Resume and Pin interactions.
+document owns starts, naming, terminal, finding, closing, Resume and Pin interactions.
 
 | Group | Decides |
 | --- | --- |
@@ -53,8 +55,7 @@ title segment (`New Agent ·  · main`). Change Name uses the title `New Agent �
 supplies the Enter/Escape instructions. With no usable CLI, `Open Settings` has the detail `Install a supported CLI in this environment, or configure its
 path.`; where the CLIs cannot be listed at all, it carries that failure as its detail. A configuration error also
 offers this item. It follows the same Open Settings flow. With no folder, a local launch uses PANEL-1.2's
-Open Folder prerequisite picker and its wording. Add `Change Working Location...` under `Options` there whenever
-the Rust engine lists another Facade machine, so the same flow can reach a remote location (1.3). Missing optional Git does not block creation or
+Open Folder prerequisite picker and its wording. Missing optional Git does not block creation or
 trigger a Git initialization suggestion. Cancel closes without effects or changing successful-launch history.
 
 ### 1.2 Human location history
@@ -75,27 +76,13 @@ without an unavailable-location note.
 
 **Change Working Location chooses a location and returns to the CLI picker for its machine.**
 
-On the Rust engine, when another Facade machine is listed, the first step inside Change Working Location is
-`New Agent · Machine`. Preselect the machine of the current working location, initially `This machine` with its
-name alongside. Use VS Code's `device-desktop` codicon for `This machine` and `globe` for every other machine.
-Show the saved machine names. Use the Facade machine ID for the window and each target, including
-when machines share an SSH host or saved name. A machine without a route shows `Needs SSH login` when its saved
-connection needs interaction, or `Unavailable` otherwise. Enter on either row leaves the picker open.
-
-For another reachable machine, offer the working locations its connected windows supply, its login home (`~`),
-and entry of an absolute path on that machine. Return to Machine with Back from the location list, including
-while the catalog loads, with a three-second bound on querying another machine. Back from path entry returns to
-that machine's location list. Back from Machine keeps the name and prior working location in the CLI picker.
-Accept a location before changing which machine's CLIs appear, keeping the chosen name. Escape cancels the flow.
-
-For this window's machine, start with its workspace folders or offer Open Folder if it has no folder.
+Start with its workspace folders or offer Open Folder if it has no folder.
 Use workspace-folder order and skip a single-choice step. Inside a folder, use WORKTREES-1.2's catalog. An ordinary
 folder is a normal choice. In a folder inside a Git repository, the location step offers New Worktree, its row
 `New Worktree...` naming its source as `from {branch}` (WORKTREES-2.1); where a prerequisite is missing - no commit yet,
 no native creation - that row shows why as its detail and cannot be chosen (WORKTREES-2.3). The step shows at once and
 adds the row when its check completes. A folder in no repository, or where Git is missing, is a plain folder and has no
-New Worktree row. With one plain folder as the window's only location, the CLI picker offers Change Working Location
-only when another Facade machine is listed. Once Git found no repository there, or is missing, that folder
+New Worktree row. Once Git found no repository there, or is missing, that folder
 is the window's one place to work, which goes without saying: the title does not name it, nor does a Resume Agent line
 (3.2), and where every agent works there neither do Go to Agent rows (2.3), and the panel offers no filter (PANEL-2.3);
 details keep it, and cards show no location anywhere (PANEL-1.3). A second folder, a repository found there or a worktree
@@ -224,10 +211,8 @@ group never goes empty; the editor draws the copy before Facade hears of it, so 
 extension can prevent. The agent stays as it was throughout. A reload or an extension-host restart is the one exception to
 a tab staying open (3.5): every agent's process and card survive it, but only the pinned agents' tabs open again; every other agent's
 tab stays hidden until the person opens it from its card, and once the pinned tabs are open the last one opened
-successfully is in front, its group the active one, and its card selected. Rust member windows can show the same
-agent's screen at once. The last resize determines its dimensions, including a resize from a terminal attach. Core uses
-the last resizing member editor for the CLI's colors and follows its theme updates (ARCHITECTURE-2.3). Each window
-keeps its own tab position and focus. The old engine keeps the process and screen in ptyd.
+successfully is in front, its group the active one, and its card selected. The execution supervisor keeps the process
+and screen.
 
 The tab shows only the agent name beside the entry's icon from CONFIGURATION-2.4: a built-in logo glyph
 (`facade-cli-<id>`) or a robot glyph (`facade-robot-<color>`). It shows
@@ -267,7 +252,7 @@ terminal in the editor area; an extension cannot change that.
 
 ### 2.3 Finding an agent
 
-**Go to Agent opens this window's agents and, on the Rust engine, lets the person adopt reachable running agents.**
+**Go to Agent opens this window's agents.**
 
 Match name, CLI, title, working location and run ID. Accept the existing short ID and a copied agent reference as
 search input; an ID in a copied reference matches that run even if its descriptive name is stale. Use one native picker
@@ -281,15 +266,6 @@ and retained-error cards in panel order, whatever the panel's filter shows; rows
 open. Choosing a row closes the picker and reveals that terminal. Each row's buttons copy its reference (2.1) and offer Stop Agent or Dismiss Agent for that exact agent (3.1).
 Both keep the picker open.
 
-Rust adds one row per other reachable running non-guest agent, including ordinary terminal starts and agents of
-disconnected windows. Show this window's agents first while querying other machines, with a three-second bound.
-Each outside row appends the member window names in window-reference order and adds
-`Window disconnected` after each disconnected member. Window names and the status label are display fields. The search
-fields above also accept the full reference of a remote agent. Selecting an outside row adds the current window under RULES-4.1,
-then opens its card and terminal here using the normal reveal path. Its other windows keep presenting it. Copy and Stop Agent
-act on the row's exact numbered agent without adding this window. On the old engine the picker stays within the
-current window. For ended Rust agents, Resume uses the records of this window under 3.2.
-
 ## 3 End and continuity
 
 ### 3.1 Stop and dismiss
@@ -301,20 +277,14 @@ Stop Agent on a run already known to have ended leaves the retained pair availab
 requires a confirmed end or a failed launch known to have created no process.
 
 Stop Agent uses RULES-4.1's lifetime rules. A local card and terminal tab close immediately, with cleanup in the
-background where a process exists. On the Rust engine, Stop Agent calls `agent.stop`, including for a launch whose
-number arrives after the card closes. A remote pair stays until core confirms the stop or reports its exit. A
-successful stop closes the pairs in its connected member windows, keeping the record, conversation and Rust Pins.
-Resume Agent can restore that record by number even when its card is gone (3.2). MCP keeps `stop_agent` under MCP-3.2.
+background where a process exists. MCP keeps `stop_agent` under MCP-3.2.
 
-Dismiss Agent closes the current window's retained card and paired terminal. The workspace records dismissal for
-an abnormal exit recorded by core. A card for a failed restoration call is dismissed for the current activation.
-A subsequent Rust restoration clears the dismissal. On the old engine, Stop Agent and Dismiss Agent also unpin.
+Dismiss Agent closes the current window's retained card and paired terminal. Stop Agent and Dismiss Agent also unpin.
 A refused Pin save leaves the pair in place and reports the failure to the initiator.
 
 The initiator sees a refusal or unknown result as `Could not stop {0}: {1}`. A known failure after the local pair
 has already closed reports `{0}'s card and terminal were closed, but its process could not be stopped.` The
-initiator sees a dismissal failure as `Could not dismiss {0}: {1}`. A running Rust agent whose stop failed can
-reattach at the next opening or reload. The old engine records an unconfirmed cleanup so that a reload ends that
+initiator sees a dismissal failure as `Could not dismiss {0}: {1}`. The old engine records an unconfirmed cleanup so that a reload ends that
 run. A stop during launch waits for its cleanup result. Worktrees, files, conversation history and child agents
 stay. Unsolicited exits follow RULES-3.3.
 
@@ -323,16 +293,11 @@ closure follow RULES-3.3, 2.4 and 4.1. Messages use an agent's `#aN` when it has
 
 ### 3.2 Choosing an agent or session
 
-**Resume Agent selects an ended Rust member record. Continue Session selects a session from CLI history.**
+**Continue Session selects a session from CLI history.**
 
-Resume Agent opens from the Rust panel title or the Command Palette. It lists confirmed ended records with a saved session,
-including stopped or dismissed agents, by recent activity. Each row identifies its exact numbered agent. A session held by
-another running agent is unavailable. With no eligible records the picker says `No agents to resume in this window`.
-
-Continue Session opens from the Command Palette or the empty panel on both engines. It also opens from the old engine's
-panel title. It reads CLI history from the window's folders, subfolders and associated worktrees. With no folder, its
-`Open Folder...` row runs the editor's Open Folder as PANEL-1.2 describes. Both pickers show at once, busy while they
-prepare their sources. Check facade.json before reading the sources. A file-level problem shows one row per problem: the file as label, its reason as detail and a
+Continue Session opens from the Command Palette, panel title or empty panel. It reads CLI history from the window's folders, subfolders and associated worktrees. With no folder, its
+`Open Folder...` row runs the editor's Open Folder as PANEL-1.2 describes. The picker shows at once, busy while it
+prepares its sources. Check facade.json before reading the sources. A file-level problem shows one row per problem: the file as label, its reason as detail and a
 gear icon and an Open Settings gear button, as in New Agent. Choosing the row or its button runs Open Settings.
 No conversations are read, and the picker does not claim there are no saved conversations. An entry's own error omits that entry's conversations (CONFIGURATION-4.1).
 
@@ -362,8 +327,7 @@ Otherwise, choosing that conversation opens a native working-location picker for
 with its full path. Each choice must find the conversation's store with that folder's launch settings
 (CONFIGURATION-3.4). Do not infer the original cwd from directory order. Cancellation starts nothing. If that exact
 conversation already runs in Facade, do not start it again; reveal it only when it belongs to this window, otherwise say
-`{0} is already running in another window.` For a Rust member agent the same running record is already in this window's
-scope. External activity is not a gate: call vendor resume and return its result. No external-writer scan, lease or
+`{0} is already running in another window.` External activity is not a gate: call vendor resume and return its result. No external-writer scan, lease or
 concurrency guarantee is required.
 
 ### 3.3 Restoring agents and continuing sessions
@@ -379,14 +343,12 @@ agent's ID. Never derive it from the conversation title or CLI ID. Existing save
 unchanged. An ordinary reload preserves the running agent's name. Automatic Pin restoration keeps a recorded
 nonempty name; a blank one follows 2.1.
 Missing original session, location or configuration fails with its actual reason. For a vendor's ambiguous workspace-folder
-set under 3.2, the person's explicit location choice supplies the missing cwd. On the Rust engine core uses a retained
-agent's original cwd with the restoring window's execution environment and current startup settings, even when that
-window does not list the location. Resume waits for core to confirm success before opening the card and terminal.
+set under 3.2, the person's explicit location choice supplies the missing cwd.
 Concurrent resumes of the same retained number share a process under RULES-4.2. If a Resume call errors and core
 already reports the same member running, the window reattaches to it. A manual failure says
 `Could not resume {0}: {1}` with the saved title. Continue Session uses the session ID and starts a new agent even if
 an ended record has the same session. Its failure says `Could not continue {0}: {1}`. On the old engine an accepted
-continuation creates its pair immediately and retains actual launch failure. On Rust the pair opens after core confirms startup. Do not acquire an external
+continuation creates its pair immediately and retains actual launch failure. Do not acquire an external
 conversation-writer lease or replay the original creation prompt.
 On process start, register the successful cwd under WORKTREES-1.2 and update human launch history under 1.2.
 
@@ -446,20 +408,7 @@ saved is undone on the tab, and the person is told `Could not pin {0}: {1}` or `
 of an agent that cannot be pinned is undone. The adapter must identify and resume the exact session. Pin and Unpin are
 acknowledged only after durable storage succeeds.
 
-The Rust engine creates a Pin once core identifies the agent's saved session. It uses the machine and number
-under RULES-4.2. One workspace has one Pin for that identity. Actively pinning an agent with an existing Pin keeps
-its saved position. A preexisting session-only Pin for the same conversation takes the new identity in place when
-the person pins the agent. Metadata refresh updates the existing entry and preserves an Unpin committed by another
-window (ARCHITECTURE-3.1).
-
-**Rust Pin restoration** starts from the first complete `agents` snapshot of the bound machine under RULES-4.2.
-If needed, add this window to the agent before reattaching or calling `agent.resume` for the original number. Pin
-restoration keeps the saved order and opens pinned tabs after the runs are reconciled (3.5). A failed restoration's
-red card gives the actual reason, including a missing saved session. Dismiss Agent closes that card for this activation.
-For an actual abnormal exit, the workspace remembers its dismissal until the agent runs again or the record is removed.
-The workspace's Pin intent stays independent of Pin intent in another workspace.
-
-On the old engine, a run whose CLI can identify and resume an exact session can be pinned from its start and across
+A run whose CLI can identify and resume an exact session can be pinned from its start and across
 a reload. A conversation Facade resumed is saved already, and a new one
 can be pinned before its CLI names it - before its first message for CLIs that name it then. Such a Pin takes the
 conversation the CLI names; a window opened before that starts a new conversation of the same CLI with the Pin's name
@@ -493,13 +442,6 @@ Stop Agent, Dismiss Agent and a normal exit remove the Pin; whole-window close p
 
 **Reload and temporary disconnection reuse existing runs. Reopening can restore ended agents through saved Pins.**
 
-On the Rust engine, reconnect to core after a reload, window closure or extension-host restart. The logical reference
-selects this window's agents (RULES-4.1), which reattach by their original numbers and screens. A complete `agents`
-snapshot drives Pin restoration under 3.4.
-The core record keeps an actual abnormal exit across activation. The workspace keeps the user's dismissal of that exit.
-A failed restoration call keeps the red card for the current activation. A later opening or reload can attempt that
-Pin once again. Normal exit or a successful stop in an open window does not trigger automatic restoration there.
-
 On the old engine, RULES-4.1 keeps runs for its grace after disconnect. Reattach those runs before restoring Pins, never duplicating a
 conversation still held by Facade: Pins are restored only once the conversations every ptyd of the window holds are
 known, and one that does not answer yet delays them. A run that exits between the listing and its reattachment shows
@@ -513,8 +455,7 @@ always, does an agent that cannot be pinned, such as a custom program (CONFIGURA
 session integration failed. The pinned tabs open by one procedure, in one sequence for the whole activation, whichever
 of these brought each run back:
 
-1. Reconstruct the runs. On the Rust engine, read core's snapshot and attempt eligible Pin restores (3.4). On the old
-   engine, reattach every run the window's ptyds hold. Pin restoration then starts its new runs (3.4), once
+1. Reconstruct the runs. Reattach every run the window's ptyds hold. Pin restoration then starts its new runs (3.4), once
    the tabs ahead of the first saved Pin no run holds have opened. Those need no listing of the conversations; every tab
    after that Pin, and the final selection, wait for it, a ptyd that does not answer delaying them as it delays the Pins.
 2. Choose the eligible Pins in their workspace's saved order (PANEL-2.1), each pinned agent's tab once - a reattached run's,
@@ -531,7 +472,7 @@ of these brought each run back:
 5. Finalize the selection once: it does not move while they open; once they are open it is on the last one opened, and
    where none opened it stays as it was (PANEL-2.1).
 
-Each logical Rust window keeps its own tab placement (ARCHITECTURE-3.1). The old engine keeps it with the run.
+Keep tab placement with the run (ARCHITECTURE-3.1).
 The record follows the person's changes, including for retained failures and starts waiting their turn.
 Facade's own showing of a tab for its mark leaves the recorded placement alone. A pinned agent's tab opens in its
 remembered group on reload.
@@ -543,9 +484,7 @@ workspace while the grace is ending its runs waits for those ends, within the fi
 it restores Pins. A run whose end is not confirmed stays listed as uncertain, holding its conversation, its Pin not
 restored beside it, and shows a red card whose second line says `Stop unconfirmed · check process`, where Stop Agent
 retries the stop; once its exit is heard the card goes and its Pin is restored as an ended run's. On the old engine, proven
-folder or worktree removal closes and unpins affected agents, including when removal is found on restart. On the Rust
-engine, Delete Worktree follows WORKTREES-3.2's source-window and stop checks. Location loss discovered elsewhere
-keeps the Pin. If restoration fails because the location is gone, the person can unpin from the red card.
+folder or worktree removal closes and unpins affected agents, including when removal is found on restart.
 
 ## 4 Technical design
 
@@ -567,13 +506,54 @@ now. Cleanup hangs up the process group, as a closed terminal would, and kills i
 end confirmed once its exit is heard within 2 s of the kill and unconfirmed otherwise; on Windows the console is ended
 once. No UI waits for it.
 
+
+## 5 Start, Attach and Resume
+
+### 5.1 New Agent
+
+**New Agent uses the machine and folder selected in Change Working Location.**
+
+Start from the editor host and its workspace folders and worktrees. Offer saved machines, including sleeping machines.
+Selecting a sleeping machine wakes it. For a different machine, offer its login home, recent folders on that
+machine and direct path entry. Resolve launch options under RULES-6.5 and RULES-6.6. Show the started agent's card
+and terminal. A helper started by an agent on the list appears as a card without taking focus.
+
+### 5.2 Go to Agent
+
+**Go to Agent on the Panel and in the Command Palette opens an eligible running managed agent.**
+
+Use RULES-6.2's Attach candidates. Selecting a row opens the terminal and adds the agent and its descendants to the
+workspace list. Put Go to Agent beside Resume in the Panel title. The rows select an agent.
+
+### 5.3 Closing, stopping and hiding
+
+**Close the terminal to detach, Hide to clear the workspace card and Pin, and Stop to end the agent's run.**
+
+Use RULES-6.3 for the effects. A normal exit or crash leaves the card available for Resume when it has a session.
+Remove also removes the agent's record. Show operation failures where the person acts.
+
+### 5.4 Resume Agent
+
+**Use one Resume Agent picker for ended agents and saved CLI sessions.**
+
+Show the Orchestrator's candidates scoped to the extension host's machine and the workspace folders. Open the
+selected agent's terminal after success. If the chosen session is in use, identify that agent. See RULES-6.2.
+
+### 5.5 Session-backed Pins
+
+**Pin and Unpin operate on the card's workspace record.**
+
+Native tab operations leave the workspace Pin as it was. Apply RULES-6.4 once on workspace reopen and keep a visible
+error on the card when recovery fails.
+
 ## Checks
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Plain/no-Git/multi-folder flow, current Settings tab and Change Name placeholder, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, window CLI picker before any machine selection, local and remote location changes including from a folderless window, Back and Escape, unavailable machines, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
+| 1.1–1.5 | Plain/no-Git/multi-folder flow, current Settings tab and Change Name placeholder, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, workspace folder and location choices, Back and Escape, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
 | 2.1–2.3 | Configured/default names, trimming and case-insensitive exclusions, empty/exhausted lists, blank starts/renames, invalid names blocking starts, ID names omitted from Resume/Pin, duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
-| 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, Rust agent continuity after window close and original-number restoration, the old engine's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
+| 3.1–3.5 | Separate Stop Agent and Dismiss Agent actions, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, the old engine's uncertain-end red card and restoration after the confirmed end, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
+| 5.1–5.5 | Start by machine and folder, Go to Agent roster, card and tab actions, unified Resume, session-backed Pin |
 
 Evidence: [Verification](../engineering/VERIFICATION.md).

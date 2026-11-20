@@ -2,11 +2,11 @@ Stop one or more agents
 
 Usage: facade stop <AGENT>...
 
-Stop agents that Facade started and keep them in your list. You can still read their screens, remove
-them or resume a saved session if the CLI supports it.
+Stop running managed agents. You can read their screens, remove them or resume a saved session.
+Agents they started keep running.
 
 Arguments:
-  <AGENT>...  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
+  <AGENT>...  Agent addresses, IDs or names
 
 Options:
   -h, --help  Print help

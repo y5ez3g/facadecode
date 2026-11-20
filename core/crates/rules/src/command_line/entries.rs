@@ -6,13 +6,16 @@
 //!
 //! Entries never borrow from each other: a CLI added with type `codex` ignores the `codex` entry.
 //! A mistake therefore disables only the entry it is in. It is reported by setting path, never
-//! by the value written there, worded the way the editor reports settings.
+//! by the value written there, with its place in the settings file.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use facade_base::settings::{Json, Member, Settings, is_space};
+use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::programs::{on_path, program_of, runnable};
+use facade_base::settings::{Json, Member, Node, Settings, is_space};
 use facade_base::system::{SYSTEM, System, env_var};
 use regex::{Captures, Regex};
 
@@ -129,8 +132,19 @@ pub struct Entry {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub enabled: bool,
-    /// Every mistake in it, each starting with the setting path.
+    /// Every mistake in it, with the setting path and its place in the file.
     pub problems: Vec<String>,
+    program_location: Option<String>,
+    enabled_location: Option<String>,
+    env_locations: BTreeMap<String, String>,
+}
+
+/// A launch's replayable CLI arguments and the model and effort they select when known.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LaunchOptions {
+    pub args: Vec<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// All entries of `settings` (CONFIGURATION-2.1). The built-ins come first, in their own order,
@@ -139,16 +153,14 @@ pub struct Entry {
 pub fn read(settings: &Settings) -> Vec<Entry> {
     let built_ins: &'static [Rule] = rules().unwrap_or_default();
     let is_built_in = |key: &str| built_ins.iter().any(|rule| rule.cli == key);
-    let no_fields = Json::Object(Vec::new());
     let mut entries = Vec::new();
     for rule in built_ins {
         let written = settings.clis.iter().find(|member| member.key == rule.cli);
-        let value = written.map_or(&no_fields, |member| &member.value.json);
-        entries.push(Entry::read(&rule.cli, value, built_ins));
+        entries.push(Entry::read(settings, &rule.cli, written, built_ins));
     }
     for member in &settings.clis {
         if !is_built_in(&member.key) {
-            entries.push(Entry::read(&member.key, &member.value.json, built_ins));
+            entries.push(Entry::read(settings, &member.key, Some(member), built_ins));
         }
     }
     entries
@@ -157,6 +169,56 @@ pub fn read(settings: &Settings) -> Vec<Entry> {
 /// The entry keyed exactly `name`.
 pub fn find<'a>(entries: &'a [Entry], name: &str) -> Option<&'a Entry> {
     entries.iter().find(|entry| entry.name == name)
+}
+
+/// Selects a configured CLI and checks its settings in the incoming environment.
+/// Program discovery happens separately once the working folder and entry environment are ready.
+pub fn select<'a>(
+    entries: &'a [Entry],
+    name: &str,
+    folder: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<&'a Entry, ErrorBody> {
+    if !name.is_empty()
+        && let Some(entry) = find(entries, name)
+    {
+        let problems = entry.problems_with(env);
+        if !problems.is_empty() {
+            return Err(entry.error(Reason::InvalidSettings, problems.join("; ")));
+        }
+        if !entry.enabled {
+            let problem = format!(
+                "{} is turned off by {}.enabled",
+                entry.display_name(),
+                entry.setting
+            );
+            return Err(entry.error(
+                Reason::Unavailable,
+                located(entry.enabled_location.as_deref(), problem),
+            ));
+        }
+        return Ok(entry);
+    }
+    let listed: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.listed(env))
+        .map(|entry| entry.name.as_str())
+        .collect();
+    let listed = if listed.is_empty() {
+        "none".into()
+    } else {
+        listed.join(", ")
+    };
+    let folder = folder.display();
+    let message = if name.is_empty() {
+        format!("Choose a CLI by name. The CLIs configured at {folder} are {listed}.")
+    } else {
+        format!(
+            "No CLI {} is configured at {folder}; the CLIs there are {listed}.",
+            quoted(name)
+        )
+    };
+    Err(ErrorBody::new(Reason::NotFound, message))
 }
 
 /// Whether two variable names name the same variable: Windows compares them without case.
@@ -168,9 +230,71 @@ fn same_variable(one: &str, other: &str) -> bool {
 }
 
 impl Entry {
+    fn error(&self, reason: Reason, problem: String) -> ErrorBody {
+        let mut error = ErrorBody::new(reason, problem);
+        error.data.entry = Some(self.name.clone());
+        error
+    }
+
     /// Where the program was set, or where to set it when the entry has none.
     pub fn program_setting(&self) -> String {
         format!("{}.{}", self.setting, self.program_key)
+    }
+
+    /// Finds the program in `folder` with the entry's effective environment.
+    pub fn resolve_program(
+        &self,
+        folder: &Path,
+        env: &BTreeMap<String, String>,
+    ) -> Result<PathBuf, ErrorBody> {
+        if !folder.is_dir() {
+            let message = format!("the folder {} is not available", folder.display());
+            return Err(ErrorBody::new(Reason::Unavailable, message));
+        }
+        let path = env_var(env, "PATH");
+        let setting = self.program_setting();
+        let found = match self.program.as_deref() {
+            Some(command)
+                if command.contains('/')
+                    || command.contains(std::path::MAIN_SEPARATOR)
+                    || command == "~" =>
+            {
+                let file = PathBuf::from(program_of(command, env, &folder.to_string_lossy()));
+                if runnable(&file) {
+                    Ok(file)
+                } else {
+                    Err(format!(
+                        "{setting} is {}, and {} is not a program that can be run",
+                        quoted(command),
+                        file.display()
+                    ))
+                }
+            }
+            Some(command) => on_path(command, path, folder).ok_or_else(|| {
+                format!(
+                    "{setting} is {}, which was not found on the PATH of a terminal in {}",
+                    quoted(command),
+                    folder.display()
+                )
+            }),
+            None => {
+                let rule = self.kind.and_then(|kind| kind.rule());
+                let program = rule.map_or("", |rule| rule.program.as_str());
+                on_path(program, path, folder).ok_or_else(|| {
+                    format!(
+                        "{program} was not found on the PATH of a terminal in {}, and \
+                         {setting} does not name its location",
+                        folder.display()
+                    )
+                })
+            }
+        };
+        found.map_err(|problem| {
+            self.error(
+                Reason::NotFound,
+                located(self.program_location.as_deref(), problem),
+            )
+        })
     }
 
     /// What lists show: the product name for a built-in's own entry (`Claude Code`), the key for
@@ -230,6 +354,36 @@ impl Entry {
         rule.choices.args(model, effort)
     }
 
+    /// Builds the arguments to save and replay, in the same order used to start the CLI.
+    pub fn launch_options(
+        &self,
+        model: Option<&str>,
+        effort: Option<&str>,
+        args: &[String],
+    ) -> Result<LaunchOptions, ErrorBody> {
+        if let Some(asked) = self.refused_choice(model, effort) {
+            return Err(self.error(
+                Reason::Unsupported,
+                format!(
+                    "{} takes no explicit {asked}; leave `{asked}` out to use its default.",
+                    self.display_name()
+                ),
+            ));
+        }
+        let mut words = self.choices(model, effort, args);
+        words.extend_from_slice(&self.args);
+        words.extend_from_slice(args);
+        let [model, effort] = match self.kind.and_then(|kind| kind.rule()) {
+            Some(rule) => rule.choices.values_in(&rule.arguments, &words),
+            None => [None, None],
+        };
+        Ok(LaunchOptions {
+            args: words,
+            model,
+            effort,
+        })
+    }
+
     /// The environment it runs with (CONFIGURATION-3.2): `env`, as the start passes it, changed
     /// by the entry's `env` one variable at a time. A value is set with each `${env:NAME}` read
     /// from the start's `env`, once; a None unsets. On Windows a name is the same variable in any
@@ -263,10 +417,14 @@ impl Entry {
                 if env_var(env, variable).is_some() {
                     continue;
                 }
-                problems.push(format!(
+                let problem = format!(
                     "{}.env.{name} reads ${{env:{variable}}}, but {variable} is not in the \
                      environment it starts with; set it there, or write the value",
                     self.setting
+                );
+                problems.push(located(
+                    self.env_locations.get(name).map(String::as_str),
+                    problem,
                 ));
             }
         }
@@ -280,11 +438,21 @@ impl Entry {
         self.enabled || !self.problems_with(env).is_empty()
     }
 
-    /// Reads the key `name` with the value `value` (CONFIGURATION-2.2). The key decides whether
+    /// Reads the settings entry named `name` (CONFIGURATION-2.2). The key decides whether
     /// it edits a built-in or adds a CLI.
-    fn read(name: &str, value: &Json, built_ins: &'static [Rule]) -> Entry {
+    fn read(
+        settings: &Settings,
+        name: &str,
+        written: Option<&Member>,
+        built_ins: &'static [Rule],
+    ) -> Entry {
         let built_in = built_ins.iter().find(|rule| rule.cli == name);
-        let mut reader = Reader::new(name);
+        let mut reader = Reader {
+            settings,
+            entry_at: written.map(|member| member.at),
+            setting: setting_of(name),
+            problems: Vec::new(),
+        };
         if built_in.is_none() {
             reader.check_name(name, built_ins);
         }
@@ -302,15 +470,23 @@ impl Entry {
             effort: None,
             enabled: true,
             problems: Vec::new(),
+            program_location: None,
+            enabled_location: None,
+            env_locations: BTreeMap::new(),
         };
-        match value {
-            Json::Object(fields) => reader.fill(&mut entry, fields, built_in, built_ins),
-            other => reader.say(format!(
-                "{} must be an object of type, icon, program, args, env, model, effort and \
-                 enabled; received {}",
-                reader.setting,
-                other.kind()
-            )),
+        if let Some(Member { value, .. }) = written {
+            match &value.json {
+                Json::Object(fields) => reader.fill(&mut entry, fields, built_in, built_ins),
+                other => reader.say(
+                    Some(value.at),
+                    format!(
+                        "{} must be an object of type, icon, program, args, env, model, effort and \
+                     enabled; received {}",
+                        reader.setting,
+                        other.kind()
+                    ),
+                ),
+            }
         }
         if entry.icon.is_empty() {
             entry.icon = default_icon(entry.kind);
@@ -329,27 +505,28 @@ fn default_icon(kind: Option<Kind>) -> String {
 }
 
 /// Reads one entry's fields, collecting the problems in the order they are found.
-struct Reader {
+struct Reader<'a> {
+    settings: &'a Settings,
+    entry_at: Option<usize>,
     setting: String,
     problems: Vec<String>,
 }
 
-impl Reader {
-    fn new(name: &str) -> Reader {
-        Reader {
-            setting: setting_of(name),
-            problems: Vec::new(),
-        }
+impl Reader<'_> {
+    fn location(&self, at: Option<usize>) -> Option<String> {
+        self.settings
+            .source_location(at.or(self.entry_at)?)
+            .map(|place| place.to_string())
     }
 
-    fn say(&mut self, problem: String) {
-        self.problems.push(problem);
+    fn say(&mut self, at: Option<usize>, problem: String) {
+        self.problems
+            .push(located(self.location(at).as_deref(), problem));
     }
 
-    /// Says a problem with the field the text starts with, after the entry's path and a dot.
-    fn say_at(&mut self, field_and_problem: String) {
-        let problem = format!("{}.{field_and_problem}", self.setting);
-        self.problems.push(problem);
+    /// Adds the entry's setting path to a field problem at its key or value.
+    fn say_at(&mut self, at: Option<usize>, field_and_problem: String) {
+        self.say(at, format!("{}.{field_and_problem}", self.setting));
     }
 
     /// An added CLI's key shows in every list of CLIs (CONFIGURATION-2.1). It must contain
@@ -378,7 +555,7 @@ impl Reader {
                 None => return,
             }
         };
-        self.say(format!("{}: {problem}", self.setting));
+        self.say(None, format!("{}: {problem}", self.setting));
     }
 
     /// Reads every field of an entry written as an object, into `entry`.
@@ -394,15 +571,16 @@ impl Reader {
             .filter(|field| field.key != "command" && !FIELDS.contains(&field.key.as_str()))
         {
             let known = FIELDS.join(", ");
-            self.say_at(format!(
-                "{} is not a field of an entry, which takes {known}",
-                unknown.key
-            ));
+            self.say_at(
+                Some(unknown.at),
+                format!(
+                    "{} is not a field of an entry, which takes {known}",
+                    unknown.key
+                ),
+            );
         }
-        let get = |key: &str| {
-            let member = fields.iter().find(|field| field.key == key);
-            member.map(|member| &member.value.json)
-        };
+        let field = |key: &str| fields.iter().find(|field| field.key == key);
+        let get = |key: &str| field(key).map(|member| &member.value);
         entry.kind = match built_in {
             Some(rule) => {
                 self.keep_type(rule, get("type"));
@@ -411,35 +589,64 @@ impl Reader {
             None => self.added_type(get("type"), built_ins),
         };
         match (get("program"), get("command")) {
-            (Some(_), Some(_)) => {
-                self.say_at("program conflicts with command. Keep program.".into())
-            }
+            (Some(_), Some(_)) => self.say_at(
+                field("program").map(|member| member.at),
+                "program conflicts with command. Keep program.".into(),
+            ),
             (Some(value), None) => entry.program = self.text("program", Some(value)),
             (None, Some(value)) => {
                 entry.program_key = "command";
                 entry.program = self.text("command", Some(value));
             }
             (None, None) if matches!(entry.kind, Some(Kind::Program)) => {
-                self.say_at("program is missing; set it to the program to run".into());
+                self.say_at(
+                    None,
+                    "program is missing; set it to the program to run".into(),
+                );
             }
             (None, None) => {}
         }
-        entry.args = self.args(get("args"));
-        if let Some(Kind::BuiltIn(rule)) = entry.kind {
-            let path = format!("{}.args", self.setting);
-            self.problems
-                .extend(rule.arguments.problems(&entry.args, &path));
-        }
+        entry.program_location = self.location(get(entry.program_key).map(|node| node.at));
+        entry.args = self.args(get("args"), entry.kind);
         entry.env = self.env(get("env"));
+        if let Some(Node {
+            json: Json::Object(variables),
+            ..
+        }) = get("env")
+        {
+            entry.env_locations = variables
+                .iter()
+                .filter_map(|member| {
+                    let Json::String(value) = &member.value.json else {
+                        return None;
+                    };
+                    if !ENV_REFERENCE.is_match(value) {
+                        return None;
+                    }
+                    Some((member.key.clone(), self.location(Some(member.value.at))?))
+                })
+                .collect();
+        }
         entry.model = self.choice("model", get("model"), entry.kind);
         entry.effort = self.choice("effort", get("effort"), entry.kind);
         match get("enabled") {
-            Some(Json::Bool(on)) => entry.enabled = *on,
+            Some(Node {
+                json: Json::Bool(on),
+                at,
+            }) => {
+                entry.enabled = *on;
+                if !on {
+                    entry.enabled_location = self.location(Some(*at));
+                }
+            }
             Some(other) => {
-                self.say_at(format!(
-                    "enabled must be true or false; received {}",
-                    other.kind()
-                ));
+                self.say_at(
+                    Some(other.at),
+                    format!(
+                        "enabled must be true or false; received {}",
+                        other.json.kind()
+                    ),
+                );
             }
             None => {}
         }
@@ -449,30 +656,34 @@ impl Reader {
     }
 
     /// A built-in's `type`, if written, may only repeat the built-in's ID.
-    fn keep_type(&mut self, rule: &Rule, written: Option<&Json>) {
-        let same = |json: &Json| matches!(json, Json::String(id) if *id == rule.cli);
-        if written.is_none_or(same) {
+    fn keep_type(&mut self, rule: &Rule, written: Option<&Node>) {
+        let Some(written) = written else { return };
+        if matches!(&written.json, Json::String(id) if *id == rule.cli) {
             return;
         }
         let id = &rule.cli;
-        self.say_at(format!(
-            "type cannot change the {id} entry's type: it is {}'s; set it back to \"{id}\" or \
+        self.say_at(
+            Some(written.at),
+            format!(
+                "type cannot change the {id} entry's type: it is {}'s; set it back to \"{id}\" or \
              remove the line",
-            rule.display_name
-        ));
+                rule.display_name
+            ),
+        );
     }
 
     /// An added CLI's `type`: `custom` or a built-in's ID. A wrong one is reported with the
     /// allowed types, never with what was written (CONFIGURATION-4.1).
-    fn added_type(&mut self, written: Option<&Json>, built_ins: &'static [Rule]) -> Option<Kind> {
+    fn added_type(&mut self, written: Option<&Node>, built_ins: &'static [Rule]) -> Option<Kind> {
         let allowed = FILES.map(|(cli, _)| cli).join(", ") + ", " + PROGRAM_TYPE;
         let Some(written) = written else {
-            self.say_at(format!(
-                "type is missing; set it to the CLI it runs: {allowed}"
-            ));
+            self.say_at(
+                None,
+                format!("type is missing; set it to the CLI it runs: {allowed}"),
+            );
             return None;
         };
-        if let Json::String(id) = written {
+        if let Json::String(id) = &written.json {
             if id == PROGRAM_TYPE {
                 return Some(Kind::Program);
             }
@@ -480,16 +691,20 @@ impl Reader {
                 return Some(Kind::BuiltIn(rule));
             }
         }
-        self.say_at(format!(
-            "type must be one of {allowed}; received {}",
-            written.kind()
-        ));
+        self.say_at(
+            Some(written.at),
+            format!(
+                "type must be one of {allowed}; received {}",
+                written.json.kind()
+            ),
+        );
         None
     }
 
     /// A string field: present, not just spaces, and free of NUL.
-    fn text(&mut self, key: &str, written: Option<&Json>) -> Option<String> {
-        let problem = match written? {
+    fn text(&mut self, key: &str, written: Option<&Node>) -> Option<String> {
+        let written = written?;
+        let problem = match &written.json {
             Json::String(text) if text.chars().all(is_space) => {
                 format!("{key} is empty; set it, or leave it out")
             }
@@ -499,58 +714,67 @@ impl Reader {
             Json::String(text) => return Some(text.clone()),
             other => format!("{key} must be a string; received {}", other.kind()),
         };
-        self.say_at(problem);
+        self.say_at(Some(written.at), problem);
         None
     }
 
     /// `args`: an array of strings without NUL. One bad item discards them all.
-    fn args(&mut self, written: Option<&Json>) -> Vec<String> {
-        let items = match written {
-            None => return Vec::new(),
-            Some(Json::Array(items)) => items,
-            Some(other) => {
-                self.say_at(format!(
+    fn args(&mut self, written: Option<&Node>, kind: Option<Kind>) -> Vec<String> {
+        let Some(written) = written else {
+            return Vec::new();
+        };
+        let Json::Array(items) = &written.json else {
+            self.say_at(
+                Some(written.at),
+                format!(
                     "args must be an array of strings; received {}",
-                    other.kind()
-                ));
-                return Vec::new();
-            }
+                    written.json.kind()
+                ),
+            );
+            return Vec::new();
         };
         let found_before = self.problems.len();
         let mut args = Vec::with_capacity(items.len());
         for (index, item) in items.iter().enumerate() {
             match &item.json {
                 Json::String(arg) if !arg.contains('\0') => args.push(arg.clone()),
-                Json::String(_) => self.say_at(format!(
+                Json::String(_) => self.say_at(Some(item.at), format!(
                     "args[{index}] contains a NUL character, which is not permitted in arguments"
                 )),
                 other => {
-                    self.say_at(format!(
+                    self.say_at(Some(item.at), format!(
                         "args[{index}] must be a string; received {}",
                         other.kind()
                     ));
                 }
             }
         }
-        if self.problems.len() == found_before {
-            args
-        } else {
-            Vec::new()
+        if self.problems.len() != found_before {
+            return Vec::new();
         }
+        if let Some(Kind::BuiltIn(rule)) = kind {
+            let path = format!("{}.args", self.setting);
+            for (index, problem) in rule.arguments.problems_at(&args, &path) {
+                self.say(Some(items[index].at), problem);
+            }
+        }
+        args
     }
 
     /// `env`: variable names mapped to a string or null. One bad variable discards them all.
-    fn env(&mut self, written: Option<&Json>) -> Vec<(String, Option<String>)> {
-        let variables = match written {
-            None => return Vec::new(),
-            Some(Json::Object(variables)) => variables,
-            Some(other) => {
-                self.say_at(format!(
+    fn env(&mut self, written: Option<&Node>) -> Vec<(String, Option<String>)> {
+        let Some(written) = written else {
+            return Vec::new();
+        };
+        let Json::Object(variables) = &written.json else {
+            self.say_at(
+                Some(written.at),
+                format!(
                     "env must be an object of variable names to strings or null; received {}",
-                    other.kind()
-                ));
-                return Vec::new();
-            }
+                    written.json.kind()
+                ),
+            );
+            return Vec::new();
         };
         let found_before = self.problems.len();
         let mut env = Vec::with_capacity(variables.len());
@@ -558,9 +782,10 @@ impl Reader {
             let name = &variable.key;
             if name.is_empty() || name.contains(['=', '\0']) {
                 let shown = shown_name(name);
-                self.say_at(format!(
-                    "env contains invalid environment variable name {shown}"
-                ));
+                self.say_at(
+                    Some(variable.at),
+                    format!("env contains invalid environment variable name {shown}"),
+                );
                 continue;
             }
             match &variable.value.json {
@@ -568,11 +793,11 @@ impl Reader {
                 Json::String(value) if !value.contains('\0') => {
                     env.push((name.clone(), Some(value.clone())));
                 }
-                Json::String(_) => self.say_at(format!(
+                Json::String(_) => self.say_at(Some(variable.value.at), format!(
                     "env.{name} contains a NUL character, which is not permitted in environment \
                      variables"
                 )),
-                other => self.say_at(format!(
+                other => self.say_at(Some(variable.value.at), format!(
                     "env.{name} must be a string or null; received {}",
                     other.kind()
                 )),
@@ -586,8 +811,9 @@ impl Reader {
     }
 
     /// `model` or `effort`, kept only when the entry's type accepts it from Facade.
-    fn choice(&mut self, key: &str, written: Option<&Json>, kind: Option<Kind>) -> Option<String> {
-        let value = self.text(key, written)?;
+    fn choice(&mut self, key: &str, written: Option<&Node>, kind: Option<Kind>) -> Option<String> {
+        let written = written?;
+        let value = self.text(key, Some(written))?;
         let refusal = match kind {
             Some(Kind::Program) => {
                 format!("{key} is not taken by a program: give its own options in args")
@@ -598,26 +824,36 @@ impl Reader {
             ),
             _ => return Some(value),
         };
-        self.say_at(refusal);
+        self.say_at(Some(written.at), refusal);
         None
     }
 
     /// `icon`: a built-in's ID or a robot's name. A wrong one is reported with the allowed
     /// icons, never with what was written (CONFIGURATION-2.4, 4.1).
-    fn icon(&mut self, written: Option<&Json>) -> Option<String> {
+    fn icon(&mut self, written: Option<&Node>) -> Option<String> {
         let allowed: Vec<&str> = FILES.iter().map(|(cli, _)| *cli).chain(ROBOTS).collect();
         let written = written?;
-        if let Json::String(icon) = written
+        if let Json::String(icon) = &written.json
             && allowed.contains(&icon.as_str())
         {
             return Some(icon.clone());
         }
         let allowed = allowed.join(", ");
-        self.say_at(format!(
-            "icon must be one of {allowed}; received {}",
-            written.kind()
-        ));
+        self.say_at(
+            Some(written.at),
+            format!(
+                "icon must be one of {allowed}; received {}",
+                written.json.kind()
+            ),
+        );
         None
+    }
+}
+
+fn located(location: Option<&str>, problem: String) -> String {
+    match location {
+        Some(place) => format!("{place}: {problem}"),
+        None => problem,
     }
 }
 
@@ -669,6 +905,10 @@ mod tests {
     /// What is wrong with the entry `name`, `value` in a file of it alone.
     fn problems(name: &str, value: &str) -> Vec<String> {
         entry(name, &format!("{{{}: {value}}}", quoted(name))).problems
+    }
+
+    fn at(column: usize, problem: &str) -> String {
+        format!("{FILE}:1:{column}: {problem}")
     }
 
     /// Every built-in, by its name, its defaults where the file names it not, in the built-ins'
@@ -767,15 +1007,24 @@ mod tests {
         assert_eq!(legacy.program_setting(), "clis.tool.command");
         assert!(legacy.problems.is_empty());
 
-        for clis in [
-            r#"{"tool":{"type":"custom","command":"same","program":"same"}}"#,
-            r#"{"tool":{"type":"custom","program":null,"command":"old"}}"#,
+        for (clis, column) in [
+            (
+                r#"{"tool":{"type":"custom","command":"same","program":"same"}}"#,
+                52,
+            ),
+            (
+                r#"{"tool":{"type":"custom","program":null,"command":"old"}}"#,
+                35,
+            ),
         ] {
             let conflict = entry("tool", clis);
             assert!(conflict.program.is_none());
             assert_eq!(
                 conflict.problems,
-                ["clis.tool.program conflicts with command. Keep program."]
+                [at(
+                    column,
+                    "clis.tool.program conflicts with command. Keep program."
+                )]
             );
         }
     }
@@ -840,7 +1089,7 @@ mod tests {
             ),
         ];
         for (name, said) in cases {
-            assert_eq!(problems(name, program), [said], "{name:?}");
+            assert_eq!(problems(name, program), [at(11, said)], "{name:?}");
         }
         assert!(problems("agy2", program).is_empty());
     }
@@ -864,15 +1113,39 @@ mod tests {
             [
                 (
                     "claude",
-                    &[
+                    &[at(
+                        58,
                         r#"clis.claude.type cannot change the claude entry's type: it is Claude Code's; set it back to "claude" or remove the line"#
-                            .to_string(),
-                    ][..]
+                    ),][..]
                 ),
-                ("a", &[format!("clis.a.type is missing; set it to the CLI it runs: {types}")][..]),
-                ("b", &[format!("clis.b.type must be one of {types}; received string")][..]),
-                ("c", &[format!("clis.c.type must be one of {types}; received number")][..]),
-                ("d", &["clis.d.program is missing; set it to the program to run".to_string()][..]),
+                (
+                    "a",
+                    &[at(
+                        69,
+                        &format!("clis.a.type is missing; set it to the CLI it runs: {types}")
+                    )][..]
+                ),
+                (
+                    "b",
+                    &[at(
+                        92,
+                        &format!("clis.b.type must be one of {types}; received string")
+                    )][..]
+                ),
+                (
+                    "c",
+                    &[at(
+                        120,
+                        &format!("clis.c.type must be one of {types}; received number")
+                    )][..]
+                ),
+                (
+                    "d",
+                    &[at(
+                        124,
+                        "clis.d.program is missing; set it to the program to run"
+                    )][..]
+                ),
             ]
         );
     }
@@ -888,19 +1161,40 @@ mod tests {
         assert_eq!(
             pi.problems,
             [
-                "clis.pi.trust is not a field of an entry, which takes type, icon, program, args, \
-                 env, model, effort, enabled",
-                "clis.pi.command is empty; set it, or leave it out",
-                "clis.pi.args[1] must be a string; received number",
-                "clis.pi.args[2] contains a NUL character, which is not permitted in arguments",
-                "clis.pi.env.BAD must be a string or null; received number",
-                "clis.pi.env contains invalid environment variable name \"\"",
-                "clis.pi.env contains invalid environment variable name \"TOKEN=…\"",
-                "clis.pi.env.NUL contains a NUL character, which is not permitted in \
-                 environment variables",
-                "clis.pi.model must be a string; received number",
-                "clis.pi.effort is empty; set it, or leave it out",
-                "clis.pi.enabled must be true or false; received string",
+                at(
+                    207,
+                    "clis.pi.trust is not a field of an entry, which takes type, icon, program, args, \
+                 env, model, effort, enabled"
+                ),
+                at(43, "clis.pi.command is empty; set it, or leave it out"),
+                at(65, "clis.pi.args[1] must be a string; received number"),
+                at(
+                    68,
+                    "clis.pi.args[2] contains a NUL character, which is not permitted in arguments"
+                ),
+                at(
+                    110,
+                    "clis.pi.env.BAD must be a string or null; received number"
+                ),
+                at(
+                    113,
+                    "clis.pi.env contains invalid environment variable name \"\""
+                ),
+                at(
+                    122,
+                    "clis.pi.env contains invalid environment variable name \"TOKEN=…\""
+                ),
+                at(
+                    151,
+                    "clis.pi.env.NUL contains a NUL character, which is not permitted in \
+                 environment variables"
+                ),
+                at(172, "clis.pi.model must be a string; received number"),
+                at(185, "clis.pi.effort is empty; set it, or leave it out"),
+                at(
+                    200,
+                    "clis.pi.enabled must be true or false; received string"
+                ),
             ]
         );
         assert_eq!(
@@ -917,25 +1211,33 @@ mod tests {
         assert!(!pi.problems.concat().contains("sk-live"));
         assert_eq!(
             problems("codex", "[]"),
-            [
+            [at(
+                20,
                 "clis.codex must be an object of type, icon, program, args, env, model, effort and \
                  enabled; received array"
-            ]
+            )]
         );
         assert_eq!(
             problems("codex", r#"{"args": "--search", "env": null}"#),
             [
-                "clis.codex.args must be an array of strings; received string",
-                "clis.codex.env must be an object of variable names to strings or null; \
+                at(
+                    29,
+                    "clis.codex.args must be an array of strings; received string"
+                ),
+                at(
+                    48,
+                    "clis.codex.env must be an object of variable names to strings or null; \
                  received null"
+                )
             ]
         );
         assert_eq!(
             problems("codex", r#"{"env": ["A=1"]}"#),
-            [
+            [at(
+                28,
                 "clis.codex.env must be an object of variable names to strings or null; \
                  received array"
-            ]
+            )]
         );
     }
 
@@ -956,29 +1258,29 @@ mod tests {
                 (
                     None,
                     None,
-                    vec![
+                    vec![at(
+                        33,
                         "clis.opencode.model is not taken by OpenCode, which sets it in its own \
                          configuration"
-                            .to_string()
-                    ]
+                    )]
                 ),
                 (Some("p".into()), Some("high".into()), vec![]),
                 (
                     None,
                     None,
-                    vec![
+                    vec![at(
+                        135,
                         "clis.tool.effort is not taken by a program: give its own options in args"
-                            .to_string()
-                    ]
+                    )]
                 ),
                 (
                     None,
                     None,
-                    vec![
+                    vec![at(
+                        181,
                         "clis.oc.effort is not taken by OpenCode, which sets it in its own \
                          configuration"
-                            .to_string()
-                    ]
+                    )]
                 ),
             ]
         );
@@ -1010,14 +1312,16 @@ mod tests {
                 ("agy".into(), vec![]),
                 (
                     "muse".into(),
-                    vec![format!(
-                        "clis.muse.icon must be one of {icons}; received number"
+                    vec![at(
+                        122,
+                        &format!("clis.muse.icon must be one of {icons}; received number")
                     )]
                 ),
                 (
                     "pi".into(),
-                    vec![format!(
-                        "clis.pi.icon must be one of {icons}; received string"
+                    vec![at(
+                        89,
+                        &format!("clis.pi.icon must be one of {icons}; received string")
                     )]
                 ),
                 ("codex".into(), vec![]),
@@ -1033,7 +1337,10 @@ mod tests {
     #[test]
     fn one_entry_wrong_leaves_the_others_and_a_program_s_args_are_its_own() {
         let read = entries(
-            r#"{"clis": {"codex": {"args": [42]}, "mine": {"type": "custom", "command": "mine"}}}"#,
+            r#"{"clis": {
+  "codex": { "env": {"LABEL": "🐾"}, "args": [42] },
+  "mine": {"type": "custom", "command": "mine"}
+}}"#,
         );
         let wrong: Vec<&str> = read
             .iter()
@@ -1041,6 +1348,16 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect();
         assert_eq!(wrong, ["codex"]);
+        let folder = Path::new("project");
+        let env = BTreeMap::new();
+        let invalid = select(&read, "codex", folder, &env).unwrap_err();
+        assert_eq!(invalid.data.reason, Reason::InvalidSettings);
+        assert_eq!(invalid.data.entry.as_deref(), Some("codex"));
+        assert_eq!(
+            invalid.message,
+            format!("{FILE}:2:47: clis.codex.args[0] must be a string; received number")
+        );
+        assert_eq!(select(&read, "mine", folder, &env).unwrap().name, "mine");
         let clis = r#"{"tool": {"type": "custom", "command": "tool", "args": ["run", "--yolo", "--", "x", ""]}, "mine": {"type": "codex", "args": ["--yolo"]}}"#;
         let (tool, mine) = (entry("tool", clis), entry("mine", clis));
         assert_eq!(
@@ -1052,7 +1369,10 @@ mod tests {
         );
         assert_eq!(
             mine.problems,
-            ["clis.mine.args[0] is --yolo, which Facade sets or decides itself; remove it"]
+            [at(
+                135,
+                "clis.mine.args[0] is --yolo, which Facade sets or decides itself; remove it"
+            )]
         );
     }
 
@@ -1103,10 +1423,16 @@ mod tests {
         assert_eq!(
             codex.problems_with(&bare),
             [
-                "clis.codex.env.API_TOKEN reads ${env:WORK_TOKEN}, but WORK_TOKEN is not in the \
-                 environment it starts with; set it there, or write the value",
-                "clis.codex.env.API_TOKEN reads ${env:EMPTY}, but EMPTY is not in the environment \
-                 it starts with; set it there, or write the value",
+                at(
+                    42,
+                    "clis.codex.env.API_TOKEN reads ${env:WORK_TOKEN}, but WORK_TOKEN is not in the \
+                 environment it starts with; set it there, or write the value"
+                ),
+                at(
+                    42,
+                    "clis.codex.env.API_TOKEN reads ${env:EMPTY}, but EMPTY is not in the environment \
+                 it starts with; set it there, or write the value"
+                ),
             ]
         );
     }
@@ -1117,7 +1443,7 @@ mod tests {
     fn a_start_s_choice_wins_and_a_type_without_one_refuses_it() {
         let codex = entry(
             "codex",
-            r#"{"codex": {"model": "my-model", "effort": "high"}}"#,
+            r#"{"codex": {"model": "my-model", "effort": "high", "args": ["--search"]}}"#,
         );
         assert_eq!(
             codex.choices(None, Some("low"), &[]),
@@ -1161,6 +1487,52 @@ mod tests {
             entry("tool", r#"{"tool": {"type": "custom", "command": "tool"}}"#)
                 .refused_choice(Some("m"), None),
             Some("model")
+        );
+
+        let replay = codex.launch_options(None, Some("low"), &[]).unwrap();
+        assert_eq!(
+            replay,
+            LaunchOptions {
+                args: words(&[
+                    "--model",
+                    "my-model",
+                    "-c",
+                    r#"model_reasoning_effort="low""#,
+                    "--search"
+                ]),
+                model: Some("my-model".into()),
+                effort: Some("low".into()),
+            }
+        );
+        let cli = [
+            "-xmgpt-b",
+            "-c",
+            r#"model="gpt-c""#,
+            "-cmodel_reasoning_effort=high",
+        ];
+        let replay = codex
+            .launch_options(None, Some("low"), &words(&cli))
+            .unwrap();
+        let configured = ["-c", r#"model_reasoning_effort="low""#, "--search"];
+        assert_eq!(replay.args, words(&[configured.as_slice(), &cli].concat()));
+        assert_eq!(replay.model.as_deref(), Some("gpt-b"));
+        assert_eq!(replay.effort.as_deref(), Some("high"));
+        let saved = serde_json::to_value(&replay).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!({ "args": replay.args, "model": "gpt-b", "effort": "high" })
+        );
+        assert_eq!(
+            serde_json::from_value::<LaunchOptions>(saved).unwrap(),
+            replay
+        );
+        assert_eq!(
+            entry("opencode", "{}")
+                .launch_options(None, Some("low"), &[])
+                .unwrap_err()
+                .data
+                .reason,
+            Reason::Unsupported
         );
     }
 }

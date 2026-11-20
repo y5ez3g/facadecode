@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use facade_base::daemon::{
     AgentInfo, AgentState, AgentsUpdate, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
-    WindowRef,
 };
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_rules::{BoxReading, InputRule, Rule};
@@ -29,10 +28,10 @@ use super::screen::LoggedScreen;
 use super::state::{Kept, StateTracker, Viewing, keep};
 use super::terminal::{Terminal, TerminalEvent, TerminalWait};
 use super::typist::{Modes, Typing, Typist};
-use super::viewers::{ViewerRequest, Viewers};
+use super::viewers::{ViewKind, ViewerRequest, Viewers};
 use super::{
     ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
-    ScreenStart, Shared, Submission, WindowColors,
+    ScreenStart, Shared, Submission,
 };
 use crate::{Sender, gate_for_test, pause_for_test};
 
@@ -107,6 +106,9 @@ pub(super) fn spawn(
         .as_deref()
         .and_then(|name| facade_rules::find(name).ok().flatten());
     let recovered = !matches!(screen, ScreenStart::New(_));
+    if let ScreenStart::Recovered { log: Some(log), .. } = &screen {
+        links.shared.record.lock().unwrap().title = log.recovered_title.clone();
+    }
     let mut tracker = {
         let replayed = match &screen {
             ScreenStart::Recovered { screen, .. } => Some(screen.as_ref()),
@@ -495,13 +497,12 @@ impl Actor {
                 let _ = reply.send(self.take_input(input, run));
             }
             AgentCommand::Resize(cols, rows) => self.take_size(cols, rows, None),
-            AgentCommand::ResizeFromWindow { cols, rows, colors } => {
-                self.take_size(cols, rows, Some(colors));
+            AgentCommand::ResizeTerminal { cols, rows, colors } => {
+                if !self.ended() {
+                    self.take_size(cols, rows, colors);
+                }
             }
-            AgentCommand::WindowColorsChanged {
-                colors,
-                allow_initial,
-            } => self.change_window_colors(colors, allow_initial),
+            #[cfg(test)]
             AgentCommand::AddViewer {
                 viewer,
                 tx,
@@ -509,31 +510,60 @@ impl Actor {
                 include_scrollback,
                 reply,
             } => {
-                // A screen that cannot be read back gives no snapshot: the watch fails.
-                if self.screen_mut().hold().await {
-                    self.viewers.request(ViewerRequest {
-                        viewer,
-                        tx,
-                        keep_scrollback,
-                        include_scrollback,
-                        reply,
-                    });
-                    self.admit_viewers();
-                    self.state.seen();
-                    self.state_changed = true;
-                }
+                self.add_viewer(ViewerRequest {
+                    viewer,
+                    kind: ViewKind::Legacy,
+                    tx,
+                    keep_scrollback,
+                    include_scrollback,
+                    reply,
+                })
+                .await;
+            }
+            AgentCommand::AttachViewer {
+                viewer,
+                name,
+                tx,
+                keep_scrollback,
+                include_scrollback,
+                reply,
+            } => {
+                self.add_viewer(ViewerRequest {
+                    viewer,
+                    kind: ViewKind::Attach(name),
+                    tx,
+                    keep_scrollback,
+                    include_scrollback,
+                    reply,
+                })
+                .await;
             }
             AgentCommand::RemoveViewer { viewer } => self.viewers.remove(viewer),
             AgentCommand::ReadScreen { lines, reply } => {
                 if self.screen_mut().hold().await {
+                    self.record_title();
                     let _ = reply.send(self.screen().screen().read(lines));
                 }
             }
             AgentCommand::Inspect { reply } => {
+                let title_unknown = self.links.shared.record.lock().unwrap().title.is_none();
+                if title_unknown && !self.screen().is_held() && self.screen_mut().hold().await {
+                    self.record_title();
+                }
+                let (agent, title) = {
+                    let record = self.links.shared.record.lock().unwrap();
+                    (record.info.clone(), record.title.clone())
+                };
                 let _ = reply.send(Inspection {
-                    agent: self.links.shared.record.lock().unwrap().info.clone(),
+                    agent,
                     input: self.read_screen_input().info,
                     session_tracking: self.captures && !self.ended(),
+                    viewers: if self.ended() {
+                        Vec::new()
+                    } else {
+                        self.viewers.names()
+                    },
+                    title,
                 });
             }
             AgentCommand::ProcessExited { run, exit, stopped } => {
@@ -659,7 +689,6 @@ impl Actor {
                 self.publish();
                 let _ = reply.send(self.links.shared.record.lock().unwrap().info.clone());
             }
-            AgentCommand::UpdateWindows { windows, reply } => self.update_windows(windows, reply),
             // A run that ended takes no prompt: dropping `ready` says so.
             AgentCommand::AwaitPrompt { ready } => {
                 if !self.ended() {
@@ -679,23 +708,6 @@ impl Actor {
             }
         }
         true
-    }
-
-    /// Publishes the committed membership change before replying with that same record.
-    fn update_windows(&mut self, windows: Vec<WindowRef>, reply: oneshot::Sender<AgentInfo>) {
-        let (changed, agent) = {
-            let mut record = self.links.shared.record.lock().unwrap();
-            let changed = record.info.windows != windows;
-            if changed {
-                record.info.windows = windows;
-            }
-            (changed, record.info.clone())
-        };
-        if changed {
-            self.publish_at = None;
-            self.publish_record(agent.clone());
-        }
-        let _ = reply.send(agent);
     }
 
     /// Takes input for run `run`, or says why not.
@@ -768,12 +780,11 @@ impl Actor {
     }
 
     /// Size requested by a client. An agent without a terminal keeps its last screen.
-    fn take_size(&mut self, cols: u16, rows: u16, colors: Option<WindowColors>) {
+    fn take_size(&mut self, cols: u16, rows: u16, colors: Option<TerminalColors>) {
         if !self.terminal.is_open() {
             return;
         }
-        if let Some(WindowColors { window, colors }) = colors {
-            self.links.shared.record.lock().unwrap().color_source = Some(window);
+        if let Some(colors) = colors {
             self.screen_mut().set_colors(colors);
         }
         if self.screen().is_full() {
@@ -790,25 +801,6 @@ impl Actor {
             self.publish_soon();
             self.catch_up_at = Some(Instant::now());
         }
-    }
-
-    /// Rechecks the color source when applying a window's theme from the mailbox.
-    fn change_window_colors(
-        &mut self,
-        WindowColors { window, colors }: WindowColors,
-        allow_initial: bool,
-    ) {
-        {
-            let mut record = self.links.shared.record.lock().unwrap();
-            match &record.color_source {
-                Some(source) if source == &window => {}
-                None if allow_initial && record.info.windows.contains(&window) => {
-                    record.color_source = Some(window);
-                }
-                _ => return,
-            }
-        }
-        self.screen_mut().set_colors(colors);
     }
 
     /// Logs and applies a size to the screen, then to the terminal. Answers whether the record's
@@ -914,6 +906,9 @@ impl Actor {
 
     /// The replies and status the screen found in output.
     fn take_parsed(&mut self, fed: ParsedOutput) {
+        if fed.title_change.is_some() {
+            self.record_title();
+        }
         self.queue_replies(fed.query_replies);
         self.state_changed |= !fed.status.is_empty();
         self.state.take(fed.status);
@@ -926,8 +921,22 @@ impl Actor {
     /// Output the actor writes itself, such as a restart's reset: logged, parsed and shown.
     fn feed_own(&mut self, bytes: &[u8]) {
         let fed = self.screen_mut().feed(bytes);
+        if fed.title_change.is_some() {
+            self.record_title();
+        }
         self.viewers.show(&fed);
         self.screen_mut().checkpoint_if_due();
+    }
+
+    async fn add_viewer(&mut self, request: ViewerRequest) {
+        // A screen that cannot be read back gives no snapshot: the watch fails.
+        if self.screen_mut().hold().await {
+            self.record_title();
+            self.viewers.request(request);
+            self.admit_viewers();
+            self.state.seen();
+            self.state_changed = true;
+        }
     }
 
     fn admit_viewers(&mut self) {
@@ -957,6 +966,9 @@ impl Actor {
     fn end_sync(&mut self) {
         self.screen_mut().checkpoint_if_due();
         let fed = self.screen_mut().end_synchronized_update();
+        if fed.title_change.is_some() {
+            self.record_title();
+        }
         self.queue_replies(fed.query_replies);
         if fed.redraw_viewers {
             self.viewers.redraw_all();
@@ -964,6 +976,18 @@ impl Actor {
         self.admit_viewers();
         self.catch_up_at = Some(Instant::now());
         self.screen_mut().checkpoint_if_due();
+    }
+
+    fn record_title(&mut self) {
+        let title = self.screen().title();
+        {
+            let mut record = self.links.shared.record.lock().unwrap();
+            if record.title.as_deref() == title {
+                return;
+            }
+            record.title = title.map(str::to_owned);
+        }
+        self.publish_soon();
     }
 
     /// Gives the terminal back its logged size after a redraw nudge.
@@ -1067,6 +1091,7 @@ impl Actor {
     ) {
         // The new run's output goes on in the screen and its log.
         self.screen_mut().hold_with_log().await;
+        self.record_title();
         // Input bound to the ended run is refused from now on, also for senders waiting for room.
         self.run = run;
         self.links.shared.run.store(run, Ordering::SeqCst);

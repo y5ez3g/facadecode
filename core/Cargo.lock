@@ -437,6 +437,7 @@ dependencies = [
  "facade-base",
  "facade-screen",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

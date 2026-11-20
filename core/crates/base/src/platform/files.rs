@@ -11,6 +11,34 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 mod windows;
 
+/// Whether the current system can use `name` as one directory component.
+pub fn valid_folder_name(name: &str) -> bool {
+    if matches!(name, "" | "." | "..")
+        || name.contains('\0')
+        || name.contains(std::path::is_separator)
+    {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        if name.ends_with(['.', ' ']) || name.contains(|c: char| c < ' ' || "<>:\"|?*".contains(c))
+        {
+            return false;
+        }
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+        let numbered_port = stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9');
+        !(numbered_port || ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str()))
+    }
+    #[cfg(unix)]
+    true
+}
+
 /// Opens `path` for writing, empty, made private where it is new.
 pub fn create_private_file(path: &Path) -> io::Result<File> {
     private_options()

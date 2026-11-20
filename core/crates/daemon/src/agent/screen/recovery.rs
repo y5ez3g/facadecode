@@ -18,8 +18,9 @@ pub(crate) struct RecoveredScreen {
 }
 
 /// Reads an ended screen without modifying checkpoint or log contents; blocks and takes no lock.
-pub(crate) fn load(dir: &Path, agent_id: &str) -> io::Result<Screen> {
-    read_saved(dir, agent_id, None, &|| {}, &open_log_file, false).map(|saved| saved.screen)
+pub(crate) fn load(dir: &Path, agent_id: &str) -> io::Result<(Screen, Option<String>)> {
+    read_saved(dir, agent_id, None, &|| {}, &open_log_file, false)
+        .map(|saved| (saved.screen, saved.title))
 }
 
 /// Replays and publishes a combined generation for future appends; blocks and takes no lock.
@@ -155,6 +156,7 @@ struct Forced {
 }
 struct Replay {
     screen: Screen,
+    title: Option<String>,
     extents: Vec<Extent>,
     clean: Option<Position>,
     forced: Option<Forced>,
@@ -177,6 +179,7 @@ impl Replay {
         let mut replay = Self {
             clean: screen.at_clean_point().then_some(start),
             screen,
+            title: captured.title.clone(),
             extents: Vec::new(),
             forced: None,
             end: start,
@@ -207,7 +210,9 @@ impl Replay {
                     progress();
                 }
                 bytes += length;
-                record.apply(&mut replay.screen);
+                if let Some(title) = record.apply(&mut replay.screen) {
+                    replay.title = (!title.is_empty()).then_some(title);
+                }
                 replay.end = Position {
                     generation: number,
                     offset: reader.offset,
@@ -220,7 +225,7 @@ impl Replay {
                 } else if stop.is_none() && tail + MAX_RECORD_BYTES > MAX_LOG_BYTES {
                     replay.forced = Some(Forced {
                         at: replay.end,
-                        data: Checkpoint::capture(&replay.screen).encode(),
+                        data: replay.checkpoint(),
                         losses: forced_checkpoint_losses(&replay.screen),
                     });
                     tail = header;
@@ -238,6 +243,10 @@ impl Replay {
         }
         Ok(replay)
     }
+
+    fn checkpoint(&self) -> Vec<u8> {
+        Checkpoint::capture_with_title(&self.screen, self.title.as_deref()).encode()
+    }
 }
 
 struct Saved {
@@ -245,6 +254,7 @@ struct Saved {
     base: Option<u64>,
     last: Option<u64>,
     screen: Screen,
+    title: Option<String>,
     checkpoint: Vec<u8>,
     from: Position,
     logs: Vec<Extent>,
@@ -276,6 +286,7 @@ fn read_saved(
         };
         return Ok(Saved {
             screen,
+            title: None,
             checkpoint,
             from,
             inventory,
@@ -308,12 +319,12 @@ fn read_saved(
         (forced.data, forced.at)
     } else if let Some(clean) = complete.clean {
         if clean == complete.end {
-            (Checkpoint::capture(&complete.screen).encode(), clean)
+            (complete.checkpoint(), clean)
         } else if clean == initial {
             (bytes, initial)
         } else {
             let prefix = Replay::walk(dir, number, &captured, Some(clean), progress, opener)?;
-            (Checkpoint::capture(&prefix.screen).encode(), clean)
+            (prefix.checkpoint(), clean)
         }
     } else {
         (bytes, initial)
@@ -323,6 +334,7 @@ fn read_saved(
         base: Some(number),
         last: Some(last),
         screen: complete.screen,
+        title: complete.title,
         checkpoint,
         from,
         logs: complete.extents,
@@ -350,6 +362,7 @@ impl Saved {
         }
         let mut log = ScreenLog::open(dir.into(), id, base, Some(file), length);
         log.output_since_capture = extent.end - extent.start;
+        log.recovered_title.clone_from(&self.title);
         Some(log)
     }
     fn fold(mut self, dir: &Path, id: &str) -> RecoveredScreen {
@@ -367,7 +380,7 @@ impl Saved {
             ));
         }
         let writing = synchronized.and_then(|()| self.write_fold(dir, next));
-        let log = match writing {
+        let mut log = match writing {
             Ok((file, bytes, cleanup)) => {
                 let mut log = ScreenLog::open(dir.into(), id, next, Some(file), bytes);
                 log.cleaned_up(next, cleanup);
@@ -385,6 +398,7 @@ impl Saved {
                 log
             }
         };
+        log.recovered_title = self.title;
         RecoveredScreen {
             screen: self.screen,
             log: Some(log),

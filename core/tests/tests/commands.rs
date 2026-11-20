@@ -14,7 +14,15 @@ fn start_reports_non_utf8_environment_variables() {
     let home = TestHome::new("nonutf8");
     let output = home
         .command(&test_binaries().facade)
-        .args(["start", "--name", "odd", SH.as_str(), "-c", "sleep 60"])
+        .args([
+            "start",
+            "-d",
+            "--name",
+            "odd",
+            home.shell_cli(),
+            "-c",
+            "sleep 60",
+        ])
         .env(
             std::ffi::OsStr::from_bytes(b"ODD"),
             std::ffi::OsStr::from_bytes(b"\xff\xfe"),
@@ -37,7 +45,7 @@ fn start_uses_default_size_when_terminal_size_is_zero() {
             "start",
             "--name",
             "sized",
-            SH.as_str(),
+            home.shell_cli(),
             "-c",
             "stty size; sleep 60",
         ]),
@@ -57,19 +65,19 @@ fn interactive_start_propagates_process_exit_status() {
     let home = TestHome::new("exitcode");
     // An end by a signal is Unix's alone.
     #[cfg_attr(windows, allow(unused_mut))]
-    let mut ends = vec![("sleep 1; exit 3", 3, "a1 exited with code 3.")];
+    let mut ends = vec![("a1", "sleep 1; exit 3", 3, "exited with code 3.")];
     #[cfg(unix)]
     ends.push((
+        "a2",
         "sleep 1; kill -TERM $$",
         128 + libc::SIGTERM,
-        "a2 was ended by SIGTERM.",
+        "was ended by SIGTERM.",
     ));
-    for (script, code, said) in ends {
+    let sh = home.shell_cli();
+    for (id, script, code, ended) in ends {
         let mut term = TestTerminal::spawn(
             home.command(&test_binaries().facade)
-                .arg("start")
-                .arg(shell())
-                .args(["-c", script]),
+                .args(["start", sh, "-c", script]),
             80,
             24,
         );
@@ -77,8 +85,10 @@ fn interactive_start_propagates_process_exit_status() {
             .wait_exit(secs(15))
             .unwrap_or_else(|| panic!("{script}: never ended"));
         assert_eq!(status.code(), Some(code), "{script}: {}", term.text());
+        let address = home.agent_record(id).expect("recorded")["address"].clone();
+        let said = format!("{} {ended}", address.as_str().unwrap_or_default());
         assert!(
-            term.wait_for(secs(2), |text| text.contains(said)),
+            term.wait_for(secs(2), |text| text.contains(&said)),
             "{script}: {}",
             term.text()
         );
@@ -93,14 +103,24 @@ fn commands_start_list_read_and_stop_agents() {
     let table = home.list_table();
     assert_eq!(
         table.header,
-        ["ID", "NAME", "CLI", "STATE", "CREATED", "FOLDER"],
+        [
+            "ID", "NAME", "TYPE", "STATE", "CLI", "TITLE", "FOLDER", "AGE"
+        ],
         "{table:?}"
     );
     let row = table.row("NAME", "w1").expect("w1 is listed");
+    let address = home.agent_record("a1").expect("recorded")["address"].clone();
+    let age = table.cell(row, "AGE");
     assert!(
-        table.cell(row, "ID") == "a1"
+        table.cell(row, "ID") == address
+            && table.cell(row, "TYPE") == "managed"
             && table.cell(row, "STATE") == "starting"
-            && table.cell(row, "CREATED").ends_with(" ago"),
+            && table.cell(row, "CLI") == "fake"
+            && table.cell(row, "TITLE") == "-"
+            && age.len() > 1
+            && age[..age.len() - 1]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit()),
         "{table:?}"
     );
     let started_folder = Path::new(table.cell(row, "FOLDER"));
@@ -125,13 +145,20 @@ fn commands_start_list_read_and_stop_agents() {
         "w1's process {} still runs",
         agent.pid
     );
+    // The list shows running agents alone; inspect shows the stopped one.
     assert!(
-        wait_until(secs(5), || home.list_state("w1").as_deref()
-            == Some("stopped")),
+        wait_until(secs(5), || home.list_state("w1").is_none()),
         "{:?}",
         home.list_table()
     );
-    assert!(home.agent_from_list_json("w2").expect("w2 is listed")["process"] == "running");
+    let inspected = home.run_facade_ok(&["inspect", "w1"]);
+    assert!(
+        inspected
+            .lines()
+            .any(|line| line.starts_with("State:") && line[6..].trim() == "stopped"),
+        "{inspected}"
+    );
+    assert!(home.agent_from_watch("w2").expect("w2 is recorded")["process"] == "running");
 }
 
 /// `facade list` and `inspect` show a name on one line whatever it holds, and each list column is
@@ -141,24 +168,19 @@ fn list_and_inspect_show_names_on_one_line_in_aligned_columns() {
     let home = TestHome::new("listnames");
     home.start_fake("evil\u{1b}[2J\r\nname");
     home.start_fake("w2");
-    home.run_facade_ok(&["stop", "w2"]);
-    assert!(
-        wait_until(secs(10), || home.list_state("w2").as_deref()
-            == Some("stopped")),
-        "{:?}",
-        home.list_table()
-    );
+    let address = home.agent_record("a1").expect("recorded")["address"].clone();
     let list = home.run_facade_ok(&["list"]);
     assert!(!list.contains('\u{1b}') && !list.contains('\r'), "{list:?}");
     let lines: Vec<&str> = list.lines().collect();
     assert_eq!(lines.len(), 3, "a header and one line per agent: {list}");
     let table = Table::parse(&list);
-    let name = table.cell(&table.rows[0], "NAME");
+    // The newest start first.
+    let name = table.cell(&table.rows[1], "NAME");
     assert!(
-        table.cell(&table.rows[0], "ID") == "a1"
+        table.cell(&table.rows[1], "ID") == address
             && name.starts_with("evil [2J")
             && name.ends_with("name")
-            && table.cell(&table.rows[1], "STATE") == "stopped",
+            && table.cell(&table.rows[0], "NAME") == "w2",
         "{list}"
     );
     // Each column begins at the same place on every line: three spaces, then the cell.
@@ -205,21 +227,12 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
     let home = TestHome::new("passthrough");
     // Use a shell that prints its received arguments.
     let script = "printf 'given:%s\\n' \"$*\"; sleep 60";
+    let sh = home.shell_cli();
     let named = home.run_facade_ok(&[
-        "start",
-        "--name",
-        "echoer",
-        SH.as_str(),
-        "-c",
-        script,
-        "sh",
-        "--model",
-        "x",
-        "--name",
-        "its own",
-        "-p",
+        "start", "-d", "--name", "echoer", sh, "-c", script, "sh", "--model", "x", "--name",
+        "its own", "-p",
     ]);
-    assert_eq!(named, "a1\n");
+    assert_eq!(started_id(&named), "a1", "{named}");
     assert!(
         wait_until(secs(10), || home
             .screen("echoer")
@@ -228,8 +241,8 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
         home.screen("echoer")
     );
     // Unnamed agents use unused suggested names while available.
-    home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "-d", sh, "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "-d", sh, "-c", "sleep 60"]);
     let table = home.list_table();
     let listed = table.column("NAME");
     assert_eq!(listed.len(), 3, "{listed:?}");
@@ -246,7 +259,12 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
 fn commands_resolve_agent_ids_numbers_and_names() {
     let home = TestHome::new("numbers");
     home.start_fake("w1");
-    for reference in ["#a1", "a1", "1", "w1"] {
+    let address = home.agent_record("a1").expect("recorded")["address"]
+        .as_str()
+        .expect("an address")
+        .to_string();
+    // An ID, a copyable address or a name. Anything not `a` and a number is a name.
+    for reference in ["a1", address.as_str(), "w1"] {
         assert!(
             home.screen(reference).contains("fakecli (Facade test CLI)"),
             "{reference}: {}",
@@ -255,9 +273,7 @@ fn commands_resolve_agent_ids_numbers_and_names() {
     }
     let none = home.run_facade(&["screen", "a9"]);
     assert!(
-        none.status.code() == Some(1)
-            && stderr(&none)
-                == "error: no agent 'a9'\n  tip: run 'facade list' to see your agents\n",
+        none.status.code() == Some(1) && stderr(&none) == "error: no agent \"a9\" was found\n",
         "{}",
         stderr(&none)
     );
@@ -323,10 +339,22 @@ fn no_real_cli_can_start_in_a_test() {
     );
     // What each agent finds and is given, written in the project: through sh on Unix; through
     // cmd.exe on Windows, where Git's sh would show its own forms of the paths.
+    // Each is a custom program of the test's settings: Facade starts only the CLIs they list.
+    #[cfg(unix)]
+    let cli = home.shell_cli();
+    #[cfg(windows)]
+    let cli = {
+        let cmd = system_folders()
+            .iter()
+            .map(|folder| Path::new(folder).join("cmd.exe"))
+            .find(|program| program.exists())
+            .expect("cmd.exe in a system folder");
+        home.add_custom_cli("cmd", &cmd);
+        "cmd"
+    };
     #[cfg(unix)]
     let script = |name: &str| {
         vec![
-            shell().display().to_string(),
             "-c".to_string(),
             format!(
                 "for cli in {CLIS}; do command -v \"$cli\"; done > {name}-found.txt; env > \
@@ -337,7 +365,6 @@ fn no_real_cli_can_start_in_a_test() {
     #[cfg(windows)]
     let script = |name: &str| {
         vec![
-            "cmd.exe".to_string(),
             "/d".to_string(),
             "/s".to_string(),
             "/c".to_string(),
@@ -350,7 +377,7 @@ fn no_real_cli_can_start_in_a_test() {
     };
     let started = home
         .command(&test_binaries().facade)
-        .args(["start", "--name", "command"])
+        .args(["start", "-d", "--name", "command", cli])
         .args(script("command"))
         .output()
         .unwrap();
@@ -360,7 +387,7 @@ fn no_real_cli_can_start_in_a_test() {
     let wired = wire.call(
         "agent.start",
         json!({
-            "command": script("wire"), "name": "wire", "cwd": home.project,
+            "cli": cli, "args": script("wire"), "name": "wire", "folder": home.project,
             "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
         }),
     );
@@ -397,7 +424,8 @@ fn no_real_cli_can_start_in_a_test() {
     }
     let outside = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     let args = json!({
-        "command": [shell(), "-c", "sleep 60"], "name": "outside", "cwd": home.project,
+        "cli": home.shell_cli(), "args": ["-c", "sleep 60"], "name": "outside",
+        "folder": home.project,
         "env": { "HOME": outside }, "cols": 80, "rows": 24,
     });
     let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -426,8 +454,11 @@ fn command_of(pid: i32) -> String {
 #[cfg(unix)]
 #[test]
 fn facade_runs_from_its_build_s_folder_and_runs_name_the_launchers() {
+    use facade_scenarios::serde_json;
+
     let home = TestHome::new("programs");
-    let agent = home.start_named_fake("w1", &[]);
+    let args_file = home.project.join("fake-args.json");
+    let agent = home.start_named_fake("w1", &[("FAKECLI_ARGS", args_file.to_str().unwrap())]);
     let bin = home.path.join("core").join("bin");
     let build = std::fs::read_link(bin.join("facade"))
         .expect("the launcher")
@@ -460,6 +491,22 @@ fn facade_runs_from_its_build_s_folder_and_runs_name_the_launchers() {
             "the {service} runs {command}"
         );
     }
+    let args: Vec<String> = serde_json::from_slice(&std::fs::read(args_file).unwrap()).unwrap();
+    let run = facade_rules::run_folder(&home.path.join("core/runs"), &agent.id)
+        .expect("the fake CLI has one run directory");
+    let config_file = run.join("mcp.json");
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--mcp-config" && Path::new(&pair[1]) == config_file),
+        "the CLI is given its run's MCP configuration: {args:?}"
+    );
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config_file).unwrap()).unwrap();
+    assert_eq!(
+        config["mcpServers"]["facade"]["command"],
+        bin.join("facade-mcp").display().to_string(),
+        "its MCP server is the launcher"
+    );
     let identity = facade_base::process::ProcessIdentity {
         pid: agent.pid as u32,
         birth: facade_base::unix_process::birth(agent.pid as u32)
@@ -469,12 +516,9 @@ fn facade_runs_from_its_build_s_folder_and_runs_name_the_launchers() {
     let env = facade_base::unix_process::environment(&identity)
         .unwrap()
         .expect("the CLI's environment");
-    assert_eq!(
-        env["FAKECLI_MCP"],
-        bin.join("facade-mcp").display().to_string(),
-        "its MCP server is the launcher"
-    );
-    let hook = &env["FAKECLI_SESSION_HOOK"];
+    let hook = env
+        .get("FAKECLI_SESSION_HOOK")
+        .expect("the CLI is given its session hook");
     assert!(
         hook.starts_with(&format!(
             "'{}' hook session-start ",
@@ -511,13 +555,13 @@ fn programs_deleted_while_facade_runs_are_put_back_before_a_start_names_them() {
         );
     }
     let ready = || {
-        home.agent_from_list_json("w2")
+        home.agent_from_watch("w2")
             .is_some_and(|row| row["tools_state"] == "available")
     };
     assert!(
         wait_until(secs(15), ready),
         "{:?}",
-        home.agent_from_list_json("w2")
+        home.agent_from_watch("w2")
     );
 }
 
@@ -746,13 +790,13 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
         &format!("/session {SELECTED}\r"),
     );
     let selected = || {
-        home.agent_from_list_json("w1")
+        home.agent_from_watch("w1")
             .is_some_and(|row| row["session"] == SELECTED)
     };
     assert!(
         wait_until(secs(10), selected),
         "the session hook did not write: {:?}",
-        home.agent_from_list_json("w1")
+        home.agent_from_watch("w1")
     );
     home.start_named_fake("w2", &[]);
     let old = home.kill_daemon();

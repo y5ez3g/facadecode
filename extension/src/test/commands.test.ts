@@ -205,7 +205,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual(shown, [RUN]);
 	});
 
-	test('a card\'s menu names its run: a run gone does nothing; another shape fails without a guess', async () => {
+	test('PANEL-2.2, 4.2: a card\'s menu names its exact run, including same-numbered agents on two machines', async () => {
 		await run('facade.pinAgent', { run_id: `run-${'9'.padStart(32, '0')}` });
 		await run('facade.pinAgent', { webview: 'facade.agents', webviewSection: 'agent', run_id: RUN, preventDefaultContextMenuItems: true });
 		assert.deepStrictEqual(pinned, [RUN]);
@@ -214,6 +214,74 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 			assert.throws(() => run('facade.dismissAgent', bad), /run_id/, JSON.stringify(bad));
 		}
 		assert.throws(() => run('facade.revealAgent'), /run_id/);
+
+		const registered = new Map<string, (arg?: unknown) => unknown>();
+		const done: unknown[][] = [];
+		const renames: unknown[] = [];
+		const local = { ...FACTS, id: 'workstation/a3', alias: 'a3', address: 'a3@workstation', pinnable: true };
+		const remote = { ...FACTS, id: 'devbox/a3', alias: 'a3', address: 'a3@0f12abcd', lifecycle: 'ended', pin: 'pin-remote' } satisfies RunFacts;
+		const entries = new Map<string, RunFacts>([[local.id, local], [remote.id, remote]]);
+		const api = {
+			commands: { registerCommand: (id: string, handler: (arg?: unknown) => unknown) => {
+				registered.set(id, handler);
+				return { dispose: () => registered.delete(id) };
+			} },
+			l10n: { t: (value: string, ...args: unknown[]) => value.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) },
+			env: { clipboard: { writeText: async (text: string) => { done.push(['copy', text]); } } }
+		};
+		const { AgentActions, registerRustAgentCommands } = withModules({ vscode: api, '../pickers/stepping': {
+			Flow: class { async text(options: unknown) { renames.push(options); return '  New name  '; } close() { } }
+		} })<typeof import('../ui/commands/agent')>(require.resolve('../ui/commands/agent'));
+		const registration = registerRustAgentCommands({
+			agents: { get: id => entries.get(id) },
+			model: { selectedAgent: () => ({ run: local.id, ended: false }) } as never,
+			actions: {
+				open: async id => { done.push(['open', id]); return true; },
+				hide: async id => { done.push(['hide', id]); },
+				stop: async id => { done.push(['stop', id]); },
+				remove: async id => { done.push(['remove', id]); },
+				setPinned: async (id, value) => { done.push(['pin', id, value]); },
+				rename: async (id, name) => { done.push(['rename', id, name]); }
+			},
+			goToAgent: async () => { done.push(['go']); },
+			notifyError: text => assert.fail(text)
+		});
+		const card = { webview: 'facade.agents', webviewSection: 'agent', run_id: remote.id, preventDefaultContextMenuItems: true };
+		const invoke = (name: string, target?: unknown) => registered.get(`facade.${name}`)!(target);
+		assert.strictEqual(await invoke('openTerminal', card), false);
+		await invoke('stopAgent', card);
+		await invoke('pinAgent', card);
+		await invoke('hideAgent', { run_id: 'gone' });
+		await assert.rejects(async () => invoke('deleteAgent', { run: remote.id }), /run_id/);
+		assert.strictEqual(done.length, 0);
+		assert.strictEqual(await invoke('openTerminal'), true);
+		await invoke('hideAgent', card);
+		await invoke('stopAgent');
+		await invoke('deleteAgent', card);
+		await invoke('pinAgent');
+		await invoke('unpinAgent', card);
+		await invoke('renameAgent', card);
+		await invoke('copyAgentReference', card);
+		await invoke('goToAgent');
+		entries.set(remote.id, { ...remote, address: undefined, name: '' });
+		await invoke('renameAgent', card);
+		const legacy = new AgentActions({
+			agents: { get: () => FACTS, rename: (id: string, name: string) => { done.push(['rename', id, name]); } } as never,
+			model: {} as never, execution: {} as never, notifyError: text => assert.fail(text)
+		});
+		await legacy.rename(RUN);
+		assert.deepStrictEqual(done, [
+			['open', local.id], ['hide', remote.id], ['stop', local.id], ['remove', remote.id],
+			['pin', local.id, true], ['pin', remote.id, false], ['rename', remote.id, 'New name'], ['copy', remote.address], ['go'],
+			['rename', remote.id, 'New name'], ['rename', RUN, 'New name']
+		]);
+		assert.deepStrictEqual(renames, [
+			{ title: 'Rename Agent', value: remote.name, placeholder: 'Leave blank to choose a name automatically', prompt: 'Rename a3@0f12abcd' },
+			{ title: 'Rename Agent', value: '', placeholder: 'Leave blank to choose a name automatically' },
+			{ title: 'Rename Agent', value: FACTS.name, placeholder: 'Leave blank for an unused name, or its ID', prompt: 'Rename @Ada Lovelace #a3' }
+		]);
+		assert.deepStrictEqual(['dismissAgent', 'moveUp', 'moveDown'].map(name => registered.has(`facade.${name}`)), [false, false, false]);
+		registration.forEach(each => each.dispose());
 	});
 
 	test('LIFECYCLE-3.1: Stop Agent stops the exact run and tells the initiator about failures and unknown results', async () => {

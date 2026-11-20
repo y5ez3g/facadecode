@@ -10,6 +10,7 @@ import type { Card, CardMenu, DetailField, DetailId, PlaceKind } from '../webvie
 
 /** The words a card is said in, in the person's language. */
 export interface CardWords {
+	readonly orchestrator?: OrchestratorCardWords;
 	/** `Title: {0}`, `Location: {0}` and `Path: {0}`: what a screen reader says of a card's details (PANEL-1.5). */
 	readonly title: (value: string) => string;
 	/**
@@ -59,6 +60,16 @@ export interface CardWords {
 	readonly saidByAgent: (sender: string, line: string) => string;
 	readonly saidByPerson: (line: string) => string;
 	readonly saidByFacade: (line: string) => string;
+}
+
+interface OrchestratorCardWords {
+	readonly justDone: string;
+	readonly waitingForYou: string;
+	readonly ended: string;
+	readonly unknown: string;
+	readonly stateError: string;
+	readonly machine: (value: string) => string;
+	readonly address: (value: string) => string;
 }
 
 /** Where a card's agent works, as the card says it (PANEL-1.3). */
@@ -129,9 +140,12 @@ export interface CardSaid {
  * `🧑‍💻`, another agent's message `📨`, or Facade's own, unmarked: a Facade result, or a notable state while it lasts - its start, over
  * any message; what its CLI waits for; why its dot is red - then the last message again; before any, its known opening,
  * `New session started`, `Agent resumed` or `Session continued`. Its state in words is the accessible label's, never the second line's, nor is a
- * title. Never a completion claim.
+ * title. Orchestrator-backed cards use the daemon's state and title (PANEL-4.1).
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
+	if (facts.orchestrator && words.orchestrator) {
+		return orchestratorStatusOf(facts.orchestrator.state, facts, words, words.orchestrator);
+	}
 	if (facts.remoteMachine !== undefined && facts.disconnected) {
 		return { dot: 'none', stateText: words.connectionLost, ...noticeOf(words.connectionLost) };
 	}
@@ -173,6 +187,26 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	if (!facts.sessionOpening) { return { dot, stateText, line: '', ...unsaid }; }
 	const opening = facts.sessionOpening === 'resumed' ? words.resumed : facts.sessionOpening === 'continued' ? words.continued : words.started;
 	return { dot, stateText, ...noticeOf(opening), ...unsaid };
+}
+
+/** The same state and TITLE as the Orchestrator's list (RULES-6.2, PANEL-4.1). */
+function orchestratorStatusOf(state: NonNullable<RunFacts['orchestrator']>['state'], facts: RunFacts, words: CardWords, terms: OrchestratorCardWords): CardStatus {
+	const states = {
+		starting: words.starting,
+		working: words.working,
+		waiting_for_you: terms.waitingForYou,
+		just_done: terms.justDone,
+		idle: words.notWorking,
+		error: terms.stateError,
+		ended: terms.ended,
+		unknown: terms.unknown
+	};
+	const failure = facts.error && errorReasonOf(facts, words);
+	return {
+		dot: failure || state === 'error' ? 'error' : state === 'working' || state === 'starting' ? 'working' : 'none',
+		stateText: failure ? words.error(failure) : states[state],
+		line: facts.title ?? ''
+	};
 }
 
 /** The mark of the person's own input on its card: someone at a computer, as `📨` marks another agent's message (PANEL-1.4). */
@@ -276,8 +310,11 @@ export function labelOf(format: (value: string) => string): string {
  * started it, and where it works (the page adds when it started); and an accessible label of name, short run ID, state, location,
  * CLI and second line, its description the details' facts the label does not say.
  */
-export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly repeated?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly readsTitles?: boolean; readonly icon?: string }): Card {
+export function cardOf(facts: RunFacts, input: CardInput): Card {
 	const { place, words } = input;
+	if (facts.orchestrator && words.orchestrator) {
+		return orchestratorCardOf(facts, facts.orchestrator, input, words.orchestrator);
+	}
 	const status = statusOf(facts, words);
 	const runningOn = facts.remoteMachine === undefined ? undefined : words.runningOn(facts.remoteMachine);
 	const pinned = facts.remoteMachine === undefined && !!facts.pin;
@@ -325,4 +362,57 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		startedAt: facts.startedAt ?? facts.createdAt,
 		menu: input.menu
 	};
+}
+
+interface CardInput {
+	readonly place: CardPlace;
+	readonly repeated?: boolean;
+	readonly selected: boolean;
+	readonly menu: CardMenu;
+	readonly words: CardWords;
+	readonly readsTitles?: boolean;
+	readonly icon?: string;
+}
+
+/** Workspace card content comes from the Orchestrator (PANEL-4.1). */
+function orchestratorCardOf(facts: RunFacts, record: NonNullable<RunFacts['orchestrator']>, input: CardInput, terms: OrchestratorCardWords): Card {
+	const { place, words } = input;
+	const { dot, stateText, line } = orchestratorStatusOf(record.state, facts, words, terms);
+	const field = (id: DetailId, format: (value: string) => string, value: string): DetailField => ({ id, label: labelOf(format), value });
+	const alias = record.reference.agent_id;
+	const machine = record.machine ?? record.reference.machine_id;
+	const address = facts.address;
+	return {
+		runId: facts.id,
+		name: facts.name,
+		alias,
+		selected: input.selected,
+		...(facts.pin ? { pinned: true } : {}),
+		...(input.repeated && facts.name.trim() ? { repeated: true } : {}),
+		avatar: avatarOf(input.icon ?? facts.cli),
+		dot,
+		stateText,
+		line,
+		orchestrator: { cli: facts.displayName, running: isAgentRunning(facts) },
+		label: [facts.name, alias, facts.pin && words.pinned, facts.displayName, stateText].filter(Boolean).join(', '),
+		details: {
+			...(line ? { summary: field('title', words.title, line) } : { untitled: words.untitledPending }),
+			titleLabel: labelOf(words.title),
+			machine: field('machine', terms.machine, machine),
+			...(address ? { address: field('address', terms.address, address) } : {}),
+			location: { ...field('location', words.location, place.context), kind: place.kind },
+			path: field('path', words.path, place.path),
+			description: {
+				title: words.title(line || words.untitledPending),
+				place: [terms.machine(machine), address && terms.address(address), words.location(place.context), words.path(place.path)].filter(Boolean).join(', ')
+			}
+		},
+		startedAt: facts.startedAt ?? facts.createdAt,
+		menu: input.menu
+	};
+}
+
+/** Open Terminal and Stop apply to running cards (PANEL-4.2). */
+export function isAgentRunning(facts: RunFacts): boolean {
+	return facts.lifecycle === 'running';
 }

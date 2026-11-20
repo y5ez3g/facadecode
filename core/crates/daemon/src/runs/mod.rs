@@ -23,13 +23,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::daemon::KeeperInfo;
+use facade_base::instructions::{self, ManagedRun};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs};
-use facade_base::process::ProcessExit;
+use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::programs::Held;
 use facade_base::start::StartCommand;
 use facade_base::terminal::PtyMaster;
 use facade_rules::Rule;
+use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -99,7 +101,8 @@ pub(crate) struct RunRequest<'a> {
 
 /// A run ready for the keeper.
 pub(crate) struct PreparedRun {
-    pub(crate) launch: StartCommand<String>,
+    /// The keeper's command line, including arguments private to this run.
+    launch: StartCommand<String>,
     pub(crate) env: BTreeMap<String, String>,
     /// The CLI reports its session to its run folder.
     pub(crate) captures: bool,
@@ -113,6 +116,7 @@ pub(crate) struct PreparedRun {
     pub(crate) rule: Option<&'static Rule>,
     /// The request's kind: whether the run is the agent's first or a resume.
     pub(crate) kind: RunKind,
+    credential_digest: Option<[u8; 32]>,
 }
 
 impl PreparedRun {
@@ -136,8 +140,23 @@ pub(crate) enum RunKind {
 /// A run the keeper started.
 pub(crate) struct StartedRun {
     pub(crate) pid: u32,
+    pub(crate) process: ProcessIdentity,
     /// The terminal's master side; the runs keep a copy.
     pub(crate) master: PtyMaster,
+    pub(crate) credential: Option<RunCredentialRecord>,
+}
+
+/// The verifier saved with a run, tied to the process reported by the keeper.
+pub(crate) struct RunCredentialRecord {
+    pub(crate) digest: [u8; 32],
+    pub(crate) process: ProcessIdentity,
+}
+
+/// The installed run named by a private relay credential.
+pub(crate) struct RunIdentity {
+    pub(crate) agent_id: String,
+    pub(crate) pid: u32,
+    pub(crate) run: u64,
 }
 
 /// What became of an exit the keeper reported.
@@ -197,10 +216,16 @@ impl Runs {
         self.link.reserve_start()
     }
 
-    /// Composes a run's command line and environment, places Facade's plugin, and, for a start,
-    /// creates its run folder. Waits on the file system and the CLI's version.
-    pub(crate) async fn prepare(&self, request: RunRequest<'_>) -> Result<PreparedRun, ErrorBody> {
-        self.preparation.prepare(request).await
+    /// Prepares a managed launch with instructions for its caller and its private relay.
+    pub(crate) async fn prepare_managed(
+        &self,
+        request: RunRequest<'_>,
+        address: &str,
+        context: &ManagedRun<'_>,
+    ) -> Result<PreparedRun, ErrorBody> {
+        self.preparation
+            .prepare(request, Some(instructions::for_managed(address, context)))
+            .await
     }
 
     /// For a resume: removes the agent's earlier run folders, then creates this run's. Blocking.
@@ -234,7 +259,15 @@ impl Runs {
         };
         let launched = self
             .link
-            .send_start(reservation, id, number, args, exits, prepared.kind)
+            .send_start(
+                reservation,
+                id,
+                number,
+                args,
+                exits,
+                prepared.kind,
+                prepared.credential_digest,
+            )
             .await;
         match &launched {
             Ok(_) => {
@@ -248,10 +281,18 @@ impl Runs {
         launched
     }
 
-    /// The daemon committed agent `id`'s run: listed it, or installed a resumed one. Returns an
-    /// exit that came before, for the daemon to save. Called with the agents locked.
-    pub(crate) fn installed(&self, id: &str) -> Option<ProcessExit> {
-        self.link.installed(id)
+    /// Confirms the specific generation after its record and terminal are installed.
+    pub(crate) fn installed_run(&self, id: &str, number: u64) -> Option<ProcessExit> {
+        self.link.installed(id, Some(number))
+    }
+
+    /// Verifies a relay credential, waiting for its run to be installed if it is starting.
+    /// Call on a blocking worker with no daemon lock held.
+    pub(crate) fn verify_credential(
+        &self,
+        credential: &str,
+    ) -> Result<Option<RunIdentity>, ErrorBody> {
+        tokio::runtime::Handle::current().block_on(self.link.verify_credential(credential))
     }
 
     /// Asks the keeper to stop agent `id`'s run, waiting up to 10 seconds for a ready keeper.
@@ -428,6 +469,16 @@ impl Runs {
         Ok(())
     }
 
+    /// Restores the saved verifier only for the active run recovered from this keeper entry.
+    pub(crate) fn restore_credential(
+        &self,
+        held: &KeeperHeldAgent,
+        number: u64,
+        credential: RunCredentialRecord,
+    ) -> bool {
+        self.link.restore_credential(held, number, credential)
+    }
+
     /// Recovery: a run only the keeper holds is held as it is where its record cannot be read, and
     /// stopped where it has none.
     pub(crate) async fn take_keeper_only(
@@ -448,4 +499,8 @@ impl Runs {
     pub(crate) fn let_go_of_unused_plugins(&self, agents: Vec<(String, PathBuf)>) {
         self.preparation.let_go_of_unused_plugins(agents);
     }
+}
+
+fn credential_digest(credential: &str) -> [u8; 32] {
+    Sha256::digest(credential.as_bytes()).into()
 }

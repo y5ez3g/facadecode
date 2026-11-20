@@ -6,9 +6,9 @@ import * as assert from 'assert';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { AgentListRow, V3InspectResult } from '../../base/coreProtocol';
 import { endEditors, until } from './editors';
-import type { windowsInCore } from './editors';
-import type { LegacyPinFixture, ListedAgent, Step } from './rustWindowDriver';
+import type { Step } from './rustWindowDriver';
 
 type Closed = Extract<Step, { readonly phase: 'closed' }>;
 
@@ -21,29 +21,21 @@ export function lifetimeDriverFiles(): Readonly<Record<string, string>> {
 	};
 }
 
-/** The closed window's process and transcript can still be read using the core CLI. */
-export function checkClosedAgent(step: Extract<Closed, { readonly after: 'reload' }>, call: (...args: string[]) => string): void {
-	const { agents } = JSON.parse(call('list', '--json')) as { readonly agents: ListedAgent[] };
-	assert.deepStrictEqual(agents.map(each => [each.agent_id, each.pid, each.process]), [[step.before.id, step.before.pid, 'running']], 'the closed window’s original agent is still running');
-	assert.ok(call('screen', step.before.id, '--lines', '120').includes(step.screenText), 'the closed window’s screen still holds its transcript');
-}
-
-/** Emulate saved state from a version whose Pin had neither a home nor a core agent ID. */
-export function seedLegacyPin(fixture: LegacyPinFixture): void {
-	const key = 'facade.pins';
-	const withLegacy = (text: string) => {
-		const state = JSON.parse(text) as { readonly [key]: { readonly id: string }[] };
-		assert.ok(state[key].some(pin => pin.id === fixture.pin.id), 'the fixture replaces a saved Pin');
-		return JSON.stringify({ ...state, [key]: state[key].map(pin => pin.id === fixture.pin.id ? fixture.pin : pin) });
-	};
-	fs.writeFileSync(fixture.mirror, `${withLegacy(fs.readFileSync(fixture.mirror, 'utf8'))}\n`);
-}
-
-/** The former daemon started its 90-second or five-minute timer at the last connection's departure. */
-export async function afterOldWindowGrace(windowId: string, windows: () => ReturnType<typeof windowsInCore>, remote: boolean): Promise<void> {
-	await until(`window ${windowId} to disconnect from core`, async () => (await windows()).some(window => window.window_id === windowId && !window.connected) || undefined);
-	console.log(`    ${JSON.stringify({ phase: 'disconnected', windowId, connected: false })}`);
+/** The closed window's process and transcript survive the former window-dependent timeout. */
+export async function checkClosedAgent(
+	step: Extract<Closed, { readonly after: 'reload' }>,
+	call: (...args: string[]) => string,
+	inspect: (agent: string) => Promise<V3InspectResult>,
+	remote = false
+): Promise<void> {
+	await until('the closed window to detach from the agent', async () => (await inspect(step.before.id)).viewers.length === 0 || undefined);
+	console.log('    The closed editor detached its terminal.');
 	await new Promise(resolve => setTimeout(resolve, remote ? 305_000 : 95_000));
+	const { agents } = JSON.parse(call('list', '--json')) as { readonly agents: AgentListRow[] };
+	const { agent, viewers } = await inspect(step.before.id);
+	assert.deepStrictEqual(agents.map(each => each.id), [agent.address]);
+	assert.deepStrictEqual([agent.pid, agent.process, agent.session, viewers], [step.before.pid, 'running', step.before.session, []]);
+	assert.ok(call('screen', step.before.id, '--lines', '120').includes(step.screenText), 'the closed window’s screen still holds its transcript');
 }
 
 /** Restart with the same workspace and profile after the driver has closed the current editor window. */

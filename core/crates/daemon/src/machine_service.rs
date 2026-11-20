@@ -2,22 +2,22 @@
 
 use std::sync::Arc;
 
-use facade_base::address::{MachineSelector, is_machine_name};
 use facade_base::daemon::{ClientKind, HelloParams, HelloResult};
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{
-    AgentRef, Caller, ConnectionKind, ConnectionState, MachineAddArgs, MachineAddResult,
-    MachineConnectArgs, MachineConnectResult, MachineConnection, MachineHello, MachineIdentity,
-    MachineInfo, MachineRemoveResult, MachineRenameResult, MachineTransport,
+    AgentRef, ConnectionKind, MachineAddResult, MachineHello, MachineIdentity, MachineRemoveResult,
+    MachineRenameResult, MachineTransport,
 };
 use facade_base::sockets::{ServerReader, ServerWriter};
-use facade_base::ssh::{SshMode, machine_ssh_args};
+use facade_base::ssh::parse_ssh_destination;
+use facade_base::v3;
+use facade_base::v3::address::{self as addresses, MachineSelector, is_machine_name};
 use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::sync::mpsc;
 
 use crate::lifecycle::Work;
-use crate::network::{Event, FrontConnection};
+use crate::network::{Event, FrontConnection, SavedSsh, TargetReply};
 use crate::records::root_of;
 use crate::server::Client;
 use crate::service::value_of;
@@ -25,7 +25,10 @@ use crate::{Daemon, SavedConnection, blocking_in_place};
 
 pub(crate) enum MachineStream {
     Incoming(MachineHello),
-    Foreground(FrontConnection),
+    Foreground {
+        session: FrontConnection,
+        argv: Vec<String>,
+    },
 }
 
 pub(crate) async fn follow_network(
@@ -35,8 +38,11 @@ pub(crate) async fn follow_network(
     while let Some(event) = events.recv().await {
         match event {
             Event::Target(request) => {
-                let daemon = daemon.clone();
-                tokio::spawn(async move { daemon.serve_target(request).await });
+                let error = ErrorBody::new(
+                    Reason::IncompatibleProtocol,
+                    "normal machine calls use protocol 3",
+                );
+                let _ = request.reply.send(TargetReply::Call(Err(error)));
             }
             Event::RoutesChanged { machines } => {
                 for row in machines
@@ -44,7 +50,11 @@ pub(crate) async fn follow_network(
                     .filter(|row| row.machine_id != daemon.machine_id && !row.is_unreachable())
                 {
                     if let Err(error) = blocking_in_place(|| {
-                        daemon.store.remember_machine(&row.machine_id, &row.name)
+                        daemon.store.remember_machine(&row.machine_id, &row.name)?;
+                        if let Some(route) = daemon.network.remembered_route(&row.machine_id) {
+                            daemon.store.remember_route(&row.machine_id, &route)?;
+                        }
+                        Ok::<_, anyhow::Error>(())
                     }) {
                         crate::log("warn", &format!("could not save a machine name: {error:#}"));
                     }
@@ -112,56 +122,67 @@ impl Daemon {
         client: &Client,
         args: Value,
     ) -> Result<(Value, MachineStream), ErrorBody> {
-        if client.agent.is_some() || client.identity.kind != ClientKind::Terminal {
+        if client.verified_actor.is_some() || client.identity.kind != ClientKind::Terminal {
             return Err(ErrorBody::refused(
-                "only a person connected as a terminal can open a machine session",
+                "only a terminal client can open an SSH connection",
             ));
         }
-        let MachineConnectArgs { transport, kind } = decode_arguments(args)?;
-        let (ssh_destination, remote_home, expected_machine_id) = match &transport {
-            MachineTransport::Ssh {
+        let v3::MachineConnectArgs { transport, kind } = decode_arguments(args)?;
+        let (transport, argv, expected_machine_id) = match transport {
+            v3::MachineTransport::Ssh {
                 ssh_destination,
+                ssh_args,
                 remote_home,
             } => {
-                let mode = if kind == ConnectionKind::Saved {
-                    SshMode::Add
-                } else {
-                    SshMode::Connect
-                };
-                machine_ssh_args(ssh_destination, remote_home.as_deref(), mode, None)
-                    .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-                let saved = if kind == ConnectionKind::Saved {
-                    self.saved_connections()?.into_iter().find(|saved| {
-                        &saved.ssh_destination == ssh_destination
-                            && &saved.remote_home == remote_home
-                    })
+                let argv = checked_ssh_args(&ssh_destination, ssh_args)?;
+                let expected = if kind == ConnectionKind::Saved {
+                    self.saved_ssh()?
+                        .into_iter()
+                        .find(|saved| saved.argv == argv && saved.config.remote_home == remote_home)
+                        .map(|saved| saved.config.machine_id)
                 } else {
                     None
                 };
                 (
-                    Some(ssh_destination.clone()),
-                    remote_home.clone(),
-                    saved.map(|saved| saved.machine_id),
+                    MachineTransport::Ssh {
+                        ssh_destination,
+                        remote_home,
+                    },
+                    argv,
+                    expected,
                 )
             }
-            MachineTransport::Bridge if kind == ConnectionKind::Temporary => (None, None, None),
-            MachineTransport::Bridge => {
+            v3::MachineTransport::Bridge if kind == ConnectionKind::Temporary => {
+                (MachineTransport::Bridge, Vec::new(), None)
+            }
+            _ => {
                 return Err(ErrorBody::invalid_argument(
                     "a bridged machine session is temporary",
                 ));
             }
         };
-        let result = MachineConnectResult {
+        let (ssh_destination, remote_home) = match &transport {
+            MachineTransport::Ssh {
+                ssh_destination,
+                remote_home,
+            } => (Some(ssh_destination.clone()), remote_home.clone()),
+            MachineTransport::Bridge => (None, None),
+        };
+        let result = v3::MachineConnectResult {
             ssh_destination,
+            ssh_args: argv.clone(),
             remote_home,
             expected_machine_id: expected_machine_id.clone(),
         };
-        let front = FrontConnection {
+        let session = FrontConnection {
             transport,
             kind,
             expected_machine_id,
         };
-        Ok((value_of(result), MachineStream::Foreground(front)))
+        Ok((
+            value_of(result),
+            MachineStream::Foreground { session, argv },
+        ))
     }
 
     pub(crate) async fn serve_machine_stream(
@@ -170,34 +191,50 @@ impl Daemon {
         read: BufReader<ServerReader>,
         write: ServerWriter,
     ) -> anyhow::Result<()> {
-        let Some(_active) = self.lifecycle.begin(Work::Connection) else {
+        let Some(initial_work) = self.lifecycle.begin(Work::Call) else {
             return Ok(());
         };
         match stream {
-            MachineStream::Incoming(remote) => self.network.accept(remote, read, write).await,
-            MachineStream::Foreground(front) => {
-                let transport = front.transport.clone();
-                let kind = front.kind;
+            MachineStream::Incoming(remote) => {
                 self.network
-                    .connect(front, read, write, |remote| {
-                        if kind == ConnectionKind::Saved
-                            && let MachineTransport::Ssh {
-                                ssh_destination,
-                                remote_home,
-                            } = &transport
-                        {
-                            self.check_saved_destination(
-                                &remote.machine_id,
-                                ssh_destination,
-                                remote_home.as_deref(),
-                            )?;
-                        }
-                        blocking_in_place(|| {
-                            self.store
-                                .remember_machine(&remote.machine_id, &remote.name)
-                        })
-                        .map_err(ErrorBody::internal)
-                    })
+                    .accept_with_work(remote, read, write, Some(initial_work))
+                    .await
+            }
+            MachineStream::Foreground { session, argv } => {
+                let transport = session.transport.clone();
+                let kind = session.kind;
+                self.network
+                    .connect_with_saved(
+                        session,
+                        read,
+                        write,
+                        Some(initial_work),
+                        |remote: &MachineHello| {
+                            let saved = match &transport {
+                                MachineTransport::Ssh {
+                                    ssh_destination,
+                                    remote_home,
+                                } if kind == ConnectionKind::Saved => {
+                                    let saved = SavedSsh {
+                                        config: SavedConnection {
+                                            machine_id: remote.machine_id.clone(),
+                                            ssh_destination: ssh_destination.clone(),
+                                            remote_home: remote_home.clone(),
+                                        },
+                                        argv,
+                                    };
+                                    Some(self.keep_ssh(saved)?)
+                                }
+                                _ => None,
+                            };
+                            let first = blocking_in_place(|| {
+                                self.store
+                                    .remember_machine(&remote.machine_id, &remote.name)
+                            })
+                            .map_err(ErrorBody::internal)?;
+                            Ok((first, saved))
+                        },
+                    )
                     .await
             }
         }
@@ -205,129 +242,99 @@ impl Daemon {
     }
 
     /// Derives the caller from the local connection's accepted identity.
-    pub(crate) fn local_caller(&self, client: &Client) -> Result<Caller, ErrorBody> {
-        if let Some(id) = &client.agent {
-            let agent = AgentRef {
-                machine_id: self.machine_id.clone(),
-                agent_id: id.clone(),
-            };
-            let info = self.get_agent(id).map(|handle| handle.info());
-            let root = info.as_ref().map(root_of).unwrap_or_else(|| agent.clone());
-            let yolo = info.is_some_and(|info| info.yolo);
-            return Ok(Caller::Agent { agent, root, yolo });
-        }
-        if let Some(binding) = &client.window {
-            if !self.windows.is_current(binding) {
-                return Err(ErrorBody::refused("this editor window is no longer bound"));
-            }
-            return Ok(Caller::Ide {
-                window: binding.window.clone(),
+    pub(crate) fn local_caller(
+        &self,
+        client: &Client,
+    ) -> Result<facade_base::v3::Caller, ErrorBody> {
+        use facade_base::v3::Caller;
+        if let Some(agent) = client.verified_actor.as_ref() {
+            let info = self
+                .get_agent(&agent.agent_id)
+                .filter(|_| self.machine_id == agent.machine_id)
+                .map(|agent| agent.info())
+                .filter(|info| info.process == facade_base::process::ProcessState::Running)
+                .ok_or_else(|| {
+                    ErrorBody::new(Reason::CallerUnavailable, "this agent's run has ended")
+                })?;
+            return Ok(Caller::Agent {
+                agent: agent.clone(),
+                root: root_of(&info),
+                yolo: info.yolo,
             });
         }
-        if client.identity.kind == ClientKind::Terminal {
-            Ok(Caller::Terminal {
-                machine_id: self.machine_id.clone(),
-            })
-        } else {
-            Err(ErrorBody::refused(
-                "this connection cannot act for the person",
-            ))
+        let machine_id = self.machine_id.clone();
+        match client.identity.kind {
+            ClientKind::Terminal => Ok(Caller::Terminal { machine_id }),
+            ClientKind::Ide => Ok(Caller::Ide { machine_id }),
+            _ => Err(ErrorBody::refused("this connection has no verified caller")),
         }
     }
 
-    fn saved_connections(&self) -> Result<Vec<SavedConnection>, ErrorBody> {
-        blocking_in_place(|| self.store.saved_connections()).map_err(ErrorBody::internal)
+    fn saved_ssh(&self) -> Result<Vec<SavedSsh>, ErrorBody> {
+        blocking_in_place(|| self.store.saved_ssh()).map_err(ErrorBody::internal)
     }
 
     pub(crate) fn restore_machine_connections(&self) -> anyhow::Result<()> {
-        for saved in blocking_in_place(|| self.store.saved_connections())? {
-            drop(self.network.start_saved(saved));
+        for saved in blocking_in_place(|| self.store.saved_ssh())? {
+            drop(self.network.start_saved_ssh(saved));
+        }
+        for (id, route) in blocking_in_place(|| self.store.remembered_routes())? {
+            self.network.remember_route(id, route);
         }
         Ok(())
     }
 
-    fn check_saved_destination(
-        &self,
-        machine_id: &str,
-        ssh_destination: &str,
-        remote_home: Option<&str>,
-    ) -> Result<Option<SavedConnection>, ErrorBody> {
-        let saved = self
-            .saved_connections()?
-            .into_iter()
-            .find(|saved| saved.machine_id == machine_id);
-        if let Some(saved) = &saved
-            && (saved.ssh_destination != ssh_destination
-                || saved.remote_home.as_deref() != remote_home)
-        {
-            return Err(ErrorBody::invalid_argument(format!(
-                "this machine is already saved through {}",
-                saved.ssh_destination
+    fn keep_ssh(&self, saved: SavedSsh) -> Result<SavedSsh, ErrorBody> {
+        let kept = blocking_in_place(|| self.store.save_verified_ssh(&saved))
+            .map_err(ErrorBody::internal)?;
+        if kept.config != saved.config || kept.argv != saved.argv {
+            return Err(ErrorBody::refused(format!(
+                "this machine already has a saved SSH connection through {}",
+                kept.config.ssh_destination
             )));
         }
-        Ok(saved)
-    }
-
-    pub(crate) fn machine_table(&self) -> Result<Vec<MachineInfo>, ErrorBody> {
-        let mut machines = self.network.machines();
-        let known =
-            blocking_in_place(|| self.store.known_machine_names()).map_err(ErrorBody::internal)?;
-        let local_connections = machines
-            .iter()
-            .find(|row| row.machine_id == self.machine_id)
-            .map(|row| row.connections.clone())
-            .unwrap_or_default();
-        for saved in self.saved_connections()? {
-            if machines
-                .iter()
-                .any(|row| row.machine_id == saved.machine_id)
-            {
-                continue;
-            }
-            let state = local_connections.iter().find(|c| {
-                c.machine_id == saved.machine_id
-                    && c.kind == ConnectionKind::Saved
-                    && c.initiator_machine_id == self.machine_id
-            });
-            machines.push(MachineInfo {
-                name: known
-                    .get(&saved.machine_id)
-                    .cloned()
-                    .unwrap_or_else(|| saved.ssh_destination.clone()),
-                machine_id: saved.machine_id,
-                boot_id: None,
-                build: None,
-                route: None,
-                connections: vec![MachineConnection {
-                    machine_id: self.machine_id.clone(),
-                    initiator_machine_id: self.machine_id.clone(),
-                    kind: ConnectionKind::Saved,
-                    ssh_destination: Some(saved.ssh_destination),
-                    remote_home: saved.remote_home,
-                    state: state.map_or(ConnectionState::Disconnected, |c| c.state),
-                    ssh_interaction: state.and_then(|c| c.ssh_interaction.clone()),
-                }],
-            });
-        }
-        machines.sort_by(|left, right| left.machine_id.cmp(&right.machine_id));
-        Ok(machines)
+        Ok(kept)
     }
 
     fn publish_machine_table(&self) {
-        match self.machine_table() {
-            Ok(machines) => {
-                let _ = self.machine_views.send(machines);
+        let _ = self.machine_views.send(());
+    }
+
+    pub(crate) fn public_machines(&self) -> Result<Vec<v3::MachineInfo>, ErrorBody> {
+        let last_contact =
+            blocking_in_place(|| self.store.machine_last_seen()).map_err(ErrorBody::internal)?;
+        let mut rows = self.network.machines_v3();
+        let visible = identities(&rows);
+        for row in &mut rows {
+            row.selector = machine_address_part(&row.machine_id, &visible)?;
+            if row.last_seen.is_none() {
+                row.last_seen = last_contact.get(&row.machine_id).cloned();
             }
-            Err(error) => crate::log("warn", &error.message),
         }
+        Ok(rows)
+    }
+
+    pub(crate) fn machine_identities(&self) -> Result<Vec<MachineIdentity>, ErrorBody> {
+        Ok(identities(&self.network.machines_v3()))
+    }
+
+    pub(crate) fn machine_address_part(&self, machine_id: &str) -> Result<String, ErrorBody> {
+        let visible = self.machine_identities()?;
+        machine_address_part(machine_id, &visible)
+    }
+
+    pub(crate) fn agent_address(&self, reference: &AgentRef) -> Result<String, ErrorBody> {
+        let machine = self.machine_address_part(&reference.machine_id)?;
+        Ok(addresses::format_agent_address(reference, &machine))
     }
 
     pub(crate) fn select_machine(
         &self,
         selector: MachineSelector<'_>,
-    ) -> Result<MachineInfo, ErrorBody> {
+    ) -> Result<v3::MachineInfo, ErrorBody> {
         let mut found: Vec<_> = self
-            .machine_table()?
+            .network
+            .machines_v3()
             .into_iter()
             .filter(|machine| {
                 selector.matches(&MachineIdentity {
@@ -345,24 +352,6 @@ impl Daemon {
                     .matches(&identity)
                     .then(|| offline_machine(identity))
             }));
-            if found.is_empty()
-                && let MachineSelector::IdPrefix(id) = selector
-                && id.len() == 32
-            {
-                let id = id.to_ascii_lowercase();
-                let machine_id = format!(
-                    "{}-{}-{}-{}-{}",
-                    &id[..8],
-                    &id[8..12],
-                    &id[12..16],
-                    &id[16..20],
-                    &id[20..]
-                );
-                found.push(offline_machine(MachineIdentity {
-                    name: facade_base::address::exact_machine_selector(&machine_id),
-                    machine_id,
-                }));
-            }
         }
         match found.len() {
             0 => Err(ErrorBody::new(
@@ -375,56 +364,44 @@ impl Daemon {
                     Reason::AmbiguousReference,
                     "several machines match that address",
                 );
-                error.data.candidates = found.into_iter().map(|row| row.machine_id).collect();
+                let visible = self.machine_identities()?;
+                error.data.candidates = found
+                    .into_iter()
+                    .filter_map(|machine| machine_address_part(&machine.machine_id, &visible).ok())
+                    .collect();
                 Err(error)
             }
         }
     }
 
-    pub(crate) async fn add_machine(
+    pub(crate) async fn add_machine_v3(
         &self,
-        args: MachineAddArgs,
+        args: v3::MachineAddArgs,
     ) -> Result<MachineAddResult, ErrorBody> {
         let _changing = self.machine_changes.lock().await;
-        let old = self.check_saved_destination(
-            &args.machine_id,
-            &args.ssh_destination,
-            args.remote_home.as_deref(),
-        )?;
-        let saved = SavedConnection {
-            machine_id: args.machine_id,
-            ssh_destination: args.ssh_destination,
-            remote_home: args.remote_home,
-        };
-        let connected = self.network.start_saved(saved.clone()).await;
-        let machine = match connected
-            .map_err(ErrorBody::internal)
-            .and_then(|machine| machine)
-        {
-            Ok(machine) => machine,
-            Err(error) => {
-                if old.is_none() {
-                    self.network.remove_saved(&saved.machine_id);
-                }
-                return Err(error);
-            }
-        };
-        let kept = blocking_in_place(|| self.store.save_connection(&saved));
-        if let Err(error) = kept {
-            if old.is_none() {
-                self.network.remove_saved(&saved.machine_id);
-            }
-            return Err(ErrorBody::internal(error));
+        let argv = checked_ssh_args(&args.ssh_destination, args.ssh_args)?;
+        let saved = self
+            .saved_ssh()?
+            .into_iter()
+            .find(|saved| saved.config.machine_id == args.machine_id)
+            .ok_or_else(|| {
+                ErrorBody::invalid_argument(
+                    "open the authenticated foreground SSH connection first",
+                )
+            })?;
+        if saved.argv != argv || saved.config.remote_home != args.remote_home {
+            return Err(ErrorBody::invalid_argument(
+                "the saved SSH connection does not match these arguments",
+            ));
         }
-        let first_connection = blocking_in_place(|| {
-            self.store
-                .remember_machine(&machine.machine_id, &machine.name)
-        })
-        .map_err(ErrorBody::internal)?;
-        self.publish_machine_table();
+        let machine = self
+            .network
+            .start_saved_ssh(saved)
+            .await
+            .map_err(ErrorBody::internal)??;
         Ok(MachineAddResult {
             machine,
-            first_connection,
+            first_connection: false,
         })
     }
 
@@ -475,8 +452,57 @@ impl Daemon {
     }
 }
 
-fn offline_machine(identity: MachineIdentity) -> MachineInfo {
-    MachineInfo {
+fn checked_ssh_args(destination: &str, argv: Vec<String>) -> Result<Vec<String>, ErrorBody> {
+    let argv = if argv.is_empty() {
+        vec![destination.to_owned()]
+    } else {
+        argv
+    };
+    let parsed = parse_ssh_destination(&argv)
+        .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+    if parsed != destination {
+        return Err(ErrorBody::invalid_argument(
+            "SSH arguments name a different destination",
+        ));
+    }
+    Ok(argv)
+}
+
+pub(crate) fn machine_address_part(
+    machine_id: &str,
+    visible: &[MachineIdentity],
+) -> Result<String, ErrorBody> {
+    let unnamed = MachineIdentity {
+        machine_id: machine_id.to_owned(),
+        name: String::new(),
+    };
+    let target = visible
+        .iter()
+        .find(|entry| entry.machine_id == machine_id)
+        .unwrap_or(&unnamed);
+    addresses::display_machine_selector(target, visible).map_err(|error| {
+        ErrorBody::new(
+            Reason::AmbiguousReference,
+            format!("{error}; use machine rename to give it a unique name"),
+        )
+    })
+}
+
+fn identities(rows: &[v3::MachineInfo]) -> Vec<MachineIdentity> {
+    rows.iter()
+        .map(|row| MachineIdentity {
+            machine_id: row.machine_id.clone(),
+            name: row.name.clone(),
+        })
+        .collect()
+}
+
+fn offline_machine(identity: MachineIdentity) -> v3::MachineInfo {
+    v3::MachineInfo {
+        selector: addresses::exact_machine_selector(&identity.machine_id),
+        state: v3::MachineState::Unreachable,
+        last_seen: None,
+        ssh_error: None,
         machine_id: identity.machine_id,
         name: identity.name,
         boot_id: None,

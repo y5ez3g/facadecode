@@ -17,6 +17,8 @@ import { linesOf, placeOf } from './detailLines';
 import type { Card } from '../webview/protocol';
 
 const WORDS: CardWords = {
+	orchestrator: { justDone: 'Just done', waitingForYou: 'Waiting for you', ended: 'Ended', unknown: 'Unknown', stateError: 'Error',
+		machine: value => `Machine: ${value}`, address: value => `Address: ${value}` },
 	title: value => `Title: ${value}`,
 	location: value => `Location: ${value}`,
 	path: value => `Path: ${value}`,
@@ -60,10 +62,11 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 
 const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', context: 'shop · main', path: '/app', kind: 'repo' as const };
 const menu = { moveUp: false, moveDown: true };
+const reference = { machine_id: 'machine-id', agent_id: 'a1' };
 
 suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', () => {
 
-	test('PANEL-1.3: the remote icon exposes the running machine in the accessible label', () => {
+	test('PANEL-1.3, PANEL-4.1: the old remote icon exposes its machine; workspace details expose the machine and exact address', () => {
 		const card = cardOf(run({ alias: '#a1@gpu', remoteMachine: 'gpu (3f9a2c1d)' }), { place, selected: false, menu, words: WORDS });
 		assert.strictEqual(card.runningOn, 'Running on gpu (3f9a2c1d)');
 		assert.ok(card.label.includes(card.runningOn));
@@ -74,6 +77,17 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		const disconnected = statusOf(run({ remoteMachine: 'gpu', disconnected: true }), WORDS);
 		assert.strictEqual(disconnected.dot, 'none');
 		assert.strictEqual(disconnected.stateText, WORDS.connectionLost);
+		const title = '  The daemon TITLE  ';
+		const address = 'a1@3f9a2c1d';
+		const workspaceCard = cardOf(run({ remoteMachine: 'gpu (3f9a2c1d)', orchestrator: { reference, state: 'idle', machine: 'gpu' },
+			title, address, pin: 'pin-1', said: 'Private terminal text' }), { place, selected: false, menu, words: WORDS });
+		assert.deepStrictEqual([workspaceCard.alias, workspaceCard.runningOn, workspaceCard.pinned, workspaceCard.line,
+			workspaceCard.details.summary?.value, workspaceCard.details.machine, workspaceCard.details.address, workspaceCard.label], [
+			'a1', undefined, true, title, title,
+			{ id: 'machine', label: 'Machine: ', value: 'gpu' }, { id: 'address', label: 'Address: ', value: address },
+			'Ada, a1, Claude Code, Idle'
+		]);
+		assert.strictEqual(workspaceCard.details.description.place, 'Machine: gpu, Address: a1@3f9a2c1d, Location: shop · main, Path: /app');
 	});
 
 	test('all CLIs retain a blocker without a recognized kind, its full reason on its second line and in its label', () => {
@@ -91,7 +105,7 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		}
 	});
 
-	test('RULES-3.2: green while it starts or works; red for an error, Facade tools it cannot use or a start not ready by its bound; none otherwise, its state in its label', () => {
+	test('RULES-3.2, RULES-6.2: both engines expose their state in color and in words; workspace cards use the daemon state and TITLE', () => {
 		const shown = (facts: RunFacts) => {
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
 			return [card.dot, card.stateText, card.line, card.label.split(', ').includes(card.stateText)];
@@ -119,6 +133,16 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 			['error', 'Facade tools unavailable · conflict', 'Facade tools unavailable · conflict', true],
 			['error', 'Error · Failed', 'Failed', true]
 		]);
+		const expected = {
+			starting: ['working', 'Starting'], working: ['working', 'Working'], waiting_for_you: ['none', 'Waiting for you'],
+			just_done: ['none', 'Just done'], idle: ['none', 'Idle'], ended: ['none', 'Ended'], unknown: ['none', 'Unknown'], error: ['error', 'Error']
+		} satisfies Record<NonNullable<RunFacts['orchestrator']>['state'], string[]>;
+		for (const [state, [dot, label]] of Object.entries(expected) as [keyof typeof expected, string[]][]) {
+			assert.deepStrictEqual(shown(run({ orchestrator: { reference, state }, title: 'Daemon TITLE', said: 'Terminal text' })),
+				[dot, label, 'Daemon TITLE', true], state);
+		}
+		assert.deepStrictEqual(shown(run({ orchestrator: { reference, state: 'ended' }, lifecycle: 'ended', title: 'Daemon TITLE',
+			error: { source: 'resume', reason: 'Session is in use', at: 1 } })), ['error', 'Error · Session is in use', 'Daemon TITLE', true]);
 	});
 
 	test('PANEL-1.4: the second line says the last message sent to it - the task it was started with being the first - and before any, how its run began: never its title', () => {

@@ -13,7 +13,7 @@ fn hello_reports_protocol_build_and_capabilities() {
     let mut wire = DaemonTestClient::open(&home);
     let welcome = wire.hello("terminal", [1, 9], json!({}));
     let result = &welcome["result"];
-    assert_eq!(result["protocol"], 2, "{welcome}");
+    assert_eq!(result["protocol"], 3, "{welcome}");
     assert!(
         result["machine_id"]
             .as_str()
@@ -32,13 +32,12 @@ fn hello_reports_protocol_build_and_capabilities() {
     );
     assert_eq!(
         result["topics"],
-        json!(["agents", "screen", "messages", "windows", "machines"]),
+        json!(["agents", "screen", "machines"]),
         "{welcome}"
     );
     assert!(
         result["ops"].as_array().is_some_and(|ops| [
             "agent.start",
-            "agent.adopt",
             "agent.rename",
             "agent.send",
             "machine.add",
@@ -63,14 +62,12 @@ fn hello_reports_protocol_build_and_capabilities() {
         "invalid_argument"
     );
     assert!(wire.call("agent.screen", json!({ "agent": "w1" }))["result"]["text"].is_string());
-    let (_editor, logical) = ide_binding(
-        &home,
-        &json!({
-            "id": "protocol-probe", "label": "Editor", "workspace": "workspace",
-            "environment": "local", "folders": [home.project],
-        }),
+    let mut editor = DaemonTestClient::open(&home);
+    let editor = editor.hello("ide", DAEMON_RANGE, json!({}));
+    assert_eq!(
+        result["machine_id"], editor["result"]["machine_id"],
+        "{editor}"
     );
-    assert_eq!(result["machine_id"], logical.machine_id);
 }
 
 #[test]
@@ -84,7 +81,7 @@ fn a_client_without_a_shared_protocol_or_of_an_unknown_kind_is_refused() {
     );
     let mut newer = DaemonTestClient::open(&home);
     assert_eq!(
-        error_reason(&newer.hello("terminal", [3, 3], json!({}))),
+        error_reason(&newer.hello("terminal", [4, 4], json!({}))),
         "protocol_incompatible"
     );
     let mut stranger = DaemonTestClient::open(&home);
@@ -104,7 +101,7 @@ fn a_v1_client_is_refused_and_the_keeper_keeps_the_live_process() {
     assert_eq!(error_reason(&v1), "protocol_incompatible", "{v1}");
     assert_eq!(home.keeper_pid(), Some(keeper));
     assert!(alive(&agent.process));
-    assert_eq!(home.agent_from_list_json("kept").unwrap()["pid"], agent.pid);
+    assert_eq!(home.agent_record(&agent.id).unwrap()["pid"], agent.pid);
 }
 
 #[test]
@@ -137,16 +134,16 @@ fn requests_require_hello_and_reject_unknown_methods_operations_and_topics() {
 }
 
 #[test]
-fn a_start_with_no_program_or_no_terminal_size_is_an_invalid_argument() {
+fn a_start_with_no_cli_or_no_terminal_size_is_an_invalid_argument() {
     let home = TestHome::new("startargs");
     home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
     wire.hello("terminal", DAEMON_RANGE, json!({}));
     let cwd = home.project.to_string_lossy().into_owned();
     for args in [
-        json!({ "command": [], "cwd": cwd, "cols": 80, "rows": 24 }),
-        json!({ "command": [SH.as_str()], "cwd": cwd, "cols": 0, "rows": 24 }),
-        json!({ "command": [SH.as_str()], "cwd": cwd }),
+        json!({ "folder": cwd, "cols": 80, "rows": 24 }),
+        json!({ "cli": "fake", "folder": cwd, "cols": 0, "rows": 24 }),
+        json!({ "cli": "fake", "folder": cwd }),
     ] {
         assert_eq!(
             error_reason(&wire.call("agent.start", args.clone())),
@@ -189,9 +186,8 @@ fn malformed_requests_get_json_rpc_errors_and_oversized_lines_close_connection()
     // A valid hello must work after malformed requests.
     stream
         .write_all(
-            b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"hello\",\"params\":{\"protocol\":[1,\
-              1],\"build\":\"t\",\"kind\":\"terminal\",\"client\":{\"name\":\"t\",\
-              \"version\":\"1\"}}}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"hello\",\"params\":{\"protocol\":[3,\
+              3],\"build\":\"t\",\"kind\":\"terminal\"}}\n",
         )
         .unwrap();
     assert_eq!(response()["id"], 7);
@@ -269,11 +265,10 @@ fn unread_responses_backpressure_the_connection() {
     drop(stream);
 }
 
-/// The person's client reads the daemon's log: the last lines, oldest first, which say what was
-/// done and hold no message's text. A call that acts for an agent is refused, as the log names
-/// every agent and who sent whom a message.
+/// The person's client reads the last log lines, oldest first, without message text. A managed
+/// agent's tools do not expose the log.
 #[test]
-fn the_person_s_client_reads_the_daemon_s_log_and_an_agent_s_call_is_refused() {
+fn the_person_s_client_reads_the_daemon_s_log_and_an_agent_s_tool_is_refused() {
     let home = TestHome::new("daemonlog");
     let ada = home.start_named_fake("ada", &[]);
     home.run_facade_ok(&["send", "ada", "hello ada"]);
@@ -293,8 +288,7 @@ fn the_person_s_client_reads_the_daemon_s_log_and_an_agent_s_call_is_refused() {
         "the start, then the send: {lines:#?}"
     );
     assert!(at("hello ada").is_none(), "{lines:#?}");
-    let mut for_ada = DaemonTestClient::open(&home);
-    for_ada.hello("terminal", DAEMON_RANGE, json!({ "agent": ada.id }));
-    let refused = for_ada.call("daemon.log", json!({}));
-    assert_eq!(error_reason(&refused), "refused", "{refused}");
+    let mut managed = McpTestClient::open(&home, &ada.id);
+    let refused = managed.call("daemon.log", json!({}));
+    assert_eq!(refused["reason"], "unsupported", "{refused}");
 }

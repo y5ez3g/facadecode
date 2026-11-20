@@ -57,7 +57,7 @@ suite('The agent panel in Chromium', function () {
 	let tested: string;
 	let css: string;
 	/** The page's words: each its own key, the templates as the extension gives them. */
-	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}', startedBy: 'Started {0} by {1}',
+	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}', startedBy: 'Started {0} by {1}', copyReference: 'Copy Agent Reference',
 		ago: { now: 'just now', secs: '{0} secs ago', min: '{0} min ago', mins: '{0} mins ago', hr: '{0} hr ago', hrs: '{0} hrs ago', day: '{0} day ago', days: '{0} days ago', wk: '{0} wk ago', wks: '{0} wks ago', mo: '{0} mo ago', mos: '{0} mos ago', yr: '{0} yr ago', yrs: '{0} yrs ago' } };
 	/** Loads a new page of the panel, as the view does each time it shows. */
 	const load = async (bundle = shipped, saved?: unknown) => {
@@ -163,6 +163,23 @@ suite('The agent panel in Chromium', function () {
 		})()`), [true, true, true, 'dot none', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login',
 			['Fix the login', 'Agent 1 #a1', 'Started just now', 'main', '/project'],
 			'Title: Fix the login, Started just now, Path: /project']);
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { alias: 'a1', dot: 'none', stateText: 'Just done',
+			orchestrator: { cli: 'Claude Code', running: true }, line: '<daemon title>', label: 'Agent 1, a1, Claude Code, Just done',
+			details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: '<daemon title>' },
+				machine: { id: 'machine', label: 'Machine: ', value: 'devbox' },
+				address: { id: 'address', label: 'Address: ', value: 'a1@devbox' } }) })], { revision: 3 })`) });
+		assert.deepStrictEqual(await evaluate(`(() => {
+			const card = document.querySelector('.agent');
+			const facts = detailsOf(card);
+			card.querySelector('.details-button').click();
+			const copy = document.querySelector('.details .button');
+			copy.focus();
+			copy.click();
+			return [card.querySelector('.card-meta').textContent, card.querySelector('.title').textContent, card.getAttribute('aria-label'),
+				facts, copy.textContent, document.activeElement === copy, window.posted.filter(message => message.type === 'act').map(({ what, target }) => [what, target]), window.errors];
+		})()`), ['Just done · Claude Code ·', '<daemon title>', 'Agent 1, a1, Claude Code, Just done',
+			['<daemon title>', 'Agent 1', 'Started just now', 'main', '/project', 'devbox', 'a1@devbox'],
+			'Copy Agent Reference', true, [['copyReference', 'run-1']], []]);
 	});
 
 	test('PANEL-1.5: a card\'s details are five rows, each an icon and one line: its title, No title yet where it has none and Title unavailable where none can come, after the same Title: label; its name and short ID, an empty name its ID alone; when it started - and who started it; where it works, its icon its kind\'s; its path', async () => {
@@ -372,8 +389,9 @@ suite('The agent panel in Chromium', function () {
 	test('PANEL-1.5: open details follow their card when a card above it closes up and goes', async () => {
 		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
 		await evaluate(`document.querySelectorAll('.agent')[1].querySelector('.details-button').click()`);
-		// Past their entrance, which slides them 10 px
-		await wait(450);
+	// Measure after Chromium finishes the details' entrance transition.
+	await frames();
+	await evaluate(`Promise.all(document.querySelector('.details').getAnimations().map(animation => animation.finished))`);
 		const gap = `(() => { const card = document.querySelector('[data-run="run-2"]').getBoundingClientRect(), details = document.querySelector('.details').getBoundingClientRect(); return Math.round(details.top - card.bottom); })()`;
 		const before = await evaluate(gap);
 		await evaluate(`agents.splice(0, 1); redraw({ revision: 3, exited: ['run-1'] })`);
@@ -823,7 +841,7 @@ suite('The agent panel in Chromium', function () {
 	test('PANEL-3.2: a state the extension sends is drawn whichever of a card\'s fields it has - two cards of one name with their short IDs among them; none is refused', async () => {
 		// Every field a card can have: a field the host's cards gain that the page's check does not know fails here, as `repeated` did
 		const every: { readonly [K in keyof Required<Card>]: Card[K] } = {
-			pinned: true, runningOn: undefined, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
+			pinned: true, runningOn: undefined, orchestrator: undefined, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
 			dot: 'working', stateText: 'Working', line: '📨 Check the build',
 			details: { summary: { id: 'title', label: 'Title: ', value: 'Check the build' }, titleLabel: 'Title: ', untitled: 'No title yet', startedBy: 'Maker #a7', location: { id: 'location', label: 'Location: ', value: 'main', kind: 'repo' }, path: { id: 'path', label: 'Path: ', value: '/project' }, description: { title: 'Title: Check the build', place: 'Path: /project' } },
 			label: 'Ada, #a1, Working', startedAt: Date.now(),
@@ -1354,12 +1372,26 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; the ended context only for Dismiss Agent; never Pin or Unpin, its button\'s', async () => {
+	test('PANEL-2.2, 4.2: a card\'s menu carries its exact run and the action context for its engine', async () => {
 		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); agents[1] = newCard(2, { menu: { pin: true, moveUp: true, moveDown: false } }); agents[2] = newCard(3, { pinned: true, menu: { unpin: true, dismiss: true, moveUp: false, moveDown: false } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 4).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
 			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-2', webviewMoveUp: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-3', webviewAgentEnded: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-4', preventDefaultContextMenuItems: true }
+		]);
+		assert.deepStrictEqual(await evaluate(`(() => {
+			agents = [
+				newCard(1, { runId: 'local/a1', orchestrator: { cli: 'Claude Code', running: true }, menu: { pin: true, moveUp: false, moveDown: false } }),
+				newCard(2, { runId: 'remote/a1', pinned: true, orchestrator: { cli: 'Claude Code', running: false }, menu: { unpin: true, moveUp: false, moveDown: false } })
+			];
+			redraw({ revision: 8 });
+			return [...document.querySelectorAll('.agent')].filter(card => !card.classList.contains('closing')).map(card =>
+				[JSON.parse(card.dataset.vscodeContext), card.querySelector('.pin-button').hidden, Boolean(card.querySelector('.pin'))]);
+		})()`), [
+			[{ webviewSection: 'agent', run_id: 'local/a1', webviewAgentRunning: true, webviewAgentPinned: false,
+				webviewAgentPinnable: true, preventDefaultContextMenuItems: true }, true, false],
+			[{ webviewSection: 'agent', run_id: 'remote/a1', webviewAgentRunning: false, webviewAgentPinned: true,
+				webviewAgentPinnable: false, preventDefaultContextMenuItems: true }, true, true]
 		]);
 	});
 
@@ -2004,9 +2036,13 @@ suite('The agent panel in Chromium', function () {
 		await evaluate('scrollTo(0, 50)');
 		// PANEL-3.3: the scroll event reveals the bar asynchronously, and CDP can acknowledge touch input before Chromium applies it.
 		await until(() => evaluate(`scrollY === 50 && !document.querySelector('.facade-scrollbar').hidden && document.querySelector('.facade-scrollbar').classList.contains('visible')`), 5_000, 'The scrollbar did not become ready for touch.');
-		await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 395, y: 20 }] });
+		const touch = await evaluate(`(() => {
+			const box = document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect();
+			return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+		})()`) as { x: number; y: number };
+		await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touch] });
 		await until(() => evaluate(`document.querySelector('.facade-scrollbar').hasPointerCapture(window.pointer) && document.querySelector('.facade-scrollbar').classList.contains('dragging')`), 5_000, 'The touch did not capture the scrollbar.');
-		await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 395, y: 150 }] });
+		await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: touch.x, y: touch.y + 130 }] });
 		await until(() => evaluate('scrollY > 50'), 5_000, 'The captured touch did not scroll the page.');
 		assert.ok(await evaluate('scrollY') > 50);
 		await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });

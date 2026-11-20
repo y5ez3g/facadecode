@@ -73,6 +73,12 @@ pub struct Override {
     pub value: Option<String>,
 }
 
+/// The value of a CLI choice, as a literal option argument or as a configuration value.
+pub enum ChoiceValue {
+    Option(String),
+    Override(String),
+}
+
 /// One piece of a CLI's arguments as its parser reads it: where it starts, how many arguments it
 /// takes up, and what it is.
 #[derive(Debug, PartialEq)]
@@ -162,16 +168,31 @@ impl ArgsGrammar {
     /// What is wrong with `args`, the entry's `args` at `setting` (CONFIGURATION-3.1, 4.1). Each
     /// problem names the place and the option or key, never a value, which may be a secret.
     pub fn problems(&self, args: &[String], setting: &str) -> Vec<String> {
+        self.problems_at(args, setting)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect()
+    }
+
+    /// The problems with the index of their source argument.
+    pub(crate) fn problems_at(&self, args: &[String], setting: &str) -> Vec<(usize, String)> {
         let say = |refused: Refused| match refused {
-            Refused::Option { index, option } => format!(
-                "{setting}[{index}] is {option}, which Facade sets or decides itself; remove it"
+            Refused::Option { index, option } => (
+                index,
+                format!(
+                    "{setting}[{index}] is {option}, which Facade sets or decides itself; remove it"
+                ),
             ),
-            Refused::Key { index, key } => {
-                format!("{setting}[{index}] sets {key}, which Facade sets itself; remove it")
-            }
-            Refused::Positional { index } => format!(
-                "{setting}[{index}] is not an option: Facade gives the CLI its task and folder \
-                 itself, so args holds only options and their values"
+            Refused::Key { index, key } => (
+                index,
+                format!("{setting}[{index}] sets {key}, which Facade sets itself; remove it"),
+            ),
+            Refused::Positional { index } => (
+                index,
+                format!(
+                    "{setting}[{index}] is not an option: Facade gives the CLI its task and folder \
+                     itself, so args holds only options and their values"
+                ),
             ),
         };
         self.refused(args).into_iter().map(say).collect()
@@ -272,6 +293,36 @@ impl ArgsGrammar {
             .any(|piece| names(&piece))
     }
 
+    /// The last value given for a choice. A CLI option takes precedence over a configuration
+    /// override. An option that appeared without a value still takes precedence.
+    pub fn choice_value(
+        &self,
+        args: &[String],
+        options: &[String],
+        key: Option<&str>,
+    ) -> Option<ChoiceValue> {
+        let mut option = None;
+        let mut config = None;
+        for piece in self.read(args).take_while(|piece| piece.kind != Kind::End) {
+            match piece.kind {
+                Kind::Option { name, values, .. }
+                    if options.iter().any(|option| self.is_option(&name, option)) =>
+                {
+                    option = Some(values.into_iter().next().map(ChoiceValue::Option));
+                }
+                Kind::Override { text: Some(text) }
+                    if key.is_some_and(|key| key_of(&text).trim() == key) =>
+                {
+                    config = text
+                        .split_once('=')
+                        .map(|(_, value)| ChoiceValue::Override(value.to_string()));
+                }
+                _ => {}
+            }
+        }
+        option.unwrap_or(config)
+    }
+
     /// The index of the `--` that ends the options of `args`, else their length.
     pub fn end_of_options(&self, args: &[String]) -> usize {
         let end = self.read(args).find(|piece| piece.kind == Kind::End);
@@ -365,7 +416,7 @@ impl ArgsGrammar {
 
     /// A run of short options at `at`, `-cp`: each letter is an option up to the first that takes
     /// a value, which takes the rest of the run, or else the next argument. The piece names the
-    /// whole run, except a value glued right after the first letter, which names that letter.
+    /// option that takes the value, or the whole run if none is known to take one.
     fn read_run(&self, args: &[String], at: usize, chars: &[char]) -> (usize, Kind) {
         let arg = &args[at];
         let takes_value = self.clusters.as_deref().unwrap_or_default();
@@ -373,22 +424,20 @@ impl ArgsGrammar {
         let valued = letters
             .take_while(|(_, letter)| letter.is_ascii_alphanumeric())
             .find(|(_, letter)| takes_value.contains(&format!("-{letter}")));
-        let whole_run = |(span, kind): (usize, Kind)| match kind {
-            Kind::Option { values, .. } => (span, option(arg.clone(), Written::Run, values)),
+        let as_run = |(span, kind): (usize, Kind)| match kind {
+            Kind::Option { name, values, .. } => (span, option(name, Written::Run, values)),
             kind => (span, kind),
         };
         let Some((place, letter)) = valued else {
             // No letter takes a value: the last may be one Facade does not know that takes one.
-            return whole_run(self.read_apart(args, at, arg));
+            return as_run(self.read_apart(args, at, arg));
         };
+        let short = format!("-{letter}");
         let rest: String = chars[place + 1..].iter().collect();
         match (rest.is_empty(), place) {
-            (true, _) => whole_run(self.read_apart(args, at, &format!("-{letter}"))),
-            (false, 1) => (
-                1,
-                option(format!("-{letter}"), Written::Attached, vec![rest]),
-            ),
-            (false, _) => (1, option(arg.clone(), Written::Run, vec![rest])),
+            (true, _) => as_run(self.read_apart(args, at, &short)),
+            (false, 1) => (1, option(short, Written::Attached, vec![rest])),
+            (false, _) => (1, option(short, Written::Run, vec![rest])),
         }
     }
 
@@ -700,6 +749,25 @@ mod tests {
         assert!(refused("codex", &["-pwork", "-pmy-model"]).is_empty());
         assert_eq!(refused("opencode", &["-cs", "abc"]), ["0:-c"]);
         assert_eq!(refused("muse", &["-wc"]), ["0:-w"]);
+        let grammar = &find("codex").unwrap().unwrap().arguments;
+        let options = ["--model", "-m"].map(String::from);
+        let args = [
+            "-mgpt-first",
+            "-xm",
+            "gpt-saved",
+            "-c",
+            "model=\"gpt-config\"",
+        ]
+        .map(String::from);
+        assert!(matches!(
+            grammar.choice_value(&args, &options, Some("model")),
+            Some(ChoiceValue::Option(value)) if value == "gpt-saved"
+        ));
+        let config = ["-c", "model=\"gpt-config\""].map(String::from);
+        assert!(matches!(
+            grammar.choice_value(&config, &options, Some("model")),
+            Some(ChoiceValue::Override(value)) if value == "\"gpt-config\""
+        ));
     }
 
     /// A configuration override is refused where its key is one Facade sets, the parent of one or
@@ -834,6 +902,11 @@ mod tests {
     fn a_refused_argument_is_said_by_its_place_never_its_value() {
         let grammar = &find("codex").unwrap().unwrap().arguments;
         let args = ["-c", "model=\"sk-secret\"", "sk-positional"].map(String::from);
+        let indexed = grammar.problems_at(&args, "clis.codex.args");
+        assert_eq!(
+            indexed.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            [0, 2]
+        );
         assert_eq!(
             grammar.problems(&args, "clis.codex.args"),
             [

@@ -4,16 +4,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use facade_base::address::{display_machine_selector, exact_machine_selector};
-use facade_base::daemon::{
-    AgentInfo, AgentMachineView, AgentsChange, AgentsSnapshot, AgentsTopic, AgentsUpdate,
-    AgentsWatchArgs, WatchParams,
-};
+use facade_base::daemon::WatchParams;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
-use facade_base::machine::{
-    AgentRef, Caller, MachineIdentity, MachineInfo, MachineResponseState, MachineStateRow,
-};
+use facade_base::machine::{MachineInfo, MachineResponseState, MachineStateRow};
 use facade_base::operations::Topic;
+use facade_base::v3::{
+    AgentInfo, AgentMachineState, AgentSyncState, AgentsChange, AgentsSnapshot, AgentsTopic,
+    Caller, NoArgs,
+};
 use tokio::task::AbortHandle;
 
 use crate::Daemon;
@@ -32,9 +30,15 @@ struct Source {
 }
 
 impl Source {
-    fn view(&self) -> AgentMachineView {
-        AgentMachineView {
-            row: self.row.clone(),
+    fn view(&self) -> AgentMachineState {
+        let state = match self.row.state {
+            MachineResponseState::Responded => AgentSyncState::Synced,
+            MachineResponseState::Waiting => AgentSyncState::Pending,
+            _ => AgentSyncState::Unreachable,
+        };
+        AgentMachineState {
+            state,
+            machine_id: self.row.machine_id.clone(),
             agents: (self.row.state == MachineResponseState::Responded)
                 .then(|| self.agents.values().cloned().collect()),
         }
@@ -52,7 +56,7 @@ impl Source {
 }
 
 impl Daemon {
-    pub(crate) fn remote_agent_states(&self) -> Vec<AgentMachineView> {
+    pub(crate) fn remote_agent_states(&self) -> Vec<AgentMachineState> {
         self.remote_agents
             .lock()
             .unwrap()
@@ -72,7 +76,7 @@ impl Daemon {
                     .any(|row| &row.machine_id == id && !row.is_unreachable())
             {
                 source.reset(MachineResponseState::Unreachable, None);
-                let _ = self.changes.send(AgentsUpdate::MachineState {
+                let _ = self.remote_changes.send(AgentsChange::SyncUpdated {
                     machine: source.view(),
                 });
             }
@@ -107,7 +111,7 @@ impl Daemon {
     ) {
         source.reset(MachineResponseState::Waiting, None);
         source.route = Some(route);
-        let _ = self.changes.send(AgentsUpdate::MachineState {
+        let _ = self.remote_changes.send(AgentsChange::SyncUpdated {
             machine: source.view(),
         });
         let generation = source.generation;
@@ -138,7 +142,7 @@ impl Daemon {
                     };
                     source.task.take();
                     source.reset(state, received_at);
-                    let _ = daemon.changes.send(AgentsUpdate::MachineState {
+                    let _ = daemon.remote_changes.send(AgentsChange::SyncUpdated {
                         machine: source.view(),
                     });
                     source.generation
@@ -180,9 +184,7 @@ impl Daemon {
         machine_id: &str,
         generation: u64,
     ) -> Result<(), RequestFailure> {
-        let args = AgentsWatchArgs {
-            member_machine_id: Some(self.machine_id.clone()),
-        };
+        let args = NoArgs {};
         let caller = Caller::Terminal {
             machine_id: self.machine_id.clone(),
         };
@@ -197,18 +199,16 @@ impl Daemon {
         let received_at = subscription.received_at;
         let snapshot: AgentsSnapshot = decode_arguments(std::mem::take(&mut subscription.snapshot))
             .map_err(|error| RequestFailure::Failed(error, Some(received_at)))?;
-        let machines = self
-            .machine_table()
-            .map_err(|error| RequestFailure::Failed(error, Some(received_at)))?;
         let agents = snapshot
             .agents
             .into_iter()
-            .filter(|agent| self.remote_member(agent, machine_id))
+            .filter(|agent| agent.machine_id == machine_id)
             .map(|mut agent| {
-                self.project_agent(&mut agent, &machines);
-                (agent.agent_id.clone(), agent)
+                agent.address = self.agent_address(&agent.reference())?;
+                Ok((agent.agent_id.clone(), agent))
             })
-            .collect();
+            .collect::<Result<BTreeMap<_, _>, ErrorBody>>()
+            .map_err(|error| RequestFailure::Failed(error, Some(received_at)))?;
         {
             let mut view = self.remote_agents.lock().unwrap();
             let Some(source) = view
@@ -222,7 +222,7 @@ impl Daemon {
             source
                 .row
                 .observe(MachineResponseState::Responded, Some(received_at));
-            let _ = self.changes.send(AgentsUpdate::MachineState {
+            let _ = self.remote_changes.send(AgentsChange::SyncUpdated {
                 machine: source.view(),
             });
         }
@@ -232,10 +232,9 @@ impl Daemon {
             let mut change: AgentsChange = decode_arguments(change.value)
                 .map_err(|error| RequestFailure::Failed(error, Some(received_at)))?;
             if let AgentsChange::Updated { agent } = &mut change {
-                let machines = self
-                    .machine_table()
+                agent.address = self
+                    .agent_address(&agent.reference())
                     .map_err(|error| RequestFailure::Failed(error, Some(received_at)))?;
-                self.project_agent(agent, &machines);
             }
             let mut view = self.remote_agents.lock().unwrap();
             let Some(source) = view
@@ -245,61 +244,21 @@ impl Daemon {
             else {
                 return Ok(());
             };
-            let update = match change {
-                AgentsChange::Updated { agent } if self.remote_member(&agent, machine_id) => {
+            match &change {
+                AgentsChange::Updated { agent } if agent.machine_id == machine_id => {
                     source.agents.insert(agent.agent_id.clone(), *agent.clone());
-                    AgentsUpdate::Updated { agent }
                 }
                 AgentsChange::Removed {
                     machine_id: source_id,
                     agent_id,
+                    ..
                 } if source_id == machine_id => {
-                    source.agents.remove(&agent_id);
-                    AgentsUpdate::Removed {
-                        machine_id: source_id,
-                        agent_id,
-                    }
+                    source.agents.remove(agent_id);
                 }
                 _ => continue,
             };
-            let _ = self.changes.send(update);
+            let _ = self.remote_changes.send(change);
         }
         Ok(())
-    }
-
-    fn remote_member(&self, agent: &AgentInfo, machine_id: &str) -> bool {
-        agent.machine_id == machine_id
-            && !agent.guest
-            && agent
-                .windows
-                .iter()
-                .any(|window| window.machine_id == self.machine_id)
-    }
-
-    pub(crate) fn project_agent(&self, agent: &mut AgentInfo, machines: &[MachineInfo]) {
-        let reference = AgentRef {
-            machine_id: agent.machine_id.clone(),
-            agent_id: agent.agent_id.clone(),
-        };
-        let known: Vec<_> = machines
-            .iter()
-            .map(|machine| MachineIdentity {
-                machine_id: machine.machine_id.clone(),
-                name: machine.name.clone(),
-            })
-            .collect();
-        let selector = known
-            .iter()
-            .find(|identity| identity.machine_id == agent.machine_id)
-            .map_or_else(
-                || exact_machine_selector(&agent.machine_id),
-                |identity| display_machine_selector(identity, &known),
-            );
-        agent.address = Some(reference.address(&selector));
-        agent.label = Some(reference.label(&self.machine_id, &selector));
-        agent.unreachable = agent.machine_id != self.machine_id
-            && !machines
-                .iter()
-                .any(|machine| machine.machine_id == agent.machine_id && !machine.is_unreachable());
     }
 }

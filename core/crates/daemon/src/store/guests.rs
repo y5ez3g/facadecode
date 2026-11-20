@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::Store;
 
@@ -48,14 +48,26 @@ impl GuestTable {
     }
 
     /// Commits a guest's record as it joins.
+    #[cfg(test)]
     pub(crate) fn keep_guest(&self, guest: &GuestRecord) -> anyhow::Result<()> {
+        self.keep_snapshot(guest, None)
+    }
+
+    /// Commits a guest and its YOLO together. A guest's existing snapshot takes precedence.
+    pub(crate) fn keep_snapshot(
+        &self,
+        guest: &GuestRecord,
+        yolo: Option<bool>,
+    ) -> anyhow::Result<()> {
         self.0.with(
             || format!("keep the record of guest {}", guest.agent_id),
             |connection| {
                 connection.execute(
-                    "INSERT OR REPLACE INTO guests \
-                     (agent_id, name, cli, session, cwd, created_at, heard_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO guests (agent_id, name, cli, session, cwd, created_at, heard_at, yolo) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                     ON CONFLICT(agent_id) DO UPDATE SET name = excluded.name, cli = excluded.cli, \
+                     session = excluded.session, cwd = excluded.cwd, created_at = excluded.created_at, \
+                     heard_at = excluded.heard_at, yolo = COALESCE(guests.yolo, excluded.yolo)",
                     params![
                         guest.agent_id,
                         guest.name,
@@ -64,6 +76,7 @@ impl GuestTable {
                         guest.cwd,
                         guest.created_at,
                         guest.heard_at,
+                        yolo,
                     ],
                 )
             },
@@ -71,7 +84,40 @@ impl GuestTable {
         Ok(())
     }
 
+    /// Returns the saved YOLO snapshot if the record was created by a daemon that saved one.
+    pub(crate) fn snapshot_yolo(&self, agent_id: &str) -> anyhow::Result<Option<bool>> {
+        self.0.with(
+            || format!("read the YOLO snapshot of guest {agent_id}"),
+            |connection| {
+                let yolo = connection
+                    .query_row(
+                        "SELECT yolo FROM guests WHERE agent_id = ?1",
+                        [agent_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                Ok(yolo.flatten())
+            },
+        )
+    }
+
+    /// Changes only the name of a guest that is still present.
+    pub(crate) fn rename_guest(&self, agent_id: &str, name: &str) -> anyhow::Result<bool> {
+        self.0.with(
+            || format!("save the name of guest {agent_id}"),
+            |connection| {
+                connection
+                    .execute(
+                        "UPDATE guests SET name = ?2 WHERE agent_id = ?1",
+                        [agent_id, name],
+                    )
+                    .map(|count| count == 1)
+            },
+        )
+    }
+
     /// Commits that Facade heard from guest `agent_id` at `at`.
+    #[cfg(test)]
     pub(crate) fn heard_from_guest(&self, agent_id: &str, at: &str) -> anyhow::Result<()> {
         self.0.with(
             || format!("note that guest {agent_id} was heard from"),

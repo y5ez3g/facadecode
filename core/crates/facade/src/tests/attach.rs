@@ -7,39 +7,46 @@ use facade_base::process::ProcessExit;
 use serde_json::json;
 
 use crate::Opening;
-use crate::attach::{AttachEnd, RECONNECTING, opening_line, result_line, unsent_line};
+use crate::attach::{
+    AttachEnd, RECONNECTING, opening_line, reconnected_line, result_line, unsent_line,
+};
 
-fn exit(fields: serde_json::Value) -> ProcessExit {
+fn exit(fields: serde_json::Value) -> Option<ProcessExit> {
     let mut exit = json!({ "at": "2026-11-17T23:21:01.000Z" });
     exit.as_object_mut()
         .unwrap()
         .extend(fields.as_object().unwrap().clone());
-    serde_json::from_value(exit).expect("a valid exit")
+    Some(serde_json::from_value(exit).expect("a valid exit"))
 }
 
 #[test]
 fn the_line_before_the_screen_says_how_to_detach() {
     let pixel = || "Pixel".to_string();
     assert_eq!(
-        opening_line(&Opening::Started { name: pixel() }, "a3"),
-        "Started a3 (Pixel). Press Ctrl-] to detach."
+        opening_line(&Opening::Started { name: pixel() }, "a3@devbox"),
+        "Started a3@devbox (Pixel). Press Ctrl-] to detach."
     );
     assert_eq!(
-        opening_line(&Opening::Resumed { name: pixel() }, "a3"),
-        "Resumed a3 (Pixel). Press Ctrl-] to detach."
+        opening_line(&Opening::Resumed { name: pixel() }, "a3@devbox"),
+        "Resumed a3@devbox (Pixel). Press Ctrl-] to detach."
     );
     assert_eq!(
-        opening_line(&Opening::Attached, "a3"),
-        "Attached to a3. Press Ctrl-] to detach."
+        opening_line(&Opening::Attached, "a3@devbox"),
+        "Attached to a3@devbox. Press Ctrl-] to detach."
     );
 }
 
 #[test]
-fn the_reconnect_row_says_keys_may_be_lost() {
+fn reconnect_rows_say_when_keys_are_discarded_and_how_many_bytes_were_lost() {
     assert_eq!(
         RECONNECTING,
-        "Reconnecting to Facade. Recent keys may be lost."
+        "Connection lost. Reconnecting. Keys typed while disconnected are not sent."
     );
+    assert_eq!(
+        reconnected_line(12).as_deref(),
+        Some("Keys not sent: 12 bytes.")
+    );
+    assert_eq!(reconnected_line(0), None);
 }
 
 #[test]
@@ -70,6 +77,10 @@ fn the_line_after_the_screen_says_how_the_attachment_ended() {
     );
     assert_eq!(
         ended(AttachEnd::AgentExited(exit(json!({})))),
+        "a3 ended; its exit status is unknown."
+    );
+    assert_eq!(
+        ended(AttachEnd::AgentExited(None)),
         "a3 ended; its exit status is unknown."
     );
     assert_eq!(ended(AttachEnd::Removed), "error: a3 was removed");

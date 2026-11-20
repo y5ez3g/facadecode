@@ -1,23 +1,16 @@
-//! What the commands print: tables, the words for states, relative times, `inspect`, `status`,
-//! integrations and sends.
+//! The words and structured output of the terminal commands.
 
-use std::path::Path;
-use std::time::Duration;
-
-use facade_base::daemon::{HelloResult, IntegrationInfo, Message, PartState};
-use facade_base::machine::{AgentListResult, MachineListResult};
+use facade_base::v3::{AgentListResult, AgentListRow, SendResult, StatusResult};
 use serde_json::{Value, json};
 
-use super::{agent, before, input, inspection, now};
+use super::{agent, before, inspection, now};
 use crate::commands::{
-    agent_list_json, ago, input_words, inspect_text, integration_status, integration_text,
-    integrations_text, list_text, part_words, quiet_text, sent, state_words, status_text,
-    tools_words,
+    Inspection, age, agent_list_json, list_text, quiet_text, sent, sleeping_text, state_words,
+    status_text,
 };
-use crate::machine::machine_list_json;
 use crate::table;
 
-/// `text` with each line's trailing spaces removed: the last column's padding is no one's to read.
+/// Remove the last column's padding from each line.
 fn trimmed(text: &str) -> String {
     text.lines()
         .map(str::trim_end)
@@ -26,78 +19,48 @@ fn trimmed(text: &str) -> String {
 }
 
 #[test]
-fn agent_list_json_projects_the_same_settled_v2_response() {
-    for (status, state, responded, unreachable) in [
-        ("answered", "responded", true, false),
-        ("unavailable", "unreachable", false, true),
-        ("timed_out", "timed_out", false, false),
-        ("error", "failed", true, false),
+fn agent_list_json_projects_the_daemons_public_rows_and_machine_states() {
+    let rows = json!([{
+        "id": "a3@peer", "name": "Pixel", "type": "managed",
+        "state": "working", "cli": "claude", "title": "Review",
+        "folder": "/work/site", "started_at": before(60),
+    }]);
+    let mut wire_rows = rows.clone();
+    wire_rows[0]["reference"] = json!({ "agent_id": "a3", "machine_id": "peer-id" });
+
+    for (state, status) in [
+        ("online", "answered"),
+        ("online", "timed_out"),
+        ("online", "error"),
+        ("connecting", "unavailable"),
+        ("sleeping", "unavailable"),
+        ("unreachable", "unavailable"),
+        ("ssh_interaction_required", "unavailable"),
     ] {
-        let mut wire_row = json!({
+        let mut machine = json!({
             "machine_id": "401b070c-c174-4c94-abb1-cd1efda7a62b",
-            "short_id": "401b070cc174",
+            "short_id": "401b070c",
             "name": "peer",
+            "selector": "peer",
+            "state": state,
             "status": status,
         });
-        if responded {
-            wire_row["build"] = json!("0.1.6+test");
-            wire_row["answered_at"] = json!("2026-11-18T20:00:55.123Z");
+        if state == "online" {
+            machine["build"] = json!("0.1.6+test");
+        } else {
+            machine["last_seen"] = json!(before(60));
         }
-        let wire = json!({ "agents": [], "machines": [wire_row.clone()] });
+        if state == "unreachable" || state == "ssh_interaction_required" {
+            machine["ssh_error"] = json!("Could not connect");
+        }
+        let wire = json!({ "agents": wire_rows, "machines": [machine] });
         let list: AgentListResult = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(serde_json::to_value(&list).unwrap(), wire);
-
-        let mut expected = wire_row;
-        let fields = expected.as_object_mut().unwrap();
-        fields.shift_remove("status");
-        if let Some(at) = fields.shift_remove("answered_at") {
-            fields.insert("responded_at".into(), at);
-        }
-        fields.insert("state".into(), json!(state));
-        if unreachable {
-            fields.insert("unreachable".into(), json!(true));
-        }
         assert_eq!(
-            agent_list_json(list).unwrap(),
-            json!({ "agents": [], "machines": [expected] })
+            agent_list_json(&list).unwrap(),
+            json!({ "agents": rows, "machines": [machine] })
         );
     }
-}
-
-#[test]
-fn machine_list_json_preserves_routes_and_connection_details_from_the_same_v2_reply() {
-    let wire = json!({ "machines": [
-        {
-            "machine_id": "here", "boot_id": "boot", "name": "local", "build": "0.1.6+test",
-            "route": [],
-            "connections": [{
-                "machine_id": "peer", "initiator_machine_id": "here", "kind": "temporary",
-                "state": "connected",
-            }],
-        },
-        {
-            "machine_id": "peer", "name": "reachable",
-            "route": ["relay", "peer"],
-            "connections": [{
-                "machine_id": "here", "initiator_machine_id": "here", "kind": "saved",
-                "ssh_destination": "qa@peer", "remote_home": "/home/qa/facade", "state": "unavailable",
-            }],
-        },
-        {
-            "machine_id": "closed", "name": "offline",
-            "connections": [{
-                "machine_id": "here", "initiator_machine_id": "here", "kind": "saved",
-                "ssh_destination": "qa@closed", "state": "ssh_interaction_required",
-                "ssh_interaction": { "reason": "needs a login", "command": ["ssh", "qa@closed"] },
-            }],
-        },
-    ] });
-    let list: MachineListResult = serde_json::from_value(wire.clone()).unwrap();
-    let mut expected = wire.clone();
-    expected["machines"][1]["connections"][0]["state"] = json!("disconnected");
-    expected["machines"][2]["unreachable"] = json!(true);
-    assert_eq!(machine_list_json(&list).unwrap(), expected);
-    assert_eq!(serde_json::to_value(&list).unwrap(), wire);
 }
 
 #[test]
@@ -125,18 +88,17 @@ fn a_table_pads_each_column_to_its_widest_cell_and_keeps_each_row_on_one_line() 
 }
 
 #[test]
-fn relative_times_read_as_a_person_says_them() {
-    let at = |seconds: u64| now() - Duration::from_secs(seconds);
+fn age_uses_whole_minutes_hours_or_days() {
     for (seconds, words) in [
-        (12, "12 seconds ago"),
-        (61, "1 minute ago"),
-        (5 * 60 + 10, "5 minutes ago"),
-        (60 * 60 + 5, "about an hour ago"),
-        (3 * 3600 + 300, "3 hours ago"),
-        (2 * 86400 + 3600, "2 days ago"),
-        (21 * 86400 + 3600, "3 weeks ago"),
+        (12, "0m"),
+        (61, "1m"),
+        (5 * 60 + 10, "5m"),
+        (60 * 60 + 5, "1h"),
+        (3 * 3600 + 300, "3h"),
+        (2 * 86400 + 3600, "2d"),
+        (21 * 86400 + 3600, "21d"),
     ] {
-        assert_eq!(ago(at(seconds), now()), words, "{seconds} seconds");
+        assert_eq!(age(&before(seconds), now()), words, "{seconds} seconds");
     }
 }
 
@@ -187,196 +149,42 @@ fn every_state_has_its_words() {
             "ended",
         ),
         (json!({ "state": "unknown" }), "unknown"),
+        (json!({ "type": "guest", "state": "online" }), "online"),
     ] {
         assert_eq!(state_words(&agent(changes.clone())), words, "{changes}");
     }
 }
 
 #[test]
-fn input_tools_and_part_states_have_their_words() {
-    assert_eq!(input_words(&input("usable", None)), "empty");
-    assert_eq!(input_words(&input("draft", None)), "draft");
-    assert_eq!(
-        input_words(&input("draft", Some((3, 1)))),
-        "draft (3 more lines above, 1 below)"
-    );
-    assert_eq!(input_words(&input("interaction", None)), "menu or question");
-    assert_eq!(input_words(&input("unknown", None)), "unknown");
-
-    let tools = |state: &str| tools_words(&agent(json!({ "tools_state": state })));
-    assert_eq!(tools("available"), "available");
-    assert_eq!(tools("connecting"), "connecting");
-    assert_eq!(tools("not_injected"), "not provided");
-    let unavailable = tools_words(&agent(
-        json!({ "tools_state": "unavailable", "tools_reason": "disconnected" }),
-    ));
-    assert!(
-        unavailable.starts_with("unavailable: ") && unavailable.len() > "unavailable: ".len(),
-        "{unavailable}"
-    );
-
-    assert_eq!(part_words(PartState::AsWritten), "up to date");
-    assert_eq!(part_words(PartState::Changed), "needs attention");
-    assert_eq!(part_words(PartState::Missing), "no Facade settings");
-    assert_eq!(part_words(PartState::Unknown), "unknown");
-}
-
-/// An integration of `cli` with parts in `states`, added seven days before [`now`] where any part is.
-fn integration(cli: &str, states: &[&str]) -> IntegrationInfo {
-    let parts: Vec<Value> = states
-        .iter()
-        .enumerate()
-        .map(|(n, state)| json!({ "file": format!("/home/you/.{cli}/file{n}"), "state": state }))
-        .collect();
-    let mut info = json!({ "cli": cli, "parts": parts });
-    if states.contains(&"as_written") || states.contains(&"changed") {
-        info["added_at"] = json!(before(7 * 86400 + 60));
-    }
-    serde_json::from_value(info).expect("a valid integration")
-}
-
-#[test]
-fn an_integration_s_status_takes_the_first_rule_that_matches() {
-    for (states, status) in [
-        (&["as_written", "unknown"][..], "unknown"),
-        (&["as_written", "as_written"][..], "added"),
-        (&["missing", "missing"][..], "not added"),
-        (&["as_written", "missing"][..], "needs attention"),
-        (&["changed", "as_written"][..], "needs attention"),
-    ] {
-        assert_eq!(
-            integration_status(&integration("claude", states)),
-            status,
-            "{states:?}"
-        );
-    }
-}
-
-#[test]
-fn the_integration_list_is_a_table_with_when_each_was_added() {
-    let list = [
-        integration("claude", &["as_written", "as_written"]),
-        integration("codex", &["missing", "missing"]),
-        integration("agy", &["changed", "missing"]),
-    ];
-    assert_eq!(
-        trimmed(&integrations_text(&list, now())),
-        "CLI      STATE             ADDED\n\
-         claude   added             7 days ago\n\
-         codex    not added\n\
-         agy      needs attention   7 days ago"
-    );
-}
-
-#[test]
-fn adding_and_removing_show_each_part() {
-    let info: IntegrationInfo = serde_json::from_value(json!({
-        "cli": "claude",
-        "added_at": before(10),
-        "parts": [
-            { "file": "/home/you/.claude/settings.json", "state": "as_written" },
-            { "file": "claude mcp", "state": "as_written" },
-        ],
-    }))
+fn the_list_is_one_row_per_agent_and_quiet_prints_addresses() {
+    let title = "A title with forty visible characters and some more";
+    let rows: Vec<AgentListRow> = serde_json::from_value(json!([
+        {
+            "id": "a5@laptop", "name": "Visor", "type": "guest", "state": "online",
+            "cli": "cursor", "folder": "/work/site", "started_at": before(60),
+        },
+        {
+            "id": "a3@devbox", "name": "Pixel", "type": "managed", "state": "working",
+            "cli": "claude", "title": title, "folder": "/work/site", "started_at": before(120),
+        },
+        {
+            "id": "a4@devbox", "name": "Ada", "type": "managed", "state": "waiting_for_you",
+            "cli": "codex", "folder": "/work/site", "started_at": before(300),
+        },
+    ]))
     .unwrap();
+    let rows: Vec<&AgentListRow> = rows.iter().collect();
     assert_eq!(
-        trimmed(&integration_text(&info, false)),
-        "Added Facade to claude.\n\
-        \x20 /home/you/.claude/settings.json   up to date\n\
-        \x20 Claude Code MCP servers           up to date"
+        trimmed(&list_text(&rows, now())),
+        "ID          NAME    TYPE      STATE             CLI      TITLE                                      FOLDER       AGE\n\
+         a5@laptop   Visor   guest     online            cursor   -                                          /work/site   1m\n\
+         a3@devbox   Pixel   managed   working           claude   A title with forty visible characters a…   /work/site   2m\n\
+         a4@devbox   Ada     managed   waiting_for_you   codex    -                                          /work/site   5m"
     );
-    let removed: IntegrationInfo = serde_json::from_value(json!({
-        "cli": "claude",
-        "parts": [
-            { "file": "/home/you/.claude/settings.json", "state": "missing" },
-            { "file": "claude mcp", "state": "missing" },
-        ],
-    }))
-    .unwrap();
-    assert_eq!(
-        trimmed(&integration_text(&removed, true)),
-        "Removed Facade from claude.\n\
-        \x20 /home/you/.claude/settings.json   no Facade settings\n\
-        \x20 Claude Code MCP servers           no Facade settings"
-    );
-    let left: IntegrationInfo = serde_json::from_value(json!({
-        "cli": "claude",
-        "parts": [
-            { "file": "/home/you/.claude/settings.json", "state": "changed" },
-            { "file": "claude mcp", "state": "missing" },
-        ],
-    }))
-    .unwrap();
-    assert!(
-        integration_text(&left, true).starts_with("Check claude's settings to confirm removal.\n"),
-        "{}",
-        integration_text(&left, true)
-    );
+    assert_eq!(quiet_text(&rows), "a5@laptop\na3@devbox\na4@devbox");
 }
 
-#[test]
-fn the_list_is_one_row_per_agent_and_quiet_prints_ids() {
-    let created = |seconds: u64| json!(before(seconds));
-    let agents = [
-        agent(json!({ "created_at": created(3 * 3600 + 60), "cwd": "D:\\apps\\facadecode" })),
-        agent(json!({
-            "agent_id": "a4", "name": "Ada", "cli": "codex", "created_at": created(3600 + 60),
-            "cwd": "D:\\apps\\facadecode", "state": "waiting_for_you",
-            "state_detail": { "kind": "question", "text": "Which one?\nA or B" },
-            "said": { "text": "pick one", "from": "human", "at": before(100) },
-        })),
-        agent(json!({
-            "agent_id": "a5", "name": "Plug", "cli": "agy", "created_at": created(5 * 60 + 5),
-            "cwd": "D:\\apps\\facadecode", "process": "ended", "state": "ended",
-            "exit": { "code": 3, "at": before(60) }, "state_detail": { "how": "crashed" },
-        })),
-        agent(json!({
-            "agent_id": "a6", "name": "Visor", "created_at": created(2 * 60 + 5),
-            "cwd": "D:\\work\\site", "state": "idle", "guest": true, "pid": null, "cols": null,
-            "rows": null,
-        })),
-    ];
-    assert_eq!(
-        trimmed(&list_text(&agents, now())),
-        "ID   NAME    CLI              STATE                       CREATED             FOLDER\n\
-         a3   Pixel   claude           working                     3 hours ago         D:\\apps\\facadecode\n\
-         a4   Ada     codex            waiting for you: question   about an hour ago   D:\\apps\\facadecode\n\
-         a5   Plug    agy              exited: code 3              5 minutes ago       D:\\apps\\facadecode\n\
-         a6   Visor   claude (guest)   idle                        2 minutes ago       D:\\work\\site"
-    );
-    assert_eq!(quiet_text(&agents), "a3\na4\na5\na6");
-}
-
-#[test]
-fn inspect_shows_what_an_agent_is_doing() {
-    let pixel = agent(json!({
-        "cwd": "D:\\apps\\facadecode",
-        "state": "waiting_for_you",
-        "state_detail": { "kind": "permission", "text": "Allow Bash(rm -rf build)?" },
-        "said": { "text": "fix the build", "from": "human", "at": before(60) },
-        "session": "86da4482-2bae-4a45-b193-a5664c19826a",
-    }));
-    let inspected = inspection(&pixel, Some("claude"), input("usable", None), true);
-    assert_eq!(
-        trimmed(&inspect_text(&inspected, now())),
-        "ID:            a3\n\
-         Name:          Pixel\n\
-         CLI:           claude\n\
-         Folder:        D:\\apps\\facadecode\n\
-         Created:       2 minutes ago (2026-11-17 23:20:01 UTC)\n\
-         Started by:    human\n\
-         Process:       running, pid 1234\n\
-         YOLO:          off\n\
-         State:         waiting for you: permission\n\
-        \x20              Allow Bash(rm -rf build)?\n\
-         Facade tools:  available\n\
-         Input box:     empty\n\
-         Last input:    human, 1 minute ago (2026-11-17 23:21:01 UTC): fix the build\n\
-         Session:       86da4482-2bae-4a45-b193-a5664c19826a"
-    );
-}
-
-/// The value after `label:` on the line it begins, if any.
+/// The value after a field's label.
 fn field(text: &str, label: &str) -> Option<String> {
     text.lines()
         .find_map(|line| line.strip_prefix(label)?.strip_prefix(':'))
@@ -384,47 +192,101 @@ fn field(text: &str, label: &str) -> Option<String> {
 }
 
 #[test]
-fn inspect_names_the_kind_creator_process_and_session_where_they_differ() {
-    let shown = |changes: Value, rule: Option<&str>, tracking: bool| {
-        inspect_text(
-            &inspection(&agent(changes), rule, input("usable", None), tracking),
-            now(),
-        )
+fn inspect_shows_the_same_facts_in_text_and_json() {
+    let pixel = agent(json!({
+        "cwd": "D:\\apps\\facadecode",
+        "state": "waiting_for_you",
+        "state_detail": { "kind": "permission", "text": "Allow the build?" },
+        "args": ["--flag", "two words"],
+        "model": "sonnet",
+        "effort": "high",
+        "session": "86da4482-2bae-4a45-b193-a5664c19826a",
+        "yolo": true,
+    }));
+    let inspected = inspection(
+        &pixel,
+        Some("claude"),
+        &["Terminal on laptop", "VS Code"],
+        Some(json!({ "kind": "command_line" })),
+    );
+    let output = Inspection::from(&inspected);
+    let detail = "waiting for you: permission (Allow the build?)";
+    let text = output.text();
+    let fields = [
+        ("ID", "a3@laptop"),
+        ("Name", "Pixel"),
+        ("Type", "managed"),
+        ("State", detail),
+        ("Machine", "laptop"),
+        ("CLI", "claude"),
+        ("Folder", "D:\\apps\\facadecode"),
+        ("Args", r#"["--flag","two words"]"#),
+        ("Model", "sonnet"),
+        ("Effort", "high"),
+        ("Session", "86da4482-2bae-4a45-b193-a5664c19826a"),
+        ("Started by", "command line"),
+        ("Viewers", "Terminal on laptop, VS Code"),
+        ("YOLO", "on"),
+    ];
+    assert_eq!(text.lines().count(), fields.len());
+    for (label, expected) in fields {
+        assert_eq!(field(&text, label).as_deref(), Some(expected), "{text}");
+    }
+    assert_eq!(
+        serde_json::to_value(&output).unwrap(),
+        json!({
+            "id": "a3@laptop", "name": "Pixel", "type": "managed",
+            "state": "waiting_for_you", "state_detail": detail, "machine": "laptop",
+            "cli": "claude", "custom_program": false, "folder": "D:\\apps\\facadecode",
+            "args": ["--flag", "two words"], "model": "sonnet", "effort": "high",
+            "session": "86da4482-2bae-4a45-b193-a5664c19826a",
+            "started_by": { "kind": "command_line" },
+            "viewers": ["Terminal on laptop", "VS Code"],
+            "yolo": true,
+        })
+    );
+}
+
+#[test]
+fn inspect_describes_custom_programs_guests_and_ended_agents() {
+    let shown = |changes: Value, rule: Option<&str>, started_by: Option<Value>| {
+        Inspection::from(&inspection(&agent(changes), rule, &[], started_by)).text()
     };
     let added = shown(
-        json!({ "cli": "fake work", "creator": "a2", "yolo": true }),
+        json!({
+            "cli": "fake work", "creator": "a2", "yolo": true
+        }),
         Some("claude"),
-        true,
+        Some(json!({ "kind": "agent", "address": "a2@devbox" })),
     );
-    assert_eq!(field(&added, "Kind").as_deref(), Some("claude"));
-    assert_eq!(field(&added, "Started by").as_deref(), Some("a2"));
-    assert_eq!(
-        field(&added, "YOLO").as_deref(),
-        Some("on: can address every agent")
-    );
+    assert_eq!(field(&added, "CLI").as_deref(), Some("fake work"));
+    assert_eq!(field(&added, "Started by").as_deref(), Some("a2@devbox"));
+    assert_eq!(field(&added, "YOLO").as_deref(), Some("on"));
     assert_eq!(field(&added, "Session").as_deref(), Some("none"));
 
-    let plain = shown(json!({ "cli": "bash" }), None, false);
-    assert_eq!(field(&plain, "Kind").as_deref(), Some("plain program"));
-    assert_eq!(
-        field(&plain, "Session").as_deref(),
-        Some("none (not tracked)")
+    let custom = shown(
+        json!({ "cli": "build tool" }),
+        None,
+        Some(json!({ "kind": "vs_code" })),
     );
-
-    let same = shown(json!({}), Some("claude"), true);
-    assert_eq!(field(&same, "Kind"), None, "{same}");
+    assert_eq!(
+        field(&custom, "CLI").as_deref(),
+        Some("build tool (custom program)")
+    );
+    assert_eq!(field(&custom, "Started by").as_deref(), Some("VS Code"));
+    assert_eq!(field(&custom, "Session").as_deref(), Some("none"));
 
     let guest = shown(
-        json!({ "guest": true, "pid": null, "cols": null, "rows": null }),
+        json!({
+            "type": "guest", "cli": "cursor", "state": "online",
+            "pid": null, "cols": null, "rows": null,
+        }),
         None,
-        false,
+        None,
     );
-    assert!(
-        field(&guest, "Kind").is_none()
-            && field(&guest, "Started by").is_none()
-            && field(&guest, "Process").as_deref() == Some("none (guest)"),
-        "{guest}"
-    );
+    assert_eq!(field(&guest, "Type").as_deref(), Some("guest"));
+    assert_eq!(field(&guest, "CLI").as_deref(), Some("cursor"));
+    assert_eq!(field(&guest, "Started by").as_deref(), Some("none"));
 
     let ended = shown(
         json!({
@@ -432,106 +294,107 @@ fn inspect_names_the_kind_creator_process_and_session_where_they_differ() {
             "exit": { "code": 0, "at": before(60) },
         }),
         Some("claude"),
-        false,
+        None,
     );
-    assert_eq!(
-        field(&ended, "Process").as_deref(),
-        Some("exited: code 0, 1 minute ago (2026-11-17 23:21:01 UTC)")
-    );
-}
-
-fn hello(daemon_build: &str, keeper: Option<(u32, &str)>) -> HelloResult {
-    let mut hello = json!({
-        "protocol": 2, "build": daemon_build, "machine_id": "m-1", "pid": 16968, "agents": 12,
-        "topics": [], "ops": [],
-    });
-    if let Some((pid, build)) = keeper {
-        hello["keeper"] = json!({ "pid": pid, "build": build });
-    }
-    serde_json::from_value(hello).expect("a valid hello")
+    assert_eq!(field(&ended, "State").as_deref(), Some("exited: code 0"));
 }
 
 #[test]
-fn status_shows_the_services_and_their_builds_where_they_differ() {
-    let home = Path::new("/home/you/.facade");
-    // This command is 0.1.6, built from commit abc.
-    let (version, build) = ("0.1.6", "0.1.6+abc");
-    assert_eq!(
-        status_text(
-            home,
-            Some(&hello(build, Some((16752, build)))),
-            version,
-            build
-        ),
-        "Facade is running.\n  Home:      /home/you/.facade\n  Version:   0.1.6\n  Daemon:    pid \
-         16968\n  Keeper:    pid 16752\n  Agents:    12"
+fn status_shows_settings_services_and_connected_machines() {
+    let (home, settings, build) = (
+        "/home/you/.facade",
+        "/home/you/.facade/facade.json",
+        "0.1.6+abc",
     );
-    let older = status_text(home, Some(&hello("0.1.5", None)), version, build);
-    assert!(
-        older.contains("\n  Daemon:    pid 16968 (0.1.5)\n")
-            && older.contains("\n  Keeper:    none\n"),
-        "{older}"
-    );
-    let silent = status_text(home, None, version, build);
-    assert!(
-        silent.starts_with("Facade did not respond.\n  Home:      /home/you/.facade"),
-        "{silent}"
-    );
-}
-
-/// A message to `to` whose delivery has `delivery`'s fields.
-fn message(to: &str, delivery: Value) -> Message {
-    serde_json::from_value(json!({
-        "message_id": "m42", "from": "human", "to": to, "text": "hi",
-        "at": before(1), "delivery": delivery,
+    let mut status: StatusResult = serde_json::from_value(json!({
+        "home": home,
+        "settings_file": settings,
+        "build": build,
+        "daemon_pid": 16968,
+        "keeper_pid": 16752,
+        "agents": 12,
+        "machines": [
+            { "machine_id": "peer-id", "short_id": "peer", "name": "peer",
+              "selector": "peer", "state": "online", "status": "answered" },
+            { "machine_id": "dim-id", "short_id": "dim", "name": "dim",
+              "selector": "dim", "state": "sleeping", "status": "unavailable" },
+        ],
     }))
-    .expect("a valid message")
+    .unwrap();
+    assert_eq!(
+        status_text(&status, build),
+        "Orchestrator running.\n  Home:      /home/you/.facade\n  Settings:  /home/you/.facade/facade.json\n  Version:   0.1.6\n  Daemon:    pid 16968\n  Keeper:    pid 16752\n  Agents:    12\n  Machines:  peer"
+    );
+    status.build = "0.1.5".into();
+    status.keeper_pid = None;
+    assert_eq!(
+        status_text(&status, build),
+        "Orchestrator running.\n  Home:      /home/you/.facade\n  Settings:  /home/you/.facade/facade.json\n  Version:   0.1.5\n  Daemon:    pid 16968 (0.1.5)\n  Keeper:    none\n  Agents:    12\n  Machines:  peer"
+    );
+    assert_eq!(
+        sleeping_text(home, settings, "0.1.6"),
+        "Orchestrator sleeping.\n  Home:      /home/you/.facade\n  Settings:  /home/you/.facade/facade.json\n  Version:   0.1.6"
+    );
+}
+
+fn receipt(delivery: Value) -> SendResult {
+    serde_json::from_value(json!({
+        "id": "m42@peer",
+        "message": {
+            "message_id": "m42", "from": "command_line", "to": "a3", "text": "hi",
+            "at": before(1), "delivery": delivery,
+        },
+    }))
+    .expect("a valid send result")
 }
 
 #[test]
-fn a_send_says_where_the_message_went_or_why_it_did_not() {
-    let delivered = |to: &str, via: &str| {
-        sent(&message(
-            to,
-            json!({ "status": "success", "text_written": "full", "delivered_via": via }),
-        ))
-        .map_err(|problem| problem.to_string())
-    };
-    assert_eq!(
-        delivered("a3", "terminal").as_deref(),
-        Ok("m42 delivered to a3")
+fn a_send_only_prints_the_daemons_address_after_delivery() {
+    for via in ["terminal", "read"] {
+        let result = receipt(json!({
+            "status": "success", "text_written": "full", "delivered_via": via
+        }));
+        assert_eq!(sent(result, "a3@peer").unwrap(), "m42@peer");
+    }
+    let waiting = sent(
+        receipt(json!({ "status": "pending", "text_written": "none" })),
+        "a3@peer",
+    )
+    .expect_err("a pending delivery has no successful receipt")
+    .to_string();
+    assert!(
+        waiting.starts_with("error: m42@peer was not delivered to a3@peer: "),
+        "{waiting}"
     );
-    assert_eq!(delivered("a3", "read").as_deref(), Ok("m42 read by a3"));
-    let waiting = sent(&message(
-        "a6",
-        json!({ "status": "pending", "text_written": "none" }),
-    ))
-    .map_err(|problem| problem.to_string());
-    assert_eq!(waiting.as_deref(), Ok("m42 waiting in a6's inbox"));
-
-    let unconfirmed = sent(&message(
-        "a3",
-        json!({ "status": "failure", "reason": "submission_unconfirmed", "text_written": "full",
-                "enter_written": true }),
-    ))
+    let unconfirmed = sent(
+        receipt(json!({
+            "status": "failure", "reason": "submission_unconfirmed", "text_written": "full",
+            "enter_written": true,
+        })),
+        "a3@peer",
+    )
     .expect_err("an unconfirmed delivery fails")
     .to_string();
     assert!(
-        unconfirmed.starts_with("error: could not confirm delivery of m42 to a3")
+        unconfirmed.starts_with("error: could not confirm delivery of m42@peer to a3@peer")
             && unconfirmed.ends_with(
-                "\n  tip: run 'facade screen a3' and look for m42 in the input box or recent \
+                "\n  tip: run 'facade screen a3@peer' and look for m42@peer in the input box or recent \
                  output before sending it again"
             ),
         "{unconfirmed}"
     );
-    let failed = sent(&message(
-        "a3",
-        json!({ "status": "failure", "reason": "input_draft", "text_written": "none" }),
-    ))
+    let failed = sent(
+        receipt(json!({
+            "status": "failure", "reason": "input_draft", "text_written": "none"
+        })),
+        "a3@peer",
+    )
     .expect_err("a held message fails")
     .to_string();
     assert!(
-        failed.starts_with("error: m42 was not delivered to a3: ") && !failed.contains('\n'),
+        failed.starts_with("error: m42@peer was not delivered to a3@peer: ")
+            && failed.contains("a draft held a3@peer's input")
+            && !failed.contains('\n'),
         "{failed}"
     );
 }

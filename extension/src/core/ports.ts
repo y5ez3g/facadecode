@@ -5,6 +5,8 @@
 // The contracts between the core and its environment (ARCHITECTURE-1.3): the core decides, these ports act. Only plain data
 // crosses them, so the core is tested with fakes and never imports vscode, sockets or a CLI's screen parser.
 
+import type { AgentRef, AgentState } from '../base/coreProtocol';
+
 export interface Disposable {
 	dispose(): void;
 }
@@ -661,6 +663,12 @@ export interface RunError {
 }
 
 export interface RunFacts {
+	/** The Orchestrator facts for a card on the Rust engine (PANEL-4.1). */
+	readonly orchestrator?: {
+		readonly reference: AgentRef;
+		readonly state: Exclude<AgentState, 'online'>;
+		readonly machine?: string;
+	};
 	/** The running machine's display name when its ID differs from the editor window's. */
 	readonly remoteMachine?: string;
 	/** The copyable, machine-qualified core reference. */

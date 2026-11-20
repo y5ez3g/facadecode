@@ -7,8 +7,8 @@ Type text into the agent's terminal, or press keys to answer its menus. Add '--e
 after the text. To give the agent a task or ask it a question, use 'facade send'.
 
 Arguments:
-  <AGENT>  Agent ID or name; add @MACHINE for another machine's agent, such as a17@gpu
-  <TEXT>   Text to type; put '--' before text that starts with '-'
+  <AGENT>  Agent address such as a17@gpu, or an agent ID or name
+  <TEXT>   Text to type. Put '--' before text that starts with '-'
 
 Options:
       --enter      Press Enter after the text

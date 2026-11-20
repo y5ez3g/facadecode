@@ -14,12 +14,12 @@
 		"yolo": {
 			"type": "boolean",
 			"default": true,
-			"markdownDescription": "`true`: agents start with each CLI's own no-approval mode, and their Facade tools reach every agent in your Facade windows on this computer. `false`: each CLI's own approvals and sandbox, and the tools reach only an agent's creation tree: the agent you started and those started from it. Applies to agents started afterwards."
+			"markdownDescription": "With `true`, Facade handles CLI approvals and directory trust prompts, disables the CLI sandbox where supported, and lets MCP callers reach all agents across connected machines. With `false`, each CLI keeps its own approvals and sandbox, and MCP callers reach only their entire creation tree. Facade tools need no approval in either mode. Changes apply to managed agents on start or Resume and to Guests when they connect."
 		},
 		"names": {
 			"type": "array",
 			"items": { "type": "string", "pattern": "\\S" },
-			"markdownDescription": "Names suggested for New Agent and Resume. Facade randomly picks an unused name in this window, and fills blank names the same way. If none remain or the list is empty, the agent uses its ID, such as #a1."
+			"markdownDescription": "Names for agents and Guests without a name. Facade picks a name at random, preferring names unused in `facade list` and allowing duplicates when all names are in use."
 		},
 		"clis": {
 			"type": "object",
@@ -92,7 +92,7 @@
 			"type": "object",
 			"default": {},
 			"additionalProperties": { "type": ["string", "null"] },
-			"markdownDescription": "Environment variables: a string sets one, `null` removes it. `${env:NAME}` in a value reads NAME from the editor's environment; a variable it names must exist. Facade never shows these values."
+			"markdownDescription": "A string sets an environment variable and `null` removes it. `${env:NAME}` reads NAME from the initiator's environment for a local launch, or from the destination machine's login environment for a remote launch. The referenced variable must exist."
 		},
 		"model": {
 			"type": "string",

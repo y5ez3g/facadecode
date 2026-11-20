@@ -99,6 +99,17 @@
 			{
 				"command": "facade.goToAgent",
 				"title": "%command.goToAgent%",
+				"category": "%command.category%",
+				"icon": "$(go-to-file)"
+			},
+			{
+				"command": "facade.openTerminal",
+				"title": "%command.openTerminal%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.hideAgent",
+				"title": "%command.hideAgent%",
 				"category": "%command.category%"
 			},
 			{
@@ -109,6 +120,16 @@
 			{
 				"command": "facade.stopAgent",
 				"title": "%command.stopAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.deleteAgent",
+				"title": "%command.deleteAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.copyAgentReference",
+				"title": "%command.copyAgentReference%",
 				"category": "%command.category%"
 			},
 			{
@@ -197,9 +218,14 @@
 					"group": "navigation@2"
 				},
 				{
+					"command": "facade.goToAgent",
+					"when": "view == facade.agents && facade.engine == rust",
+					"group": "navigation@3"
+				},
+				{
 					"command": "facade.newAgent",
 					"when": "view == facade.agents",
-					"group": "navigation@3"
+					"group": "navigation@4"
 				},
 				{
 					"command": "workbench.action.addRootFolder",
@@ -208,7 +234,7 @@
 				},
 				{
 					"command": "facade.newWorktree",
-					"when": "view == facade.agents && workspaceFolderCount != 0",
+					"when": "view == facade.agents && workspaceFolderCount != 0 && facade.engine != rust",
 					"group": "1_locations@2"
 				},
 				{
@@ -220,34 +246,73 @@
 			"webview/context": [
 				{
 					"command": "facade.renameAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine != rust",
 					"group": "1_agent@1"
 				},
 				{
 					"command": "facade.moveUp",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp && facade.engine != rust",
 					"group": "2_move@1"
 				},
 				{
 					"command": "facade.moveDown",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown && facade.engine != rust",
 					"group": "2_move@2"
 				},
 				{
 					"command": "facade.stopAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && !webviewAgentEnded",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && !webviewAgentEnded && facade.engine != rust",
 					"group": "4_close@1"
 				},
 				{
 					"command": "facade.dismissAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewAgentEnded",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewAgentEnded && facade.engine != rust",
 					"group": "4_close@1"
+				},
+				{
+					"command": "facade.openTerminal",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentRunning",
+					"group": "1_agent@1"
+				},
+				{
+					"command": "facade.hideAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust",
+					"group": "1_agent@2"
+				},
+				{
+					"command": "facade.stopAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentRunning",
+					"group": "1_agent@3"
+				},
+				{
+					"command": "facade.deleteAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust",
+					"group": "1_agent@4"
+				},
+				{
+					"command": "facade.pinAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentPinnable && !webviewAgentPinned",
+					"group": "1_agent@5"
+				},
+				{
+					"command": "facade.unpinAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust && webviewAgentPinned",
+					"group": "1_agent@6"
+				},
+				{
+					"command": "facade.renameAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && facade.engine == rust",
+					"group": "1_agent@7"
 				}
 			],
 			"commandPalette": [
 				{
 					"command": "facade.resumeAgent",
 					"when": "facade.engine == rust"
+				},
+				{
+					"command": "facade.continueSession",
+					"when": "facade.engine != rust"
 				},
 				{
 					"command": "facade.showAgentLaunch",
@@ -258,12 +323,28 @@
 					"when": "facade.agentSelected"
 				},
 				{
+					"command": "facade.openTerminal",
+					"when": "facade.engine == rust && facade.agentSelected && facade.agentSelectedRunning"
+				},
+				{
+					"command": "facade.hideAgent",
+					"when": "facade.engine == rust && facade.agentSelected"
+				},
+				{
 					"command": "facade.stopAgent",
-					"when": "facade.agentSelected && !facade.agentSelectedEnded"
+					"when": "facade.agentSelected && ((facade.engine == rust && facade.agentSelectedRunning) || (facade.engine != rust && !facade.agentSelectedEnded))"
+				},
+				{
+					"command": "facade.deleteAgent",
+					"when": "facade.engine == rust && facade.agentSelected"
+				},
+				{
+					"command": "facade.copyAgentReference",
+					"when": "facade.engine == rust && facade.agentSelected"
 				},
 				{
 					"command": "facade.dismissAgent",
-					"when": "facade.agentSelected && facade.agentSelectedEnded"
+					"when": "facade.agentSelected && facade.agentSelectedEnded && facade.engine != rust"
 				},
 				{
 					"command": "facade.showAgentDetails",
@@ -495,375 +576,6 @@
 						"scope": "machine",
 						"order": 1,
 						"markdownDescription": "%config.rustEngine%"
-					},
-					"facade.yolo": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.yolo%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.collaboration.enabled": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.collaboration.enabled%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.claude.enabled": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.claude.enabled%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.claude.path": {
-						"type": "string",
-						"default": "",
-						"scope": "machine",
-						"markdownDescription": "%config.claude.path%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.claude.launch": {
-						"type": "object",
-						"default": {},
-						"properties": {
-							"arguments": {
-								"type": "array",
-								"items": {
-									"type": "string"
-								},
-								"default": [],
-								"markdownDescription": "%config.launch.arguments%"
-							},
-							"environment": {
-								"type": "object",
-								"additionalProperties": {
-									"type": [
-										"string",
-										"null"
-									]
-								},
-								"default": {},
-								"markdownDescription": "%config.launch.environment%"
-							}
-						},
-						"additionalProperties": false,
-						"scope": "machine",
-						"markdownDescription": "%config.claude.launch%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.codex.enabled": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.codex.enabled%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.codex.path": {
-						"type": "string",
-						"default": "",
-						"scope": "machine",
-						"markdownDescription": "%config.codex.path%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.codex.launch": {
-						"type": "object",
-						"default": {},
-						"properties": {
-							"arguments": {
-								"type": "array",
-								"items": {
-									"type": "string"
-								},
-								"default": [],
-								"markdownDescription": "%config.launch.arguments%"
-							},
-							"environment": {
-								"type": "object",
-								"additionalProperties": {
-									"type": [
-										"string",
-										"null"
-									]
-								},
-								"default": {},
-								"markdownDescription": "%config.launch.environment%"
-							}
-						},
-						"additionalProperties": false,
-						"scope": "machine",
-						"markdownDescription": "%config.codex.launch%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.antigravity.enabled": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.antigravity.enabled%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.antigravity.path": {
-						"type": "string",
-						"default": "",
-						"scope": "machine",
-						"markdownDescription": "%config.antigravity.path%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.antigravity.launch": {
-						"type": "object",
-						"default": {},
-						"properties": {
-							"arguments": {
-								"type": "array",
-								"items": {
-									"type": "string"
-								},
-								"default": [],
-								"markdownDescription": "%config.launch.arguments%"
-							},
-							"environment": {
-								"type": "object",
-								"additionalProperties": {
-									"type": [
-										"string",
-										"null"
-									]
-								},
-								"default": {},
-								"markdownDescription": "%config.launch.environment%"
-							}
-						},
-						"additionalProperties": false,
-						"scope": "machine",
-						"markdownDescription": "%config.antigravity.launch%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.muse.enabled": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.muse.enabled%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.muse.path": {
-						"type": "string",
-						"default": "",
-						"scope": "machine",
-						"markdownDescription": "%config.muse.path%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.muse.launch": {
-						"type": "object",
-						"default": {},
-						"properties": {
-							"arguments": {
-								"type": "array",
-								"items": {
-									"type": "string"
-								},
-								"default": [],
-								"markdownDescription": "%config.launch.arguments%"
-							},
-							"environment": {
-								"type": "object",
-								"additionalProperties": {
-									"type": [
-										"string",
-										"null"
-									]
-								},
-								"default": {},
-								"markdownDescription": "%config.launch.environment%"
-							}
-						},
-						"additionalProperties": false,
-						"scope": "machine",
-						"markdownDescription": "%config.muse.launch%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.opencode.enabled": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.opencode.enabled%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.opencode.path": {
-						"type": "string",
-						"default": "",
-						"scope": "machine",
-						"markdownDescription": "%config.opencode.path%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.opencode.launch": {
-						"type": "object",
-						"default": {},
-						"properties": {
-							"arguments": {
-								"type": "array",
-								"items": {
-									"type": "string"
-								},
-								"default": [],
-								"markdownDescription": "%config.launch.arguments%"
-							},
-							"environment": {
-								"type": "object",
-								"additionalProperties": {
-									"type": [
-										"string",
-										"null"
-									]
-								},
-								"default": {},
-								"markdownDescription": "%config.launch.environment%"
-							}
-						},
-						"additionalProperties": false,
-						"scope": "machine",
-						"markdownDescription": "%config.opencode.launch%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.pi.enabled": {
-						"type": "boolean",
-						"default": true,
-						"scope": "machine",
-						"markdownDescription": "%config.pi.enabled%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.pi.path": {
-						"type": "string",
-						"default": "",
-						"scope": "machine",
-						"markdownDescription": "%config.pi.path%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.pi.launch": {
-						"type": "object",
-						"default": {},
-						"properties": {
-							"arguments": {
-								"type": "array",
-								"items": {
-									"type": "string"
-								},
-								"default": [],
-								"markdownDescription": "%config.launch.arguments%"
-							},
-							"environment": {
-								"type": "object",
-								"additionalProperties": {
-									"type": [
-										"string",
-										"null"
-									]
-								},
-								"default": {},
-								"markdownDescription": "%config.launch.environment%"
-							}
-						},
-						"additionalProperties": false,
-						"scope": "machine",
-						"markdownDescription": "%config.pi.launch%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
-					},
-					"facade.custom": {
-						"type": "object",
-						"default": {},
-						"propertyNames": {
-							"pattern": "\\S",
-							"not": {
-								"enum": [
-									"claude",
-									"codex",
-									"agy",
-									"muse",
-									"opencode",
-									"pi"
-								]
-							}
-						},
-						"additionalProperties": {
-							"type": "object",
-							"required": [
-								"path",
-								"launch"
-							],
-							"properties": {
-								"path": {
-									"type": "string",
-									"pattern": "\\S",
-									"markdownDescription": "%config.custom.path%"
-								},
-								"launch": {
-									"type": "object",
-									"required": [
-										"resume"
-									],
-									"properties": {
-										"start": {
-											"type": "array",
-											"items": {
-												"type": "string"
-											},
-											"default": [],
-											"markdownDescription": "%config.custom.launch.start%"
-										},
-										"resume": {
-											"type": "array",
-											"items": {
-												"type": "string"
-											},
-											"minItems": 1,
-											"contains": {
-												"type": "string",
-												"pattern": "\\$\\{sessionId\\}"
-											},
-											"markdownDescription": "%config.custom.launch.resume%"
-										},
-										"environment": {
-											"type": "object",
-											"additionalProperties": {
-												"type": [
-													"string",
-													"null"
-												]
-											},
-											"default": {},
-											"markdownDescription": "%config.launch.environment%"
-										}
-									},
-									"additionalProperties": false,
-									"markdownDescription": "%config.custom.launch%"
-								}
-							},
-							"additionalProperties": false
-						},
-						"scope": "machine",
-						"markdownDescription": "%config.custom%",
-						"markdownDeprecationMessage": "%config.moved%",
-						"deprecationMessage": "%config.movedPlain%"
 					}
 				}
 			}

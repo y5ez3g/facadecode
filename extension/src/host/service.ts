@@ -53,14 +53,15 @@ import { createLocationService, createWorktreeService } from './locations/index'
 import { editorEnvironment } from './editorEnvironment';
 import { namesOf, WAIT_SECONDS, yoloOf } from './settings';
 import type { FacadeSettings } from './facadeSettings';
-import { homeReloadText, UnusableHome, unusableHomeText, useFacadeHome } from './home';
+import { homePathOf, homeReloadText, homeSetting, UnusableHome, unusableHomeText, useFacadeHome } from './home';
 import { editorFacadeSettings, notMadeText } from './settingsNotice';
-import { serveRemoteSshMachine, showComponentMissing, waitForWindowIdentity } from './windowComponent';
+import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch, watchSettingsFile } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
 import { chooseEngine, oldRunsRunning, retireWhenDone, rustEngineSetting, watchRustEngineSetting } from './engine';
-import { activateRust } from './rust/index';
+import { activateOrchestrator } from './orchestrator/index';
+import { DaemonError } from './orchestrator/types';
 import { FACADE_PROGRAM } from './rust/types';
 import { facadeInTerminals } from './rust/environment';
 
@@ -141,6 +142,35 @@ function workspaceUri(): string {
  * directory. Returns what deactivation runs: the window detaches, and its agents' processes go on in ptyd (RULES-4.1).
  */
 export async function activateFacade(context: vscode.ExtensionContext): Promise<() => Promise<void>> {
+	const automaticEngine = rustEngineSetting() === 'auto';
+	let switchable = automaticEngine && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
+	const configured = homeSetting();
+	const oldRoot = configured === undefined ? undefined : homePathOf(configured);
+	const legacyHome = oldRoot === undefined ? undefined : path.join(oldRoot, 'extension');
+	context.subscriptions.push(watchRustEngineSetting());
+	const engine = await chooseEngine(context, legacyHome ?? (switchable ? facadeHome() : ''));
+	if (engine === 'rust') {
+		try {
+			const root = facadeRoot();
+			return await activateOrchestrator(context, {
+				root,
+				home: path.join(root, 'extension'),
+				...(legacyHome !== undefined ? { legacyHome } : {})
+			});
+		} catch (error) {
+			const cause = error instanceof Error ? error.cause : undefined;
+			if (cause instanceof DaemonError && (cause.reason === 'protocol_incompatible' || cause.reason === 'refused')) {
+				throw new ActivationError(cause.message);
+			}
+			switchable = false;
+			await vscode.commands.executeCommand('setContext', 'facade.engine', 'old');
+			void vscode.window.showWarningMessage(vscode.l10n.t(
+				"The old engine is active on {0}. {1} Fix the problem, set {2} to `auto`, and reload the window to try the Rust engine again.",
+				os.hostname(), messageOf(error), 'facade.rustEngine'
+			));
+		}
+	}
+
 	// The Facade home first, before anything reads it (ARCHITECTURE-3.1): one that is no path starts nothing, never another home
 	try {
 		useFacadeHome(context, { terminals: true, offerReload: true, reloadText: homeReloadText });
@@ -162,53 +192,6 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	if (!identity) {
 		const missing = showComponentMissing(context, session);
 		return async () => missing.dispose();
-	}
-	// One engine for this window, chosen now and kept until it reloads: core where it can run, else the extension's own
-	context.subscriptions.push(watchRustEngineSetting());
-	// Whether core could run this window but the old engine still has runs: only then does a reload switch it, once they are gone
-	const automaticEngine = rustEngineSetting() === 'auto';
-	let switchable = automaticEngine && fs.existsSync(path.join(context.extensionPath, FACADE_PROGRAM));
-	if (await chooseEngine(context, home) === 'rust') {
-		const root = facadeRoot();
-		let detachRust: (() => Promise<void>) | undefined;
-		try {
-			detachRust = await activateRust(context, {
-				root, home, identity,
-				keep: log => {
-					const opened = openWorkspaceRecord(context, home, identity);
-					return {
-						key: opened.record.key,
-						claim: nextOwnerClaim(`rust-terminal:${identity.token}`, home),
-						handedOver: opened.record.key === opened.handedOver,
-						bind: window => keepWorkspaceState(context, home, identity, opened, log,
-							nextOwnerClaim(`rust-window:${window.machine_id}/${window.window_id}`, home), true).workspaceState
-					};
-				},
-				openSettings: async () => { await openSettingsOf(context.extension.id); },
-				openSettingsFile: settings => registerOpenSettingsFile(settings)
-			});
-		} catch (err) {
-			switchable = false;
-			// A core that cannot run here - WSL 1, a container that forbids process descriptors - leaves this window on the old engine
-			void vscode.commands.executeCommand('setContext', 'facade.engine', 'old');
-			void vscode.window.showWarningMessage(vscode.l10n.t("Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.", messageOf(err), 'facade.rustEngine'));
-		}
-		if (detachRust) {
-			if (vscode.env.remoteName !== 'ssh-remote') {
-				return detachRust;
-			}
-			let bridge: vscode.Disposable;
-			try {
-				bridge = serveRemoteSshMachine(context, identity, root);
-			} catch (err) {
-				console.error(`Could not register the Facade Remote-SSH machine bridge: ${messageOf(err)}`);
-				return detachRust;
-			}
-			return async () => {
-				bridge.dispose();
-				await detachRust();
-			};
-		}
 	}
 	facadeInTerminals(context.environmentVariableCollection, undefined);
 	const opened = openWorkspaceRecord(context, home, identity);
@@ -539,7 +522,7 @@ function openWorkspaceRecord(context: vscode.ExtensionContext, home: string, ide
  * window becomes a workspace or another window takes it over (ARCHITECTURE-2.2, 3.1).
  */
 function keepWorkspaceState(context: vscode.ExtensionContext, home: string, identity: WindowIdentity,
-	opened: ReturnType<typeof openWorkspaceRecord>, log: LogPort, claim: OwnerClaim, rust = false) {
+	opened: ReturnType<typeof openWorkspaceRecord>, log: LogPort, claim: OwnerClaim) {
 	const { folders, uri, record, handedOver } = opened;
 	// A proven handover or an exact-URI takeover uses the shared owner's state, including in a fresh profile. A stale
 	// Memento at a previously visited destination cannot overwrite the current order and choices beside those runs.
@@ -550,16 +533,15 @@ function keepWorkspaceState(context: vscode.ExtensionContext, home: string, iden
 	const writeIfOwned = (write: () => void) => writeAsOwner(claim, home, write);
 	// The exact saved URI follows a proven handover; stale local state cannot overwrite a concurrent canonical move.
 	writeIfOwned(() => keepWorkspaceUri(uri, record, home));
-	const workspaceState = new KeptWorkspaceState(rust ? undefined : context.workspaceState,
+	const workspaceState = new KeptWorkspaceState(context.workspaceState,
 		path.join(record.dir, 'workspace-state.json'), carried, text => log.event(text), writeIfOwned);
 	try {
 		writeIfOwned(() => keepWindowKey(identity.token, record.key, folders, home, Date.now(), uri));
 	} catch (err) {
 		log.event(`Could not note which agents this window claims: ${messageOf(err)}`);
 	}
-	const keyStorage = rust ? context.workspaceState : workspaceState;
-	if (keyStorage.get(WORKSPACE_KEY) !== record.key) {
-		void Promise.resolve(keyStorage.update(WORKSPACE_KEY, record.key)).catch(err => log.event(`Could not keep the workspace's key: ${messageOf(err)}`));
+	if (workspaceState.get(WORKSPACE_KEY) !== record.key) {
+		void Promise.resolve(workspaceState.update(WORKSPACE_KEY, record.key)).catch(err => log.event(`Could not keep the workspace's key: ${messageOf(err)}`));
 	}
 	return { workspaceState, writeIfOwned };
 }

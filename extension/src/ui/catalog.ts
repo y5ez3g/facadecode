@@ -15,13 +15,17 @@ export const COMMANDS = {
 	pinAgent: 'facade.pinAgent',
 	unpinAgent: 'facade.unpinAgent',
 	goToAgent: 'facade.goToAgent',
+	openTerminal: 'facade.openTerminal',
+	hideAgent: 'facade.hideAgent',
 	renameAgent: 'facade.renameAgent',
 	stopAgent: 'facade.stopAgent',
+	deleteAgent: 'facade.deleteAgent',
+	copyAgentReference: 'facade.copyAgentReference',
 	dismissAgent: 'facade.dismissAgent',
 	/** The selected card's details, for the keyboard (PANEL-1.5, UX-2.3). */
 	showAgentDetails: 'facade.showAgentDetails',
 	filter: 'facade.filter',
-	/** The editor's Settings at Facade Code's section, whose Edit in facade.json link opens the settings file (CONFIGURATION-1.2). */
+	/** Open the Orchestrator's settings file, or the editor's Settings on the old engine (CONFIGURATION-7.1, 1.2). */
 	openSettings: 'facade.openSettings',
 	/** Registered by the host: the settings file opened, made first where there is none (CONFIGURATION-1.2, 1.3). */
 	openSettingsFile: 'facade.openSettingsFile',
@@ -47,6 +51,7 @@ export const TEST_COMMANDS = {
 export const CONTEXT = {
 	hasAgents: 'facade.hasAgents',
 	agentSelected: 'facade.agentSelected',
+	agentSelectedRunning: 'facade.agentSelectedRunning',
 	agentSelectedEnded: 'facade.agentSelectedEnded',
 	agentSelectedPinned: 'facade.agentSelectedPinned',
 	agentSelectedPinnable: 'facade.agentSelectedPinnable',

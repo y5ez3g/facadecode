@@ -2,6 +2,14 @@
 
 use facade_scenarios::*;
 
+/// The copyable address Facade gives the agent with this ID, such as `a1@host`.
+fn address(home: &TestHome, id: &str) -> String {
+    home.agent_record(id).expect("the agent is recorded")["address"]
+        .as_str()
+        .expect("an address")
+        .to_string()
+}
+
 #[cfg(unix)]
 #[test]
 fn attach_restores_bracketed_paste_and_cooked_mode_on_signal() {
@@ -58,7 +66,8 @@ fn attach_restores_main_screen_on_detach_or_signal() {
         "printf '\\033[?1049hALT-READY'; sleep 60",
     );
     assert!(wait_for_screen_text(&home, &agent, "ALT-READY"));
-    let detached = format!("Detached from {agent}. Run 'facade attach {agent}' to return.");
+    let address = address(&home, &agent);
+    let detached = format!("Detached from {address}. Run 'facade attach {address}' to return.");
     // Termination signals reach attach on Unix alone.
     #[cfg_attr(windows, allow(unused_mut))]
     let mut ends = vec![("ctrl-]", detached.as_str(), 0)];
@@ -232,7 +241,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
         .unwrap_or_default();
     assert!(
         last.contains("Attachment ended by SIGTERM.")
-            && !term.text().contains("Reconnecting to Facade"),
+            && !term.text().contains(ATTACH_RECONNECT_NOTE),
         "{}",
         term.text()
     );
@@ -273,9 +282,10 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
         term.wait_exit(secs(5))
             .is_some_and(|status| status.success())
     );
+    let address = address(&home, &agent);
     assert!(
         term.wait_for(secs(2), |text| text.contains(&format!(
-            "Detached from {agent}. Run 'facade attach {agent}' to return."
+            "Detached from {address}. Run 'facade attach {address}' to return."
         ))),
         "{}",
         term.text()
@@ -348,7 +358,7 @@ fn attach_forwards_input_and_ctrl_bracket_detaches() {
         alive(&agent.process),
         "the agent keeps running after a detach"
     );
-    assert!(home.agent_from_list_json("w1").expect("w1 is listed")["process"] == "running");
+    assert!(home.agent_from_watch("w1").expect("w1 is recorded")["process"] == "running");
 }
 
 /// Input preceding Ctrl-] in the same read must reach the agent.
@@ -382,9 +392,11 @@ fn detach_delivers_preceding_input() {
 #[cfg(unix)]
 #[test]
 fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     let home = TestHome::new("attachbadhello");
-    home.start_fake("held");
+    // Use the fake terminal without its MCP relay, which would also try to start the lost daemon.
+    home.add_custom_cli("attach-fixture", &test_binaries().fakecli);
+    home.run_facade_ok(&["start", "-d", "--name", "held", "attach-fixture"]);
     let mut command = home.command(&test_binaries().facade);
     command
         .args(["attach", "held"])
@@ -395,28 +407,37 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     pause_process(keeper);
     home.kill_daemon();
     std::fs::remove_file(home.daemon_socket()).unwrap();
+    assert!(
+        term.wait_for_output(LOADED_TIMEOUT, "Connection lost. Reconnecting."),
+        "{}",
+        term.text_with_scrollback()
+    );
+    term.send(b"held keys");
+    home.wait_for_gate("attach-buffered-input");
+
+    // The keys are already counted when the next connection starts its hello.
     let listener = std::os::unix::net::UnixListener::bind(home.daemon_socket()).unwrap();
-    let (arrived, received) = std::sync::mpsc::channel();
-    let (release, resume) = std::sync::mpsc::channel();
     let peer = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(LOADED_TIMEOUT)).unwrap();
         let mut hello = String::new();
         BufReader::new(stream.try_clone().unwrap())
             .read_line(&mut hello)
             .unwrap();
-        arrived.send(()).unwrap();
-        resume.recv_timeout(secs(10)).unwrap();
+        let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
+        assert_eq!(hello["method"], "hello");
         stream.write_all(b"{malformed\n").unwrap();
+        // End the reply without closing the read half while Attach handles it.
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+        listener
     });
-    received.recv_timeout(secs(10)).unwrap();
-    term.send(b"held keys");
-    home.wait_for_gate("attach-buffered-input");
-    release.send(()).unwrap();
     assert_eq!(
-        term.wait_exit(secs(5))
-            .expect("a permanent failure ends attach")
-            .code(),
-        Some(1)
+        term.wait_exit(LOADED_TIMEOUT)
+            .and_then(|status| status.code()),
+        Some(1),
+        "{}",
+        term.text_with_scrollback()
     );
     assert!(
         term.wait_for_output(secs(2), "error: could not reconnect to Facade"),
@@ -428,6 +449,12 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         "{}",
         term.text_with_scrollback()
     );
-    peer.join().unwrap();
+    let listener = peer.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let extra = listener.accept();
+    assert!(
+        matches!(&extra, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "a malformed hello must end Attach without another reconnect: {extra:?}"
+    );
     resume_process(keeper);
 }

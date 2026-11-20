@@ -4,14 +4,14 @@
 
 # Facade Code
 
-**VS Code 的多 Agent 編排器。**
+**在自己的多台機器上執行 AI 程式開發 Agent。**
 
-在同一個 IDE 視窗中執行各家原生 Agent CLI、編輯程式碼並審查變更。使用你自己的帳戶與訂閱，讓 Agent 跨視窗和跨機器共同協作。
+Facade Code 在你的機器上執行一群 AI 程式開發 CLI。Agent 可以互相尋找、傳訊息、讀取畫面，並在終端機輸入文字。你可以透過 Shell、VS Code 或任何支援 MCP 的應用程式指揮它們。每台機器執行自己的 Orchestrator，並透過 SSH 互連。
 
 [![官網: facadecode.com](https://img.shields.io/badge/%E5%AE%98%E7%B6%B2-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![VS Code Marketplace: 安裝](https://img.shields.io/badge/VS%20Code%20Marketplace-%E5%AE%89%E8%A3%9D-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
 [![Open VSX: 安裝](https://img.shields.io/badge/Open%20VSX-%E5%AE%89%E8%A3%9D-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
-[![Releases: 下載 IDE](https://img.shields.io/badge/Releases-%E4%B8%8B%E8%BC%89%20IDE-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Releases](https://img.shields.io/badge/Releases-GitHub-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
 [![Issues: 回報問題](https://img.shields.io/badge/Issues-%E5%9B%9E%E5%A0%B1%E5%95%8F%E9%A1%8C-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · **繁體中文** · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
@@ -31,47 +31,71 @@
 
 ## 安裝
 
+### Shell
+
+一行安裝指令從首次包含獨立安裝套件的版本起可用。
+Shell 安裝套件支援 macOS、Linux 和 Windows 的 x64 與 arm64。
+
+在 macOS 或 Linux 上執行這個指令。
+
+```sh
+sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://github.com/y5ez3g/facadecode/releases/latest/download/install.sh
+```
+
+在 Windows PowerShell 中執行這個指令。
+
+```powershell
+$response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facadecode/releases/latest/download/install.ps1'; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())))
+```
+
+安裝程式會將 `facade` 和 `facade-mcp` 加入 PATH。開啟新的終端機，以使用更新後的 PATH。執行 `facade upgrade` 升級。在各台機器上安裝並登入所需的 CLI。內建選項有 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi。
+
+IDE 的啟動程式也叫 `facade`。兩者都安裝時，Shell 使用 PATH 中排在前面的程式。IDE 預覽版退役後，這個命令名稱歸 Orchestrator。執行 `facade version`。看到形如 `facade <version>` 的輸出，就確認使用的是 Shell 指令。
+
+### VS Code
+
 ```sh
 code --install-extension facade.facadecode
 ```
 
-或從 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) 或 [Open VSX](https://open-vsx.org/extension/facade/facadecode) 安裝 **Facade Code**。支援 macOS（Apple 晶片）、Linux (x64) 與 Windows (x64)。
+擴充套件隨附 Orchestrator。在活動列開啟 **Facade Code**，再選擇 **新增 Agent**、**Go to Agent** 或 **Resume Agent**。macOS、Linux 和 Windows 均有 x64 和 arm64 組建。
 
-接下來，安裝並登入你打算使用的任何受支援 Agent CLI：Claude Code、Codex、Antigravity、Muse Code、OpenCode 或 Pi。Facade Code 會使用各 CLI 本身的登入狀態與訂閱啟動它們。
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) · [Open VSX](https://open-vsx.org/extension/facade/facadecode) · [VS Code](../../../extension/GUIDE.md)
 
-> **Agent 預設不經確認即可執行命令。** 在預設啟用 `yolo` 的情況下，Agent 無需事先詢問即可執行命令與修改檔案。將其關閉即可還原各 CLI 標準的確認提示。詳見[擴充套件 README](../../../extension/README.md#install)。
+### MCP
 
-## Agent Panel
+將 `facade-mcp` 新增為 stdio MCP 伺服器。這個範例使用 `mcpServers` 物件。
 
-**你的 Agent 與你的 IDE，身處同一個視窗。**
+```json
+{
+  "mcpServers": {
+    "facade": { "command": "facade-mcp" }
+  }
+}
+```
 
-Facade Code 在你的檔案旁邊的編輯器終端機分頁中直接執行原生 Agent CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode 與 Pi），使用各 CLI 自己的命令、工具、帳戶與訂閱。面板中的資訊卡可即時追蹤每個 Agent 的狀態。
+外部連線在第一次呼叫工具時以 Guest 身分加入。傳送訊息後，使用 `send_message` 傳回的 `read_messages` 呼叫等待回覆。
 
-- **與你的程式碼並肩工作。** 每個 Agent 都在編輯器區域的專屬終端機分頁中執行。關閉分頁只會將其隱藏，Agent 會在背景繼續運作；點擊其資訊卡即可再次開啟。
-- **跨 Agent 追蹤狀態。** 資訊卡顯示最後傳送給每個 Agent 的內容，以及它是否正在工作、需要權限或遇到了錯誤，詳情中則顯示其標題、資料夾以及是誰啟動了它。Agent 會在視窗重新載入與擴充套件重啟期間持續運作。
-- **資料夾與 worktree。** 在任何工作區資料夾中執行 Agent，或動態建立 Git worktree 以保持程式碼變更相互獨立。固定對话可在重新開啟工作區時將其還原，或從歷程記錄中還原過往的對話工作階段。
+## 跨機器工作
 
-## Agent Use
+```sh
+facade start --name ada -d codex
+facade list
+facade attach ada
+```
 
-**讓 Agent 像你一樣操作其他 Agent。**
+使用 `facade list` 顯示的位址。用平常的 SSH 目標和選項註冊其他機器。若要從外部連上 WSL 或 Dev Container，先在該環境內設定 SSH，再以相同方式註冊。也可以在環境內直接執行 Facade。
 
-透過 MCP 與終端機通訊協定，Agent 可以啟動、停止、尋找其他 Agent 並與其收發訊息，還能讀取對方的終端機螢幕、輸入文字並按鍵。
+```sh
+facade machine add -p 2222 aaron@devbox.lan
+facade start --machine devbox --folder /work/app --worktree feat-x claude
+```
 
-- **啟動和停止 Agent。** 任何 Agent 都可以使用六款 CLI 中的任意一款，在目前電腦上各 Facade 視窗的任何資料夾或新 worktree 中啟動其他 Agent，並為其指派第一個工作。帶有相同請求 ID 的重試請求絕不會啟動重複的 Agent。
-- **傳送訊息。** Agent 之間可以相互收發訊息，也能向你傳送訊息。Facade 會一次性貼上整則訊息並傳送。如果有未傳送的文字或提示問題阻擋，傳送將會等待，直到輸入區域空閒。
-- **終端機控制。** Agent 可以讀取其他 Agent 的螢幕、輸入命令並按鍵，以回答提示或協助受阻的同伴。當子 Agent 等待權限、回答或登入達到 20 秒時，啟動它的 Agent 會收到通知。
+Facade 會在需要時於遠端機器安裝相同版本。Facade 在遠端機器使用固定的安裝路徑。需要手動安裝時，選用與本機 Orchestrator 相同的版本。在 VS Code 中用 **Go to Agent** 開啟 Agent 的終端機。工作區記住開啟的 Agent、它們的幫手及 Pin。關閉終端機分頁後 Agent 仍會執行。**Resume Agent** 和 `facade resume` 會列出可接續的工作。
 
-## Agent Mesh
+> **YOLO 預設開啟。** 開啟時，Agent 可操作已連線機器上的其他 Agent。將該機器的 `facade.json` 設為 `"yolo": false`，即可沿用 CLI 自己的核准和沙箱，並將 MCP 存取限於呼叫者的建立樹。設定在下次啟動或 resume 時生效。用 `facade status` 查詢檔案位置。
 
-**跨視窗、跨機器、跨位置連接 Agent。**
-
-Facade Code 將你在這台電腦上開啟的各 Facade 視窗中的 Agent 連接成一個網路。開啟 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 視窗即可將協作擴展到另一台機器。
-
-- **跨視窗。** 啟用 `yolo` 時，Agent 可以觸及你在這台電腦上各 Facade 視窗中的每一個 Agent，無論是本機還是 Remote - SSH 視窗。將其關閉時，Agent 只能觸及它自己的群組：即由你啟動的 Agent 及其衍生啟動的 Agent。
-- **透過 SSH 擴展。** 在 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 視窗中，Agent 直接在遠端機器上執行，使用該機器上的工具、檔案與帳戶。本機 Agent 可以直接啟動並控制 Remote - SSH 視窗中的 Agent。
-- **透過手機協調。** 使用 [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) 將 Claude 行動端 App 連接到電腦上的 Claude Code 工作階段。該工作階段可以透過 Facade 協調其他 Agent，並將進度回報到你的手機。
-
-<sub>Remote Control 需要受支援的 Claude Code 版本、符合資格的訂閱以及完整範圍的登入。詳見其[設定需求](https://code.claude.com/docs/en/remote-control#requirements)。</sub>
+[產品文件](../../facade-code.md) · [詞彙表](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 
@@ -81,11 +105,12 @@ Facade Code 將你在這台電腦上開啟的各 Facade 視窗中的 Agent 連�
 
 下載 IDE 預覽版：[macOS (Apple 晶片, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [所有版本](https://github.com/y5ez3g/facadecode/releases)
 
-該 IDE 是 VS Code 的分支版本，與現有編輯器並行安裝且不共用任何內容：設定、擴充套件與 `facade` 命令完全獨立。其擴充套件來自 [Open VSX](https://open-vsx.org)；少數專有 Microsoft 擴充套件（例如 Remote Development 與 C/C++）僅在官方 Microsoft 組建版本中執行。架構與規格見 [`docs/ide/`](../../ide/)。
+IDE 預覽版可與現有編輯器並行安裝，使用自己的設定及擴充套件。 其擴充套件來自 [Open VSX](https://open-vsx.org)；少數專有 Microsoft 擴充套件（例如 Remote Development 與 C/C++）僅在官方 Microsoft 組建版本中執行。架構與規格見 [`docs/ide/`](../../ide/)。
 
 ## 從原始碼建置
 
 - **擴充套件：**將 [`extension/AGENTS.md`](../../../extension/AGENTS.md) 提供給你的程式設計 Agent 即可建置封裝套件。
+- **Orchestrator / Shell.** [建置說明](../../../core/README.md).
 - **IDE：**將 [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) 提供給你的程式設計 Agent 即可建置應用程式。
 
 關於貢獻指南與分支規範，請參閱 [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) 與 [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md)。

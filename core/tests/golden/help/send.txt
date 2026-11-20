@@ -1,24 +1,17 @@
-Send a message to an agent or the human
+Send a message to an agent
 
-Usage: facade send [OPTIONS] <RECIPIENT> <TEXT>
+Usage: facade send <RECIPIENT> <TEXT>
 
-Give an agent a task or ask it a question, as yourself or, in an agent's terminal, as that agent.
-Facade waits up to 30 seconds to deliver the message to an agent it started; a guest gets it in its
-inbox at once. A message from an agent to the human goes to each of the agent's editor windows that
-shows Facade messages.
+Send a message from the command line. The Orchestrator waits up to 30 seconds for a managed agent's
+terminal to receive it or a guest to read it. On delivery, this command prints the message address.
 
 Arguments:
-  <RECIPIENT>  Agent ID or name, such as a17@gpu on another machine, or human for the human
-               If an agent is also named human, quote '#human' for the human or use the agent's ID
+  <RECIPIENT>  Agent address, ID or name
   <TEXT>       Message text, up to 8,000 characters and 540 lines
 
 Options:
-      --reply-to <MESSAGE>  ID of a message in your inbox to reply to
-  -h, --help                Print help
+  -h, --help  Print help
 
 Examples:
-  # Ask agent a3 to review a change
-  facade send a3 "Please review the diff in src/parser.rs"
-
-  # From an agent in an editor window, tell the human the tests passed
-  facade send human "Done: all tests pass"
+  # Ask an agent on gpu to review a change
+  facade send a3@gpu "Please review the diff in src/parser.rs"

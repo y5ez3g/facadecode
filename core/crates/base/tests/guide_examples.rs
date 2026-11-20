@@ -10,11 +10,11 @@ use facade_base::daemon::{
     self, CancelParams, ChangedParams, ClosingParams, HelloParams, HelloResult, UnwatchParams,
     WatchParams, WatchResult,
 };
-use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine;
+use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::operations::{
     CallParams, EmptyResult, Operation, OperationVisitor, Topic, TopicVisitor,
 };
+use facade_base::{machine, v3};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -79,15 +79,19 @@ impl OperationVisitor for OperationPart<'_> {
     }
 }
 
-fn operation(name: &str, value: &Value, result: bool) -> Result<(), String> {
+fn operation(name: &str, value: &Value, result: bool, legacy: bool) -> Result<(), String> {
     let mut part = OperationPart {
         name,
         value,
         result,
         read: None,
     };
-    daemon::visit_operations(&mut part);
-    machine::visit_operations(&mut part);
+    if legacy {
+        part.operation::<daemon::DaemonUpgrade>();
+        part.operation::<machine::AgentList>();
+    } else {
+        v3::visit_operations(&mut part);
+    }
     part.read
         .unwrap_or_else(|| Err(format!("{name} is no operation of this build")))
 }
@@ -126,8 +130,7 @@ fn topic(name: &str, value: &Value, of: Of) -> Result<(), String> {
         of,
         read: None,
     };
-    daemon::visit_topics(&mut part);
-    machine::visit_topics(&mut part);
+    v3::visit_topics(&mut part);
     part.read
         .unwrap_or_else(|| Err(format!("{name} is no topic of this build")))
 }
@@ -135,6 +138,8 @@ fn topic(name: &str, value: &Value, of: Of) -> Result<(), String> {
 /// What the example's earlier lines asked and watched, which later lines answer and change.
 #[derive(Default)]
 struct Exchange {
+    legacy: bool,
+    legacy_keeper_refused: bool,
     /// Each request's method, and the operation or topic it names.
     asked: HashMap<u64, (String, String)>,
     /// Each watch's topic.
@@ -146,19 +151,38 @@ impl Exchange {
     fn client_sends(&mut self, message: &Value) -> Result<(), String> {
         let params = &message["params"];
         let (method, named) = match message["method"].as_str() {
-            Some("hello") => (
-                "hello",
-                reads_as::<HelloParams>(params).map(|()| String::new())?,
-            ),
+            Some("hello") => {
+                if self.legacy {
+                    reads_as::<HelloParams>(params)?;
+                    if params["protocol"] != serde_json::json!(v3::TAKEOVER_DAEMON_PROTOCOL_RANGE)
+                        || params["kind"] != "terminal"
+                    {
+                        return Err(
+                            "the takeover example must use a terminal hello with [2,3]".into()
+                        );
+                    }
+                } else {
+                    reads_as::<v3::HelloParams>(params)?;
+                    if params["protocol"] != serde_json::json!(v3::DAEMON_PROTOCOL_RANGE) {
+                        return Err("the normal example must offer only v3".into());
+                    }
+                }
+                ("hello", String::new())
+            }
             Some("call") => {
                 reads_as::<CallParams>(params)?;
                 let op = params["op"].as_str().unwrap_or_default();
+                if self.legacy && op == "agent.list" && !self.legacy_keeper_refused {
+                    return Err(
+                        "the old agent list is only read after a keeper protocol refusal".into(),
+                    );
+                }
                 (
                     "call",
-                    operation(op, &params["args"], false).map(|()| op.to_string())?,
+                    operation(op, &params["args"], false, self.legacy).map(|()| op.to_string())?,
                 )
             }
-            Some("watch") => {
+            Some("watch") if !self.legacy => {
                 reads_as::<WatchParams>(params)?;
                 let name = params["topic"].as_str().unwrap_or_default();
                 let args = if params["args"].is_null() {
@@ -199,7 +223,14 @@ impl Exchange {
                 .get(&id)
                 .ok_or_else(|| format!("it answers request {id}, which no earlier line asked"))?;
             if let Some(error) = message.get("error") {
-                return reads_as::<ErrorBody>(error);
+                reads_as::<ErrorBody>(error)?;
+                if self.legacy && method == "call" && named == "daemon.upgrade" {
+                    let error = serde_json::from_value::<ErrorBody>(error.clone())
+                        .map_err(|error| error.to_string())?;
+                    self.legacy_keeper_refused = error.data.reason == Reason::IncompatibleProtocol
+                        && error.message.contains("the running keeper speaks");
+                }
+                return Ok(());
             }
             let result = &message["result"];
             return match method.as_str() {
@@ -214,10 +245,25 @@ impl Exchange {
                                 .collect::<Vec<_>>()
                         })
                     };
-                    let mut topics = daemon::topic_names();
-                    topics.extend(machine::topic_names());
-                    let mut ops = daemon::operation_names();
-                    ops.extend(machine::operation_names());
+                    let (protocol, topics, ops) = if self.legacy {
+                        let mut topics = daemon::topic_names();
+                        topics.extend(machine::topic_names());
+                        let mut ops = daemon::operation_names();
+                        ops.extend(machine::operation_names());
+                        (v3::TAKEOVER_DAEMON_PROTOCOL_RANGE[0], topics, ops)
+                    } else {
+                        if result.get("agent").is_some() || result.get("window").is_some() {
+                            return Err("normal v3 hello does not carry legacy identity".into());
+                        }
+                        (
+                            v3::DAEMON_PROTOCOL_RANGE[1],
+                            v3::topic_names(),
+                            v3::operation_names(),
+                        )
+                    };
+                    if result["protocol"] != protocol {
+                        return Err(format!("hello selected a protocol other than {protocol}"));
+                    }
                     if names("topics").as_ref() != Some(&topics) {
                         return Err(format!("its topics are not this build's, {topics:?}"));
                     }
@@ -226,7 +272,7 @@ impl Exchange {
                     }
                     Ok(())
                 }
-                "call" => operation(named, result, true),
+                "call" => operation(named, result, true, self.legacy),
                 "watch" => {
                     reads_as::<WatchResult>(result)?;
                     self.watched
@@ -254,13 +300,16 @@ impl Exchange {
 
 /// The message an example line holds: an arrow's line in a fenced example, `→` from the client and
 /// `←` from the daemon, or an inline message in backticks, whose method says who sends it.
-fn messages() -> Vec<(usize, bool, &'static str)> {
+fn messages() -> Vec<(usize, bool, bool, &'static str)> {
     let mut found = Vec::new();
+    let mut legacy = false;
     for (at, line) in GUIDE.lines().enumerate() {
-        if let Some(message) = line.strip_prefix("→ ") {
-            found.push((at + 1, true, message));
+        if line == "## Version 2 takeover and old data" {
+            legacy = true;
+        } else if let Some(message) = line.strip_prefix("→ ") {
+            found.push((at + 1, legacy, true, message));
         } else if let Some(message) = line.strip_prefix("← ") {
-            found.push((at + 1, false, message));
+            found.push((at + 1, legacy, false, message));
         } else {
             for inline in line
                 .split('`')
@@ -270,7 +319,7 @@ fn messages() -> Vec<(usize, bool, &'static str)> {
             {
                 let from_client = !(inline.contains("\"method\":\"changed\"")
                     || inline.contains("\"method\":\"closing\""));
-                found.push((at + 1, from_client, inline));
+                found.push((at + 1, legacy, from_client, inline));
             }
         }
     }
@@ -280,13 +329,22 @@ fn messages() -> Vec<(usize, bool, &'static str)> {
 #[test]
 fn every_example_message_of_the_guide_is_one_of_this_protocol() {
     let mut exchange = Exchange::default();
+    let mut legacy_exchange = Exchange {
+        legacy: true,
+        ..Exchange::default()
+    };
     let found = messages();
     assert!(
-        found.len() >= 16,
-        "the guide's example is gone: {} messages found",
-        found.len()
+        found.iter().filter(|(_, legacy, ..)| !legacy).count() >= 16
+            && found.iter().filter(|(_, legacy, ..)| *legacy).count() >= 6,
+        "the guide must keep the normal example and the v2 diagnostic exchange",
     );
-    for (at, from_client, line) in found {
+    for (at, legacy, from_client, line) in found {
+        let exchange = if legacy {
+            &mut legacy_exchange
+        } else {
+            &mut exchange
+        };
         let message: Value = serde_json::from_str(line)
             .unwrap_or_else(|err| panic!("guide.md:{at}: not JSON ({err}): {line}"));
         let read = if message["jsonrpc"] != "2.0" {
