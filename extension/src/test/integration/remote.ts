@@ -582,10 +582,11 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 					await back.close();
 					assert.deepStrictEqual(await expectViews(1), [secondViewer]);
 					await second.close();
-					await expectViews(0);
 					assert.strictEqual(await expectLink(true), session);
 					await endEditors([link]);
 					await expectLink(false);
+					// The remote workspace host can outlive its last editor window.
+					await expectViews(0);
 					assert.strictEqual((await inspect()).agent.pid, before.pid);
 					console.log('  ✔ Closing and reopening one window changed its viewer while the SSH route stayed open');
 				} finally {
