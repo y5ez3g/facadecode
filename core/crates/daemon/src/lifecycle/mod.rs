@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use facade_base::daemon::DaemonUpgradeResult;
+use facade_base::v3::AgentLabel;
 use tokio::sync::{Notify, oneshot, watch};
 
 use crate::log;
@@ -31,7 +32,7 @@ pub(crate) trait LifecycleActivity: Send + Sync + 'static {
     fn guest_listed(&self) -> bool;
     fn screen_writes(&self) -> usize;
     fn running_count(&self) -> usize;
-    fn running_managed_addresses(&self) -> Vec<String>;
+    fn running_managed_agents(&self) -> Vec<AgentLabel>;
     fn keeper_protocol_range(&self) -> Option<[u32; 2]>;
     fn keeper_build(&self) -> Option<String>;
     fn settle_pastes(&self) -> impl Future<Output = Vec<oneshot::Receiver<()>>> + Send;

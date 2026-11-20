@@ -55,6 +55,8 @@ public `run()` entry point.
 - A protocol 2 terminal can request a compatible takeover. The keeper and relay protocols stay
   at their existing versions. A takeover hands the PTY back to the daemon holding the new build.
   Recovery reads the original SQLite counters and screen records before it accepts business calls.
+  A keeper protocol refusal of a local terminal's takeover names the live managed agents holding
+  that keeper, with their stable references and labels.
 - A machine hello or a foreground `machine.connect` transfers its flushed connection to the network
   session. Authentication, probe, installation when needed and serve use that same SSH session.
 - The person's diagnostics read up to 200 lines of `core/logs/daemon.log`, with the home written

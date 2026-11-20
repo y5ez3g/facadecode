@@ -696,19 +696,8 @@ impl Daemon {
 
     pub(crate) fn agent_label(&self, agent: &AgentHandle) -> Result<v3::AgentLabel, ErrorBody> {
         let info = agent.info();
-        let reference = info.reference();
-        Ok(v3::AgentLabel {
-            address: self.agent_address(&reference)?,
-            reference,
-            name: info.name,
-            cli: info.cli,
-            state: if info.guest {
-                v3::AgentState::Online
-            } else {
-                public_state(info.state)
-            },
-            resumable: agent.rule().is_some() && info.session.is_some(),
-        })
+        let address = self.agent_address(&info.reference())?;
+        Ok(agent_label_of(info, address, agent.rule().is_some()))
     }
 
     /// Adds evidence about an agent which the caller was already authorized to operate on.
@@ -1198,6 +1187,25 @@ pub(crate) fn stored_message(message: v3::Message) -> daemon::Message {
         result,
         at: message.at,
         delivery: message.delivery,
+    }
+}
+
+pub(crate) fn agent_label_of(
+    info: daemon::AgentInfo,
+    address: String,
+    has_rule: bool,
+) -> v3::AgentLabel {
+    v3::AgentLabel {
+        reference: info.reference(),
+        address,
+        name: info.name,
+        cli: info.cli,
+        state: if info.guest {
+            v3::AgentState::Online
+        } else {
+            public_state(info.state)
+        },
+        resumable: has_rule && info.session.is_some(),
     }
 }
 
