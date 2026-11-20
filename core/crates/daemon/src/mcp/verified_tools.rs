@@ -162,7 +162,11 @@ fn screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
             .and_then(|lines| u16::try_from(lines).ok()),
     };
     match client.call::<v3::AgentScreen>(args) {
-        Ok(screen) => envelope::encode(screen).unwrap_or_else(|error| envelope::refusal(&error)),
+        Ok(mut screen) => {
+            // The v3 label is for Shell receipts. Keep read_screen's existing MCP payload.
+            screen.name = None;
+            envelope::encode(screen).unwrap_or_else(|error| envelope::refusal(&error))
+        }
         Err(err) => failed(&err, "nothing was changed"),
     }
 }
