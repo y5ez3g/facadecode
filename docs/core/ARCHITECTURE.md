@@ -107,8 +107,9 @@ cargo build &&
 The scenario sends a request with a method name 1 MiB long through the relay. The daemon replies with JSON-RPC error
 `-32601` and an error message longer than 1 MiB. The next `ping` on the same connection returns an empty object.
 
-The daemon alone opens the store, `core/facade.db`. The home's files each have one owner island: see
-[daemon](islands/daemon.md).
+The daemon owns the store, `core/facade.db`. The daemon process writes and migrates it. The offline machine-name
+helper reads the committed local name from the existing store when the service sleeps. The home's files each have
+one owner island. See [daemon](islands/daemon.md).
 
 ## Islands
 
@@ -154,10 +155,13 @@ core
 │   ├── server      client connections
 │   └── mcp         Facade's MCP tools behind each relay
 └── facade     the facade program
-    ├── commands    the terminal commands
+    ├── cli         command syntax and argument validation
+    ├── help        public help pages
+    ├── commands    agent commands and status
     ├── attach      showing an agent's terminal
     ├── hooks       what a CLI's hooks run
-    └── machine     SSH commands and the remote endpoint
+    ├── machine     SSH commands and the remote endpoint
+    └── upgrade     stable installer and takeover results
 ```
 
 The crates depend in one direction: base and screen, then rules, then keeper and daemon, then facade. The relay depends
@@ -186,8 +190,9 @@ on no other Facade crate. Inside base, texts may use protocol, and protocol and 
 - **Machine boundaries.** Agents and messages are known by their machine ID and number, never by a process ID or a local
   path. A relay's process ID and start time only show that its connection is still the same live relay. A machine
   session uses the same operations as a local caller, with its origin and target carried by the protocol. Socket paths
-  follow [PROTOCOL](../../core/protocol/PROTOCOL.md). Every client, VS Code included, gets what it shows through the
-  daemon protocol, and reads no file of core's.
+  follow [PROTOCOL](../../core/protocol/PROTOCOL.md). Connected clients, including VS Code, get machine and agent
+  data through the daemon protocol. Offline Shell help and service status use the daemon's read-only local name
+  helper.
 
 ## Operations that span islands
 

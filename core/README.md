@@ -61,22 +61,22 @@ export FACADE_HOME="$(mktemp -d)"
 export PATH="$PWD/target/debug:$PATH"
 facade_cmd="$PWD/target/debug/facade"
 "$facade_cmd" --help
-"$facade_cmd" start --name first fake      # Ctrl-] detaches and leaves the agent running
-FAKECLI_SESSION=86da4482-2bae-4a45-b193-a5664c19826a "$facade_cmd" start -d --name two fake
+"$facade_cmd" start -n first fake          # Ctrl+] detaches and leaves the agent running
+FAKECLI_SESSION=86da4482-2bae-4a45-b193-a5664c19826a "$facade_cmd" start -d -n two fake
 "$facade_cmd" list
-"$facade_cmd" ls -q                        # one complete address per line
 "$facade_cmd" send two "a message"
-"$facade_cmd" screen -n 20 --json two
-"$facade_cmd" inspect two
+"$facade_cmd" screen -n 20 two
+"$facade_cmd" status two
 ```
 
-Once `inspect` shows the session ID, stop the agent, list resumable sessions and resume it.
+Once `status two` shows the session ID, stop the agent, list resumable sessions and resume it.
 
 ```bash
 "$facade_cmd" stop two
 "$facade_cmd" resume
 "$facade_cmd" resume -d two
-"$facade_cmd" rm first two
+"$facade_cmd" stop first
+"$facade_cmd" stop two
 "$facade_cmd" status
 ```
 
@@ -89,42 +89,31 @@ $env:FACADE_HOME = (New-Item -ItemType Directory -Path ([IO.Path]::Combine([IO.P
 $env:PATH = "$(Join-Path $PWD target\debug);$env:PATH"
 $facadeCmd = (Resolve-Path -LiteralPath "target\debug\facade.exe").Path
 & $facadeCmd --help
-& $facadeCmd start --name first fake       # Ctrl-] detaches and leaves the agent running
+& $facadeCmd start -n first fake           # Ctrl+] detaches and leaves the agent running
 $env:FAKECLI_SESSION = '86da4482-2bae-4a45-b193-a5664c19826a'
-& $facadeCmd start -d --name two fake
+& $facadeCmd start -d -n two fake
 Remove-Item Env:FAKECLI_SESSION
 & $facadeCmd list
 & $facadeCmd send two "a message"
-& $facadeCmd screen -n 20 --json two
-& $facadeCmd inspect two
+& $facadeCmd screen -n 20 two
+& $facadeCmd status two
 ```
 
-Use the same stop, resume and cleanup commands once the session ID appears.
+Use the same stop and resume commands once the session ID appears.
 
 ```powershell
 & $facadeCmd stop two
 & $facadeCmd resume
 & $facadeCmd resume -d two
-& $facadeCmd rm first two
+& $facadeCmd stop first
+& $facadeCmd stop two
 & $facadeCmd status
 ```
 
-Use an agent's name or an address from `list`, such as `a2@devbox`. `status` shows the selected home, settings file,
-service process IDs, number of active agents and connected machines. When the local Orchestrator is sleeping, it
-says so without starting it. The logs are under `core/logs/` in that home. When you finish, remove the agents you
-started and wait for the temporary Orchestrator to exit before discarding its temporary home.
-
-## Shell completion
-
-`facade completion <SHELL>` prints a script for completing commands, aliases and options. Put `facade` on your shell's
-`PATH` before configuring it.
-
-- **Bash.** Add `source <(facade completion bash)` to `~/.bashrc`.
-- **Zsh.** Add `source <(facade completion zsh)` to `~/.zshrc` after `compinit`.
-- **Fish.** Save the output of `facade completion fish` to `~/.config/fish/completions/facade.fish`, creating the
-  directory if needed.
-- **PowerShell.** Add `facade completion powershell | Out-String | Invoke-Expression` to your PowerShell profile
-  (`$PROFILE`).
+Use an agent's name or a reference from `list`, such as `a2@devbox`. `status` shows the selected home, settings file,
+service process IDs, active agent count, connected machines and the Guest MCP launcher. When the local Orchestrator
+is sleeping, it says so without starting it. The logs are under `core/logs/` in that home. Stop the agents you started
+and wait for the temporary Orchestrator to exit before discarding its temporary home.
 
 ## What is in this folder
 

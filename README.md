@@ -53,7 +53,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 The installer adds `facade` and `facade-mcp` to PATH. Open a new terminal to use the updated PATH.
 
 The IDE preview's launcher also uses the name `facade`. If both programs are installed, your shell runs the first
-`facade` on PATH. Run `facade version` and look for a line of the form `facade <version>` to verify that you have
+`facade` on PATH. Run `facade --version` and look for a line of the form `facade <version>` to verify that you have
 the Shell command. The launcher name belongs to the Orchestrator after the IDE preview is retired.
 
 Run `facade upgrade` to install a newer version. Install and sign in to the CLIs you want to run on each machine.
@@ -98,7 +98,7 @@ way. You can also run Facade directly inside it.
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 Facade installs the matching version on the remote machine when needed and runs it from its fixed installation
