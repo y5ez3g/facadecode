@@ -61,11 +61,18 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 		editor.stdout?.on('data', capture);
 		editor.stderr?.on('data', capture);
 		editor.on('error', capture);
-		const receive = async <Result>(file: string): Promise<Result> => {
+		const receive = async <Result>(file: string, acceptCleanExit = false): Promise<Result> => {
 			try {
 				const answer = await until(file, () => {
+					const exited = acceptCleanExit && (editor.exitCode !== null || editor.signalCode !== null);
 					const text = files.read(file);
-					return text ? JSON.parse(text) as WindowAnswer : undefined;
+					if (text) { return JSON.parse(text) as WindowAnswer; }
+					// Remote-SSH can disconnect the workspace host before deactivate writes the close answer.
+					if (exited) {
+						assert.strictEqual(editor.exitCode, 0, `VS Code ${profile} did not exit cleanly`);
+						return { result: true };
+					}
+					return undefined;
 				}, 120_000);
 				if ('error' in answer) { throw new Error(answer.error); }
 				return answer.result as Result;
@@ -80,8 +87,9 @@ export async function withRustWindows(files: WindowFiles, start: StartEditor, jo
 		let sent = 0;
 		const act = <Result>(action: WindowAction) => {
 			const request = `${control}.${++sent}`;
+			const acceptCleanExit = action.kind === 'close' && editor.exitCode === null && editor.signalCode === null;
 			files.write(`${request}.request`, JSON.stringify(action));
-			return receive<Result>(`${request}.answer`);
+			return receive<Result>(`${request}.answer`, acceptCleanExit);
 		};
 		return {
 			ready, act,
