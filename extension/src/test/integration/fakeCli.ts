@@ -388,7 +388,12 @@ function start(): void {
 	// What a test asks of its screen shows within a fifth of a second
 	let quirked = '';
 	setInterval(() => {
-		const now = fs.existsSync(QUIRKS) ? fs.readFileSync(QUIRKS, 'utf8') : '';
+		let now = '';
+		try {
+			now = fs.readFileSync(QUIRKS, 'utf8');
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { throw error; }
+		}
 		if (now !== quirked) {
 			quirked = now;
 			const { title, reportedTitle, ask } = quirks();

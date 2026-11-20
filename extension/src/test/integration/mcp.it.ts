@@ -672,7 +672,11 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		}
 		if (RUST) {
 			const stopped = await script(alias, [{ tool: 'stop_agent', arguments: { agent: '$child' } }]);
-			assert.strictEqual(stopped.content('stop_agent')?.status, 'success');
+			const receipt = stopped.content('stop_agent');
+			if (receipt?.status !== 'success') {
+				await rustAgentRecord(childAlias, started.data.id).catch(error => console.error(`Rust MCP stop diagnostics unavailable: ${error}`));
+			}
+			assert.strictEqual(receipt?.status, 'success', JSON.stringify(receipt));
 		} else {
 			await closePublicAgent(childAlias);
 		}
