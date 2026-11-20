@@ -1,9 +1,13 @@
-// Releases the tested VSIX and core files to the GitHub Release of their extension/<version> tag.
-// VS Code Marketplace and Open VSX get the VSIX files from that Release.
+// Prepares the tested VSIX and core files on the GitHub Pre-release of their extension/<version> tag.
+// The owner-approved publish workflow promotes those bytes to the mirror and the stores.
 //
 //   node scripts/release.mjs github --tag extension/<v> --input-dir <dir>   files of this run's native CI jobs
 //   node scripts/release.mjs github --backfill                              every version in archive/catalog.json
-//   node scripts/release.mjs stores --tag extension/<v>                     from the Release to both stores
+//   node scripts/release.mjs build-needed --tag extension/<v>               whether the complete candidate is already uploaded
+//   node scripts/release.mjs verify --tag extension/<v>                     verify an existing GitHub candidate
+//   node scripts/release.mjs mirror --tag extension/<v>                     copy the exact candidate to the versioned mirror
+//   node scripts/release.mjs stores --tag extension/<v> --manifest-digest <sha256>  publish the verified mirror bytes
+//   node scripts/release.mjs promote --tag extension/<v> --manifest-digest <sha256> switch the two stable origins
 //   node scripts/release.mjs version <v>                                    the extension's, the window component's and core's version
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -15,6 +19,7 @@ import { pathToFileURL } from 'node:url';
 import { coreArchive, coreInstallers, coreVersionFile } from '../../core/scripts/package-core.mjs';
 import { CORE, withWorkspaceVersion } from './core.mjs';
 import { filesOfZip } from './native.mjs';
+import { publishMirror, pruneMirror } from './release-mirror.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const repository = 'y5ez3g/facadecode';
@@ -81,11 +86,14 @@ export function verifyVsix(version, target, file) {
 
 export const checksumsText = artifacts => artifacts.map(a => `${a.sha256}  ${a.file}\n`).join('');
 export function parseChecksums(text) {
-	return new Map(text.trim().split('\n').map(line => {
+	const sums = new Map();
+	for (const line of text.replace(/\r?\n$/, '').split(/\r?\n/)) {
 		const match = /^([a-f0-9]{64}) {2}(\S+)$/.exec(line);
 		assert.ok(match, `Malformed ${SUMS} line: ${line}`);
-		return [match[2], match[1]];
-	}));
+		assert.ok(!sums.has(match[2]), `Duplicate ${SUMS} entry: ${match[2]}`);
+		sums.set(match[2], match[1]);
+	}
+	return sums;
 }
 
 /** The changelog's section for this version, without its heading. */
@@ -118,7 +126,7 @@ export function collectFromRun(version, dir) {
 }
 
 /** The standalone archives tested by the same native jobs as the VSIX files, and the installers from this tag. */
-function collectCoreFromRun(version, dir, work) {
+function collectCoreFromRun(version, dir, work, commit) {
 	const archives = fs.readdirSync(dir, { recursive: true, withFileTypes: true })
 		.filter(entry => entry.isFile() && entry.name.startsWith('facade-core-'));
 	const paths = nativeTargets.map(target => {
@@ -130,7 +138,12 @@ function collectCoreFromRun(version, dir, work) {
 	assert.equal(archives.length, paths.length, 'Unexpected standalone core archive in the run');
 	const releaseVersion = path.join(work, coreVersionFile);
 	fs.writeFileSync(releaseVersion, version + '\n');
-	paths.push(...coreInstallers.map(file => path.join(CORE, file)), releaseVersion);
+	for (const file of coreInstallers) {
+		const installer = path.join(work, file);
+		fs.writeFileSync(installer, releaseSource(commit, `core/${file}`));
+		paths.push(installer);
+	}
+	paths.push(releaseVersion);
 	return paths.map(file => ({ file: path.basename(file), path: file, sha256: sha256(fs.readFileSync(file)) }));
 }
 
@@ -158,7 +171,7 @@ async function download(url) {
 }
 
 function existingRelease(tag) {
-	const result = run('gh', ['release', 'view', tag, '--repo', repository, '--json', 'tagName,assets']);
+	const result = run('gh', ['release', 'view', tag, '--repo', repository, '--json', 'tagName,assets,isDraft,isPrerelease']);
 	if (result.status !== 0) {
 		assert.match(result.stderr, /release not found/i, result.stderr || 'Cannot read the release');
 		return undefined;
@@ -166,9 +179,29 @@ function existingRelease(tag) {
 	return JSON.parse(result.stdout);
 }
 
-function extensionReleaseVersions() {
-	return JSON.parse(gh(['release', 'list', '--repo', repository, '--limit', '200', '--json', 'tagName']))
+function extensionReleaseVersions({ stable = false } = {}) {
+	const flags = stable ? ['--exclude-drafts', '--exclude-pre-releases'] : [];
+	return JSON.parse(gh(['release', 'list', '--repo', repository, '--limit', '200', '--json', 'tagName', ...flags]))
 		.map(r => /^extension\/(\d+\.\d+\.\d+)$/.exec(r.tagName)?.[1]).filter(Boolean);
+}
+
+function coreFilesFor(version) {
+	return compareVersions(version, '0.1.6') < 0 ? [] : [...nativeTargets.map(coreArchive), ...coreInstallers, coreVersionFile];
+}
+
+export function requiredReleaseFiles(version) {
+	return [...targetsFor(version).map(target => fileFor(version, target)), ...coreFilesFor(version), SUMS];
+}
+
+export function candidateNeedsBuild(version, release) {
+	const present = new Set(release?.assets.map(asset => asset.name));
+	if (!present.size) {
+		assert.ok(!release || release.isDraft || release.isPrerelease, `extension/${version} is already a stable Release`);
+		return true;
+	}
+	assert.ok(requiredReleaseFiles(version).every(file => present.has(file)),
+		`extension/${version} has an incomplete asset upload. Re-run the original failed GitHub Pre-release job to reuse its signed artifacts.`);
+	return false;
 }
 
 /** Downloads the requested Release assets and checks each against SHA256SUMS and any VSIX manifests. */
@@ -194,17 +227,18 @@ function downloadRelease(tag, version, dir, coreFiles = []) {
  * has: a file of the same name with other bytes stops the release, and only missing files are added. The Release is then
  * downloaded again and checked file by file.
  */
-export function publishGithubRelease({ tag, version, commit, artifacts, core = [], notes, latest, work }) {
+export function publishGithubRelease({ tag, version, commit, artifacts, core = [], notes, latest, prerelease = false, work }) {
 	const assets = [...artifacts, ...core];
 	const stage = fs.mkdtempSync(path.join(work, `${version}-`));
 	fs.writeFileSync(path.join(stage, SUMS), checksumsText(assets));
 	const files = [...assets.map(a => a.path), path.join(stage, SUMS)];
-	let release = existingRelease(tag);
+	const release = existingRelease(tag);
 	if (!release) {
 		const notesFile = path.join(stage, 'notes.md');
 		fs.writeFileSync(notesFile, notes);
+		const flags = prerelease ? ['--draft', '--prerelease', '--latest=false'] : [`--latest=${latest}`];
 		gh(['release', 'create', tag, '--repo', repository, '--verify-tag', '--title', `Facade Code Extension ${version}`,
-			'--notes-file', notesFile, `--latest=${latest}`, ...files]);
+			'--notes-file', notesFile, ...flags, ...files]);
 		console.log(`${tag}: Release created with ${assets.length} files and ${SUMS}.`);
 	} else {
 		const existing = fs.mkdtempSync(path.join(work, `${version}-existing-`));
@@ -221,14 +255,26 @@ export function publishGithubRelease({ tag, version, commit, artifacts, core = [
 		if (latest && JSON.parse(gh(['api', `repos/${repository}/releases/latest`])).tag_name !== tag) gh(['release', 'edit', tag, '--repo', repository, '--latest']);
 		console.log(`${tag}: Release already there; ${missing.length} missing file(s) added, the rest match byte for byte.`);
 	}
-	const checked = downloadRelease(tag, version, fs.mkdtempSync(path.join(work, `${version}-check-`)), core.map(asset => asset.file));
+	const verify = fs.mkdtempSync(path.join(work, `${version}-check-`));
+	const checked = downloadRelease(tag, version, verify, core.map(asset => asset.file));
 	assert.deepEqual(checked.map(a => [a.file, a.sha256]), assets.map(a => [a.file, a.sha256]), `${tag} differs from the released files`);
+	assert.equal(sha256(fs.readFileSync(path.join(verify, SUMS))), sha256(fs.readFileSync(path.join(stage, SUMS))),
+		`${tag} serves a different ${SUMS}`);
+	if (prerelease && (!release || release.isDraft)) publishCandidateDraft(tag);
 	console.log(`${tag}: downloaded again; all ${assets.length} files match.`);
 	return checked;
 }
 
+function publishCandidateDraft(tag) {
+	gh(['release', 'edit', tag, '--repo', repository, '--draft=false', '--prerelease', '--latest=false']);
+}
+
 function resolveCommit(ref) {
 	return execFileSync('git', ['rev-parse', `${ref}^{commit}`], { cwd: root, encoding: 'utf8' }).trim();
+}
+
+function releaseSource(commit, file) {
+	return execFileSync('git', ['show', `${commit}:${file}`], { cwd: root });
 }
 
 function ensureTag(tag, commit) {
@@ -268,17 +314,94 @@ async function backfill(work) {
 
 async function releaseRun(tag, inputDir, work) {
 	const version = versionOfTag(tag);
-	const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-	assert.equal(manifest.version, version, `${tag} is not the checked-out extension version ${manifest.version}`);
 	const commit = resolveCommit(tag);
+	const manifest = JSON.parse(releaseSource(commit, 'extension/package.json'));
+	assert.equal(manifest.version, version, `${tag} is not the checked-out extension version ${manifest.version}`);
 	const artifacts = collectFromRun(version, inputDir);
-	const core = collectCoreFromRun(version, inputDir, work);
+	const core = collectCoreFromRun(version, inputDir, work, commit);
 	const runUrl = process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : 'a local build';
-	const notes = `${releaseNotes(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), version)}\n\n---\n\n` +
+	const downloads = `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}`;
+	const install = [
+		'### Install the Shell by version',
+		'',
+		'macOS, Linux and WSL',
+		'',
+		'```sh',
+		`sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" -- --version "$2"' facade-install ${downloads}/install.sh ${version}`,
+		'```',
+		'',
+		'Windows PowerShell',
+		'',
+		'```powershell',
+		`$response = Invoke-WebRequest -UseBasicParsing '${downloads}/install.ps1'`,
+		`& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray()))) -Version ${version}`,
+		'```',
+		'',
+	].join('\n');
+	const notes = `${releaseNotes(releaseSource(commit, 'extension/CHANGELOG.md').toString(), version)}\n\n---\n\n` +
 		`Built and tested on native runners for every platform by ${runUrl}, from ${commit}. ` +
-		`The VSIX files are published to VS Code Marketplace and Open VSX. SHA-256 values for all assets are in ${SUMS}.\n`;
-	const newest = [version, ...extensionReleaseVersions()].sort(compareVersions).at(-1);
-	publishGithubRelease({ tag, version, commit, artifacts, core, notes, latest: version === newest, work });
+		`SHA-256 values for all assets are in ${SUMS}.\n\n${install}`;
+	publishGithubRelease({ tag, version, commit, artifacts, core, notes, latest: false, prerelease: true, work });
+}
+
+function verifyRelease(tag, work, prepare = false) {
+	const version = versionOfTag(tag);
+	const release = existingRelease(tag);
+	assert.ok(release, `${tag} has no GitHub Release. Prepare a candidate first.`);
+	assert.ok(prepare || !release.isDraft, `${tag} is still a draft. Prepare a Pre-release first.`);
+	const coreFiles = coreFilesFor(version);
+	const assets = downloadRelease(tag, version, work, coreFiles);
+	if (coreFiles.length) {
+		assert.equal(fs.readFileSync(path.join(work, coreVersionFile), 'utf8'), version + '\n',
+			`${tag} has a version marker for another release`);
+	}
+	const sums = path.join(work, SUMS);
+	assets.push({ file: SUMS, path: sums, sha256: sha256(fs.readFileSync(sums)) });
+	if (prepare && release.isDraft) publishCandidateDraft(tag);
+	console.log(`${tag}: verified ${assets.length} Release files.`);
+	return { version, assets, standalone: coreFiles.length !== 0 };
+}
+
+async function checkPromotion(version) {
+	const newest = extensionReleaseVersions({ stable: true }).sort(compareVersions).at(-1);
+	assert.ok(!newest || compareVersions(version, newest) >= 0, `Stable Facade is already at ${newest}`);
+	const response = await fetch(`https://facadecode.com/${coreVersionFile}`, {
+		redirect: 'error', signal: AbortSignal.timeout(60_000),
+	});
+	if (response.status === 404) return;
+	assert.ok(response.ok, `The website's stable marker returned HTTP ${response.status}`);
+	const mirrored = (await response.text()).trim();
+	assert.match(mirrored, /^[0-9]+\.[0-9]+\.[0-9]+$/, 'The website has an invalid stable version');
+	assert.ok(compareVersions(version, mirrored) >= 0, `The website is already at Facade ${mirrored}`);
+}
+
+async function mirrorRun(tag, work) {
+	const { version, assets, standalone } = verifyRelease(tag, work);
+	if (standalone) {
+		await checkPromotion(version);
+		await publishMirror(version, assets, false);
+	}
+	const digest = assets.find(asset => asset.file === SUMS).sha256;
+	if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `manifest=${digest}\n`);
+}
+
+function requireMirroredManifest(actual, expected) {
+	assert.match(expected ?? '', /^[a-f0-9]{64}$/, 'Supply the verified mirror manifest digest');
+	assert.equal(actual, expected, `The GitHub ${SUMS} changed after mirroring`);
+}
+
+async function promoteRun(tag, work, manifest) {
+	const { version, assets, standalone } = verifyRelease(tag, work);
+	requireMirroredManifest(assets.find(asset => asset.file === SUMS).sha256, manifest);
+	if (!standalone) return;
+	await checkPromotion(version);
+	await publishMirror(version, assets, true);
+	gh(['release', 'edit', tag, '--repo', repository, '--prerelease=false', '--latest']);
+	assert.equal(JSON.parse(gh(['api', `repos/${repository}/releases/latest`])).tag_name, tag,
+		`GitHub Latest did not switch to ${tag}`);
+	const versions = extensionReleaseVersions({ stable: true })
+		.filter(candidate => coreFilesFor(candidate).length).sort((left, right) => compareVersions(right, left));
+	await pruneMirror(version, versions);
 }
 
 async function marketplaceVersions() {
@@ -312,9 +435,11 @@ async function openVsxFile(version, artifact) {
 /** The Window Component first: the execution component's extension pack names it. */
 export const storeOrder = artifacts => [...artifacts].sort((a, b) => (b.target === 'universal') - (a.target === 'universal'));
 
-async function stores(tag, work) {
+async function stores(tag, work, manifest) {
 	const version = versionOfTag(tag);
-	const artifacts = storeOrder(downloadRelease(tag, version, fs.mkdtempSync(path.join(work, `${version}-stores-`))));
+	const dir = fs.mkdtempSync(path.join(work, `${version}-stores-`));
+	const artifacts = storeOrder(downloadRelease(tag, version, dir));
+	requireMirroredManifest(sha256(fs.readFileSync(path.join(dir, SUMS))), manifest);
 	console.log(`${tag}: ${artifacts.length} VSIX files downloaded from the Release and checked against ${SUMS}.`);
 	const listed = await marketplaceVersions();
 	for (const artifact of artifacts) {
@@ -374,9 +499,16 @@ async function main() {
 	try {
 		if (command === 'github' && args.includes('--backfill')) await backfill(work);
 		else if (command === 'github') await releaseRun(option('--tag'), path.resolve(option('--input-dir') ?? 'missing --input-dir'), work);
-		else if (command === 'stores') await stores(option('--tag'), work);
+		else if (command === 'build-needed') {
+			const tag = option('--tag');
+			console.log(candidateNeedsBuild(versionOfTag(tag), existingRelease(tag)));
+		}
+		else if (command === 'verify') verifyRelease(option('--tag'), work, args.includes('--prepare'));
+		else if (command === 'mirror') await mirrorRun(option('--tag'), work);
+		else if (command === 'promote') await promoteRun(option('--tag'), work, option('--manifest-digest'));
+		else if (command === 'stores') await stores(option('--tag'), work, option('--manifest-digest'));
 		else if (command === 'version') raiseVersion(args[0]);
-		else throw new Error('Usage: release.mjs github --tag extension/<v> --input-dir <dir> | github --backfill | stores --tag extension/<v> | version <v>');
+		else throw new Error('Usage: release.mjs <github|build-needed|verify|mirror|stores|promote> --tag extension/<v> | github --backfill | version <v>');
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true });
 	}

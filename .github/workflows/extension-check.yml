@@ -23,6 +23,10 @@ on:
         description: Sign the Windows packages' programs
         type: boolean
         default: false
+      package_only:
+        description: Build and verify the packages after full checks have passed for this source tree
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,19 +43,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        engine: ${{ fromJSON(inputs.package_only && '["old"]' || '["old","rust"]') }}
+        target: [linux-x64, linux-arm64, win32-x64, win32-arm64, darwin-arm64, darwin-x64]
         include:
-          - { os: ubuntu-latest, target: linux-x64, engine: old }
-          - { os: ubuntu-latest, target: linux-x64, engine: rust }
-          - { os: ubuntu-24.04-arm, target: linux-arm64, engine: old }
-          - { os: ubuntu-24.04-arm, target: linux-arm64, engine: rust }
-          - { os: windows-latest, target: win32-x64, engine: old }
-          - { os: windows-latest, target: win32-x64, engine: rust }
-          - { os: windows-11-arm, target: win32-arm64, engine: old }
-          - { os: windows-11-arm, target: win32-arm64, engine: rust }
-          - { os: macos-latest, target: darwin-arm64, engine: old }
-          - { os: macos-latest, target: darwin-arm64, engine: rust }
-          - { os: macos-15-intel, target: darwin-x64, engine: old }
-          - { os: macos-15-intel, target: darwin-x64, engine: rust }
+          - { os: ubuntu-latest, target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: windows-latest, target: win32-x64 }
+          - { os: windows-11-arm, target: win32-arm64 }
+          - { os: macos-latest, target: darwin-arm64 }
+          - { os: macos-15-intel, target: darwin-x64 }
     runs-on: ${{ matrix.os }}
     # The windows-11-arm jobs take 37 to 45 minutes unsigned; signing adds about half a minute
     timeout-minutes: 60
@@ -96,15 +96,16 @@ jobs:
           echo "CC_$(uname -m)_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run compile
+        if: "!inputs.package_only"
       - run: npm test
-        if: matrix.engine == 'old'
+        if: "!inputs.package_only && matrix.engine == 'old'"
       - name: Release script tests
-        if: runner.os == 'Linux' && matrix.engine == 'old'
+        if: "!inputs.package_only && runner.os == 'Linux' && matrix.engine == 'old'"
         run: node --test scripts/release.test.mjs
       - run: node scripts/l10n.mjs check
-        if: matrix.engine == 'old'
+        if: "!inputs.package_only && matrix.engine == 'old'"
       - run: python ../docs/extension/audit/check_spec.py
-        if: matrix.engine == 'old'
+        if: "!inputs.package_only && matrix.engine == 'old'"
       # Signing: the Artifact Signing client, made for x64 alone, on an x64 .NET 8 - emulated on Arm - and Azure's sign-in
       - uses: actions/setup-dotnet@v5
         if: env.FACADE_SIGN
@@ -171,6 +172,7 @@ jobs:
       - run: npm run bundle
         if: matrix.engine == 'rust'
       - name: Download official VS Code for isolated tests
+        if: "!inputs.package_only"
         run: |
           node <<'JS'
           const fs = require('fs');
@@ -179,12 +181,12 @@ jobs:
           }).catch(error => { console.error(error); process.exitCode = 1; });
           JS
       - name: Isolated editor journeys on Linux
-        if: runner.os == 'Linux'
+        if: "!inputs.package_only && runner.os == 'Linux'"
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
         run: xvfb-run -a npm run test:integration 2>&1 | tee build/integration.log
       - name: Isolated editor journeys on Windows
-        if: runner.os == 'Windows'
+        if: "!inputs.package_only && runner.os == 'Windows'"
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
         run: |
@@ -194,12 +196,12 @@ jobs:
           cat build/integration.log
           exit "$status"
       - name: Isolated editor journeys on macOS
-        if: runner.os == 'macOS'
+        if: "!inputs.package_only && runner.os == 'macOS'"
         env:
           FACADE_IT_ENGINE: ${{ matrix.engine }}
         run: npm run test:integration 2>&1 | tee build/integration.log
       - name: Keep editor test output
-        if: always()
+        if: always() && !inputs.package_only
         uses: actions/upload-artifact@v4
         with:
           name: editor-tests-${{ matrix.target }}-${{ matrix.engine }}
@@ -213,4 +215,14 @@ jobs:
           path: |
             extension/build/vsix/*.vsix
             extension/build/core/facade-core-*
+          if-no-files-found: error
+      - name: Record the checked-out source tree
+        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.engine == 'old'"
+        run: git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/extension-tested-tree.txt"
+      - name: Keep the checked-out source tree
+        if: "!inputs.package_only && matrix.target == 'linux-x64' && matrix.engine == 'old'"
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-extension-tree
+          path: ${{ runner.temp }}/extension-tested-tree.txt
           if-no-files-found: error

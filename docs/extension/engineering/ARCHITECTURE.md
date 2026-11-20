@@ -660,19 +660,34 @@ with core built by its pinned toolchain on every target and the editor journeys 
 Artifacts and editor logs name the target. A configured CI target does not establish verified or published support;
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 
-Releases go to GitHub first and to the stores second. A pushed tag `extension/<version>`, which must name the manifest's
-version, starts the release workflow: the extension checks workflow builds and tests that tag on every native runner,
-its two Windows packaging jobs signing in the `extension-signing` environment, the only one whose OIDC sign-in Azure
-accepts for the signing identity (its variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` name it); a manual run of that
-workflow with `sign` signs the same way without releasing. The release job puts all platform VSIX files, the window
-component, the installers and native archives, the stable version marker and `SHA256SUMS` on the tag's GitHub Release, with the changelog's section as notes, marking the newest
-extension version Latest. It then downloads the Release again and checks each file's hash and its own manifests
-(publisher, component, version, target). The stores job waits for approval in the `extension-stores` environment,
+Release candidates use the GitHub Pre-release of their `extension/<version>` tag. A pushed tag must name the manifest's
+version. Preparation builds, checks package contents and installs the Shell archive on every native runner.
+When a successful full Extension checks run from this repository recorded the exact checked-out Git tree,
+preparation records that run and reuses its source test results. Otherwise preparation also runs the full checks.
+The two Windows packaging jobs sign in `extension-signing`, the only environment whose OIDC sign-in Azure
+accepts for the signing identity. Its variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` name the identity. A manual
+run of the extension checks workflow with `sign` signs the same way without releasing.
+The prepare action puts all platform VSIX files, the window
+component, installers, native archives, version marker and `SHA256SUMS` on the tagged draft. It downloads the draft's
+files and checks their hashes and VSIX manifests. It then opens the candidate as a Pre-release with instructions for
+installing that exact version.
+
+The `mirror` mode stages the Pre-release on the website for exact-version installs during dogfood. The mirror job
+copies the verified files to `/releases/<version>/<asset>` in the website's R2 bucket and reads every file back to
+compare its hash. The stable version marker advances only in `publish` mode. After dogfood, the owner runs the release
+workflow with the candidate tag and `publish`. The stores job waits for approval in the `extension-stores` environment,
 downloads the Release's files, checks them against `SHA256SUMS`, publishes the window component before the platform
 packages to VS Code Marketplace and Open VSX, skips files a store already lists, and passes only once both stores serve
-every file byte for byte. Nothing is rebuilt or repacked between the CI run, the Release and the stores. An existing
-Release is never overwritten: a same-named file with other bytes stops the release, and only missing files are added; a
-rerun for a complete Release finishes the stores without building again.
+every file byte for byte. Promotion updates the website's stable version marker and marks the same GitHub Release
+Latest. The website serves `/install.sh` and `/install.ps1` for the new stable version as UTF-8 text directly from R2.
+After promotion it retains the ten most recent formal releases in the mirror. GitHub retains the exact-version releases.
+The CI run, Release, mirror and stores use the same bytes. A same-named asset with different bytes stops the release.
+A rerun with the complete candidate verifies the existing files. The publish action uses them without rebuilding.
+
+The mirror uses the private `facadecode-releases` R2 bucket and the routes in
+[`wrangler.jsonc`](../../../.github/release-mirror/wrangler.jsonc). The Cloudflare account owner creates the bucket and
+deploys that config with Wrangler. The `extension-mirror` Actions environment supplies `CLOUDFLARE_ACCOUNT_ID` as a
+variable and the R2 upload API token as the `CLOUDFLARE_API_TOKEN` secret.
 
 Versions first published to the stores, before this order, are listed in `extension/archive/`'s catalog with their
 source, evidence and original Marketplace files and hashes. Catalog validation requires the historical three-platform
