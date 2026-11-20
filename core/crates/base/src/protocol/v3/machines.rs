@@ -36,6 +36,9 @@ pub struct MachineQueryResult {
     pub last_seen: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_error: Option<String>,
+    /// The reason this query failed, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Lists CLIs using the selected machine's launch environment and working folder.

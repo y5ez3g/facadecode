@@ -39,7 +39,6 @@ nix = { version = "0.31", features = ["term", "process", "signal", "socket", "ui
 libc = "0.2"
 crossterm = "0.29"
 clap = { version = "4.6", features = ["derive", "wrap_help"] }
-clap_complete = "4.6"
 signal-hook = "0.4"
 sha2 = "0.10"
 schemars = "1.2"

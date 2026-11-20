@@ -29,7 +29,7 @@ use facade_base::process::{EndReason, ProcessExit, ProcessIdentity};
 use facade_base::{files, settings};
 use facade_rules::entries::{self, LaunchOptions};
 use rusqlite::config::DbConfig;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OpenFlags, Row, params};
 
 mod guests;
 mod integrations;
@@ -45,7 +45,8 @@ pub(crate) use messages::{
 };
 pub(crate) use windows::{LegacyWindow, WindowTable};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+const FILE_NAME: &str = "facade.db";
 
 const SCHEMA: &str = "
 	CREATE TABLE numbers (next INTEGER NOT NULL);
@@ -164,6 +165,7 @@ pub(crate) struct InitialLaunch<'a> {
     pub(crate) source: CreationSource,
     pub(crate) options: &'a facade_rules::entries::LaunchOptions,
     pub(crate) relay: &'a RelayRunRecord,
+    pub(crate) command: Option<&'a str>,
 }
 
 #[derive(Default)]
@@ -203,10 +205,30 @@ pub(crate) struct Store {
 }
 
 impl Store {
+    /// Reads the recorded name while the service is sleeping. A nonempty WAL can hold the name
+    /// or the entire table after an ordinary idle exit, so SQLite must read it.
+    pub(crate) fn offline_machine_name(core: &Path) -> Option<String> {
+        let path = core.join(FILE_NAME);
+        let wal = core.join(format!("{FILE_NAME}-wal"));
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI;
+        let uri = if std::fs::metadata(wal).is_ok_and(|wal| wal.len() > 0) {
+            format!("{}?mode=ro&readonly_shm=1", files::sqlite_file_uri(&path)?)
+        } else {
+            files::immutable_uri(&path)?
+        };
+        let db = Connection::open_with_flags(uri, flags).ok()?;
+        db.query_row("SELECT name FROM machine WHERE singleton = 1", [], |row| {
+            row.get(0)
+        })
+        .ok()
+    }
+
     /// Opens the store in `core`, initializing it the first time with agent numbers above every
     /// agent in `held`, the CLIs the keeper holds. Blocks. A database that cannot be read fails.
     pub(crate) fn open(core: &Path, held: &[String]) -> anyhow::Result<OpenedStore> {
-        let path = core.join("facade.db");
+        let path = core.join(FILE_NAME);
         make_private(core, &path)
             .map_err(|err| anyhow::anyhow!("could not make {} private: {err}", core.display()))?;
         let mut connection = Connection::open(&path)
@@ -456,6 +478,7 @@ impl Store {
         yolo: bool,
         started_at: Option<&str>,
         relay: Option<&RelayRunRecord>,
+        command: Option<&str>,
     ) -> anyhow::Result<()> {
         #[cfg(debug_assertions)]
         if failing_for_test("fail-restart-commit") {
@@ -469,7 +492,8 @@ impl Store {
                      exit_signal = NULL, exit_at = NULL, exit_reason = NULL, \
                      started_at = COALESCE(?4, started_at), \
                      run_auth_version = CASE WHEN ?4 IS NULL AND run_auth_version IS NULL \
-                         THEN NULL ELSE 3 END, run_auth_birth = ?5, run_credential_digest = ?6 \
+                         THEN NULL ELSE 3 END, run_auth_birth = ?5, run_credential_digest = ?6, \
+                     launch_command = ?7 \
                      WHERE agent_id = ?1",
                     params![
                         agent_id,
@@ -480,6 +504,7 @@ impl Store {
                         relay
                             .and_then(|relay| relay.digest.as_ref())
                             .map(|digest| digest.as_slice()),
+                        command,
                     ],
                 )
             },
@@ -558,6 +583,24 @@ impl Store {
             ).optional(),
         )?;
         Ok(details.unwrap_or_default())
+    }
+
+    pub(crate) fn launch_command(&self, agent_id: &str) -> anyhow::Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+
+        self.with(
+            || format!("read the launch command of {agent_id}"),
+            |connection| {
+                connection
+                    .query_row(
+                        "SELECT launch_command FROM agents WHERE agent_id = ?1",
+                        [agent_id],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .map(Option::flatten)
+            },
+        )
     }
 
     /// Commits the session an agent's CLI reported; nothing once the record is deleted. Blocks.
@@ -802,14 +845,15 @@ fn write_launch(
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     connection.execute(
         "UPDATE agents SET creation_source = ?2, launch_options = ?3, run_auth_version = ?4,
-         run_auth_birth = ?5, run_credential_digest = ?6 WHERE agent_id = ?1",
+         run_auth_birth = ?5, run_credential_digest = ?6, launch_command = ?7 WHERE agent_id = ?1",
         params![
             id,
             launch.source.as_str(),
             options,
             auth.version,
             auth.process.birth,
-            auth.digest.as_ref().map(|digest| digest.as_slice())
+            auth.digest.as_ref().map(|digest| digest.as_slice()),
+            launch.command,
         ],
     )?;
     Ok(())
@@ -852,25 +896,28 @@ fn migrate(
         return Ok(());
     }
     let transaction = connection.transaction()?;
-    machines::snapshot_legacy_machines(&transaction)?;
-    machines::migrate_routes(&transaction)?;
-    messages::migrate_send_routes(&transaction)?;
-    if version == 0 {
-        transaction.execute("ALTER TABLE guests ADD COLUMN yolo INTEGER", [])?;
+    if version < 3 {
+        machines::snapshot_legacy_machines(&transaction)?;
+        machines::migrate_routes(&transaction)?;
+        messages::migrate_send_routes(&transaction)?;
+        if version == 0 {
+            transaction.execute("ALTER TABLE guests ADD COLUMN yolo INTEGER", [])?;
+        }
+        if version < 2 {
+            messages::migrate_withdrawals(&transaction)?;
+        }
+        transaction.execute_batch(
+            "ALTER TABLE agents ADD COLUMN started_at TEXT;
+             ALTER TABLE agents ADD COLUMN run_auth_version INTEGER;
+             ALTER TABLE agents ADD COLUMN run_auth_birth TEXT;
+             ALTER TABLE agents ADD COLUMN run_credential_digest BLOB;
+             ALTER TABLE agents ADD COLUMN creation_source TEXT;
+             ALTER TABLE agents ADD COLUMN launch_options TEXT;
+             CREATE TABLE agent_removals (agent_id TEXT PRIMARY KEY, expired INTEGER NOT NULL);",
+        )?;
+        snapshot_launch_options(&transaction, read_settings)?;
     }
-    if version < 2 {
-        messages::migrate_withdrawals(&transaction)?;
-    }
-    transaction.execute_batch(
-        "ALTER TABLE agents ADD COLUMN started_at TEXT;
-         ALTER TABLE agents ADD COLUMN run_auth_version INTEGER;
-         ALTER TABLE agents ADD COLUMN run_auth_birth TEXT;
-         ALTER TABLE agents ADD COLUMN run_credential_digest BLOB;
-         ALTER TABLE agents ADD COLUMN creation_source TEXT;
-         ALTER TABLE agents ADD COLUMN launch_options TEXT;
-         CREATE TABLE agent_removals (agent_id TEXT PRIMARY KEY, expired INTEGER NOT NULL);",
-    )?;
-    snapshot_launch_options(&transaction, read_settings)?;
+    transaction.execute("ALTER TABLE agents ADD COLUMN launch_command TEXT", [])?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -1361,7 +1408,14 @@ pub(crate) mod tests {
             .record_session("a1", Some("86da4482-2bae-4a45-b193-a5664c19826a"))
             .unwrap();
         store
-            .record_restart("a1", 77, false, Some("2026-11-09T17:26:00.123Z"), None)
+            .record_restart(
+                "a1",
+                77,
+                false,
+                Some("2026-11-09T17:26:00.123Z"),
+                None,
+                None,
+            )
             .unwrap();
         drop(store);
         let opened = Store::open(&core, &[]).unwrap();
@@ -1385,7 +1439,7 @@ pub(crate) mod tests {
         opened.store.record_session("a1", None).unwrap();
         opened
             .store
-            .record_restart("a1", 78, true, Some("2026-11-09T17:27:00.123Z"), None)
+            .record_restart("a1", 78, true, Some("2026-11-09T17:27:00.123Z"), None, None)
             .unwrap();
         assert!(
             Store::open(&core, &[]).unwrap().records.is_empty(),

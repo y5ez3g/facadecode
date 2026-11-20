@@ -1,41 +1,25 @@
-Start an agent
+Start an agent from a coding CLI.
 
-Usage: facade start [OPTIONS] <CLI> [ARGS]...
+Facade options come before the CLI name. Everything after the CLI name is
+passed to that CLI unchanged. Use that CLI's own flags for model, reasoning,
+and prompts.
 
-Start a built-in or configured CLI. Place Facade options before the CLI name. In an interactive
-terminal, Ctrl-] detaches and returns 0. If the agent exits first, this command returns the CLI's
-exit code. Use '-d' to start in the background and print the address. A successful start means the
-agent is running. Delivery of '--prompt' is separate. Scripts that need confirmation can start
-first, then run 'facade send ADDRESS TEXT' and check its result.
+Usage: facade start [OPTIONS] <CLI> [CLI_ARGS]...
 
-Arguments:
-  <CLI>      A built-in or configured CLI
-  [ARGS]...  Arguments for the CLI. Put Facade options before the CLI name
+Examples
+  facade start codex
+  facade start -d -n Nova codex --model gpt-6.2-sol
+  facade start --machine devbox --workdir /work/app -d codex
 
-Options:
-      --name <NAME>        Name the agent [default: chosen by the Orchestrator]
-      --prompt <TEXT>      Give the agent its first prompt when the CLI is ready
-      --machine <MACHINE>  Machine name or ID from 'facade machine list'
-      --folder <FOLDER>    Start in this folder [default: current folder here, login home on another
-                           machine]
-      --worktree <BRANCH>  Create a worktree and a branch from the current HEAD
-      --model <MODEL>      Use this model for the CLI
-      --effort <EFFORT>    Use this effort for the CLI
-  -d, --detach             Start in the background and print the agent's address
-  -h, --help               Print help
+Arguments
+  <CLI>          Configured coding CLI (e.g. claude, codex)
+  [CLI_ARGS]...  Arguments passed to the CLI unchanged
 
-Examples:
-  # Start Claude Code and work with it here
-  facade start claude
-
-  # Choose a name, model and effort
-  facade start --name review --model gpt-6.2-sol --effort high codex
-
-  # Start in the background with a first prompt
-  facade start -d --prompt "Fix the failing test in parser.rs" claude
-
-  # Start Codex in a folder relative to this shell
-  facade start --folder ./app codex
-
-  # Create a worktree on gpu and start there
-  facade start --machine gpu --folder /work/app --worktree review codex
+Options
+  -n, --name <NAME>          Name this agent (default: chosen by Facade)
+      --machine <MACHINE>    Run on this machine (default: {machine})
+      --workdir <DIRECTORY>  Working directory (default: current directory locally,
+                             login directory remotely)
+      --worktree <BRANCH>    Create a Git worktree and branch from current HEAD
+  -d, --detach               Start in the background
+  -h, --help                 Show help

@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 安装器将 `facade` 和 `facade-mcp` 加入 PATH。打开一个新终端，让新的 PATH 生效。运行 `facade upgrade` 升级。在各台机器上安装并登录所需的 CLI。内置选项有 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi。
 
-IDE 的启动器也叫 `facade`。两者都装时，Shell 运行 PATH 中排在前面的程序。IDE 预览版退役后，这个命令名归 Orchestrator。运行 `facade version`。看到形如 `facade <version>` 的输出，就确认用的是 Shell 命令。
+IDE 的启动器也叫 `facade`。两者都装时，Shell 运行 PATH 中排在前面的程序。IDE 预览版退役后，这个命令名归 Orchestrator。运行 `facade --version`。看到形如 `facade <version>` 的输出，就确认用的是 Shell 命令。
 
 ### VS Code
 
@@ -88,7 +88,7 @@ facade attach ada
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 需要时 Facade 在远机装上匹配版本。Facade 在远机使用固定的安装路径。需要手动安装时，选和本机 Orchestrator 相同的版本。在 VS Code 中用 **Go to Agent** 打开 Agent 终端。工作区记住打开过的 Agent、它们的帮手和 Pin。关闭终端 tab 后 Agent 照常运行。**Resume Agent** 和 `facade resume` 会列出可继续的工作。

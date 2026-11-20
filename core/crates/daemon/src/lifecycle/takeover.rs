@@ -119,19 +119,25 @@ impl Lifecycle {
         if let Some(keeper) = activity.keeper_protocol_range()
             && shared_version(args.keeper_protocol_range, keeper).is_none()
         {
-            let agents = activity.running_managed_addresses();
+            let agents = activity.running_managed_agents();
             if !agents.is_empty() {
                 let [low, high] = args.keeper_protocol_range;
                 let [keeper_low, keeper_high] = keeper;
-                let addresses = agents.join(", ");
-                return Err(ErrorBody::new(
+                let addresses = agents
+                    .iter()
+                    .map(|agent| agent.address.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut error = ErrorBody::new(
                     Reason::IncompatibleProtocol,
                     format!(
                         "{} speaks keeper protocol {low} to {high}, and the running keeper speaks \
                          {keeper_low} to {keeper_high}. Stop the running agents {addresses} and try again.",
                         args.build
                     ),
-                ));
+                );
+                error.data.agents = agents;
+                return Err(error);
             }
         }
         let running = activity.running_count();

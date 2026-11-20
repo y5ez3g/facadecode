@@ -8,32 +8,45 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use facade_base::address::short_machine_id;
 use facade_base::daemon::{display_name, methods};
 use facade_base::daemon_client::{DaemonClient, transient_transport};
 use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Reason, RequestRead, ServerMessage, decode_arguments, read_request,
     read_server_message,
 };
-use facade_base::machine::{
-    ConnectedParams, ConnectionOutcome, MachineRemoveArgs, MachineRenameArgs,
-};
-use facade_base::operations::NoArgs;
+use facade_base::machine::{ConnectedParams, ConnectionOutcome};
 use facade_base::paths::ClientSocket;
 use facade_base::ssh::{self, BootstrapAction, RemoteLoginShell, RemoteProbe, SshMode};
 use facade_base::v3::{
-    ClientKind, ConnectionKind, ConnectionState, DAEMON_PROTOCOL_RANGE, HelloParams, HelloResult,
-    MachineConnect, MachineConnectArgs, MachineConnection, MachineHello, MachineInfo, MachineList,
-    MachineListResult, MachineRemove, MachineRename, MachineState, MachineTransport,
+    ClientKind, ConnectionKind, DAEMON_PROTOCOL_RANGE, HelloParams, HelloResult, MachineConnect,
+    MachineConnectArgs, MachineHello, MachineTransport,
 };
-use serde_json::Value;
 
 use crate::cli::{MachineAction, ServeArgs, SshTarget};
-use crate::errors::{self, Problem, ServeFailure, about_connection, about_machine, repair_tip};
-use crate::table;
+use crate::errors::{self, Problem, ServeFailure, about_connection, repair_command};
+
+mod roster;
+
+// The wire representation is also checked by the existing protocol round-trip test.
+#[cfg(test)]
+use facade_base::v3::MachineListResult;
 
 // Leave time for the person's SSH prompts before the daemon's machine handshake starts.
 const SSH_LOGIN_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The native console interruption status Windows reports if SSH takes Ctrl+C first.
+const CONSOLE_INTERRUPTED: i32 = 0xC000_013A_u32 as i32;
+
+#[derive(Debug)]
+struct ConsoleInterrupted;
+
+impl std::fmt::Display for ConsoleInterrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("console interrupted")
+    }
+}
+
+impl std::error::Error for ConsoleInterrupted {}
 
 impl ServeArgs {
     fn home(self) -> anyhow::Result<Option<PathBuf>> {
@@ -59,45 +72,16 @@ pub(crate) fn run(
 ) -> anyhow::Result<i32> {
     match action {
         MachineAction::Add(target) => return add(target),
-        MachineAction::Link(target) => return foreground(target, ConnectionKind::Saved, connect),
+        MachineAction::Link(target) => {
+            return foreground(target, ConnectionKind::Saved, connect).or_else(interrupted_exit);
+        }
         MachineAction::Connect(target) => {
-            return foreground(target, ConnectionKind::Temporary, connect);
+            return foreground(target, ConnectionKind::Temporary, connect)
+                .or_else(interrupted_exit);
         }
-        MachineAction::List { json } => {
-            let mut daemon = connect()?;
-            let listed = daemon.call::<MachineList>(NoArgs {})?;
-            if json {
-                let json = machine_list_json(&listed)?;
-                println_or_end!("{}", serde_json::to_string_pretty(&json)?);
-            } else {
-                print_table(&listed.machines, &daemon.hello_result.machine_id);
-            }
-        }
-        MachineAction::Remove { machine } => {
-            let removed = connect()?
-                .call::<MachineRemove>(MachineRemoveArgs {
-                    machine: machine.clone(),
-                })
-                .map_err(|error| about_machine(&machine, None, error))?;
-            let machine = display_name(&machine);
-            println_or_end!("Removed the saved connection to {machine}.");
-            if removed.reachable {
-                eprintln!("note: {machine} still has a route through another machine");
-            }
-        }
-        MachineAction::Rename { machine, name } => {
-            let renamed = connect()?
-                .call::<MachineRename>(MachineRenameArgs {
-                    machine: machine.clone(),
-                    name,
-                })
-                .map_err(|error| about_machine(&machine, None, error))?;
-            println_or_end!(
-                "{} {}",
-                short_machine_id(&renamed.machine_id),
-                display_name(&renamed.name)
-            );
-        }
+        MachineAction::List => roster::list(&mut connect()?)?,
+        MachineAction::Remove { machine } => roster::remove(&mut connect()?, machine)?,
+        MachineAction::Rename { machine, name } => roster::rename(&mut connect()?, machine, name)?,
         MachineAction::Serve(args) => {
             let wake = !args.no_start;
             let home = args
@@ -115,8 +99,8 @@ pub(crate) fn run(
     Ok(0)
 }
 
-/// Gives the CLI the machine's reachability and the public state of each direct connection.
-pub(crate) fn machine_list_json(listed: &MachineListResult) -> serde_json::Result<Value> {
+#[cfg(test)]
+fn machine_list_json(listed: &MachineListResult) -> serde_json::Result<serde_json::Value> {
     serde_json::to_value(listed)
 }
 
@@ -252,7 +236,7 @@ struct SshSession {
     child: Child,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
-    stderr: std::thread::JoinHandle<String>,
+    stderr: std::thread::JoinHandle<SshDiagnostics>,
 }
 
 impl SshSession {
@@ -269,7 +253,7 @@ impl SshSession {
         })
     }
 
-    fn finish(self, kill: bool) -> io::Result<(ExitStatus, String)> {
+    fn finish(self, kill: bool) -> anyhow::Result<(ExitStatus, SshDiagnostics)> {
         let Self {
             mut child,
             input,
@@ -281,6 +265,7 @@ impl SshSession {
             let _ = child.kill();
         }
         let status = child.wait()?;
+        check_interrupted(status)?;
         Ok((status, stderr.join().unwrap_or_default()))
     }
 }
@@ -310,7 +295,8 @@ fn bootstrap_ssh(
     };
     let words = ssh::ssh_login_args(ssh_args, mode, control_dir.as_deref())
         .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-    let mut session = SshSession::spawn(&words)?;
+    let mut session = SshSession::spawn(&words)
+        .map_err(|error| ssh_failure(destination, ssh_args, &format!("{error:#}")))?;
     let probe_login = |input: &mut ChildStdin,
                        output: &mut BufReader<ChildStdout>|
      -> anyhow::Result<_> {
@@ -320,7 +306,6 @@ fn bootstrap_ssh(
         let Some(shell) = read_login_marker(output, ssh::parse_remote_platform)? else {
             return Ok(None);
         };
-        let system = shell.system();
         let remote = match shell {
             RemoteLoginShell::Unix => unix_command,
             _ => command(shell)?,
@@ -357,7 +342,7 @@ fn bootstrap_ssh(
                 facade_base::build_version(&remote)
             );
         }
-        Ok(Some((system, action)))
+        Ok(Some(action))
     };
     let prelude = std::thread::scope(|scope| {
         let (report, result) = mpsc::sync_channel(1);
@@ -382,14 +367,14 @@ fn bootstrap_ssh(
             }
         }
     });
-    let (system, action) = match prelude {
+    let action = match prelude {
         Ok(Some(setup)) => setup,
         Ok(None) => {
             let (status, stderr) = session.finish(false)?;
-            return Err(ssh_failure(destination, status, stderr));
+            return Err(ssh_failure(destination, ssh_args, &stderr.reason(status)));
         }
         Err(error) => {
-            let _ = session.finish(true);
+            session.finish(true)?;
             return Err(error);
         }
     };
@@ -398,40 +383,50 @@ fn bootstrap_ssh(
         BootstrapAction::Install => ssh::BOOTSTRAP_INSTALL,
         _ => unreachable!("the active connection can serve or install"),
     };
-    let ready = match send_ssh(&mut session.input, directive) {
-        Ok(true) => read_bootstrap_line(&mut session.output),
-        Ok(false) => Ok(None),
-        Err(error) => Err(error.into()),
-    };
-    let error = match ready {
+    match send_ssh(&mut session.input, directive) {
+        Ok(true) => {}
+        Ok(false) => {
+            let (status, stderr) = session.finish(false)?;
+            return Err(ssh_failure(destination, ssh_args, &stderr.reason(status)));
+        }
+        Err(error) => {
+            session.finish(true)?;
+            return Err(ssh_failure(destination, ssh_args, &error.to_string()));
+        }
+    }
+    let reason = match read_bootstrap_line(&mut session.output) {
         Ok(Some(line)) if line.as_slice() == ssh::BOOTSTRAP_READY.as_bytes() => return Ok(session),
         Ok(Some(_)) => {
-            let _ = session.finish(true);
-            anyhow::anyhow!("expected the remote Facade bootstrap to report ready")
+            session.finish(true)?;
+            "Expected the remote Facade bootstrap to report ready.".into()
         }
         Ok(None) => {
             let (status, stderr) = session.finish(false)?;
-            if action == BootstrapAction::Serve {
-                return Err(ssh_failure(destination, status, stderr));
+            if status.code() == Some(255) {
+                return Err(ssh_failure(destination, ssh_args, &stderr.reason(status)));
             }
-            let reason = ssh_reason(status, stderr);
-            anyhow::anyhow!("{reason}")
+            match stderr.installer_http_status {
+                Some(code) => format!("The installer download returned HTTP {code}."),
+                None => stderr.reason(status),
+            }
         }
         Err(error) => {
-            let _ = session.finish(true);
-            error
+            session.finish(true)?;
+            format!("{error:#}")
         }
     };
+    let destination = display_name(destination);
     if action == BootstrapAction::Install {
-        let install = ssh::remote_install_command(system, build, home)?;
         Err(anyhow::anyhow!(
-            "could not install Facade {} on {} ({error:#})\n  \
-             tip: run this command on that machine\n{install}",
-            facade_base::build_version(build),
-            display_name(destination)
+            "Could not install Facade {} on {destination}.\n{reason}\n\
+             Check that the release includes the installer, or install the same Facade version \
+             on {destination} and retry.",
+            facade_base::build_version(build)
         ))
     } else {
-        Err(error)
+        Err(anyhow::anyhow!(
+            "Could not start Facade on {destination}: {reason}"
+        ))
     }
 }
 
@@ -474,23 +469,58 @@ fn read_bootstrap_line(source: &mut impl BufRead) -> anyhow::Result<Option<Vec<u
     Ok(Some(line))
 }
 
-fn ssh_failure(destination: &str, status: ExitStatus, stderr: String) -> anyhow::Error {
-    let destination = display_name(destination);
-    if stderr.is_empty() && status.success() {
-        return Problem::SshClosed { destination }.into();
-    }
-    Problem::SshFailed {
-        destination,
-        why: ssh_reason(status, stderr),
-    }
-    .into()
+fn check_interrupted(status: ExitStatus) -> anyhow::Result<()> {
+    // Unix delivers SIGINT to the foreground process group and terminates this process directly.
+    // An ordinary SSH exit (including 130 or 255) only describes the connection.
+    anyhow::ensure!(
+        status.code() != Some(CONSOLE_INTERRUPTED),
+        ConsoleInterrupted
+    );
+    Ok(())
 }
 
-fn ssh_reason(status: ExitStatus, stderr: String) -> String {
-    if stderr.is_empty() {
-        errors::ssh_exit(status.code())
+fn interrupted_exit(error: anyhow::Error) -> anyhow::Result<i32> {
+    if error.is::<ConsoleInterrupted>() {
+        Ok(CONSOLE_INTERRUPTED)
     } else {
-        stderr
+        Err(error)
+    }
+}
+
+fn ssh_failure(destination: &str, ssh_args: &[String], why: &str) -> anyhow::Error {
+    let why = why
+        .strip_prefix(destination)
+        .and_then(|rest| rest.strip_prefix(": "))
+        .unwrap_or(why);
+    let words: Vec<_> = std::iter::once("ssh".to_owned())
+        .chain(ssh_args.iter().cloned())
+        .collect();
+    let tip = match repair_command(&words) {
+        Ok(command) => format!("Check your SSH access with '{command}' and try again."),
+        Err(words) => format!(
+            "Check your SSH access by running 'ssh' with these arguments, one per line:\n  {}",
+            words[1..].join("\n  ")
+        ),
+    };
+    anyhow::anyhow!(
+        "Could not connect to {} over SSH: {why}\n{tip}",
+        display_name(destination)
+    )
+}
+
+fn reconnect_tip(target: &SshTarget) -> String {
+    let prefix = ["facade", "machine", "connect"];
+    let mut words = prefix.map(str::to_owned).to_vec();
+    if let Some(home) = &target.home {
+        words.extend(["--home".into(), home.clone()]);
+    }
+    words.extend(target.ssh_args.iter().cloned());
+    match repair_command(&words) {
+        Ok(command) => format!("Reconnect with '{command}'."),
+        Err(words) => format!(
+            "Reconnect with 'facade machine connect' and these arguments, one per line:\n  {}",
+            words[prefix.len()..].join("\n  ")
+        ),
     }
 }
 
@@ -572,6 +602,7 @@ fn foreground(
     let given = ssh::parse_ssh_destination(&target.ssh_args)
         .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?
         .to_owned();
+    let reconnect = (!save).then(|| reconnect_tip(&target));
     let mut daemon = connect()?;
     let session = bootstrap_ssh(
         &target.ssh_args,
@@ -586,7 +617,7 @@ fn foreground(
             .call::<MachineConnect>(MachineConnectArgs {
                 transport: MachineTransport::Ssh {
                     ssh_destination: given.clone(),
-                    ssh_args: target.ssh_args,
+                    ssh_args: target.ssh_args.clone(),
                     remote_home: target.home,
                 },
                 kind,
@@ -602,7 +633,7 @@ fn foreground(
     let (destination, mut from_daemon, to_daemon, connection) = match streams {
         Ok(streams) => streams,
         Err(error) => {
-            let _ = session.finish(true);
+            session.finish(true)?;
             return Err(error);
         }
     };
@@ -637,7 +668,7 @@ fn foreground(
                 print_trust(&connected.machine);
             }
             let name = display_name(&connected.machine.name);
-            eprintln!("Connected to {name}. Press Ctrl-C to disconnect.");
+            eprintln!("Connected to {name}. Press Ctrl+C to disconnect.");
             print_logout_cleanup(&connected.machine);
             ForegroundEnd::Disconnected(name)
         };
@@ -651,6 +682,7 @@ fn foreground(
         let _ = child.kill();
     }
     let status = child.wait()?;
+    check_interrupted(status)?;
     let end = match result {
         // If the peer disappeared without a specific protocol error, explain what SSH reported.
         Err(error)
@@ -665,36 +697,90 @@ fn foreground(
     };
     match end {
         ForegroundEnd::Saved => Ok(0),
-        ForegroundEnd::Disconnected(machine) => Err(Problem::ConnectionLost {
-            machine,
-            destination: display_name(&destination),
+        ForegroundEnd::Disconnected(machine) => {
+            let tip = reconnect.expect("a temporary connection has a reconnect command");
+            Err(anyhow::anyhow!(
+                "The connection to {machine} was lost.\n{tip}"
+            ))
         }
-        .into()),
-        ForegroundEnd::BeforeHandshake => Err(ssh_failure(
-            &destination,
-            status,
-            ssh_said.join().unwrap_or_default(),
-        )),
+        ForegroundEnd::BeforeHandshake => {
+            let why = ssh_said.join().unwrap_or_default().reason(status);
+            Err(ssh_failure(&destination, &target.ssh_args, &why))
+        }
     }
 }
 
-/// Copies what SSH writes on standard error to this command's, as it comes, and gives its last
-/// line that is not blank once SSH closes it.
-fn pass_on_stderr(stderr: Option<std::process::ChildStderr>) -> std::thread::JoinHandle<String> {
+#[derive(Default)]
+struct SshDiagnostics {
+    last: String,
+    installer_http_status: Option<u16>,
+}
+
+impl SshDiagnostics {
+    fn note(&mut self, line: &[u8]) {
+        let line = String::from_utf8_lossy(line);
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        // curl and Windows PowerShell report the downloader's status in these forms. PowerShell
+        // follows it with the call site and other details.
+        let http_status = line
+            .strip_prefix("curl: (22) The requested URL returned error: ")
+            .or_else(|| {
+                line.strip_prefix("Invoke-WebRequest : The remote server returned an error: (")
+            })
+            .and_then(|text| text.get(..3))
+            .and_then(|code| code.parse().ok());
+        if http_status.is_some() {
+            self.installer_http_status = http_status;
+        }
+        self.last = crate::single_line(line);
+    }
+
+    fn reason(self, status: ExitStatus) -> String {
+        if !self.last.is_empty() {
+            self.last
+        } else if status.success() {
+            "SSH closed before Facade connected.".into()
+        } else {
+            errors::ssh_exit(status.code())
+        }
+    }
+}
+
+/// Copies SSH's stderr as it arrives, including prompts without a newline, and keeps the last
+/// diagnostic for the stage that failed.
+fn pass_on_stderr(
+    stderr: Option<std::process::ChildStderr>,
+) -> std::thread::JoinHandle<SshDiagnostics> {
     std::thread::spawn(move || {
-        let mut last = String::new();
-        let Some(stderr) = stderr else {
-            return last;
+        let mut diagnostic = SshDiagnostics::default();
+        let Some(mut stderr) = stderr else {
+            return diagnostic;
         };
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        let mut line = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            let read = match stderr.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            let bytes = &buffer[..read];
             // A saved link may still be running after its foreground command closes the pipe.
-            let _ = writeln!(io::stderr(), "{line}");
-            let line = line.trim();
-            if !line.is_empty() {
-                last = line.to_owned();
+            let _ = io::stderr().write_all(bytes);
+            for part in bytes.split_inclusive(|&byte| byte == b'\n') {
+                line.extend_from_slice(part);
+                if part.ends_with(b"\n") {
+                    diagnostic.note(&line);
+                    line.clear();
+                }
             }
         }
-        last
+        diagnostic.note(&line);
+        diagnostic
     })
 }
 
@@ -751,128 +837,6 @@ fn print_logout_cleanup(machine: &MachineHello) {
             display_name(&machine.name)
         );
     }
-}
-
-/// Prints one row per machine, this one first, and a warning for each saved connection that needs
-/// an SSH login.
-fn print_table(machines: &[MachineInfo], local_machine_id: &str) {
-    let label = |id: &str| {
-        machines
-            .iter()
-            .find(|machine| machine.machine_id == id)
-            .map_or_else(|| short_machine_id(id), |machine| machine.selector.clone())
-    };
-    let mut ordered: Vec<&MachineInfo> = machines.iter().collect();
-    ordered.sort_by_key(|machine| machine.machine_id != local_machine_id);
-    let saved_here = ordered
-        .first()
-        .filter(|machine| machine.machine_id == local_machine_id)
-        .map_or(&[][..], |machine| machine.connections.as_slice());
-    let mut logins = Vec::new();
-    let mut ssh_errors = Vec::new();
-    let rows: Vec<Vec<String>> = ordered
-        .iter()
-        .map(|machine| {
-            let saved = saved_here
-                .iter()
-                .filter(|connection| {
-                    connection.kind == ConnectionKind::Saved
-                        && connection.initiator_machine_id == local_machine_id
-                        && connection.machine_id == machine.machine_id
-                        && connection.ssh_destination.is_some()
-                })
-                .map(|connection| {
-                    let arguments = saved_arguments(connection);
-                    if connection.state == ConnectionState::SshInteractionRequired {
-                        let mut repair = ["facade", "machine", "add"].map(str::to_owned).to_vec();
-                        repair.extend(arguments.iter().cloned());
-                        logins.push((&machine.selector, repair));
-                    }
-                    errors::repair_command(&arguments).unwrap_or_else(|words| words.join(" "))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            if let Some(error) = &machine.ssh_error {
-                ssh_errors.push((&machine.selector, error));
-            }
-            let route = match machine.route.as_deref() {
-                Some([]) => "this machine".to_string(),
-                Some([_]) => "direct".to_string(),
-                Some(hops) => format!(
-                    "via {}",
-                    hops[..hops.len() - 1]
-                        .iter()
-                        .map(|id| label(id))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None => String::new(),
-            };
-            let state = match machine.state {
-                MachineState::Online => "online",
-                MachineState::Connecting => "connecting",
-                MachineState::Sleeping => "sleeping",
-                MachineState::Unreachable => "unreachable",
-                MachineState::SshInteractionRequired => "needs SSH login",
-            };
-            vec![
-                machine.name.clone(),
-                short_machine_id(&machine.machine_id),
-                machine.selector.clone(),
-                machine
-                    .build
-                    .as_deref()
-                    .map_or("", facade_base::build_version)
-                    .to_owned(),
-                state.to_owned(),
-                route,
-                machine.last_seen.clone().unwrap_or_default(),
-                saved,
-            ]
-        })
-        .collect();
-    println_or_end!(
-        "{}",
-        table(
-            &[
-                "NAME",
-                "ID",
-                "SELECTOR",
-                "VERSION",
-                "STATE",
-                "ROUTE",
-                "LAST SEEN",
-                "SAVED"
-            ],
-            &rows,
-        )
-    );
-    for (machine, error) in ssh_errors {
-        eprintln!("warning: SSH to {}: {error}", display_name(machine));
-    }
-    for (machine, repair) in logins {
-        eprintln!(
-            "warning: {} needs an SSH login; {}",
-            display_name(machine),
-            repair_tip(&repair)
-        );
-    }
-    if machines.len() == 1 {
-        eprintln!("No other machines. Run 'facade machine add <DESTINATION>' to connect one.");
-    }
-}
-
-fn saved_arguments(connection: &MachineConnection) -> Vec<String> {
-    let mut arguments = Vec::new();
-    if let Some(home) = &connection.remote_home {
-        arguments.extend(["--home".to_owned(), home.clone()]);
-    }
-    if connection.ssh_args.is_empty() {
-        arguments.extend(connection.ssh_destination.iter().cloned());
-    } else {
-        arguments.extend(connection.ssh_args.iter().cloned());
-    }
-    arguments
 }
 
 #[cfg(test)]

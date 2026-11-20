@@ -188,20 +188,19 @@ fn a_removal_interrupted_after_its_record_is_deleted_is_finished_by_the_next_dae
         .unwrap() as i32;
     let keeper = home.lock_record("keeper").expect("a keeper").0;
     let keeper_process = process_identity(keeper);
-    std::thread::scope(|scope| {
-        let removing = scope.spawn(|| home.run_facade(&["remove", &doomed]));
-        assert!(
-            wait_until(LOADED_TIMEOUT, || stopped(daemon)),
-            "the daemon did not stop after deleting the record"
-        );
-        kill_process(daemon);
-        let removed = removing.join().unwrap();
-        assert!(
-            !removed.status.success() && stderr(&removed).contains("the outcome is unknown"),
-            "{}",
-            stderr(&removed)
-        );
-    });
+    let removing = wire.send(
+        "call",
+        json!({ "op": "agent.remove", "args": { "agent": doomed } }),
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || stopped(daemon)),
+        "the daemon did not stop after deleting the record"
+    );
+    kill_process(daemon);
+    assert!(
+        wire.wait_for_response(removing, secs(1)).is_none(),
+        "the interrupted removal must not report a confirmed outcome"
+    );
     assert!(
         wait_until(LOADED_TIMEOUT, || !alive(&keeper_process)),
         "a keeper holding nothing exits with its daemon: {}",
@@ -212,7 +211,7 @@ fn a_removal_interrupted_after_its_record_is_deleted_is_finished_by_the_next_dae
     let listed = home.run_facade(&["list"]);
     assert_eq!(
         (listed.status.code(), stdout(&listed), stderr(&listed)),
-        (Some(0), String::new(), "No agents.\n".to_string())
+        (Some(0), String::new(), "No active agents.\nStart one with 'facade start codex', or run 'facade resume' to find saved sessions.\n".to_string())
     );
     assert!(
         wait_until(LOADED_TIMEOUT, || !home
@@ -296,23 +295,21 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
         term.text()
     );
     for round in 1..=2 {
+        let previous = term.output_len();
         let old = home.kill_daemon();
-        assert!(
-            term.wait_for(secs(10), |_| term.output_count(ATTACH_RECONNECT_NOTE)
-                == round),
-            "attempt {round}: {}",
-            term.text()
-        );
         home.wait_for_daemon_after(old, secs(30))
             .expect("a replacement daemon");
-        // The redraw after reconnecting replaces the note.
         assert!(
-            term.wait_for(secs(10), |text| !text.contains(ATTACH_RECONNECT_NOTE)),
+            term.wait_for_bytes(previous, b"READY", secs(10)),
             "attempt {round}: {}",
             term.text()
         );
     }
-    assert_eq!(term.output_count("Keys not sent:"), 0);
+    assert_eq!(term.output_count(ATTACH_RECONNECT_NOTE), 0);
+    assert_eq!(
+        term.output_count("bytes typed while disconnected were not sent"),
+        0
+    );
     term.send(b"after\r");
     assert!(
         term.wait_for(secs(10), |text| text.contains("got:after")),
@@ -338,12 +335,20 @@ fn attach_reconnects_and_never_duplicates_the_scrollback() {
 #[test]
 fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
     let home = TestHome::new("offlinekeys");
-    home.start_fake("w1");
+    let agent = home.start_fake("w1");
+    let away = "界";
+    let note = format!(
+        "Reconnected to w1 ({}). {} bytes typed while disconnected were not sent; check the screen and retype if needed.",
+        agent.address,
+        away.len()
+    );
+    // Allow the whole notice plus the terminal's last column, even with a long runner hostname.
+    let cols = u16::try_from(note.len() + 1).expect("the reconnect notice fits a terminal");
     let mut term = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .env("FACADE_TEST_GATES", "attach-evidence")
             .args(["attach", "w1"]),
-        100,
+        cols,
         30,
     );
     assert!(
@@ -360,17 +365,13 @@ fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
     // typed.
     pause_process(keeper);
     home.kill_daemon();
-    assert!(
-        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
-        "{}",
-        term.text()
-    );
+    assert!(wait_until(secs(10), || home.hello_result().is_none()));
+    // The socket can disappear before Attach switches its input queue to disconnected.
+    home.wait_for_gate("attach-disconnected");
     let disconnected = term.output_len();
-    let away = "界";
     term.send(away.as_bytes());
     home.wait_for_gate("attach-buffered-input");
     resume_process(keeper);
-    let note = format!("Keys not sent: {} bytes.", away.len());
     assert!(term.wait_for_output(secs(15), &note), "{}", term.text());
     let written = term.output_since(disconnected);
     let written = String::from_utf8_lossy(&written);
@@ -387,14 +388,13 @@ fn keys_typed_while_attach_is_disconnected_are_reported_after_the_redraw() {
         "{:?}",
         home.submitted_messages()
     );
-    std::fs::remove_file(home.path.join("core/reached-attach-buffered-input")).unwrap();
+    for point in ["attach-disconnected", "attach-buffered-input"] {
+        std::fs::remove_file(home.path.join(format!("core/reached-{point}"))).unwrap();
+    }
     pause_process(keeper);
     home.kill_daemon();
-    assert!(
-        term.wait_for(secs(10), |text| text.contains(ATTACH_RECONNECT_NOTE)),
-        "{}",
-        term.text()
-    );
+    assert!(wait_until(secs(10), || home.hello_result().is_none()));
+    home.wait_for_gate("attach-disconnected");
     term.send(b"never sent");
     home.wait_for_gate("attach-buffered-input");
     term.send(b"\x1d");
@@ -451,7 +451,7 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         wait_until(secs(15), || !alive(&survivor_process)),
         "the CLI outlived its console"
     );
-    home.run_facade_ok(&["inspect", &agent_id]);
+    home.run_facade_ok(&["status", &agent_id]);
     let ended = agent(&home, &agent_id).unwrap();
     assert!(
         ended["process"] == "ended"
@@ -471,6 +471,16 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         json!({ "agent": agent_id, "raw": facade_base::base64::encode(b"x") }),
     );
     assert_eq!(error_reason(&typed), "ended", "{typed}");
+    let address = ended["address"].as_str().expect("the recovered reference");
+    let refused = home.run_facade(&["type", &agent_id, "x"]);
+    assert_eq!(
+        (stdout(&refused), stderr(&refused), refused.status.code()),
+        (
+            String::new(),
+            format!("error: survivor ({address}) has stopped and cannot accept input.\n"),
+            Some(1),
+        )
+    );
     let mut term = TestTerminal::spawn(
         home.command(&test_binaries().facade)
             .args(["attach", &agent_id]),
@@ -482,12 +492,17 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         .expect("an attachment to an ended agent is refused");
     assert_eq!(status.code(), Some(1), "attaching to an ended agent fails");
     let shown = |term: &TestTerminal| term.text_with_scrollback();
+    let stopped = format!("error: survivor ({address}) has stopped.");
+    let read = format!("Read its final screen with 'facade screen {address}'.");
     assert!(
-        wait_until(secs(2), || shown(&term).contains("has ended")),
+        wait_until(secs(2), || {
+            let text = shown(&term);
+            text.contains(&stopped) && text.contains(&read)
+        }),
         "{}",
         shown(&term)
     );
-    home.run_facade_ok(&["remove", &agent_id]);
+    home.remove_agent(&agent_id);
     assert!(home.agents().is_empty());
     std::thread::sleep(Duration::from_millis(500));
     // On Windows the CLI ended with its console, before any stop.
@@ -569,11 +584,11 @@ fn an_ended_run_whose_terminal_a_descendant_holds_does_not_hold_up_recovery() {
     // The saved exit released the run, so no keeper holds it and none restarts the daemon. A
     // command starts the next one.
     let started = Instant::now();
-    let inspected = home.run_facade_ok(&["inspect", &agent_id]);
+    let inspected = home.run_facade_ok(&["status", &agent_id]);
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State:") && line[6..].trim() == "exited: code 3"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Exited (code 3)"),
         "{inspected}"
     );
     assert!(
@@ -985,18 +1000,19 @@ fn a_reconnect_keeps_the_cursor_the_agent_saved() {
         "{}",
         term.text()
     );
+    let previous = term.output_len();
     let old = home.kill_daemon();
-    assert!(
-        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
-        "{}",
-        term.text()
-    );
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
     assert!(
-        term.wait_for(secs(10), |text| !text.contains(ATTACH_RECONNECT_NOTE)),
+        term.wait_for_bytes(previous, b"READY", secs(10)),
         "{}",
         term.text()
+    );
+    assert_eq!(term.output_count(ATTACH_RECONNECT_NOTE), 0);
+    assert_eq!(
+        term.output_count("bytes typed while disconnected were not sent"),
+        0
     );
     std::fs::write(home.project.join("go"), "").unwrap();
     // The agent saved its cursor two rows above READY, in column 3.
@@ -1099,7 +1115,9 @@ fn attach_keeps_retrying_while_recovery_waits_and_detaches_at_once() {
     let home = TestHome::new("heldrecovery");
     home.start_fake("w1");
     let mut term = TestTerminal::spawn(
-        home.command(&test_binaries().facade).args(["attach", "w1"]),
+        home.command(&test_binaries().facade)
+            .env("FACADE_TEST_GATES", "attach-evidence")
+            .args(["attach", "w1"]),
         100,
         30,
     );
@@ -1111,12 +1129,10 @@ fn attach_keeps_retrying_while_recovery_waits_and_detaches_at_once() {
     let keeper = home.keeper_pid().expect("a keeper");
     pause_process(keeper);
     home.kill_daemon();
-    assert!(
-        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
-        "{}",
-        term.text()
-    );
+    assert!(wait_until(secs(10), || home.hello_result().is_none()));
+    home.wait_for_gate("attach-disconnected");
     term.send(b"held keys");
+    home.wait_for_gate("attach-buffered-input");
     std::thread::sleep(secs(12));
     assert_eq!(
         home.daemon_log().matches(" listening on ").count(),

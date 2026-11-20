@@ -8,9 +8,11 @@ use facade_base::daemon::{AgentsUpdate, WatchParams};
 use facade_base::jsonrpc::{AgentRemoval, ErrorBody, Reason, decode_arguments};
 use facade_base::machine::AgentRef;
 use facade_base::operations::Topic;
+use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::v3::{
-    AgentTarget, AgentsChange, AgentsSnapshot, AgentsTopic, Caller, MachinesChange, MachinesTopic,
-    NoArgs, ScreenChange, ScreenSnapshot, ScreenTopic, ScreenWatchArgs,
+    AgentTarget, AgentsChange, AgentsSnapshot, AgentsTopic, AttachmentInfo, AttachmentKind, Caller,
+    MachinesChange, MachinesTopic, NoArgs, ScreenChange, ScreenSnapshot, ScreenTopic,
+    ScreenWatchArgs,
 };
 use serde::Serialize;
 use tokio::sync::{broadcast::error::RecvError, mpsc, oneshot};
@@ -37,14 +39,22 @@ impl Daemon {
         match topic {
             ScreenTopic::NAME => {
                 let args: ScreenWatchArgs = decode_arguments(args)?;
+                if args.allow_ended && !matches!(args.target, AgentTarget::Reference { .. }) {
+                    return Err(ErrorBody::invalid_argument(
+                        "an ended screen needs an exact agent reference",
+                    ));
+                }
+                let operation = OperationTarget::Attach {
+                    allow_ended: args.allow_ended,
+                };
                 let reference = self
-                    .addressed_agent(&caller, args.target.clone(), OperationTarget::Attach)
+                    .addressed_agent(&caller, args.target.clone(), operation)
                     .await?;
                 if reference.machine_id != self.machine_id {
                     self.watch_remote_screen(reference, caller, args).await
                 } else {
-                    let agent = self.local_target(&caller, &reference, OperationTarget::Attach)?;
-                    self.watch_agent_screen(agent, args, viewer).await
+                    self.watch_local_screen(&caller, &reference, args, viewer)
+                        .await
                 }
             }
             AgentsTopic::NAME => {
@@ -91,8 +101,8 @@ impl Daemon {
                         "the terminal belongs to another machine",
                     ));
                 }
-                let agent = self.local_target(caller, reference, OperationTarget::Attach)?;
-                self.watch_agent_screen(agent, args, viewer).await
+                self.watch_local_screen(caller, &reference.clone(), args, viewer)
+                    .await
             }
             _ => Err(ErrorBody::refused(
                 "this topic has no forwarded subscription",
@@ -100,9 +110,26 @@ impl Daemon {
         }
     }
 
+    async fn watch_local_screen(
+        &self,
+        caller: &Caller,
+        reference: &AgentRef,
+        args: ScreenWatchArgs,
+        viewer: u64,
+    ) -> Result<Watch, ErrorBody> {
+        let operation = OperationTarget::Attach {
+            allow_ended: args.allow_ended,
+        };
+        let agent = self.local_target(caller, reference, operation)?;
+        self.watch_agent_screen(&agent, caller, args, viewer)
+            .await
+            .map_err(|error| self.with_agent_error(&agent, error))
+    }
+
     async fn watch_agent_screen(
         &self,
-        agent: AgentHandle,
+        agent: &AgentHandle,
+        caller: &Caller,
         args: ScreenWatchArgs,
         viewer: u64,
     ) -> Result<Watch, ErrorBody> {
@@ -111,23 +138,33 @@ impl Daemon {
         let (tx, mut feed) = viewer_channel();
         let stalled = feed.stalled();
         let (reply, drawn) = oneshot::channel();
+        let kind = match caller {
+            Caller::Terminal { .. } => Some(AttachmentKind::Shell),
+            Caller::Ide { .. } => Some(AttachmentKind::VsCode),
+            Caller::Agent { .. } => None,
+        };
         let added = AgentCommand::AttachViewer {
             viewer,
             name: args.viewer,
+            attachment: kind.map(|kind| AttachmentInfo {
+                kind,
+                machine_id: caller.machine_id().to_owned(),
+            }),
+            allow_ended: args.allow_ended,
             tx,
             keep_scrollback: args.keep_scrollback,
             include_scrollback: args.include_scrollback,
             reply,
         };
         if !agent.send(added).await {
-            return Err(actor_stopped(&agent));
+            return Err(actor_stopped(agent));
         }
         let drawn = match tokio::time::timeout(SCREEN_SNAPSHOT_TIMEOUT, drawn).await {
             Ok(Ok(drawn)) => drawn,
             other => {
                 agent.send(AgentCommand::RemoveViewer { viewer }).await;
                 return Err(match other {
-                    Ok(Err(_)) => actor_stopped(&agent),
+                    Ok(Err(_)) => actor_stopped(agent),
                     _ => ErrorBody::new(
                         Reason::Unavailable,
                         format!("{address} did not draw its screen"),
@@ -135,8 +172,8 @@ impl Daemon {
                 });
             }
         };
-        if drawn.exit.is_some() {
-            agent.send(AgentCommand::RemoveViewer { viewer }).await;
+        let ended = drawn.process == ProcessState::Ended || drawn.exit.is_some();
+        if ended && !args.allow_ended {
             return Err(ErrorBody::new(
                 Reason::Ended,
                 format!("{address} has already stopped"),
@@ -146,17 +183,30 @@ impl Daemon {
             agent_id: reference.agent_id,
             machine_id: reference.machine_id,
             address,
+            name: Some(drawn.name),
             cols: drawn.cols,
             rows: drawn.rows,
             redraw: facade_base::base64::encode(&drawn.redraw),
+            exit_status: drawn.exit.as_ref().and_then(shell_exit_status),
             exit: drawn.exit,
-            process: Some(drawn.process),
+            process: Some(if ended {
+                ProcessState::Ended
+            } else {
+                drawn.process
+            }),
         };
+        let (changes, sent) = mpsc::channel(CHANGES_WAITING);
+        if ended {
+            return Ok(Watch {
+                snapshot: value_of(snapshot),
+                changes: sent,
+            });
+        }
         self.watch_ends
             .lock()
             .unwrap()
             .insert(viewer, agent.clone());
-        let (changes, sent) = mpsc::channel(CHANGES_WAITING);
+        let agent = agent.clone();
         tokio::spawn(async move {
             let forward = async {
                 while let Some(change) = feed.recv().await {
@@ -181,12 +231,12 @@ impl Daemon {
     }
 
     async fn watch_remote_screen(
-        &self,
+        self: &Arc<Self>,
         reference: AgentRef,
         caller: Caller,
         mut args: ScreenWatchArgs,
     ) -> Result<Watch, ErrorBody> {
-        self.network.ensure_route(&reference.machine_id).await?;
+        self.ensure_machine_route(&reference.machine_id).await?;
         let address = self.agent_address(&reference)?;
         args.target = AgentTarget::Reference {
             reference: reference.clone(),
@@ -195,6 +245,7 @@ impl Daemon {
             topic: ScreenTopic::NAME.into(),
             args: value_of(args),
         };
+        let report_failure = matches!(caller, Caller::Terminal { .. });
         let mut subscription = self
             .network
             .watch(
@@ -203,7 +254,8 @@ impl Daemon {
                 params,
                 Some(SCREEN_SNAPSHOT_TIMEOUT),
             )
-            .await?;
+            .await
+            .map_err(|error| self.remote_screen_error(&reference, error))?;
         let mut snapshot: ScreenSnapshot =
             decode_arguments(std::mem::take(&mut subscription.snapshot))?;
         if snapshot.reference() != reference {
@@ -213,6 +265,13 @@ impl Daemon {
         }
         snapshot.address = address;
         let (changes, sent) = mpsc::channel(CHANGES_WAITING);
+        if snapshot.process == Some(ProcessState::Ended) || snapshot.exit.is_some() {
+            return Ok(Watch {
+                snapshot: value_of(snapshot),
+                changes: sent,
+            });
+        }
+        let daemon = self.clone();
         tokio::spawn(async move {
             let forward = async {
                 while let Some(change) = subscription.next().await {
@@ -221,6 +280,11 @@ impl Daemon {
                             if changes.send(WatchChange::Change(value)).await.is_err() {
                                 return;
                             }
+                        }
+                        Err(error) if report_failure => {
+                            let error = daemon.remote_screen_error(&reference, error);
+                            let _ = changes.send(WatchChange::Ended(error)).await;
+                            return;
                         }
                         Err(_) => break,
                     }
@@ -233,6 +297,15 @@ impl Daemon {
             snapshot: value_of(snapshot),
             changes: sent,
         })
+    }
+
+    fn remote_screen_error(&self, reference: &AgentRef, error: ErrorBody) -> ErrorBody {
+        let error = self.project_remote_error(error);
+        if error.data.unavailable.is_some() || error.data.ssh_interaction.is_some() {
+            self.machine_failure(&reference.machine_id, error)
+        } else {
+            error
+        }
     }
 
     fn watch_agent_records(
@@ -404,7 +477,19 @@ fn screen_change(change: ViewerChange) -> ScreenChange {
         ViewerChange::Output(bytes) => ScreenChange::Output {
             data: facade_base::base64::encode(&bytes),
         },
-        ViewerChange::Exit(exit) => ScreenChange::Exit { exit },
+        ViewerChange::Exit(exit) => ScreenChange::Exit {
+            exit_status: shell_exit_status(&exit),
+            exit,
+        },
         ViewerChange::Removed => ScreenChange::Removed,
     }
+}
+
+fn shell_exit_status(exit: &ProcessExit) -> Option<i32> {
+    exit.code.or_else(|| {
+        exit.signal
+            .as_deref()
+            .and_then(facade_base::unix_process::signal_number)
+            .map(|number| 128 + number)
+    })
 }

@@ -93,31 +93,38 @@ static HOMES: AtomicU64 = AtomicU64::new(0);
 /// The settings entry of the test's shell as a custom program: [`TestHome::shell_cli`].
 pub const SHELL_CLI: &str = "sh";
 
-/// The machine-local ID in the address printed by a background start or resume.
-pub fn started_id(out: &str) -> String {
-    let line = out.strip_suffix('\n').unwrap_or(out);
-    let line = line.strip_suffix('\r').unwrap_or(line);
-    let id = if DAEMON_RANGE[1] >= 3 {
-        let (id, machine) = line
-            .split_once('@')
-            .unwrap_or_else(|| panic!("expected a machine address: {out:?}"));
-        assert!(
-            !machine.is_empty()
-                && !machine.starts_with("id:")
-                && !machine.contains(['@', '\r', '\n']),
-            "unexpected machine selector: {out:?}"
-        );
-        id
-    } else {
-        line
-    };
+/// Reads the Ref in the first line of a managed agent's background start or resume receipt.
+pub fn started_ref(out: &str) -> &str {
+    let line = out.lines().next().expect("a background receipt");
+    let (opening, address) = line
+        .rsplit_once(" (")
+        .unwrap_or_else(|| panic!("expected a named agent in the receipt: {out:?}"));
+    assert!(
+        opening.starts_with("Started ") || opening.starts_with("Resumed "),
+        "unexpected background receipt: {out:?}"
+    );
+    let reference = address
+        .strip_suffix(") in the background.")
+        .unwrap_or_else(|| panic!("expected a background receipt: {out:?}"));
+    let (id, machine) = reference
+        .split_once('@')
+        .unwrap_or_else(|| panic!("expected a machine address: {out:?}"));
+    assert!(
+        !machine.is_empty() && !machine.starts_with("id:") && !machine.contains(['@', '\r', '\n']),
+        "unexpected machine selector: {out:?}"
+    );
     assert!(
         id.strip_prefix('a').is_some_and(
             |number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
         ),
         "unexpected start output: {out:?}"
     );
-    id.to_string()
+    reference
+}
+
+/// The machine-local ID in a background start or resume receipt.
+pub fn started_id(out: &str) -> String {
+    started_ref(out).split_once('@').unwrap().0.to_string()
 }
 
 /// A table that a `facade` command printed: its header's labels, and each row's cells, split where
@@ -434,7 +441,7 @@ impl TestHome {
         self.test_path()
     }
 
-    /// Runs `facade start --name <name> <cli>` without a terminal and waits for the agent's input
+    /// Runs `facade start -d --name <name> <cli>` without a terminal and waits for the agent's input
     /// box.
     fn start_in_background(&self, name: &str, cli: &str, env: &[(&str, &str)]) -> TestAgent {
         let mut command = self.command(&test_binaries().facade);
@@ -464,10 +471,13 @@ impl TestHome {
         agent
     }
 
-    /// Finds an agent by name in `facade list --json`.
-    pub fn agent_from_list_json(&self, name: &str) -> Option<Value> {
-        let listed: Value =
-            serde_json::from_str(&stdout(&self.run_facade(&["list", "--json"]))).ok()?;
+    /// The active roster and its machine query outcomes on v3.
+    pub fn agent_list(&self) -> Value {
+        connect(self).call_ok("agent.list", json!({}))
+    }
+
+    pub fn listed_agent(&self, name: &str) -> Option<Value> {
+        let listed = self.agent_list();
         listed["agents"]
             .as_array()?
             .iter()
@@ -475,11 +485,44 @@ impl TestHome {
             .cloned()
     }
 
-    /// The agent whose ID `facade start` or `facade resume` printed in the background, and the
+    /// Sends a v3 start with a first message from the terminal caller.
+    pub fn start_with_prompt(
+        &self,
+        name: &str,
+        cli: &str,
+        prompt: &str,
+        overrides: &[(&str, &str)],
+    ) -> Value {
+        // Forward the same isolated environment the Shell start sent, including the system
+        // variables the fake coding CLI's subprocesses need.
+        let mut command = self.command(&test_binaries().facade);
+        command.envs(overrides.iter().copied());
+        let env = command
+            .get_envs()
+            .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        connect(self).call(
+            "agent.start",
+            json!({
+                "name": name, "cli": cli, "prompt": prompt, "folder": self.project,
+                "env": env, "cols": 120, "rows": 30,
+            }),
+        )
+    }
+
+    pub fn inspect_agent(&self, agent: &str) -> Value {
+        connect(self).call_ok("agent.inspect", json!({ "agent": agent }))
+    }
+
+    pub fn remove_agent(&self, agent: &str) {
+        connect(self).call_ok("agent.remove", json!({ "agent": agent }));
+    }
+
+    /// The agent named in the background start or resume receipt, and the
     /// process its record names.
     pub fn started_agent(&self, out: &str) -> TestAgent {
         let id = started_id(out);
-        let address = out.trim_end_matches(['\r', '\n']).to_string();
+        let address = started_ref(out).to_string();
         let record = self
             .agent_record(&id)
             .unwrap_or_else(|| panic!("{id} is not listed"));

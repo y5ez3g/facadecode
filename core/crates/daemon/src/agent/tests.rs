@@ -213,6 +213,7 @@ impl Harness {
             untouched_input,
             rule: rule.map(str::to_string),
             captures: false,
+            launch_command: None,
             deliveries: messages.delivery_handle(),
             state,
         };
@@ -238,7 +239,7 @@ impl Harness {
             .await
             .ok()?;
         Some(
-            facade_base::daemon::plain(&read.await.ok()?.text)
+            facade_base::daemon::plain(&read.await.ok()?.0.text)
                 .lines()
                 .map(str::to_string)
                 .collect(),
@@ -885,6 +886,7 @@ impl Harness {
             master,
             pid: 4242,
             captures: false,
+            launch_command: None,
             version: None,
             tools,
             reply,
@@ -1271,6 +1273,8 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
         .send(AgentCommand::AttachViewer {
             viewer: 1,
             name: Some("terminal one".into()),
+            attachment: None,
+            allow_ended: false,
             tx,
             keep_scrollback: false,
             include_scrollback: false,
@@ -1345,6 +1349,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
         untouched_input: false,
         rule: None,
         captures: false,
+        launch_command: None,
         deliveries: crate::messages::tests::messages().0.delivery_handle(),
         state,
     };
@@ -1391,6 +1396,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
         untouched_input: false,
         rule: Some("fake".into()),
         captures: false,
+        launch_command: None,
         deliveries: post.delivery_handle(),
         state,
     };
@@ -1529,6 +1535,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         untouched_input: false,
         rule: None,
         captures: false,
+        launch_command: None,
         deliveries: messages.delivery_handle(),
         state,
     };

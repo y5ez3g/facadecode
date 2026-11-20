@@ -15,9 +15,7 @@ const PAGES: &[&[&str]] = &[
     &["attach"],
     &["stop"],
     &["resume"],
-    &["remove"],
     &["rename"],
-    &["inspect"],
     &["screen"],
     &["type"],
     &["send"],
@@ -28,13 +26,8 @@ const PAGES: &[&[&str]] = &[
     &["machine", "remove"],
     &["machine", "rename"],
     &["status"],
-    &["version"],
-    &["completion"],
     &["upgrade"],
 ];
-
-/// Each alias, and the command whose page it prints.
-const ALIASES: &[(&str, &str)] = &[("ls", "list"), ("rm", "remove")];
 
 /// Help is read at this width; one page is read narrower too.
 const WIDTH: &str = "100";
@@ -92,7 +85,15 @@ impl Pages {
                 Some(_) => {}
             }
         }
-        let page = page.unwrap_or_default();
+        let mut page = page.unwrap_or_default();
+        if name == "start" {
+            let machine = facade_base::address::default_machine_name(
+                &facade_base::system::hostname().unwrap_or_default(),
+            );
+            let default = format!("Run on this machine (default: {machine})");
+            assert!(page.contains(&default), "{page}");
+            page = page.replace(&default, "Run on this machine (default: {machine})");
+        }
         let file = golden(name);
         if std::env::var_os("FACADE_REGENERATE").is_some() {
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -128,8 +129,7 @@ fn forms<'a>(path: &[&'a str]) -> Vec<Vec<&'a str>> {
 }
 
 /// `facade`, `facade -h`, `facade --help` and `facade help` print the root page, every command's
-/// three forms print its page, and an alias prints its command's page. Asking for help starts no
-/// Facade.
+/// three forms print its page. The machine group is also its no-argument page. Help starts no Facade.
 #[test]
 fn every_help_page_is_its_golden_file_whichever_way_it_is_asked_for() {
     let home = TestHome::new("helppages");
@@ -141,17 +141,13 @@ fn every_help_page_is_its_golden_file_whichever_way_it_is_asked_for() {
         WIDTH,
     );
     for path in PAGES {
-        pages.check(&home, &path.join("-"), &forms(path), WIDTH);
+        let mut requests = forms(path);
+        if *path == ["machine"] {
+            requests.push(vec!["machine"]);
+        }
+        pages.check(&home, &path.join("-"), &requests, WIDTH);
     }
-    for (alias, command) in ALIASES {
-        pages.check(&home, command, &forms(&[alias]), WIDTH);
-    }
-    pages.check(
-        &home,
-        &format!("start-{NARROW}"),
-        &forms(&["start"]),
-        NARROW,
-    );
+    pages.check(&home, "start", &forms(&["start"]), NARROW);
     pages.assert_none();
     assert!(
         !socket_exists(&home.daemon_socket()) && !home.path.join("core").exists(),
@@ -168,7 +164,6 @@ fn every_golden_help_file_is_a_page() {
     }
     let mut names: Vec<String> = PAGES.iter().map(|path| path.join("-")).collect();
     names.push("root".to_string());
-    names.push(format!("start-{NARROW}"));
     let folder = golden("root").parent().unwrap().to_path_buf();
     let kept: Vec<String> = std::fs::read_dir(&folder)
         .unwrap_or_else(|_| panic!("no folder {}", folder.display()))
@@ -192,24 +187,18 @@ fn the_root_page_groups_the_commands() {
     let root = stdout(&help(&home, &[], WIDTH));
     let headings: Vec<&str> = root
         .lines()
-        .filter(|line| !line.starts_with(' ') && line.ends_with(':'))
+        .filter(|line| matches!(*line, "Agents" | "Interact" | "System" | "Options"))
         .collect();
     assert_eq!(
         headings,
-        [
-            "Agents:",
-            "Inspect and control:",
-            "Messages:",
-            "Setup and info:",
-            "Options:"
-        ],
+        ["Agents", "Interact", "System", "Options"],
         "{root}"
     );
     assert!(
-        root.starts_with("Start AI coding agents and use their terminals from the Shell.")
+        root.starts_with("Run AI coding agents that can collaborate across your machines.")
             && root.contains("\nUsage: facade [OPTIONS] [COMMAND]\n")
             && root
-                .ends_with("\nRun 'facade <COMMAND> --help' for more information on a command.\n"),
+                .ends_with("\nRun 'facade <COMMAND> --help' for examples and options.\nLearn more at https://facadecode.com\n"),
         "{root}"
     );
 }

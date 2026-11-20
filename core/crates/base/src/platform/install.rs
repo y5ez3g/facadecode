@@ -14,10 +14,20 @@ pub fn upgrade_command() -> Command {
     }
     #[cfg(windows)]
     {
-        let mut command = Command::new("powershell.exe");
+        // Encode the captured receipt without changing the calling console's code page.
+        let mut command = super::programs::command("powershell.exe");
+        let download = format!(
+            "try {{ {} }} {WINDOWS_DOWNLOAD_ERROR}",
+            powershell_download(&latest("ps1"))
+        );
+        let installer = run_powershell_installer(
+            "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ",
+            &download,
+            "",
+        );
         command
             .args(POWERSHELL_OPTIONS)
-            .args(["-Command", &powershell_install(&latest("ps1"), "", "")]);
+            .args(["-Command", &installer]);
         command
     }
 }
@@ -31,14 +41,41 @@ pub(super) fn pinned(version: &str, extension: &str) -> String {
 }
 
 #[cfg(unix)]
-const UNIX_INSTALL: &str = r#"script=$(curl -fsSL "$1") && sh -c "$script" --"#;
+const UNIX_INSTALL: &str = r#"
+response=$(curl -fsSL -w '%{http_code}' "$1")
+status=$?
+script=${response%???}
+if [ "$status" -ne 0 ]; then
+    http=${response#"$script"}
+    case "$http" in [1-5][0-9][0-9]) ;; *) http=- ;; esac
+    printf 'facade-upgrade-download-error %s\n' "$http"
+    exit "$status"
+fi
+sh -c "$script" --
+"#;
+
+#[cfg(windows)]
+const WINDOWS_DOWNLOAD_ERROR: &str = r#"catch {
+    $http = $_.Exception.Response.StatusCode
+    if ($null -eq $http) { $http = '-' } else { $http = [int]$http }
+    [Console]::WriteLine("facade-upgrade-download-error $http")
+    throw
+}"#;
 
 pub(super) const POWERSHELL_OPTIONS: [&str; 3] = ["-NoLogo", "-NoProfile", "-NonInteractive"];
 
 pub(super) fn powershell_install(url: &str, prefix: &str, arguments: &str) -> String {
+    run_powershell_installer(prefix, &powershell_download(url), arguments)
+}
+
+fn powershell_download(url: &str) -> String {
+    format!("$response = Invoke-WebRequest -UseBasicParsing '{url}'")
+}
+
+fn run_powershell_installer(prefix: &str, download: &str, arguments: &str) -> String {
     format!(
         "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; \
-         {prefix}$response = Invoke-WebRequest -UseBasicParsing '{url}'; \
+         {prefix}{download}; \
          & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString(\
          $response.RawContentStream.ToArray()))){arguments}"
     )

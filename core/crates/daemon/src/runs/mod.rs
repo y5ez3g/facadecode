@@ -103,6 +103,8 @@ pub(crate) struct RunRequest<'a> {
 pub(crate) struct PreparedRun {
     /// The keeper's command line, including arguments private to this run.
     launch: StartCommand<String>,
+    /// The running platform's display command with injected credentials removed.
+    pub(crate) launch_command: Option<String>,
     pub(crate) env: BTreeMap<String, String>,
     /// The CLI reports its session to its run folder.
     pub(crate) captures: bool,

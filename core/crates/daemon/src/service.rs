@@ -248,7 +248,7 @@ impl Daemon {
                 require_person(caller)?;
                 let request: facade_base::machine::MachineRemoveArgs = decode_arguments(args)?;
                 let target = self.select_machine(machine_selector(&request.machine)?)?;
-                Ok(value_of(self.remove_machine(&target.machine_id).await?))
+                Ok(value_of(self.remove_machine(target).await?))
             }
             v3::MachineRename::NAME => {
                 require_person(caller)?;
@@ -256,7 +256,7 @@ impl Daemon {
                 if !forwarded {
                     let target = self.select_machine(machine_selector(&request.machine)?)?;
                     if target.machine_id != self.machine_id {
-                        self.network.ensure_route(&target.machine_id).await?;
+                        self.ensure_machine_route(&target.machine_id).await?;
                         return self
                             .network_call(
                                 &target.machine_id,
@@ -328,7 +328,7 @@ impl Daemon {
             && let Some(machine) = self.machine_for(args.machine.as_deref())?
             && machine != self.machine_id
         {
-            self.network.ensure_route(&machine).await?;
+            self.ensure_machine_route(&machine).await?;
             args.machine = None;
             args.env.clear();
             if args.folder_is_default {
@@ -470,7 +470,7 @@ impl Daemon {
             self.addressed_agent(caller, target, capability).await?
         };
         if reference.machine_id != self.machine_id {
-            self.network.ensure_route(&reference.machine_id).await?;
+            self.ensure_machine_route(&reference.machine_id).await?;
             let object = args
                 .as_object_mut()
                 .expect("agent arguments decode from an object");
@@ -497,74 +497,88 @@ impl Daemon {
         }
         let agent = self.local_target(caller, &reference, capability)?;
         let address = self.agent_address(&reference)?;
-        let result = match operation {
-            v3::AgentInspect::NAME => value_of(self.inspect(&agent).await?),
-            v3::AgentStop::NAME => {
-                let result = self.stop(&agent).await?;
-                if result.already_ended {
-                    return Err(ErrorBody::new(
-                        Reason::Ended,
-                        format!("{address} has already stopped"),
-                    ));
+        let result = async {
+            let result = match operation {
+                v3::AgentInspect::NAME => value_of(self.inspect(&agent).await?),
+                v3::AgentStop::NAME => {
+                    let (result, label) = self.stop(&agent).await?;
+                    if result.already_ended {
+                        let mut error =
+                            ErrorBody::new(Reason::Ended, format!("{address} has already stopped"));
+                        error.data.agents.push(label);
+                        return Err(error);
+                    }
+                    value_of(v3::StopResult {
+                        exit: result.exit,
+                        address,
+                        reference,
+                        agent: Some(label),
+                        already_ended: false,
+                    })
                 }
-                value_of(v3::StopResult {
-                    exit: result.exit,
-                    address,
-                    reference,
-                    already_ended: false,
-                })
-            }
-            v3::AgentRemove::NAME => {
-                self.remove(&agent).await?;
-                value_of(v3::RemoveResult { reference, address })
-            }
-            v3::AgentScreen::NAME => {
-                let request: v3::AgentScreenArgs = decode_arguments(args)?;
-                value_of(self.read_screen_of(&agent, request.lines, address).await?)
-            }
-            v3::AgentType::NAME => {
-                let request = decode_arguments(args)?;
-                let from_name = incoming
-                    .and_then(|call| call.from_name)
-                    .or_else(|| self.caller_name(caller));
-                self.type_into_agent(
-                    &agent,
-                    request,
-                    sender_from(caller, from_name),
-                    when_full,
-                    cancel,
-                )
-                .await?;
-                value_of(v3::EmptyResult {})
-            }
-            v3::AgentResize::NAME => {
-                let request: v3::AgentResizeArgs = decode_arguments(args)?;
-                check_size(request.cols, request.rows)?;
-                let command = match request.colors {
-                    Some(colors) if matches!(caller, Caller::Ide { .. }) => {
-                        AgentCommand::ResizeTerminal {
-                            cols: request.cols,
-                            rows: request.rows,
-                            colors: Some(crate::presence::terminal_colors(&colors)?),
+                v3::AgentRemove::NAME => {
+                    self.remove(&agent).await?;
+                    value_of(v3::RemoveResult { reference, address })
+                }
+                v3::AgentScreen::NAME => {
+                    let request: v3::AgentScreenArgs = decode_arguments(args)?;
+                    value_of(self.read_screen_of(&agent, request.lines, address).await?)
+                }
+                v3::AgentType::NAME => {
+                    let request: v3::AgentTypeArgs = decode_arguments(args)?;
+                    let label = if request.raw.is_none() {
+                        Some(self.agent_label(&agent)?)
+                    } else {
+                        None
+                    };
+                    let from_name = incoming
+                        .and_then(|call| call.from_name)
+                        .or_else(|| self.caller_name(caller));
+                    self.type_into_agent(
+                        &agent,
+                        request,
+                        sender_from(caller, from_name),
+                        when_full,
+                        cancel,
+                    )
+                    .await?;
+                    value_of(v3::TypeResult { agent: label })
+                }
+                v3::AgentResize::NAME => {
+                    let request: v3::AgentResizeArgs = decode_arguments(args)?;
+                    check_size(request.cols, request.rows)?;
+                    let command = match request.colors {
+                        Some(colors) if matches!(caller, Caller::Ide { .. }) => {
+                            AgentCommand::ResizeTerminal {
+                                cols: request.cols,
+                                rows: request.rows,
+                                colors: Some(crate::presence::terminal_colors(&colors)?),
+                            }
                         }
+                        Some(_) => {
+                            return Err(ErrorBody::refused("only an editor sets terminal colors"));
+                        }
+                        None => AgentCommand::Resize(request.cols, request.rows),
+                    };
+                    if !agent.send(command).await {
+                        return Err(actor_stopped(&agent));
                     }
-                    Some(_) => {
-                        return Err(ErrorBody::refused("only an editor sets terminal colors"));
-                    }
-                    None => AgentCommand::Resize(request.cols, request.rows),
-                };
-                if !agent.send(command).await {
-                    return Err(actor_stopped(&agent));
+                    value_of(v3::EmptyResult {})
                 }
-                value_of(v3::EmptyResult {})
-            }
-            v3::AgentRename::NAME => {
-                let request: v3::AgentRenameArgs = decode_arguments(args)?;
-                value_of(self.public_agent(self.rename(&agent, &request.name).await?)?)
-            }
-            _ => unreachable!(),
-        };
-        Ok(result)
+                v3::AgentRename::NAME => {
+                    let request: v3::AgentRenameArgs = decode_arguments(args)?;
+                    let (renamed, previous_name) = self.rename(&agent, &request.name).await?;
+                    value_of(v3::RenameResult {
+                        agent: self.public_agent(renamed)?,
+                        previous_name: Some(previous_name),
+                    })
+                }
+                _ => unreachable!(),
+            };
+            Ok(result)
+        }
+        .await;
+        result.map_err(|error| self.with_agent_error(&agent, error))
     }
 
     pub(crate) fn local_target(
@@ -634,7 +648,66 @@ impl Daemon {
                 }
             }
         }
+        if matches!(operation, v3::AgentStop::NAME | v3::AgentType::NAME)
+            && let Some(agent) = response.get_mut("agent").filter(|agent| !agent.is_null())
+        {
+            let mut label: v3::AgentLabel = decode_arguments(agent.take())?;
+            self.project_agent_label(reference, &mut label)?;
+            *agent = value_of(label);
+        }
         Ok(response)
+    }
+
+    pub(crate) fn project_agent_label(
+        &self,
+        reference: &AgentRef,
+        label: &mut v3::AgentLabel,
+    ) -> Result<(), ErrorBody> {
+        if label.reference != *reference {
+            return Err(ErrorBody::refused("the machine reported a different agent"));
+        }
+        label.address = self.agent_address(reference)?;
+        Ok(())
+    }
+
+    pub(crate) fn project_remote_error(&self, mut error: ErrorBody) -> ErrorBody {
+        let data = &mut *error.data;
+        let mut projected = std::collections::BTreeMap::new();
+        for label in &mut data.agents {
+            if let Ok(address) = self.agent_address(&label.reference) {
+                let original = std::mem::replace(&mut label.address, address);
+                projected.insert(original, &label.address);
+            }
+        }
+        for candidate in &mut data.candidates {
+            if let Some(&address) = projected.get(candidate) {
+                candidate.clone_from(address);
+            }
+        }
+        if !data.machines.is_empty()
+            && let Ok(visible) = self.machine_identities()
+        {
+            for row in &mut data.machines {
+                crate::machine_service::project_machine_query(row, &visible);
+            }
+        }
+        error
+    }
+
+    pub(crate) fn agent_label(&self, agent: &AgentHandle) -> Result<v3::AgentLabel, ErrorBody> {
+        let info = agent.info();
+        let address = self.agent_address(&info.reference())?;
+        Ok(agent_label_of(info, address, agent.rule().is_some()))
+    }
+
+    /// Adds evidence about an agent which the caller was already authorized to operate on.
+    pub(crate) fn with_agent_error(&self, agent: &AgentHandle, mut error: ErrorBody) -> ErrorBody {
+        if error.data.agents.is_empty()
+            && let Ok(label) = self.agent_label(agent)
+        {
+            error.data.agents.push(label);
+        }
+        error
     }
 
     pub(crate) fn caller_name(&self, caller: &Caller) -> Option<String> {
@@ -814,6 +887,8 @@ impl Daemon {
                 },
                 session_tracking: false,
                 viewers: Vec::new(),
+                attachments: Vec::new(),
+                launch_command: None,
             });
         }
         let (reply, inspected) = oneshot::channel();
@@ -835,6 +910,8 @@ impl Daemon {
             input: facts.input,
             session_tracking: facts.session_tracking,
             viewers: facts.viewers,
+            attachments: facts.attachments,
+            launch_command: facts.launch_command,
         })
     }
 
@@ -861,16 +938,16 @@ impl Daemon {
         {
             return Err(actor_stopped(agent));
         }
-        let screen = read.await.map_err(|_| actor_stopped(agent))?;
-        let observed_at = agent
-            .exit()
-            .borrow()
+        let (screen, info) = read.await.map_err(|_| actor_stopped(agent))?;
+        let observed_at = info
+            .exit
             .as_ref()
             .map_or_else(facade_base::time::iso_now, |exit| exit.at.clone());
         Ok(v3::ScreenText {
             agent_id: agent.id().to_owned(),
             address,
-            process: agent.info().process,
+            name: Some(info.name),
+            process: info.process,
             observed_at,
             buffer: if screen.alternate {
                 ScreenBuffer::Alternate
@@ -924,7 +1001,7 @@ impl Daemon {
             && let Some(id) = self.machine_for(args.machine.as_deref())?
             && id != self.machine_id
         {
-            self.network.ensure_route(&id).await?;
+            self.ensure_machine_route(&id).await?;
             args.machine = None;
             args.env.clear();
             return self
@@ -951,7 +1028,7 @@ impl Daemon {
             && let Some(id) = self.machine_for(args.machine.as_deref())?
             && id != self.machine_id
         {
-            self.network.ensure_route(&id).await?;
+            self.ensure_machine_route(&id).await?;
             args.machine = None;
             return self
                 .network_call(
@@ -1005,7 +1082,7 @@ impl Daemon {
             && let Some(id) = self.machine_for(args.machine.as_deref())?
             && id != self.machine_id
         {
-            self.network.ensure_route(&id).await?;
+            self.ensure_machine_route(&id).await?;
             return self
                 .network_call(
                     &id,
@@ -1110,6 +1187,25 @@ pub(crate) fn stored_message(message: v3::Message) -> daemon::Message {
         result,
         at: message.at,
         delivery: message.delivery,
+    }
+}
+
+pub(crate) fn agent_label_of(
+    info: daemon::AgentInfo,
+    address: String,
+    has_rule: bool,
+) -> v3::AgentLabel {
+    v3::AgentLabel {
+        reference: info.reference(),
+        address,
+        name: info.name,
+        cli: info.cli,
+        state: if info.guest {
+            v3::AgentState::Online
+        } else {
+            public_state(info.state)
+        },
+        resumable: has_rule && info.session.is_some(),
     }
 }
 

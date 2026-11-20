@@ -147,8 +147,8 @@ operations! {
     CliList: "cli.list", "Lists CLIs available in the selected launch environment.", CliListArgs => CliListResult;
     AgentStop: "agent.stop", "Stops the agent's CLI and keeps the agent record.", AgentSelectorArgs => StopResult;
     AgentRemove: "agent.remove", "Removes a managed agent.", AgentSelectorArgs => RemoveResult;
-    AgentRename: "agent.rename", "Changes an agent's name.", AgentRenameArgs => AgentInfo;
-    AgentType: "agent.type", "Sends input to a managed agent's terminal.", AgentTypeArgs => EmptyResult;
+    AgentRename: "agent.rename", "Changes an agent's name.", AgentRenameArgs => RenameResult;
+    AgentType: "agent.type", "Sends input to a managed agent's terminal.", AgentTypeArgs => TypeResult;
     AgentSend: "agent.send", "Sends a message to an agent.", AgentSendArgs => SendResult;
     AgentResize: "agent.resize", "Resizes a managed agent's terminal.", AgentResizeArgs => EmptyResult;
     AgentScreen: "agent.screen", "Reads the last logical lines of an agent's screen.", AgentScreenArgs => ScreenText;

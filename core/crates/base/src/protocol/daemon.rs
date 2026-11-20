@@ -2444,7 +2444,12 @@ pub enum ScreenChange {
         rows: u16,
     },
     /// The recorded exit of the agent.
-    Exit { exit: ProcessExit },
+    Exit {
+        exit: ProcessExit,
+        /// The shell exit status calculated on the machine that ran the agent, if known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_status: Option<i32>,
+    },
     /// The agent was removed. No changes follow on this watch.
     Removed,
     /// An unknown change kind. Skip it.
@@ -3445,7 +3450,11 @@ mod tests {
             at: "2026-11-09T17:22:05.123Z".into(),
         };
         assert_eq!(
-            serde_json::to_value(ScreenChange::Exit { exit }).unwrap(),
+            serde_json::to_value(ScreenChange::Exit {
+                exit,
+                exit_status: None,
+            })
+            .unwrap(),
             json!({ "kind": "exit", "exit": { "code": 0, "at": "2026-11-09T17:22:05.123Z" } })
         );
         assert_eq!(

@@ -1,19 +1,16 @@
-Rename an agent
+Rename an active agent, guest, or stopped agent.
+
+Changes only the display name; the agent reference stays the same.
 
 Usage: facade rename <AGENT> <NAME>
 
-Change the agent's display name. Pass an empty or blank name to let the Orchestrator choose one.
+Examples
+  facade rename Nova review
+  facade rename a5@laptop "Shell review"
 
-Arguments:
-  <AGENT>  Agent address such as a17@gpu, or an agent ID or name
-  <NAME>   New name, or " " for one chosen by the Orchestrator
+Arguments
+  <AGENT>  Agent reference, agent ID, or unique name (active agents take priority for duplicate names)
+  <NAME>   New name
 
-Options:
-  -h, --help  Print help
-
-Examples:
-  # Rename agent a3 to reviewer
-  facade rename a3 reviewer
-
-  # Let the Orchestrator choose a new name for agent a3
-  facade rename a3 " "
+Options
+  -h, --help  Show help

@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{AgentInfo, Delivery, MessageRef, PromptOutcome};
+use super::{AgentInfo, AgentLabel, Delivery, MessageRef, PromptOutcome};
 
 /// The receipt of a send, with the address that can be used to wait for a reply.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -11,6 +11,9 @@ use super::{AgentInfo, Delivery, MessageRef, PromptOutcome};
 pub struct SendResult {
     pub id: String,
     pub message: Message,
+    /// The recipient selected for this send, including when delivery fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<AgentLabel>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub repeated: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -76,6 +79,9 @@ pub struct AgentSendArgs {
     /// delivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_left_ms: Option<u64>,
+    /// A terminal can request a numbered delivery outcome for a target without an input rule.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_unsupported_receipt: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -1,19 +1,17 @@
-Show Orchestrator status
+Show Facade or agent status.
 
-Usage: facade status [OPTIONS]
+Without arguments, checks the local Facade service without starting it.
+Pass an agent to inspect its state, working directory, and launch details.
 
-Show the Orchestrator's version, Facade home, and settings file. When running, it also shows the
-daemon and keeper process IDs, active agent count and connected machines. Local status checks for a
-running service. '--machine' queries another machine and wakes it if needed.
+Usage: facade status [AGENT]
 
-Options:
-      --json               Print the status as JSON
-      --machine <MACHINE>  Machine name or ID from 'facade machine list'
-  -h, --help               Print help
-
-Examples:
-  # Check the local Orchestrator
+Examples
   facade status
+  facade status Nova
+  facade status a5@laptop
 
-  # Check the Orchestrator on gpu
-  facade status --machine gpu
+Arguments
+  [AGENT]  Agent reference, agent ID, or unique name (active agents take priority for duplicate names)
+
+Options
+  -h, --help  Show help

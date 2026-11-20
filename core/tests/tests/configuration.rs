@@ -35,14 +35,9 @@ fn assert_settings_problem(home: &TestHome, message: &Value, problem: &str) {
     );
 }
 
-/// Waits until `facade inspect` shows the agent `name` with the test CLI's session.
+/// Waits until the daemon reports the agent `name` with the test CLI's session.
 fn has_session(home: &TestHome, name: &str) {
-    let session = || {
-        let inspected = home.run_facade(&["inspect", name, "--json"]);
-        facade_scenarios::serde_json::from_slice::<Value>(&inspected.stdout)
-            .map(|inspected| inspected["session"].clone())
-            .unwrap_or_default()
-    };
+    let session = || home.inspect_agent(name)["agent"]["session"].clone();
     assert!(
         wait_until(secs(10), || session() == SESSION),
         "{name} reported no session: {}",
@@ -85,7 +80,7 @@ fn facade(home: &TestHome, args: &[&str], env: &[(&str, &str)]) -> Output {
 /// Starts the CLI `cli` of the settings file as agent `name`, and waits for the test CLI's input
 /// box.
 fn start(home: &TestHome, name: &str, cli: &str, env: &[(&str, &str)]) {
-    let started = facade(home, &["start", "--name", name, cli], env);
+    let started = facade(home, &["start", "-d", "--name", name, cli], env);
     assert!(
         started.status.success(),
         "facade start {cli} failed: {}",
@@ -100,7 +95,7 @@ fn start(home: &TestHome, name: &str, cli: &str, env: &[(&str, &str)]) {
 
 /// A start of `cli` that is refused, with what it says.
 fn refused(home: &TestHome, cli: &str) -> String {
-    let output = facade(home, &["start", "--name", "nope", cli], &[]);
+    let output = facade(home, &["start", "-d", "--name", "nope", cli], &[]);
     assert!(!output.status.success(), "facade start {cli} started");
     stderr(&output)
 }
@@ -121,7 +116,7 @@ fn an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says() {
     settings(&home, &json!({ "clis": { "fake work": entry } }));
     let started = facade(
         &home,
-        &["start", "--name", "worker", "fake work", "--more"],
+        &["start", "-d", "--name", "worker", "fake work", "--more"],
         &[("WHO", "ada-at-work")],
     );
     assert!(started.status.success(), "{}", stderr(&started));
@@ -134,18 +129,13 @@ fn an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says() {
         without_wiring(&home, args_in(&file)),
         ["--model", "m1", "--effort", "low", "--flag", "x", "--more"]
     );
+    assert_eq!(home.listed_agent("worker").unwrap()["cli"], "fake work");
+    let inspected = home.run_facade_ok(&["status", "worker"]);
     assert_eq!(
-        home.agent_from_list_json("worker").unwrap()["cli"],
-        "fake work"
+        status_field(&inspected, "CLI"),
+        Some("fake work"),
+        "{inspected}"
     );
-    let inspected = home.run_facade_ok(&["inspect", "worker"]);
-    let label = |name: &str| {
-        inspected
-            .lines()
-            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
-            .map(str::trim)
-    };
-    assert_eq!(label("CLI"), Some("fake work"), "{inspected}");
     let rule = connect(&home).call("agent.inspect", json!({ "agent": "worker" }));
     assert_eq!(rule["result"]["rule"], "fake", "{rule}");
 }
@@ -188,32 +178,18 @@ fn a_custom_cli_runs_its_program_as_it_is() {
         ["--resume-like", ""],
         "its own arguments, an empty one too, as they are"
     );
-    let inspected = home.run_facade_ok(&["inspect", "tool", "--json"]);
-    let inspected: Value = facade_scenarios::serde_json::from_str(&inspected).unwrap();
+    let inspected = home.inspect_agent("tool");
+    assert_eq!(inspected["agent"]["cli"], "tool");
     assert_eq!(
-        (&inspected["cli"], &inspected["custom_program"]),
-        (&json!("tool"), &json!(true)),
-        "{inspected}"
-    );
-    let inspected = connect(&home).call("agent.inspect", json!({ "agent": "tool" }));
-    assert_eq!(
-        (
-            inspected["result"].get("rule"),
-            &inspected["result"]["agent"]["tools_state"]
-        ),
+        (inspected.get("rule"), &inspected["agent"]["tools_state"]),
         (None, &json!("not_injected")),
         "{inspected}"
     );
-    let prompted = facade(
-        &home,
-        &["start", "--name", "prompted", "--prompt", "hi", "tool"],
-        &[],
-    );
-    assert!(!prompted.status.success(), "{}", stdout(&prompted));
+    let prompted = home.start_with_prompt("prompted", "tool", "hi", &[]);
+    assert!(prompted["error"].is_object(), "{prompted}");
     assert!(
-        home.agent_from_list_json("prompted").is_none(),
-        "nothing started: {}",
-        stderr(&prompted)
+        home.listed_agent("prompted").is_none(),
+        "nothing started: {prompted}"
     );
 }
 
@@ -259,11 +235,10 @@ fn start_agent_and_the_cli_catalog_use_the_settings_file() {
     });
     settings(&home, &json!({ "clis": clis }));
     let started = home.run_facade_ok(&["start", "-d", "--name", "ada", "fake"]);
-    let (id, _) = started
-        .trim()
+    let (id, _) = started_ref(&started)
         .split_once('@')
         .expect("start gives an address");
-    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
+    let cwd = home.listed_agent("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open_configured(&home, id);
     let rows = connect(&home).call("cli.list", json!({}))["result"]["clis"].clone();
     let rows = rows.as_array().unwrap();
@@ -373,7 +348,7 @@ fn a_resume_runs_its_start_s_args_and_refuses_an_entry_retyped_or_gone() {
     home.run_facade_ok(&["stop", "worker"]);
     settings(&home, &entry(json!(["--then"]), "fake"));
     std::fs::remove_file(&file).unwrap();
-    let resumed = facade(&home, &["resume", "worker"], &[]);
+    let resumed = facade(&home, &["resume", "-d", "worker"], &[]);
     assert!(resumed.status.success(), "{}", stderr(&resumed));
     let args = args_in(&file);
     assert!(
@@ -388,7 +363,7 @@ fn a_resume_runs_its_start_s_args_and_refuses_an_entry_retyped_or_gone() {
         &home,
         &json!({ "clis": { "fake work": { "type": "custom", "command": program } } }),
     );
-    let retyped = facade(&home, &["resume", "worker"], &[]);
+    let retyped = facade(&home, &["resume", "-d", "worker"], &[]);
     let said = "clis[\"fake work\"] runs a program now, but this conversation is Fake CLI's; it \
                 cannot be resumed with it";
     assert!(
@@ -397,7 +372,7 @@ fn a_resume_runs_its_start_s_args_and_refuses_an_entry_retyped_or_gone() {
         stderr(&retyped)
     );
     settings(&home, &json!({}));
-    let gone = facade(&home, &["resume", "worker"], &[]);
+    let gone = facade(&home, &["resume", "-d", "worker"], &[]);
     let said = "\"fake work\" is no longer in clis of ";
     assert!(
         !gone.status.success()
@@ -416,7 +391,7 @@ fn an_agent_started_without_a_name_is_named_from_names() {
     settings(&home, &json!({ "names": [" Solo ", " Duo "] }));
     home.start_named_fake("sOlO", &[]);
     let start = || {
-        let started = facade(&home, &["start", "fake"], &[]);
+        let started = facade(&home, &["start", "-d", "fake"], &[]);
         assert!(started.status.success(), "{}", stderr(&started));
         let id = started_id(&stdout(&started));
         home.agent_record(&id).unwrap()["name"].clone()
@@ -443,7 +418,7 @@ fn started_with(
     settings(home, &json!({ "clis": { label: entry } }));
     let started = facade(
         home,
-        &[&["start", "--name", label, label][..], words].concat(),
+        &[&["start", "-d", "--name", label, label][..], words].concat(),
         &[],
     );
     assert!(started.status.success(), "{label}: {}", stderr(&started));
@@ -552,9 +527,8 @@ fn an_entry_s_args_are_merged_as_their_cli_reads_them() {
     assert_eq!(prompt, Some("--settings={\"a\": 1}"), "{claude:?}");
 }
 
-/// The MCP and CLI starts both diagnose an entry's executable by its setting (CONFIGURATION-2.2,
-/// 4.1): the default is missing from PATH, or the current or legacy field names a program that
-/// cannot be found or run.
+/// MCP names an entry's setting and lookup directory (CONFIGURATION-2.2, 4.1). Shell names the
+/// machine and program, distinguishing a PATH search from an explicit path.
 #[test]
 fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     let home = TestHome::new("configprogram");
@@ -567,10 +541,14 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
     let mut ada = McpTestClient::open(&home, "a1");
-    let folder = home.agent_from_list_json("ada").unwrap()["folder"]
+    let folder = home.listed_agent("ada").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
+    let machines = connect(&home).call_ok("machine.list", json!({}));
+    let machine = machines["machines"][0]["name"]
+        .as_str()
+        .expect("the local machine name");
     // A path from the root names the drive of the folder it runs in on Windows.
     #[cfg(unix)]
     let gone = "/nope/facade-fakecli".to_string();
@@ -586,6 +564,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "opencode was not found on the PATH of a terminal in {folder}, and clis.oc.program \
                  does not name its location"
             ),
+            "opencode was not found on PATH.".to_string(),
         ),
         (
             "named",
@@ -593,6 +572,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "clis.named.command is \"no-such-cli\", which was not found on the PATH of a \
                  terminal in {folder}"
             ),
+            "no-such-cli was not found on PATH.".to_string(),
         ),
         (
             "canonical",
@@ -600,6 +580,7 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "clis.canonical.program is \"no-such-cli\", which was not found on the PATH of a \
                  terminal in {folder}"
             ),
+            "no-such-cli was not found on PATH.".to_string(),
         ),
         (
             "gone",
@@ -607,17 +588,23 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
                 "clis.gone.command is \"/nope/facade-fakecli\", and {gone} is not a program that \
                  can be run"
             ),
+            format!("{gone} was not found."),
         ),
     ];
-    for (cli, problem) in said {
+    for (cli, problem, shell_detail) in said {
         let start = json!({ "name": "w", "cli": cli, "folder": folder });
         let mcp = ada.call("start_agent", start);
         assert_eq!(mcp["reason"], "not_found", "{mcp}");
         assert_settings_problem(&home, &mcp["message"], &problem);
-        let refused = refused(&home, cli);
-        assert!(
-            refused.contains(&problem) && !refused.contains("(not_found)"),
-            "{refused}"
+        let refused = facade(&home, &["start", "-d", "--name", "nope", cli], &[]);
+        assert_eq!(
+            (stdout(&refused), stderr(&refused), refused.status.code()),
+            (
+                String::new(),
+                format!("error: Could not start {cli:?} on {machine}. {shell_detail}\n"),
+                Some(1),
+            ),
+            "{cli}"
         );
     }
 }
@@ -636,7 +623,7 @@ fn a_turned_off_entry_that_is_wrong_is_listed_with_what_is_wrong() {
     settings(&home, &json!({ "clis": clis }));
     home.start_named_fake("ada", &[]);
     let mut ada = McpTestClient::open(&home, "a1");
-    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
+    let cwd = home.listed_agent("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
         json!({ "name": "w", "cli": "off reads", "folder": cwd }),
@@ -663,7 +650,7 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
             && problem.matches("yolo must be").count() == 1,
         "{catalog}"
     );
-    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
+    let cwd = home.listed_agent("ada").unwrap()["folder"].clone();
     let refused = ada.call(
         "start_agent",
         json!({ "name": "w", "cli": "fake", "folder": cwd }),
@@ -683,7 +670,7 @@ fn a_file_wrong_as_a_whole_lists_no_cli_and_says_its_problems_once() {
 fn start_agent_refuses_a_blank_model_or_effort() {
     let home = TestHome::new("configblank");
     home.start_named_fake("ada", &[]);
-    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
+    let cwd = home.listed_agent("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     let refused = ada.call(
         "start_agent",
@@ -734,7 +721,7 @@ fn a_resume_refuses_an_entry_turned_off_or_wrong() {
         ),
     ] {
         settings(&home, &entry(more));
-        let resumed = facade(&home, &["resume", "worker"], &[]);
+        let resumed = facade(&home, &["resume", "-d", "worker"], &[]);
         assert!(
             !resumed.status.success() && stderr(&resumed).contains(said),
             "{}",
@@ -797,17 +784,38 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
     }
 }
 
-/// A name of spaces alone is blank, by the spaces the editor trims, a byte order mark among them: a
-/// start and a rename given one name the agent from `names` (LIFECYCLE-2.1).
+/// Shell rejects a blank rename before changing the name. In v3, a blank rename picks a name
+/// from the settings.
+fn rename_blank_through_v3(home: &TestHome, agent: &str, blank: &str) {
+    let refused = facade(home, &["rename", agent, blank], &[]);
+    assert_eq!(
+        (
+            stdout(&refused).as_str(),
+            stderr(&refused).as_str(),
+            refused.status.code()
+        ),
+        (
+            "",
+            "error: Agent name cannot be empty.\n\
+             Usage: facade rename <AGENT> <NAME>\n\
+             Example: facade rename Nova review\n",
+            Some(2),
+        )
+    );
+    assert_eq!(home.inspect_agent(agent)["agent"]["name"], agent);
+    connect(home).call_ok("agent.rename", json!({ "agent": agent, "name": blank }));
+}
+
+/// An editor-blank name, including a byte order mark, uses `names` in start and the v3 rename.
 #[test]
 fn a_name_of_the_editor_s_spaces_alone_is_blank() {
     let home = TestHome::new("configblankname");
     settings(&home, &json!({ "names": ["Solo"] }));
-    let started = facade(&home, &["start", "--name", "\u{feff} ", "fake"], &[]);
+    let started = facade(&home, &["start", "-d", "--name", "\u{feff} ", "fake"], &[]);
     assert!(started.status.success(), "{}", stderr(&started));
     assert_eq!(home.agents()[0]["name"], "Solo", "{:?}", home.agents());
     settings(&home, &json!({ "names": ["Renamed"] }));
-    home.run_facade_ok(&["rename", "Solo", "\u{feff}"]);
+    rename_blank_through_v3(&home, "Solo", "\u{feff}");
     assert_eq!(home.agents()[0]["name"], "Renamed", "{:?}", home.agents());
 }
 
@@ -818,7 +826,7 @@ fn a_blank_rename_and_a_guest_are_named_from_names() {
     let home = TestHome::new("confignamed");
     settings(&home, &json!({ "names": ["Renamed"] }));
     home.start_named_fake("ada", &[]);
-    home.run_facade_ok(&["rename", "ada", " "]);
+    rename_blank_through_v3(&home, "ada", " ");
     assert!(
         home.agents().iter().any(|agent| agent["name"] == "Renamed"),
         "{:?}",
@@ -966,7 +974,7 @@ fn an_agent_starts_agents_with_its_own_environment() {
     );
     let started = facade(
         &home,
-        &["start", "--name", "ada", "fake work"],
+        &["start", "-d", "--name", "ada", "fake work"],
         &[("PROVIDER_KEY", "person-key"), ("KEPT", "kept")],
     );
     assert!(started.status.success(), "{}", stderr(&started));
@@ -975,7 +983,7 @@ fn an_agent_starts_agents_with_its_own_environment() {
         "{}",
         home.screen("ada")
     );
-    let cwd = home.agent_from_list_json("ada").unwrap()["folder"].clone();
+    let cwd = home.listed_agent("ada").unwrap()["folder"].clone();
     let mut ada = McpTestClient::open(&home, "a1");
     for (name, cli) in [("kid", "fake"), ("dumper", "dump")] {
         let started = ada.call(

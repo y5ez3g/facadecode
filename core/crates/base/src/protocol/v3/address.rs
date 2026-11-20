@@ -17,16 +17,25 @@ pub struct MachineSelector<'a> {
 
 impl MachineSelector<'_> {
     pub fn matches(self, machine: &MachineIdentity) -> bool {
-        self.name == Some(machine.name.as_str())
-            || self.id.is_some_and(|id| {
-                let digits = machine.machine_id.bytes().filter(|&byte| byte != b'-');
-                let selected = id.bytes().filter(|&byte| byte != b'-');
-                digits
-                    .zip(selected)
-                    .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
-                    .count()
-                    == if id.len() == 8 { 8 } else { 32 }
-            })
+        self.name == Some(machine.name.as_str()) || self.matches_id(&machine.machine_id)
+    }
+
+    fn matches_id(self, machine_id: &str) -> bool {
+        self.id.is_some_and(|id| {
+            let digits = machine_id.bytes().filter(|&byte| byte != b'-');
+            let selected = id.bytes().filter(|&byte| byte != b'-');
+            digits
+                .zip(selected)
+                .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
+                .count()
+                == if id.len() == 8 { 8 } else { 32 }
+        })
+    }
+
+    fn excludes_other_machines(self, machine_id: &str, visible: &[MachineIdentity]) -> bool {
+        visible
+            .iter()
+            .all(|other| other.machine_id == machine_id || !self.matches(other))
     }
 }
 
@@ -171,22 +180,30 @@ pub fn display_machine_selector(
     machine: &MachineIdentity,
     visible: &[MachineIdentity],
 ) -> Result<String, AddressError> {
-    let unique = |input: &str| {
-        parse_machine_selector(input).is_ok_and(|selector| {
-            selector.matches(machine)
-                && visible
-                    .iter()
-                    .all(|other| other.machine_id == machine.machine_id || !selector.matches(other))
-        })
-    };
-    if unique(&machine.name) {
+    if parse_machine_selector(&machine.name).is_ok_and(|selector| {
+        selector.matches(machine) && selector.excludes_other_machines(&machine.machine_id, visible)
+    }) {
         return Ok(machine.name.clone());
     }
-    let short = short_machine_id(&machine.machine_id);
+    display_machine_id(&machine.machine_id, visible)
+}
+
+/// An ID spelling that selects only this machine in the supplied view.
+/// Prefer the eight-digit ID, then the full UUID and its alternate spellings.
+pub fn display_machine_id(
+    machine_id: &str,
+    visible: &[MachineIdentity],
+) -> Result<String, AddressError> {
+    let unique = |input: &str| {
+        parse_machine_selector(input).is_ok_and(|selector| {
+            selector.matches_id(machine_id) && selector.excludes_other_machines(machine_id, visible)
+        })
+    };
+    let short = short_machine_id(machine_id);
     if unique(&short) {
         return Ok(short);
     }
-    let full = exact_machine_selector(&machine.machine_id);
+    let full = exact_machine_selector(machine_id);
     if unique(&full) {
         return Ok(full);
     }

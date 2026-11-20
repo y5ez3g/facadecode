@@ -27,9 +27,7 @@ fn recorded_cli_args(file: &Path) -> Vec<String> {
 }
 
 fn inspected_agent(home: &TestHome, agent: &str) -> Value {
-    let reply = connect(home).call("agent.inspect", json!({ "agent": agent }));
-    assert!(reply["result"]["agent"].is_object(), "{reply}");
-    reply["result"]["agent"].clone()
+    home.inspect_agent(agent)["agent"].clone()
 }
 
 /// Codex runs its SessionStart command through its session's PowerShell shell on Windows.
@@ -45,7 +43,7 @@ fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
         .command(&test_binaries().facade)
         .env("PATH", &path)
         .env("FAKECLI_SESSION", FIRST)
-        .args(["start", "--name", "codex", "codex"])
+        .args(["start", "-d", "--name", "codex", "codex"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -61,7 +59,7 @@ fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
     let resumed = home
         .command(&test_binaries().facade)
         .env("PATH", &path)
-        .args(["resume", "codex"])
+        .args(["resume", "-d", "codex"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -96,7 +94,7 @@ fn reports_session_through_cmd_quoted(cli: &str) {
         .command(&test_binaries().facade)
         .env("PATH", &path)
         .env("FAKECLI_SESSION", FIRST)
-        .args(["start", "--name", cli, cli])
+        .args(["start", "-d", "--name", cli, cli])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -199,7 +197,7 @@ fn a_session_the_cli_reports_is_recorded_and_follows_the_cli() {
     assert!(
         records_session(&home, "worker", Some(FIRST)),
         "{:?}",
-        home.agent_from_list_json("worker")
+        home.listed_agent("worker")
     );
     let mut wire = connect(&home);
     let inspected = wire.call("agent.inspect", json!({ "agent": agent.address }));
@@ -229,7 +227,7 @@ fn a_session_counts_once_its_cli_saved_it() {
     let transcripts = home.project.parent().unwrap().join("transcripts");
     std::fs::create_dir_all(&transcripts).unwrap();
     let saved = transcripts.to_string_lossy().into_owned();
-    home.start_named_fake(
+    let unsaved = home.start_named_fake(
         "unsaved",
         &[("FAKECLI_SESSION", FIRST), ("FAKECLI_TRANSCRIPTS", &saved)],
     );
@@ -245,7 +243,7 @@ fn a_session_counts_once_its_cli_saved_it() {
     assert!(
         records_session(&home, "saved", None),
         "not saved yet: {:?}",
-        home.agent_from_list_json("saved")
+        home.listed_agent("saved")
     );
     home.run_facade_ok(&["send", "saved", "hello"]);
     assert!(
@@ -254,10 +252,16 @@ fn a_session_counts_once_its_cli_saved_it() {
     );
     home.run_facade_ok(&["stop", "unsaved"]);
     let refused = resume(&home, "unsaved");
-    assert!(
-        !refused.status.success() && stderr(&refused).contains("has no recorded session to resume"),
-        "{}",
-        stderr(&refused)
+    assert_eq!(
+        (stdout(&refused), stderr(&refused), refused.status.code()),
+        (
+            String::new(),
+            format!(
+                "error: unsaved ({}) has no saved session to resume.\n",
+                unsaved.address
+            ),
+            Some(1),
+        )
     );
     home.run_facade_ok(&["stop", "saved"]);
     let resumed = resume(&home, "saved");
@@ -573,31 +577,32 @@ fn a_resumed_agent_keeps_its_id_name_record_and_screen_and_continues_its_session
 fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
     let home = TestHome::new("resume-choices");
     let first_args = home.folder().join("first-argv.json");
-    let start = home
-        .command(&test_binaries().facade)
+    let mut launch = home.command(&test_binaries().facade);
+    launch
         .env("FAKECLI_SESSION", FIRST)
-        .env("FAKECLI_ARGS", &first_args)
-        .args([
-            "start",
-            "-d",
-            "--name",
-            "ada",
-            "--model",
-            "qa-original",
-            "--effort",
-            "low",
-            "fake",
-            "qa-saved-argument",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(start.status.success(), "{}", stderr(&start));
-    let started = stdout(&start);
-    let address = started.trim();
-    assert!(address.contains('@'), "{started}");
+        .env("FAKECLI_ARGS", &first_args);
+    let env = launch
+        .get_envs()
+        .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let original = connect(&home).call_ok(
+        "agent.start",
+        json!({
+            "name": "ada", "cli": "fake", "folder": home.project,
+            "model": "qa-original", "effort": "low",
+            "args": ["qa-saved-argument"],
+            "cols": 80, "rows": 24,
+            "env": env,
+        }),
+    );
+    let address = original["agent"]["address"].as_str().unwrap();
+    assert!(address.contains('@'), "{original}");
     let inspect = || inspected_agent(&home, address);
-    assert!(wait_until(LOADED_TIMEOUT, || inspect()["session"] == FIRST));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || inspect()["session"] == FIRST),
+        "the first session was not recorded: {}",
+        inspect()
+    );
     let original = inspect();
     assert_eq!(original["address"], address);
     assert_eq!(original["model"], "qa-original");
@@ -681,7 +686,10 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
         .output()
         .unwrap();
     assert!(outcome.status.success(), "{}", stderr(&outcome));
-    assert_eq!(stdout(&outcome).trim(), address);
+    assert_eq!(
+        stdout(&outcome),
+        format!("Resumed ada ({address}) in the background.\n")
+    );
     assert_args(&resumed_args);
     assert!(wait_for_screen_text(
         &home,
@@ -764,7 +772,10 @@ fn a_resume_after_v2_takeover_uses_the_launch_choices_from_migration() {
         .output()
         .unwrap();
     assert!(resumed.status.success(), "{}", stderr(&resumed));
-    assert_eq!(stdout(&resumed).trim(), address);
+    assert_eq!(
+        stdout(&resumed),
+        format!("Resumed ada ({address}) in the background.\n")
+    );
     let argv = recorded_cli_args(&after_args);
     for [flag, expected] in [
         ["--model", "qa-at-migration"],
@@ -785,11 +796,8 @@ fn a_resume_after_v2_takeover_uses_the_launch_choices_from_migration() {
     ] {
         assert!(!argv.iter().any(|word| word == omitted), "{argv:?}");
     }
-    let public: Value = facade_scenarios::serde_json::from_str(
-        &home.run_facade_ok(&["inspect", "--json", address]),
-    )
-    .unwrap();
-    assert_eq!(public["id"], address);
+    let public = inspected_agent(&home, address);
+    assert_eq!(public["address"], address);
     assert_eq!(public["session"], FIRST);
     assert_eq!(public["model"], "qa-at-migration");
     assert_eq!(public["effort"], "low");
@@ -813,13 +821,18 @@ fn resume_refuses_a_running_agent_one_without_a_rule_and_one_without_a_session()
     assert_eq!(
         refused(&home, "running"),
         format!(
-            "error: agent {} is running or already resuming\n",
-            running.id
+            "error: running ({0}) is already running.\nOpen it with 'facade attach {0}'.\n",
+            running.address
         )
     );
     let stopped = wire.call("agent.stop", json!({ "agent": raw }));
     assert!(stopped["result"].is_object(), "{stopped}");
-    let custom = refused(&home, "raw");
+    let reply = wire.call(
+        "agent.resume",
+        json!({ "reference": "raw", "cols": 80, "rows": 24 }),
+    );
+    assert!(reply["error"].is_object(), "{reply}");
+    let custom = reply["error"]["message"].as_str().unwrap();
     assert!(
         custom.contains("is a custom program and cannot be resumed"),
         "{custom}"
@@ -828,7 +841,7 @@ fn resume_refuses_a_running_agent_one_without_a_rule_and_one_without_a_session()
     let said = refused(&home, "silent");
     assert!(
         said.starts_with("error: ")
-            && said.contains("has no recorded session")
+            && said.contains("has no saved session to resume.")
             && !said.contains("(unavailable)"),
         "{said}"
     );
@@ -885,7 +898,7 @@ fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
         let mut command = home.command(&test_binaries().facade);
         command
             .env("PATH", home.path_with_test_programs())
-            .args(["resume", "held"])
+            .args(["resume", "-d", "held"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -918,10 +931,17 @@ fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
         "held",
         &format!("session {FIRST}")
     ));
-    let again = stderr(&resume(&home, "held"));
-    assert!(
-        again == format!("error: agent {} is running or already resuming\n", held.id),
-        "{again}"
+    let again = resume(&home, "held");
+    assert_eq!(
+        (stdout(&again), stderr(&again), again.status.code()),
+        (
+            String::new(),
+            format!(
+                "error: held ({0}) is already running.\nOpen it with 'facade attach {0}'.\n",
+                held.address
+            ),
+            Some(1),
+        )
     );
 }
 
@@ -1297,7 +1317,7 @@ fn a_codex_run_keeps_the_version_its_installation_names_and_a_resume_reads_it_ag
     let resumed = home
         .command(&test_binaries().facade)
         .env("PATH", &path)
-        .args(["resume", "codex"])
+        .args(["resume", "-d", "codex"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -1345,7 +1365,7 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         .unwrap_or_else(|| panic!("{first}"));
     assert_eq!(first["result"]["agent"]["session"], FIRST);
     home.run_facade_ok(&["stop", before]);
-    home.run_facade_ok(&["remove", before]);
+    home.remove_agent(before);
     args["env"]["FAKECLI_ARGS"] = json!(file);
     let started = wire.call("agent.resume", args);
     let address = started["result"]["agent"]["address"]

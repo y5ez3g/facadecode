@@ -56,8 +56,10 @@ use std::time::{Duration, SystemTime};
 use facade_base::daemon::{AgentsUpdate, WindowRef};
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::{MachineHello, new_boot_id};
+use facade_base::process::ProcessState;
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
+use facade_base::v3::AgentLabel;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -254,15 +256,26 @@ impl LifecycleActivity for Daemon {
         agent::screen_writes()
     }
 
-    fn running_managed_addresses(&self) -> Vec<String> {
+    fn running_managed_agents(&self) -> Vec<AgentLabel> {
         self.agents()
             .into_iter()
-            .filter(|agent| !agent.is_guest() && agent.exit().borrow().is_none())
-            .map(|agent| {
-                let reference = agent.info().reference();
-                self.agent_address(&reference).unwrap_or_else(|_| {
-                    format!("{} on machine {}", reference.agent_id, reference.machine_id)
-                })
+            .filter_map(|agent| {
+                let info = agent.info();
+                if info.guest || info.process != ProcessState::Running {
+                    return None;
+                }
+                let reference = info.reference();
+                let address = self.agent_address(&reference).unwrap_or_else(|_| {
+                    facade_base::v3::address::format_agent_address(
+                        &reference,
+                        &reference.machine_id,
+                    )
+                });
+                Some(service::agent_label_of(
+                    info,
+                    address,
+                    agent.rule().is_some(),
+                ))
             })
             .collect()
     }
@@ -303,6 +316,11 @@ impl LifecycleActivity for Daemon {
         }
         all_quiet
     }
+}
+
+/// Reads the committed name of the local machine while its daemon is sleeping.
+pub fn offline_machine_name() -> Option<String> {
+    Store::offline_machine_name(&facade_base::paths::core_dir().ok()?)
 }
 
 /// Runs the daemon: `facade daemon`. The keeper starts it in the background; it can also run in

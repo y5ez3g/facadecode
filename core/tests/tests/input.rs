@@ -272,9 +272,8 @@ fn queued_calls_resume_when_input_room_returns() {
     );
 }
 
-/// `facade type` pastes text and presses keys, each call answered once its input reached the
-/// terminal: a multiline text is one message, keys edit the draft, and a call to an ended agent
-/// says that nothing was typed.
+/// Shell pastes single-line text and presses keys. A multiline paste through v3 stays one
+/// message, keys edit the draft, and a call to an ended agent says that nothing was typed.
 #[test]
 fn type_pastes_text_and_presses_keys() {
     let home = TestHome::new("type");
@@ -284,13 +283,34 @@ fn type_pastes_text_and_presses_keys() {
         .expect("an address")
         .to_string();
     home.run_facade_ok(&["type", "worker", "hello there", "--enter"]);
-    home.run_facade_ok(&["type", "a1", "two\nlines", "--enter"]);
+    let multiline = "two\nlines";
+    for (args, control) in [
+        (&["type", "a1", multiline, "--enter"][..], "U+000A"),
+        (&["type", "worker", "a\u{1b}b"][..], "U+001B"),
+    ] {
+        let refused = home.run_facade(args);
+        assert_eq!(
+            (stdout(&refused), stderr(&refused), refused.status.code()),
+            (
+                String::new(),
+                format!(
+                    "error: Text contains the control character {control}. Use '-k' or '--key' to press a key.\n\
+                     Example: facade type Nova --key Enter\n"
+                ),
+                Some(2),
+            )
+        );
+    }
+    connect(&home).call_ok(
+        "agent.type",
+        json!({ "agent": "a1", "text": multiline, "enter": true }),
+    );
     home.run_facade_ok(&["type", &address, "abc"]);
     home.run_facade_ok(&["type", "a1", "--key", "Backspace", "--key", "enter"]);
     home.run_facade_ok(&["type", "worker", "junk"]);
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     home.run_facade_ok(&["type", "worker", "ok", "--enter"]);
-    let wanted = ["hello there", "two\nlines", "ab", "ok"];
+    let wanted = ["hello there", multiline, "ab", "ok"];
     assert!(
         wait_until(secs(10), || home.submitted_messages().len() >= wanted.len()),
         "{:?}",
@@ -300,17 +320,9 @@ fn type_pastes_text_and_presses_keys() {
 
     let unknown = home.run_facade(&["type", "worker", "--key", "Esc", "--key", "F13"]);
     assert!(
-        !unknown.status.success() && stderr(&unknown).contains("unknown key \"F13\""),
+        unknown.status.code() == Some(2) && stderr(&unknown).contains("Unknown key \"F13\"."),
         "{}",
         stderr(&unknown)
-    );
-    let control = home.run_facade(&["type", "worker", "a\u{1b}b"]);
-    assert!(
-        control.status.code() == Some(2)
-            && stderr(&control).contains("control character U+001B")
-            && stderr(&control).contains("--key Esc"),
-        "{}",
-        stderr(&control)
     );
     home.run_facade_ok(&["stop", "worker"]);
     // Typing finds running agents alone: the error says the agent ended.
@@ -319,10 +331,7 @@ fn type_pastes_text_and_presses_keys() {
         assert!(
             ended.status.code() == Some(1)
                 && stderr(&ended)
-                    == format!(
-                        "error: agent {address} has ended\n  tip: run 'facade screen {given}' for \
-                         the last screen or 'facade resume {given}' to continue\n"
-                    ),
+                    == format!("error: worker ({address}) has stopped and cannot accept input.\n"),
             "{given}: {}",
             stderr(&ended)
         );
@@ -330,9 +339,9 @@ fn type_pastes_text_and_presses_keys() {
     assert_eq!(home.submitted_messages().len(), wanted.len());
 }
 
-/// The CLI validates a whole batch and the v2 endpoint can still type its legacy frames.
+/// The CLI validates a whole batch and the v3 endpoint can still type its legacy frames.
 #[test]
-fn public_keys_have_a_limit_and_v2_keeps_its_existing_keys() {
+fn public_keys_have_a_limit_and_v3_keeps_its_existing_keys() {
     let home = TestHome::new("publickeys");
     let pressed = home.project.join("pressed");
     let agent = home.start_fake_with("worker", &[("FAKECLI_KEYS", pressed.to_str().unwrap())]);
@@ -348,27 +357,35 @@ fn public_keys_have_a_limit_and_v2_keeps_its_existing_keys() {
     too_many.extend(std::iter::repeat_n(["-k", "z"], 101).flatten());
     let refused = home.run_facade(&too_many);
     assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
-    assert!(stderr(&refused).contains("expected 1 to 100 keys, got 101"));
-    for (old, replacement) in [
-        ("Escape", "Esc"),
-        ("Return", "Enter"),
-        ("ArrowUp", "Up"),
-        ("ArrowDown", "Down"),
-        ("ArrowLeft", "Left"),
-        ("ArrowRight", "Right"),
+    assert!(stderr(&refused).contains("accepts at most 100 keys, got 101"));
+    for old in [
+        "Escape",
+        "Return",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
     ] {
         let refused = home.run_facade(&["type", &agent.id, "-k", "z", "-k", old]);
         let message = stderr(&refused);
         assert_eq!(refused.status.code(), Some(2), "{message}");
         assert!(
-            message.contains(&format!("unknown key {old:?}\n  tip: use {replacement:?}")),
+            message.contains(&format!("Unknown key {old:?}."))
+                && message.contains("Supported keys: Enter, Esc"),
             "{message}"
         );
     }
 
     let empty = home.run_facade(&["type", &agent.id, ""]);
-    assert!(!empty.status.success(), "{}", stderr(&empty));
-    home.run_facade_ok(&["type", &agent.id, "", "--enter"]);
+    assert_eq!(empty.status.code(), Some(2), "{}", stderr(&empty));
+    let empty_with_enter = home.run_facade(&["type", &agent.id, "", "--enter"]);
+    assert_eq!(
+        empty_with_enter.status.code(),
+        Some(2),
+        "{}",
+        stderr(&empty_with_enter)
+    );
+    home.run_facade_ok(&["type", &agent.id, "--key", "Enter"]);
 
     let mut wire = connect(&home);
     let empty = wire.call("agent.type", json!({ "agent": agent.id, "text": "" }));

@@ -1,21 +1,17 @@
-Print an agent's recent output
+Read an agent's recent terminal output.
 
-Usage: facade screen [OPTIONS] <AGENT>
+Prints the last lines of the terminal screen and scrollback as plain text.
+Works for both running and stopped agents.
 
-Print recent terminal output and scrollback, including the last screen of an ended agent. Use
-'--json' for the text and its screen details.
+Usage: facade screen [-n|--lines <N>] <AGENT>
 
-Arguments:
-  <AGENT>  Agent address such as a17@gpu, or an agent ID or name
+Examples
+  facade screen Nova
+  facade screen -n 200 a5@laptop
 
-Options:
-      --json       Print the screen as JSON
-  -n, --lines <N>  Number of lines to print, from 1 to 2,000 [default: 50]
-  -h, --help       Print help
+Arguments
+  <AGENT>  Agent reference, agent ID, or unique name (active agents take priority for duplicate names)
 
-Examples:
-  # Print agent a3's recent output
-  facade screen a3
-
-  # Print the last 200 lines with screen details
-  facade screen --json -n 200 a3
+Options
+  -n, --lines <N>  Number of lines to print, from 1 to 2,000 (default: 50)
+  -h, --help       Show help

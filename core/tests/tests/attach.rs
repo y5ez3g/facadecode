@@ -10,6 +10,24 @@ fn address(home: &TestHome, id: &str) -> String {
         .to_string()
 }
 
+fn assert_detach_receipt(term: &TestTerminal, name: &str, address: &str) {
+    let shown = format!("Detached from {name}");
+    let detached = format!("{shown} ({address}). The agent is still running.");
+    let reattach = format!("Reattach with 'facade attach {address}'.");
+    // The narrow test terminal can wrap the receipt. Check the emitted text and that the detach
+    // notice is visible on the restored screen.
+    assert!(
+        term.wait_for_output(secs(2), &detached) && term.wait_for_output(secs(2), &reattach),
+        "{}",
+        term.text_with_scrollback()
+    );
+    assert!(
+        term.wait_for(secs(2), |text| text.contains(&shown)),
+        "{}",
+        term.text()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn attach_restores_bracketed_paste_and_cooked_mode_on_signal() {
@@ -67,18 +85,21 @@ fn attach_restores_main_screen_on_detach_or_signal() {
     );
     assert!(wait_for_screen_text(&home, &agent, "ALT-READY"));
     let address = address(&home, &agent);
-    let detached = format!("Detached from {address}. Run 'facade attach {address}' to return.");
     // Termination signals reach attach on Unix alone.
     #[cfg_attr(windows, allow(unused_mut))]
-    let mut ends = vec![("ctrl-]", detached.as_str(), 0)];
+    let mut ends = vec![("ctrl-]", None::<&str>, 0)];
     #[cfg(unix)]
     ends.extend([
         (
             "SIGTERM",
-            "Attachment ended by SIGTERM.",
+            Some("Attachment ended by SIGTERM."),
             128 + libc::SIGTERM,
         ),
-        ("SIGHUP", "Attachment ended by SIGHUP.", 128 + libc::SIGHUP),
+        (
+            "SIGHUP",
+            Some("Attachment ended by SIGHUP."),
+            128 + libc::SIGHUP,
+        ),
     ]);
     for (end, note, code) in ends {
         let mut term = TestTerminal::spawn(
@@ -105,11 +126,15 @@ fn attach_restores_main_screen_on_detach_or_signal() {
             .wait_exit(secs(5))
             .unwrap_or_else(|| panic!("{end} did not end the attachment"));
         assert_eq!(status.code(), Some(code), "{end}");
-        assert!(
-            term.wait_for(secs(2), |text| text.contains(note)),
-            "{end}: {}",
-            term.text()
-        );
+        if let Some(note) = note {
+            assert!(
+                term.wait_for(secs(2), |text| text.contains(note)),
+                "{end}: {}",
+                term.text()
+            );
+        } else {
+            assert_detach_receipt(&term, "fullscreen", &address);
+        }
         assert!(
             !term.on_alternate_screen(),
             "{end} left the terminal on its alternate screen"
@@ -283,13 +308,7 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
             .is_some_and(|status| status.success())
     );
     let address = address(&home, &agent);
-    assert!(
-        term.wait_for(secs(2), |text| text.contains(&format!(
-            "Detached from {address}. Run 'facade attach {address}' to return."
-        ))),
-        "{}",
-        term.text()
-    );
+    assert_detach_receipt(&term, "mixed", &address);
     assert!(!term.on_alternate_screen(), "left on the alternate screen");
 }
 
@@ -407,11 +426,9 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     pause_process(keeper);
     home.kill_daemon();
     std::fs::remove_file(home.daemon_socket()).unwrap();
-    assert!(
-        term.wait_for_output(LOADED_TIMEOUT, "Connection lost. Reconnecting."),
-        "{}",
-        term.text_with_scrollback()
-    );
+    assert!(home.hello_result().is_none());
+    // The socket is gone before the attachment's reader necessarily closes its input queue.
+    home.wait_for_gate("attach-disconnected");
     term.send(b"held keys");
     home.wait_for_gate("attach-buffered-input");
 
@@ -440,7 +457,7 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         term.text_with_scrollback()
     );
     assert!(
-        term.wait_for_output(secs(2), "error: could not reconnect to Facade"),
+        term.wait_for_output(secs(2), "error: Lost connection to held ("),
         "{}",
         term.text_with_scrollback()
     );
@@ -449,6 +466,7 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         "{}",
         term.text_with_scrollback()
     );
+    assert_eq!(term.output_count(ATTACH_RECONNECT_NOTE), 0);
     let listener = peer.join().unwrap();
     listener.set_nonblocking(true).unwrap();
     let extra = listener.accept();

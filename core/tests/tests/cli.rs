@@ -1,12 +1,10 @@
-//! The command line's grammar and output on the built `facade`: several agents in one command,
-//! IDs that scripts take back, `start`'s options, `status` that starts nothing, and the commands
-//! that reach no Facade.
+//! Public Shell grammar, output streams and the records behind the output.
 
 use std::path::Path;
 use std::process::{Output, Stdio};
 
 use facade_base::files::real_path;
-use facade_scenarios::serde_json::{Value, json};
+use facade_scenarios::serde_json::json;
 use facade_scenarios::*;
 
 /// `facade <args>` with the test programs on `PATH`, so that `fake` names the test CLI.
@@ -37,184 +35,191 @@ fn address(home: &TestHome, id: &str) -> String {
         .to_string()
 }
 
-/// `stop` goes through the agents in order: it prints the address of each one it stopped, says why
-/// one failed, goes on, and exits 1.
+/// A multi-target stop stops nothing. A single stop confirms the process exit.
 #[test]
-fn stop_prints_each_agent_it_stopped_and_fails_for_one_that_is_not_there() {
+fn stop_accepts_one_target_and_confirms_its_exit() {
     let home = TestHome::new("stopmany");
-    let worker = home.start_fake("w1");
-    let w1 = address(&home, &worker.id);
+    let first = home.start_fake("w1");
+    let second = home.start_fake("w2");
     assert_eq!(
-        said(&home.run_facade(&["stop", "nobody", "w1"])),
+        said(&home.run_facade(&["stop", "w1", "w2"])),
         (
-            format!("{w1}\n"),
-            "error: no agent \"nobody\" was found\n".to_string(),
+            String::new(),
+            "error: 'facade stop' accepts one agent.\nUsage: facade stop <AGENT>\nExample: facade stop Nova\n".into(),
+            Some(2)
+        )
+    );
+    assert!(alive(&first.process) && alive(&second.process));
+    assert_eq!(
+        said(&home.run_facade(&["stop", "nobody"])),
+        (
+            String::new(),
+            "error: No active agent or guest matches \"nobody\".\nRun 'facade list' to find an agent.\n".into(),
             Some(1)
         )
     );
-    assert!(!alive(&worker.process), "w1 still runs");
-    // The list shows running agents alone.
+    assert_eq!(
+        said(&home.run_facade(&["stop", &first.address])),
+        (
+            format!("Stopped w1 ({}).\n", first.address),
+            String::new(),
+            Some(0)
+        )
+    );
+    assert!(!alive(&first.process), "w1 still runs");
+    assert!(alive(&second.process), "w2 stopped too");
     assert_eq!(home.list_state("w1"), None);
 }
 
-/// `facade ls -q` prints one address a line, newest start first, which `facade rm` takes back
-/// through a shell's substitution. With no agents, `list` says so and `ls -q` prints nothing at
-/// all.
+/// The table's references name the records in their roster order and can be copied into operations.
 #[test]
-fn rm_takes_the_ids_that_ls_q_prints() {
-    let home = TestHome::new("rmquiet");
+fn roster_refs_work_for_operations_and_removal_keeps_the_empty_roster() {
+    let home = TestHome::new("rosterrefs");
     let first = home.start_fake("w1");
-    home.start_fake("w2");
-    let (a1, a2) = (address(&home, "a1"), address(&home, "a2"));
-    assert_eq!(
-        said(&home.run_facade(&["ls", "-q"])),
-        (format!("{a2}\n{a1}\n"), String::new(), Some(0))
-    );
-    let removed = home
-        .command(shell())
-        .args(["-c", "\"$0\" rm $(\"$0\" ls -q)"])
-        .arg(&test_binaries().facade)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert_eq!(
-        said(&removed),
-        (format!("{a2}\n{a1}\n"), String::new(), Some(0))
-    );
+    let second = home.start_fake("w2");
+    let table = home.list_table();
+    assert_eq!(table.column("REF"), [&second.address, &first.address]);
+    for reference in table.column("REF") {
+        let removed = connect(&home).call_ok("agent.remove", json!({ "agent": reference }));
+        assert_eq!(removed["address"], reference);
+    }
     assert!(home.agents().is_empty(), "{:?}", home.agents());
-    assert!(
-        wait_until(secs(10), || !alive(&first.process)),
-        "rm stops a running agent"
-    );
-    assert_eq!(
-        said(&home.run_facade(&["ls", "-q"])),
-        (String::new(), String::new(), Some(0))
-    );
+    assert!(!alive(&first.process) && !alive(&second.process));
+
     assert_eq!(
         said(&home.run_facade(&["list"])),
-        (String::new(), "No agents.\n".to_string(), Some(0))
+        (
+            String::new(),
+            "No active agents.\nStart one with 'facade start codex', or run 'facade resume' to find saved sessions.\n".into(),
+            Some(0)
+        )
     );
-    // The JSON holds a line for each machine, with its state, beside the agents.
-    let (json, said_on_stderr, code) = said(&home.run_facade(&["list", "--json"]));
-    assert_eq!((said_on_stderr.as_str(), code), ("", Some(0)));
-    let listed: Value = facade_scenarios::serde_json::from_str(&json).unwrap();
-    assert_eq!(listed["agents"], json!([]), "{json}");
-    assert_eq!(
-        listed["machines"].as_array().map(Vec::len),
-        Some(1),
-        "{json}"
-    );
-    assert_eq!(listed["machines"][0]["state"], "online", "{json}");
-    let both = home.run_facade(&["list", "-q", "--json"]);
-    assert_eq!(both.status.code(), Some(2), "{}", stderr(&both));
+    let listed = home.agent_list();
+    assert_eq!(listed["agents"], json!([]), "{listed}");
+    assert_eq!(listed["machines"].as_array().map(Vec::len), Some(1));
+    assert_eq!(listed["machines"][0]["state"], "online", "{listed}");
+
+    for option in ["-q", "--quiet", "--json"] {
+        let (out, err, code) = said(&home.run_facade(&["list", option]));
+        assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
+        assert!(err.contains(option), "{err}");
+    }
 }
 
-/// `start -d` starts in the background and prints the agent's address alone.
 #[test]
-fn start_d_prints_a_bare_id() {
+fn detached_start_names_the_running_agent() {
     let home = TestHome::new("startdetach");
-    let started = facade(&home, &["start", "-d", "--name", "w1", "fake"]);
-    assert_eq!(
-        said(&started),
-        (
-            format!("{}\n", address(&home, "a1")),
-            String::new(),
-            Some(0)
-        )
-    );
-    assert_eq!(home.agent_record("a1").unwrap()["process"], "running");
-    let started = facade(&home, &["start", "--detach", "fake"]);
-    assert_eq!(
-        said(&started),
-        (
-            format!("{}\n", address(&home, "a2")),
-            String::new(),
-            Some(0)
-        )
-    );
+    for (id, options) in [
+        ("a1", &["-d", "--name", "w1"][..]),
+        ("a2", &["--detach"][..]),
+    ] {
+        let args = [&["start"][..], options, &["fake"]].concat();
+        let started = facade(&home, &args);
+        assert_eq!(started.status.code(), Some(0), "{}", stderr(&started));
+        let record = home.agent_record(id).expect("a started agent");
+        let name = record["name"].as_str().expect("the agent's name");
+        let reference = record["address"].as_str().unwrap();
+        assert_eq!(
+            said(&started),
+            (
+                format!("Started {name} ({reference}) in the background.\n"),
+                String::new(),
+                Some(0)
+            )
+        );
+        assert_eq!(record["process"], "running");
+        if id == "a1" {
+            assert_eq!(name, "w1");
+        }
+    }
 }
 
-/// `list --json` gives the protocol's roster row, and `inspect --json` the same facts as its text
-/// and the protocol's record, under the same names.
+/// The roster, inspection and Shell views refer to the same live process.
 #[test]
-fn agent_json_uses_folder_and_last_input_with_the_v2_values() {
-    let home = TestHome::new("agentjson");
+fn agent_list_inspect_and_status_agree_on_the_record() {
+    let home = TestHome::new("agentviews");
     let worker = home.start_fake("worker");
     assert!(wait_for_screen_text(&home, &worker.id, "❯"));
-    let mut wire = connect(&home);
-    let listed: Value = serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
-    let mut row = wire.call("agent.list", json!({}))["result"]["agents"][0].clone();
-    // The row without the reference a client keeps for later calls.
-    row.as_object_mut().unwrap().shift_remove("reference");
-    assert_eq!(listed["agents"][0], row);
-
     let record = home.agent_record(&worker.id).unwrap();
-    let inspected: Value =
-        serde_json::from_str(&home.run_facade_ok(&["inspect", "--json", &worker.id])).unwrap();
+    let listed = home.agent_list();
+    let row = &listed["agents"][0];
+    for (row_key, record_key) in [
+        ("id", "address"),
+        ("name", "name"),
+        ("type", "type"),
+        ("cli", "cli"),
+        ("folder", "cwd"),
+    ] {
+        assert_eq!(row[row_key], record[record_key], "{row}");
+    }
     assert_eq!(
-        [
-            &inspected["id"],
-            &inspected["name"],
-            &inspected["type"],
-            &inspected["cli"],
-            &inspected["folder"],
-            &inspected["args"],
-            &inspected["yolo"],
-        ],
-        [
-            &record["address"],
-            &record["name"],
-            &record["type"],
-            &record["cli"],
-            &record["cwd"],
-            &record["args"],
-            &record["yolo"],
-        ],
-        "{inspected}"
+        row["reference"],
+        json!({
+            "agent_id": record["agent_id"], "machine_id": record["machine_id"]
+        })
     );
-    let text = home.run_facade_ok(&["inspect", &worker.id]);
-    let line = |label: &str| {
-        text.lines()
-            .find_map(|line| line.strip_prefix(&format!("{label}:")))
-            .map(str::trim)
-            .unwrap_or_else(|| panic!("no {label} in {text}"))
-            .to_string()
-    };
+
+    let inspected = home.inspect_agent(&worker.id);
+    let agent = &inspected["agent"];
+    for key in [
+        "address", "name", "type", "cli", "cwd", "args", "yolo", "pid",
+    ] {
+        assert_eq!(agent[key], record[key], "{inspected}");
+    }
+    let table = home.list_table();
+    let row = table.row("NAME", "worker").expect("the active worker");
+    assert_eq!(table.cell(row, "REF"), worker.address);
+    assert_eq!(table.cell(row, "WORKING DIRECTORY"), agent["cwd"]);
+    let detail = home.run_facade_ok(&["status", &worker.id]);
     assert_eq!(
-        [line("ID"), line("Name"), line("Folder")],
-        [&inspected["id"], &inspected["name"], &inspected["folder"]]
-            .map(|value| value.as_str().unwrap().to_string()),
-        "{text}"
+        detail.lines().next().unwrap(),
+        format!("worker ({})", worker.address)
+    );
+    assert_eq!(
+        status_field(&detail, "Working directory"),
+        agent["cwd"].as_str(),
+        "{detail}"
+    );
+    assert_eq!(
+        status_field(&detail, "PID"),
+        Some(worker.pid.to_string().as_str()),
+        "{detail}"
     );
 }
 
-/// The values of `--name` and `--prompt` may begin with a dash, even one that spells an option of
-/// Facade's.
+/// CLI arguments and a name can begin with a dash, even when a word spells an option of Facade.
 #[test]
-fn a_prompt_that_starts_with_a_dash_is_one_value() {
-    let home = TestHome::new("dashprompt");
-    for (number, (name, prompt)) in [("p1", "-d"), ("-p2", "-x is wrong"), ("p3", "--help")]
+fn a_cli_argument_that_starts_with_a_dash_is_one_value() {
+    let home = TestHome::new("dashargs");
+    for (number, (name, arg)) in [("p1", "-d"), ("-p2", "-x is wrong"), ("p3", "--help")]
         .into_iter()
         .enumerate()
     {
-        let started = facade(
-            &home,
-            &["start", "-d", "--name", name, "--prompt", prompt, "fake"],
-        );
+        let args = home.folder().join(format!("argv-{number}.json"));
+        let started = home
+            .command(&test_binaries().facade)
+            .env("FAKECLI_ARGS", &args)
+            .args(["start", "-d", "--name", name, "fake", arg])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(started.status.code(), Some(0), "{}", stderr(&started));
         let id = format!("a{}", number + 1);
         assert_eq!(
-            said(&started),
-            (format!("{}\n", address(&home, &id)), String::new(), Some(0)),
-            "{prompt}"
-        );
-        let wanted = format!(
-            "📨 Message from the command line · m{}\n{prompt}",
-            number + 1
+            stdout(&started),
+            format!(
+                "Started {name} ({}) in the background.\n",
+                address(&home, &id)
+            ),
         );
         assert!(
-            wait_until(secs(40), || home.submitted_messages().contains(&wanted)),
-            "{prompt}: {:?}",
-            home.submitted_messages()
+            wait_until(LOADED_TIMEOUT, || std::fs::read_to_string(&args)
+                .ok()
+                .and_then(
+                    |output| facade_scenarios::serde_json::from_str::<Vec<String>>(&output).ok()
+                )
+                .is_some_and(|argv| argv.iter().any(|word| word == arg))),
+            "missing argument {arg:?}"
         );
         assert!(home.agent_from_watch(name).is_some(), "{name}");
     }
@@ -253,7 +258,10 @@ fn every_word_after_the_program_is_the_program_s() {
     assert_eq!(
         said(&started),
         (
-            format!("{}\n", address(&home, "a1")),
+            format!(
+                "Started echoer ({}) in the background.\n",
+                address(&home, "a1")
+            ),
             String::new(),
             Some(0)
         )
@@ -267,18 +275,21 @@ fn every_word_after_the_program_is_the_program_s() {
     );
 }
 
-/// An option of the CLI's put before it is a usage error, found before Facade is reached.
-/// (`--model` and `--effort` are Facade's own options of `start`.)
+/// A CLI option before its name is refused before Facade is reached.
 #[test]
 fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
     let home = TestHome::new("startoption");
     assert_eq!(
-        said(&facade(&home, &["start", "--verbose", "claude"])),
+        said(&facade(&home, &["start", "--model", "codex"])),
         (
             String::new(),
-            "error: unexpected option '--verbose' before the CLI\n  tip: put CLI-specific options \
-             after the CLI name\n"
-                .to_string(),
+            concat!(
+                "error: Unknown option '--model' before <CLI>.\n",
+                "Put Facade options before the CLI name, and CLI options after it.\n",
+                "Example: facade start codex --model ...\n",
+                "Run 'facade start --help' for Facade options.\n"
+            )
+            .into(),
             Some(2)
         )
     );
@@ -287,10 +298,9 @@ fn an_unknown_option_before_the_program_exits_2_without_reaching_facade() {
 
 /// Use the invoking shell's directory for default and relative folders, even with a local selector.
 #[test]
-fn start_folder_uses_the_invoking_shell_for_local_paths() {
+fn start_workdir_uses_the_invoking_shell_for_local_paths() {
     let home = TestHome::new("startfolder");
-    let listed: Value =
-        serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"])).unwrap();
+    let listed = connect(&home).call_ok("machine.list", json!({}));
     let local = &listed["machines"][0];
     let machine_id = local["machine_id"].as_str().unwrap();
     let name = local["name"].as_str().unwrap();
@@ -301,10 +311,13 @@ fn start_folder_uses_the_invoking_shell_for_local_paths() {
     std::fs::create_dir_all(&app_folder).unwrap();
     let cases: &[(&[&str], &Path)] = &[
         (&[], &shell_folder),
-        (&["--folder", "my app"], &app_folder),
-        (&["--folder", app_folder.to_str().unwrap()], &app_folder),
+        (&["--workdir", "my app"], &app_folder),
+        (&["--workdir", app_folder.to_str().unwrap()], &app_folder),
         (&["--machine", name], &shell_folder),
-        (&["--machine", &selector, "--folder", "my app"], &app_folder),
+        (
+            &["--machine", &selector, "--workdir", "my app"],
+            &app_folder,
+        ),
     ];
     for (options, folder) in cases {
         let started = home
@@ -334,76 +347,59 @@ fn start_folder_uses_the_invoking_shell_for_local_paths() {
     }
 }
 
-/// Former options and an explicitly empty folder fail before a daemon is reached.
 #[test]
-fn start_refuses_old_options_and_an_empty_folder() {
+fn start_refuses_old_options_and_an_empty_workdir() {
     let home = TestHome::new("startopts");
     for arguments in [
         &["start", "--cwd", "/work", "fake"][..],
         &["start", "--machine", "gpu", "--cwd=/work", "fake"][..],
+        &["start", "--folder", "/work", "fake"][..],
+        &["start", "--on", "gpu", "fake"][..],
+        &["start", "--workdir", "", "fake"][..],
     ] {
         let (out, err, code) = said(&facade(&home, arguments));
         assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
-        assert!(err.contains("unexpected option '--cwd"), "{err}");
-        assert!(err.contains("tip: use '--folder'"), "{err}");
+        assert!(err.starts_with("error: "), "{err}");
+        let option = arguments
+            .iter()
+            .rev()
+            .find(|word| word.starts_with("--"))
+            .unwrap();
+        assert!(err.contains(option.split('=').next().unwrap()), "{err}");
+        assert!(
+            !reached(&home),
+            "a usage error reached Facade: {arguments:?}"
+        );
     }
-    let (out, err, code) = said(&facade(&home, &["start", "--folder", "", "fake"]));
-    assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
-    assert!(err.contains("--folder <FOLDER>"), "{err}");
-    let (out, err, code) = said(&facade(&home, &["start", "--on", "gpu", "fake"]));
-    assert_eq!((out.as_str(), code), ("", Some(2)), "{err}");
-    assert!(err.starts_with("error: ") && err.contains("--on"), "{err}");
-    assert!(!reached(&home), "a usage error reached Facade");
 }
 
-/// `machine list` on a lone machine prints its table row and says how to connect another; a
-/// machine nobody has is a catalog error.
+/// The isolated machine still has a table row and a hint on stderr.
 #[test]
 fn machine_list_and_remove_on_a_lone_machine() {
     let home = TestHome::new("machinelone");
     let (out, err, code) = said(&facade(&home, &["machine", "list"]));
-    assert_eq!(out.lines().count(), 2, "{out}");
     let table = Table::parse(&out);
     assert_eq!(
         table.header,
-        [
-            "NAME",
-            "ID",
-            "SELECTOR",
-            "VERSION",
-            "STATE",
-            "ROUTE",
-            "LAST SEEN",
-            "SAVED"
-        ],
-        "{out}"
+        ["NAME", "ID", "STATE", "VERSION", "ROUTE", "SAVED"]
     );
-    let listed: Value =
-        serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"])).unwrap();
+    assert_eq!(table.rows.len(), 1, "{out}");
+    let listed = connect(&home).call_ok("machine.list", json!({}));
     let local = &listed["machines"][0];
     let row = &table.rows[0];
-    // The ID's first 8 digits, and a selector that finds this machine alone: its name.
+    assert_eq!(table.cell(row, "NAME"), local["name"]);
+    let id = local["machine_id"].as_str().expect("a v3 machine ID");
     assert_eq!(
-        [
-            table.cell(row, "NAME"),
-            table.cell(row, "ID"),
-            table.cell(row, "SELECTOR"),
-            table.cell(row, "STATE"),
-            table.cell(row, "ROUTE"),
-        ],
-        [
-            local["name"].as_str().unwrap(),
-            &local["machine_id"].as_str().unwrap()[..8],
-            local["name"].as_str().unwrap(),
-            "online",
-            "this machine",
-        ],
-        "{out}"
+        table.cell(row, "ID"),
+        facade_base::address::short_machine_id(id)
     );
+    for (column, expected) in [("STATE", "Local"), ("ROUTE", "-"), ("SAVED", "-")] {
+        assert_eq!(table.cell(row, column), expected, "{out}");
+    }
     assert_eq!(
         (err.as_str(), code),
         (
-            "No other machines. Run 'facade machine add <DESTINATION>' to connect one.\n",
+            "No other machines. Connect one with 'facade machine add devbox'.\n",
             Some(0)
         )
     );
@@ -411,42 +407,40 @@ fn machine_list_and_remove_on_a_lone_machine() {
         said(&facade(&home, &["machine", "remove", "nowhere"])),
         (
             String::new(),
-            "error: no machine 'nowhere'\n  tip: run 'facade machine list' to see your machines\n"
-                .to_string(),
+            "error: Unknown machine \"nowhere\".\nRun 'facade machine list' to see known machines.\n".into(),
             Some(1)
         )
     );
 }
 
-/// `status` where nothing runs says the Orchestrator sleeps, shows the Facade home, the settings
-/// file and the version, and starts nothing.
 #[test]
 fn status_on_an_empty_home_starts_nothing() {
     let home = TestHome::new("statusempty");
     let version = env!("CARGO_PKG_VERSION");
-    let settings = home.path.join("facade.json");
-    assert_eq!(
-        said(&home.run_facade(&["status"])),
-        (
-            format!(
-                "Orchestrator sleeping.\n  Home:      {}\n  Settings:  {}\n  Version:   {version}\n",
-                home.path.display(),
-                settings.display()
-            ),
-            String::new(),
-            Some(0)
-        )
+    let (out, err, code) = said(&home.run_facade(&["status"]));
+    assert_eq!((err.as_str(), code), ("", Some(0)));
+    assert!(
+        out.starts_with(&format!("Facade {version} is not running on ")),
+        "{out}"
     );
-    let json: Value =
-        facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["status", "--json"])).unwrap();
+    for label in [
+        "Active agents",
+        "Connected machines",
+        "Daemon PID",
+        "Keeper PID",
+    ] {
+        assert_eq!(status_field(&out, label), Some("-"), "{out}");
+    }
+    for (label, path) in [
+        ("Home", home.path.clone()),
+        ("Settings", home.path.join("facade.json")),
+    ] {
+        assert_eq!(status_field(&out, label), path.to_str(), "{out}");
+    }
     assert_eq!(
-        json,
-        json!({
-            "running": false,
-            "home": home.path.display().to_string(),
-            "settings_file": settings.display().to_string(),
-            "version": version,
-        })
+        status_field(&out, "Guest MCP"),
+        Some("Add \"facade-mcp\" as a stdio server."),
+        "{out}"
     );
     assert!(
         !socket_exists(&home.daemon_socket()) && home.processes().is_empty(),
@@ -454,106 +448,114 @@ fn status_on_an_empty_home_starts_nothing() {
     );
 }
 
-/// `status` where Facade runs shows the home, the settings file, this command's version, both
-/// services' process IDs, the agent count and the machines, and changes nothing.
 #[test]
 fn status_shows_a_running_facade() {
     let home = TestHome::new("statusrunning");
     home.start_fake("w1");
     let hello = home.hello_result().unwrap();
-    let (daemon, keeper) = (
-        hello["pid"].as_i64().unwrap(),
-        hello["keeper"]["pid"].as_i64().unwrap(),
-    );
+    let daemon = hello["pid"].as_i64().unwrap();
+    let keeper = hello["keeper"]["pid"].as_i64().unwrap();
+    let local = connect(&home).call_ok("machine.list", json!({}))["machines"][0].clone();
+    let name = local["name"].as_str().unwrap();
     let version = env!("CARGO_PKG_VERSION");
-    let settings = home.path.join("facade.json");
-    let machines: Value =
-        serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"])).unwrap();
-    let machine = machines["machines"][0]["name"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let (out, err, code) = said(&home.run_facade(&["status"]));
+    assert_eq!((err.as_str(), code), ("", Some(0)));
     assert_eq!(
-        said(&home.run_facade(&["status"])),
-        (
-            format!(
-                "Orchestrator running.\n  Home:      {}\n  Settings:  {}\n  Version:   {version}\n  \
-                 Daemon:    pid {daemon}\n  Keeper:    pid {keeper}\n  Agents:    1\n  Machines:  \
-                 {machine}\n",
-                home.path.display(),
-                settings.display()
-            ),
-            String::new(),
-            Some(0)
-        )
+        out.lines().next().unwrap(),
+        format!("Facade {version} is running on {name}.")
     );
-    let json: Value =
-        facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["status", "--json"])).unwrap();
+    for (label, value) in [
+        ("Active agents", "1".into()),
+        ("Connected machines", "-".into()),
+        ("Home", home.path.display().to_string()),
+        (
+            "Settings",
+            home.path.join("facade.json").display().to_string(),
+        ),
+        ("Daemon PID", daemon.to_string()),
+        ("Keeper PID", keeper.to_string()),
+    ] {
+        assert_eq!(status_field(&out, label), Some(value.as_str()), "{out}");
+    }
+    let launcher = home
+        .path
+        .join("core")
+        .join("bin")
+        .join(format!("facade-mcp{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        launcher.is_file(),
+        "missing launcher {}",
+        launcher.display()
+    );
     assert_eq!(
-        (
-            &json["running"],
-            &json["home"],
-            &json["settings_file"],
-            &json["version"],
-            &json["daemon_pid"],
-            &json["keeper_pid"],
-            &json["agents"],
-            &json["machines"][0]["name"],
-        ),
-        (
-            &json!(true),
-            &json!(home.path.display().to_string()),
-            &json!(settings.display().to_string()),
-            &json!(version),
-            &json!(daemon),
-            &json!(keeper),
-            &json!(1),
-            &json!(machine),
-        ),
-        "{json}"
+        status_field(&out, "Guest MCP"),
+        Some(format!("Add \"{}\" as a stdio server.", launcher.display()).as_str()),
+        "{out}"
     );
+    let result = connect(&home).call_ok("daemon.status", json!({}));
+    assert_eq!(result["home"], home.path.to_str().unwrap());
+    assert_eq!(
+        result["settings_file"],
+        home.path.join("facade.json").to_str().unwrap()
+    );
+    assert_eq!(result["daemon_pid"], daemon);
+    assert_eq!(result["keeper_pid"], keeper);
+    assert_eq!(result["agents"], 1);
     assert_eq!(home.daemon_pid(), Some(daemon as i32));
 }
 
-/// `version` and `completion` print what they make without reaching Facade.
 #[test]
-fn version_and_completion_reach_no_facade() {
-    let home = TestHome::new("version");
-    let version = env!("CARGO_PKG_VERSION");
-    let line = format!("facade {version}\n");
+fn attach_without_a_console_explains_how_to_read_the_screen() {
+    let home = TestHome::new("attachwithoutconsole");
     assert_eq!(
-        said(&home.run_facade(&["version"])),
-        (line.clone(), String::new(), Some(0))
-    );
-    assert_eq!(
-        said(&home.run_facade(&["-V"])),
-        (line, String::new(), Some(0))
-    );
-    assert_eq!(
-        said(&home.run_facade(&["version", "--json"])),
+        said(&facade(&home, &["attach", "a3"])),
         (
-            format!("{{\n  \"version\": \"{version}\"\n}}\n"),
             String::new(),
-            Some(0)
+            "error: 'facade attach' requires an interactive terminal.\n\
+             Use 'facade screen a3' to read its recent output.\n"
+                .into(),
+            Some(1)
         )
     );
-    for shell in ["bash", "zsh", "fish", "powershell"] {
-        let (out, err, code) = said(&home.run_facade(&["completion", shell]));
-        assert!(
-            code == Some(0)
-                && err.is_empty()
-                && out.contains("facade")
-                && out.contains("ls")
-                && out.contains("resume")
-                && out.contains("upgrade")
-                && out.contains("powershell")
-                && !out.contains("integration")
-                && !out.contains("keeper"),
-            "{shell}: completes the public commands, aliases and the shells, and no hidden or \
-             removed command: {code:?} {err}\n{out}"
+    assert!(!reached(&home));
+}
+
+/// Version flags and rejected former commands neither start nor contact the daemon.
+#[test]
+fn version_flags_and_retired_commands_reach_no_facade() {
+    let home = TestHome::new("version");
+    for flag in ["-V", "--version"] {
+        assert_eq!(
+            said(&home.run_facade(&[flag])),
+            (
+                format!("facade {}\n", env!("CARGO_PKG_VERSION")),
+                String::new(),
+                Some(0)
+            )
         );
     }
-    let unknown = home.run_facade(&["completion", "cmd"]);
-    assert_eq!(unknown.status.code(), Some(2), "{}", stderr(&unknown));
+    assert_eq!(
+        said(&home.run_facade(&["-v"])),
+        (
+            String::new(),
+            "error: Unknown option '-v'.\nRun 'facade --version' to print the CLI version.\n"
+                .into(),
+            Some(2)
+        )
+    );
+    for name in ["ls", "rm", "remove", "inspect", "version", "completion"] {
+        for args in [&[name][..], &[name, "--help"], &["help", name]] {
+            assert_eq!(
+                said(&home.run_facade(args)),
+                (
+                    String::new(),
+                    format!(
+                        "error: Unknown command {name:?}.\nRun 'facade --help' for available commands.\n"
+                    ),
+                    Some(2)
+                )
+            );
+        }
+    }
     assert!(!reached(&home), "a command that needs no Facade reached it");
 }

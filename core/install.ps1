@@ -123,7 +123,10 @@ try {
     if ($existing -and ($existing.LinkType -ne 'Junction' -or (Split-Path -Parent (@($existing.Target)[0])) -ne $versions)) {
         throw "$bin is already used by another installation. Move it first."
     }
-    New-Item -ItemType Junction -Path $next -Target $destination | Out-Null
+    $upToDate = $existing -and (@($existing.Target)[0] -eq $destination)
+    if (-not $upToDate) {
+        New-Item -ItemType Junction -Path $next -Target $destination | Out-Null
+    }
 
     if (-not $NoActivate) {
         & (Join-Path $destination 'facade.exe') daemon --takeover
@@ -131,12 +134,14 @@ try {
     }
 
     # Switch the junction without writing over an executable or ConPTY file in use.
-    if ($existing) { [IO.Directory]::Move($bin, $previous) }
-    try {
-        [IO.Directory]::Move($next, $bin)
-    } catch {
-        if ($existing) { [IO.Directory]::Move($previous, $bin) }
-        throw
+    if (-not $upToDate) {
+        if ($existing) { [IO.Directory]::Move($bin, $previous) }
+        try {
+            [IO.Directory]::Move($next, $bin)
+        } catch {
+            if ($existing) { [IO.Directory]::Move($previous, $bin) }
+            throw
+        }
     }
     if (-not $NoPath) { Add-FacadePath $bin }
 } finally {
@@ -146,5 +151,9 @@ try {
     }
     if ([IO.Directory]::Exists($work)) { [IO.Directory]::Delete($work, $true) }
 }
-Write-Output "Installed Facade $build in $bin."
+if ($upToDate -and $env:FACADE_UPGRADE_REPORT -eq '1') {
+    Write-Output "Facade $build is already up to date in $bin."
+} else {
+    Write-Output "Installed Facade $build in $bin."
+}
 if (-not $NoPath) { Write-Output 'Open a new terminal if your shell has an older PATH.' }

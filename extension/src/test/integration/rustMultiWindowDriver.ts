@@ -15,18 +15,19 @@ import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
 import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
-import { agentTab, facade, facadeAs, hasAgentTab, inspect, keepConversation, newCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
+import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 
 type Action =
-	| { readonly kind: 'snapshot' | 'notifications' | 'filter' | 'show-agent-picker' | 'window-component' }
+	| { readonly kind: 'snapshot' | 'filter' | 'window-component' }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
 	| { readonly kind: 'settings-path'; readonly file: string }
 	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
 	| { readonly kind: 'hide-shell-agent'; readonly name: string }
 	| { readonly kind: 'start'; readonly screen?: string; readonly secondGroup?: boolean }
-	| { readonly kind: 'adopt' | 'resume' | 'remote-card' | 'pin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'adopt' | 'resume' | 'pin' | 'stop' | 'remove' | 'inspect' | 'saved-pin'; readonly agent: string }
+	| { readonly kind: 'remote-card'; readonly agent: string; readonly machine: string }
 	| { readonly kind: 'running'; readonly agent: string; readonly screen?: string }
-	| { readonly kind: 'send'; readonly agent: string; readonly to: string; readonly text: string }
+	| { readonly kind: 'send'; readonly to: string; readonly text: string }
 	| { readonly kind: 'wait-for-exit'; readonly pid: number }
 	| { readonly kind: 'worktree'; readonly branch: string }
 	| { readonly kind: 'delete-worktree'; readonly folder: string };
@@ -224,18 +225,14 @@ async function perform(action: Action): Promise<unknown> {
 			await until(`#${action.agent}'s terminal tab`, () => hasAgentTab(card) || undefined);
 			return running(action.agent);
 		}
-		case 'show-agent-picker':
-			void vscode.commands.executeCommand('facade.goToAgent');
-			return true;
 		case 'remote-card': {
-			const card = await until(action.agent + "'s card", async () => (await state()).cards.find(card => card.alias === action.agent));
-			assert.ok(card.runningOn && !card.pinned, JSON.stringify(card));
+			const { agent } = await inspect(action.agent);
+			const card = await until(`${agent.address}'s card and details`, async () => (await state()).cards.find(card =>
+				card.runId === `${agent.machine_id}/${agent.agent_id}` && card.details.machine?.value === action.machine));
+			assert.strictEqual(card.details.address?.value, agent.address);
+			assert.ok(!card.pinned, JSON.stringify(card));
 			await until(`${card.alias}'s terminal tab`, () => hasAgentTab(card) || undefined);
-			await until(`${card.alias}'s remote icon`, async () => {
-				const icons = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '.remote-status .remote-icon' });
-				return icons?.length === 1 || undefined;
-			});
-			return card.alias;
+			return agent.address;
 		}
 		case 'pin':
 		case 'stop':
@@ -255,15 +252,18 @@ async function perform(action: Action): Promise<unknown> {
 			return agent;
 		}
 		case 'send': {
-			const sent = facadeAs(action.agent, 'send', action.to, action.text);
-			assert.match(sent.trim(), /^m\d+@[^\s]+$/u);
+			const { agent } = await inspect(action.to);
+			const sent = facade('send', action.to, action.text).trimEnd();
+			const message = /^Delivered (m\d+@[^\s]+) to /u.exec(sent)?.[1];
+			assert.ok(message, sent);
+			assert.strictEqual(sent, `Delivered ${message} to ${agent.name} (${agent.address}).`);
 			await until('the message to appear on the recipient terminal', () =>
 				facade('screen', action.to, '--lines', '120').includes(action.text) || undefined);
+			const received = fs.readFileSync(`${process.env.FACADE_IT_RECORD}.received.#${agent.agent_id}`, 'utf8')
+				.trimEnd().split(/\r?\n/u).map(line => JSON.parse(line) as string);
+			assert.strictEqual(received.filter(text => text.endsWith(` · ${message.split('@')[0]}\n${action.text}`)).length, 1);
 			return true;
 		}
-		case 'notifications':
-			await vscode.commands.executeCommand('notifications.showList');
-			return true;
 		case 'wait-for-exit':
 			await until(`PID ${action.pid} to exit`, () => {
 				try {

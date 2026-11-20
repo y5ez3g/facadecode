@@ -6,6 +6,7 @@ use std::sync::{
 };
 
 use facade_base::process::{ProcessExit, ProcessState};
+use facade_base::v3::AttachmentInfo;
 use facade_screen::{ParsedOutput, Screen};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -31,6 +32,7 @@ pub(crate) enum ViewerChange {
 
 /// A viewer's initial screen, size, recorded exit, and process state, captured together.
 pub(crate) struct ViewerSnapshot {
+    pub(crate) name: String,
     pub(crate) redraw: Vec<u8>,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
@@ -52,7 +54,11 @@ pub(crate) enum ViewKind {
     /// The watch unit tests open with `AddViewer`: it stays through the run's exit.
     #[cfg(test)]
     Legacy,
-    Attach(Option<String>),
+    Attach {
+        name: Option<String>,
+        attachment: Option<AttachmentInfo>,
+        allow_ended: bool,
+    },
 }
 
 impl ViewKind {
@@ -61,7 +67,7 @@ impl ViewKind {
         match self {
             #[cfg(test)]
             ViewKind::Legacy => true,
-            ViewKind::Attach(_) => false,
+            ViewKind::Attach { .. } => false,
         }
     }
 }
@@ -124,7 +130,19 @@ impl Viewers {
         self.active
             .iter()
             .filter_map(|v| match &v.kind {
-                ViewKind::Attach(name) if !v.tx.queue.is_closed() => name.clone(),
+                ViewKind::Attach { name, .. } if !v.tx.queue.is_closed() => name.clone(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn attachments(&self) -> Vec<AttachmentInfo> {
+        self.active
+            .iter()
+            .filter_map(|v| match &v.kind {
+                ViewKind::Attach { attachment, .. } if !v.tx.queue.is_closed() => {
+                    attachment.clone()
+                }
                 _ => None,
             })
             .collect()
@@ -136,12 +154,28 @@ impl Viewers {
         screen: &Screen,
         exit: Option<&ProcessExit>,
         process: ProcessState,
+        name: &str,
+        draining: bool,
     ) {
         if screen.synchronized_update_deadline().is_some() {
             return;
         }
-        for request in self.waiting.drain(..) {
+        for request in std::mem::take(&mut self.waiting) {
+            // The final snapshot includes the remaining output and the exit together.
+            if draining
+                && matches!(
+                    request.kind,
+                    ViewKind::Attach {
+                        allow_ended: true,
+                        ..
+                    }
+                )
+            {
+                self.waiting.push(request);
+                continue;
+            }
             let snapshot = ViewerSnapshot {
+                name: name.to_owned(),
                 redraw: screen.redraw(request.keep_scrollback, request.include_scrollback),
                 cols: screen.cols(),
                 rows: screen.rows(),
@@ -149,7 +183,8 @@ impl Viewers {
                 process,
             };
             if request.reply.send(snapshot).is_err()
-                || (process != ProcessState::Running && matches!(request.kind, ViewKind::Attach(_)))
+                || (process != ProcessState::Running
+                    && matches!(request.kind, ViewKind::Attach { .. }))
             {
                 continue;
             }

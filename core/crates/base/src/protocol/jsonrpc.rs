@@ -14,6 +14,7 @@ use super::daemon::{
 use super::machine::{
     MachineIdConflict, MessageRef, ProtocolMismatch, SshInteraction, Unavailable,
 };
+use super::v3::{AgentLabel, MachineQueryResult, SessionMatch};
 
 pub use crate::line::MAX_LINE_BYTES;
 
@@ -253,6 +254,18 @@ pub struct ErrorData {
     /// Complete references that matched a name or machine ID prefix.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<String>,
+    /// Reachable matches or the reachable agent whose operation failed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<AgentLabel>,
+    /// Matching machines or the selected machine whose connection failed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<MachineQueryResult>,
+    /// Saved sessions matching the requested ID.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<SessionMatch>,
+    /// CLIs that can start here when the requested CLI is not configured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_clis: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<ProtocolMismatch>,
 }
@@ -345,6 +358,10 @@ impl ErrorBody {
             ssh_interaction: None,
             unavailable: None,
             candidates: Vec::new(),
+            agents: Vec::new(),
+            machines: Vec::new(),
+            sessions: Vec::new(),
+            available_clis: Vec::new(),
             protocol: None,
         });
         let code = if reason == Reason::InvalidArgument {

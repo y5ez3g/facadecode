@@ -10,10 +10,10 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentListRow, V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
+import type { AgentListEntry, HelloResult, V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
 import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
-import { callInCore, normalizeDriveLetter, until } from './editors';
+import { CoreConnectionClosed, coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
 
 type Card = PanelState['cards'][number];
 
@@ -76,43 +76,40 @@ export function agentTab(card: Card): vscode.Tab | undefined {
 export const hasAgentTab = (card: Card) => agentTab(card) !== undefined;
 
 export function facade(...args: string[]): string {
-	return facadeAs(undefined, ...args);
-}
-
-export function facadeAs(agent: string | undefined, ...args: string[]): string {
 	const program = path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade');
 	const { FACADE_AGENT: _agent, ...env } = process.env;
-	if (agent !== undefined) { env.FACADE_AGENT = agent; }
 	return execFileSync(program, args, { env, encoding: 'utf8', timeout: 20_000 });
 }
 
-export function listed(): AgentListRow[] {
-	return (JSON.parse(facade('list', '--json')) as { readonly agents: AgentListRow[] }).agents;
+export async function listed(): Promise<AgentListEntry[]> {
+	return (await coreCall(HOME, 'agent.list', {})).agents;
 }
 
 export async function inspect(id: string): Promise<V3InspectResult> {
-	const reply = await callInCore(HOME, 'agent.inspect', { agent: id }, [3, 3]);
-	assert.ok(!reply.error, JSON.stringify(reply.error));
-	return reply.result as V3InspectResult;
+	return await coreCall(HOME, 'agent.inspect', { agent: id });
 }
 
 export async function recordOf(id: string): Promise<V3AgentInfo> {
 	return (await inspect(id)).agent;
 }
 
-/** The services of the Facade that responds, or undefined while none does: `facade status` never starts Facade. */
-function servicePids(): { readonly daemon: number; readonly keeper: number } | undefined {
-	let text: string;
+/** Daemon and keeper PIDs from a passive hello while the daemon is available. */
+async function servicePids(): Promise<{ readonly daemon: number; readonly keeper: number } | undefined> {
+	let hello;
 	try {
-		text = facade('status', '--json');
+		hello = await helloInCore(HOME, [3, 3]);
 	} catch (error) {
-		if (String((error as { stderr?: string }).stderr).includes('Orchestrator is still starting')) { return undefined; }
+		const code = (error as NodeJS.ErrnoException).code;
+		if (error instanceof CoreConnectionClosed || code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ECONNRESET') {
+			return undefined;
+		}
 		throw error;
 	}
-	const status = JSON.parse(text) as { daemon_pid?: number; keeper_pid?: number };
-	if (status.daemon_pid === undefined) { return undefined; }
-	assert.ok(typeof status.daemon_pid === 'number' && typeof status.keeper_pid === 'number', text);
-	return { daemon: status.daemon_pid, keeper: status.keeper_pid };
+	assert.ok(!hello.error, JSON.stringify(hello.error));
+	const { pid, keeper } = hello.result as HelloResult;
+	if (keeper === undefined) { return undefined; }
+	assert.ok(Number.isSafeInteger(pid) && Number.isSafeInteger(keeper.pid), JSON.stringify(hello.result));
+	return { daemon: pid, keeper: keeper.pid };
 }
 
 /** The fake CLI reports the session to core. Give its transcript a title and an activity time for the Resume picker. */
@@ -167,7 +164,7 @@ async function checkLive(before: RunningAgent): Promise<void> {
 	assert.deepStrictEqual({ ...restored, cwd: normalizeDriveLetter(restored.cwd) },
 		{ ...before, cwd: normalizeDriveLetter(before.cwd) }, 'the original number, PID, session and working folder');
 	verifyScreen(before.id);
-	assert.deepStrictEqual(listed().map(each => each.id.split('@')[0]), [before.id]);
+	assert.deepStrictEqual((await listed()).map(each => each.reference.agent_id), [before.id]);
 }
 
 export async function stop(card: Card): Promise<void> {
@@ -228,12 +225,12 @@ export async function activate(): Promise<void> {
 		if (previous.after === 'reload') {
 			await checkLive(began.agent);
 			write({ phase: 'reopened', detail: began.agent });
-			const before = servicePids();
+			const before = await servicePids();
 			assert.ok(before && Number.isSafeInteger(before.daemon) && before.daemon > 1, 'Facade runs with this window');
 			process.kill(before.daemon, 'SIGKILL');
 			// Until the keeper starts the replacement, no Facade responds
-			const replacement = await until('the replacement daemon', () => {
-				const next = servicePids();
+			const replacement = await until('the replacement daemon', async () => {
+				const next = await servicePids();
 				return next && next.daemon !== before.daemon ? next : undefined;
 			});
 			assert.strictEqual(replacement.keeper, before.keeper, 'the same keeper starts the replacement daemon');
@@ -258,7 +255,7 @@ export async function activate(): Promise<void> {
 		await until('the removed agent’s Pin to clear', () => pins().every(pin => pin.agent !== previous.removed) || undefined);
 		const ended = await recordOf(previous.unpinned.id);
 		assert.deepStrictEqual([ended.process, ended.session], ['ended', previous.unpinned.session]);
-		assert.deepStrictEqual(listed().map(each => each.id.split('@')[0]), [again.id], 'only the pinned agent resumed');
+		assert.deepStrictEqual((await listed()).map(each => each.reference.agent_id), [again.id], 'only the pinned agent resumed');
 		assert.deepStrictEqual((await state()).cards.map(each => each.alias).sort(), [again.id, previous.unpinned.id].sort());
 		assert.strictEqual(vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal).length, 1);
 		write({ phase: 'done', detail: { ...again, stopped: previous.unpinned.id, removed: previous.removed } });

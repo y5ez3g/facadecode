@@ -710,8 +710,8 @@ The Orchestrator uses `FACADE_HOME`, defaulting to `~/.facade`. Open Settings op
 during the transition.
 YOLO, the name pool and CLI entries appear in `facade.json`. Mark any editor settings still used by the old
 engine for that engine.
-A malformed section affects starts that use it and the error points to its source. Use
-`facade status --machine devbox` to find a different machine's file and SSH to it to edit.
+A malformed section affects starts that use it and the error points to its source. To find the settings file on another
+machine, connect over SSH and run `facade status` there.
 
 ### 7.2 Settings at start
 

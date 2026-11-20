@@ -7,7 +7,7 @@
 //! its creation tree: those with its root. A name outside reach names nothing; an ID outside reach
 //! is refused. Windows, locations and CLIs are not limited by reach.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
 use facade_base::daemon::AgentInfo;
@@ -172,9 +172,13 @@ fn root_machine(info: &AgentInfo) -> &str {
 /// An operation's candidate set. Keys use the same terminal capability as Type.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum OperationTarget {
-    Send,
+    Send {
+        allow_unsupported_receipt: bool,
+    },
     Type,
-    Attach,
+    Attach {
+        allow_ended: bool,
+    },
     ReadScreen,
     Inspect,
     Stop,
@@ -191,6 +195,27 @@ pub(crate) struct LookupCandidate {
     pub(crate) has_rule: bool,
 }
 
+impl LookupCandidate {
+    pub(crate) fn matches(&self, key: AgentKey<'_>) -> bool {
+        match key {
+            AgentKey::Number(number) => self.info.agent_id == number,
+            AgentKey::Name(name) => trimmed(&self.info.name) == trimmed(name),
+        }
+    }
+
+    pub(crate) fn label(&self) -> v3::AgentLabel {
+        let info = &self.info;
+        v3::AgentLabel {
+            reference: info.reference(),
+            address: info.address.clone(),
+            name: info.name.clone(),
+            cli: info.cli.clone(),
+            state: info.state,
+            resumable: self.has_rule && info.session.is_some(),
+        }
+    }
+}
+
 impl OperationTarget {
     fn rejection(self, candidate: &LookupCandidate) -> Option<(Reason, &'static str)> {
         use OperationTarget::*;
@@ -199,9 +224,9 @@ impl OperationTarget {
         if info.kind == v3::AgentKind::Guest {
             return match self {
                 Inspect | Rename => None,
-                Send if info.state == v3::AgentState::Online => None,
-                Send => Some((Reason::Ended, "is offline and cannot receive messages")),
-                Type | Attach | ReadScreen => {
+                Send { .. } if info.state == v3::AgentState::Online => None,
+                Send { .. } => Some((Reason::Ended, "is offline and cannot receive messages")),
+                Type | Attach { .. } | ReadScreen => {
                     Some((Reason::Unsupported, "is a Guest without a terminal"))
                 }
                 Stop => Some((
@@ -214,10 +239,12 @@ impl OperationTarget {
         }
 
         match self {
-            Send | Type | Attach | Stop if info.process == ProcessState::Ended => {
+            Send { .. } | Type | Attach { allow_ended: false } | Stop
+                if info.process == ProcessState::Ended =>
+            {
                 Some((Reason::Ended, "has ended"))
             }
-            Send if !candidate.has_rule => Some((
+            Send { .. } if !candidate.has_rule => Some((
                 Reason::Unsupported,
                 "is a custom program and cannot receive messages",
             )),
@@ -225,7 +252,7 @@ impl OperationTarget {
                 Reason::Unsupported,
                 "is a custom program and cannot be resumed",
             )),
-            Resume if info.session.is_none() => {
+            Resume if info.process == ProcessState::Ended && info.session.is_none() => {
                 Some((Reason::Unavailable, "has no recorded session to resume"))
             }
             _ => None,
@@ -241,42 +268,75 @@ pub(crate) fn lookup(
     operation: OperationTarget,
     agents: &[LookupCandidate],
 ) -> Result<AgentRef, ErrorBody> {
-    let mut usable = Vec::new();
+    lookup_matches(
+        key,
+        reach,
+        operation,
+        agents.iter().filter(|candidate| candidate.matches(key)),
+    )
+}
+
+/// Chooses among the matches from all interpretations of a selector.
+pub(crate) fn lookup_matches<'a>(
+    key: AgentKey<'_>,
+    reach: &Reach,
+    operation: OperationTarget,
+    matches: impl Iterator<Item = &'a LookupCandidate>,
+) -> Result<AgentRef, ErrorBody> {
+    let mut usable = BTreeMap::new();
+    let mut unsupported = BTreeMap::new();
     let mut rejected = Vec::new();
     let mut refused = false;
-    for candidate in agents {
+    for candidate in matches {
         let info = &candidate.info;
-        let matches = match key {
-            AgentKey::Number(number) => info.agent_id == number,
-            AgentKey::Name(name) => trimmed(&info.name) == trimmed(name),
-        };
-        if !matches {
-            continue;
-        }
         let root_machine = info.root_machine_id.as_deref().unwrap_or(&info.machine_id);
         if !reach.reaches_root(&info.root, root_machine) {
             refused = true;
             continue;
         }
         if let Some((reason, message)) = operation.rejection(candidate) {
-            rejected.push((&info.address, reason, message));
+            if reason == Reason::Unsupported
+                && matches!(
+                    operation,
+                    OperationTarget::Send {
+                        allow_unsupported_receipt: true
+                    }
+                )
+            {
+                unsupported.insert(info.reference(), candidate);
+            } else {
+                rejected.push((candidate, reason, message));
+            }
         } else {
-            usable.push(info);
+            usable.insert(info.reference(), candidate);
         }
     }
 
+    if usable.is_empty() {
+        usable = unsupported;
+    }
+    if matches!(key, AgentKey::Name(_))
+        && usable
+            .values()
+            .any(|candidate| candidate.info.process == ProcessState::Running)
+    {
+        usable.retain(|_, candidate| candidate.info.process == ProcessState::Running);
+    }
     let (AgentKey::Number(input) | AgentKey::Name(input)) = key;
-    match usable.as_slice() {
-        [agent] => Ok(agent.reference()),
-        [] => {
+    match usable.len() {
+        1 => Ok(usable.into_keys().next().expect("one matching agent")),
+        0 => {
             // Report an ended match first. For equal reasons, use the first address.
-            rejected
-                .sort_unstable_by_key(|(address, reason, _)| (*reason != Reason::Ended, *address));
-            if let Some((address, reason, message)) = rejected.first() {
-                return Err(ErrorBody::new(
+            rejected.sort_unstable_by_key(|(candidate, reason, _)| {
+                (*reason != Reason::Ended, &candidate.info.address)
+            });
+            if let Some((candidate, reason, message)) = rejected.first() {
+                let mut error = ErrorBody::new(
                     *reason,
-                    format!("agent {address} {message}"),
-                ));
+                    format!("agent {} {message}", candidate.info.address),
+                );
+                error.data.agents.push(candidate.label());
+                return Err(error);
             }
             if refused {
                 return Err(ErrorBody::new(
@@ -290,8 +350,9 @@ pub(crate) fn lookup(
             ))
         }
         _ => {
-            let mut addresses: Vec<_> = usable.iter().map(|info| info.address.clone()).collect();
-            addresses.sort_unstable();
+            let mut labels: Vec<_> = usable.into_values().map(LookupCandidate::label).collect();
+            labels.sort_unstable_by(|a, b| a.address.cmp(&b.address));
+            let addresses: Vec<_> = labels.iter().map(|label| label.address.clone()).collect();
             let mut error = ErrorBody::new(
                 Reason::AmbiguousReference,
                 format!(
@@ -300,6 +361,7 @@ pub(crate) fn lookup(
                 ),
             );
             error.data.candidates = addresses;
+            error.data.agents = labels;
             Err(error)
         }
     }

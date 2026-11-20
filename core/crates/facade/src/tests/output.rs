@@ -1,13 +1,15 @@
-//! The words and structured output of the terminal commands.
+//! The Shell presentation of daemon results and the underlying roster wire format.
 
-use facade_base::v3::{AgentListResult, AgentListRow, SendResult, StatusResult};
+use std::collections::HashMap;
+
+use facade_base::v3::{
+    AgentListResult, AgentListRow, AttachmentInfo, AttachmentKind, SendResult, StatusResult,
+};
 use serde_json::{Value, json};
 
 use super::{agent, before, inspection, now};
-use crate::commands::{
-    Inspection, age, agent_list_json, list_text, quiet_text, sent, sleeping_text, state_words,
-    status_text,
-};
+use crate::commands::{age, inspect_text, list_text, sleeping_text, state_words, status_text};
+use crate::errors::delivery_receipt;
 use crate::table;
 
 /// Remove the last column's padding from each line.
@@ -19,7 +21,7 @@ fn trimmed(text: &str) -> String {
 }
 
 #[test]
-fn agent_list_json_projects_the_daemons_public_rows_and_machine_states() {
+fn the_v3_roster_keeps_public_rows_stable_references_and_machine_query_states() {
     let rows = json!([{
         "id": "a3@peer", "name": "Pixel", "type": "managed",
         "state": "working", "cli": "claude", "title": "Review",
@@ -56,10 +58,6 @@ fn agent_list_json_projects_the_daemons_public_rows_and_machine_states() {
         let wire = json!({ "agents": wire_rows, "machines": [machine] });
         let list: AgentListResult = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(serde_json::to_value(&list).unwrap(), wire);
-        assert_eq!(
-            agent_list_json(&list).unwrap(),
-            json!({ "agents": rows, "machines": [machine] })
-        );
     }
 }
 
@@ -90,13 +88,13 @@ fn a_table_pads_each_column_to_its_widest_cell_and_keeps_each_row_on_one_line() 
 #[test]
 fn age_uses_whole_minutes_hours_or_days() {
     for (seconds, words) in [
-        (12, "0m"),
-        (61, "1m"),
-        (5 * 60 + 10, "5m"),
-        (60 * 60 + 5, "1h"),
-        (3 * 3600 + 300, "3h"),
-        (2 * 86400 + 3600, "2d"),
-        (21 * 86400 + 3600, "21d"),
+        (12, "0m ago"),
+        (61, "1m ago"),
+        (5 * 60 + 10, "5m ago"),
+        (60 * 60 + 5, "1h ago"),
+        (3 * 3600 + 300, "3h ago"),
+        (2 * 86400 + 3600, "2d ago"),
+        (21 * 86400 + 3600, "21d ago"),
     ] {
         assert_eq!(age(&before(seconds), now()), words, "{seconds} seconds");
     }
@@ -107,56 +105,56 @@ fn every_state_has_its_words() {
     let ended = |exit: Value, how: &str| json!({ "process": "ended", "state": "ended", "exit": exit, "state_detail": { "how": how } });
     let at = before(60);
     for (changes, words) in [
-        (json!({ "state": "starting" }), "starting"),
-        (json!({ "state": "working" }), "working"),
+        (json!({ "state": "starting" }), "Starting"),
+        (json!({ "state": "working" }), "Working"),
         (
             json!({ "state": "waiting_for_you", "state_detail": { "kind": "permission", "text": "Run it?" } }),
-            "waiting for you: permission",
+            "Waiting for you (permission: Run it?)",
         ),
         (
             json!({ "state": "waiting_for_you", "state_detail": { "kind": "question" } }),
-            "waiting for you: question",
+            "Waiting for you (question)",
         ),
         (
             json!({ "state": "waiting_for_you", "state_detail": { "kind": "auth" } }),
-            "waiting for you: sign-in",
+            "Waiting for you (sign-in)",
         ),
         (
             json!({ "state": "waiting_for_you", "state_detail": { "kind": "unknown" } }),
-            "waiting for you",
+            "Waiting for you",
         ),
-        (json!({ "state": "just_done" }), "turn finished"),
-        (json!({ "state": "idle" }), "idle"),
+        (json!({ "state": "just_done" }), "Just done"),
+        (json!({ "state": "idle" }), "Idle"),
         (
             json!({ "state": "error", "state_detail": { "text": "Out of credits" } }),
-            "error",
+            "Error (Out of credits)",
         ),
-        (ended(json!({ "code": 0, "at": at }), "stopped"), "stopped"),
+        (ended(json!({ "code": 0, "at": at }), "stopped"), "Stopped"),
         (
             ended(json!({ "code": 0, "at": at }), "normal"),
-            "exited: code 0",
+            "Exited (code 0)",
         ),
         (
             ended(json!({ "code": 3, "at": at }), "crashed"),
-            "exited: code 3",
+            "Exited (code 3)",
         ),
         (
             ended(json!({ "signal": "SIGKILL", "at": at }), "crashed"),
-            "ended by SIGKILL",
+            "Ended by signal SIGKILL",
         ),
         (
             ended(json!({ "reason": "terminal_closed", "at": at }), "unknown"),
-            "ended",
+            "Ended",
         ),
-        (json!({ "state": "unknown" }), "unknown"),
-        (json!({ "type": "guest", "state": "online" }), "online"),
+        (json!({ "state": "unknown" }), "Unknown"),
+        (json!({ "type": "guest", "state": "online" }), "Online"),
     ] {
         assert_eq!(state_words(&agent(changes.clone())), words, "{changes}");
     }
 }
 
 #[test]
-fn the_list_is_one_row_per_agent_and_quiet_prints_addresses() {
+fn the_list_is_one_row_per_agent_with_a_copyable_ref() {
     let title = "A title with forty visible characters and some more";
     let rows: Vec<AgentListRow> = serde_json::from_value(json!([
         {
@@ -176,81 +174,95 @@ fn the_list_is_one_row_per_agent_and_quiet_prints_addresses() {
     let rows: Vec<&AgentListRow> = rows.iter().collect();
     assert_eq!(
         trimmed(&list_text(&rows, now())),
-        "ID          NAME    TYPE      STATE             CLI      TITLE                                      FOLDER       AGE\n\
-         a5@laptop   Visor   guest     online            cursor   -                                          /work/site   1m\n\
-         a3@devbox   Pixel   managed   working           claude   A title with forty visible characters a…   /work/site   2m\n\
-         a4@devbox   Ada     managed   waiting_for_you   codex    -                                          /work/site   5m"
+        "NAME    REF         STATE             CLI      TYPE      WORKING DIRECTORY   STARTED   TITLE\n\
+         Visor   a5@laptop   Online            cursor   Guest     -                   1m ago    -\n\
+         Pixel   a3@devbox   Working           claude   Managed   /work/site          2m ago    A title with forty visible characters a…\n\
+         Ada     a4@devbox   Waiting for you   codex    Managed   /work/site          5m ago    -"
     );
-    assert_eq!(quiet_text(&rows), "a5@laptop\na3@devbox\na4@devbox");
 }
 
 /// The value after a field's label.
 fn field(text: &str, label: &str) -> Option<String> {
     text.lines()
-        .find_map(|line| line.strip_prefix(label)?.strip_prefix(':'))
+        .find_map(|line| {
+            line.strip_prefix(label)
+                .filter(|value| value.starts_with("  "))
+        })
         .map(|value| value.trim().to_string())
 }
 
 #[test]
-fn inspect_shows_the_same_facts_in_text_and_json() {
+fn inspect_shows_the_agents_process_and_launch_facts() {
     let pixel = agent(json!({
         "cwd": "D:\\apps\\facadecode",
         "state": "waiting_for_you",
         "state_detail": { "kind": "permission", "text": "Allow the build?" },
         "args": ["--flag", "two words"],
+        "title": "Review Shell output",
         "model": "sonnet",
         "effort": "high",
         "session": "86da4482-2bae-4a45-b193-a5664c19826a",
         "yolo": true,
     }));
-    let inspected = inspection(
+    let mut inspected = inspection(
         &pixel,
         Some("claude"),
-        &["Terminal on laptop", "VS Code"],
+        &["temporary workspace", "Terminal on original hostname"],
         Some(json!({ "kind": "command_line" })),
     );
-    let output = Inspection::from(&inspected);
-    let detail = "waiting for you: permission (Allow the build?)";
-    let text = output.text();
+    inspected.attachments = vec![
+        AttachmentInfo {
+            kind: AttachmentKind::VsCode,
+            machine_id: "devbox-id".into(),
+        },
+        AttachmentInfo {
+            kind: AttachmentKind::Shell,
+            machine_id: "laptop-id".into(),
+        },
+    ];
+    let machine_names = HashMap::from([("laptop-id".into(), "laptop".into())]);
+    inspected.launch_command = Some(r#""C:\Tools\claude.exe" --flag "two words""#.into());
+    let text = inspect_text(&inspected, &machine_names);
+    assert_eq!(text.lines().next(), Some("Pixel (a3@laptop)"));
     let fields = [
-        ("ID", "a3@laptop"),
-        ("Name", "Pixel"),
-        ("Type", "managed"),
-        ("State", detail),
-        ("Machine", "laptop"),
+        ("State", "Waiting for you (permission: Allow the build?)"),
         ("CLI", "claude"),
-        ("Folder", "D:\\apps\\facadecode"),
-        ("Args", r#"["--flag","two words"]"#),
-        ("Model", "sonnet"),
-        ("Effort", "high"),
+        ("PID", "1234"),
+        ("Working directory", "D:\\apps\\facadecode"),
+        (
+            "Launch command",
+            r#""C:\Tools\claude.exe" --flag "two words""#,
+        ),
+        ("Type", "Managed"),
+        ("Machine", "laptop"),
+        ("Title", "Review Shell output"),
         ("Session", "86da4482-2bae-4a45-b193-a5664c19826a"),
-        ("Started by", "command line"),
-        ("Viewers", "Terminal on laptop, VS Code"),
+        ("Started by", "Shell"),
+        ("Attached in", "VS Code, Shell (laptop)"),
         ("YOLO", "on"),
     ];
-    assert_eq!(text.lines().count(), fields.len());
+    assert_eq!(
+        text.lines().filter(|line| !line.is_empty()).count(),
+        fields.len() + 1
+    );
     for (label, expected) in fields {
         assert_eq!(field(&text, label).as_deref(), Some(expected), "{text}");
     }
+    inspected.attachments.clear();
+    let legacy = inspect_text(&inspected, &machine_names);
     assert_eq!(
-        serde_json::to_value(&output).unwrap(),
-        json!({
-            "id": "a3@laptop", "name": "Pixel", "type": "managed",
-            "state": "waiting_for_you", "state_detail": detail, "machine": "laptop",
-            "cli": "claude", "custom_program": false, "folder": "D:\\apps\\facadecode",
-            "args": ["--flag", "two words"], "model": "sonnet", "effort": "high",
-            "session": "86da4482-2bae-4a45-b193-a5664c19826a",
-            "started_by": { "kind": "command_line" },
-            "viewers": ["Terminal on laptop", "VS Code"],
-            "yolo": true,
-        })
+        field(&legacy, "Attached in").as_deref(),
+        Some("temporary workspace, Terminal on original hostname")
     );
 }
 
 #[test]
 fn inspect_describes_custom_programs_guests_and_ended_agents() {
     let shown = |changes: Value, rule: Option<&str>, started_by: Option<Value>| {
-        Inspection::from(&inspection(&agent(changes), rule, &[], started_by)).text()
+        inspect_text(
+            &inspection(&agent(changes), rule, &[], started_by),
+            &HashMap::new(),
+        )
     };
     let added = shown(
         json!({
@@ -262,19 +274,17 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
     assert_eq!(field(&added, "CLI").as_deref(), Some("fake work"));
     assert_eq!(field(&added, "Started by").as_deref(), Some("a2@devbox"));
     assert_eq!(field(&added, "YOLO").as_deref(), Some("on"));
-    assert_eq!(field(&added, "Session").as_deref(), Some("none"));
+    assert_eq!(field(&added, "Session").as_deref(), Some("-"));
 
     let custom = shown(
         json!({ "cli": "build tool" }),
         None,
         Some(json!({ "kind": "vs_code" })),
     );
-    assert_eq!(
-        field(&custom, "CLI").as_deref(),
-        Some("build tool (custom program)")
-    );
+    assert_eq!(field(&custom, "CLI").as_deref(), Some("build tool"));
     assert_eq!(field(&custom, "Started by").as_deref(), Some("VS Code"));
-    assert_eq!(field(&custom, "Session").as_deref(), Some("none"));
+    assert_eq!(field(&custom, "Launch command").as_deref(), Some("-"));
+    assert_eq!(field(&custom, "Session").as_deref(), Some("-"));
 
     let guest = shown(
         json!({
@@ -284,9 +294,17 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
         None,
         None,
     );
-    assert_eq!(field(&guest, "Type").as_deref(), Some("guest"));
+    assert_eq!(field(&guest, "Type").as_deref(), Some("Guest"));
     assert_eq!(field(&guest, "CLI").as_deref(), Some("cursor"));
-    assert_eq!(field(&guest, "Started by").as_deref(), Some("none"));
+    for label in [
+        "Started by",
+        "PID",
+        "Working directory",
+        "Launch command",
+        "Attached in",
+    ] {
+        assert_eq!(field(&guest, label).as_deref(), Some("-"), "{guest}");
+    }
 
     let ended = shown(
         json!({
@@ -296,7 +314,8 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
         Some("claude"),
         None,
     );
-    assert_eq!(field(&ended, "State").as_deref(), Some("exited: code 0"));
+    assert_eq!(field(&ended, "State").as_deref(), Some("Exited (code 0)"));
+    assert_eq!(field(&ended, "PID").as_deref(), Some("-"));
 }
 
 #[test]
@@ -318,28 +337,52 @@ fn status_shows_settings_services_and_connected_machines() {
               "selector": "peer", "state": "online", "status": "answered" },
             { "machine_id": "dim-id", "short_id": "dim", "name": "dim",
               "selector": "dim", "state": "sleeping", "status": "unavailable" },
+            { "machine_id": "link-id", "short_id": "link", "name": "devbox",
+              "selector": "devbox", "state": "online", "status": "answered" },
         ],
     }))
     .unwrap();
+    let launcher = "/home/you/.facade/core/bin/facade-mcp";
+    let text = status_text(&status, "peer-id", "0.1.6", launcher);
     assert_eq!(
-        status_text(&status, build),
-        "Orchestrator running.\n  Home:      /home/you/.facade\n  Settings:  /home/you/.facade/facade.json\n  Version:   0.1.6\n  Daemon:    pid 16968\n  Keeper:    pid 16752\n  Agents:    12\n  Machines:  peer"
+        text,
+        "Facade 0.1.6 is running on peer.\nActive agents       12\nConnected machines  devbox\n\n\
+         Home                /home/you/.facade\nSettings            /home/you/.facade/facade.json\n\
+         Daemon PID          16968\nKeeper PID          16752\n\n\
+         Guest MCP           Add \"/home/you/.facade/core/bin/facade-mcp\" as a stdio server."
     );
     status.build = "0.1.5".into();
     status.keeper_pid = None;
+    let text = status_text(&status, "peer-id", "0.1.6", launcher);
     assert_eq!(
-        status_text(&status, build),
-        "Orchestrator running.\n  Home:      /home/you/.facade\n  Settings:  /home/you/.facade/facade.json\n  Version:   0.1.5\n  Daemon:    pid 16968 (0.1.5)\n  Keeper:    none\n  Agents:    12\n  Machines:  peer"
+        text.lines().next(),
+        Some("Facade 0.1.5 is running on peer.")
     );
-    assert_eq!(
-        sleeping_text(home, settings, "0.1.6"),
-        "Orchestrator sleeping.\n  Home:      /home/you/.facade\n  Settings:  /home/you/.facade/facade.json\n  Version:   0.1.6"
-    );
+    assert_eq!(field(&text, "CLI version").as_deref(), Some("0.1.6"));
+    assert_eq!(field(&text, "Keeper PID").as_deref(), Some("-"));
+    let sleeping = sleeping_text(home, settings, "0.1.6", launcher, "laptop");
+    assert!(sleeping.starts_with("Facade 0.1.6 is not running on "));
+    assert_eq!(field(&sleeping, "Home").as_deref(), Some(home));
+    assert_eq!(field(&sleeping, "Settings").as_deref(), Some(settings));
+    for label in [
+        "Active agents",
+        "Connected machines",
+        "Daemon PID",
+        "Keeper PID",
+    ] {
+        assert_eq!(field(&sleeping, label).as_deref(), Some("-"), "{sleeping}");
+    }
+    assert_eq!(field(&sleeping, "Guest MCP"), field(&text, "Guest MCP"));
 }
 
 fn receipt(delivery: Value) -> SendResult {
     serde_json::from_value(json!({
         "id": "m42@peer",
+        "recipient": {
+            "reference": { "agent_id": "a3", "machine_id": "peer-id" },
+            "address": "a3@peer", "name": "Pixel", "cli": "claude",
+            "state": "idle", "resumable": false,
+        },
         "message": {
             "message_id": "m42", "from": "command_line", "to": "a3", "text": "hi",
             "at": before(1), "delivery": delivery,
@@ -349,52 +392,49 @@ fn receipt(delivery: Value) -> SendResult {
 }
 
 #[test]
-fn a_send_only_prints_the_daemons_address_after_delivery() {
+fn a_send_only_prints_a_success_receipt_after_delivery() {
     for via in ["terminal", "read"] {
         let result = receipt(json!({
             "status": "success", "text_written": "full", "delivered_via": via
         }));
-        assert_eq!(sent(result, "a3@peer").unwrap(), "m42@peer");
+        assert_eq!(
+            delivery_receipt(&result, "a3@peer").unwrap(),
+            "Delivered m42@peer to Pixel (a3@peer)."
+        );
     }
-    let waiting = sent(
-        receipt(json!({ "status": "pending", "text_written": "none" })),
+    let waiting = delivery_receipt(
+        &receipt(json!({ "status": "pending", "text_written": "none" })),
         "a3@peer",
     )
-    .expect_err("a pending delivery has no successful receipt")
-    .to_string();
+    .expect_err("a pending delivery has no successful receipt");
     assert!(
-        waiting.starts_with("error: m42@peer was not delivered to a3@peer: "),
-        "{waiting}"
+        waiting
+            .to_string()
+            .starts_with("error: Could not deliver m42@peer to Pixel (a3@peer).")
     );
-    let unconfirmed = sent(
-        receipt(json!({
+    let unconfirmed = delivery_receipt(
+        &receipt(json!({
             "status": "failure", "reason": "submission_unconfirmed", "text_written": "full",
             "enter_written": true,
         })),
         "a3@peer",
     )
-    .expect_err("an unconfirmed delivery fails")
-    .to_string();
-    assert!(
-        unconfirmed.starts_with("error: could not confirm delivery of m42@peer to a3@peer")
-            && unconfirmed.ends_with(
-                "\n  tip: run 'facade screen a3@peer' and look for m42@peer in the input box or recent \
-                 output before sending it again"
-            ),
-        "{unconfirmed}"
+    .expect_err("an unconfirmed delivery fails");
+    assert_eq!(
+        unconfirmed.to_string(),
+        "error: Could not confirm delivery of m42@peer to Pixel (a3@peer).\n\
+         Check the terminal with 'facade attach a3@peer' or 'facade screen a3@peer' before sending it again."
     );
-    let failed = sent(
-        receipt(json!({
+    let failed = delivery_receipt(
+        &receipt(json!({
             "status": "failure", "reason": "input_draft", "text_written": "none"
         })),
         "a3@peer",
     )
-    .expect_err("a held message fails")
-    .to_string();
-    assert!(
-        failed.starts_with("error: m42@peer was not delivered to a3@peer: ")
-            && failed.contains("a draft held a3@peer's input")
-            && !failed.contains('\n'),
-        "{failed}"
+    .expect_err("a held message fails");
+    assert_eq!(
+        failed.to_string(),
+        "error: Could not deliver m42@peer to Pixel (a3@peer). Its terminal has an unfinished draft.\n\
+         Open it with 'facade attach a3@peer'. Submit or clear the draft, then try again."
     );
 }

@@ -11,9 +11,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentListRow } from '../../base/coreProtocol';
 import type { PanelState } from '../../webview/protocol';
-import { normalizeDriveLetter, until } from './editors';
+import { coreProgram, normalizeDriveLetter, until } from './editors';
 import { aliasOf, hasAgentTab, inspect, keepConversation, listed, newCard, recordOf, resumeCard, state, stop } from './rustWindowDriver';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -56,32 +55,40 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		const log = path.join(HOME, 'core', 'logs', 'daemon.log');
 		await until('core\'s daemon of this root to run', () => fs.existsSync(log) && /listening on/.test(fs.readFileSync(log, 'utf8')) ? true : undefined);
 		assert.ok(fs.existsSync(path.join(HOME, 'core', 'facade.db')), 'its store is in the root\'s core folder');
-		assert.deepStrictEqual(listed(), [], 'no agent runs before this journey starts one');
+		assert.deepStrictEqual(await listed(), [], 'no agent runs before this journey starts one');
 	});
 
 	test('`facade list` in the window\'s terminal shows the agent the editor started', async function () {
 		this.timeout(90_000);
 		const card = await newCard();
 		const out = path.join(path.dirname(RECORD), 'terminal-list');
-		// On Windows, PowerShell without the person's profile; its files written as ASCII, which `>` would write as UTF-16
 		const windows = process.platform === 'win32';
-		const shell = vscode.window.createTerminal({ name: 'engine-journey shell', ...windows ? { shellPath: 'powershell.exe', shellArgs: ['-NoProfile'] } : {} });
+		const shell = vscode.window.createTerminal({ name: 'engine-journey shell', ...windows
+			? { shellPath: 'powershell.exe', shellArgs: ['-NoProfile'] }
+			: { shellPath: '/bin/bash', shellArgs: ['--noprofile', '--norc'] } });
 		try {
 			// PATH has core's program of this root, YOLO is on by default, so the terminal sees the editor's agents
 			shell.sendText(windows
-				? `(Get-Command facade).Source | Out-File -Encoding ascii '${out}.which'; facade list --json | Out-File -Encoding ascii '${out}.json'; $LASTEXITCODE | Out-File -Encoding ascii '${out}.done'`
-				: `command -v facade > '${out}.which'; facade list --json > '${out}.json'; echo $? > '${out}.done'`);
-			await until('the terminal\'s `facade list`', () => fs.existsSync(`${out}.done`) ? true : undefined, 60_000);
-			assert.strictEqual(fs.readFileSync(`${out}.done`, 'utf8').trim(), '0', fs.existsSync(`${out}.json`) ? fs.readFileSync(`${out}.json`, 'utf8') : 'no output');
-			assert.strictEqual(path.basename(path.dirname(path.dirname(fs.readFileSync(`${out}.which`, 'utf8').trim()))), 'core', `the terminal runs core's own facade: ${fs.readFileSync(`${out}.which`, 'utf8')}`);
-			const { agents } = JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as { readonly agents: AgentListRow[] };
+				? `(Get-Command facade).Source | Out-File -Encoding utf8 '${out}.which'; facade list 2> '${out}.err' | Out-File -Encoding utf8 '${out}.txt'; $LASTEXITCODE | Out-File -Encoding utf8 '${out}.done'`
+				: `command -v facade > '${out}.which'; facade list > '${out}.txt' 2> '${out}.err'; echo $? > '${out}.done'`);
+			const read = (suffix: string) => fs.existsSync(`${out}.${suffix}`) ? fs.readFileSync(`${out}.${suffix}`, 'utf8').trim() : '';
+			const code = await until('the terminal\'s `facade list`', () => read('done') || undefined, 60_000);
+			const stdout = read('txt');
+			const stderr = read('err');
+			assert.strictEqual(code, '0', `${stdout}\n${stderr}`);
+			assert.strictEqual(stderr, '');
+			assert.strictEqual(normalizeDriveLetter(read('which')), normalizeDriveLetter(coreProgram(path.join(HOME, 'core', 'bin'))),
+				'the terminal resolves the launcher in its own Facade home');
 			const created = await inspect(card.alias);
 			assert.deepStrictEqual(created.started_by, { kind: 'vs_code' });
-			const seen = agents.find(agent => agent.id === created.agent.address);
-			assert.ok(seen, `the terminal lists ${created.agent.address}: ${fs.readFileSync(`${out}.json`, 'utf8')}`);
-			assert.strictEqual(seen.name, card.name);
-			assert.strictEqual(seen.type, 'managed');
-			assert.strictEqual(resolvedFolder(seen.folder), resolvedFolder(vscode.workspace.workspaceFolders![0].uri.fsPath));
+			assert.strictEqual(resolvedFolder(created.agent.cwd), resolvedFolder(vscode.workspace.workspaceFolders![0].uri.fsPath));
+			const [header, ...rows] = stdout.split(/\r?\n/u);
+			assert.deepStrictEqual(header.trimEnd().split(/ {2,}/u), ['NAME', 'REF', 'STATE', 'CLI', 'TYPE', 'WORKING DIRECTORY', 'STARTED', 'TITLE']);
+			const row = rows.find(line => line.split(/ {2,}/u)[1] === created.agent.address);
+			assert.ok(row, `the terminal lists ${created.agent.address}: ${stdout}`);
+			const [name, , , cli, type] = row.split(/ {2,}/u);
+			assert.deepStrictEqual([name, cli, type], [card.name, created.agent.cli, 'Managed']);
+			assert.ok(row.split(/ {2,}Managed {2,}/u)[1]?.startsWith(`${created.agent.cwd}  `), row);
 		} finally {
 			shell.dispose();
 			await vscode.commands.executeCommand('facade.deleteAgent', { run_id: card.runId });
@@ -109,7 +116,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			const stopped = await recordOf(id);
 			assert.strictEqual(stopped.session, session);
 			assert.strictEqual(stopped.state_detail?.how, 'stopped');
-			assert.ok(!listed().some(each => each.id === stopped.address), 'the stopped agent leaves the active roster');
+			assert.ok(!(await listed()).some(each => each.id === stopped.address), 'the stopped agent leaves the active roster');
 			assert.ok(fs.existsSync(path.join(screens, id)), 'its screen log stays');
 
 			const second = await resumeCard(id);
@@ -123,7 +130,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			assert.strictEqual(resolvedFolder(resumed.cwd), resolvedFolder(launch.cwd), 'in the same folder');
 			const agent = await recordOf(id);
 			assert.strictEqual(agent.session, session);
-			assert.deepStrictEqual(listed().map(each => each.id), [stopped.address], 'one running agent keeps the original address');
+			assert.deepStrictEqual((await listed()).map(each => each.id), [stopped.address], 'one running agent keeps the original address');
 			assert.strictEqual(agent.process, 'running');
 			assert.ok(agent.pid, 'the resumed fake CLI has a PID');
 			await until('the resumed tab to open', () => hasAgentTab(second) || undefined);
@@ -146,7 +153,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 				return record.session === session ? record : undefined;
 			});
 			assert.strictEqual(resolvedFolder(saved.cwd), resolvedFolder(launch.cwd));
-			assert.deepStrictEqual(listed().map(each => each.id), [saved.address]);
+			assert.deepStrictEqual((await listed()).map(each => each.id), [saved.address]);
 		} finally {
 			await vscode.commands.executeCommand('facade.deleteAgent', { run_id: cleanup.runId });
 		}

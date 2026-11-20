@@ -84,7 +84,7 @@ Agent 是 Facade 里有名字的参与者。打个比方，它有名字、有嘴
 - **用得上的。** 你有权限动的，而且这个操作对它有用：发信只找收得了信的，也就是在跑的受管 Agent 和连着的 Guest；打字只找在跑的受管 Agent；resume、删除、读屏、看详情对停了的也有用，就连停了的一起找。
 - **编号还是名字。** 长得像编号的（`a` 加数字）就当编号，其余的当名字。
 - **带 `@`。** `@` 后面那一段，既当机器名找，也当机器 ID 找，都对上不同的机器就报错。编号带 `@`，比如 `a3@devbox`，就是 devbox 上的 a3。名字带 `@`，比如 `Pixel@gpu`，有两种可能：gpu 上叫 Pixel 的，或者名字本来就叫 `Pixel@gpu` 的。两种各按上面的规则找：前一种写了机器，只去 gpu，它歇着就叫醒；后一种没写机器，只找醒着的机器。两种都找到就报错；其中一种查不了，比如 gpu 叫不醒，也报错，不悄悄只用另一种。
-- **会话。** `resume` 还能写一个 CLI 会话，比如 `claude:7f3e9a1c`。它也按这条规则找：万一正好有 Agent 叫这个名字，两个都找到就报错。
+- **会话。** `resume` 还能用 CLI 自存会话的 ID，比如 `7f3e9a1c`。可从表格复制 `REF`。多个匹配时会列出候选，让你选择完整 ID。
 - **找不到能用的**，也报错，并说清为什么：没有这个 Agent、它已经停了，或者它超出了你的范围。超出范围的，不列它的地址。
 
 ### 状态
@@ -102,18 +102,18 @@ Guest：     连上 → online → 断开就没了
 
 - **`start`**：启动一个 Agent，详见下一节「执行」。
 - **`stop`**：停掉它。记录保留 30 天，有会话的这期间都能接着干。它叫来的帮手不受影响，照常跑。
-- **`resume`**：接着干，和 `start` 一样默认在前台接上，加 `-d` 放到后台。Agent 自己的东西照旧：原地址、原目录、原会话，以及启动时记下的模型和 effort。机器的设置（比如 YOLO）用那台机器现在的。不带参数时，列出一个目录里能接着干的：停了的 Agent，加上 CLI 自己存的会话，不管当初是谁开的；默认是本机的当前目录，可以用 `--machine`、`--folder` 换。加 `--all`，列出所有醒着的机器上停了的 Agent（写了 `--machine` 就只看那一台），CLI 自己存的会话照旧只按目录列。选一个别处的会话，就把它接管成一个新的 Agent，给它新的地址。如果这个会话正被 Facade 里的另一个 Agent 用着，就报错并说出是哪个，免得两个 CLI 同时写一个会话。还没有会话的 Agent，比如 CLI 还没建会话就停了的，没法接着干，resume 会报错说明。
-- **`remove`**：删掉记录、屏幕和收件箱。Agent 还在跑的话，先停掉它再删。
-- **`rename`**：只改名字，地址不变。给一个空名字，就和启动时不起名一样，重新挑一个。
-- **`list`**：列出所有醒着、连得上的机器上跑着的 Agent 和连着的 Guest，最近一次启动或 resume 的排在最上面，AGE 也从那一次算起。停了的不在这里，用 `resume` 看。
-- **`inspect`**：看一个 Agent 的全部信息：地址、名字、类型、状态、机器、CLI、目录、启动参数、模型和 effort、会话、谁启动的、谁正在看、YOLO 开没开。
+- **`resume`** 默认在前台接上，加 `-d` 放到后台。恢复已有 Agent 会沿用原 Ref、目录、会话和启动时的模型及 effort。机器的设置（比如 YOLO）用那台机器现在的。直接运行 `facade resume`，会看到所有可达机器上有会话的已停止 Agent，以及本机当前目录中 CLI 自存的会话。带 `--machine` 时只列这台机器，可列出登录目录里的会话。恢复自存会话会创建一个新的 Agent。会话已被占用时，错误会给出占用它的 Agent。
+- 通过 VS Code 可以删除 Agent 的记录、屏幕和收件箱。Agent 还在跑的话，先停掉它再删除。
+- **`rename`** 改名字，Ref 不变。给出一个非空名字。
+- **`list`** 列出可达机器上跑着的 Agent 和连着的 Guest，最近一次启动或恢复的排在最上面。`STARTED` 从那一次算起。
+- **`status <AGENT>`** 显示 Ref、名字、状态、运行机器、CLI、工作目录、启动命令、会话、启动来源、当前查看者和 YOLO。
 
 ```text
 $ facade list
-ID          NAME   TYPE     STATE    CLI     TITLE                         FOLDER         AGE
-a9@devbox   eve    managed  idle     claude  Write release notes           /work/app-wt   1m
-a5@laptop   cora   guest    online   cursor  -                             ~/site         5m
-a3@laptop   ada    managed  working  codex   Fix the failing parser test   ~/app          2h
+NAME   REF         STATE     CLI      TYPE      WORKING DIRECTORY  STARTED  TITLE
+Eve    a9@devbox   Idle      claude   Managed   /work/app-wt       1m ago   Write release notes
+Cora   a5@laptop   Online    cursor   Guest     -                  5m ago   -
+Ada    a3@laptop   Working   codex    Managed   /work/app          2h ago   Fix the failing parser test
 ```
 
 TITLE 是 CLI 给自己设的标题，最长 40 个字，超出的部分截掉。
@@ -186,26 +186,25 @@ facade machine rename devbox build-box
 - **WSL 和 Dev Container** 各算一台机器。要从外面连上它们，也得在里面开好 SSH，再 `machine add`；在它们里面直接用 Facade，就用不着 SSH。
 - **机器名**默认取主机名第一个点之前的部分，转成小写，只用小写字母、数字和 `-`；可以改，改的时候也是这个写法。机器 ID 是第一次运行时生成的，写的时候用前 8 位就够，比如 `9a0d44b2`。
 - **没事就歇着，用到才叫醒。** 一台机器上没有在跑的 Agent、本机也没有入口在用（Shell 命令在跑、VS Code 开着、有 MCP 连着），它的 Orchestrator 就退出歇着。别的机器只是连着它，不算在用；它正在替别的机器办事或转发，算在用，办完才歇。存下的机器也不会让它一直开着。醒着的机器之间会自动连上；歇着的机器，只有你写明要在它上面做事时才被 SSH 叫醒，比如 `start --machine devbox`、`resume a3@devbox`，路上要经过的机器也一起叫醒。不写机器的操作只看醒着的机器：歇着的机器上没有在跑的 Agent，`list`、发信、打字本来就用不着它；它上面停了的 Agent，写上机器才找得到，`resume` 列出来的本来就是带机器的地址。只能经过它才到得了的机器，这时也看不到。
-- **歇着和连不上的机器。** 它们上面的 Agent 不出现在 `list` 里。表格最后写明哪台歇着、哪台连不上；连不上的附上最后一次见到的时间和 SSH 的原始报错。`--json` 里每台机器一行，标明它的状态。用 `--machine devbox` 只查 devbox 时，照「写了机器」的规则，它歇着就先叫醒再查，连不上就报错退出。
+- `facade machine list` 显示歇着和连不上的机器及当前连接状态。多机 Agent 查询会在 stderr 报告查询失败的机器。用 `--machine devbox` 只查这台机器时，会先叫醒它再查。连不上时，命令显示连接错误并退出。
 
 ### 运行：启动一个 Agent
 
 ```text
-facade start [--machine M] [--folder F] [--worktree B] [--name N] [--prompt P]
-             [--model MODEL] [--effort EFFORT] [-d] <cli> [CLI 自己的参数…]
+facade start [--machine M] [--workdir D] [--worktree B] [--name N] [-d] <CLI> [CLI_ARGS]...
 
 facade start claude                                                        # 本机，当前目录
-facade start --machine devbox --folder /work/app claude                    # 在 devbox 上启动
-facade start --machine devbox --folder /work/app --worktree feat-x codex   # 新建一个 worktree，在里面启动
-facade start --prompt "把失败的测试修好" -d codex                           # 带着第一条任务，在后台跑
+facade start --machine devbox --workdir /work/app claude                    # 在 devbox 上启动
+facade start --machine devbox --workdir /work/app --worktree feat-x codex   # 新建一个 worktree，在里面启动
+facade start -d -n Nova codex --model gpt-6.2-sol                           # 用 CLI 自己的选项后台启动
 ```
 
-- **成功是什么意思。** Agent 跑起来了，`start` 就算成功。带着的第一条任务是另外送的，结果用 🔔 告诉启动它的 Agent；从命令行启动时没人收这个提醒，脚本要确认任务送到了，就先 `start`，再用 `facade send` 发任务，看 send 的结果。
+- `start` 的回执确认 Agent 已经启动。需要确认任务送达时，用 `facade send` 并检查送达回执。MCP `start_agent` 的首条任务仍由 Orchestrator 安排投递，结果用 🔔 告诉启动它的 Agent。
 - **默认值。** 默认用发起的人或 Agent 所在的地方：Shell 用本机和当前目录，VS Code 用窗口所在的机器和工作区里的文件夹，MCP 用发起调用的那个 Agent 所在的机器和目录，Guest 用它连进来的那台机器。没有现成的目录可用时，比如在别的机器上启动，或者发起的是没有目录的 Guest，不写目录就用那台机器登录后的 home。
 - **目录。** 普通文件夹、Git 仓库、已有的 worktree 都行，没有 Git 也照样能用。`--worktree` 会从那个仓库当前的 HEAD 新建一个分支和 worktree，放在仓库旁边的 `<仓库>.worktrees/<分支>`；分支已经存在就报错。删 worktree 不归 Facade 管，用 `git worktree remove`。
 - **CLI。** 能跑的是 6 个内置的 CLI（claude、codex、agy、muse、opencode、pi），以及那台机器的设置里另外加的，包括「自定义程序」。其他程序一律拒绝。没写用哪个 CLI 会报错，并列出能用的那几个。那台机器上没装这个 CLI，就直接失败，不会拿别的机器上的顶替。
 - **环境变量。** 也跟着发起的一方：在本机启动，用发起的那个 Shell、VS Code 或 Agent 的环境（Guest 用它那条 `facade-mcp` 带来的环境）；在别的机器上启动，用那台机器的登录环境，就像你 ssh 上去新开一个终端。
-- **模型和 effort。** 默认用那台机器设置里配的，也可以用 `--model`、`--effort` 指定。启动时用的是哪个，会记在 Agent 的记录里，`resume` 时照用。
+- 模型、推理和提示词可用 CLI 自己的参数，在 CLI 名称之后传入。也可以在目标机器的设置里配置默认值。已记录的启动选择在 `resume` 时继续使用。
 - **信任目录。** 很多 CLI 第一次进一个目录会问「信任这个目录吗」。YOLO 开着时，由 Orchestrator 替你回答；YOLO 关着时，留给你自己答。
 - **接入。** Orchestrator 给受管 Agent 配好 `facade-mcp` 和钩子，只在这一次运行里有效，不会写你的全局配置。你自己在 CLI 里配的那一行 `facade-mcp` 也不碍事：连接算谁，按会话认。
 - **不自动拉起。** Agent 退出、崩溃或者机器重启以后，Orchestrator 不会自己去拉它，要接着干就 `resume`。VS Code 重开窗口时拉起 Pin 住的 Agent，是 VS Code 替你做了 `resume`，见后面 VS Code 一节。
@@ -213,7 +212,7 @@ facade start --prompt "把失败的测试修好" -d codex                       
 
 ### 设置
 
-每台机器有自己的 `facade.json`，里面是 YOLO、名字池和 CLI 配置。Agent 跑在哪台机器上，就用哪台的设置。设置只能直接改文件：本机的文件在哪，`facade status` 里会写；别的机器的用 `facade status --machine devbox` 看，再 ssh 上去改。改完后，下一次 `start` 或 `resume` 才生效，YOLO 也一样。文件写错了，用到写错那部分的启动都会失败，并告诉你错在哪一行；比如只是一个 CLI 的配置写错，就只影响启动这个 CLI。
+每台机器有自己的 `facade.json`，里面是 YOLO、名字池和 CLI 配置。Agent 使用运行机器的设置。`facade status` 会显示本机设置文件的位置。要编辑别的机器的设置，可先 SSH 登录那台机器，再运行 `facade status`。改完后，下一次 `start` 或 `resume` 会使用新设置。配置有错时，启动会报出对应的问题。
 
 ### 各个 CLI 不一样的地方
 
@@ -273,10 +272,10 @@ Facade 自己也会发提醒，标着 🔔，和普通消息一样送，跨机�
 
 ### 终端
 
-- 你可以读屏、打字、按键，也可以 Attach 进去：实时看，直接打字，按 Ctrl-] 断开，Agent 照常跑。已经停了的 Agent，也能读到它留下的最后一屏。
+- 你可以读屏、打字、按键，也可以 Attach 进去实时查看和打字。按 Ctrl+] 离开时 Agent 照常跑。停了的 Agent 仍可通过 `facade screen` 读到最后一屏。
 - 几个地方可以同时 Attach 同一个 Agent，看到的是同一块屏幕。终端大小以最后一次调整为准，打开一个 Attach 也算一次调整；颜色只由 VS Code 给，Shell 的 Attach 不改颜色。
-- Attach 时会报上自己是谁，比如哪个 VS Code 窗口、哪个终端，所以 `inspect` 能看到现在谁在看它。
-- 断线后会自动重连。断开期间敲的键一律不补发：重连后先显示当前的屏幕，并告诉你丢了多少，你看清楚再重新输入。
+- `facade status <AGENT>` 的 `Attached in` 显示当前的查看者。
+- 断线恢复后先重绘当前屏幕。有未送达的按键时会提示丢失的字节数，方便你核对后重新输入。
 - 跨机器操作和本机一样，同样要看权限。
 - 没有只能看、不能打字的 Attach。只想看的话，用读屏。
 
@@ -287,12 +286,12 @@ Facade 自己也会发提醒，标着 🔔，和普通消息一样送，跨机�
 服务管的是 Orchestrator 自己：怎么装、什么时候在跑、怎么升级。
 
 - **两个进程。** keeper 是所有 CLI 的父进程，daemon 管 Agent、给 Facade 提供服务。两个进程你都看得到：`facade status` 分开显示，日志也是两份，各留 30 天。任何一个重启，Agent 都不会停。
-- **`facade status`。** 显示 Facade home、设置文件在哪、版本、两个进程的进程号、Agent 个数，以及连着哪些机器。加 `--machine devbox` 看那台机器的。
+- **`facade status`** 显示本机 Facade home、设置文件、版本、两个进程的进程号、Agent 个数、连着的机器和 Guest MCP 的固定路径。服务休眠时可直接查询。
 - **安装。** 一行命令装好 Orchestrator、`facade` 和 `facade-mcp`，并把这两个命令放进 PATH。VS Code 扩展自己带一份；远机上装的也是同一套。Facade Code IDE 的命令行启动器现在也叫 `facade`，IDE 以后会去掉，到时 `facade` 这个名字就只归 Orchestrator；在那之前，装了 IDE 的电脑上，PATH 里排在前面的那个生效。
 - **什么时候在跑。** 用到时才起来，开机不自启；没有在跑的 Agent、本机没有入口在用、手上也没有没办完的事时就退出。别的机器只是连着，不算在用，见「机器」一节。
 - **升级。** 运行 `facade upgrade`，或者重跑一遍安装命令。新版接管旧版，Agent 不停；VS Code 里原来看得到的 Agent 和 Pin 也都还在。升级前已经在跑的 Agent，身份照旧版的认法，一直认到它这次运行结束；之后的启动和 resume 照新规则。远机在下一次连上它时升级。不会自动检查更新。
 - **卸载。** 先不做。
-- **其他命令。** `facade version`，以及生成命令补全的 `facade completion`。
+- `facade --version` 显示 CLI 版本。
 
 ---
 
@@ -303,21 +302,23 @@ Facade 自己也会发提醒，标着 🔔，和普通消息一样送，跨机�
 Shell 是给人和脚本用的。在这里运行的 `facade` 不代表任何 Agent，发出的信署名「命令行」。Agent 一般不会去调用它；就算调用了，也同样只算命令行，前提是它过了 CLI 自己的确认和沙箱，见「权限和 YOLO」。Shell 能做全部动作，输出只用英文，和 docker、git 一样。
 
 ```text
-facade start [--machine M] [--folder F] [--worktree B] [--name N] [--prompt P] [--model MODEL] [--effort EFFORT] [-d] <cli> [参数…]
-facade list [--machine M] [-q]                     # 也可以写成 facade ls；-q 只打地址
+facade start [--machine M] [--workdir D] [--worktree B] [-n N] [-d] <CLI> [CLI_ARGS]...
+facade list [--machine M]
 facade attach a3@devbox
 facade send ada "跑一下测试"
 facade screen a3              facade type a3 "yes" --enter
-facade stop a3 [a4…]          facade remove a3 [a4…]   # remove 也可以写成 rm
-facade rename a3 reviewer     facade inspect a3
-facade resume [--machine M] [--folder F] [--all]   # 列出能接着干的，每行给一个能直接粘贴的参数
-facade resume [-d] a3         # 接着干停了的 Agent；和 start 一样，-d 放到后台
-facade resume claude:7f3e9a1c # 接管一个别处的会话，变成新 Agent
+facade stop a3
+facade rename a3 reviewer     facade status a3
+facade resume [--machine M]   # 列出可恢复的 Agent 和会话
+facade resume [-d] a3         # 沿用原目录恢复 Agent
+facade resume 7f3e9a1c        # 从当前目录中的自存会话创建 Agent
 facade machine add <你平时 ssh 的写法> | connect | remove | list | rename
-facade status | version | completion | upgrade
+facade status [AGENT]
+facade --version
+facade upgrade
 ```
 
-人不收消息，所以 Shell 里没有取信的命令。输出规则沿用 131 定下的：帮助分组显示，编号不带 `#`，查询类命令都有 `--json`，数据走 stdout、诊断信息走 stderr，执行失败退出码是 1，用法写错退出码是 2；前台的 `start`、`resume` 和 `attach` 接上以后，按 Ctrl-] 断开返回 0，Agent 自己退出时返回 CLI 的退出码。
+`facade` 打开首页，每个命令都可加 `--help` 查看用法。结果与回执写 stdout，空结果引导、诊断与进度写 stderr。执行失败返回 1，用法错误返回 2。前台的 `start`、`resume` 和 `attach` 接上以后，按 Ctrl+] 离开返回 0。Agent 自己退出时，返回 CLI 的实际退出状态。
 
 ## MCP：`facade-mcp`
 
@@ -325,7 +326,7 @@ MCP 给 Agent 和外部应用用。工具暂时还是现在这 8 个：`list_age
 
 要改的有五处：
 
-- 原来用到「窗口」的地方，都换成「机器」；参数名和 Shell 的选项一样，比如 `machine`、`folder`。
+- MCP 以 `machine` 选择目标机器，通过 `folder` 指定启动目录。
 - 不能再给人发消息。
 - `read_messages` 加一个「等」的参数：设了才等，默认不等，所以 Agent 平时查一下信不会白白卡住。等的时候可以只等某一条信的回复，每次最多等 30 秒。不管等不等，都只拿还没开始打进终端的信。
 - `send_message` 的返回里，`id` 是带机器的完整编号；发信的是 Guest 时，再写明下一步：调用 `read_messages` 等回复，要让模型照着就能调对。
@@ -353,7 +354,7 @@ MCP 给 Agent 和外部应用用。工具暂时还是现在这 8 个：`list_age
 ## 几个典型用法
 
 1. **Shell 启动，VS Code 接手。** 在笔记本上运行 `facade start -d codex`，启动 ada。在 VS Code 里用 Go to Agent… 搜到 ada，打开它的终端。关掉窗口，ada 照常跑；回到 Shell 运行 `facade attach ada`，接上的还是同一个终端。
-2. **去另一台机器干活。** 运行一次 `facade machine add -p 2222 aaron@devbox.lan`（devbox 上没装的话，这时会自动装好），再运行 `facade start --machine devbox --folder /work/app --worktree feat-x claude`。笔记本上的 VS Code 和终端都能同时看它。
+2. **去另一台机器干活。** 运行一次 `facade machine add -p 2222 aaron@devbox.lan`（devbox 上没装的话，这时会自动装好），再运行 `facade start --machine devbox --workdir /work/app --worktree feat-x claude`。笔记本上的 VS Code 和终端都能同时看它。
 3. **Agent 组队。** 你开着 ada，ada 用 MCP 叫来两个帮手。帮手在你的 Panel 里自动出卡片；它们干完活，用 `reply_to` 回信给 ada，ada 再读它们的屏确认。
 4. **外部应用加入。** Cursor 配上一行 `facade-mcp`，就成了一个 Guest。YOLO 开着时，它用 `send_message` 给 ada 发信，照着返回结果的提示调 `read_messages` 等着，ada 的回复一到就拿到。YOLO 关着时，Cursor 只能找它自己叫来的 Agent。
 5. **接着干。** ada 停了以后，`facade resume` 能列出它，`facade resume ada` 就用原地址、原模型接着干。重开 VS Code 时，Pin 住的 Agent 由窗口替你拉起来。

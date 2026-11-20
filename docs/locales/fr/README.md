@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 Le programme d’installation ajoute `facade` et `facade-mcp` au PATH. Ouvrez un nouveau terminal pour utiliser le PATH mis à jour. Mettez à jour avec `facade upgrade`. Installez les CLI nécessaires et connectez-vous sur chaque machine. Les CLI intégrées sont Claude Code, Codex, Antigravity, Muse Code, OpenCode et Pi.
 
-Son lanceur s’appelle aussi `facade`. Si les deux sont installés, le shell utilise le premier `facade` du PATH. Après le retrait de l’aperçu, ce nom de commande revient à Orchestrator. Exécutez `facade version`. Une ligne au format `facade <version>` confirme que vous utilisez la commande Shell.
+Son lanceur s’appelle aussi `facade`. Si les deux sont installés, le shell utilise le premier `facade` du PATH. Après le retrait de l’aperçu, ce nom de commande revient à Orchestrator. Exécutez `facade --version`. Une ligne au format `facade <version>` confirme que vous utilisez la commande Shell.
 
 ### VS Code
 
@@ -88,7 +88,7 @@ Utilisez l’adresse affichée par `facade list`. Enregistrez les autres machine
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 Facade installe au besoin la version correspondante sur la machine distante. Facade utilise le chemin d’installation fixe sur la machine distante. Pour une installation manuelle, utilisez la même version que votre Orchestrator local. Dans VS Code, **Go to Agent** ouvre le terminal d’un agent actif. L’espace de travail mémorise les agents ouverts, leurs assistants et vos Pins. Fermer l’onglet du terminal laisse l’agent travailler. **Resume Agent** et `facade resume` proposent le travail enregistré.

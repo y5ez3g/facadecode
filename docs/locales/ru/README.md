@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 Установщик добавляет `facade` и `facade-mcp` в PATH. Откройте новый терминал, чтобы применить обновлённый PATH. Для обновления выполните `facade upgrade`. Установите нужные CLI и войдите в них на каждой машине. Встроенные варианты включают Claude Code, Codex, Antigravity, Muse Code, OpenCode и Pi.
 
-Её команда запуска тоже называется `facade`. Если установлены обе программы, Shell запускает первую найденную в PATH. После прекращения выпуска IDE имя команды останется за Orchestrator. Выполните `facade version`. Строка в формате `facade <version>` подтверждает, что используется команда Shell.
+Её команда запуска тоже называется `facade`. Если установлены обе программы, Shell запускает первую найденную в PATH. После прекращения выпуска IDE имя команды останется за Orchestrator. Выполните `facade --version`. Строка в формате `facade <version>` подтверждает, что используется команда Shell.
 
 ### VS Code
 
@@ -88,7 +88,7 @@ facade attach ada
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 Facade при необходимости устанавливает подходящую версию на удалённой машине. На удалённой машине Facade использует фиксированный путь установки. При ручной установке берите ту же версию, что у локального Orchestrator. В VS Code команда **Go to Agent** открывает терминал запущенного агента. Рабочая область запоминает открытых агентов, их помощников и ваши Pins. При закрытии вкладки терминала агент продолжает работу. **Resume Agent** и `facade resume` показывают сохранённую работу.

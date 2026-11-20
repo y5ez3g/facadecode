@@ -1,36 +1,41 @@
-Start AI coding agents and use their terminals from the Shell. You can watch an agent work, step in
-or send it a task. Agents can also start and message one another.
+Run AI coding agents that can collaborate across your machines.
 
-Learn more at https://facadecode.com
+Start Claude Code, Codex, or another coding CLI. Agents can start other
+agents, send messages, read screens, and type in terminals — just as you do.
+They run in the background while other agents direct them, across connected
+machines as if on the same machine. Attach anytime to watch or take over.
+Third-party agents can join as guests over MCP to exchange messages with
+managed agents.
 
 Usage: facade [OPTIONS] [COMMAND]
 
-Agents:
-  start       Start an agent
-  list        List active agents
-  attach      Watch an agent and use its terminal
-  stop        Stop one or more agents
-  resume      List resumable sessions or resume one
-  remove      Remove one or more agents
-  rename      Rename an agent
+Examples
+  facade start codex
+  facade list
+  facade attach Nova
+  facade start --machine devbox -d codex
 
-Inspect and control:
-  inspect     Show what an agent is doing
-  screen      Print an agent's recent output
-  type        Type text or press keys in an agent's terminal
+Agents
+  start     Start an agent
+  list      List active agents
+  resume    List or resume agents and sessions
+  stop      Stop an agent
+  rename    Rename an agent
 
-Messages:
-  send        Send a message to an agent
+Interact
+  attach    Open an agent's terminal
+  send      Send a message to an agent
+  screen    Read an agent's terminal output
+  type      Type text or press keys in an agent's terminal
 
-Setup and info:
-  machine     Connect to other machines over SSH
-  status      Show Orchestrator status
-  version     Print the version
-  completion  Print a shell completion script
-  upgrade     Upgrade Facade Code
+System
+  status    Show Facade or agent status
+  machine   Connect and manage machines over SSH
+  upgrade   Upgrade Facade
 
-Options:
-  -h, --help     Print help
-  -V, --version  Print the version
+Options
+  -h, --help     Show help
+  -V, --version  Print version
 
-Run 'facade <COMMAND> --help' for more information on a command.
+Run 'facade <COMMAND> --help' for examples and options.
+Learn more at https://facadecode.com

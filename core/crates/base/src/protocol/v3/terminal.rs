@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::process::{ProcessExit, ProcessState};
 use crate::protocol::daemon::include_scrollback_by_default;
 
-use super::{AgentRef, AgentTarget, ScreenBuffer, TerminalColors};
+use super::{AgentInfo, AgentLabel, AgentRef, AgentTarget, ScreenBuffer, TerminalColors};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "V3AgentArgs")]
@@ -45,6 +45,13 @@ pub struct AgentTypeArgs {
     pub keys: Option<Vec<String>>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TypeResult {
+    /// The target that took the input. Raw terminal input keeps the empty receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentLabel>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "V3RenameArgs")]
 pub struct AgentRenameArgs {
@@ -54,6 +61,15 @@ pub struct AgentRenameArgs {
     /// The new name, trimmed. An empty or blank name gets a default name chosen from the suggested
     /// names: unused while one is available, otherwise reused. Names may repeat.
     pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RenameResult {
+    #[serde(flatten)]
+    pub agent: AgentInfo,
+    /// The name this operation replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -99,6 +115,9 @@ pub struct ScreenWatchArgs {
     pub include_scrollback: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewer: Option<String>,
+    /// With an exact managed reference, allow the final snapshot of an ended run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_ended: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -107,6 +126,8 @@ pub struct ScreenSnapshot {
     /// The ID of the agent being viewed.
     pub agent_id: String,
     pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The agent's running machine, for reconnecting to its exact reference.
     pub machine_id: String,
     /// Terminal width required to apply the redraw.
@@ -121,6 +142,9 @@ pub struct ScreenSnapshot {
     /// The recorded exit, if the agent has ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit: Option<ProcessExit>,
+    /// The shell exit status calculated on the machine that ran the agent, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<i32>,
     /// The agent's process state captured with this snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessState>,
@@ -140,6 +164,8 @@ impl ScreenSnapshot {
 pub struct ScreenText {
     pub agent_id: String,
     pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Whether the agent's CLI is running. An ended agent's screen is the one it left.
     pub process: ProcessState,
     /// When the screen was read, in UTC ISO 8601 format with milliseconds; for an ended agent, when

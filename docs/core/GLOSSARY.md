@@ -242,6 +242,8 @@ have full reach for the actions they offer.
 | message number | A number such as `m17`, issued once on the recipient's machine | address (for this) |
 | structured identity | The full machine ID and agent or message number used in storage, protocol and forwarding. An `AgentRef` identifies the agent's machine, and a `MessageRef` identifies the recipient's machine | name, address (for this) |
 | address | A number qualified by a machine, such as `a3@devbox`, `a3@9a0d44b2` or `m17@devbox`. Facade gives a machine-qualified agent address, including for agents on the local machine. MCP uses the single field `id` for it | `#a3`, `@name`, `id:` prefix |
+| agent reference | The Shell term in prose for a copyable agent address such as `a3@devbox`. Tables use the heading `REF`, and output templates use `{ref}` | — |
+| saved session ID | The CLI's identifier for a session it saved. For a saved session, the `facade resume` table shows an eight-character ID prefix in `REF` when the prefix is unique, or the full ID when prefixes collide | — |
 
 Use a machine name when it resolves to one machine, then its short ID, then its full ID. A bare agent number or name
 searches awake, reachable machines for agents the caller can use for the operation. Send results give a qualified message
@@ -326,6 +328,8 @@ code that mirrors them keeps it too.
 
 | On the wire | Means, in this glossary's words |
 |---|---|
+| `address` in an agent record | The copyable address that Shell calls an agent reference |
+| `reference` of type `AgentRef` | The agent's structured identity, with its full `machine_id` and `agent_id` |
 | `daemon.upgrade`, reason `upgrading` | A newer build taking over: take over |
 | `status`: the MCP result's field, the `facade status` command, the Program Status Protocol (OSC 7501) | The outcome of a call; Facade's own state; a CLI reporting its state |
 | reason `configuration_invalid` | The settings file has problems |

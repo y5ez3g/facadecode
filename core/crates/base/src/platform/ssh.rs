@@ -324,23 +324,6 @@ fn is_windows_absolute_path(path: &[u8]) -> bool {
 const UNIX_PROGRAM: &str = r#""$HOME/.local/bin/facade""#;
 const WINDOWS_PROGRAM: &str = r#"(Join-Path $env:LOCALAPPDATA 'Facade\bin\facade.exe')"#;
 
-/// Reports the fixed installation's version, or a JSON marker if the installation is absent.
-pub fn remote_probe_command(system: RemoteSystem) -> String {
-    match system {
-        RemoteSystem::Unix => sh_command(
-            &unix_probe_script(
-                &format!("{UNIX_PROGRAM} version --json || exit 1"),
-                r#"printf '%s\n' '{"missing":true}'"#,
-            ),
-            &[],
-        ),
-        RemoteSystem::Windows => powershell_command(&windows_probe_script(
-            "& $program version --json; exit $LASTEXITCODE",
-            "[Console]::WriteLine('{\"missing\":true}')",
-        )),
-    }
-}
-
 fn unix_probe_script(installed: &str, missing: &str) -> String {
     format!(
         r#"for dir in "$HOME" "$HOME/.local" "$HOME/.local/bin"; do
@@ -551,7 +534,7 @@ fn bootstrap_command(
             };
             let probe = unix_probe_script(
                 &format!(
-                    r#"report=$({UNIX_PROGRAM} version) || exit 1
+                    r#"report=$({UNIX_PROGRAM} --version) || exit 1
                     case "$report" in
                         'facade '*) printf 'version %s\n' "${{report#facade }}" ;;
                         *) printf 'Unexpected version from %s\n' {UNIX_PROGRAM} >&2; exit 1 ;;
@@ -589,7 +572,7 @@ fn bootstrap_command(
                 String::new()
             };
             let probe = windows_probe_script(
-                "$report = & $program version; if ($LASTEXITCODE -ne 0) { exit 1 }; \
+                "$report = & $program --version; if ($LASTEXITCODE -ne 0) { exit 1 }; \
                  if ($report -isnot [string] -or -not $report.StartsWith('facade ')) { \
                      throw \"Unexpected version from $program\" \
                  }; [Console]::WriteLine('version ' + $report.Substring(7))",

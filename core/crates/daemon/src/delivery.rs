@@ -24,7 +24,7 @@ use crate::agent::{
 use crate::machine_service::machine_address_part;
 use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedResult, Settled};
 use crate::operations::{check_request_id, request_words};
-use crate::records::OperationTarget;
+use crate::records::{OperationTarget, Reach};
 use crate::service::{Forwarded, sender_from, value_of};
 use crate::store::SendRoute;
 use crate::{Cancel, Daemon, HUMAN, Sender, gate_for_test, log};
@@ -274,6 +274,11 @@ impl Daemon {
         incoming: Option<Forwarded>,
         mut cancel: Cancel,
     ) -> Result<Value, ErrorBody> {
+        if args.allow_unsupported_receipt && !matches!(caller, Caller::Terminal { .. }) {
+            return Err(ErrorBody::refused(
+                "only a terminal can request an unsupported delivery receipt",
+            ));
+        }
         let forwarded = incoming.is_some();
         let limit = incoming
             .as_ref()
@@ -324,7 +329,9 @@ impl Daemon {
                         v3::AgentTarget::Address {
                             agent: args.to.clone(),
                         },
-                        OperationTarget::Send,
+                        OperationTarget::Send {
+                            allow_unsupported_receipt: args.allow_unsupported_receipt,
+                        },
                     );
                     let recipient = tokio::time::timeout_at(due.instant, resolving)
                         .await
@@ -358,7 +365,7 @@ impl Daemon {
         if recipient.machine_id != self.machine_id {
             let target = &recipient.machine_id;
             let routed =
-                tokio::time::timeout_at(due.instant, self.network.ensure_route(target)).await;
+                tokio::time::timeout_at(due.instant, self.ensure_machine_route(target)).await;
             match routed {
                 Ok(Ok(())) => {}
                 _ if replay => return Err(send_unconfirmed()),
@@ -444,6 +451,9 @@ impl Daemon {
                     && result.message.delivery.reason == Some(DeliveryFailure::Timeout)
             });
             result.expected_reply_to = self.checked_reply_hint(caller, &recipient, candidate);
+            if let Some(label) = &mut result.recipient {
+                self.project_agent_label(&recipient, label)?;
+            }
             let message = MessageRef {
                 machine_id: recipient.machine_id,
                 message_id: result.message.message_id.clone(),
@@ -455,7 +465,7 @@ impl Daemon {
             machine: caller.machine_id(),
             sender,
         };
-        let (sent, candidate) = self
+        let (sent, candidate, label) = self
             .send_to_agent(caller, &recipient, args, origin, due, cancel)
             .await?;
         let candidate = candidate.filter(|_| allow_reply_hint);
@@ -471,6 +481,7 @@ impl Daemon {
         Ok(value_of(v3::SendResult {
             id: self.message_address(&reference)?,
             message: self.public_message(sent.message)?,
+            recipient: label,
             repeated: sent.repeated,
             withdrawn: sent.withdrawn,
             expected_reply_to,
@@ -568,7 +579,7 @@ impl Daemon {
         origin: SendOrigin<'_>,
         due: Due,
         mut cancel: Cancel,
-    ) -> Result<(SendOutcome, Option<MessageRef>), SendFailure> {
+    ) -> Result<(SendOutcome, Option<MessageRef>, Option<v3::AgentLabel>), SendFailure> {
         let inbox = origin.sender.from.clone();
         let machine = origin.machine;
         if let Some(request_id) = args.request_id.as_deref() {
@@ -580,10 +591,22 @@ impl Daemon {
                 request_id,
                 None,
             )? {
-                return self.repeat_send(earlier, request_id, cancel).await;
+                let label = self
+                    .get_agent(&recipient.agent_id)
+                    .filter(|agent| Reach::from(caller).reaches(&agent.info()))
+                    .map(|agent| self.agent_label(&agent))
+                    .transpose()?;
+                let (sent, reply) = self.repeat_send(earlier, request_id, cancel).await?;
+                return Ok((sent, reply, label));
             }
         }
-        let to = self.local_target(caller, recipient, OperationTarget::Send)?;
+        let to = self.local_target(
+            caller,
+            recipient,
+            OperationTarget::Send {
+                allow_unsupported_receipt: args.allow_unsupported_receipt,
+            },
+        )?;
         facade_base::daemon::check_message_text(&args.text).map_err(ErrorBody::invalid_argument)?;
         let reply = match (args.reply_to, args.reply_to_machine_id) {
             (Some(message_id), Some(machine_id)) if machine_id == machine => Some(MessageRef {
@@ -599,24 +622,24 @@ impl Daemon {
             }
         };
         if to.exit().borrow().is_some() {
-            return Err(ErrorBody::new(
+            let error = ErrorBody::new(
                 Reason::Ended,
                 format!(
                     "{} ended; it takes no messages",
                     self.agent_address(recipient)?
                 ),
-            )
-            .into());
+            );
+            return Err(self.with_agent_error(&to, error).into());
         }
-        if !to.is_guest() && to.rule().is_none() {
-            return Err(ErrorBody::new(
+        if !args.allow_unsupported_receipt && !to.is_guest() && to.rule().is_none() {
+            let error = ErrorBody::new(
                 Reason::Unsupported,
                 format!(
                     "{} is a custom program and cannot receive messages",
                     to.info().name
                 ),
-            )
-            .into());
+            );
+            return Err(self.with_agent_error(&to, error).into());
         }
         let message = Message {
             from_machine_id: (machine != self.machine_id).then(|| machine.to_string()),
@@ -639,7 +662,8 @@ impl Daemon {
                 // A call with the same ID kept its message first: this one joins it.
                 Posted::Earlier(earlier) => {
                     let request_id = args.request_id.as_deref().unwrap_or_default();
-                    return self.repeat_send(earlier, request_id, cancel).await;
+                    let (sent, reply) = self.repeat_send(earlier, request_id, cancel).await?;
+                    return Ok((sent, reply, Some(self.agent_label(&to)?)));
                 }
             };
         log(
@@ -685,7 +709,8 @@ impl Daemon {
         gate_for_test("before-send-answer");
         let answer = settled.borrow().clone();
         let (message, withdrawn, expected_reply_to) =
-            settled_answer(answer, to.id(), &message.message_id)?;
+            settled_answer(answer, to.id(), &message.message_id)
+                .map_err(|error| self.with_agent_error(&to, error))?;
         Ok((
             SendOutcome {
                 message,
@@ -694,6 +719,7 @@ impl Daemon {
                 window_delivery: None,
             },
             expected_reply_to,
+            Some(self.agent_label(&to)?),
         ))
     }
 

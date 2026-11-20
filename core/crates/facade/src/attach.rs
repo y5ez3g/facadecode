@@ -6,37 +6,35 @@
 //! stderr. Ctrl-] waits up to one second for the keys typed before it. Termination signals do not wait.
 
 use std::collections::VecDeque;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use facade_base::console::{ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes};
 use facade_base::daemon;
-use facade_base::daemon_client::{DaemonClient, RECONNECT_DELAY};
+use facade_base::daemon_client::{Cut, DaemonClient, RECONNECT_DELAY, takeover_timeout};
 use facade_base::jsonrpc::{self, ErrorBody, Reason};
 use facade_base::operations::{CallParams, Operation};
-use facade_base::paths::{ClientSocket, core_dir};
-use facade_base::process::{EndReason, ProcessExit};
+use facade_base::paths::ClientSocket;
+use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::unix_process::signal_number;
 use facade_base::v3::{self, AgentRef, AgentTarget, ScreenChange, ScreenSnapshot, ScreenTopic};
 use facade_base::{base64, service, system};
+use unicode_width::UnicodeWidthChar;
 
 use crate::daemon_client::{ConnectFailure, Reconnect};
-use crate::errors::about_agent;
-use crate::{ExitText, Opening};
+use crate::errors::{AgentCommand, agent_failed, agent_label, cause};
+use crate::{ExitText, Opening, single_line};
 
 /// Ctrl-], as plain input and in the kitty keyboard encoding. In win32-input-mode it comes as a
 /// key-down record of its character, which [`is_detach_record`] recognizes.
 const DETACH_KEYS: [&[u8]; 2] = [b"\x1d", b"\x1b[93;5u"];
 /// The longest Ctrl-] waits for the keys typed before it to be sent.
 const DETACH_SEND_TIMEOUT: Duration = Duration::from_secs(1);
+const RECONNECT_TIMED_OUT: &str = "the terminal did not reconnect in time";
 /// The most typed bytes that wait while a connected writer is busy.
 const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
-/// The bottom row while the attachment reconnects.
-pub(crate) const RECONNECTING: &str =
-    "Connection lost. Reconnecting. Keys typed while disconnected are not sent.";
 
 /// Whether raw mode is on and the person's terminal still has to be restored.
 static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -49,7 +47,7 @@ static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TERMINAL: Mutex<()> = Mutex::new(());
 
 /// The person's terminal size, when both dimensions are nonzero.
-pub(crate) fn terminal_size() -> Option<(u16, u16)> {
+pub(crate) fn console_size() -> Option<(u16, u16)> {
     let (cols, rows) = crossterm::terminal::size().ok()?;
     (cols > 0 && rows > 0).then_some((cols, rows))
 }
@@ -60,35 +58,63 @@ pub(crate) fn terminal_size() -> Option<(u16, u16)> {
 /// Returns the command's exit code.
 pub(crate) fn attach(
     mut client: DaemonClient,
-    agent: &str,
+    target: AgentTarget,
     opening: Opening,
     reconnect: &Reconnect,
 ) -> anyhow::Result<i32> {
     let hostname = system::hostname().unwrap_or_else(|_| client.hello_result.machine_id.clone());
     let viewer = format!("Terminal on {hostname}");
-    let target = AgentTarget::Address {
-        agent: agent.into(),
+    let address = match &target {
+        AgentTarget::Address { agent } => agent.clone(),
+        AgentTarget::Reference { reference } => v3::address::format_agent_address(
+            reference,
+            &v3::address::exact_machine_selector(&reference.machine_id),
+        ),
     };
+    let allow_ended =
+        !matches!(opening, Opening::Attached) && matches!(target, AgentTarget::Reference { .. });
     // The person's scrollback stays above the agent's screen, which brings its own.
-    let (watch, snapshot) = watch_screen(&mut client, target, &viewer, true)
-        .map_err(|error| about_agent(agent, error))?;
+    let (watch, snapshot) =
+        match watch_screen(&mut client, target.clone(), &viewer, true, allow_ended) {
+            Ok(watched) => watched,
+            // An older daemon may refuse an ended run even with an exact target and allow_ended.
+            Err(error) if allow_ended && watch_reason(&error) == Some(Reason::Ended) => {
+                let agent = inspect_agent(&mut client, target);
+                let shown = agent.as_ref().map_or_else(
+                    || single_line(&address),
+                    |agent| agent_label(Some(&agent.name), &agent.address),
+                );
+                let end = AttachEnd::AgentExited {
+                    exit: agent.and_then(|agent| agent.exit),
+                    status: None,
+                };
+                let code = end.code();
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(
+                    stderr,
+                    "{}\n{}",
+                    opening_line(&opening, &shown),
+                    result_line(&end, &shown, &address)
+                );
+                return Ok(code);
+            }
+            Err(error) => return Err(opening_error(&address, error)),
+        };
+    let shown = agent_label(snapshot.name.as_deref(), &snapshot.address);
     let input = Arc::new(AgentInput::new(
         snapshot.reference(),
         snapshot.address.clone(),
     ));
+    input.lock().agent_name.clone_from(&snapshot.name);
     let screen = ScreenWatch {
         client,
         watch,
         snapshot,
     };
     // Register before entering raw mode so a termination signal can be handled even during setup.
-    let signals = ConsoleSignals::new().map_err(|error| about_agent(agent, error.into()))?;
-    let _ = writeln!(
-        std::io::stderr(),
-        "{}",
-        opening_line(&opening, &input.shown)
-    );
-    enter_raw_mode().map_err(|error| about_agent(agent, error.into()))?;
+    let signals = ConsoleSignals::new()?;
+    let _ = writeln!(std::io::stderr(), "{}", opening_line(&opening, &shown));
+    enter_raw_mode()?;
     follow_signals(signals, input.clone());
     let end = follow_agent(screen, &input, &viewer, reconnect);
     let code = end.as_ref().map_or(1, AttachEnd::code);
@@ -126,10 +152,12 @@ fn lock_vt_modes() -> MutexGuard<'static, Option<VtModes>> {
 /// Why an attachment ended.
 pub(crate) enum AttachEnd {
     Detached,
-    AgentExited(Option<ProcessExit>),
+    AgentExited {
+        exit: Option<ProcessExit>,
+        status: Option<i32>,
+    },
     Removed,
-    /// A permission, protocol or settings error stops every reconnect.
-    Unreachable,
+    Unreachable(String),
     Signal(String),
 }
 
@@ -137,45 +165,126 @@ impl AttachEnd {
     fn code(&self) -> i32 {
         match self {
             AttachEnd::Detached => 0,
-            AttachEnd::AgentExited(exit) => exit.as_ref().map_or(1, exit_code),
-            AttachEnd::Removed | AttachEnd::Unreachable => 1,
+            AttachEnd::AgentExited { exit, status } => {
+                status.unwrap_or_else(|| exit.as_ref().map_or(1, exit_code))
+            }
+            AttachEnd::Removed | AttachEnd::Unreachable(_) => 1,
             AttachEnd::Signal(name) => signal_number(name).map_or(1, |number| 128 + number),
         }
     }
 }
 
-/// The line shown before the first redraw, using the address from the screen snapshot.
-pub(crate) fn opening_line(opening: &Opening, id: &str) -> String {
+/// The line shown before the first redraw.
+pub(crate) fn opening_line(opening: &Opening, shown: &str) -> String {
     let began = match opening {
-        Opening::Started { name } => format!("Started {id} ({}).", daemon::display_name(name)),
-        Opening::Resumed { name } => format!("Resumed {id} ({}).", daemon::display_name(name)),
-        Opening::Attached => format!("Attached to {id}."),
+        Opening::Started => format!("Started {shown}."),
+        Opening::Resumed => format!("Resumed {shown}."),
+        Opening::SavedSession { cli } => {
+            format!("Started {shown} from a saved {} session.", single_line(cli))
+        }
+        Opening::Attached => format!("Attached to {shown}."),
     };
-    format!("{began} Press Ctrl-] to detach.")
+    format!("{began} Press Ctrl+] to detach.")
 }
 
 /// The result shown after restoring the person's terminal.
-pub(crate) fn result_line(end: &AttachEnd, id: &str, logs: &Path) -> String {
+pub(crate) fn result_line(end: &AttachEnd, shown: &str, address: &str) -> String {
     match end {
-        AttachEnd::Detached => format!("Detached from {id}. Run 'facade attach {id}' to return."),
-        AttachEnd::AgentExited(Some(exit)) if exit.code.is_some() => {
-            format!("{id} exited with {}.", ExitText(exit))
-        }
-        AttachEnd::AgentExited(Some(exit)) if exit.signal.is_some() => {
-            format!("{id} was ended by {}.", ExitText(exit))
-        }
-        AttachEnd::AgentExited(Some(ProcessExit {
-            reason: Some(EndReason::TerminalClosed),
-            ..
-        })) => format!("{id}'s terminal closed. Its CLI may still be running."),
-        AttachEnd::AgentExited(_) => format!("{id} ended; its exit status is unknown."),
-        AttachEnd::Removed => format!("error: {id} was removed"),
-        AttachEnd::Unreachable => format!(
-            "error: could not reconnect to Facade\n  tip: check '{}/' for details",
-            logs.display()
+        AttachEnd::Detached => format!(
+            "Detached from {shown}. The agent is still running.\nReattach with 'facade attach {address}'."
         ),
+        AttachEnd::AgentExited {
+            exit: Some(exit), ..
+        } if exit.code.is_some() => {
+            format!("{shown} exited with {}.", ExitText(exit))
+        }
+        AttachEnd::AgentExited {
+            exit: Some(exit), ..
+        } if exit.signal.is_some() => {
+            format!("{shown} exited on signal {}.", ExitText(exit))
+        }
+        AttachEnd::AgentExited {
+            status: Some(status),
+            ..
+        } => {
+            format!("{shown} exited with status {status}.")
+        }
+        AttachEnd::AgentExited { .. } => {
+            format!("{shown} exited. Facade could not confirm its exit status.")
+        }
+        AttachEnd::Removed => format!("error: {shown} was removed"),
+        AttachEnd::Unreachable(why) => format!("error: {}", lost_connection(shown, address, why)),
         AttachEnd::Signal(name) => format!("Attachment ended by {name}."),
     }
+}
+
+fn lost_connection(shown: &str, address: &str, why: &str) -> String {
+    format!(
+        "Lost connection to {shown}: {}\nReattach with 'facade attach {address}', or check 'facade machine list'.",
+        single_line(why)
+    )
+}
+
+/// Presents a refusal of the first watch using only records visible to this caller.
+fn opening_error(address: &str, error: anyhow::Error) -> anyhow::Error {
+    if let Some(body) = error.downcast_ref::<ErrorBody>()
+        && matches!(
+            body.data.reason,
+            Reason::Unavailable | Reason::SshInteractionRequired
+        )
+    {
+        if let [agent] = body.data.agents.as_slice() {
+            let shown = agent_label(Some(&agent.name), &agent.address);
+            return anyhow::anyhow!(lost_connection(
+                &shown,
+                &agent.address,
+                &connection_reason(&error)
+            ));
+        }
+        // If the caller gave a machine, even an unavailable peer's address can be useful.
+        if address.contains('@')
+            && body
+                .data
+                .unavailable
+                .as_ref()
+                .is_none_or(|unavailable| unavailable.unanswered.is_empty())
+        {
+            let address = single_line(address);
+            return anyhow::anyhow!(lost_connection(
+                &address,
+                &address,
+                &connection_reason(&error)
+            ));
+        }
+    } else if error.is::<Cut>() {
+        let address = single_line(address);
+        return anyhow::anyhow!(lost_connection(
+            &address,
+            &address,
+            &connection_reason(&error)
+        ));
+    }
+    agent_failed(AgentCommand::Attach, address, error)
+}
+
+/// Prefers the current query's SSH diagnostic when the daemon has one.
+fn connection_reason(error: &anyhow::Error) -> String {
+    machine_connection_reason(error).map_or_else(|| cause(error), str::to_owned)
+}
+
+fn machine_connection_reason(error: &anyhow::Error) -> Option<&str> {
+    let body = error.downcast_ref::<ErrorBody>()?;
+    if let Some(ssh) = &body.data.ssh_interaction {
+        return Some(&ssh.reason);
+    }
+    let detail = match body.data.machines.as_slice() {
+        [machine] => machine.error.as_deref(),
+        _ => None,
+    };
+    detail.or_else(|| {
+        body.data.unavailable.as_ref()?.machine.as_ref()?;
+        Some(body.message.as_str())
+    })
 }
 
 /// The final warning when typed input was left waiting or dropped.
@@ -183,12 +292,14 @@ pub(crate) fn unsent_line(unsent: usize) -> Option<String> {
     (unsent > 0).then(|| format!("warning: {unsent} bytes you typed were not sent"))
 }
 
-/// The bottom row after the first redraw on the restored connection.
-pub(crate) fn reconnected_line(unsent: usize) -> Option<String> {
-    (unsent > 0).then(|| format!("Keys not sent: {unsent} bytes."))
+/// The notice after the first redraw on the restored connection.
+pub(crate) fn reconnected_line(shown: &str, unsent: usize) -> Option<String> {
+    (unsent > 0).then(|| format!(
+        "Reconnected to {shown}. {unsent} bytes typed while disconnected were not sent; check the screen and retype if needed."
+    ))
 }
 
-/// The agent's exit code, 128 plus the number of the signal that ended it, or 1 with neither.
+/// Computes the exit code using the local signal table when an older peer omitted its status.
 fn exit_code(exit: &ProcessExit) -> i32 {
     match (exit.code, exit.signal.as_deref()) {
         (Some(code), _) => code,
@@ -211,12 +322,14 @@ fn watch_screen(
     target: AgentTarget,
     viewer: &str,
     include_scrollback: bool,
+    allow_ended: bool,
 ) -> anyhow::Result<(u64, ScreenSnapshot)> {
     client.watch::<ScreenTopic>(v3::ScreenWatchArgs {
         target,
         keep_scrollback: true,
         include_scrollback,
         viewer: Some(viewer.into()),
+        allow_ended,
     })
 }
 
@@ -233,11 +346,14 @@ fn follow_agent(
     spawn_with(input, AgentInput::send_queued);
     spawn_with(input, read_keys);
     loop {
-        if let Some(end) = show_until_closed(&mut screen, input) {
-            return Ok(end);
-        }
+        let failure = match show_until_closed(&mut screen, input) {
+            Ok(Some(end)) => return Ok(end),
+            Ok(None) => None,
+            Err(error) => Some(error),
+        };
         let closing = screen.client.closing.is_some();
         input.disconnected(closing);
+        service::mark_for_test("attach-disconnected");
         if input.is_detached() {
             return Ok(AttachEnd::Detached);
         }
@@ -246,16 +362,14 @@ fn follow_agent(
             input.wait_for_write();
             screen.client.respond_to_closing();
         }
-        if let Some(_terminal) = attached_terminal() {
-            show_status(RECONNECTING);
-        }
-        screen = match reconnect_screen(input, viewer, reconnect) {
+        screen = match reconnect_screen(input, viewer, reconnect, failure) {
             Ok(again) => again,
             Err(end) => return Ok(end),
         };
         if let Some(end) = show_snapshot(&mut screen, input)? {
             return Ok(end);
         }
+        service::mark_for_test("attach-reconnected");
     }
 }
 
@@ -264,66 +378,106 @@ fn show_snapshot(
     screen: &mut ScreenWatch,
     input: &AgentInput,
 ) -> anyhow::Result<Option<AttachEnd>> {
-    write_output(&screen.snapshot.redraw);
-    if let Some(exit) = screen.snapshot.exit.take() {
-        return Ok(Some(AttachEnd::AgentExited(Some(exit))));
-    }
-    // Hold the terminal through the report so restoration cannot hide an already counted notice.
+    // Keep the redraw, displayed identity and notice together so restoration sees one snapshot.
     let Some(_terminal) = attached_terminal() else {
         return Ok(Some(AttachEnd::Detached));
     };
+    write_screen(&screen.snapshot.redraw);
+    {
+        let mut queue = input.lock();
+        queue.agent_name.clone_from(&screen.snapshot.name);
+        queue.address.clone_from(&screen.snapshot.address);
+    }
+    let status = screen.snapshot.exit_status;
+    if screen.snapshot.process == Some(ProcessState::Ended)
+        || screen.snapshot.exit.is_some()
+        || status.is_some()
+    {
+        return Ok(Some(AttachEnd::AgentExited {
+            exit: screen.snapshot.exit.take(),
+            status,
+        }));
+    }
     input.push_resize();
-    let Some(unsent) = input.connected(screen.client.writer.try_clone()?) else {
+    let Some(loss) = input.connected(screen.client.writer.try_clone()?) else {
         return Ok(Some(AttachEnd::Detached));
     };
-    if let Some(note) = reconnected_line(unsent) {
-        show_status(&note);
+    if loss.queued > 0 || loss.disconnected > 0 {
+        let shown = agent_label(screen.snapshot.name.as_deref(), &screen.snapshot.address);
+        let queued = (loss.queued > 0).then(|| {
+            format!(
+                "warning: {} bytes queued before disconnect were not sent",
+                loss.queued
+            )
+        });
+        let notice: Vec<String> = reconnected_line(&shown, loss.disconnected)
+            .into_iter()
+            .chain(queued)
+            .collect();
+        show_status(&notice.join("\n"));
     }
     Ok(None)
 }
 
 /// Draws changes. Returns how the attachment ended, or None when the connection closed.
-fn show_until_closed(screen: &mut ScreenWatch, input: &AgentInput) -> Option<AttachEnd> {
-    while let Ok(Some(change)) = screen.client.next_change::<ScreenTopic>(screen.watch) {
+fn show_until_closed(
+    screen: &mut ScreenWatch,
+    input: &AgentInput,
+) -> anyhow::Result<Option<AttachEnd>> {
+    while let Some(change) = screen.client.next_change::<ScreenTopic>(screen.watch)? {
         // Detaching shuts the connection down, whatever the read returned.
         if input.is_detached() {
-            return Some(AttachEnd::Detached);
+            return Ok(Some(AttachEnd::Detached));
         }
-        return Some(match change {
+        return Ok(Some(match change {
             ScreenChange::Output { data } | ScreenChange::Redraw { data, .. } => {
                 write_output(&data);
                 continue;
             }
             ScreenChange::Unknown => continue,
-            ScreenChange::Exit { exit } => AttachEnd::AgentExited(Some(exit)),
+            ScreenChange::Exit { exit, exit_status } => AttachEnd::AgentExited {
+                exit: Some(exit),
+                status: exit_status,
+            },
             ScreenChange::Removed => AttachEnd::Removed,
-        });
+        }));
     }
-    None
+    Ok(None)
 }
 
-/// Reaches the daemon again and watches the same agent, trying again after [`RECONNECT_DELAY`]
-/// while failures are temporary, including an unavailable remote machine. Detaching cancels the
-/// attempt, hello included. A permanent connection error or the agent's exit or removal ends it.
+/// Reaches the daemon again and watches the same agent. The existing retry delay also applies to
+/// an unavailable remote route. All attempts share the time allowed for a daemon handover.
 fn reconnect_screen(
     input: &AgentInput,
     viewer: &str,
     reconnect: &Reconnect,
+    mut last_failure: Option<anyhow::Error>,
 ) -> Result<ScreenWatch, AttachEnd> {
-    while !input.is_detached() {
-        let mut client =
-            match reconnect(&|| input.is_detached(), &mut |stream| input.opening(stream)) {
-                Ok(client) => client,
-                Err(ConnectFailure::Cancelled) => break,
-                Err(ConnectFailure::Permanent(_)) => return Err(AttachEnd::Unreachable),
-                Err(ConnectFailure::Timeout(_)) => {
-                    input.wait_before_reconnect();
-                    continue;
-                }
-            };
-        let watched = watch_screen(&mut client, input.target(), viewer, false);
-        match watched {
-            _ if input.is_detached() => break,
+    let deadline = Instant::now() + takeover_timeout();
+    while !input.is_detached() && Instant::now() < deadline {
+        let connection = reconnect(deadline, &|| input.is_detached(), &mut |stream| {
+            input.opening(stream)
+        });
+        if input.is_detached() {
+            break;
+        }
+        let mut client = match connection {
+            Ok(client) => client,
+            Err(ConnectFailure::Cancelled) => break,
+            Err(ConnectFailure::Permanent(error)) => {
+                return Err(AttachEnd::Unreachable(connection_reason(&error)));
+            }
+            Err(ConnectFailure::Timeout(error)) => {
+                keep_reconnect_failure(&mut last_failure, error);
+                input.wait_before_reconnect(deadline);
+                continue;
+            }
+        };
+        let watched = watch_before(&mut client, input.target(), viewer, deadline);
+        if input.is_detached() {
+            break;
+        }
+        let error = match watched {
             Ok((watch, snapshot)) => {
                 return Ok(ScreenWatch {
                     client,
@@ -331,25 +485,89 @@ fn reconnect_screen(
                     snapshot,
                 });
             }
-            Err(error) => match watch_reason(&error) {
-                Some(Reason::NotFound) => return Err(AttachEnd::Removed),
-                Some(Reason::Ended) => {
-                    let exit = client
-                        .call::<v3::AgentInspect>(v3::AgentSelectorArgs {
-                            target: input.target(),
-                        })
-                        .ok()
-                        .and_then(|inspected| inspected.agent.exit);
-                    if input.is_detached() {
-                        break;
-                    }
-                    return Err(AttachEnd::AgentExited(exit));
+            Err(error) => error,
+        };
+        match watch_reason(&error) {
+            Some(Reason::NotFound) => return Err(AttachEnd::Removed),
+            Some(Reason::Ended) => {
+                let exit = set_watch_timeout(&client, deadline)
+                    .ok()
+                    .and_then(|()| inspect_agent(&mut client, input.target()))
+                    .and_then(|agent| agent.exit);
+                if input.is_detached() {
+                    break;
                 }
-                _ => input.wait_before_reconnect(),
-            },
+                return Err(AttachEnd::AgentExited { exit, status: None });
+            }
+            _ if retryable_watch(&error) => {
+                keep_reconnect_failure(&mut last_failure, error);
+                input.wait_before_reconnect(deadline);
+            }
+            _ => return Err(AttachEnd::Unreachable(connection_reason(&error))),
         }
     }
-    Err(AttachEnd::Detached)
+    if input.is_detached() {
+        return Err(AttachEnd::Detached);
+    }
+    let why = last_failure
+        .as_ref()
+        .filter(|error| !error.is::<Cut>())
+        .map_or_else(|| RECONNECT_TIMED_OUT.into(), connection_reason);
+    Err(AttachEnd::Unreachable(why))
+}
+
+/// A local transport failure must not replace the current diagnostic from the remote machine.
+fn keep_reconnect_failure(last: &mut Option<anyhow::Error>, failure: anyhow::Error) {
+    if !failure.is::<Cut>()
+        && (last.as_ref().and_then(machine_connection_reason).is_none()
+            || machine_connection_reason(&failure).is_some())
+    {
+        *last = Some(failure);
+    }
+}
+
+/// The remaining reconnect time also applies to the screen request on the new connection.
+fn watch_before(
+    client: &mut DaemonClient,
+    target: AgentTarget,
+    viewer: &str,
+    deadline: Instant,
+) -> anyhow::Result<(u64, ScreenSnapshot)> {
+    set_watch_timeout(client, deadline)?;
+    let watched = watch_screen(client, target, viewer, false, true)?;
+    client.writer.set_read_timeout(None)?;
+    client.writer.set_write_timeout(None)?;
+    Ok(watched)
+}
+
+fn set_watch_timeout(client: &DaemonClient, deadline: Instant) -> std::io::Result<()> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            RECONNECT_TIMED_OUT,
+        ));
+    }
+    client.writer.set_read_timeout(Some(remaining))?;
+    client.writer.set_write_timeout(Some(remaining))
+}
+
+/// Older daemons refuse ended snapshots even when a foreground watch opts in.
+fn inspect_agent(client: &mut DaemonClient, target: AgentTarget) -> Option<v3::AgentInfo> {
+    client
+        .call::<v3::AgentInspect>(v3::AgentSelectorArgs { target })
+        .ok()
+        .map(|inspected| inspected.agent)
+}
+
+fn retryable_watch(error: &anyhow::Error) -> bool {
+    matches!(
+        watch_reason(error),
+        Some(Reason::Unavailable | Reason::Upgrading | Reason::SshInteractionRequired)
+    ) || error.is::<Cut>()
+        || error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(facade_base::daemon_client::transient_transport)
 }
 
 /// The daemon's reason for refusing the watch.
@@ -443,8 +661,6 @@ fn is_detach_record(keys: &[u8]) -> bool {
 struct AgentInput {
     /// The identity of the agent from the first snapshot.
     reference: AgentRef,
-    /// The agent as the person reads it, for the lines around the attachment.
-    shown: String,
     queue: Mutex<InputQueue>,
     /// Wakes the writer for new input, a new connection or the end, and wakes whoever waits for a
     /// write to end.
@@ -453,13 +669,15 @@ struct AgentInput {
 
 #[derive(Default)]
 struct InputQueue {
+    /// Display identity from the snapshot most recently drawn.
+    agent_name: Option<String>,
+    address: String,
     waiting: VecDeque<Outgoing>,
     /// The key bytes in `waiting`.
     waiting_key_bytes: usize,
     /// Typed bytes discarded because the connected queue was full.
     overflow_key_bytes: usize,
-    /// Bytes dropped on disconnect or typed while waiting for the next full redraw.
-    disconnected_key_bytes: usize,
+    reconnect_loss: ReconnectLoss,
     /// The connection to send on; none while disconnected. A failed write ends it only if it is
     /// still the one the write used.
     connection: Option<Arc<ClientSocket>>,
@@ -471,10 +689,18 @@ struct InputQueue {
     detached: bool,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ReconnectLoss {
+    /// Bytes still in the connected queue when the connection closed.
+    queued: usize,
+    /// Bytes typed while disconnected, before the next full redraw.
+    disconnected: usize,
+}
+
 impl InputQueue {
     /// Drops input that has not been handed to the old connection.
     fn clear_connection(&mut self) -> Option<Arc<ClientSocket>> {
-        self.disconnected_key_bytes += std::mem::take(&mut self.waiting_key_bytes);
+        self.reconnect_loss.queued += std::mem::take(&mut self.waiting_key_bytes);
         self.waiting.clear();
         self.connection.take()
     }
@@ -500,7 +726,7 @@ impl Outgoing {
                 keys: None,
             })),
             Outgoing::Resize => {
-                let (cols, rows) = terminal_size()?;
+                let (cols, rows) = console_size()?;
                 let args = v3::AgentResizeArgs {
                     target,
                     cols,
@@ -523,11 +749,13 @@ fn notification<O: Operation>(args: O::Args) -> Vec<u8> {
 }
 
 impl AgentInput {
-    fn new(reference: AgentRef, shown: String) -> Self {
+    fn new(reference: AgentRef, address: String) -> Self {
         AgentInput {
             reference,
-            shown,
-            queue: Mutex::default(),
+            queue: Mutex::new(InputQueue {
+                address,
+                ..InputQueue::default()
+            }),
             wake: Condvar::new(),
         }
     }
@@ -547,10 +775,13 @@ impl AgentInput {
     }
 
     /// Waits until the retry delay elapses or the person detaches.
-    fn wait_before_reconnect(&self) {
+    fn wait_before_reconnect(&self, deadline: Instant) {
+        let delay = deadline
+            .saturating_duration_since(Instant::now())
+            .min(RECONNECT_DELAY);
         drop(
             self.wake
-                .wait_timeout_while(self.lock(), RECONNECT_DELAY, |queue| !queue.detached)
+                .wait_timeout_while(self.lock(), delay, |queue| !queue.detached)
                 .unwrap(),
         );
     }
@@ -572,7 +803,7 @@ impl AgentInput {
         }
         let mut queue = self.lock();
         if queue.connection.is_none() {
-            queue.disconnected_key_bytes += keys.len();
+            queue.reconnect_loss.disconnected += keys.len();
             // The reconnect failure scenario waits for this point before releasing its peer.
             service::mark_for_test("attach-buffered-input");
             return;
@@ -590,8 +821,8 @@ impl AgentInput {
         self.wake.notify_all();
     }
 
-    /// Enables the writer and takes the count to report after the redraw.
-    fn connected(&self, connection: ClientSocket) -> Option<usize> {
+    /// Enables the writer and takes the unsent counts to report after the redraw.
+    fn connected(&self, connection: ClientSocket) -> Option<ReconnectLoss> {
         let mut queue = self.lock();
         if queue.detached {
             return None;
@@ -599,7 +830,7 @@ impl AgentInput {
         queue.opening = None;
         queue.connection = Some(Arc::new(connection));
         self.wake.notify_all();
-        Some(std::mem::take(&mut queue.disconnected_key_bytes))
+        Some(std::mem::take(&mut queue.reconnect_loss))
     }
 
     /// Stops handing input to the old connection. A forwarded watch can end while the socket
@@ -660,7 +891,10 @@ impl AgentInput {
     /// Typed bytes still waiting or dropped. Bytes handed to a connection do not count.
     fn unsent_bytes(&self) -> usize {
         let queue = self.lock();
-        queue.waiting_key_bytes + queue.overflow_key_bytes + queue.disconnected_key_bytes
+        queue.waiting_key_bytes
+            + queue.overflow_key_bytes
+            + queue.reconnect_loss.queued
+            + queue.reconnect_loss.disconnected
     }
 
     /// The writer thread: sends the waiting input in order until the attachment ends.
@@ -729,13 +963,18 @@ fn write_terminal(bytes: &[u8]) {
 /// is the attachment's. After the restoration more output would turn the agent's modes back on and
 /// cover the result.
 fn write_output(data: &str) {
+    if let Some(_terminal) = attached_terminal() {
+        write_screen(data);
+    }
+}
+
+/// Writes base64 screen data while the caller holds [`TERMINAL`].
+fn write_screen(data: &str) {
     let Ok(bytes) = base64::decode(data) else {
         return;
     };
-    if let Some(_terminal) = attached_terminal() {
-        track_alternate_screen(&bytes);
-        write_terminal(&bytes);
-    }
+    track_alternate_screen(&bytes);
+    write_terminal(&bytes);
 }
 
 /// Follows alternate-screen modes 1049, 1047 and 47, also inside combined mode sequences, and the
@@ -768,12 +1007,55 @@ fn track_alternate_screen(bytes: &[u8]) {
     }
 }
 
-/// Shows a note on the bottom row without scrolling or moving the agent's cursor.
+/// Writes the notice to stderr. On a console it uses the bottom rows without scrolling.
 /// The caller holds [`TERMINAL`].
 fn show_status(note: &str) {
-    let width = terminal_size().map_or(80, |(cols, _)| usize::from(cols));
-    let shown: String = note.chars().take(width.saturating_sub(1)).collect();
-    write_terminal(format!("\x1b7\x1b[999;1H\x1b[0m\x1b[2K{shown}\x1b8").as_bytes());
+    let mut stderr = std::io::stderr().lock();
+    if !stderr.is_terminal() {
+        let _ = writeln!(stderr, "{note}");
+        return;
+    }
+    let (cols, rows) = console_size().unwrap_or((80, 24));
+    let width = usize::from(cols).saturating_sub(1);
+    let lines: Vec<_> = note
+        .lines()
+        .flat_map(|line| wrap_status(line, width))
+        .collect();
+    let lines = &lines[lines.len().saturating_sub(usize::from(rows))..];
+    let mut output = String::from("\x1b7\x1b[999;1H\x1b[0m");
+    if lines.len() > 1 {
+        use std::fmt::Write as _;
+        let _ = write!(output, "\x1b[{}A", lines.len() - 1);
+    }
+    output.push_str("\x1b[2K");
+    output.push_str(&lines.join("\x1b[1B\r\x1b[2K"));
+    output.push_str("\x1b8");
+    let _ = stderr.write_all(output.as_bytes());
+    let _ = stderr.flush();
+}
+
+/// Breaks a console notice at spaces where possible while keeping every word.
+fn wrap_status(mut note: &str, width: usize) -> Vec<&str> {
+    let mut lines = Vec::new();
+    while let Some(first) = note.chars().next() {
+        let mut used = 0;
+        let end = note
+            .char_indices()
+            .find_map(|(at, ch)| {
+                used += ch.width().unwrap_or(0);
+                (used > width).then_some(at)
+            })
+            .unwrap_or(note.len())
+            .max(first.len_utf8());
+        let end = if end < note.len() && !note[end..].starts_with(' ') {
+            note[..end].rfind(' ').filter(|&at| at > 0).unwrap_or(end)
+        } else {
+            end
+        };
+        lines.push(&note[..end]);
+        note = note[end..].trim_start_matches(' ');
+    }
+    lines
 }
 
 /// Restores plain text, visible cursor, normal keyboard and keypad modes, wrapping, ASCII charset,
@@ -800,9 +1082,9 @@ fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
 
     let line = match end {
         Ok(end) => {
-            let logs =
-                core_dir().map_or_else(|_| PathBuf::from("core/logs"), |core| core.join("logs"));
-            result_line(&end, &input.shown, &logs)
+            let queue = input.lock();
+            let shown = agent_label(queue.agent_name.as_deref(), &queue.address);
+            result_line(&end, &shown, &queue.address)
         }
         Err(error) => format!("error: attachment failed: {error:#}"),
     };
@@ -893,7 +1175,7 @@ mod tests {
         // Leave the writer idle so all the connected keys are still waiting at disconnect.
         let input = input();
         let (old_writer, _old_daemon) = connection();
-        assert_eq!(input.connected(old_writer), Some(0));
+        assert_eq!(input.connected(old_writer), Some(ReconnectLoss::default()));
         input.push_keys(&vec![b'x'; MAX_QUEUED_KEY_BYTES]);
         input.push_keys(b"too many");
         input.disconnected(false);
@@ -907,8 +1189,11 @@ mod tests {
         let (writer, mut daemon) = connection();
         assert_eq!(
             input.connected(writer),
-            Some(MAX_QUEUED_KEY_BYTES + 6),
-            "the reconnect notice counts discarded keys, measured in bytes"
+            Some(ReconnectLoss {
+                queued: MAX_QUEUED_KEY_BYTES,
+                disconnected: 6,
+            }),
+            "the notices distinguish queued bytes from bytes typed while disconnected"
         );
         spawn_with(&input, AgentInput::send_queued);
         input.push_keys(b"online");
@@ -926,7 +1211,7 @@ mod tests {
         let input = input();
         spawn_with(&input, AgentInput::send_queued);
         let (writer, daemon) = connection();
-        assert_eq!(input.connected(writer), Some(0));
+        assert_eq!(input.connected(writer), Some(ReconnectLoss::default()));
         drop(daemon);
         // The write fails, so whether these keys arrived is unknown: they are neither kept nor
         // counted as unsent.
@@ -939,7 +1224,13 @@ mod tests {
         assert_eq!(input.unsent_bytes(), 0);
         input.push_keys(b"offline");
         let (writer, mut daemon) = connection();
-        assert_eq!(input.connected(writer), Some(7));
+        assert_eq!(
+            input.connected(writer),
+            Some(ReconnectLoss {
+                queued: 0,
+                disconnected: 7,
+            })
+        );
         input.push_keys(b"online");
         assert_eq!(typed(&mut daemon), b"online");
         assert_eq!(input.unsent_bytes(), 0);
@@ -952,7 +1243,7 @@ mod tests {
         spawn_with(&input, AgentInput::send_queued);
         // The daemon reads nothing, so the writer soon blocks in a write.
         let (writer, daemon) = connection();
-        assert_eq!(input.connected(writer), Some(0));
+        assert_eq!(input.connected(writer), Some(ReconnectLoss::default()));
         let chunk = vec![b'k'; 64 * 1024];
         let maximum_unsent = 40 * chunk.len();
         let (done, finished) = std::sync::mpsc::channel();

@@ -72,6 +72,7 @@ pub(super) fn send_verified(
             reply_to_machine_id: None,
             request_id: Some(call.request_id.clone()),
             time_left_ms: left.map(|left| left.as_millis() as u64),
+            allow_unsupported_receipt: false,
         },
         |sent, _| delivered_verified(sent, actor.kind),
         |err, _| {

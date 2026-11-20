@@ -8,14 +8,14 @@
 // profile or agents.
 
 import { runTests } from '@vscode/test-electron';
+import * as assert from 'assert';
 import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { callInCore, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
-import type { V3InspectResult } from '../../base/coreProtocol';
+import { coreCall, coreProgram, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
@@ -205,7 +205,7 @@ async function main(): Promise<void> {
 	const corePrograms = coreProgram(path.join(extension, 'bin'));
 	const endRust = async (facade: string) => {
 		if (engine === 'rust') {
-			await endCore(corePrograms, facade);
+			await endCore(facade);
 		}
 	};
 	/**
@@ -276,6 +276,7 @@ async function main(): Promise<void> {
 		facadeSettings(facade, { ...alone(cli.id), ...nativeLifecycle ? { [cli.id]: { command: realPath, args: realArgs } } : {} }, nativeLifecycle ? false : undefined);
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'conversionDriver.js'), path.join(driver, 'extension.js'));
+		fs.copyFileSync(path.join(__dirname, 'editors.js'), path.join(driver, 'editors.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
@@ -728,19 +729,18 @@ async function main(): Promise<void> {
 		const start = () => spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS],
 			{ env: { ...env, ...profile.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-		const call = (...args: string[]) => execFileSync(corePrograms, args, { env, encoding: 'utf8', timeout: 20_000 });
-		const inspect = async (agent: string) => {
-			const response = await callInCore(facade, 'agent.inspect', { agent }, [3, 3]);
-			if (response.error) { throw new Error(response.error.message); }
-			return response.result as V3InspectResult;
-		};
+		const screen = (agent: string) => execFileSync(corePrograms, ['screen', agent, '--lines', '120'], { env, encoding: 'utf8', timeout: 20_000 });
+		const list = async () => (await coreCall(facade, 'agent.list', {})).agents;
+		const inspect = (agent: string) => coreCall(facade, 'agent.inspect', { agent });
 		console.log('\n  Journey: the Rust window lifetime and saved Pins');
 		try {
 			await windowLifetime(start, () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', async step => {
 				if (step.after === 'reload') {
-					await checkClosedAgent(step, call, inspect);
+					await checkClosedAgent(step, screen, list, inspect);
 				} else if (step.after === 'pins') {
-					call('remove', step.removed);
+					const { agent } = await inspect(step.removed);
+					const reference = { machine_id: agent.machine_id, agent_id: agent.agent_id };
+					assert.deepStrictEqual((await coreCall(facade, 'agent.remove', { reference })).reference, reference);
 				}
 			});
 		} finally {
@@ -770,7 +770,8 @@ async function main(): Promise<void> {
 				fs.renameSync(temporary, file);
 			}
 		};
-		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, CLAUDE_CONFIG_DIR: claudeConfig };
+		// Each journey has its own Facade home and can start an a1.
+		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, `${runName}-cli`), CLAUDE_CONFIG_DIR: claudeConfig };
 		const start = (folder: string, name: string, control: string, port: number) => {
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');

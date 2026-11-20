@@ -1,25 +1,19 @@
-Connect to a machine and save its SSH arguments
+Connect to a remote machine over SSH and save it.
 
-Usage: facade machine add [OPTIONS] <SSH-ARG>...
+Runs SSH in this terminal so you can answer host key or password prompts,
+then installs or upgrades Facade on the remote machine if needed. Put '--home'
+before SSH options and destination; everything after is passed to ssh.
 
-Connect over SSH and save the connection. Use the same arguments you would give ssh. Put '--home'
-before those arguments to use another remote Facade home. SSH can ask for a password or host key
-here. Saved machines connect automatically while awake. An operation that names a sleeping machine
-wakes it. Run the same command again when a saved connection needs a login.
+Usage: facade machine add [--home <PATH>] <SSH_ARGS>...
 
-Arguments:
-  <SSH-ARG>...  The arguments you would use after ssh, including the destination
+Examples
+  facade machine add devbox
+  facade machine add user@10.0.0.5
+  facade machine add -p 2222 -i ~/.ssh/work user@devbox
 
-Options:
-      --home <PATH>  Remote Facade home. Put this option before the SSH arguments
-  -h, --help         Print help
+Arguments
+  <SSH_ARGS>...  SSH flags and destination, passed directly to ssh
 
-Examples:
-  # Connect to gpu from your SSH config
-  facade machine add gpu
-
-  # Connect as another user on port 2222
-  facade machine add -p 2222 me@10.0.0.5
-
-  # Use an SSH key and another remote Facade home
-  facade machine add --home /srv/facade -i ~/.ssh/work me@gpu
+Options
+      --home <PATH>  Facade home directory on the remote machine (default: ~/.facade)
+  -h, --help         Show help

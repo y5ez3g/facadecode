@@ -37,6 +37,10 @@ public `run()` entry point.
 - A start writes the record and any initial prompt before the run becomes available. It reserves
   the prompt result's number on its creator's machine. That machine accepts a result while the
   creator is present. Shell and editor launches have no Agent to receive such a result.
+- The launch transaction and a resumed run's commit save the displayed executable and arguments
+  formatted by the running machine. Runs redacts the injected credential before the display
+  text goes to the store or actor. Inspection reads this value from the same run as its screen
+  facts. A recovered keeper run with no committed launch has no displayed command.
 - On Windows a stop releases the actor's copy of the pseudo console's signal pipe, then the
   keeper link's copy, before it asks the keeper to stop. An IDE resize can carry terminal colors.
 - The service opens after recovery has listed the readable agents. Five consecutive idle seconds
@@ -51,10 +55,15 @@ public `run()` entry point.
 - A protocol 2 terminal can request a compatible takeover. The keeper and relay protocols stay
   at their existing versions. A takeover hands the PTY back to the daemon holding the new build.
   Recovery reads the original SQLite counters and screen records before it accepts business calls.
+  A keeper protocol refusal of a local terminal's takeover names the live managed agents holding
+  that keeper, with their stable references and labels.
 - A machine hello or a foreground `machine.connect` transfers its flushed connection to the network
   session. Authentication, probe, installation when needed and serve use that same SSH session.
 - The person's diagnostics read up to 200 lines of `core/logs/daemon.log`, with the home written
   as `~`. Only the daemon writes and prunes this log.
+- After a passive probe finds the service sleeping, Shell can call `offline_machine_name()`
+  to read the committed local machine name through Store. A read-only connection uses a
+  retained WAL and SQLite's shared memory. A checkpointed database is opened as immutable.
 
 ## Depends on
 
@@ -104,6 +113,9 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     as restart preparation begins.
   - An admitted Attach reports its viewer name for the life of its watch. The actor reads the CLI
     title from the terminal and restores the last title from the screen log.
+  - A screen snapshot carries the agent name, process state and any recorded exit from the actor.
+    An exact final snapshot waits for the existing exit drain and admits no live viewer.
+    Inspect includes the authenticated client kind and source machine of shell and editor viewers.
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
   - At most `MAX_INPUT_BYTES` (1 MiB) of input waits; more is refused with the input given back.
   - Quiet replies only once no read is under way and what the last reads brought went through the screen log; `LetGoBeforeStop` lets go of the signal pipe and nothing else.
@@ -340,8 +352,10 @@ Records owns agent numbers, default names and target lookup within the caller's 
   as `list`, plus its own pending reservations. It can reuse a name when the pool is full. A
   person's explicit name may repeat.
 - `lookup` consumes Base's parsed number or name and applies the operation's capability and the
-  caller's reach. Identical matching names are ambiguous. `human`, `@Pixel` and a bare digit are
-  names. A stable reference retains its machine ID and still passes the same operation checks.
+  caller's reach. A name selects a live match in preference to an ended one among eligible records.
+  Identical eligible names and numbers across machines can be ambiguous. Diagnostic labels
+  describe only reachable records. `human`, `@Pixel` and a bare digit are names. A stable
+  reference retains its machine ID and still passes the same operation checks.
 - `list_row` projects the shared `AgentListEntry`. Its public row contains the canonical address,
   name, kind, state, CLI, title, folder and latest start time. Shell, MCP and the editor use that row.
 
@@ -370,7 +384,8 @@ Discovery probes already awake services. An explicit target follows a saved rout
 wake the service. Concurrent requests to the same saved hop use its shared attempt.
 
 Online, connecting, sleeping and failed links are distinct. The machine view carries the last
-observed time and any raw SSH error. A forwarded operation holds work while it executes, including
+observed time and any raw SSH error. An attempted query can report its own failure separately.
+A forwarded operation holds work while it executes, including
 when relayed through another machine. Passive subscriptions share the existing links.
 
 ### guests
@@ -453,8 +468,8 @@ trait and writes responses and watch changes back, without knowing what any oper
     `ended(closing_answered)`.
   - `Client` carries the connection's client kind and the actor verified by the daemon's private
     MCP connection.
-  - `Watch { snapshot, changes }`, `WatchChange::{Change(Value), Disconnect}`: `Disconnect` cuts
-    off a client that fell too far behind.
+  - `Watch { snapshot, changes }`. `WatchChange::Ended(ErrorBody)` reports a remote watch failure.
+    `WatchChange::Disconnect` cuts off a client that fell too far behind.
   - `WhenFull::{Refuse, Wait}`: input without room fails at once (a request ID) or waits until its
     `Cancel`, which the server triggers when the client closes (a notification).
 

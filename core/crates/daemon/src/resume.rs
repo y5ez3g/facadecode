@@ -4,14 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use facade_base::daemon::AgentResumeArgs;
+use facade_base::daemon::{AgentResumeArgs, HowEnded, is_session_id};
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{AgentRef, MachineQueryStatus};
 use facade_base::operations::Operation;
 use facade_base::process::ProcessState;
 use facade_base::v3::{
     self, Caller, ResumeArgs, ResumeCandidate, ResumeListArgs, ResumeListResult, ResumeResult,
-    ResumeTarget,
+    ResumeTarget, SessionMatch,
 };
 use facade_rules::entries;
 use tokio::task::JoinSet;
@@ -38,7 +38,7 @@ impl Daemon {
             self.machine_for(args.machine.as_deref())?
         };
         if let Some(id) = selected.as_ref().filter(|id| *id != &self.machine_id) {
-            self.network.ensure_route(id).await?;
+            self.ensure_machine_route(id).await?;
             args.machine = None;
             let mut found: ResumeListResult = decode_arguments(
                 self.network_call(
@@ -53,6 +53,10 @@ impl Daemon {
             )?;
             for item in &mut found.items {
                 self.project_resume_candidate(item, true)?;
+            }
+            let visible = self.machine_identities()?;
+            for row in &mut found.machines {
+                crate::machine_service::project_machine_query(row, &visible);
             }
             return Ok(found);
         }
@@ -92,20 +96,23 @@ impl Daemon {
         }
         while let Some(task) = jobs.join_next().await {
             let (row, result) = task.map_err(ErrorBody::internal)?;
-            let status = match result {
+            let mut query = machine_query_result(row, MachineQueryStatus::Answered);
+            match result {
                 Ok(items) => {
                     for mut item in items
                         .into_iter()
-                        .filter(|item| item.machine_id == row.machine_id)
+                        .filter(|item| item.machine_id == query.machine_id)
                     {
                         self.project_resume_candidate(&mut item, true)?;
                         local.push(item);
                     }
-                    MachineQueryStatus::Answered
                 }
-                Err(error) => crate::network_operations::machine_query_failure(&error),
-            };
-            machines.push(machine_query_result(row, status));
+                Err(error) => {
+                    query.status = crate::network_operations::machine_query_failure(&error);
+                    query.error = Some(error.message);
+                }
+            }
+            machines.push(query);
         }
         local.sort_by(|a, b| {
             b.at.cmp(&a.at)
@@ -169,8 +176,11 @@ impl Daemon {
                 machine_id: self.machine_id.clone(),
                 session,
                 agent: Some(reference),
+                name: Some(info.name),
+                stopped: info.state_detail.as_ref().and_then(|detail| detail.how)
+                    == Some(HowEnded::Stopped),
                 title: info.title,
-                at: Some(info.started_at),
+                at: info.exit.map(|exit| exit.at),
             });
         }
         if let Some(folder) = &folder
@@ -270,10 +280,31 @@ impl Daemon {
             )
             .await
         };
-        let session_selector = input.split_once(':').filter(|(entry, id)| {
-            !entry.is_empty() && facade_rules::parse_session_id(id).as_deref() == Some(*id)
+        let legacy_session = input
+            .split_once(':')
+            .filter(|(entry, id)| {
+                !entry.is_empty() && facade_rules::parse_session_id(id).as_deref() == Some(*id)
+            })
+            .map(|(cli, id)| (Some(cli), id.to_owned()));
+        let session_selector = legacy_session.or_else(|| {
+            if !agent
+                .as_ref()
+                .is_err_and(|error| error.data.reason == Reason::NotFound)
+            {
+                return None;
+            }
+            let id = facade_rules::parse_session_id(input).or_else(|| {
+                (input.len() == 8 && is_session_id(input)).then(|| {
+                    if input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                        input.to_ascii_lowercase()
+                    } else {
+                        input.to_owned()
+                    }
+                })
+            })?;
+            Some((None, id))
         });
-        let (candidate, session_env) = if let Some((cli, id)) = session_selector {
+        let (candidate, session_env) = if let Some((cli, id)) = &session_selector {
             let folder = args.target.folder.clone().or_else(|| {
                 (!forwarded)
                     .then(|| facade_base::system::env_var(&args.env, "PWD").map(str::to_owned))
@@ -295,19 +326,21 @@ impl Daemon {
                     "{folder} is not an available folder"
                 )));
             }
-            let mut candidates = self.saved_candidates(path, env.clone(), Some(cli))?;
-            candidates.retain(|(_, item)| {
-                item.session == id || (id.len() >= 8 && item.session.starts_with(id))
+            let mut candidates = self.saved_candidates(path, env.clone(), *cli)?;
+            let mut matched = BTreeSet::new();
+            candidates.retain(|(rule, item)| {
+                (item.session == *id || (id.len() == 8 && item.session.starts_with(id)))
+                    && matched.insert((rule.clone(), item.session.clone()))
             });
             if candidates.len() > 1 {
                 let mut error = ErrorBody::new(
                     Reason::AmbiguousReference,
                     format!("{input} names several saved sessions"),
                 );
-                error.data.candidates = candidates
-                    .into_iter()
-                    .map(|(_, item)| item.target.reference)
-                    .collect();
+                for (_, item) in &candidates {
+                    error.data.candidates.push(item.target.reference.clone());
+                    error.data.sessions.push(session_match(item));
+                }
                 return Err(error);
             }
             (candidates.pop().map(|(_, item)| item), env)
@@ -320,6 +353,7 @@ impl Daemon {
                     Reason::AmbiguousReference,
                     format!("{input} names an agent and a saved session"),
                 );
+                error.data.sessions.push(session_match(&session));
                 error.data.candidates = vec![self.agent_address(&agent)?, session.target.reference];
                 return Err(error);
             }
@@ -357,6 +391,7 @@ impl Daemon {
                     .await?;
                 return Ok(ResumeResult {
                     agent: self.public_agent(started.agent)?,
+                    from_saved_session: true,
                 });
             }
             (Err(error), None)
@@ -391,9 +426,11 @@ impl Daemon {
                     rows: args.rows,
                 },
             )
-            .await?;
+            .await
+            .map_err(|error| self.with_agent_error(&handle, error))?;
         Ok(ResumeResult {
             agent: self.public_agent(resumed)?,
+            from_saved_session: false,
         })
     }
 
@@ -403,7 +440,7 @@ impl Daemon {
         caller: &Caller,
         mut args: ResumeArgs,
     ) -> Result<ResumeResult, ErrorBody> {
-        self.network.ensure_route(id).await?;
+        self.ensure_machine_route(id).await?;
         args.machine_id = Some(id.to_owned());
         args.target.machine = None;
         args.env.clear();
@@ -479,6 +516,8 @@ impl Daemon {
                             session: session.id,
                             folder,
                             agent: None,
+                            name: None,
+                            stopped: false,
                             title: session.title,
                             at: session.modified_at.map(facade_base::time::iso_time),
                         },
@@ -487,5 +526,13 @@ impl Daemon {
             }
             Ok(items)
         })
+    }
+}
+
+fn session_match(candidate: &ResumeCandidate) -> SessionMatch {
+    SessionMatch {
+        id: candidate.session.clone(),
+        cli: candidate.cli.clone(),
+        title: candidate.title.clone(),
     }
 }

@@ -1,16 +1,16 @@
-Remove a saved connection
+Delete a saved SSH machine connection.
+
+Removes the saved connection and closes the direct SSH link if open.
+Running agents on that machine are not stopped.
 
 Usage: facade machine remove <MACHINE>
 
-Forget this machine's saved SSH arguments and close that connection. Agents keep running, and
-another route may still be available.
+Examples
+  facade machine remove devbox
+  facade machine remove 9a0d44b2
 
-Arguments:
-  <MACHINE>  Machine name or ID from 'facade machine list'
+Arguments
+  <MACHINE>  Machine name or ID (from 'facade machine list')
 
-Options:
-  -h, --help  Print help
-
-Examples:
-  # Stop connecting to gpu
-  facade machine remove gpu
+Options
+  -h, --help  Show help

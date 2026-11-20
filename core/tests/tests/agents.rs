@@ -17,7 +17,7 @@ fn remove_ends_a_running_agent_first_and_removes_an_ended_one() {
     assert!(removed["error"].is_null(), "{removed}");
     assert!(!alive(&worker.process), "the removed agent must stop");
     assert!(
-        home.agent_from_list_json("worker").is_none(),
+        home.listed_agent("worker").is_none(),
         "the removed agent must not be listed"
     );
     // An ended agent can be removed immediately. The list shows running agents alone; the agents
@@ -76,8 +76,8 @@ fn remove_terminates_the_agent_process_group() {
     let (child_pid, leader_pid) = (pid_in("child-pid"), pid_in("leader-pid"));
     let leader_pid_process = process_identity(leader_pid);
     let child_pid_process = process_identity(child_pid);
-    home.run_facade_ok(&["remove", &child]);
-    home.run_facade_ok(&["remove", &stubborn]);
+    home.remove_agent(&child);
+    home.remove_agent(&stubborn);
     assert!(
         wait_until(secs(6), || !alive(&child_pid_process)),
         "subprocess {child_pid} is still running after removal"
@@ -265,11 +265,11 @@ fn immediate_exit_is_recorded_with_exit_code() {
     );
     // The list shows running agents alone; inspect shows the ended one with its exit.
     assert_eq!(home.list_state("quick"), None);
-    let inspected = home.run_facade_ok(&["inspect", "quick"]);
+    let inspected = home.run_facade_ok(&["status", "quick"]);
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State:") && line[6..].trim() == "exited: code 3"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Exited (code 3)"),
         "{inspected}"
     );
 }
@@ -373,7 +373,7 @@ fn an_ended_cli_s_hangup_ignoring_descendant_runs_on_through_its_release_and_rem
         alive(&descendant),
         "the descendant ignores the hangup, and an ordinary end sends no group signal"
     );
-    home.run_facade_ok(&["remove", &id]);
+    home.remove_agent(&id);
     drop(wire);
     home.wait_for_idle_exit();
     assert!(

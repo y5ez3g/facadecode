@@ -316,7 +316,7 @@ fn remove_delivers_final_redraw_then_exit_then_removed() {
         "{}",
         home.screen(&agent)
     );
-    home.run_facade_ok(&["remove", &agent]);
+    home.remove_agent(&agent);
     let mut kinds = Vec::new();
     let mut since_redraw = Vec::new();
     while let Some(line) = slow.read_message() {

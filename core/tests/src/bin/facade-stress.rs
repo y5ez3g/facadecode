@@ -189,7 +189,7 @@ fn start_many(
     let agents = (0..count)
         .map(|i| {
             let name = format!("{prefix}{i}");
-            let mut args = vec!["start", "--name", &name];
+            let mut args = vec!["start", "-d", "--name", &name];
             args.extend_from_slice(command);
             let id = started_id(&home.run_facade_ok(&args));
             (id, name)

@@ -2,7 +2,7 @@
 //! before any other message once the CLI's tools connected or will not, and the one result it owes
 //! the agent that started it, written as the prompt is settled, across daemon restarts too.
 
-use std::process::{Child, Output, Stdio};
+use std::process::{Child, Stdio};
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
@@ -11,7 +11,7 @@ use facade_scenarios::*;
 /// the server and boss's folder.
 fn boss(home: &TestHome) -> (McpTestClient, String) {
     home.start_named_fake("boss", &[]);
-    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
+    let cwd = home.listed_agent("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -20,13 +20,14 @@ fn boss(home: &TestHome) -> (McpTestClient, String) {
 
 /// The machine part of the addresses Facade gives in this test's home.
 fn host(home: &TestHome) -> String {
-    let listed = home.run_facade_ok(&["ls", "-q"]);
-    listed
-        .lines()
-        .next()
-        .and_then(|address| address.split_once('@'))
-        .map(|(_, machine)| machine.to_string())
-        .unwrap_or_else(|| panic!("no address listed: {listed:?}"))
+    let listed = home.agent_list();
+    listed["agents"][0]["id"]
+        .as_str()
+        .unwrap()
+        .split_once('@')
+        .expect("an agent address")
+        .1
+        .to_string()
 }
 
 /// The record of the agent named `name`, from the `agents` topic.
@@ -46,20 +47,6 @@ fn start_child(boss: &mut McpTestClient, path: &str, prompt: &str) -> Value {
     );
     assert_eq!(started["status"], "success", "{started}");
     started
-}
-
-/// Runs `facade start --prompt <prompt> --name <name> fake`, as a command in a plain terminal does,
-/// or in agent `agent`'s.
-fn start_with_prompt(home: &TestHome, agent: Option<&str>, name: &str, prompt: &str) -> Output {
-    let mut command = home.command(&test_binaries().facade);
-    if let Some(agent) = agent {
-        command.env("FACADE_AGENT", agent);
-    }
-    command
-        .env("PATH", home.path_with_test_programs())
-        .args(["start", "--prompt", prompt, "--name", name, "fake"])
-        .stdin(Stdio::null());
-    command.output().expect("could not run facade start")
 }
 
 /// Starts `facade send` in the background, from the command line.
@@ -251,7 +238,7 @@ fn a_prompt_whose_agent_ends_before_its_tools_settle_fails_as_ended() {
     // own start.
     home.start_named_fake("boss", &[("FAKECLI_MCP_DELAY_MS", "60000")]);
     let host = host(&home);
-    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
+    let cwd = home.listed_agent("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -400,9 +387,9 @@ fn a_prompt_settled_while_a_guest_s_inbox_goes_writes_it_no_result() {
     home.release_gate("before-guest-inbox-removal");
     assert!(
         wait_until(secs(10), || !home
-            .run_facade_ok(&["ls", "-q"])
-            .lines()
-            .any(|listed| listed == address)),
+            .list_table()
+            .column("REF")
+            .contains(&address.as_str())),
         "the guest's end goes on"
     );
 }
@@ -530,7 +517,7 @@ fn a_caller_removed_before_its_result_gets_none() {
     home.wait_for_gate("before-prompt-delivery");
     drop(boss);
     home.run_facade_ok(&["stop", "boss"]);
-    home.run_facade_ok(&["remove", "boss"]);
+    home.remove_agent("boss");
     home.release_gate("before-prompt-delivery");
     assert!(
         wait_for_submission(&home, &prompt(&host)),
@@ -539,7 +526,10 @@ fn a_caller_removed_before_its_result_gets_none() {
     );
     assert_eq!(
         home.run_facade_ok(&["send", "child", "next"]).trim(),
-        format!("m3@{host}")
+        format!(
+            "Delivered m3@{host} to child ({}).",
+            record(&home, "child")["address"].as_str().unwrap()
+        )
     );
     // The caller is gone and no client can read its inbox: the store alone shows that the number
     // taken for the result holds no message.
@@ -547,22 +537,27 @@ fn a_caller_removed_before_its_result_gets_none() {
     assert_eq!(submitted(&home, "🔔"), Vec::<String>::new());
 }
 
-/// `facade start --prompt` sends the prompt from the command line and owes no result, in a plain
-/// terminal and in an agent's alike: a command run in any terminal acts for the command line.
+/// A v3 start from a terminal caller sends the prompt from the command line and owes no result.
+/// An inherited agent value in the launch environment does not change the caller's identity.
 #[test]
-fn facade_start_s_prompt_comes_from_the_command_line_and_owes_no_result() {
+fn a_terminal_start_s_prompt_comes_from_the_command_line_and_owes_no_result() {
     let home = TestHome::new("promptcli");
     home.start_named_fake("boss", &[]);
-    let solo = start_with_prompt(&home, None, "solo", "from the person");
-    assert!(solo.status.success(), "{}", stderr(&solo));
+    let solo = home.start_with_prompt("solo", "fake", "from the person", &[]);
+    assert!(solo["result"].is_object(), "{solo}");
     let person = "📨 Message from the command line · m1\nfrom the person";
     assert!(
         wait_for_submission(&home, person),
         "{:?}",
         home.submitted_messages()
     );
-    let child = start_with_prompt(&home, Some("a1"), "child", "from the boss's terminal");
-    assert!(child.status.success(), "{}", stderr(&child));
+    let child = home.start_with_prompt(
+        "child",
+        "fake",
+        "from the boss's terminal",
+        &[("FACADE_AGENT", "a1")],
+    );
+    assert!(child["result"].is_object(), "{child}");
     let boss = "📨 Message from the command line · m2\nfrom the boss's terminal";
     assert!(
         wait_for_submission(&home, boss),
@@ -579,7 +574,10 @@ fn facade_start_s_prompt_comes_from_the_command_line_and_owes_no_result() {
     let host = host(&home);
     assert_eq!(
         home.run_facade_ok(&["send", "child", "next"]).trim(),
-        format!("m3@{host}"),
+        format!(
+            "Delivered m3@{host} to child ({}).",
+            record(&home, "child")["address"].as_str().unwrap()
+        ),
         "no number was taken for a result"
     );
 }

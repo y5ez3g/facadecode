@@ -116,6 +116,14 @@ fn receipt_id(home: &TestHome, agent: &str, message: &str) -> String {
 }
 
 /// The fake CLI agent `agent`'s own Facade tools.
+fn delivered(home: &TestHome, agent: &str, message: &str) -> String {
+    let record = home.agent_record(agent).expect("the recipient");
+    let address = record["address"].as_str().unwrap();
+    let name = record["name"].as_str().unwrap();
+    let machine = address.split_once('@').unwrap().1;
+    format!("Delivered {message}@{machine} to {name} ({address}).")
+}
+
 fn tools_of(home: &TestHome, agent: &str) -> McpTestClient {
     McpTestClient::open_configured(home, agent)
 }
@@ -183,7 +191,10 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
 
     let from_command = facade_as(&home, "a9", &["send", "ada", "hi from the command line"]);
     assert!(from_command.status.success(), "{}", stderr(&from_command));
-    assert_eq!(stdout(&from_command).trim(), "m1@laptop");
+    assert_eq!(
+        stdout(&from_command).trim(),
+        delivered(&home, &ada.id, "m1")
+    );
     let sent = bob_relay.call(
         "send_message",
         json!({ "to": ada_address, "text": "hi ada" }),
@@ -256,8 +267,7 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
         stderr(&output)
     };
     assert!(
-        refused(home.run_facade(&["send", "ada", " \t"]))
-            .contains("text is blank: a message needs text")
+        refused(home.run_facade(&["send", "ada", " \t"])).contains("Message text cannot be empty.")
     );
     assert!(
         refused(home.run_facade(&["send", "ada", "a\u{7}b"])).contains("control character U+0007")
@@ -291,7 +301,7 @@ fn a_message_is_typed_into_its_recipient_s_input_under_a_header_naming_its_sende
     assert_eq!(
         home.run_facade_ok(&["send", "human", "an Agent named human"])
             .trim(),
-        "m4@laptop"
+        delivered(&home, &ada.id, "m4")
     );
     assert!(wait_for_screen_text(&home, &ada.id, "an Agent named human"));
 }
@@ -330,9 +340,10 @@ fn a_send_a_draft_held_until_its_deadline_says_so() {
     let said = stderr(&sent);
     assert!(
         said.starts_with(&format!(
-            "error: {} was not delivered to worker: ",
-            receipt_id(&home, &worker.id, "m1")
-        )) && said.contains("a draft held worker's input until the deadline")
+            "error: Could not deliver {} to worker ({}). ",
+            receipt_id(&home, &worker.id, "m1"),
+            worker.address
+        )) && said.contains("Its terminal has an unfinished draft.")
             && !said.contains("(failed)"),
         "{said}"
     );
@@ -370,13 +381,13 @@ fn a_message_waits_while_a_draft_holds_the_input_and_never_types_over_it() {
 fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     let home = TestHome::new("sendread");
     let worker = home.start_named_fake("worker", &[]);
-    home.start_named_fake("other", &[]);
+    let other = home.start_named_fake("other", &[]);
     type_draft(&home, "worker", "my draft");
     let mut tools = tools_of(&home, &worker.id);
     // A message to another agent is not in this inbox.
     assert_eq!(
         home.run_facade_ok(&["send", "other", "not for a1"]).trim(),
-        receipt_id(&home, &worker.id, "m1")
+        delivered(&home, &other.id, "m1")
     );
     let send = begin_send(&home, "worker", "read me", None);
     let read = read_messages(&mut tools, json!({ "wait": true }));
@@ -394,7 +405,7 @@ fn a_read_delivers_a_waiting_message_so_it_is_never_typed() {
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "next"]).trim(),
-        receipt_id(&home, &worker.id, "m3")
+        delivered(&home, &worker.id, "m3")
     );
     assert_eq!(
         home.submitted_messages(),
@@ -427,7 +438,7 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
         .unwrap();
     assert_eq!(
         home.run_facade_ok(&["rename", "worker", "  Neo  "]),
-        format!("{worker_address} Neo\n")
+        format!("Renamed \"worker\" to \"Neo\" ({worker_address}).\n")
     );
     let updated = |name: &str| {
         agents.changes(watch).iter().any(|changed| {
@@ -439,12 +450,12 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
         "{:?}",
         agents.changes(watch)
     );
+    let table = home.list_table();
     assert!(
-        home.list_table()
+        table
             .row("NAME", "Neo")
-            .is_some_and(|row| row[0] == worker_address),
-        "{:?}",
-        home.list_table()
+            .is_some_and(|row| table.cell(row, "REF") == worker_address),
+        "{table:?}"
     );
     let sent =
         tools_of(&home, &worker.id).call("send_message", json!({ "to": "other", "text": "hi" }));
@@ -454,17 +465,25 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
         [format!("📨 Message from Neo ({worker_address}) · m1\nhi")],
         "a message carries its sender's name when it was sent"
     );
-    let renamed = home.run_facade_ok(&["rename", "a1", " "]);
-    let name = renamed
-        .trim()
-        .strip_prefix(&format!("{worker_address} "))
-        .unwrap_or_default();
+    let blank = home.run_facade(&["rename", "a1", " "]);
+    assert_eq!(blank.status.code(), Some(2));
+    assert!(blank.stdout.is_empty());
+    assert!(
+        stderr(&blank).contains("Agent name cannot be empty."),
+        "{}",
+        stderr(&blank)
+    );
+    assert_eq!(home.agent_record("a1").unwrap()["name"], "Neo");
+
+    let renamed = agents.call_ok("agent.rename", json!({ "agent": "a1", "name": " " }));
+    let name = renamed["name"].as_str().expect("the replacement name");
     assert!(!name.is_empty() && name != "Neo", "{renamed}");
     assert_eq!(home.agent_from_watch(name).unwrap()["agent_id"], "a1");
     let unknown = home.run_facade(&["rename", "nobody", "x"]);
     assert!(
         unknown.status.code() == Some(1)
-            && stderr(&unknown) == "error: no agent \"nobody\" was found\n",
+            && stderr(&unknown)
+                == "error: No agent or guest matches \"nobody\".\nRun 'facade list' to find an agent.\n",
         "{}",
         stderr(&unknown)
     );
@@ -478,14 +497,14 @@ fn message_numbers_are_never_given_twice_across_daemons() {
     let worker = home.start_named_fake("worker", &[]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "first"]).trim(),
-        receipt_id(&home, &worker.id, "m1")
+        delivered(&home, &worker.id, "m1")
     );
     let old = home.kill_daemon();
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "second"]).trim(),
-        receipt_id(&home, &worker.id, "m2")
+        delivered(&home, &worker.id, "m2")
     );
 }
 
@@ -670,10 +689,10 @@ fn a_send_whose_recipient_is_removed_before_its_answer_still_answers() {
     let home = TestHome::new("sendremoved");
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-send-answer")]);
     let worker = home.start_named_fake("worker", &[]);
-    let receipt = receipt_id(&home, &worker.id, "m1");
+    let receipt = delivered(&home, &worker.id, "m1");
     let send = send_in_background(&home, &["worker", "hello"]);
     home.wait_for_gate("before-send-answer");
-    home.run_facade_ok(&["remove", "worker"]);
+    home.remove_agent("worker");
     home.release_gate("before-send-answer");
     let sent = output_within(send, secs(10)).expect("facade send answers");
     assert_eq!(stdout(&sent).trim(), receipt, "{}", stderr(&sent));
@@ -695,7 +714,7 @@ fn a_message_too_long_for_any_cli_is_refused_before_it_is_kept() {
     );
     let started = home
         .command(&test_binaries().facade)
-        .args(["start", "--name", "slow", "agy"])
+        .args(["start", "-d", "--name", "slow", "agy"])
         .env("PATH", path)
         .stdin(Stdio::null())
         .output()
@@ -705,10 +724,10 @@ fn a_message_too_long_for_any_cli_is_refused_before_it_is_kept() {
     let lines = |count: usize| vec!["x"; count].join("\n");
     for agent in ["slow", "quick"] {
         let refused = home.run_facade(&["send", agent, &lines(541)]);
-        assert!(!refused.status.success(), "{}", stdout(&refused));
+        assert_eq!(refused.status.code(), Some(2), "{}", stdout(&refused));
         assert!(
             stderr(&refused).contains(
-                "text has 541 lines; a message carries at most 540: send it in shorter parts"
+                "Message is too long (1,081 characters, 541 lines). Maximum is 8,000 characters and 540 lines."
             ),
             "{}",
             stderr(&refused)
@@ -814,7 +833,7 @@ fn messages_and_what_became_of_them_outlive_their_daemon() {
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "typed"]).trim(),
-        receipt_id(&home, &worker.id, "m2")
+        delivered(&home, &worker.id, "m2")
     );
     let refused = wire.call("agent.send", json!({ "to": "plain", "text": "no reader" }));
     assert_eq!(error_reason(&refused), "unsupported", "{refused}");
@@ -1079,7 +1098,7 @@ fn a_message_read_when_its_daemon_crashes_is_never_typed_by_the_next() {
     home.run_facade_ok(&["type", "worker", "--key", "Ctrl+C"]);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "next"]).trim(),
-        receipt_id(&home, &worker.id, "m2")
+        delivered(&home, &worker.id, "m2")
     );
     assert_eq!(
         home.submitted_messages(),
@@ -1121,14 +1140,14 @@ fn a_removed_agent_s_inbox_goes_and_what_it_sent_stays() {
     let worker_address = address(&home, &worker.id);
     assert_eq!(
         home.run_facade_ok(&["send", "worker", "to worker"]).trim(),
-        receipt_id(&home, &worker.id, "m1")
+        delivered(&home, &worker.id, "m1")
     );
     let sent = tools_of(&home, &worker.id).call(
         "send_message",
         json!({ "to": "other", "text": "from worker" }),
     );
     assert_eq!(sent["status"], "success", "{sent}");
-    home.run_facade_ok(&["remove", "worker"]);
+    home.remove_agent("worker");
     // The removed agent has no tools left to read its inbox with: the store shows it is gone.
     assert!(kept(&home, 1).is_none() && kept(&home, 2).is_some());
     crash(&home);

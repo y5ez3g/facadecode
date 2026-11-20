@@ -57,8 +57,9 @@ impl Daemon {
         };
         let parsed = parse_agent_address(&input)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        let reach = Reach::from(caller);
         let resolve = |key: AgentKey<'_>, rows: &[LookupCandidate]| {
-            records::lookup(key, &Reach::from(caller), operation, rows)
+            records::lookup(key, &reach, operation, rows)
         };
         match parsed {
             AgentAddress::Local(key) => {
@@ -106,70 +107,28 @@ impl Daemon {
                 let (selected, _) = self
                     .query_agents(caller, Some(&target.machine_id), false)
                     .await?;
-                let qualified = resolve(agent, &selected);
                 let Some(literal) = literal_name else {
-                    return qualified;
+                    return resolve(agent, &selected);
                 };
                 let (awake, states) = self.query_agents(caller, None, false).await?;
-                let literal = resolve(AgentKey::Name(literal), &awake);
-                if literal
-                    .as_ref()
-                    .is_err_and(|error| error.data.reason == Reason::NotFound)
-                    && let Some(error) = unanswered_lookup(&states)
+                let literal = AgentKey::Name(literal);
+                if let Some(error) = unanswered_lookup(&states)
+                    && resolve(literal, &awake)
+                        .is_err_and(|error| error.data.reason == Reason::NotFound)
                 {
                     return Err(error);
                 }
-                self.choose_interpretation(&input, qualified, literal)
+                records::lookup_matches(
+                    AgentKey::Name(&input),
+                    &reach,
+                    operation,
+                    selected
+                        .iter()
+                        .filter(|candidate| candidate.matches(agent))
+                        .chain(awake.iter().filter(|candidate| candidate.matches(literal))),
+                )
             }
         }
-    }
-
-    fn choose_interpretation(
-        &self,
-        input: &str,
-        qualified: Result<AgentRef, ErrorBody>,
-        literal: Result<AgentRef, ErrorBody>,
-    ) -> Result<AgentRef, ErrorBody> {
-        let mut choices = Vec::new();
-        let mut answer = None;
-        let mut rejection = None;
-        for result in [qualified, literal] {
-            match result {
-                Ok(reference) => {
-                    choices.push(self.agent_address(&reference)?);
-                    answer = Some(reference);
-                }
-                Err(error) if error.data.reason == Reason::AmbiguousReference => {
-                    choices.extend(error.data.candidates);
-                }
-                Err(error) => {
-                    if rejection
-                        .as_ref()
-                        .is_none_or(|prior: &ErrorBody| prior.data.reason == Reason::NotFound)
-                    {
-                        rejection = Some(error);
-                    }
-                }
-            }
-        }
-        choices.sort();
-        choices.dedup();
-        if choices.len() > 1 {
-            let mut error = ErrorBody::new(
-                Reason::AmbiguousReference,
-                format!(
-                    "{input:?} names several agents; use one of {}",
-                    choices.join(", ")
-                ),
-            );
-            error.data.candidates = choices;
-            return Err(error);
-        }
-        answer.ok_or_else(|| {
-            rejection.unwrap_or_else(|| {
-                ErrorBody::new(Reason::NotFound, format!("no agent {input:?} was found"))
-            })
-        })
     }
 
     async fn query_agents(
@@ -181,11 +140,20 @@ impl Daemon {
         if let Some(machine) = machine
             && machine != self.machine_id
         {
-            self.network.ensure_route(machine).await?;
+            self.ensure_machine_route(machine).await?;
         }
         let visible = self.machine_identities()?;
         let mut rows = self.public_machines()?;
         rows.retain(|row| machine.is_none_or(|id| row.machine_id == id));
+        if let Some(id) = machine.filter(|_| rows.is_empty()) {
+            return Err(self.machine_failure(
+                id,
+                ErrorBody::new(
+                    Reason::Unavailable,
+                    "the selected machine is no longer connected",
+                ),
+            ));
+        }
         let mut jobs = JoinSet::new();
         let deadline = tokio::time::Instant::now() + LIST_DEADLINE;
         let mut agents = Vec::new();
@@ -197,7 +165,7 @@ impl Daemon {
             if result.machine_id == self.machine_id {
                 result.status = MachineQueryStatus::Answered;
                 agents = self.local_agent_records(caller, query)?;
-            } else if ready {
+            } else if ready || machine.is_some() {
                 let daemon = self.clone();
                 let id = result.machine_id.clone();
                 let caller = caller.clone();
@@ -236,16 +204,19 @@ impl Daemon {
                         records.retain(|record| record.info.machine_id == id);
                         agents.extend(records);
                     }
-                    Err(error) if machine.is_some() => return Err(error),
-                    Err(_) => {}
+                    Err(error) if machine.is_some() => return Err(self.machine_failure(&id, error)),
+                    Err(error) => row.error = Some(error.message),
                 },
-                Err(error) if machine.is_some() => return Err(error.into()),
+                Err(error) if machine.is_some() => {
+                    return Err(self.machine_failure(&id, error.into()));
+                }
                 Err(error) => {
-                    row.status = match error {
+                    row.status = match &error {
                         RequestFailure::TimedOut(_) => MachineQueryStatus::TimedOut,
                         RequestFailure::Unreachable(_) => MachineQueryStatus::Unavailable,
                         RequestFailure::Failed(_, _) => MachineQueryStatus::Error,
                     };
+                    row.error = Some(ErrorBody::from(error).message);
                 }
             }
         }
@@ -350,6 +321,14 @@ impl Daemon {
                 request_id,
             )
             .await
+            .map_err(|error| {
+                let error = self.project_remote_error(error);
+                if error.data.unavailable.is_some() || error.data.ssh_interaction.is_some() {
+                    self.machine_failure(target, error)
+                } else {
+                    error
+                }
+            })
     }
 
     pub(crate) async fn import_legacy_workspace(
@@ -578,6 +557,7 @@ impl Daemon {
                     while let Some(change) = changes.recv().await {
                         let change = match change {
                             WatchChange::Change(value) => Ok(value),
+                            WatchChange::Ended(error) => Err(error),
                             WatchChange::Disconnect => {
                                 Err(ErrorBody::new(Reason::Unavailable, "the watch fell behind"))
                             }
@@ -656,6 +636,11 @@ fn unanswered_lookup(machines: &[v3::MachineQueryResult]) -> Option<ErrorBody> {
         matches: Vec::new(),
         unanswered,
     });
+    error.data.machines = machines
+        .iter()
+        .filter(|machine| machine.error.is_some())
+        .cloned()
+        .collect();
     Some(error)
 }
 
@@ -692,6 +677,7 @@ pub(crate) fn machine_query_result(
         status,
         last_seen: machine.last_seen,
         ssh_error: machine.ssh_error,
+        error: None,
     }
 }
 
@@ -735,6 +721,7 @@ mod tests {
                 status: MachineQueryStatus::Unavailable,
                 last_seen: Some("2000-01-01T00:00:00.000Z".into()),
                 ssh_error: None,
+                error: None,
             };
             let result = observe_agent_reply(&mut row, reply, received_at);
             assert_eq!(row.status, status);

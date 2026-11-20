@@ -3,7 +3,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -13,7 +12,7 @@ import type { Response, V3HelloParams, V3InspectResult, V3ScreenText } from '../
 import { lineReader } from '../../base/lines';
 import { unspun } from '../../base/tabSpinner';
 import { linesOf as cardLines } from '../detailLines';
-import { coreProgram, coreSocket, normalizeDriveLetter } from './editors';
+import { coreCall, coreSocket, normalizeDriveLetter } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
 
@@ -115,7 +114,7 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
 	const card = await until('a new card', async () => {
 		const mine = (await state()).cards.find(each => !before.has(each.runId) && !cardLines(each).some(line => line.startsWith('Started by')));
-		if (mine && (RUST || /#a\d+/.test(cardLines(mine).join(' ')))) {
+		if (mine && (RUST ? mine.alias : /#a\d+/.test(cardLines(mine).join(' ')))) {
 			return mine;
 		}
 		if (!mine) {
@@ -123,11 +122,9 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 		}
 		return undefined;
 	});
-	const address = RUST ? await until(`${card.name} in the shared roster`, () => {
-		const extension = vscode.extensions.getExtension('facade.facadecode')!.extensionPath;
-		const json = execFileSync(coreProgram(path.join(extension, 'bin')), ['list', '--json'], { encoding: 'utf8', timeout: 20_000 });
-		const { agents } = JSON.parse(json) as { agents: { type: string; name: string; id: string }[] };
-		return agents.find(row => row.type === 'managed' && row.name === card.name)?.id;
+	const address = RUST ? await until(`${card.name} in the shared roster`, async () => {
+		const { agents } = await coreCall(process.env.FACADE_HOME!, 'agent.list', {});
+		return agents.find(row => row.type === 'managed' && row.name === card.name && row.reference.agent_id === card.alias)?.id;
 	}) : cardLines(card).join(' ').match(/#a\d+/)![0];
 	const alias = RUST ? fakeAlias(address) : address;
 	// Its server answered: the agent's Facade tools are there

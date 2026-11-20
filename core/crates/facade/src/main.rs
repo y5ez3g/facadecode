@@ -25,36 +25,38 @@ mod hooks;
 mod machine;
 #[cfg(test)]
 mod tests;
+mod upgrade;
 
 use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
 
-use anyhow::Context as _;
+use facade_base::address::default_machine_name;
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
 use facade_base::daemon_client::DaemonClient;
+use facade_base::operations::NoArgs;
 use facade_base::process::{EndReason, ProcessExit};
-use facade_base::v3::{MachineQueryArgs, ResumeListArgs, ResumeTarget};
+use facade_base::v3::{AgentTarget, MachineList};
 use unicode_width::UnicodeWidthStr;
 
-use cli::{Command, MachineAction, Target, Targets};
-use commands::{Format, Listing};
+use cli::{Command, MachineAction, ParseError, StartOptions, Target};
 use daemon_client::{connect_or_start, reconnect};
-use errors::Problem;
 
 /// How an attachment began, for the line before the agent's screen.
 pub(crate) enum Opening {
-    /// `start` began the agent in this terminal: its record's name.
-    Started { name: String },
-    /// `resume` began it: its record's name.
-    Resumed { name: String },
+    /// `start` began the agent in this terminal.
+    Started,
+    /// `resume` began a new run of an existing agent.
+    Resumed,
+    /// `resume` started a new agent from a CLI's saved session.
+    SavedSession { cli: String },
     /// `facade attach`.
     Attached,
 }
 
 /// An agent that `start` or `resume` began in this terminal, to attach to.
 pub(crate) struct Shown {
-    /// The agent's ID, such as `a3`.
-    pub(crate) agent: String,
+    /// The exact reference to the agent just started or resumed.
+    pub(crate) target: AgentTarget,
     pub(crate) opening: Opening,
 }
 
@@ -81,12 +83,18 @@ fn main() {
     facade_base::take_test_build();
     let arguments = match cli::parse() {
         Ok(arguments) => arguments,
-        Err(error) if error.use_stderr() && is_hook_line() => skip_hook_line(&error),
-        Err(error) => error.exit(),
+        Err(ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+        Err(ParseError::Internal(error)) if error.use_stderr() && is_hook_line() => {
+            skip_hook_line(&error);
+        }
+        Err(ParseError::Internal(error)) => error.exit(),
     };
     let Some(command) = arguments.command else {
         // `facade` alone prints the root page, as help does.
-        let _ = cli::cli().print_help();
+        print_help(help::page("").expect("root help page"));
         std::process::exit(0)
     };
     // A command whose output is closed early, as by `facade list | head`, ends without an error,
@@ -208,30 +216,103 @@ fn skip_hook_line(error: &clap::Error) -> ! {
     std::process::exit(0)
 }
 
-/// Whether this command's standard input and output are both terminals, where it can show an
-/// agent.
-fn interactive() -> bool {
-    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+/// Prints help with the local machine's name when that page needs it.
+fn print_help(page: &help::Page) {
+    let machine = if page.path == "start" {
+        local_machine_name()
+    } else {
+        String::new()
+    };
+    print_or_end!("{}", page.render(&machine));
 }
 
-/// The size of the person's terminal for an agent's first frame, where this command shows the
-/// agent: it is interactive and `detach` does not keep the agent in the background.
-fn shown_terminal(detach: bool) -> Option<(u16, u16)> {
-    (!detach && interactive()).then(|| attach::terminal_size().unwrap_or(DEFAULT_TERMINAL_SIZE))
+fn local_machine_name() -> String {
+    let name = match daemon_client::probe() {
+        Ok(Some(mut client)) => client
+            .call::<MachineList>(NoArgs {})
+            .ok()
+            .and_then(|listed| {
+                listed
+                    .machines
+                    .into_iter()
+                    .find(|machine| machine.machine_id == client.hello_result.machine_id)
+                    .map(|machine| machine.name)
+            }),
+        Ok(None) => facade_daemon::offline_machine_name(),
+        Err(_) => None,
+    };
+    name.unwrap_or_else(|| {
+        default_machine_name(&facade_base::system::hostname().unwrap_or_default())
+    })
 }
 
-/// Shows the agent a start or resume returned, until the person detaches or it ends; exits 0 where
-/// there is none to show.
+/// Foreground commands need a console on both ends of the attachment.
+fn require_console(command: &str, tip: &str) -> anyhow::Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        anyhow::bail!("'facade {command}' requires an interactive terminal.\n{tip}");
+    }
+    Ok(())
+}
+
+fn read_screen_tip(agent: &str) -> String {
+    let mut words = vec!["facade".into(), "screen".into()];
+    if agent.starts_with('-') {
+        words.push("--".into());
+    }
+    words.push(agent.into());
+    match errors::repair_command(&words) {
+        Ok(command) if command.contains('\'') => {
+            format!("Use {command} to read its recent output.")
+        }
+        Ok(command) => format!("Use '{command}' to read its recent output."),
+        Err(_) => "Use 'facade screen' with the agent reference to read its recent output.".into(),
+    }
+}
+
+fn launch_console(detach: bool, command: &str, tip: &str) -> anyhow::Result<Option<(u16, u16)>> {
+    if detach {
+        return Ok(None);
+    }
+    require_console(command, tip)?;
+    Ok(Some(
+        attach::console_size().unwrap_or(DEFAULT_TERMINAL_SIZE),
+    ))
+}
+
+/// Shows the agent a start or resume returned, until the person detaches or it ends.
 fn show(client: DaemonClient, shown: Option<Shown>) -> anyhow::Result<i32> {
     match shown {
-        Some(Shown { agent, opening }) => attach::attach(client, &agent, opening, &reconnect),
+        Some(Shown { target, opening }) => attach::attach(client, target, opening, &reconnect),
         None => Ok(0),
     }
+}
+
+/// Missing a CLI is still a usage error when the service cannot list available CLIs.
+fn missing_cli(options: StartOptions) -> i32 {
+    let error = connect_or_start()
+        .ok()
+        .and_then(|mut client| commands::start(&mut client, options, None).err())
+        .unwrap_or_else(|| {
+            errors::Problem::MissingCli {
+                available: Vec::new(),
+            }
+            .into()
+        });
+    errors::report(&error);
+    2
 }
 
 /// Runs a command and returns its exit code.
 fn run(command: Command) -> anyhow::Result<i32> {
     match command {
+        Command::Help(page) => {
+            print_help(page);
+            Ok(0)
+        }
+        Command::PrintVersion => {
+            println_or_end!("facade {}", facade_base::version());
+            Ok(0)
+        }
         Command::Hook { event } => {
             let agent = std::env::var("FACADE_AGENT").ok();
             hooks::run(event, agent.as_deref());
@@ -249,120 +330,71 @@ fn run(command: Command) -> anyhow::Result<i32> {
             }
             daemon_client::machine_socket(wake)
         }),
+        Command::Start { options, .. } if options.cli_and_args.is_empty() => {
+            Ok(missing_cli(options))
+        }
         Command::Start { options, detach } => {
-            cli::check_start(&options.cli_and_args)?;
-            let terminal = shown_terminal(detach);
+            let terminal = launch_console(
+                detach,
+                "start",
+                "Pass '-d' to start the agent in the background.\nExample: facade start -d codex",
+            )?;
             let mut client = connect_or_start()?;
             let shown = commands::start(&mut client, options, terminal)?;
             show(client, shown)
         }
         Command::Resume {
+            reference: Some(reference),
             detach,
-            machine,
-            folder,
-            all,
-            json,
-            reference,
+            ..
         } => {
+            let terminal = launch_console(
+                detach,
+                "resume",
+                "Pass '-d' to resume the agent in the background.\nExample: facade resume -d a5@laptop",
+            )?;
             let mut client = connect_or_start()?;
-            if let Some(reference) = reference {
-                let terminal = shown_terminal(detach);
-                let target = ResumeTarget {
-                    reference,
-                    machine,
-                    folder,
-                };
-                let shown = commands::resume(&mut client, target, terminal)?;
-                show(client, shown)
-            } else {
-                let args = ResumeListArgs {
-                    machine,
-                    folder,
-                    all,
-                };
-                commands::resume_list(&mut client, args, format(json)).map(done)
-            }
+            let shown = commands::resume(&mut client, reference, terminal)?;
+            show(client, shown)
+        }
+        Command::Resume { machine, .. } => {
+            commands::resume_list(&mut connect_or_start()?, machine).map(done)
         }
         Command::Attach(Target { agent }) => {
-            if !interactive() {
-                return Err(Problem::NotInteractive { given: agent }.into());
-            }
-            attach::attach(connect_or_start()?, &agent, Opening::Attached, &reconnect)
+            require_console("attach", &read_screen_tip(&agent))?;
+            let target = AgentTarget::Address { agent };
+            attach::attach(connect_or_start()?, target, Opening::Attached, &reconnect)
         }
-        Command::List {
-            quiet,
-            json,
-            machine,
-        } => {
-            let listing = match (quiet, json) {
-                (true, _) => Listing::Quiet,
-                (_, true) => Listing::Json,
-                _ => Listing::Table,
-            };
-            commands::list(
-                &mut connect_or_start()?,
-                MachineQueryArgs { machine },
-                listing,
-            )
-            .map(done)
-        }
-        Command::Inspect {
-            json,
-            target: Target { agent },
-        } => commands::inspect(&mut connect_or_start()?, agent, format(json)).map(done),
+        Command::List { machine } => commands::list(&mut connect_or_start()?, machine).map(done),
         Command::Screen {
-            json,
             lines,
             target: Target { agent },
-        } => commands::screen(&mut connect_or_start()?, agent, lines, format(json)).map(done),
+        } => commands::screen(&mut connect_or_start()?, agent, lines).map(done),
         Command::Type {
             target: Target { agent },
             text,
             enter,
             keys,
-        } => {
-            cli::check_type(text.as_deref(), &keys)?;
-            commands::type_input(&mut connect_or_start()?, agent, text, enter, keys).map(done)
-        }
+        } => commands::type_input(&mut connect_or_start()?, agent, text, enter, keys).map(done),
         Command::Send { to, text } => commands::send(&mut connect_or_start()?, to, text).map(done),
         Command::Rename {
             target: Target { agent },
             name,
         } => commands::rename(&mut connect_or_start()?, agent, name).map(done),
-        Command::Stop(Targets { agents }) => {
-            commands::stop(&mut connect_or_start()?, agents, &errors::report)
+        Command::Stop(Target { agent }) => {
+            commands::stop(&mut connect_or_start()?, agent).map(done)
         }
-        Command::Remove(Targets { agents }) => {
-            commands::remove(&mut connect_or_start()?, agents, &errors::report)
+        Command::Status { agent: Some(agent) } => {
+            commands::inspect(&mut connect_or_start()?, agent).map(done)
         }
-        Command::Status { json, machine } => {
-            let mut client = if machine.is_some() {
-                Some(connect_or_start()?)
-            } else {
-                daemon_client::probe()?
-            };
-            commands::status(client.as_mut(), machine, format(json)).map(done)
+        Command::Status { agent: None } => {
+            commands::status(daemon_client::probe()?.as_mut()).map(done)
         }
-        Command::Upgrade => {
-            let status = facade_base::install::upgrade_command()
-                .status()
-                .context("could not start the Facade Code installer")?;
-            Ok(i32::from(!status.success()))
-        }
-        Command::Version { json } => commands::version(format(json)).map(done),
-        Command::Completion { shell } => {
-            cli::completion(&shell);
-            Ok(0)
-        }
+        Command::Upgrade => upgrade::run().map(done),
     }
 }
 
 /// The exit code of a command that did what it was asked.
 fn done((): ()) -> i32 {
     0
-}
-
-/// How `--json` asks a command to print.
-fn format(json: bool) -> Format {
-    if json { Format::Json } else { Format::Text }
 }

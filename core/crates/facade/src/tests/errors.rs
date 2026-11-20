@@ -6,8 +6,10 @@ use std::path::PathBuf;
 use facade_base::jsonrpc::{ErrorBody, Reason};
 
 use facade_base::machine::{ExecutionOutcome, MachineIdentity, Unavailable};
+use facade_base::v3::AgentLabel;
+use serde_json::json;
 
-use crate::errors::{Change, Problem, about_agent, about_change, words};
+use crate::errors::{AgentCommand, Problem, agent_failed, exit_code, words};
 
 fn given(text: &str) -> String {
     text.to_string()
@@ -27,24 +29,16 @@ fn each_catalog_row_prints_its_error_and_tip() {
             1,
         ),
         (
-            Problem::NotInteractive { given: given("a3") },
-            "error: 'facade attach' needs an interactive terminal\n  tip: run 'facade screen a3' to \
-             see its recent output",
-            1,
-        ),
-        (
             Problem::MissingCli {
                 available: vec![given("example")],
             },
-            "error: choose a CLI to start\n  tip: available CLIs: example",
-            2,
-        ),
-        (
-            Problem::UnknownStartOption {
-                option: given("--unrecognized"),
-            },
-            "error: unexpected option '--unrecognized' before the CLI\n  tip: put CLI-specific \
-             options after the CLI name",
+            concat!(
+                "error: Choose a coding CLI to start.\n",
+                "Available CLIs: example\n",
+                "Usage: facade start [OPTIONS] <CLI> [CLI_ARGS]...\n",
+                "Example: facade start codex\n",
+                "Run 'facade start --help' for all options."
+            ),
             2,
         ),
         (
@@ -53,16 +47,6 @@ fn each_catalog_row_prints_its_error_and_tip() {
             },
             "error: could not use the settings file: /home/you/.facade/facade.json:3:7: expected a \
              string\n  tip: fix the settings file and try again",
-            1,
-        ),
-        (
-            Problem::NotDelivered {
-                message: given("m42@laptop"),
-                to: given("a3@laptop"),
-                why: given("a draft held the input until the deadline; nothing was typed"),
-            },
-            "error: m42@laptop was not delivered to a3@laptop: a draft held the input until the \
-             deadline; nothing was typed",
             1,
         ),
     ];
@@ -97,40 +81,38 @@ fn an_unreachable_orchestrator_names_the_log_to_check() {
     );
 }
 
-#[test]
-fn an_unconfirmed_delivery_says_where_to_look() {
-    let said = Problem::Unconfirmed {
-        message: given("m42"),
-        to: given("a3"),
-        progress: given("the text was pasted and Enter was sent"),
-    }
-    .to_string();
-    let (error, tip) = said.split_once('\n').expect("an error and a tip");
-    assert!(
-        error.starts_with("error: could not confirm delivery of m42 to a3")
-            && error.contains("the text was pasted and Enter was sent"),
-        "{said}"
-    );
-    assert_eq!(
-        tip,
-        "  tip: run 'facade screen a3' and look for m42 in the input box or recent output before \
-         sending it again"
-    );
-}
-
 /// A service failure, as the command's call returns it.
 fn refused(reason: Reason, message: &str) -> anyhow::Error {
     anyhow::Error::new(ErrorBody::new(reason, message))
 }
 
+fn agent_label(
+    agent_id: &str,
+    machine: &str,
+    name: &str,
+    state: &str,
+    resumable: bool,
+) -> AgentLabel {
+    serde_json::from_value(json!({
+        "reference": { "agent_id": agent_id, "machine_id": machine },
+        "address": format!("{agent_id}@{machine}"), "name": name, "cli": "fake",
+        "state": state, "resumable": resumable,
+    }))
+    .expect("a public agent label")
+}
+
 #[test]
 fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
     let row = |given: &str, reason: Reason, message: &str| {
-        words(&about_agent(given, refused(reason, message)))
+        words(&agent_failed(
+            AgentCommand::Screen,
+            given,
+            refused(reason, message),
+        ))
     };
     assert_eq!(
         row("a9", Reason::NotFound, "no agent a9"),
-        "error: no agent a9"
+        "error: No agent or guest matches \"a9\".\nRun 'facade list' to find an agent."
     );
 
     let mut multiple = ErrorBody::new(
@@ -139,9 +121,26 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
     );
     multiple.data.candidates = ["a1@laptop", "a2@gpu"].map(given).to_vec();
     assert_eq!(
-        words(&about_agent("Ada", multiple.into())),
+        words(&agent_failed(
+            AgentCommand::Screen,
+            "Ada",
+            multiple.clone().into()
+        )),
         "error: more than one agent matches Ada\n  tip: choose a1@laptop, a2@gpu"
     );
+
+    multiple.data.agents = vec![
+        agent_label("a1", "laptop", "Ada", "idle", false),
+        agent_label("a2", "gpu", "Ada", "working", false),
+    ];
+    let error = agent_failed(AgentCommand::Screen, "Ada", multiple.into());
+    let text = words(&error);
+    assert!(text.starts_with("error: More than one active agent or guest is named \"Ada\"."));
+    for candidate in ["a1@laptop", "a2@gpu", "Idle", "Working"] {
+        assert!(text.contains(candidate), "{text}");
+    }
+    assert!(text.ends_with("Use an exact agent reference.\nExample: facade screen a1@laptop"));
+    assert_eq!(exit_code(&error), 1);
 
     assert_eq!(
         row(
@@ -164,12 +163,14 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
 #[test]
 fn a_send_to_an_ended_agent_names_the_agent_the_service_gives() {
     let mut ended = ErrorBody::new(Reason::Ended, "a2@gpu has ended");
-    ended.data.candidates = vec![given("a2@gpu")];
+    ended.data.agents = vec![agent_label("a2", "gpu", "Bob", "ended", true)];
+    let error = agent_failed(AgentCommand::Send, "bob", ended.into());
     assert_eq!(
-        words(&about_agent("bob", ended.into())),
-        "error: a2@gpu has ended\n  tip: run 'facade screen a2@gpu' for the last screen or \
-         'facade resume a2@gpu' to continue"
+        words(&error),
+        "error: Bob (a2@gpu) has stopped and cannot receive messages.\n\
+         Resume it with 'facade resume a2@gpu'."
     );
+    assert_eq!(exit_code(&error), 1);
 }
 
 #[test]
@@ -189,14 +190,6 @@ fn a_settings_file_that_cannot_be_used_gets_the_fix_tip() {
 #[test]
 fn machine_rows_print_their_error_and_tip() {
     let rows: Vec<(Problem, &str)> = vec![
-        (
-            Problem::SshFailed {
-                destination: given("gpu"),
-                why: given("Permission denied (publickey)."),
-            },
-            "error: could not connect to gpu over SSH: Permission denied (publickey).\n  tip: run \
-             'ssh gpu' to check that you can log in",
-        ),
         (
             Problem::NoFacade {
                 destination: given("gpu"),
@@ -220,14 +213,6 @@ fn machine_rows_print_their_error_and_tip() {
             "error: SSH to gpu needs you to log in\n  tip: run 'facade machine add gpu'",
         ),
         (
-            Problem::MachineStoppedResponding {
-                machine: given("gpu"),
-                change: Some((Change::Stop, given("a17@gpu"))),
-            },
-            "error: could not confirm that a17@gpu stopped: gpu stopped responding\n  tip: run \
-             'facade inspect a17@gpu' to check",
-        ),
-        (
             Problem::NoMachine {
                 given: given("lab"),
             },
@@ -240,10 +225,11 @@ fn machine_rows_print_their_error_and_tip() {
     }
 }
 
-/// A call that never reached the agent's machine says so for the agent `stop` was given.
+/// A stop of a resolved agent whose machine stopped responding reports an unconfirmed exit.
 #[test]
-fn an_unreachable_machine_names_what_was_not_done() {
-    let mut body = ErrorBody::new(Reason::Unavailable, "gpu: The request did not run.");
+fn an_unconfirmed_remote_stop_names_the_resolved_agent() {
+    let mut body = ErrorBody::new(Reason::Unavailable, "gpu stopped responding");
+    body.data.agents = vec![agent_label("a17", "gpu", "Pixel", "idle", false)];
     body.data.unavailable = Some(Unavailable {
         execution: ExecutionOutcome::OutcomeUnknown,
         machine: Some(MachineIdentity {
@@ -254,11 +240,10 @@ fn an_unreachable_machine_names_what_was_not_done() {
         matches: Vec::new(),
         unanswered: Vec::new(),
     });
-    let error = about_change("a17@gpu", Change::Remove, body.into());
+    let error = agent_failed(AgentCommand::Stop, "a17@gpu", body.into());
     assert_eq!(
         words(&error),
-        "error: could not confirm that a17@gpu was removed: gpu stopped responding\n  tip: run \
-         'facade inspect a17@gpu' to check"
+        "error: Could not confirm that Pixel (a17@gpu) stopped. Check it with 'facade status a17@gpu'."
     );
 }
 
@@ -279,7 +264,7 @@ fn a_name_search_some_machines_did_not_answer_names_them_for_stop() {
             name: given("gpu"),
         }],
     });
-    let error = about_change("Pixel", Change::Stop, body.into());
+    let error = agent_failed(AgentCommand::Stop, "Pixel", body.into());
     assert_eq!(
         words(&error),
         "error: not every machine answered the search for Pixel"

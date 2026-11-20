@@ -50,7 +50,7 @@ $response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facade
 
 Penginstal menambahkan `facade` dan `facade-mcp` ke PATH. Buka terminal baru untuk menggunakan PATH yang diperbarui. Jalankan `facade upgrade` untuk memperbarui. Instal CLI yang dibutuhkan dan masuk di setiap mesin. Pilihan bawaan mencakup Claude Code, Codex, Antigravity, Muse Code, OpenCode, dan Pi.
 
-Peluncurnya juga bernama `facade`. Jika keduanya terpasang, Shell memakai entri pertama di PATH. Setelah pratinjau dihentikan, nama itu menjadi milik Orchestrator. Jalankan `facade version`. Baris berbentuk `facade <version>` mengonfirmasi bahwa perintah Shell yang digunakan.
+Peluncurnya juga bernama `facade`. Jika keduanya terpasang, Shell memakai entri pertama di PATH. Setelah pratinjau dihentikan, nama itu menjadi milik Orchestrator. Jalankan `facade --version`. Baris berbentuk `facade <version>` mengonfirmasi bahwa perintah Shell yang digunakan.
 
 ### VS Code
 
@@ -88,7 +88,7 @@ Gunakan alamat dari `facade list`. Daftarkan mesin lain memakai target dan opsi 
 
 ```sh
 facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --folder /work/app --worktree feat-x claude
+facade start --machine devbox --workdir /work/app --worktree feat-x claude
 ```
 
 Facade memasang versi yang sesuai pada mesin jarak jauh bila diperlukan. Facade memakai jalur instalasi tetap di mesin jarak jauh. Jika memasang secara manual, gunakan versi yang sama dengan Orchestrator lokal. Di VS Code, **Go to Agent** membuka terminal agen yang sedang berjalan. Ruang kerja mengingat agen yang dibuka, para pembantunya, dan Pin Anda. Menutup tab terminal membiarkan agen berjalan. **Resume Agent** dan `facade resume` menawarkan pekerjaan yang tersimpan.

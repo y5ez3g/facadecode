@@ -1,23 +1,20 @@
-Connect to other machines over SSH
+Connect and manage machines over SSH.
 
 Usage: facade machine <COMMAND>
 
-Work with agents on other machines. Orchestrators connect over SSH and open no port. Once two
-machines are connected, you can list, start and message agents on both from either one.
+Examples
+  facade machine add devbox
+  facade machine connect devbox
+  facade machine list
 
-Commands:
-  add      Connect to a machine and save its SSH arguments
-  connect  Connect to a machine while this command runs
-  list     List machines
-  remove   Remove a saved connection
+Commands
+  add      Connect and save an SSH machine
+  connect  Connect while this command runs
+  list     List local and known machines
+  remove   Remove a saved SSH connection
   rename   Rename a machine
 
-Options:
-  -h, --help  Print help
+Options
+  -h, --help  Show help
 
-Examples:
-  # Connect to gpu from your SSH config
-  facade machine add gpu
-
-  # See the machines this one connects to
-  facade machine list
+Run 'facade machine <COMMAND> --help' for examples and options.
