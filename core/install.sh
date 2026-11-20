@@ -42,12 +42,27 @@ case "$(uname -m)" in
 esac
 
 releases=https://github.com/y5ez3g/facadecode/releases
+mirror=https://facadecode.com
 asset="facade-core-$os-$arch.tar.gz"
 valid_version() {
     case "$1" in *[!0-9.]*) return 1 ;; esac
     printf '%s\n' "$1" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
 }
-download() { curl --proto '=https' --proto-redir '=https' -fsSL "$@"; }
+read_version() {
+    LC_ALL=C awk '
+        { sub(/\r$/, "") }
+        NR == 1 && /^[0-9]+\.[0-9]+\.[0-9]+$/ { version = $0 }
+        END { if (NR != 1 || version == "") exit 1; print version }
+    ' "$1"
+}
+download() {
+    status=$(curl --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
+        -fsL -w '%{http_code}' -o "$2" "$1") || return 1
+    case "$status" in 2[0-9][0-9]) return 0 ;; *) return 1 ;; esac
+}
+download_package() {
+    download "$1/$asset" "$work/$asset" && download "$1/SHA256SUMS" "$work/SHA256SUMS"
+}
 [ -z "$version" ] || valid_version "$version" || fail 'Use a release version such as 0.1.6.'
 
 data="$root/share/facade"
@@ -64,17 +79,22 @@ if [ -n "$package" ]; then
     cp -- "$(dirname -- "$package")/SHA256SUMS" "$work/SHA256SUMS"
 else
     if [ -z "$version" ]; then
-        version=$(download "$releases/latest/download/facade-core-version.txt") ||
-            fail 'Could not find the latest stable Facade release with standalone packages.'
-        valid_version "$version" || fail 'The stable release did not provide a valid version.'
+        version_file="$work/latest-version"
+        download "$releases/latest/download/facade-core-version.txt" "$version_file" ||
+            download "$mirror/facade-core-version.txt" "$version_file" ||
+            fail 'Could not download the stable Facade version from GitHub or facadecode.com.'
+        version=$(read_version "$version_file") || fail 'The stable release did not provide a valid version.'
     fi
-    release="$releases/download/extension%2F$version"
-    download "$release/SHA256SUMS" -o "$work/SHA256SUMS" ||
-        fail "Could not download the checksums for Facade $version."
-    download "$release/$asset" -o "$work/$asset" ||
-        fail "Could not download $asset for Facade $version."
+    download_package "$releases/download/extension%2F$version" ||
+        download_package "$mirror/releases/$version" ||
+        fail "Could not download $asset and its checksums for Facade $version from GitHub or facadecode.com."
 fi
-expected=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$work/SHA256SUMS")
+expected=$(LC_ALL=C awk -v asset="$asset" '
+    { sub(/\r$/, "") }
+    length($1) != 64 || !/^[0-9a-fA-F]+  [^[:space:]]+$/ { invalid = 1; exit }
+    $2 == asset { count++; hash = tolower($1) }
+    END { if (invalid || count != 1) exit 1; print hash }
+' "$work/SHA256SUMS") || fail "SHA-256 verification failed for $asset."
 if [ "$os" = darwin ]; then
     actual=$(shasum -a 256 "$work/$asset")
 else
@@ -85,8 +105,7 @@ fi
 stage="$work/payload"
 mkdir "$stage"
 tar -xzf "$work/$asset" -C "$stage"
-build=$(cat "$stage/VERSION")
-valid_version "$build" || fail 'The package did not provide a valid version.'
+build=$(read_version "$stage/VERSION") || fail 'The package did not provide a valid version.'
 [ -z "$version" ] || [ "$build" = "$version" ] || fail "Expected Facade $version, found $build in the package."
 for program in facade facade-mcp; do
     [ -f "$stage/$program" ] || fail "The package has no $program."

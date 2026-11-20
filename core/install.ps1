@@ -10,8 +10,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $PSNativeCommandUseErrorActionPreference = $false
-$versionPattern = '\A[0-9]+\.[0-9]+\.[0-9]+\z'
-if ($Version -and $Version -notmatch $versionPattern) {
+$versionPattern = '[0-9]+\.[0-9]+\.[0-9]+'
+if ($PSBoundParameters.ContainsKey('Version') -and $Version -notmatch "\A$versionPattern\z") {
     throw 'Use a release version such as 0.1.6.'
 }
 if ($InstallRoot -notmatch '^[a-zA-Z]:[/\\]') {
@@ -26,6 +26,7 @@ $arch = switch ($processor.Architecture) {
     default { throw 'Facade is available for Windows on x64 and arm64.' }
 }
 $releases = 'https://github.com/y5ez3g/facadecode/releases'
+$mirror = 'https://facadecode.com'
 $asset = "facade-core-win32-$arch.zip"
 $programs = @('facade.exe', 'facade-mcp.exe', 'conpty\conpty.dll', 'conpty\OpenConsole.exe')
 $bin = Join-Path $InstallRoot 'bin'
@@ -33,6 +34,28 @@ $versions = Join-Path $InstallRoot 'versions'
 $work = Join-Path $versions ('.install-' + [guid]::NewGuid())
 $next = Join-Path $work 'next'
 $previous = Join-Path $work 'previous'
+
+function Read-Version {
+    param([string] $File, [string] $InvalidMessage)
+
+    $record = [regex]::Match([IO.File]::ReadAllText($File), "\A($versionPattern)(?:\r?\n)?\z")
+    if (-not $record.Success) { throw $InvalidMessage }
+    $record.Groups[1].Value
+}
+
+function Get-Download {
+    param([string] $Url, [string] $Destination)
+
+    $status = & curl.exe --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 `
+        -fsL -w '%{http_code}' -o $Destination $Url
+    $LASTEXITCODE -eq 0 -and $status -match '\A2[0-9]{2}\z'
+}
+
+function Get-ReleasePackage {
+    param([string] $Origin)
+
+    (Get-Download "$Origin/$asset" $archive) -and (Get-Download "$Origin/SHA256SUMS" $checksums)
+}
 
 function Add-FacadePath {
     param([string] $Directory)
@@ -82,26 +105,29 @@ try {
     } else {
         if (-not $Version) {
             $versionFile = Join-Path $work 'latest-version'
-            Invoke-WebRequest -UseBasicParsing "$releases/latest/download/facade-core-version.txt" -OutFile $versionFile
-            $Version = [IO.File]::ReadAllText($versionFile).Trim()
-            if ($Version -notmatch $versionPattern) {
-                throw 'The stable release did not provide a valid version.'
+            if (-not (Get-Download "$releases/latest/download/facade-core-version.txt" $versionFile) -and
+                -not (Get-Download "$mirror/facade-core-version.txt" $versionFile)) {
+                throw 'Could not download the stable Facade version from GitHub or facadecode.com.'
             }
+            $Version = Read-Version $versionFile 'The stable release did not provide a valid version.'
         }
-        $release = "$releases/download/extension%2F$Version"
-        Invoke-WebRequest -UseBasicParsing "$release/SHA256SUMS" -OutFile $checksums
-        Invoke-WebRequest -UseBasicParsing "$release/$asset" -OutFile $archive
+        if (-not (Get-ReleasePackage "$releases/download/extension%2F$Version") -and
+            -not (Get-ReleasePackage "$mirror/releases/$Version")) {
+            throw "Could not download $asset and its checksums for Facade $Version from GitHub or facadecode.com."
+        }
     }
-    $checksumPattern = '\A[0-9a-fA-F]{64}  ' + [regex]::Escape($asset) + '\z'
-    $expected = @(Get-Content -LiteralPath $checksums | Where-Object { $_ -match $checksumPattern })
-    if ($expected.Count -ne 1 -or $expected[0].Substring(0, 64) -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash) {
+    $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object {
+        $record = [regex]::Match($_, '\A([0-9a-fA-F]{64})  (\S+)\z')
+        if (-not $record.Success) { throw "SHA-256 verification failed for $asset." }
+        if ($record.Groups[2].Value -ceq $asset) { $record.Groups[1].Value }
+    })
+    if ($expected.Count -ne 1 -or $expected[0] -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash) {
         throw "SHA-256 verification failed for $asset."
     }
 
     $stage = Join-Path $work 'payload'
     Expand-Archive -LiteralPath $archive -DestinationPath $stage
-    $build = [IO.File]::ReadAllText((Join-Path $stage 'VERSION')).Trim()
-    if ($build -notmatch $versionPattern) { throw 'The package did not provide a valid version.' }
+    $build = Read-Version (Join-Path $stage 'VERSION') 'The package did not provide a valid version.'
     if ($Version -and $build -cne $Version) { throw "Expected Facade $Version, found $build in the package." }
     foreach ($program in $programs) {
         if (-not [IO.File]::Exists((Join-Path $stage $program))) { throw "The package has no $program." }
