@@ -227,17 +227,20 @@ fn print_help(page: &help::Page) {
 }
 
 fn local_machine_name() -> String {
-    let name = daemon_client::probe()
-        .ok()
-        .flatten()
-        .and_then(|mut client| {
-            let listed = client.call::<MachineList>(NoArgs {}).ok()?;
-            listed
-                .machines
-                .into_iter()
-                .find(|machine| machine.machine_id == client.hello_result.machine_id)
-                .map(|machine| machine.name)
-        });
+    let name = match daemon_client::probe() {
+        Ok(Some(mut client)) => client
+            .call::<MachineList>(NoArgs {})
+            .ok()
+            .and_then(|listed| {
+                listed
+                    .machines
+                    .into_iter()
+                    .find(|machine| machine.machine_id == client.hello_result.machine_id)
+                    .map(|machine| machine.name)
+            }),
+        Ok(None) => facade_daemon::offline_machine_name(),
+        Err(_) => None,
+    };
     name.unwrap_or_else(|| {
         default_machine_name(&facade_base::system::hostname().unwrap_or_default())
     })

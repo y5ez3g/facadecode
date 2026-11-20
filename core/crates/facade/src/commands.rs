@@ -465,11 +465,13 @@ pub(crate) fn status(client: Option<&mut DaemonClient>) -> anyhow::Result<()> {
         None => {
             let home = facade_base::paths::facade_home()?;
             let settings = facade_base::settings::settings_file()?;
+            let machine = facade_daemon::offline_machine_name().unwrap_or_else(default_local_name);
             sleeping_text(
                 &home.to_string_lossy(),
                 &settings.to_string_lossy(),
                 &cli_version,
                 &launcher,
+                &machine,
             )
         }
     };
@@ -710,10 +712,16 @@ fn default_local_name() -> String {
     default_machine_name(&facade_base::system::hostname().unwrap_or_default())
 }
 
-pub(crate) fn sleeping_text(home: &str, settings: &str, version: &str, launcher: &str) -> String {
+pub(crate) fn sleeping_text(
+    home: &str,
+    settings: &str,
+    version: &str,
+    launcher: &str,
+    machine: &str,
+) -> String {
     let headline = format!(
         "Facade {version} is not running on {}.",
-        default_local_name()
+        single_line(machine)
     );
     service_text(
         &headline,

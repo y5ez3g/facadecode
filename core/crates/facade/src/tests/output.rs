@@ -336,7 +336,7 @@ fn status_shows_settings_services_and_connected_machines() {
     );
     assert_eq!(field(&text, "CLI version").as_deref(), Some("0.1.6"));
     assert_eq!(field(&text, "Keeper PID").as_deref(), Some("-"));
-    let sleeping = sleeping_text(home, settings, "0.1.6", launcher);
+    let sleeping = sleeping_text(home, settings, "0.1.6", launcher, "laptop");
     assert!(sleeping.starts_with("Facade 0.1.6 is not running on "));
     assert_eq!(field(&sleeping, "Home").as_deref(), Some(home));
     assert_eq!(field(&sleeping, "Settings").as_deref(), Some(settings));
