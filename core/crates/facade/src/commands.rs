@@ -15,9 +15,9 @@ use facade_base::v3::{
     AgentCreator, AgentInfo, AgentInspect, AgentInspectResult, AgentKind, AgentList, AgentListRow,
     AgentRename, AgentRenameArgs, AgentResume, AgentResumeList, AgentScreen, AgentScreenArgs,
     AgentSelectorArgs, AgentSend, AgentSendArgs, AgentStart, AgentState, AgentStop, AgentTarget,
-    AgentType, AgentTypeArgs, CliList, CliListArgs, DaemonStatus, MachineIdentity, MachineList,
-    MachineQueryArgs, MachineQueryResult, MachineQueryStatus, MachineState, NoArgs, ResumeArgs,
-    ResumeCandidate, ResumeListArgs, ResumeTarget, StartArgs, StatusArgs, StatusResult,
+    AgentType, AgentTypeArgs, AttachmentKind, CliList, CliListArgs, DaemonStatus, MachineIdentity,
+    MachineList, MachineQueryArgs, MachineQueryResult, MachineQueryStatus, MachineState, NoArgs,
+    ResumeArgs, ResumeCandidate, ResumeListArgs, ResumeTarget, StartArgs, StatusArgs, StatusResult,
 };
 
 use crate::cli::StartOptions;
@@ -313,7 +313,25 @@ pub(crate) fn inspect(client: &mut DaemonClient, agent: String) -> anyhow::Resul
     let inspected = client
         .call::<AgentInspect>(agent_selector(&agent))
         .map_err(|error| errors::agent_failed(AgentCommand::Status, &agent, error))?;
-    println_or_end!("{}", inspect_text(&inspected));
+    let machine_names = if inspected
+        .attachments
+        .iter()
+        .any(|attachment| attachment.kind == AttachmentKind::Shell)
+    {
+        client
+            .call::<MachineList>(NoArgs {})
+            .map(|listed| {
+                listed
+                    .machines
+                    .into_iter()
+                    .map(|machine| (machine.machine_id, machine.name))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    println_or_end!("{}", inspect_text(&inspected, &machine_names));
     Ok(())
 }
 
@@ -449,8 +467,10 @@ fn agent_selector(agent: &str) -> AgentSelectorArgs {
 
 pub(crate) fn status(client: Option<&mut DaemonClient>) -> anyhow::Result<()> {
     let launcher = facade_base::programs::launcher("facade-mcp")
+        .ok()
+        .filter(|path| path.is_file())
         .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "facade-mcp".into());
+        .unwrap_or_else(|| "facade-mcp".into());
     let cli_version = facade_base::version();
     let text = match client {
         Some(client) => {
@@ -632,7 +652,10 @@ fn session_prefix(id: &str) -> &str {
     &id[..end]
 }
 
-pub(crate) fn inspect_text(inspected: &AgentInspectResult) -> String {
+pub(crate) fn inspect_text(
+    inspected: &AgentInspectResult,
+    machine_names: &HashMap<String, String>,
+) -> String {
     let agent = &inspected.agent;
     let managed = agent.kind == AgentKind::Managed;
     let running = managed && agent.process == ProcessState::Running;
@@ -660,10 +683,23 @@ pub(crate) fn inspect_text(inspected: &AgentInspectResult) -> String {
         Some(AgentCreator::VsCode) => "VS Code",
         None => "-",
     };
-    let viewers = if running {
+    let viewers = if !running {
+        String::new()
+    } else if inspected.attachments.is_empty() {
         inspected.viewers.join(", ")
     } else {
-        String::new()
+        inspected
+            .attachments
+            .iter()
+            .map(|attachment| match attachment.kind {
+                AttachmentKind::VsCode => "VS Code".into(),
+                AttachmentKind::Shell => machine_names.get(&attachment.machine_id).map_or_else(
+                    || "Shell".into(),
+                    |name| format!("Shell ({})", single_line(name)),
+                ),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     format!(
         "{}\n{}\n\n{}",

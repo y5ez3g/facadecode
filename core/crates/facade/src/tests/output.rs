@@ -1,6 +1,10 @@
 //! The Shell presentation of daemon results and the underlying roster wire format.
 
-use facade_base::v3::{AgentListResult, AgentListRow, SendResult, StatusResult};
+use std::collections::HashMap;
+
+use facade_base::v3::{
+    AgentListResult, AgentListRow, AttachmentInfo, AttachmentKind, SendResult, StatusResult,
+};
 use serde_json::{Value, json};
 
 use super::{agent, before, inspection, now};
@@ -203,11 +207,22 @@ fn inspect_shows_the_agents_process_and_launch_facts() {
     let mut inspected = inspection(
         &pixel,
         Some("claude"),
-        &["Shell (laptop)", "VS Code"],
+        &["temporary workspace", "Terminal on original hostname"],
         Some(json!({ "kind": "command_line" })),
     );
+    inspected.attachments = vec![
+        AttachmentInfo {
+            kind: AttachmentKind::VsCode,
+            machine_id: "devbox-id".into(),
+        },
+        AttachmentInfo {
+            kind: AttachmentKind::Shell,
+            machine_id: "laptop-id".into(),
+        },
+    ];
+    let machine_names = HashMap::from([("laptop-id".into(), "laptop".into())]);
     inspected.launch_command = Some(r#""C:\Tools\claude.exe" --flag "two words""#.into());
-    let text = inspect_text(&inspected);
+    let text = inspect_text(&inspected, &machine_names);
     assert_eq!(text.lines().next(), Some("Pixel (a3@laptop)"));
     let fields = [
         ("State", "Waiting for you (permission: Allow the build?)"),
@@ -223,7 +238,7 @@ fn inspect_shows_the_agents_process_and_launch_facts() {
         ("Title", "Review Shell output"),
         ("Session", "86da4482-2bae-4a45-b193-a5664c19826a"),
         ("Started by", "Shell"),
-        ("Attached in", "Shell (laptop), VS Code"),
+        ("Attached in", "VS Code, Shell (laptop)"),
         ("YOLO", "on"),
     ];
     assert_eq!(
@@ -233,12 +248,21 @@ fn inspect_shows_the_agents_process_and_launch_facts() {
     for (label, expected) in fields {
         assert_eq!(field(&text, label).as_deref(), Some(expected), "{text}");
     }
+    inspected.attachments.clear();
+    let legacy = inspect_text(&inspected, &machine_names);
+    assert_eq!(
+        field(&legacy, "Attached in").as_deref(),
+        Some("temporary workspace, Terminal on original hostname")
+    );
 }
 
 #[test]
 fn inspect_describes_custom_programs_guests_and_ended_agents() {
     let shown = |changes: Value, rule: Option<&str>, started_by: Option<Value>| {
-        inspect_text(&inspection(&agent(changes), rule, &[], started_by))
+        inspect_text(
+            &inspection(&agent(changes), rule, &[], started_by),
+            &HashMap::new(),
+        )
     };
     let added = shown(
         json!({
