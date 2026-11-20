@@ -1,13 +1,12 @@
-Upgrade Facade Code
+Upgrade Facade.
+
+Downloads and installs the latest release, then hands off running services
+without stopping active agents.
 
 Usage: facade upgrade
 
-Install the latest stable version of Facade Code. A compatible running Orchestrator hands over to
-the new version while its agents keep running.
-
-Options:
-  -h, --help  Print help
-
-Examples:
-  # Install the latest stable version
+Examples
   facade upgrade
+
+Options
+  -h, --help  Show help

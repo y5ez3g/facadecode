@@ -300,7 +300,7 @@ fn type_pastes_text_and_presses_keys() {
 
     let unknown = home.run_facade(&["type", "worker", "--key", "Esc", "--key", "F13"]);
     assert!(
-        !unknown.status.success() && stderr(&unknown).contains("unknown key \"F13\""),
+        unknown.status.code() == Some(2) && stderr(&unknown).contains("Unknown key \"F13\"."),
         "{}",
         stderr(&unknown)
     );
@@ -319,10 +319,7 @@ fn type_pastes_text_and_presses_keys() {
         assert!(
             ended.status.code() == Some(1)
                 && stderr(&ended)
-                    == format!(
-                        "error: agent {address} has ended\n  tip: run 'facade screen {given}' for \
-                         the last screen or 'facade resume {given}' to continue\n"
-                    ),
+                    == format!("error: worker ({address}) has stopped and cannot accept input.\n"),
             "{given}: {}",
             stderr(&ended)
         );
@@ -330,9 +327,9 @@ fn type_pastes_text_and_presses_keys() {
     assert_eq!(home.submitted_messages().len(), wanted.len());
 }
 
-/// The CLI validates a whole batch and the v2 endpoint can still type its legacy frames.
+/// The CLI validates a whole batch and the v3 endpoint can still type its legacy frames.
 #[test]
-fn public_keys_have_a_limit_and_v2_keeps_its_existing_keys() {
+fn public_keys_have_a_limit_and_v3_keeps_its_existing_keys() {
     let home = TestHome::new("publickeys");
     let pressed = home.project.join("pressed");
     let agent = home.start_fake_with("worker", &[("FAKECLI_KEYS", pressed.to_str().unwrap())]);
@@ -348,27 +345,35 @@ fn public_keys_have_a_limit_and_v2_keeps_its_existing_keys() {
     too_many.extend(std::iter::repeat_n(["-k", "z"], 101).flatten());
     let refused = home.run_facade(&too_many);
     assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
-    assert!(stderr(&refused).contains("expected 1 to 100 keys, got 101"));
-    for (old, replacement) in [
-        ("Escape", "Esc"),
-        ("Return", "Enter"),
-        ("ArrowUp", "Up"),
-        ("ArrowDown", "Down"),
-        ("ArrowLeft", "Left"),
-        ("ArrowRight", "Right"),
+    assert!(stderr(&refused).contains("accepts at most 100 keys, got 101"));
+    for old in [
+        "Escape",
+        "Return",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
     ] {
         let refused = home.run_facade(&["type", &agent.id, "-k", "z", "-k", old]);
         let message = stderr(&refused);
         assert_eq!(refused.status.code(), Some(2), "{message}");
         assert!(
-            message.contains(&format!("unknown key {old:?}\n  tip: use {replacement:?}")),
+            message.contains(&format!("Unknown key {old:?}."))
+                && message.contains("Supported keys: Enter, Esc"),
             "{message}"
         );
     }
 
     let empty = home.run_facade(&["type", &agent.id, ""]);
-    assert!(!empty.status.success(), "{}", stderr(&empty));
-    home.run_facade_ok(&["type", &agent.id, "", "--enter"]);
+    assert_eq!(empty.status.code(), Some(2), "{}", stderr(&empty));
+    let empty_with_enter = home.run_facade(&["type", &agent.id, "", "--enter"]);
+    assert_eq!(
+        empty_with_enter.status.code(),
+        Some(2),
+        "{}",
+        stderr(&empty_with_enter)
+    );
+    home.run_facade_ok(&["type", &agent.id, "--key", "Enter"]);
 
     let mut wire = connect(&home);
     let empty = wire.call("agent.type", json!({ "agent": agent.id, "text": "" }));

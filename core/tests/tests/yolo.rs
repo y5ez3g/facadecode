@@ -92,9 +92,7 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
     assert_eq!(record(&home, "after-restart")["yolo"], false);
     assert_eq!(record(&home, "on")["yolo"], true, "kept across the restart");
     let yolo = |agent: &str| {
-        home.run_facade_ok(&["inspect", agent])
-            .lines()
-            .find_map(|line| Some(line.strip_prefix("YOLO:")?.trim().to_string()))
+        status_field(&home.run_facade_ok(&["status", agent]), "YOLO").map(str::to_string)
     };
     assert_eq!(yolo("after-restart").as_deref(), Some("off"));
     assert_eq!(yolo("on").as_deref(), Some("on"));
@@ -118,7 +116,7 @@ fn a_settings_file_that_cannot_be_read_refuses_every_start() {
     let mut command = home.command(&test_binaries().facade);
     let refused = command
         .env("PATH", home.path_with_test_programs())
-        .args(["start", "--name", "nope", "fake"])
+        .args(["start", "-d", "--name", "nope", "fake"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -192,7 +190,7 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
         .command(&test_binaries().facade)
         .env("FACADE_AGENT", "a2")
         .env("PATH", home.path_with_test_programs())
-        .args(["start", "--name", "dee", "fake"])
+        .args(["start", "-d", "--name", "dee", "fake"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -407,7 +405,7 @@ fn a_resume_reads_yolo_from_the_settings_file_as_a_start_does() {
     let resume = || {
         home.command(&test_binaries().facade)
             .env("PATH", home.path_with_test_programs())
-            .args(["resume", "worker"])
+            .args(["resume", "-d", "worker"])
             .stdin(Stdio::null())
             .output()
     };
@@ -723,7 +721,7 @@ fn each_cli_launches_with_yolo_on_as_its_rule_says_and_with_yolo_off_as_it_nativ
         let started = home
             .facade_in_an_empty_home()
             .env("PATH", &path)
-            .args(["start", "--name", name, cli])
+            .args(["start", "-d", "--name", name, cli])
             .stdin(Stdio::null())
             .output()
             .unwrap();

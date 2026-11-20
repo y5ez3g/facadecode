@@ -174,7 +174,7 @@ fn restart_with_changed_bytes(hard_link: bool) {
         let output = home
             .command(program)
             .env_remove("FACADE_TEST_LINK_PROGRAMS")
-            .args(["start", "--name", name, "fake"])
+            .args(["start", "-d", "--name", name, "fake"])
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -435,10 +435,8 @@ fn a_newer_build_s_status_reports_the_running_service_without_upgrading_it() {
     home.start_named_fake("w1", &[]);
     let hello = home.hello_result().unwrap();
     let (daemon, keeper) = (hello["pid"].clone(), hello["keeper"]["pid"].clone());
-    let machines: Value =
-        facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["machine", "list", "--json"]))
-            .unwrap();
-    let machine = machines["machines"][0]["selector"].as_str().unwrap();
+    let machines = connect(&home).call_ok("machine.list", json!({}));
+    let machine = machines["machines"][0]["name"].as_str().unwrap();
     let program = program_of_build(&home, &newer());
     let status = home
         .command(&program)
@@ -447,17 +445,40 @@ fn a_newer_build_s_status_reports_the_running_service_without_upgrading_it() {
         .output()
         .unwrap();
     assert_eq!(
-        (stdout(&status), stderr(&status), status.status.code()),
-        (
-            format!(
-                "Orchestrator running.\n  Home:      {}\n  Settings:  {}\n  Version:   {CURRENT}\n  Daemon:    pid {daemon} \
-                 ({CURRENT})\n  Keeper:    pid {keeper}\n  Agents:    1\n  Machines:  {machine}\n",
-                home.path.display(),
-                home.path.join("facade.json").display(),
-            ),
-            String::new(),
-            Some(0)
-        )
+        (stderr(&status), status.status.code()),
+        (String::new(), Some(0))
+    );
+    let text = stdout(&status);
+    assert_eq!(
+        text.lines().next().unwrap(),
+        format!("Facade {CURRENT} is running on {machine}.")
+    );
+    assert_eq!(
+        status_field(&text, "CLI version"),
+        Some(newer().as_str()),
+        "{text}"
+    );
+    assert_eq!(status_field(&text, "Home"), home.path.to_str(), "{text}");
+    assert_eq!(
+        status_field(&text, "Settings"),
+        home.path.join("facade.json").to_str(),
+        "{text}"
+    );
+    assert_eq!(
+        status_field(&text, "Daemon PID"),
+        Some(daemon.to_string().as_str()),
+        "{text}"
+    );
+    assert_eq!(
+        status_field(&text, "Keeper PID"),
+        Some(keeper.to_string().as_str()),
+        "{text}"
+    );
+    assert_eq!(status_field(&text, "Active agents"), Some("1"), "{text}");
+    assert_eq!(
+        status_field(&text, "Connected machines"),
+        Some("-"),
+        "{text}"
     );
     let after = home.hello_result().unwrap();
     assert_eq!(
@@ -670,7 +691,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
         home.submitted_messages()
     );
     assert!(
-        home.agent_from_list_json("renamed").is_none(),
+        home.listed_agent("renamed").is_none(),
         "the refused rename did nothing"
     );
 }
@@ -859,7 +880,7 @@ fn start_asking_from_its_screen(home: &TestHome, name: &str) {
     let started = command
         .env("PATH", &path)
         .env("FAKECLI_LOOK", "agy")
-        .args(["start", "--name", name, "agy"])
+        .args(["start", "-d", "--name", name, "agy"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -1017,7 +1038,7 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
             .env("PATH", &path)
             .env("FAKECLI_LOOK", "agy");
         let started = command
-            .args(["start", "--name", name, "agy"])
+            .args(["start", "-d", "--name", name, "agy"])
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -1192,12 +1213,14 @@ fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     assert_eq!(home.hello_result().unwrap()["build"], pre_release());
     let listed = home
         .command(&test_binaries().facade)
-        .args(["list", "--quiet"])
+        .args(["list"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(
-        listed.status.success() && stderr(&listed).is_empty(),
+        listed.status.success()
+            && listed.stdout.is_empty()
+            && stderr(&listed).starts_with("No active agents.\n"),
         "{}",
         stderr(&listed)
     );
@@ -1208,9 +1231,9 @@ fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     );
 }
 
-/// The machine table and JSON show the version and build of a daemon that has a build suffix.
+/// The machine table shows the version and v3 keeps the build suffix.
 #[test]
-fn machine_list_shows_the_version_and_json_keeps_the_build() {
+fn machine_list_shows_the_version_and_v3_keeps_the_build() {
     let home = TestHome::new("machineversion");
     let version = pre_release();
     let build = format!("{version}+4f2a");
@@ -1229,9 +1252,7 @@ fn machine_list_shows_the_version_and_json_keeps_the_build() {
         "{table}"
     );
 
-    let json = home.run_facade_ok(&["machine", "list", "--json"]);
-    let listed: facade_scenarios::serde_json::Value =
-        facade_scenarios::serde_json::from_str(&json).unwrap();
+    let listed = connect(&home).call_ok("machine.list", json!({}));
     assert_eq!(listed["machines"][0]["build"], build);
 }
 
@@ -1339,6 +1360,8 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
         "{:?}",
         home.submitted_messages()
     );
+    assert!(term.wait_for(secs(10), |text| text.contains("quiet")));
+    let previous = term.output_len();
     home.release_gate("upgrade-quiet");
     let listed = asking.wait_with_output().unwrap();
     assert!(
@@ -1351,13 +1374,15 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
         stderr(&listed)
     );
     assert!(
-        term.wait_for_output(secs(10), ATTACH_RECONNECT_NOTE),
+        term.wait_for_bytes(previous, b"quiet", secs(10)),
         "{}",
         term.text()
     );
-    assert!(term.wait_for(secs(10), |text| text.contains("quiet")
-        && !text.contains(ATTACH_RECONNECT_NOTE)));
-    assert_eq!(term.output_count("Keys not sent:"), 0);
+    assert_eq!(term.output_count(ATTACH_RECONNECT_NOTE), 0);
+    assert_eq!(
+        term.output_count("bytes typed while disconnected were not sent"),
+        0
+    );
     term.send(b"after\r");
     let all = ["before", "during", "quiet", "after"];
     assert!(
@@ -1668,7 +1693,7 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
             .unwrap()
     };
     let facade = test_binaries().facade.clone();
-    let start = run(&facade, &["start", "--name", "started", "fake"]);
+    let start = run(&facade, &["start", "-d", "--name", "started", "fake"]);
     let stop = run(&facade, &["stop", "stopped"]);
     let typing = run(&facade, &["type", "typed", "typed under way"]);
     for gate in gates {
@@ -1767,7 +1792,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         };
         let name = format!("{cli}-run");
         let started = start
-            .args(["start", "--name", &name, cli])
+            .args(["start", "-d", "--name", &name, cli])
             .stdin(Stdio::null())
             .output()
             .unwrap();

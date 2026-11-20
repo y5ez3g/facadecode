@@ -46,12 +46,9 @@ fn session_file(home: &TestHome, id: &str) -> PathBuf {
         .join(facade_rules::SESSION_FILE)
 }
 
-/// The session `facade inspect` shows for agent `name`.
+/// The session the daemon has recorded for this agent.
 fn inspected_session(home: &TestHome, name: &str) -> Value {
-    let inspected = home.run_facade(&["inspect", name, "--json"]);
-    facade_scenarios::serde_json::from_slice::<Value>(&inspected.stdout)
-        .map(|inspected| inspected["session"].clone())
-        .unwrap_or_default()
+    home.inspect_agent(name)["agent"]["session"].clone()
 }
 
 /// In a run Facade started, the run's hooks record its own session and do nothing else: they join

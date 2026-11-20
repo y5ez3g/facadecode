@@ -1,6 +1,7 @@
 //! How the command line reaches the Orchestrator and installs a running replacement. Status,
 //! installers and passive machine links can check for an existing service without starting it.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::keeper::{KEEPER_PROTOCOL_VERSION, MIN_KEEPER_PROTOCOL_VERSION};
 use facade_base::paths::ClientSocket;
 use facade_base::service::{self, Candidate, Report, Service};
-use facade_base::v3::{DAEMON_PROTOCOL_RANGE, TAKEOVER_DAEMON_PROTOCOL_RANGE};
+use facade_base::v3::{AgentLabel, DAEMON_PROTOCOL_RANGE, TAKEOVER_DAEMON_PROTOCOL_RANGE};
 
 use crate::errors::{self, Problem, ServeFailure};
 
@@ -44,10 +45,10 @@ impl From<ConnectFailure> for anyhow::Error {
     }
 }
 
-/// One attempt to reach the daemon again, as [`reconnect`] makes it: whether the caller has
-/// cancelled, and a look at each connection before hello. A takeover has its own deadline after
-/// the initial connection.
+/// One attempt to reach the daemon again, as [`reconnect`] makes it: the attachment's overall
+/// deadline, whether the caller has cancelled, and a look at each connection before hello.
 pub(crate) type Reconnect = dyn Fn(
+    Instant,
     &dyn Fn() -> bool,
     &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure>;
@@ -139,10 +140,11 @@ impl std::error::Error for Unstarted {}
 
 /// Reconnects an attached terminal. Detaching can close any socket that has not finished hello.
 pub(super) fn reconnect(
+    deadline: Instant,
     cancelled: &dyn Fn() -> bool,
     opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure> {
-    let mut client = connect_with_takeover(Purpose::Command, cancelled, opening)?;
+    let mut client = connect_with_takeover(Purpose::Attachment(deadline), cancelled, opening)?;
     client.disable_auto_reconnect();
     Ok(client)
 }
@@ -150,8 +152,18 @@ pub(super) fn reconnect(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Purpose {
     Command,
+    Attachment(Instant),
     Background,
     Install,
+}
+
+impl Purpose {
+    fn deadline(self) -> Option<Instant> {
+        match self {
+            Self::Attachment(deadline) => Some(deadline),
+            _ => None,
+        }
+    }
 }
 
 enum Contact {
@@ -177,13 +189,15 @@ fn connect_with_takeover(
 ) -> Result<DaemonClient, ConnectFailure> {
     let identity = shell_identity();
     let ours = facade_base::build_id();
+    let deadline = purpose.deadline();
     let contact = reach_daemon(
         purpose != Purpose::Install,
         cancelled,
         DAEMON_CONNECT_TIMEOUT,
+        deadline,
         |socket, until| match DaemonClient::connect_v3(socket, &identity, until, opening) {
             Ok(client) => Ok(client.map(Contact::Current)),
-            Err(error) if speaks_v2(&error) => UpgradeClient::connect(socket, until, opening)
+            Err(error) if speaks_v2(&error) => open_upgrade(socket, until, opening, deadline)
                 .map(|client| client.map(Contact::Legacy)),
             Err(error) => Err(error),
         },
@@ -197,9 +211,13 @@ fn connect_with_takeover(
                 return Ok(client);
             }
             drop(client);
-            reach_daemon(false, cancelled, DAEMON_CONNECT_TIMEOUT, |socket, until| {
-                UpgradeClient::connect(socket, until, opening)
-            })?
+            reach_daemon(
+                false,
+                cancelled,
+                DAEMON_CONNECT_TIMEOUT,
+                deadline,
+                |socket, until| open_upgrade(socket, until, opening, deadline),
+            )?
         }
         Contact::Legacy(upgrade) => upgrade,
     };
@@ -209,16 +227,59 @@ fn connect_with_takeover(
     {
         None
     } else {
-        Some(ask_to_take_over(&mut upgrade, &ours)?)
+        Some(ask_to_take_over(&mut upgrade, &ours, purpose)?)
     };
     drop(upgrade);
     follow_takeover(&identity, cancelled, opening, &ours, took_over, purpose)
 }
 
+/// The compatibility hello clears its socket's read timeout. An attachment also bounds the
+/// upgrade request that follows it by the overall reconnect deadline.
+fn open_upgrade(
+    socket: &Path,
+    until: Instant,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+    attachment_deadline: Option<Instant>,
+) -> anyhow::Result<Option<UpgradeClient>> {
+    let Some(deadline) = attachment_deadline else {
+        return UpgradeClient::connect(socket, until, opening);
+    };
+    let mut stream = None;
+    let client = UpgradeClient::connect(socket, until, &mut |candidate| {
+        stream = Some(candidate.try_clone());
+        opening(candidate)
+    })?;
+    if let (Some(_), Some(stream)) = (&client, stream) {
+        let stream = stream?;
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        stream.set_read_timeout(Some(remaining))?;
+        stream.set_write_timeout(Some(remaining))?;
+    }
+    Ok(client)
+}
+
+/// The existing diagnostic and the agents that blocked a keeper takeover, when known.
+#[derive(Debug)]
+struct TakeoverRefusal {
+    message: String,
+    blockers: Vec<AgentLabel>,
+}
+
+impl std::fmt::Display for TakeoverRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TakeoverRefusal {}
+
 /// Sends the handover request using the negotiated compatibility connection.
 fn ask_to_take_over(
     client: &mut UpgradeClient,
     ours: &str,
+    purpose: Purpose,
 ) -> Result<(Instant, DaemonUpgradeResult), ConnectFailure> {
     let asked = Instant::now();
     let program = facade_base::this_program().map_err(permanent)?;
@@ -235,8 +296,18 @@ fn ask_to_take_over(
         .map(|handed| (asked, handed))
         .map_err(|error| {
             let mut message = errors::takeover_refused(ours, &client.hello_result().build, &error);
-            add_legacy_keeper_diagnostic(client, &error, &mut message);
-            permanent(anyhow::anyhow!(message))
+            let blockers = if client.hello_result().protocol == TAKEOVER_DAEMON_PROTOCOL_RANGE[0]
+                && !matches!(purpose, Purpose::Attachment(_))
+            {
+                add_legacy_keeper_diagnostic(client, &error, &mut message)
+            } else {
+                error
+                    .downcast::<ErrorBody>()
+                    .ok()
+                    .filter(|body| body.data.reason == Reason::IncompatibleProtocol)
+                    .map_or_else(Vec::new, |body| body.data.agents)
+            };
+            permanent(TakeoverRefusal { message, blockers })
         })
 }
 
@@ -245,34 +316,65 @@ fn add_legacy_keeper_diagnostic(
     client: &mut UpgradeClient,
     error: &anyhow::Error,
     message: &mut String,
-) {
+) -> Vec<AgentLabel> {
     let keeper_refused = error.downcast_ref::<ErrorBody>().is_some_and(|body| {
         body.data.reason == Reason::IncompatibleProtocol
             && body.message.contains("the running keeper speaks")
     });
-    if client.hello_result().protocol != TAKEOVER_DAEMON_PROTOCOL_RANGE[0] || !keeper_refused {
-        return;
+    if !keeper_refused {
+        return Vec::new();
     }
     let Ok(listed) = client.legacy_agents() else {
-        return;
+        return Vec::new();
     };
     let local_id = &client.hello_result().machine_id;
     // The legacy diagnostic asks only this machine. Its name may be shared by a peer.
     let selector = facade_base::v3::address::exact_machine_selector(local_id);
-    let addresses: Vec<_> = listed
+    let blockers: Vec<_> = listed
         .agents
         .into_iter()
         .filter(|agent| {
             !agent.guest && agent.process == facade_base::process::ProcessState::Running
         })
         .filter(|agent| &agent.machine_id == local_id)
-        .map(|agent| facade_base::v3::address::format_agent_address(&agent.reference(), &selector))
+        .map(|agent| {
+            let reference = agent.reference();
+            AgentLabel {
+                address: facade_base::v3::address::format_agent_address(&reference, &selector),
+                reference,
+                name: agent.name,
+                cli: agent.cli,
+                state: legacy_agent_state(agent.state),
+                resumable: agent.session.is_some(),
+            }
+        })
         .collect();
-    if !addresses.is_empty() {
+    if !blockers.is_empty() {
+        let addresses: Vec<_> = blockers
+            .iter()
+            .map(|agent| agent.address.as_str())
+            .collect();
         message.push_str(&format!(
             "\n  tip: stop {} and retry the upgrade",
             addresses.join(", ")
         ));
+    }
+    blockers
+}
+
+fn legacy_agent_state(state: facade_base::daemon::AgentState) -> facade_base::v3::AgentState {
+    use facade_base::{daemon::AgentState as Old, v3::AgentState as Current};
+
+    match state {
+        Old::Starting => Current::Starting,
+        Old::Working => Current::Working,
+        Old::WaitingForYou => Current::WaitingForYou,
+        Old::JustDone => Current::JustDone,
+        Old::Idle => Current::Idle,
+        Old::Error => Current::Error,
+        Old::Ended => Current::Ended,
+        Old::Unknown => Current::Unknown,
+        Old::Unrecognized => Current::Unrecognized,
     }
 }
 
@@ -286,24 +388,26 @@ fn follow_takeover(
     purpose: Purpose,
 ) -> Result<DaemonClient, ConnectFailure> {
     let timeout = takeover_timeout();
-    let client =
-        reach_daemon(
-            false,
-            cancelled,
-            timeout,
-            |socket, until| match DaemonClient::connect_v3(socket, identity, until, opening) {
-                Ok(client) => Ok(client.filter(|client| client.hello_result.build == ours)),
-                Err(error) if speaks_v2(&error) => Ok(None),
-                Err(error) => Err(error),
-            },
-        )
-        .map_err(|failure| match failure {
-            ConnectFailure::Timeout(error) => ConnectFailure::Timeout(
-                error.context(errors::takeover_silent(ours, timeout.as_secs())),
-            ),
-            failure => failure,
-        })?;
-    if let Some((asked, handed)) = handed {
+    let client = reach_daemon(
+        false,
+        cancelled,
+        timeout,
+        purpose.deadline(),
+        |socket, until| match DaemonClient::connect_v3(socket, identity, until, opening) {
+            Ok(client) => Ok(client.filter(|client| client.hello_result.build == ours)),
+            Err(error) if speaks_v2(&error) => Ok(None),
+            Err(error) => Err(error),
+        },
+    )
+    .map_err(|failure| match failure {
+        ConnectFailure::Timeout(error) => {
+            ConnectFailure::Timeout(error.context(errors::takeover_silent(ours, timeout.as_secs())))
+        }
+        failure => failure,
+    })?;
+    if let Some((asked, handed)) = handed
+        && !matches!(purpose, Purpose::Attachment(_))
+    {
         eprintln!(
             "{}",
             errors::took_over(
@@ -416,6 +520,7 @@ pub(super) fn machine_socket(wake: bool) -> anyhow::Result<Option<ClientSocket>>
         } else {
             RUNNING_TIMEOUT
         },
+        None,
         |socket, _| match ClientSocket::connect(socket) {
             Ok(client) => Ok(Some(client)),
             Err(error) if transient_transport(&error) => Ok(None),
@@ -434,6 +539,7 @@ fn reach_daemon<T>(
     start_if_idle: bool,
     cancelled: &dyn Fn() -> bool,
     timeout: Duration,
+    attachment_deadline: Option<Instant>,
     mut open: impl FnMut(&Path, Instant) -> anyhow::Result<Option<T>>,
 ) -> Result<T, ConnectFailure> {
     let home = if start_if_idle {
@@ -444,7 +550,10 @@ fn reach_daemon<T>(
     .map_err(permanent)?;
     let logs = home.join("logs");
     let socket = facade_base::paths::daemon_socket().map_err(permanent)?;
-    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let deadline =
+        attachment_deadline.map_or(started + timeout, |until| until.min(started + timeout));
+    let wait = deadline.saturating_duration_since(started);
     let mut keeper = StartedKeeper::default();
     loop {
         if cancelled() {
@@ -467,7 +576,8 @@ fn reach_daemon<T>(
             keeper.start().map_err(permanent)?;
         }
         if Instant::now() >= deadline {
-            let why = errors::daemon_slow(daemon_runs, timeout.as_secs());
+            let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+            let why = errors::daemon_slow(daemon_runs, seconds);
             let hidden = errors::see_log(&why, &logs);
             let log = logs.join("daemon.log");
             let starting = daemon_runs;
@@ -513,8 +623,20 @@ fn services_running(core: &Path) -> std::io::Result<bool> {
 
 /// Connects only to running services and waits for this build to take over.
 pub(super) fn takeover() -> anyhow::Result<i32> {
-    if services_running(&facade_base::paths::core_dir()?)? {
-        connect_with_takeover(Purpose::Install, &|| false, &mut |_| true)?;
+    if services_running(&facade_base::paths::core_dir()?)?
+        && let Err(failure) = connect_with_takeover(Purpose::Install, &|| false, &mut |_| true)
+    {
+        let error = anyhow::Error::from(failure);
+        if std::env::var("FACADE_UPGRADE_REPORT").as_deref() == Ok("1")
+            && let Some(refusal) = error.downcast_ref::<TakeoverRefusal>()
+            && !refusal.blockers.is_empty()
+            && let Ok(payload) = serde_json::to_string(&refusal.blockers)
+        {
+            let mut stdout = std::io::stdout().lock();
+            let _ =
+                writeln!(stdout, "facade-upgrade-blockers {payload}").and_then(|()| stdout.flush());
+        }
+        return Err(error);
     }
     Ok(0)
 }

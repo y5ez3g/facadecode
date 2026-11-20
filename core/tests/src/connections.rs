@@ -122,6 +122,14 @@ impl DaemonTestClient {
         self.request("call", json!({ "op": op, "args": args }))
     }
 
+    pub fn call_ok(&mut self, op: &str, args: Value) -> Value {
+        let response = self.call(op, args);
+        response
+            .get("result")
+            .unwrap_or_else(|| panic!("{op} failed: {response}"))
+            .clone()
+    }
+
     /// Returns the changes received for this watch.
     pub fn changes(&self, watch: u64) -> Vec<Value> {
         self.notifications

@@ -14,7 +14,8 @@ pub fn upgrade_command() -> Command {
     }
     #[cfg(windows)]
     {
-        let mut command = Command::new("powershell.exe");
+        // Encode the captured receipt without changing the calling console's code page.
+        let mut command = super::programs::command("powershell.exe");
         let download = format!(
             "try {{ {} }} {WINDOWS_DOWNLOAD_ERROR}",
             powershell_download(&latest("ps1"))

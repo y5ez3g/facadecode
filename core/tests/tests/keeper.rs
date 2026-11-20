@@ -197,11 +197,11 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         wait_until(secs(10), || !alive(&agent.process)),
         "the replacement keeper stopped the CLI"
     );
-    let inspected = home.run_facade_ok(&["inspect", "w1"]);
+    let inspected = home.run_facade_ok(&["status", "w1"]);
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State:") && line[6..].trim() == "stopped"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Stopped"),
         "the record retains the stop: {inspected}"
     );
 }

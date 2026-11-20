@@ -1,19 +1,16 @@
-Stop one or more agents
+Stop a running agent.
 
-Usage: facade stop <AGENT>...
+The agent's record and saved session are kept, so you can read its final
+screen or resume it later.
 
-Stop running managed agents. You can read their screens, remove them or resume a saved session.
-Agents they started keep running.
+Usage: facade stop <AGENT>
 
-Arguments:
-  <AGENT>...  Agent addresses, IDs or names
+Examples
+  facade stop Nova
+  facade stop a5@laptop
 
-Options:
-  -h, --help  Print help
+Arguments
+  <AGENT>  Agent reference, agent ID, or unique name
 
-Examples:
-  # Stop agent a3
-  facade stop a3
-
-  # Stop two agents, by ID and by name
-  facade stop a3 Ada
+Options
+  -h, --help  Show help

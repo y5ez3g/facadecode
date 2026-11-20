@@ -407,11 +407,7 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     pause_process(keeper);
     home.kill_daemon();
     std::fs::remove_file(home.daemon_socket()).unwrap();
-    assert!(
-        term.wait_for_output(LOADED_TIMEOUT, "Connection lost. Reconnecting."),
-        "{}",
-        term.text_with_scrollback()
-    );
+    assert!(home.hello_result().is_none());
     term.send(b"held keys");
     home.wait_for_gate("attach-buffered-input");
 
@@ -440,7 +436,7 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         term.text_with_scrollback()
     );
     assert!(
-        term.wait_for_output(secs(2), "error: could not reconnect to Facade"),
+        term.wait_for_output(secs(2), "error: Lost connection to held ("),
         "{}",
         term.text_with_scrollback()
     );
@@ -449,6 +445,7 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         "{}",
         term.text_with_scrollback()
     );
+    assert_eq!(term.output_count(ATTACH_RECONNECT_NOTE), 0);
     let listener = peer.join().unwrap();
     listener.set_nonblocking(true).unwrap();
     let extra = listener.accept();

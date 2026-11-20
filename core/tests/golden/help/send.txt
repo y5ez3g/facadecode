@@ -1,17 +1,18 @@
-Send a message to an agent
+Send a message to an active agent or guest.
+
+Waits up to 30 seconds for delivery: types and submits the message in a
+managed agent's terminal once its input box is free, or waits for a guest to
+read it over MCP. Messages can be up to 8,000 characters and 540 lines.
 
 Usage: facade send <RECIPIENT> <TEXT>
 
-Send a message from the command line. The Orchestrator waits up to 30 seconds for a managed agent's
-terminal to receive it or a guest to read it. On delivery, this command prints the message address.
+Examples
+  facade send Nova "Check the build"
+  facade send a5@laptop "Please review the diff in src/parser.rs"
 
-Arguments:
-  <RECIPIENT>  Agent address, ID or name
-  <TEXT>       Message text, up to 8,000 characters and 540 lines
+Arguments
+  <RECIPIENT>  Active agent or guest reference, agent ID, or unique name
+  <TEXT>       Message text
 
-Options:
-  -h, --help  Print help
-
-Examples:
-  # Ask an agent on gpu to review a change
-  facade send a3@gpu "Please review the diff in src/parser.rs"
+Options
+  -h, --help  Show help

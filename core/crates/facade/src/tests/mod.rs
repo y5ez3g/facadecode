@@ -66,6 +66,7 @@ fn inspection(
         "input": { "state": "usable", "evidence": "the input frame" },
         "session_tracking": rule.is_some(),
         "viewers": viewers,
+        "attached_in": viewers,
         "started_by": started_by,
     }))
     .expect("a valid inspection")

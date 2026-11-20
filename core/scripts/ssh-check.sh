@@ -101,12 +101,16 @@ else
 fi
 
 # 3. Log in again: both run; two's screen is as it was, and typing reaches it.
-if ssh -o BatchMode=yes "$dest" "$login facade list --json" > "$tmp/list.out" 2>&1 &&
-	grep -qE '"name"[[:space:]]*:[[:space:]]*"one"' "$tmp/list.out" &&
-	grep -qE '"name"[[:space:]]*:[[:space:]]*"two"' "$tmp/list.out"; then
+if ssh -o BatchMode=yes "$dest" "$login facade list" > "$tmp/list.out" 2> "$tmp/list.err" &&
+	awk '
+		NR == 1 && $1 == "NAME" && $2 == "REF" { header = 1 }
+		$1 == "one" && $2 ~ /^a[0-9]+@[^[:space:]]+$/ { one = $2 }
+		$1 == "two" && $2 ~ /^a[0-9]+@[^[:space:]]+$/ { two = $2 }
+		END { exit !(header && NR == 3 && one && two && one != two) }
+	' "$tmp/list.out"; then
 	ok "3 a new login lists one and two running"
 else
-	fail "3 a new login does not list one and two running: see $tmp/list.out"
+	fail "3 a new login does not list one and two running: see $tmp/list.out and $tmp/list.err"
 fi
 open_login three "facade attach two"
 i=0

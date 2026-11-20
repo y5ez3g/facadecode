@@ -6,8 +6,7 @@ use facade_scenarios::*;
 
 /// `agent.inspect` for an agent.
 fn inspect(home: &TestHome, agent: &str) -> Value {
-    let inspected = connect(home).call("agent.inspect", json!({ "agent": agent }));
-    inspected["result"].clone()
+    home.inspect_agent(agent)
 }
 
 #[test]
@@ -16,8 +15,8 @@ fn a_rule_s_name_runs_its_cli_and_a_custom_program_runs_as_given() {
     home.start_named_fake("named", &[]);
     home.add_custom_cli("raw", &test_binaries().fakecli);
     home.run_facade_ok(&["start", "-d", "--name", "raw", "raw"]);
-    let named = home.agent_from_list_json("named").unwrap();
-    let raw = home.agent_from_list_json("raw").unwrap();
+    let named = home.listed_agent("named").unwrap();
+    let raw = home.listed_agent("raw").unwrap();
     assert_eq!(
         (named["cli"].as_str(), raw["cli"].as_str()),
         (Some("fake"), Some("raw")),
@@ -28,17 +27,9 @@ fn a_rule_s_name_runs_its_cli_and_a_custom_program_runs_as_given() {
         inspect(&home, "raw").get("rule").is_none(),
         "a custom program has no rule"
     );
-    let plain = home.run_facade_ok(&["inspect", "raw"]);
-    let label = |name: &str| {
-        plain
-            .lines()
-            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
-            .map(str::trim)
-    };
-    assert!(
-        label("CLI") == Some("raw (custom program)") && label("Session") == Some("none"),
-        "{plain}"
-    );
+    let plain = home.run_facade_ok(&["status", "raw"]);
+    assert_eq!(status_field(&plain, "CLI"), Some("raw"), "{plain}");
+    assert_eq!(status_field(&plain, "Session"), Some("-"), "{plain}");
     let help = home.run_facade_ok(&["start", "--help"]);
     assert!(
         help.contains("claude") && !help.contains("fake"),
@@ -173,88 +164,72 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
         "{}",
         inspect(&home, "reader")
     );
-    let plain = home.run_facade_ok(&["inspect", "reader"]);
-    // Each line is a label in sentence case, padded to one column, and its value.
-    let fields: Vec<(&str, &str)> = plain
-        .lines()
+    let plain = home.run_facade_ok(&["status", "reader"]);
+    let mut lines = plain.lines();
+    let address = &agent.address;
+    assert_eq!(
+        lines.next(),
+        Some(format!("reader ({address})").as_str()),
+        "{plain}"
+    );
+    let fields: Vec<_> = lines
+        .filter(|line| !line.is_empty())
         .map(|line| {
-            let (label, value) = line.split_once(':').unwrap_or_else(|| panic!("{plain}"));
+            let (label, value) = line.split_once("  ").unwrap_or_else(|| panic!("{plain}"));
             assert_eq!(
-                label.len() + 1 + value.len() - value.trim_start().len(),
-                15,
+                line.len() - value.trim_start().len(),
+                "Working directory".len() + 2,
                 "{plain}"
             );
-            (label, value.trim())
+            label
         })
         .collect();
-    let value = |label: &str| {
-        fields
-            .iter()
-            .find(|(given, _)| *given == label)
-            .map(|(_, value)| *value)
-    };
     assert_eq!(
-        fields.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+        fields,
         [
-            "ID",
-            "Name",
-            "Type",
             "State",
-            "Machine",
             "CLI",
-            "Folder",
-            "Args",
-            "Model",
-            "Effort",
+            "PID",
+            "Working directory",
+            "Launch command",
+            "Type",
+            "Machine",
+            "Title",
             "Session",
             "Started by",
-            "Viewers",
+            "Attached in",
             "YOLO"
         ],
         "{plain}"
     );
     assert!(
-        value("Folder")
+        status_field(&plain, "Working directory")
             .map(std::path::Path::new)
             .is_some_and(|folder| folder.is_absolute() && folder.ends_with("project")),
         "{plain}"
     );
-    let address = home.agent_record(&agent.id).unwrap()["address"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let machine = address.split_once('@').map(|(_, machine)| machine);
-    assert_eq!(
+    for (label, expected) in [
+        ("Type", Some("Managed")),
         (
-            value("ID"),
-            value("Name"),
-            value("Type"),
-            value("Machine"),
-            value("CLI"),
-            value("Args"),
-            value("Model"),
-            value("Effort"),
-            value("Session"),
-            value("Started by"),
-            value("Viewers"),
-            value("YOLO"),
+            "Machine",
+            address.split_once('@').map(|(_, machine)| machine),
         ),
-        (
-            Some(address.as_str()),
-            Some("reader"),
-            Some("managed"),
-            machine,
-            Some("fake"),
-            Some("none"),
-            Some("none"),
-            Some("none"),
-            Some("none"),
-            Some("command line"),
-            Some("none"),
-            Some("on")
-        ),
-        "{plain}"
+        ("CLI", Some("fake")),
+        ("Session", Some("-")),
+        ("Started by", Some("Shell")),
+        ("Attached in", Some("-")),
+        ("YOLO", Some("on")),
+    ] {
+        assert_eq!(status_field(&plain, label), expected, "{plain}");
+    }
+    let inspection = inspect(&home, "reader");
+    let record = &inspection["agent"];
+    assert_eq!(record["args"], json!([]));
+    assert!(
+        record["model"].is_null() && record["effort"].is_null(),
+        "{record}"
     );
+    assert_eq!(inspection["viewers"], json!([]));
     wire.call("agent.stop", json!({ "agent": agent.id }));
     let ended = inspect(&home, "reader");
     assert_eq!(

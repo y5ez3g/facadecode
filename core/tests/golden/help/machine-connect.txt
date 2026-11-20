@@ -1,17 +1,19 @@
-Connect to a machine while this command runs
+Connect to a remote machine temporarily over SSH.
 
-Usage: facade machine connect [OPTIONS] <SSH-ARG>...
+Keeps the connection open while this command runs (press Ctrl+C to
+disconnect) without saving it. Runs SSH in this terminal and installs or
+upgrades Facade on the remote machine if needed. Put '--home' before SSH
+options and destination; everything after is passed to ssh.
 
-Keep a temporary SSH connection until you press Ctrl-C or close this terminal. Use the same SSH
-arguments and optional '--home' as 'facade machine add'.
+Usage: facade machine connect [--home <PATH>] <SSH_ARGS>...
 
-Arguments:
-  <SSH-ARG>...  The arguments you would use after ssh, including the destination
+Examples
+  facade machine connect devbox
+  facade machine connect -p 2222 user@devbox
 
-Options:
-      --home <PATH>  Remote Facade home. Put this option before the SSH arguments
-  -h, --help         Print help
+Arguments
+  <SSH_ARGS>...  SSH flags and destination, passed directly to ssh
 
-Examples:
-  # Connect to gpu for now
-  facade machine connect gpu
+Options
+      --home <PATH>  Facade home directory on the remote machine (default: ~/.facade)
+  -h, --help         Show help

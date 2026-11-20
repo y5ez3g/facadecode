@@ -131,7 +131,7 @@ fn a_managed_read_delivers_only_whole_inline_messages() {
     let mut texts = messages.map(|message| message["text"].as_str().unwrap());
     texts.sort_unstable();
     assert_eq!(texts, [long[0].as_str(), long[1].as_str()]);
-    let roster: Value = serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
+    let roster = home.agent_list();
     let bob_address = &roster["agents"]
         .as_array()
         .unwrap()
@@ -293,9 +293,13 @@ fn a_long_screen_is_complete_and_inline() {
         facade_base::daemon::plain(after["data"]["text"].as_str().unwrap()).contains(&expected),
         "the stopped agent retains the output"
     );
-    let shell = home.run_facade_ok(&["screen", "long", "--lines", "200", "--json"]);
-    let shell: Value = serde_json::from_str(&shell).unwrap();
-    assert_eq!(shell["text"], after["data"]["text"]);
+    let screen = connect(&home).call_ok("agent.screen", json!({ "agent": "long", "lines": 200 }));
+    assert_eq!(screen["text"], after["data"]["text"]);
+    let shell = home.run_facade_ok(&["screen", "long", "--lines", "200"]);
+    assert_eq!(
+        shell,
+        facade_base::daemon::plain(screen["text"].as_str().unwrap())
+    );
 
     let address = after["data"]["address"].as_str().expect("an agent address");
     for (tool, args) in [
@@ -465,7 +469,7 @@ fn a_prompt_given_to_claude_stays_its_prompt() {
     let started = home
         .facade_in_an_empty_home()
         .env("PATH", &path)
-        .args(["start", "claude", "fix the bug"])
+        .args(["start", "-d", "claude", "fix the bug"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -487,23 +491,20 @@ fn a_prompt_given_to_claude_stays_its_prompt() {
     );
 }
 
-/// `facade start --prompt` gives the agent its first message once its CLI's tools connected,
+/// A terminal client's v3 start gives the agent its first message once its CLI's tools connected,
 /// however long after the start that is, as its time to be delivered counts from then: the person's
 /// words under a header naming them, as `facade send` sends them, and what was last said to the
 /// agent.
 #[test]
 fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
     let home = TestHome::new("startprompt");
-    let path = home.path_with_test_programs();
-    let started = home
-        .command(&test_binaries().facade)
-        .env("PATH", &path)
-        .env("FAKECLI_MCP_DELAY_MS", "32000")
-        .args(["start", "--prompt", "say hi", "--name", "ada", "fake"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(started.status.success(), "{}", stderr(&started));
+    let started = home.start_with_prompt(
+        "ada",
+        "fake",
+        "say hi",
+        &[("FAKECLI_MCP_DELAY_MS", "32000")],
+    );
+    assert!(started["result"].is_object(), "{started}");
     // The CLI starts its Facade server 32 seconds after its own start, past the 29.5 seconds a
     // message has to be delivered: the CLI shows its empty input while its tools connect.
     assert!(
@@ -570,15 +571,9 @@ fn a_start_prompt_is_the_agent_s_first_message_once_its_tools_connected() {
 #[test]
 fn the_tools_connect_once_the_cli_has_asked_for_them() {
     let home = TestHome::new("toolslisted");
-    let started = home
-        .command(&test_binaries().facade)
-        .env("PATH", home.path_with_test_programs())
-        .env("FACADE_TEST_GATES", "mcp-before-tools-list")
-        .args(["start", "--prompt", "say hi", "--name", "ada", "fake"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(started.status.success(), "{}", stderr(&started));
+    home.start_facade_with(&[("FACADE_TEST_GATES", "mcp-before-tools-list")]);
+    let started = home.start_with_prompt("ada", "fake", "say hi", &[]);
+    assert!(started["result"].is_object(), "{started}");
     home.wait_for_gate("mcp-before-tools-list");
     assert!(
         wait_until(secs(30), || home.screen("ada").contains("❯")),
@@ -611,10 +606,10 @@ fn the_tools_connect_once_the_cli_has_asked_for_them() {
     );
 }
 
-/// A Shell start from an agent's terminal still records the command line as the creator and
-/// delivers the first prompt from the command line.
+/// Shell commands from an agent's terminal still act for the command line, whether starting
+/// an agent or sending it a message.
 #[test]
-fn a_start_prompt_from_an_agent_s_terminal_comes_from_the_command_line() {
+fn a_start_and_send_from_an_agent_s_terminal_come_from_the_command_line() {
     let home = TestHome::new("startpromptfrom");
     let mut wire = connect(&home);
     let (facade, path, log) = (
@@ -623,8 +618,8 @@ fn a_start_prompt_from_an_agent_s_terminal_comes_from_the_command_line() {
         home.fake_log.display().to_string(),
     );
     let script = format!(
-        "FAKECLI_LOG='{log}' PATH='{path}' '{facade}' start --prompt 'from the boss' --name child \
-         fake </dev/null; sleep 60"
+        "FAKECLI_LOG='{log}' PATH='{path}' '{facade}' start -d --name child fake </dev/null && \
+         '{facade}' send child 'from the boss' </dev/null; sleep 60"
     );
     let boss = start_script(&mut wire, &home, "boss", &script);
     assert!(
@@ -650,7 +645,6 @@ fn a_start_prompt_from_an_agent_s_terminal_comes_from_the_command_line() {
 #[test]
 fn a_start_prompt_that_could_not_be_sent_starts_nothing() {
     let home = TestHome::new("startpromptrefused");
-    let path = home.path_with_test_programs();
     let lines = vec!["a line"; 600].join("\n");
     home.add_custom_cli("script", std::path::Path::new(SH.as_str()));
     for (prompt, cli, said) in [
@@ -670,18 +664,9 @@ fn a_start_prompt_that_could_not_be_sent_starts_nothing() {
             "the prompt cannot go as a message: text has 600 lines; a message carries at most 540",
         ),
     ] {
-        let refused = home
-            .command(&test_binaries().facade)
-            .env("PATH", &path)
-            .args(["start", "--prompt", prompt, cli])
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert!(
-            !refused.status.success() && stderr(&refused).contains(said),
-            "{cli}: {}",
-            stderr(&refused)
-        );
+        let refused = home.start_with_prompt("never-started", cli, prompt, &[]);
+        let diagnostic = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(diagnostic.contains(said), "{cli}: {refused}");
     }
     assert_eq!(home.agents(), Vec::<Value>::new(), "nothing started");
 }
@@ -698,7 +683,7 @@ fn a_server_started_before_its_agent_is_listed_serves_the_installed_run() {
     let mut start = home
         .command(&test_binaries().facade)
         .env("PATH", home.path_with_test_programs())
-        .args(["start", "--name", "ada", "fake"])
+        .args(["start", "-d", "--name", "ada", "fake"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .spawn()
@@ -730,12 +715,12 @@ fn a_facade_command_in_an_agent_s_terminal_starts_with_its_own_environment() {
     let facade = test_binaries().facade.display().to_string();
     let path = home.path_with_test_programs();
     let script = format!(
-        "PATH='{path}' FAKECLI_NAME='named by the command' '{facade}' start --name child fake \
+        "PATH='{path}' FAKECLI_NAME='named by the command' '{facade}' start -d --name child fake \
          </dev/null; sleep 60"
     );
     let shell = start_script(&mut wire, &home, "shell", &script);
     assert!(
-        wait_until(secs(30), || home.agent_from_list_json("child").is_some()),
+        wait_until(secs(30), || home.listed_agent("child").is_some()),
         "{}",
         home.screen(&shell)
     );
@@ -767,7 +752,7 @@ fn a_muse_code_run_gets_its_server_by_c_unless_its_project_names_one() {
         let started = home
             .facade_in_an_empty_home()
             .env("PATH", &path)
-            .args(["start", "--name", name, "muse"])
+            .args(["start", "-d", "--name", name, "muse"])
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -860,7 +845,7 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_whose_runs_ended_meanwhile() {
         .facade_in_an_empty_home()
         .env("PATH", &path)
         .env("FAKECLI_LOOK", "agy")
-        .args(["start", "--name", "ada", "agy"])
+        .args(["start", "-d", "--name", "ada", "agy"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -902,7 +887,7 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_its_predecessor_kept() {
         .facade_in_an_empty_home()
         .env("PATH", &path)
         .env("FAKECLI_LOOK", "agy")
-        .args(["start", "--name", "ada", "agy"])
+        .args(["start", "-d", "--name", "ada", "agy"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -946,7 +931,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
         let started = command
             .env("PATH", &path)
             .env("FAKECLI_LOOK", "agy")
-            .args(["start", "--name", name, "agy"])
+            .args(["start", "-d", "--name", name, "agy"])
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -1120,7 +1105,7 @@ fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
         .env("FAKECLI_LOOK", "agy")
         .env("FAKECLI_PANEL_DELAY_MS", "2000");
     let started = command
-        .args(["start", "--name", "ada", "agy"])
+        .args(["start", "-d", "--name", "ada", "agy"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -1175,17 +1160,17 @@ fn a_start_prompt_to_antigravity_goes_once_its_tools_are_ready() {
         programs.display(),
         home.path_with_test_programs()
     );
-    let mut command = home.facade_in_an_empty_home();
-    command
-        .env("PATH", &path)
-        .env("FAKECLI_LOOK", "agy")
-        .env("FAKECLI_PANEL_DELAY_MS", "2000");
-    let started = command
-        .args(["start", "--prompt", "say hi", "--name", "ada", "agy"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(started.status.success(), "{}", stderr(&started));
+    let started = home.start_with_prompt(
+        "ada",
+        "agy",
+        "say hi",
+        &[
+            ("PATH", &path),
+            ("FAKECLI_LOOK", "agy"),
+            ("FAKECLI_PANEL_DELAY_MS", "2000"),
+        ],
+    );
+    assert!(started["result"].is_object(), "{started}");
     let prompt = "📨 Message from the command line · m1\nsay hi";
     assert!(
         wait_until(secs(30), || home
@@ -1331,7 +1316,7 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
         };
         let started = command
             .env("PATH", &path)
-            .args(["start", "--name", cli, cli])
+            .args(["start", "-d", "--name", cli, cli])
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -1600,7 +1585,7 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     let home = TestHome::new("mcpenv");
     let agent = home.start_named_fake("boss", &[("FAKECLI_NAME", "named by the boss")]);
     let mut boss = McpTestClient::open_stripped(&home, &agent.id);
-    let cwd = home.agent_from_list_json("boss").unwrap()["folder"]
+    let cwd = home.listed_agent("boss").unwrap()["folder"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2381,7 +2366,7 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
             "{cli}'s guests get a run's tools"
         );
         let meta = meta_key.map_or(Value::Null, |key| json!({ key: session }));
-        assert_eq!(home.run_facade_ok(&["list", "-q"]).trim(), "a1@golden-host");
+        assert_eq!(home.list_table().column("REF"), ["a1@golden-host"]);
         let listed = server.call_in("list_agents", json!({}), meta.clone());
         assert_eq!(listed["status"], "success", "{listed}");
         let rows = listed["data"]["agents"]

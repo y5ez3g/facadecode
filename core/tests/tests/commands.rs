@@ -71,7 +71,7 @@ fn interactive_start_propagates_process_exit_status() {
         "a2",
         "sleep 1; kill -TERM $$",
         128 + libc::SIGTERM,
-        "was ended by SIGTERM.",
+        "exited on signal SIGTERM.",
     ));
     let sh = home.shell_cli();
     for (id, script, code, ended) in ends {
@@ -85,8 +85,12 @@ fn interactive_start_propagates_process_exit_status() {
             .wait_exit(secs(15))
             .unwrap_or_else(|| panic!("{script}: never ended"));
         assert_eq!(status.code(), Some(code), "{script}: {}", term.text());
-        let address = home.agent_record(id).expect("recorded")["address"].clone();
-        let said = format!("{} {ended}", address.as_str().unwrap_or_default());
+        let record = home.agent_record(id).expect("recorded");
+        let (name, reference) = (
+            record["name"].as_str().unwrap(),
+            record["address"].as_str().unwrap(),
+        );
+        let said = format!("{name} ({reference}) {ended}");
         assert!(
             term.wait_for(secs(2), |text| text.contains(&said)),
             "{script}: {}",
@@ -104,26 +108,34 @@ fn commands_start_list_read_and_stop_agents() {
     assert_eq!(
         table.header,
         [
-            "ID", "NAME", "TYPE", "STATE", "CLI", "TITLE", "FOLDER", "AGE"
+            "NAME",
+            "REF",
+            "STATE",
+            "CLI",
+            "TYPE",
+            "WORKING DIRECTORY",
+            "STARTED",
+            "TITLE"
         ],
         "{table:?}"
     );
     let row = table.row("NAME", "w1").expect("w1 is listed");
     let address = home.agent_record("a1").expect("recorded")["address"].clone();
-    let age = table.cell(row, "AGE");
+    let age = table
+        .cell(row, "STARTED")
+        .strip_suffix("m ago")
+        .expect("a recent start");
     assert!(
-        table.cell(row, "ID") == address
-            && table.cell(row, "TYPE") == "managed"
-            && table.cell(row, "STATE") == "starting"
+        table.cell(row, "REF") == address
+            && table.cell(row, "TYPE") == "Managed"
+            && table.cell(row, "STATE") == "Starting"
             && table.cell(row, "CLI") == "fake"
             && table.cell(row, "TITLE") == "-"
-            && age.len() > 1
-            && age[..age.len() - 1]
-                .bytes()
-                .all(|byte| byte.is_ascii_digit()),
+            && !age.is_empty()
+            && age.bytes().all(|byte| byte.is_ascii_digit()),
         "{table:?}"
     );
-    let started_folder = Path::new(table.cell(row, "FOLDER"));
+    let started_folder = Path::new(table.cell(row, "WORKING DIRECTORY"));
     assert_eq!(
         real_path(started_folder).unwrap(),
         real_path(&home.project).unwrap(),
@@ -151,11 +163,11 @@ fn commands_start_list_read_and_stop_agents() {
         "{:?}",
         home.list_table()
     );
-    let inspected = home.run_facade_ok(&["inspect", "w1"]);
+    let inspected = home.run_facade_ok(&["status", "w1"]);
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State:") && line[6..].trim() == "stopped"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Stopped"),
         "{inspected}"
     );
     assert!(home.agent_from_watch("w2").expect("w2 is recorded")["process"] == "running");
@@ -177,7 +189,7 @@ fn list_and_inspect_show_names_on_one_line_in_aligned_columns() {
     // The newest start first.
     let name = table.cell(&table.rows[1], "NAME");
     assert!(
-        table.cell(&table.rows[1], "ID") == address
+        table.cell(&table.rows[1], "REF") == address
             && name.starts_with("evil [2J")
             && name.ends_with("name")
             && table.cell(&table.rows[0], "NAME") == "w2",
@@ -191,13 +203,12 @@ fn list_and_inspect_show_names_on_one_line_in_aligned_columns() {
             .all(|line| line[..state_at].ends_with("   ") && !line[state_at..].starts_with(' ')),
         "every line's STATE column starts at the same place: {list}"
     );
-    let inspected = home.run_facade_ok(&["inspect", "a1"]);
-    let named = inspected
-        .lines()
-        .find(|line| line.starts_with("Name:"))
-        .unwrap_or_default();
+    let inspected = home.run_facade_ok(&["status", "a1"]);
+    let named = inspected.lines().next().unwrap_or_default();
     assert!(
-        !inspected.contains('\u{1b}') && named.contains("evil [2J") && named.ends_with("name"),
+        !inspected.contains('\u{1b}')
+            && named.contains("evil [2J")
+            && named.ends_with(&format!("name ({})", address.as_str().unwrap())),
         "{inspected}"
     );
 }
@@ -273,7 +284,9 @@ fn commands_resolve_agent_ids_numbers_and_names() {
     }
     let none = home.run_facade(&["screen", "a9"]);
     assert!(
-        none.status.code() == Some(1) && stderr(&none) == "error: no agent \"a9\" was found\n",
+        none.status.code() == Some(1)
+            && stderr(&none)
+                == "error: No agent or guest matches \"a9\".\nRun 'facade list' to find an agent.\n",
         "{}",
         stderr(&none)
     );

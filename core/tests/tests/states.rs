@@ -108,7 +108,7 @@ fn a_turn_is_working_then_just_done_until_a_terminal_shows_the_agent() {
         "text without Enter says nothing"
     );
     // The list's table says the states in the words of the protocol.
-    assert_eq!(home.list_state("w1").as_deref(), Some("just_done"));
+    assert_eq!(home.list_state("w1").as_deref(), Some("Just done"));
     let _term = attach(&home, "w1");
     reaches(&home, "w1", "idle");
 }
@@ -135,11 +135,11 @@ fn waiting_for_you_says_what_for_an_error_says_the_cli_s_words_and_a_report_take
         waiting["state_detail"],
         json!({ "kind": "permission", "text": "Run npm test?" })
     );
-    assert_eq!(home.list_state("w1").as_deref(), Some("waiting_for_you"));
-    let inspected = home.run_facade_ok(&["inspect", "w1"]);
+    assert_eq!(home.list_state("w1").as_deref(), Some("Waiting for you"));
+    let inspected = home.run_facade_ok(&["status", "w1"]);
     assert!(
-        inspected.lines().any(|line| line.starts_with("State:")
-            && line[6..].trim() == "waiting for you: permission (Run npm test?)"),
+        inspected.lines().any(|line| line.starts_with("State ")
+            && line[5..].trim() == "Waiting for you (permission: Run npm test?)"),
         "{inspected}"
     );
     submit(&home, "w1", "/fake error Out of credits");
@@ -148,11 +148,11 @@ fn waiting_for_you_says_what_for_an_error_says_the_cli_s_words_and_a_report_take
     submit(&home, "w1", "/fake clear");
     let unknown = reaches(&home, "w1", "unknown");
     assert_eq!(unknown["state_detail"], json!({ "reason": "taken_back" }));
-    let inspected = home.run_facade_ok(&["inspect", "w1"]);
+    let inspected = home.run_facade_ok(&["status", "w1"]);
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State:") && line[6..].trim_start().starts_with("unknown")),
+            .any(|line| line.starts_with("State ") && line[5..].trim_start().starts_with("Unknown")),
         "{inspected}"
     );
     assert_eq!(
@@ -173,7 +173,7 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
     for (name, how) in [
         ("normal", "normal"),
         ("crashed", "crashed"),
-        ("stopped", "stopped"),
+        ("stopped", "Stopped"),
     ] {
         let ended = reaches(&home, name, "ended");
         assert_eq!(ended["state_detail"], json!({ "how": how }), "{name}");
@@ -181,15 +181,15 @@ fn an_ended_agent_says_whether_it_ended_normally_was_stopped_or_crashed() {
     // The list shows running agents alone; inspect says how each ended.
     assert!(home.list_table().rows.is_empty(), "{:?}", home.list_table());
     for (name, said) in [
-        ("normal", "exited: code 0"),
-        ("crashed", "exited: code 3"),
+        ("normal", "Exited (code 0)"),
+        ("crashed", "Exited (code 3)"),
         ("stopped", "stopped"),
     ] {
-        let inspected = home.run_facade_ok(&["inspect", name]);
+        let inspected = home.run_facade_ok(&["status", name]);
         assert!(
             inspected
                 .lines()
-                .any(|line| line.starts_with("State:") && line[6..].trim() == said),
+                .any(|line| line.starts_with("State ") && line[5..].trim() == said),
             "{name}: {inspected}"
         );
     }

@@ -479,7 +479,7 @@ fn a_send_cut_off_by_a_restart_is_repeated_by_its_request_id_and_typed_once() {
     );
     assert_eq!(error_reason(&ended), "ended", "{ended}");
 
-    home.run_facade_ok(&["rm", "worker"]);
+    home.remove_agent("worker");
     let replacement = home.start_named_fake("worker", &[]);
     assert_ne!(replacement.id, worker.id);
     drop(reconnected);

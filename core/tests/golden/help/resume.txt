@@ -1,32 +1,25 @@
-List resumable sessions or resume one
+List or resume stopped agents and saved CLI sessions.
 
-Usage: facade resume [OPTIONS] [REFERENCE]
+Without arguments, lists resumable stopped agents across reachable machines
+and saved sessions in the current directory. Pass a reference from the list
+to open it in this terminal, or pass '-d' to resume in the background. Press
+Ctrl+] to detach and leave it running.
 
-Without a reference, list resumable agents and CLI sessions for the current folder. Use '--folder'
-or '--machine' to look elsewhere. With a reference, resume the agent or start a new agent from a CLI
-session. In an interactive terminal, Ctrl-] detaches and returns 0. If the agent exits first, this
-command returns the CLI's exit code. Use '-d' to run in the background.
+Usage:
+  facade resume [--machine <MACHINE>]
+  facade resume [-d|--detach] <REFERENCE>
 
-Arguments:
-  [REFERENCE]  Agent address, agent name, or CLI session such as claude:7f3e9a1c
-
-Options:
-  -d, --detach             Resume in the background and print the agent's address
-      --machine <MACHINE>  Machine name or ID from 'facade machine list'
-      --folder <FOLDER>    Select a folder for CLI sessions
-      --all                List ended agents beyond this folder
-      --json               Print resumable sessions as JSON
-  -h, --help               Print help
-
-Examples:
-  # List resumable agents and CLI sessions
+Examples
   facade resume
+  facade resume --machine devbox
+  facade resume a5@laptop
+  facade resume 7f3e9a1c
+  facade resume -d a5@laptop
 
-  # List ended agents across awake machines
-  facade resume --all
+Arguments
+  <REFERENCE>  Stopped agent reference, agent ID, unique name, or session ID
 
-  # Resume agent a3 and work with it here
-  facade resume a3
-
-  # Resume agent a3 in the background
-  facade resume -d a3
+Options
+      --machine <MACHINE>  List resumable agents and sessions on this machine only
+  -d, --detach           Resume in the background
+  -h, --help             Show help

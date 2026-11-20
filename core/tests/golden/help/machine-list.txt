@@ -1,17 +1,12 @@
-List machines
+List the local machine and known remote machines.
 
-Usage: facade machine list [OPTIONS]
+Shows each machine's name, ID, connection state, Facade version, route,
+and whether its SSH connection is saved.
 
-See connected and saved machines, their state, and how to sign in again when needed. Copy a machine
-selector from the table to use in a command.
+Usage: facade machine list
 
-Options:
-      --json  Print machines as JSON
-  -h, --help  Print help
-
-Examples:
-  # See your machines
+Examples
   facade machine list
 
-  # Print every machine as JSON
-  facade machine list --json
+Options
+  -h, --help  Show help

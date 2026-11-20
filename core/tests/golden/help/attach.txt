@@ -1,20 +1,16 @@
-Watch an agent and use its terminal
+Open a running managed agent's terminal.
+
+Streams the agent's live terminal here so you can watch or type directly.
+Press Ctrl+] to detach and leave the agent running in the background.
 
 Usage: facade attach <AGENT>
 
-Watch a running managed agent and use its terminal. Ctrl-] detaches and returns 0. If the agent
-exits first, this command returns the CLI's exit code. Use 'facade screen' to read an ended agent's
-last screen.
+Examples
+  facade attach Nova
+  facade attach a5@laptop
 
-Arguments:
-  <AGENT>  Agent address such as a17@gpu, or an agent ID or name
+Arguments
+  <AGENT>  Running managed agent reference, agent ID, or unique name
 
-Options:
-  -h, --help  Print help
-
-Examples:
-  # Watch agent a3
-  facade attach a3
-
-  # Watch the agent named Pixel
-  facade attach Pixel
+Options
+  -h, --help  Show help

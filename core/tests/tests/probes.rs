@@ -56,7 +56,7 @@ fn start(home: &TestHome, name: &str, env: &[(&str, &str)], shown: &str) -> Stri
         .env("FAKECLI_KEYS", keys_file(home, name))
         .env("FAKECLI_LOOK", "muse")
         .envs(env.iter().copied())
-        .args(["start", "--name", name, "fake muse"])
+        .args(["start", "-d", "--name", name, "fake muse"])
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -146,7 +146,7 @@ fn a_hint_is_probed_once_a_run_and_the_message_goes_in() {
         .env("FAKECLI_KEYS", &file)
         .env("FAKECLI_LOOK", "muse")
         .env("FAKECLI_HINT", "review my changes")
-        .args(["resume", "muse"])
+        .args(["resume", "-d", "muse"])
         .stdin(std::process::Stdio::null())
         .output()
         .unwrap();
@@ -171,7 +171,10 @@ fn a_draft_before_the_cursor_is_probed_once_and_holds_the_message() {
     let file = keys_file(&home, "muse");
     start(&home, "muse", &[("FAKECLI_DRAFT_AT_START", DRAFT)], DRAFT);
     let (sent, said) = send(&home, "muse", "a message");
-    assert!(!sent && said.contains("a draft held"), "{said}");
+    assert!(
+        !sent && said.contains("Its terminal has an unfinished draft."),
+        "{said}"
+    );
     assert_eq!(pressed(&file), b" \x7f", "one probe, through every retry");
     assert!(home.submitted_messages().is_empty());
     assert!(
@@ -202,7 +205,7 @@ fn a_probe_that_finds_neither_takes_its_space_out_and_reads_unknown() {
         .map(String::from)
         .collect();
     assert!(
-        !sent && said.contains("not recognized as empty"),
+        !sent && said.contains("The delivery deadline passed before its terminal was ready."),
         "{said}\n{probes:#?}"
     );
     assert_eq!(pressed(&file), b" \x7f");
@@ -232,7 +235,7 @@ fn a_space_that_does_not_show_gets_no_backspace() {
         );
         let (sent, said) = send(&home, "muse", "a message");
         assert!(
-            !sent && said.contains("not recognized as empty"),
+            !sent && said.contains("The delivery deadline passed before its terminal was ready."),
             "{label}: {said}"
         );
         assert_eq!(pressed(&file), b" ", "{label}: the space alone");
@@ -252,7 +255,10 @@ fn a_probe_whose_backspace_does_not_restore_the_row_presses_nothing_more() {
     ];
     start(&home, "muse", &env, DRAFT);
     let (sent, said) = send(&home, "muse", "a message");
-    assert!(!sent && said.contains("a draft held"), "{said}");
+    assert!(
+        !sent && said.contains("Its terminal has an unfinished draft."),
+        "{said}"
+    );
     assert_eq!(pressed(&file), b" \x7f", "nothing after the Backspace");
     assert!(home.submitted_messages().is_empty());
 }

@@ -1,29 +1,25 @@
-Type text or press keys in an agent's terminal
+Type text or press keys in a running agent's terminal.
 
-Usage: facade type <AGENT> <TEXT> [--enter]
-       facade type <AGENT> --key <KEY>...
+Use 'facade send' to deliver a complete message safely without overwriting a
+draft. Use 'facade type' to edit a draft, navigate menus, or answer prompts.
 
-Type text into the agent's terminal, or press keys to answer its menus. Add '--enter' to press Enter
-after the text. To give the agent a task or ask it a question, use 'facade send'.
+Usage:
+  facade type <AGENT> <TEXT> [--enter]
+  facade type <AGENT> --key <KEY> [--key <KEY>]...
 
-Arguments:
-  <AGENT>  Agent address such as a17@gpu, or an agent ID or name
-  <TEXT>   Text to type. Put '--' before text that starts with '-'
+Examples
+  facade type Nova "draft"
+  facade type Nova "hello" --enter
+  facade type Nova --key Esc
+  facade type Nova --key Down --key Enter
 
-Options:
-      --enter      Press Enter after the text
-  -k, --key <KEY>  Press a key. Repeat for 1 to 100 keys. Use Enter, Esc, Tab, Shift+Tab, Backspace,
-                   Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to
-                   Ctrl+Z or one non-control Unicode code point. Names and Ctrl combinations ignore
-                   ASCII case
-  -h, --help       Print help
+Arguments
+  <AGENT>  Running managed agent reference, agent ID, or unique name
+  <TEXT>   Text to type
 
-Examples:
-  # Type text and press Enter
-  facade type a3 "run the tests" --enter
-
-  # Press Esc
-  facade type a3 --key Esc
-
-  # Pick the second item of a menu
-  facade type a3 -k Down -k Enter
+Options
+      --enter      Press Enter after typing <TEXT>
+  -k, --key <KEY>  Press a key (repeat for more): Enter, Esc, Tab, Shift+Tab,
+                   Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp,
+                   PageDown, Space, Ctrl+A to Ctrl+Z, or one character
+  -h, --help       Show help

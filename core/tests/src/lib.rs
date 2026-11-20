@@ -28,7 +28,7 @@ pub fn secs(seconds: u64) -> Duration {
     Duration::from_secs(seconds)
 }
 
-/// The notice shown while a Shell Attach reconnects.
+/// The former reconnect line, which must stay absent from the terminal.
 pub const ATTACH_RECONNECT_NOTE: &str =
     "Connection lost. Reconnecting. Keys typed while disconnected are not sent.";
 
@@ -88,6 +88,13 @@ pub fn stdout(output: &Output) -> String {
 
 pub fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+pub fn status_field<'a>(out: &'a str, label: &str) -> Option<&'a str> {
+    out.lines().find_map(|line| {
+        let tail = line.strip_prefix(label)?;
+        tail.starts_with("  ").then(|| tail.trim())
+    })
 }
 
 #[cfg(test)]

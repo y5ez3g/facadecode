@@ -170,11 +170,11 @@ fn the_services_exit_when_idle_and_the_records_survive() {
         !socket_exists(&home.daemon_socket()) && !socket_exists(&home.keeper_socket()),
         "the sockets are removed"
     );
-    let inspected = home.run_facade_ok(&["inspect", &agent]);
+    let inspected = home.run_facade_ok(&["status", &agent]);
     assert!(
         inspected
             .lines()
-            .any(|line| line.starts_with("State:") && line[6..].trim() == "exited: code 4"),
+            .any(|line| line.starts_with("State ") && line[5..].trim() == "Exited (code 4)"),
         "{inspected}"
     );
     assert_eq!(home.hello_result().unwrap()["agents"], 0);

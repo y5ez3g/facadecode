@@ -8,7 +8,7 @@ use facade_scenarios::*;
 
 fn managed_relay(home: &TestHome, name: &str) -> (String, McpTestClient) {
     let started = home.run_facade_ok(&["start", "-d", "--name", name, "fake"]);
-    let address = started.trim();
+    let address = started_ref(&started);
     let (id, _) = address.split_once('@').expect("start gives an address");
     (address.into(), McpTestClient::open_configured(home, id))
 }
@@ -24,9 +24,7 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     let ada_address = ada_address.as_str();
     let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
     assert_eq!(
-        home.run_facade_ok(&["list", "-q"])
-            .lines()
-            .collect::<Vec<_>>(),
+        home.list_table().column("REF"),
         [ada_address],
         "the external connection joins on its first tool call"
     );
@@ -156,9 +154,9 @@ fn a_guest_waits_for_the_reply_to_its_message() {
     assert!(status.success(), "{status:?}");
     assert!(
         wait_until(secs(10), || !home
-            .run_facade_ok(&["list", "-q"])
-            .lines()
-            .any(|id| id == guest_address)),
+            .list_table()
+            .column("REF")
+            .contains(&guest_address)),
         "the Guest stayed listed after disconnecting"
     );
 }
@@ -181,7 +179,7 @@ fn a_guest_with_yolo_off_sees_the_agent_it_started() {
     assert_eq!(roster["status"], "success", "{roster}");
     let agents = roster["data"]["agents"].as_array().expect("the agent list");
     assert!(
-        agents.iter().all(|row| row["id"] != outside.trim()),
+        agents.iter().all(|row| row["id"] != started_ref(&outside)),
         "{roster}"
     );
     let helper = agents
@@ -252,7 +250,7 @@ fn guest_history_keeps_long_messages_inline_across_pages() {
 
 /// The full active roster remains readable by an MCP client without access to the daemon's files.
 #[test]
-fn a_large_roster_matches_the_shell_roster_inline() {
+fn a_large_roster_matches_the_protocol_and_shell_rosters_inline() {
     let home = TestHome::new("large-roster");
     let (_, mut observer) = managed_relay(&home, "observer");
     let guests: Vec<_> = (0..56)
@@ -264,12 +262,21 @@ fn a_large_roster_matches_the_shell_roster_inline() {
         })
         .collect();
 
-    let shell = home.run_facade_ok(&["list", "--json"]);
-    let shell: Value = facade_scenarios::serde_json::from_str(&shell).unwrap();
-    let rows = shell["agents"].as_array().expect("the Shell roster");
+    let roster = home.agent_list();
+    let mut rows = roster["agents"].as_array().expect("the v3 roster").clone();
+    let table = home.list_table();
+    assert_eq!(
+        table.column("REF"),
+        rows.iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    for row in &mut rows {
+        row.as_object_mut().unwrap().shift_remove("reference");
+    }
     assert_eq!(rows.len(), guests.len() + 1);
     assert!(
-        facade_scenarios::serde_json::to_string(rows)
+        facade_scenarios::serde_json::to_string(&rows)
             .unwrap()
             .chars()
             .count()
@@ -279,7 +286,7 @@ fn a_large_roster_matches_the_shell_roster_inline() {
     let mcp = observer.call("list_agents", json!({}));
     assert_eq!(mcp["status"], "success", "{mcp}");
     assert!(mcp["data"].get("file").is_none(), "{mcp}");
-    assert_eq!(mcp["data"]["agents"], shell["agents"]);
+    assert_eq!(mcp["data"]["agents"], json!(rows));
 }
 
 /// A guest's server serves whatever its variables and words: a variable that is not UTF-8, which
@@ -337,10 +344,8 @@ fn report_run_session(home: &TestHome, agent: &str, session: &str) {
     assert!(child.wait().unwrap().success());
 }
 
-/// `facade inspect --json` of `agent`.
 fn inspected(home: &TestHome, agent: &str) -> Value {
-    facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["inspect", "--json", agent]))
-        .unwrap_or_default()
+    home.inspect_agent(agent)["agent"].clone()
 }
 
 /// A session nested in a Facade run of its own CLI, as `claude -p` that the run's model starts,
@@ -378,7 +383,7 @@ fn a_session_nested_in_a_run_of_its_own_cli_is_a_guest_of_its_own() {
             stdout(&started),
             stderr(&started)
         );
-        let address = stdout(&started).trim().to_string();
+        let address = started_ref(&stdout(&started)).to_string();
         let run = started_id(&stdout(&started));
         // A run's session is reported as its CLI names it: a UUID here.
         let (own, nested) = (
@@ -506,10 +511,9 @@ fn a_guest_starts_an_agent_with_its_cli_s_environment() {
     );
 }
 
-/// The Guests of `home`'s roster, as `facade list --json` gives them.
+/// The Guests of the active v3 roster.
 fn guest_rows(home: &TestHome) -> Vec<Value> {
-    let listed: Value =
-        facade_scenarios::serde_json::from_str(&home.run_facade_ok(&["list", "--json"])).unwrap();
+    let listed = home.agent_list();
     listed["agents"]
         .as_array()
         .unwrap()

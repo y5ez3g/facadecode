@@ -1,21 +1,14 @@
-List active agents
+List active agents and connected guests.
 
-Usage: facade list [OPTIONS]
-Alias: facade ls
+Shows currently running managed agents and connected MCP guests across
+reachable machines, newest first. Stopped agents move to 'facade resume'.
 
-Show running managed agents and connected guests on machines already connected, with the latest
-starts and resumes first. Use 'facade resume' to find ended agents with saved sessions. '--machine'
-queries one machine and wakes it if needed.
+Usage: facade list [--machine <MACHINE>]
 
-Options:
-  -q, --quiet              Print only agent addresses
-      --json               Print agents and machines as JSON
-      --machine <MACHINE>  Machine name or ID from 'facade machine list'
-  -h, --help               Print help
-
-Examples:
-  # See which agents are working or waiting for you
+Examples
   facade list
+  facade list --machine devbox
 
-  # Print agent addresses, one per line
-  facade ls -q
+Options
+      --machine <MACHINE>  List agents on this machine only
+  -h, --help               Show help

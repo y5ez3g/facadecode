@@ -1,17 +1,17 @@
-Rename a machine
+Rename a machine.
+
+Updates the machine's name. Names may contain lowercase letters, digits,
+and hyphens ('-').
 
 Usage: facade machine rename <MACHINE> <NAME>
 
-Give a machine a new name, from any machine with a route to it. Addresses with the old name, such as
-'a17@gpu', stop working.
+Examples
+  facade machine rename devbox lab
+  facade machine rename 9a0d44b2 devbox-east
 
-Arguments:
-  <MACHINE>  Machine name or ID from 'facade machine list'
-  <NAME>     New name
+Arguments
+  <MACHINE>  Machine name or ID (from 'facade machine list')
+  <NAME>     New machine name (lowercase letters, digits, and hyphens ('-'))
 
-Options:
-  -h, --help  Print help
-
-Examples:
-  # Rename machine gpu to lab
-  facade machine rename gpu lab
+Options
+  -h, --help  Show help
