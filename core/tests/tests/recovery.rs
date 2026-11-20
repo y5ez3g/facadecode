@@ -1128,6 +1128,7 @@ fn attach_keeps_retrying_while_recovery_waits_and_detaches_at_once() {
     pause_process(keeper);
     home.kill_daemon();
     assert!(wait_until(secs(10), || home.hello_result().is_none()));
+    home.wait_for_gate("attach-disconnected");
     term.send(b"held keys");
     home.wait_for_gate("attach-buffered-input");
     std::thread::sleep(secs(12));

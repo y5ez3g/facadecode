@@ -784,6 +784,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     assert_eq!(terminal.output_count(ATTACH_RECONNECT_NOTE), 0);
     assert_eq!(second.agent_record(id).unwrap()["pid"], worker["pid"]);
     assert!(terminal.wait_exit(secs(0)).is_none(), "{}", terminal.text());
+    first.wait_for_gate("attach-disconnected");
     let discarded = b"discard while disconnected";
     terminal.send(discarded);
     first.wait_for_gate("attach-buffered-input");
