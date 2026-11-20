@@ -148,7 +148,8 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const launch = await until('the Shell start argv at the fake CLI', () => fs.existsSync(launchFile)
 		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[] }
 		: undefined);
-	assert.deepStrictEqual(launch.args.slice(-2), ['--', prompt]);
+	assert.deepStrictEqual(launch.args.filter(arg => arg === '--' || arg === prompt), ['--', prompt], 'the two Shell arguments each arrive once');
+	assert.strictEqual(launch.args[launch.args.indexOf('--') + 1], prompt, 'the prompt immediately follows its separator');
 	const window = await open(folder, 'sh');
 	assert.strictEqual(await window.act<boolean>({ kind: 'window-component' }), false);
 	const status = run('status');

@@ -770,7 +770,8 @@ async function main(): Promise<void> {
 				fs.renameSync(temporary, file);
 			}
 		};
-		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, CLAUDE_CONFIG_DIR: claudeConfig };
+		// Each journey has its own Facade home and can start an a1.
+		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, `${runName}-cli`), CLAUDE_CONFIG_DIR: claudeConfig };
 		const start = (folder: string, name: string, control: string, port: number) => {
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
