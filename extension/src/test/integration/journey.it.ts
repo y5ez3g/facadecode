@@ -291,6 +291,12 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			// Read the same output that draws this terminal, on either engine.
 			watching = pty.onDidWrite(data => { screen += data; });
 			const file = `${RECORD}.bytes.${alias}`;
+			if (!RUST && CLI === 'agy') {
+				// The old engine can finish its startup MCP probe after the fake CLI reports Idle.
+				const probe = Buffer.from('\x1b[200~/mcp\x1b[201~\r\x1b');
+				await until('the MCP panel close key to reach the fake CLI', async () =>
+					fs.existsSync(file) && fs.readFileSync(file).includes(probe) || undefined);
+			}
 			const offset = fs.existsSync(file) ? fs.statSync(file).size : 0;
 			const received = () => fs.existsSync(file) ? fs.readFileSync(file).subarray(offset) : Buffer.alloc(0);
 			const text = 'hello 中文 🚀';
