@@ -369,6 +369,7 @@ fn follow_agent(
         if let Some(end) = show_snapshot(&mut screen, input)? {
             return Ok(end);
         }
+        service::mark_for_test("attach-reconnected");
     }
 }
 

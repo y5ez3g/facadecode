@@ -1319,7 +1319,9 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
     home.start_fake("w2");
     home.run_facade_ok(&["stop", "w2"]);
     let mut term = TestTerminal::spawn(
-        home.command(&test_binaries().facade).args(["attach", "w1"]),
+        home.command(&test_binaries().facade)
+            .env("FACADE_TEST_GATES", "attach-evidence")
+            .args(["attach", "w1"]),
         100,
         30,
     );
@@ -1360,7 +1362,7 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
         "{:?}",
         home.submitted_messages()
     );
-    assert!(term.wait_for(secs(10), |text| text.contains("quiet")));
+    // The quiet daemon still sends input but has stopped reading the terminal's output.
     let previous = term.output_len();
     home.release_gate("upgrade-quiet");
     let listed = asking.wait_with_output().unwrap();
@@ -1373,8 +1375,10 @@ fn an_attached_terminal_reconnects_through_a_takeover_and_its_keys_arrive_once()
         "{}",
         stderr(&listed)
     );
+    home.wait_for_gate("attach-reconnected");
     assert!(
-        term.wait_for_bytes(previous, b"quiet", secs(10)),
+        term.wait_for_bytes(previous, b"quiet", secs(10))
+            && term.wait_for(secs(10), |text| text.contains("quiet")),
         "{}",
         term.text()
     );
