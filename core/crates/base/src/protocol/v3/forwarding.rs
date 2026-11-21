@@ -4,8 +4,46 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{AgentRef, Message};
+use super::{AgentRef, Message, TerminalColors};
 use crate::operations::{CallParams, EmptyResult, Operation, OperationVisitor};
+
+/// Asks the machines on an authenticated route to open saved connections passively.
+pub const MACHINE_PROBE_ROUTE: &str = "machine.probe_route";
+
+/// Announces an authenticated machine's idle daemon exit to a capable machine.
+pub const MACHINE_SLEEPING: &str = "machine.sleeping";
+
+/// The watch's identity at the holder of a running agent's terminal.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AttachBinding {
+    pub viewer: u64,
+    pub boot_id: String,
+}
+
+/// A response to a forwarded watch on an authenticated machine session.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ForwardWatchResult {
+    /// Watch ID scoped to this machine session.
+    pub watch: u64,
+    /// The snapshot for the forwarded watch's topic.
+    pub snapshot: Value,
+    /// The holder supplies this binding for a live shared Attach.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attach: Option<AttachBinding>,
+}
+
+/// Parameters of a forwarded `attach.resize` on an authenticated machine session.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ForwardAttachResizeArgs {
+    /// The holder's viewer ID from the live watch response.
+    pub viewer: u64,
+    /// The holder's daemon start ID from the same response.
+    pub boot_id: String,
+    pub cols: u16,
+    pub rows: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colors: Option<TerminalColors>,
+}
 
 /// An identity verified by the daemon that accepted the original request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

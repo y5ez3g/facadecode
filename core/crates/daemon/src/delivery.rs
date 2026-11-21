@@ -271,6 +271,7 @@ impl Daemon {
         self: &Arc<Self>,
         caller: &Caller,
         mut args: v3::AgentSendArgs,
+        exact_recipient: Option<AgentRef>,
         incoming: Option<Forwarded>,
         mut cancel: Cancel,
     ) -> Result<Value, ErrorBody> {
@@ -300,7 +301,6 @@ impl Daemon {
                         "a forwarded send needs the resolved local recipient",
                     )
                 })?;
-            args.request_id = call.request_id;
             (recipient, sender_from(caller, call.from_name), true)
         } else {
             let sender = sender_from(caller, self.caller_name(caller));
@@ -319,16 +319,21 @@ impl Daemon {
             let (route, replay) = match retained {
                 Some(route) => (route, true),
                 None => {
-                    if args.reply_to_machine_id.is_some() {
-                        return Err(ErrorBody::invalid_argument("provide the reply in reply_to"));
-                    }
                     self.check_message_sender(caller)?;
-                    let reply = self.original_reply(caller, args.reply_to.as_deref())?;
-                    let resolving = self.addressed_agent(
+                    let reply = self.original_reply(
                         caller,
-                        v3::AgentTarget::Address {
+                        args.reply_to.as_deref(),
+                        args.reply_to_machine_id.as_deref(),
+                    )?;
+                    let selection = exact_recipient.map_or_else(
+                        || v3::AgentTarget::Address {
                             agent: args.to.clone(),
                         },
+                        |reference| v3::AgentTarget::Reference { reference },
+                    );
+                    let resolving = self.addressed_agent(
+                        caller,
+                        selection,
                         OperationTarget::Send {
                             allow_unsupported_receipt: args.allow_unsupported_receipt,
                         },
@@ -365,7 +370,8 @@ impl Daemon {
         if recipient.machine_id != self.machine_id {
             let target = &recipient.machine_id;
             let routed =
-                tokio::time::timeout_at(due.instant, self.ensure_machine_route(target)).await;
+                tokio::time::timeout_at(due.instant, self.ensure_machine_route(target, caller))
+                    .await;
             match routed {
                 Ok(Ok(())) => {}
                 _ if replay => return Err(send_unconfirmed()),
@@ -412,9 +418,11 @@ impl Daemon {
                             unavailable.execution == ExecutionOutcome::OutcomeUnknown
                         })
                     })
-                    && let Ok(Ok(())) =
-                        tokio::time::timeout_at(due.instant, self.network.ensure_route(target))
-                            .await
+                    && let Ok(Ok(())) = tokio::time::timeout_at(
+                        due.instant,
+                        self.ensure_machine_route(target, caller),
+                    )
+                    .await
                     && let Ok(left) = send_time_left(due.instant)
                 {
                     let retried = self
@@ -512,6 +520,7 @@ impl Daemon {
         &self,
         caller: &Caller,
         input: Option<&str>,
+        exact_machine: Option<&str>,
     ) -> Result<Option<(MessageRef, AgentRef)>, ErrorBody> {
         let Some(input) = input else {
             return Ok(None);
@@ -523,11 +532,20 @@ impl Daemon {
         };
         let parsed = addresses::parse_message_address(input)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-        let machine_id = parsed
-            .machine
-            .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
-            .transpose()?
-            .unwrap_or_else(|| self.machine_id.clone());
+        let machine_id = if let Some(machine) = exact_machine {
+            if parsed.machine.is_some() || !crate::network::is_uuid_v4(machine) {
+                return Err(ErrorBody::invalid_argument(
+                    "reply_to requires a full machine ID",
+                ));
+            }
+            machine.to_owned()
+        } else {
+            parsed
+                .machine
+                .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
+                .transpose()?
+                .unwrap_or_else(|| self.machine_id.clone())
+        };
         let reference = MessageRef {
             machine_id,
             message_id: parsed.message_id.into(),
@@ -566,7 +584,7 @@ impl Daemon {
     ) -> Option<MessageRef> {
         let candidate = candidate.filter(|reference| reference.machine_id == self.machine_id)?;
         let (reference, original_sender) = self
-            .original_reply(caller, Some(&candidate.message_id))
+            .original_reply(caller, Some(&candidate.message_id), None)
             .ok()??;
         (reference == candidate && &original_sender == recipient).then_some(candidate)
     }

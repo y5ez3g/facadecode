@@ -140,7 +140,7 @@ pub(super) fn is_number(input: &str, prefix: char) -> bool {
     })
 }
 
-pub(crate) fn format_reference(id: &str, machine_selector: Option<&str>) -> String {
+pub fn format_reference(id: &str, machine_selector: Option<&str>) -> String {
     match machine_selector {
         Some(machine) => format!("#{id}@{machine}"),
         None => format!("#{id}"),

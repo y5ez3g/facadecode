@@ -202,6 +202,7 @@ have full reach for the actions they offer.
 | build | The programs of one build, in `core/bin/<build>/`, with its ConPTY folder on Windows | — |
 | install | Copy a build's programs, and on Windows its ConPTY folder, into `core/bin/<build>/` | — |
 | version | A three-part version number | — |
+| API version | The positive integer selected independently by the daemon or keeper for one connection | build version |
 | sync | The daemon giving a keeper the terminals it lacks, with `agent.sync` | hand over |
 | takeover, take over | Switching the running Orchestrator to a newer build | hand over, upgrade (for the service switch) |
 | drain | The daemon letting calls under way finish before a newer build takes over | — |
@@ -230,7 +231,7 @@ have full reach for the actions they offer.
 | sleeping, sleep | A machine whose Orchestrator exited because it had no running agents, local entry points using it, or work in progress | asleep, offline, unreachable (for this) |
 | wake | Start a sleeping machine's Orchestrator over SSH when an operation names it or needs it along the saved route to the named machine | reconnect (for this) |
 | unreachable | A known machine the Orchestrator could not reach over the network | sleeping, ended, removed (for this) |
-| disconnected | The display state of a remote card or attached terminal after its live feed is lost. It keeps the last view until a fresh snapshot arrives | unreachable (for a view), ended, removed |
+| disconnected | A saved connection appears as `Disconnected` in the machine table when it has no live connection or connection attempt in progress and the current daemon has recorded no probe or connection failure. A remote card or attached terminal is disconnected after losing its live feed and keeps the last view until a fresh snapshot arrives | sleeping, unreachable, ended, removed |
 | SSH interaction required | The state of a saved connection when background SSH needs a person to authenticate or verify the host. Shell shows `needs SSH login` and gives the `facade machine add` command to run | unreachable (for this reason) |
 | machine ID conflict | Two live daemons claim the same machine ID with different daemon start IDs. Facade refuses the conflicting connection and reports both paths with `machine_id_conflict` | duplicate machine name, alternate route (for this) |
 

@@ -169,14 +169,9 @@ impl DaemonClient {
         opening: &mut dyn FnMut(&ClientSocket) -> bool,
         protocol_range: [u32; 2],
     ) -> anyhow::Result<Option<Self>> {
-        let stream = match ClientSocket::connect(socket) {
-            Err(err) if transient_transport(&err) => return Ok(None),
-            Err(err) => anyhow::bail!("cannot connect to {}: {err}", socket.display()),
-            Ok(stream) => stream,
-        };
-        if !opening(&stream) {
+        let Some(stream) = connect_transport(socket, opening)? else {
             return Ok(None);
-        }
+        };
         Self::hello_until(stream, identity, until, protocol_range)
     }
 
@@ -240,10 +235,26 @@ impl DaemonClient {
                     sessions: identity.sessions.clone(),
                     window: None,
                     numbers_given: None,
+                    capabilities: Vec::new(),
+                    foreground: false,
                     machine: None,
                 },
             )
         } else {
+            let mut capabilities = Vec::new();
+            if protocol_range == v3::DAEMON_PROTOCOL_RANGE {
+                capabilities
+                    .extend([v3::CAP_MACHINE_DISCONNECTED, v3::CAP_ATTACH].map(str::to_owned));
+                if identity.kind == ClientKind::Terminal {
+                    capabilities.extend(
+                        [
+                            v3::CAP_MACHINE_CONNECT_EXPECTED_ID,
+                            v3::CAP_RESUME_LIST_LOCAL,
+                        ]
+                        .map(str::to_owned),
+                    );
+                }
+            }
             Request::new(
                 Some(HELLO_ID),
                 methods::HELLO,
@@ -251,6 +262,8 @@ impl DaemonClient {
                     protocol_range,
                     build: crate::build_id(),
                     kind: identity.kind,
+                    capabilities,
+                    foreground: false,
                     machine: None,
                 },
             )
@@ -676,4 +689,17 @@ const RETRIED_KINDS: [ErrorKind; 9] = [
 /// data are permanent.
 pub fn transient_transport(err: &io::Error) -> bool {
     RETRIED_KINDS.contains(&err.kind()) || is_connection_lost(err)
+}
+
+/// Opens a local transport and lets its caller inspect it before hello.
+pub(crate) fn connect_transport(
+    socket: &Path,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+) -> anyhow::Result<Option<ClientSocket>> {
+    let stream = match ClientSocket::connect(socket) {
+        Err(error) if transient_transport(&error) => return Ok(None),
+        Err(error) => anyhow::bail!("cannot connect to {}: {error}", socket.display()),
+        Ok(stream) => stream,
+    };
+    Ok(opening(&stream).then_some(stream))
 }

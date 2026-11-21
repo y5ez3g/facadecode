@@ -1273,6 +1273,7 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
     harness
         .send(AgentCommand::AttachViewer {
             viewer: 1,
+            sizing: ViewerSizing::Legacy,
             name: Some("terminal one".into()),
             attachment: None,
             allow_ended: false,

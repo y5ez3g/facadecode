@@ -1,14 +1,11 @@
-//! Typing and resizing, kept in order. On one connection, `agent.type` and `agent.resize` for the
-//! same agent run one after another, as sent; each agent has its own lane, so an agent that takes
-//! no input holds up only what was sent to it.
+//! Typing for one agent runs in receive order, in its own lane. An Attach resize waits for the
+//! matching reference's lane before changing the viewer's size.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use facade_base::daemon::AgentResize;
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::operations::Operation;
-use serde_json::Value;
+use facade_base::api_v1::ErrorBody;
+use facade_base::api_v1::daemon::{AgentRef, AgentTarget, AgentTypeArgs, DaemonCall};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 use super::connection::Peer;
@@ -22,8 +19,7 @@ const MAX_LANE_BYTES: usize = 1024 * 1024;
 /// A request waiting in its lane, with the room it takes there until it is answered.
 struct Queued {
     id: Option<u64>,
-    operation: String,
-    args: Value,
+    args: AgentTypeArgs,
     _room: OwnedSemaphorePermit,
 }
 
@@ -45,25 +41,14 @@ pub(super) struct Lanes(HashMap<LaneTarget, Lane>);
 #[derive(PartialEq, Eq, Hash)]
 enum LaneTarget {
     Address(String),
-    Reference {
-        machine_id: String,
-        agent_id: String,
-    },
+    Reference(AgentRef),
 }
 
 impl LaneTarget {
-    /// Groups repeated references without resolving an agent or choosing a machine.
-    fn from_args(args: &Value) -> Self {
-        let reference = &args["reference"];
-        match (
-            reference["machine_id"].as_str(),
-            reference["agent_id"].as_str(),
-        ) {
-            (Some(machine_id), Some(agent_id)) => Self::Reference {
-                machine_id: machine_id.to_string(),
-                agent_id: agent_id.to_string(),
-            },
-            _ => Self::Address(args["agent"].as_str().unwrap_or_default().to_string()),
+    fn of(target: &AgentTarget) -> Self {
+        match target {
+            AgentTarget::Selector(selector) => Self::Address(selector.clone()),
+            AgentTarget::Reference(reference) => Self::Reference(reference.clone()),
         }
     }
 }
@@ -95,21 +80,16 @@ impl Lanes {
         &mut self,
         context: &LaneContext<S>,
         id: Option<u64>,
-        operation: String,
-        args: Value,
+        args: AgentTypeArgs,
         size: usize,
     ) {
-        let agent = LaneTarget::from_args(&args);
+        let agent = LaneTarget::of(&args.target);
         if !self.0.contains_key(&agent) {
             // Forget idle lanes: a long connection keeps none for agents it no longer types into.
             self.0.retain(|_, lane| !lane.idle());
         }
         let lane = self.0.entry(agent).or_insert_with(|| open(context.clone()));
-        // A resize carries no input: it takes no room, so it never waits for typing to make room.
-        let bytes = match operation.as_str() {
-            AgentResize::NAME => 0,
-            _ => size.clamp(1, MAX_LANE_BYTES) as u32,
-        };
+        let bytes = size.clamp(1, MAX_LANE_BYTES) as u32;
         let room = match lane.room.clone().try_acquire_many_owned(bytes) {
             Ok(room) => room,
             Err(_) if id.is_some() => {
@@ -124,10 +104,22 @@ impl Lanes {
         };
         let _ = lane.queue.send(Queued {
             id,
-            operation,
             args,
             _room: room,
         });
+    }
+
+    /// All permits are free once the matching lane has finished its queued input.
+    pub(super) async fn wait_for_input(&self, reference: &AgentRef, peer: &Peer) {
+        let Some(lane) = self.0.get(&LaneTarget::Reference(reference.clone())) else {
+            return;
+        };
+        if !lane.idle() {
+            tokio::select! {
+                _ = lane.room.acquire_many(MAX_LANE_BYTES as u32) => {}
+                () = peer.closed() => {}
+            }
+        }
     }
 }
 
@@ -148,8 +140,7 @@ fn open<S: Service>(context: LaneContext<S>) -> Lane {
                 .service
                 .call(
                     &context.client,
-                    &request.operation,
-                    request.args,
+                    DaemonCall::AgentType(request.args),
                     when_full,
                     cancel,
                 )
@@ -173,5 +164,5 @@ fn no_room() -> ErrorBody {
          earlier input was answered",
         MAX_LANE_BYTES / 1024
     );
-    ErrorBody::new(Reason::CapacityExceeded, message)
+    super::operation_error("capacity_exceeded", message)
 }

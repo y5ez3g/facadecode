@@ -36,7 +36,7 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import type { V3Operations } from '../../base/coreProtocol';
+import type { DaemonOperations } from '../../base/coreProtocol';
 import { callInCore, coreCall, detachedStartReference, EDITOR_FLAGS, editorProfile, endCore, endEditors, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, testProcessCleanup, until } from './editors';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 import { multiWindowDriverFiles, rustMultiWindow, withRustWindows } from './rustMultiWindow';
@@ -417,14 +417,14 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 			const env = environment({ FACADE_IT_WINDOW_LIFETIME: out, FACADE_IT_WINDOW_LIFETIME_SSH: '1' });
 			const start = () => spawn(executable, [...args, `--extensionEnvironment=${JSON.stringify(env)}`], { env: { ...process.env, ...local.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
 			const screen = (agent: string) => host.run(`unset FACADE_AGENT\nFACADE_HOME=${quoted(facade)} ${quoted(`${host.build}/extension-it/bin/facade`)} screen ${quoted(agent)} --lines 120`);
-			const query = async <O extends 'agent.list' | 'agent.inspect'>(op: O, args: V3Operations[O]['args']): Promise<V3Operations[O]['result']> => {
+			const query = async <O extends 'agent.list' | 'agent.inspect'>(op: O, args: DaemonOperations[O]['args']): Promise<DaemonOperations[O]['result']> => {
 				const probe = 'require(process.argv[1]).coreCall(process.argv[2], process.argv[3], JSON.parse(process.argv[4])).then(result => console.log(JSON.stringify(result))).catch(error => { console.error(error); process.exitCode = 1; });';
-				return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)} ${quoted(op)} ${quoted(JSON.stringify(args))}`)) as V3Operations[O]['result'];
+				return JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)} ${quoted(op)} ${quoted(JSON.stringify(args))}`)) as DaemonOperations[O]['result'];
 			};
 			await windowLifetime(start, () => host.run(`if [ -f ${quoted(out)} ]; then cat ${quoted(out)}; fi`), async step => {
 				if (step.after === 'reload') {
 					await checkClosedAgent(step, screen, async () => (await query('agent.list', {})).agents,
-						agent => query('agent.inspect', { agent }), true);
+						target => query('agent.inspect', { target }), true);
 				}
 			});
 		};
@@ -506,7 +506,7 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 				assert.strictEqual(first.ready.remote, 'ssh-remote');
 				const name = 'Network QA worker';
 				const address = detachedStartReference(call('start', '-d', '--name', name, 'claude'), name);
-				const inspect = () => coreCall(facade, 'agent.inspect', { agent: address });
+				const inspect = () => coreCall(facade, 'agent.inspect', { target: address });
 				const link = spawn(localCore, ['machine', 'connect', '--home', facade, '-F', config, '-o', 'BatchMode=yes', host.alias],
 					{ cwd: local.app, env, stdio: ['ignore', 'pipe', 'pipe'] });
 				let linkOutput = '';
@@ -523,11 +523,14 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 							if (action === 'opened') { sessions.add(`${pid}:${session}`); }
 							else { sessions.delete(`${pid}:${session}`); }
 						}
-						const machine = (await localMachines()).find(row => row.machine_id === theirId);
-						const routes = machine?.connections.filter(connection => connection.kind === 'temporary' && connection.state === 'connected') ?? [];
+						const machines = await localMachines();
+						const machine = machines.find(row => row.machine_id === theirId);
+						const routes = machines.find(row => row.machine_id === myId)?.connections.filter(connection =>
+							connection.machine_id === theirId && connection.initiator_machine_id === myId
+							&& connection.kind === 'temporary' && connection.state === 'connected') ?? [];
 						if (!connected) { return machine?.route === undefined && routes.length === 0 && sessions.size === 0 || undefined; }
 						return machine?.route?.length === 1 && machine.route[0] === theirId && routes.length === 1
-							&& routes[0].ssh_destination === host.alias && sessions.size === 1 ? [...sessions][0] : undefined;
+							&& routes[0].transport?.ssh_destination === host.alias && sessions.size === 1 ? [...sessions][0] : undefined;
 					}, 45_000).catch(error => {
 						console.error(linkOutput, trace());
 						throw error;
@@ -539,11 +542,11 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 						const { agent } = await inspect();
 						return agent.pid && agent.session && agent.process === 'running' ? agent : undefined;
 					});
-					assert.strictEqual(before.machine_id, myId);
+					assert.strictEqual(before.reference.machine_id, myId);
 					assert.strictEqual(before.address, address);
 					const expectViews = (count: number) => until(`${count} Remote-SSH terminal views of ${address}`, async () => {
 						const { agent, viewers } = await inspect();
-						assert.deepStrictEqual([agent.address, agent.machine_id, agent.pid, agent.process, agent.session, agent.cwd],
+						assert.deepStrictEqual([agent.address, agent.reference.machine_id, agent.pid, agent.process, agent.session, agent.cwd],
 							[address, myId, before.pid, 'running', before.session, before.cwd]);
 						return viewers.length === count ? viewers : undefined;
 					});
@@ -562,13 +565,14 @@ ${remoteEnv} ${quoted(`${remoteBin}/facade`)} --version`);
 					const secondViewer = both.find(viewer => viewer !== firstViewer);
 					assert.ok(secondViewer, JSON.stringify(both));
 					const { agents } = await coreCall(facade, 'agent.list', {});
-					assert.deepStrictEqual(agents.map(row => [row.id, row.reference.machine_id, row.name]), [[address, myId, name]]);
+					assert.deepStrictEqual(agents.map(row => [row.address, row.reference.machine_id, row.name]), [[address, myId, name]]);
 					const screen = () => call('screen', address, '--lines', '120');
 					assert.ok(screen().includes(firstText) && screen().includes(secondText));
 					const message = 'Unsupported human recipient marker';
-					const rejected = await callInCore(facade, 'agent.send', { to: '#human', text: message }, [3, 3]);
-					assert.strictEqual(rejected.error?.data.reason, 'not_found', JSON.stringify(rejected));
-					assert.strictEqual(rejected.error?.data.message_ref, undefined);
+					const rejected = await callInCore(facade, 'agent.send', { to: '#human', text: message });
+					assert.ok('error' in rejected, JSON.stringify(rejected));
+					assert.strictEqual(rejected.error.data.reason, 'not_found');
+					assert.strictEqual(rejected.error.data.details?.message_ref, undefined);
 					assert.ok(!screen().includes(message));
 					console.log('  ✔ Both Remote-SSH windows adopted the same local agent and sent input to its terminal');
 					await first.close();

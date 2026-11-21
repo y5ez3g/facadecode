@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use facade_base::daemon::{AgentsUpdate, ClientKind, is_session_id};
-use facade_base::daemon_client::{DaemonClient, Identity, upgrading};
+use facade_base::api_v1::daemon_client::{DaemonClient, upgrading};
+use facade_base::daemon::{AgentsUpdate, is_session_id};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::machine::AgentRef;
 use facade_base::process::ProcessState;
@@ -350,7 +350,7 @@ impl Daemon {
             facade_base::sockets::pair()?
         };
         let daemon = self.clone();
-        let reference = actor.reference.clone();
+        let reference = crate::api::wire_ref(&actor.reference);
         runtime.spawn(async move {
             let service = server::serve_actor(daemon, theirs, reference);
             if let Some(run) = managed_run {
@@ -364,12 +364,7 @@ impl Daemon {
                 service.await;
             }
         });
-        let identity = Identity {
-            kind: ClientKind::Mcp,
-            agent: None,
-            sessions: Vec::new(),
-        };
-        match DaemonClient::hello_v3(ours, &identity) {
+        match DaemonClient::hello_actor(ours) {
             Ok(client) => Ok(Some(client)),
             Err(err) if upgrading(&err) => Ok(None),
             Err(err) => Err(err),

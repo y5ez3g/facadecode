@@ -26,8 +26,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::daemon::{AgentInfo, AgentsUpdate, InputInfo};
+use facade_base::jsonrpc::ErrorBody;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
+use facade_base::v3;
 use facade_screen::{Screen, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
@@ -39,6 +41,13 @@ pub(crate) use screen::{ScreenLog, recover, recover_after_clean_end, saved_size,
 pub(crate) use state::{Kept, instant_of, read_kept, state_file};
 pub(crate) use typist::{MessageTyping, Typing, TypingAnswer};
 pub(crate) use viewers::{ViewerChange, ViewerSender, ViewerSnapshot, viewer_channel};
+
+/// How an attached viewer contributes to terminal geometry.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewerSizing {
+    Legacy,
+    Shared,
+}
 
 /// Rows of scrollback each agent's screen keeps.
 pub(crate) const SCROLLBACK_ROWS: usize = 10_000;
@@ -128,8 +137,10 @@ pub(crate) enum AgentCommand {
         run: u64,
         reply: InputReply,
     },
+    #[cfg(test)]
     Resize(u16, u16),
-    /// Resizes the terminal and applies colors already authorized by the service.
+    /// Sets the test terminal's size and colors outside the shared viewer path.
+    #[cfg(test)]
     ResizeTerminal {
         cols: u16,
         rows: u16,
@@ -147,15 +158,23 @@ pub(crate) enum AgentCommand {
     /// Attaches to a running terminal and keeps the viewer's name for this watch.
     AttachViewer {
         viewer: u64,
+        sizing: ViewerSizing,
         name: Option<String>,
-        attachment: Option<facade_base::v3::AttachmentInfo>,
+        attachment: Option<v3::AttachmentInfo>,
         allow_ended: bool,
         report_activity: bool,
-        size: Option<facade_base::v3::ScreenSize>,
+        size: Option<v3::ScreenSize>,
         tx: ViewerSender,
         keep_scrollback: bool,
         include_scrollback: bool,
         reply: oneshot::Sender<ViewerSnapshot>,
+    },
+    /// Reports a live shared viewer's capacity and any authorized colors.
+    ResizeViewer {
+        viewer: u64,
+        size: v3::ScreenSize,
+        colors: Option<TerminalColors>,
+        reply: oneshot::Sender<Result<(), ErrorBody>>,
     },
     RemoveViewer {
         viewer: u64,

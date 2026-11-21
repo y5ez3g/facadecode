@@ -6,11 +6,12 @@ to open it in this terminal, or pass '-d' to resume in the background. Press
 Ctrl+] to detach and leave it running.
 
 Usage:
-  facade resume [--machine <MACHINE>]
+  facade resume [--local | --machine <MACHINE>]
   facade resume [-d|--detach] <REFERENCE>
 
 Examples
   facade resume
+  facade resume --local
   facade resume --machine devbox
   facade resume a5@laptop
   facade resume 7f3e9a1c
@@ -20,6 +21,7 @@ Arguments
   <REFERENCE>  Stopped agent reference, agent ID, unique name, or session ID
 
 Options
-      --machine <MACHINE>  List resumable agents and sessions on this machine only
-  -d, --detach           Resume in the background
-  -h, --help             Show help
+      --local              List resumable agents and sessions on this machine only
+      --machine <MACHINE>  List resumable agents on that machine only
+  -d, --detach             Resume in the background
+  -h, --help               Show help

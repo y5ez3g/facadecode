@@ -5,12 +5,15 @@
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use facade_base::api_v1::keeper::HeldAgent;
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs, STOP_TIMEOUT};
+use facade_base::keeper::{KeeperStartArgs, STOP_TIMEOUT};
 use facade_base::process::{ProcessExit, ProcessIdentity};
+use facade_base::programs;
 use facade_base::unix_process::{self, Observed, ProcessObservation};
 use nix::sys::signal::Signal;
 use nix::sys::wait::waitpid;
@@ -51,14 +54,37 @@ impl Cli {
                 "command must start with the CLI's program",
             ));
         }
-        let terminal = terminal::open(args.cols.max(2), args.rows.max(1))?;
+        let folder = Path::new(&args.launch.folder);
+        if !folder.is_absolute() {
+            return Err(ErrorBody::invalid_argument("cwd must be an absolute path"));
+        }
+        let path = Path::new(program);
+        let executable = if path.is_absolute() {
+            path.to_path_buf()
+        } else if program.contains('/') {
+            return Err(ErrorBody::invalid_argument(
+                "command must start with an absolute path or a program name",
+            ));
+        } else {
+            args.env
+                .get("PATH")
+                .and_then(|path| programs::on_path(program, Some(path), folder))
+                .ok_or_else(|| {
+                    ErrorBody::new(
+                        Reason::Unavailable,
+                        format!("could not find an executable for {program} on the supplied PATH"),
+                    )
+                })?
+        };
+        let terminal = terminal::open(args.cols, args.rows)?;
         let for_daemon = duplicate(terminal.master.as_fd(), "could not copy the terminal")?;
-        let mut command = Command::new(program);
+        let mut command = Command::new(executable);
         command
+            .arg0(program)
             .args(&args.launch.args)
             .env_clear()
             .envs(&args.env)
-            .current_dir(&args.launch.folder);
+            .current_dir(folder);
         command.stdin(stdio(&terminal.slave)?);
         command.stdout(stdio(&terminal.slave)?);
         command.stderr(stdio(&terminal.slave)?);
@@ -97,11 +123,36 @@ impl Cli {
         Ok((cli, for_daemon))
     }
 
-    /// Takes over a CLI another keeper started, with the master the daemon handed in. None when
-    /// that process is already gone.
-    pub(super) fn adopt(agent: String, process: ProcessIdentity, master: OwnedFd) -> Option<Cli> {
+    /// Takes over a verified CLI with the master the daemon handed in. None when the process
+    /// has ended.
+    pub(super) fn adopt(
+        agent: String,
+        process: ProcessIdentity,
+        master: OwnedFd,
+    ) -> Result<Option<Cli>, ErrorBody> {
+        let snapshot = unix_process::snapshot(process.pid).map_err(|err| {
+            ErrorBody::new(
+                Reason::Unavailable,
+                format!(
+                    "could not check the birth of process {}: {err}",
+                    process.pid
+                ),
+            )
+        })?;
+        let Some(snapshot) = snapshot else {
+            return Ok(None);
+        };
+        if snapshot.exited == Some(true) {
+            return Ok(None);
+        }
+        if snapshot.birth != process.birth {
+            return Err(ErrorBody::invalid_argument(format!(
+                "birth does not match process {} for {agent}",
+                process.pid
+            )));
+        }
         let tie = match ProcessObservation::open(&process) {
-            Ok(Observed::Ended) => return None,
+            Ok(Observed::Ended) => return Ok(None),
             Ok(Observed::Watching(watch)) if watch.descriptor().is_some() => Tie::Observed(watch),
             Ok(Observed::Watching(_)) => {
                 log(
@@ -121,13 +172,13 @@ impl Cli {
                 Tie::Blind
             }
         };
-        Some(Cli {
+        Ok(Some(Cli {
             agent,
             process,
             master,
             tie,
             kill_deadline: None,
-        })
+        }))
     }
 
     pub(super) fn process(&self) -> &ProcessIdentity {
@@ -135,9 +186,9 @@ impl Cli {
     }
 
     /// How the CLI appears in `hello`'s list.
-    pub(super) fn as_held(&self) -> KeeperHeldAgent {
-        KeeperHeldAgent {
-            id: self.agent.clone(),
+    pub(super) fn as_held(&self) -> HeldAgent {
+        HeldAgent {
+            agent_id: self.agent.clone(),
             pid: self.process.pid,
             birth: self.process.birth.clone(),
             stopping: self.is_stopping(),

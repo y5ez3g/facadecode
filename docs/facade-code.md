@@ -101,11 +101,11 @@ Guest：     连上 → online → 断开就没了
 ### 能做的事
 
 - **`start`**：启动一个 Agent，详见下一节「执行」。
-- **`stop`**：停掉它。记录保留 30 天，有会话的这期间都能接着干。它叫来的帮手不受影响，照常跑。
-- **`resume`** 默认在前台接上，加 `-d` 放到后台。恢复已有 Agent 会沿用原 Ref、目录、会话和启动时的模型及 effort。机器的设置（比如 YOLO）用那台机器现在的。直接运行 `facade resume`，会看到所有可达机器上有会话的已停止 Agent，以及本机当前目录中 CLI 自存的会话。带 `--machine` 时只列这台机器，可列出登录目录里的会话。恢复自存会话会创建一个新的 Agent。会话已被占用时，错误会给出占用它的 Agent。
+- **`stop`** 可以一次停多个 Agent，也可以用 `--local`、`--machine <MACHINE>` 或 `--all` 按范围停止。按范围停止跳过 Guest，探测远机时让休眠的机器继续休眠。部分失败时会继续处理其他目标，再报告失败并返回 1。Agent 的记录保留 30 天，它叫来的帮手照常跑。
+- **`resume`** 默认在前台接上，加 `-d` 放到后台。恢复已有 Agent 会沿用原 Ref、目录、会话和启动时的模型及 effort，并使用运行机器的当前设置。直接运行 `facade resume` 会列出可达机器上能恢复的已停止 Agent，以及本机当前目录中 CLI 自存的会话。`--local` 只查本机，发起零次 SSH。`--machine <MACHINE>` 列指定机器上的可恢复 Agent。恢复自存会话会创建一个新的 Agent。会话已被占用时，错误会给出占用它的 Agent。
 - 通过 VS Code 可以删除 Agent 的记录、屏幕和收件箱。Agent 还在跑的话，先停掉它再删除。
 - **`rename`** 改名字，Ref 不变。给出一个非空名字。
-- **`list`** 列出可达机器上跑着的 Agent 和连着的 Guest，最近一次启动或恢复的排在最上面。`STARTED` 从那一次算起。
+- **`list`** 列出可达机器上跑着的 Agent 和连着的 Guest，最近一次启动或恢复的排在最上面，`STARTED` 从那次算起。默认按需探测已保存的机器，让休眠的机器继续休眠。`--local` 发起零次 SSH。`--machine <MACHINE>` 只查指定机器，需要时会唤醒它。
 - **`status <AGENT>`** 显示 Ref、名字、状态、运行机器、CLI、工作目录、启动命令、会话、启动来源、当前查看者和 YOLO。
 
 ```text
@@ -173,20 +173,24 @@ facade machine add aaron@10.0.0.5                # 用户@地址
 facade machine add -p 2222 aaron@devbox.lan      # 带端口
 facade machine add -i ~/.ssh/work aaron@gpu      # 带密钥
 facade machine add --home /data/facade devbox    # Facade 自己的选项：用远机上另一个 Facade home
+facade machine add --bidirectional devbox       # 同时验证并保存回程
 facade machine connect devbox                    # 只在这条命令开着时连着，Ctrl-C 就断开
-facade machine remove devbox                     # 忘掉它，并断开
+facade machine remove devbox                     # 在本机删除连接并撤销 Facade 授权
+facade machine remove --bidirectional devbox     # 同时尝试清理对端
 facade machine list
 facade machine rename devbox build-box
 ```
 
-- **`add`** 会记住这台机器。每台机器只要 `add` 一次。`connect` 的写法和 `add` 一样，也是照抄 ssh 的写法，只是不记住，命令一结束就断开。
-- **SSH 的提问。** `add` 和 `connect` 在你的终端里跑 SSH，要输密码或确认指纹时，你当场回答。第一次连一台机器时，还会提醒你：开着 YOLO 的 Agent 能操作所有连通机器上的 Agent。之后 Facade 自己去连时没法问你；哪台需要重新登录，`machine list` 里会提示，并给出能照抄的那条 `add` 命令，用的是当初登记的写法，在你的终端里跑一遍就行。
+- **`add`** 会保存验证通过的连接。已有免密凭据时沿用它们。首次需要密码时，在登录后装入并验证 Facade 专用 SSH 公钥，后续用它重连。`--bidirectional` 同时在远机上保存回程，由远机直接连接它在 SSH 登录中看到的来源 IP 的 22 端口。回程验证失败时保留正向连接并报告原因。
+- **`connect`** 在命令运行期间维持双向连接。命令结束时断开。
+- **SSH 的提问。** `add` 和 `connect` 在你的终端里跑 SSH，要输密码或确认指纹时，你当场回答。第一次连一台机器时会提醒你开着 YOLO 的 Agent 能操作连通机器上的 Agent。哪台机器需要重新登录，`machine list` 会给出能照抄的 `add` 命令。
+- **`remove`** 默认在本机删保存的出站连接，并撤销本机为对端装入的 Facade 授权，发起零次 SSH。`--bidirectional` 会先核实对端身份并尝试清理回程及授权，再完成本机删除。对端清理失败时会分别报告结果并返回 1。
 - **装 Facade、升级 Facade。** 每次连上或叫醒一台机器时，都按同一条规则：没装，就在那台机器上跑一遍一行安装，装和本机同一个版本；版本比本机旧，就升级，上面的 Agent 照常跑。协议变了没法接管时，报错并列出要先停哪些 Agent。远机比本机新，就报错，让你先升级本机。装不了的时候，比如要输密码、远机上不了网，就报错，并给出手动安装的命令。
 - **远机用哪个 home。** 默认用 `~/.facade`，要用别的就加 `--home`。
 - **WSL 和 Dev Container** 各算一台机器。要从外面连上它们，也得在里面开好 SSH，再 `machine add`；在它们里面直接用 Facade，就用不着 SSH。
 - **机器名**默认取主机名第一个点之前的部分，转成小写，只用小写字母、数字和 `-`；可以改，改的时候也是这个写法。机器 ID 是第一次运行时生成的，写的时候用前 8 位就够，比如 `9a0d44b2`。
-- **没事就歇着，用到才叫醒。** 一台机器上没有在跑的 Agent、本机也没有入口在用（Shell 命令在跑、VS Code 开着、有 MCP 连着），它的 Orchestrator 就退出歇着。别的机器只是连着它，不算在用；它正在替别的机器办事或转发，算在用，办完才歇。存下的机器也不会让它一直开着。醒着的机器之间会自动连上；歇着的机器，只有你写明要在它上面做事时才被 SSH 叫醒，比如 `start --machine devbox`、`resume a3@devbox`，路上要经过的机器也一起叫醒。不写机器的操作只看醒着的机器：歇着的机器上没有在跑的 Agent，`list`、发信、打字本来就用不着它；它上面停了的 Agent，写上机器才找得到，`resume` 列出来的本来就是带机器的地址。只能经过它才到得了的机器，这时也看不到。
-- `facade machine list` 显示歇着和连不上的机器及当前连接状态。多机 Agent 查询会在 stderr 报告查询失败的机器。用 `--machine devbox` 只查这台机器时，会先叫醒它再查。连不上时，命令显示连接错误并退出。
+- **按需连接和休眠。** Orchestrator 连续空闲 30 秒会退出，按需打开的 SSH 会话也在各自空闲 30 秒后关闭。前台连接、正在看的 Attach 和办到一半的调用都会保持会话活跃。点名执行 `start --machine devbox` 或 `resume a3@devbox` 可以唤醒目标和所需跳点。默认 `list` 与远机范围的 `stop` 做无唤醒探测。
+- `facade machine list` 仅读本机机器表，发起零次 SSH，区分当前未连接、已确认休眠、连接失败和需要 SSH 登录。多机 Agent 查询在 stderr 报告查询失败。
 
 ### 运行：启动一个 Agent
 
@@ -273,7 +277,7 @@ Facade 自己也会发提醒，标着 🔔，和普通消息一样送，跨机�
 ### 终端
 
 - 你可以读屏、打字、按键，也可以 Attach 进去实时查看和打字。按 Ctrl+] 离开时 Agent 照常跑。停了的 Agent 仍可通过 `facade screen` 读到最后一屏。
-- 几个地方可以同时 Attach 同一个 Agent，看到的是同一块屏幕。终端大小以最后一次调整为准，打开一个 Attach 也算一次调整；颜色只由 VS Code 给，Shell 的 Attach 不改颜色。
+- 几个地方可以同时 Attach 同一个 Agent。列数和行数分别取活跃窗口容量的最小值。大 Shell 在左上角显示共享网格。调整或关闭窗口会重新计算共享尺寸。使用旧版订阅的窗口仍在线时沿用当时的尺寸规则，最后一个旧版窗口离开后恢复共享尺寸。终端颜色由 VS Code 提供。
 - `facade status <AGENT>` 的 `Attached in` 显示当前的查看者。
 - 断线恢复后先重绘当前屏幕。有未送达的按键时会提示丢失的字节数，方便你核对后重新输入。
 - 跨机器操作和本机一样，同样要看权限。
@@ -288,8 +292,8 @@ Facade 自己也会发提醒，标着 🔔，和普通消息一样送，跨机�
 - **两个进程。** keeper 是所有 CLI 的父进程，daemon 管 Agent、给 Facade 提供服务。两个进程你都看得到：`facade status` 分开显示，日志也是两份，各留 30 天。任何一个重启，Agent 都不会停。
 - **`facade status`** 显示本机 Facade home、设置文件、版本、两个进程的进程号、Agent 个数、连着的机器和 Guest MCP 的固定路径。服务休眠时可直接查询。
 - **安装。** 一行命令装好 Orchestrator、`facade` 和 `facade-mcp`，并把这两个命令放进 PATH。VS Code 扩展自己带一份；远机上装的也是同一套。Facade Code IDE 的命令行启动器现在也叫 `facade`，IDE 以后会去掉，到时 `facade` 这个名字就只归 Orchestrator；在那之前，装了 IDE 的电脑上，PATH 里排在前面的那个生效。
-- **什么时候在跑。** 用到时才起来，开机不自启；没有在跑的 Agent、本机没有入口在用、手上也没有没办完的事时就退出。别的机器只是连着，不算在用，见「机器」一节。
-- **升级。** 运行 `facade upgrade`，或者重跑一遍安装命令。新版接管旧版，Agent 不停；VS Code 里原来看得到的 Agent 和 Pin 也都还在。升级前已经在跑的 Agent，身份照旧版的认法，一直认到它这次运行结束；之后的启动和 resume 照新规则。远机在下一次连上它时升级。不会自动检查更新。
+- **什么时候在跑。** 用到时才起来，连续空闲 30 秒后退出。正在进行的前台连接、Attach 和请求也算使用。
+- **升级。** `facade upgrade` 先检查稳定版，有更新才下载安装器。`facade upgrade --version X.Y.Z` 直接运行指定版本的安装器。安装的构建通过接管检查后切换运行中的服务，Agent 继续跑。升级前已在跑的 Agent 保留运行时身份，之后的启动和 resume 使用当前构建。
 - **卸载。** 先不做。
 - `facade --version` 显示 CLI 版本。
 
@@ -303,19 +307,26 @@ Shell 是给人和脚本用的。在这里运行的 `facade` 不代表任何 Age
 
 ```text
 facade start [--machine M] [--workdir D] [--worktree B] [-n N] [-d] <CLI> [CLI_ARGS]...
-facade list [--machine M]
+facade list [--local | --machine <MACHINE>]
 facade attach a3@devbox
 facade send ada "跑一下测试"
 facade screen a3              facade type a3 "yes" --enter
-facade stop a3
+facade stop <AGENT>...
+facade stop --local
+facade stop --machine <MACHINE>
+facade stop --all
 facade rename a3 reviewer     facade status a3
-facade resume [--machine M]   # 列出可恢复的 Agent 和会话
+facade resume [--local | --machine <MACHINE>]
 facade resume [-d] a3         # 沿用原目录恢复 Agent
 facade resume 7f3e9a1c        # 从当前目录中的自存会话创建 Agent
-facade machine add <你平时 ssh 的写法> | connect | remove | list | rename
+facade machine add [--home <PATH>] [--bidirectional] <SSH_ARGS>...
+facade machine connect [--home <PATH>] <SSH_ARGS>...
+facade machine remove [--bidirectional] <MACHINE>
+facade machine list
+facade machine rename <MACHINE> <NAME>
 facade status [AGENT]
 facade --version
-facade upgrade
+facade upgrade [--version X.Y.Z]
 ```
 
 `facade` 打开首页，每个命令都可加 `--help` 查看用法。结果与回执写 stdout，空结果引导、诊断与进度写 stderr。执行失败返回 1，用法错误返回 2。前台的 `start`、`resume` 和 `attach` 接上以后，按 Ctrl+] 离开返回 0。Agent 自己退出时，返回 CLI 的实际退出状态。

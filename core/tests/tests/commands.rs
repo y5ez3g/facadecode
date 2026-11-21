@@ -416,10 +416,13 @@ fn no_real_cli_can_start_in_a_test() {
         "agent.start",
         json!({
             "cli": cli, "args": script("wire"), "name": "wire", "folder": home.project,
-            "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+            "env": { "PATH": path, "FACADE_HOME": home.path }, "size": { "cols": 80, "rows": 24 },
         }),
     );
-    assert!(wired["result"]["agent"]["agent_id"].is_string(), "{wired}");
+    assert!(
+        wired["result"]["agent"]["reference"]["agent_id"].is_string(),
+        "{wired}"
+    );
     let isolation = home.isolation();
     for name in ["command", "wire"] {
         let written = home.project.join(format!("{name}-env.txt"));
@@ -454,7 +457,7 @@ fn no_real_cli_can_start_in_a_test() {
     let args = json!({
         "cli": home.shell_cli(), "args": ["-c", "sleep 60"], "name": "outside",
         "folder": home.project,
-        "env": { "HOME": outside }, "cols": 80, "rows": 24,
+        "env": { "HOME": outside }, "size": { "cols": 80, "rows": 24 },
     });
     let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         wire.call("agent.start", args)

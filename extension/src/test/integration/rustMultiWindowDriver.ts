@@ -10,16 +10,17 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { HelloResult, V3StartArgs, V3StartResult } from '../../base/coreProtocol';
+import type { HelloResult, StartArgs } from '../../base/coreProtocol';
 import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
-import { callInCore, helloInCore, normalizeDriveLetter, until } from './editors';
+import { coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
 import { RESUME_PICKER_STATE, type ResumePickerState } from './resumePickerFixture';
 import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin, resumeCard, running, state, stop } from './rustWindowDriver';
 
 type Action =
 	| { readonly kind: 'snapshot' | 'filter' | 'window-component' }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
+	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
 	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
 	| { readonly kind: 'hide-shell-agent'; readonly name: string }
@@ -38,7 +39,7 @@ export interface WindowReady {
 	readonly folder: string;
 	readonly remote: string | null;
 	readonly home: string;
-	readonly machineId: string;
+	readonly machineId: string | null;
 	readonly platform: NodeJS.Platform;
 	readonly hostPid: number;
 }
@@ -54,10 +55,22 @@ export interface WindowView {
 	readonly filter?: PanelState['filter'];
 }
 
+export interface AttachView {
+	readonly capacity: vscode.TerminalDimensions;
+	readonly grid: vscode.TerminalDimensions;
+}
+
 export type WindowAnswer = { readonly result: unknown } | { readonly error: string };
 
 const control = process.env.FACADE_IT_WINDOW_CONTROL!;
 let closing: string | undefined;
+let attached: {
+	readonly terminal: vscode.Terminal;
+	readonly pty: vscode.Pseudoterminal & { readonly dimensions?: vscode.TerminalDimensions };
+	readonly watching: vscode.Disposable;
+	override?: vscode.TerminalDimensions;
+	text: string;
+} | undefined;
 
 function answer(file: string, value: WindowAnswer): void {
 	const temporary = `${file}.new`;
@@ -101,7 +114,7 @@ async function goToCard(reference: string): Promise<PanelState['cards'][number]>
 	}).catch(error => { throw new Error(`${(error as Error).message}; picker: ${JSON.stringify(observed)}`); });
 	await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 	const card = await until(`${agent.address}'s attached card`, async () => (await state()).cards.find(card =>
-		card.runId === `${agent.machine_id}/${agent.agent_id}` && card.orchestrator?.running));
+		card.runId === `${agent.reference.machine_id}/${agent.reference.agent_id}` && card.orchestrator?.running));
 	await picker;
 	return card;
 }
@@ -164,10 +177,36 @@ async function perform(action: Action): Promise<unknown> {
 				return vscode.window.terminals.find(each =>
 					'pty' in each.creationOptions && each.creationOptions.name === card.name);
 			});
+			const pty = (terminal.creationOptions as vscode.ExtensionTerminalOptions).pty as NonNullable<typeof attached>['pty'];
+			attached?.watching.dispose();
+			const output = pty.onDidWrite(text => { if (attached?.terminal === terminal) { attached.text += text; } });
+			const grid = pty.onDidOverrideDimensions?.(dimensions => {
+				if (attached?.terminal === terminal) { attached.override = dimensions; }
+			});
+			attached = {
+				terminal, pty, text: '', watching: vscode.Disposable.from(output, ...(grid ? [grid] : []))
+			};
 			terminal.sendText(action.text, true);
 			await until('the editor input on the agent screen', () =>
 				facade('screen', action.address, '--lines', '120').includes(action.text) || undefined);
 			return action.address;
+		}
+		case 'shell-attach-view': {
+			const view = attached;
+			assert.ok(view, 'Go to Agent opened a terminal');
+			const previous = view.pty.dimensions;
+			if (action.resize) {
+				await vscode.commands.executeCommand('workbench.action.toggleAuxiliaryBar');
+			}
+			return await until('the terminal capacity and shared grid', () => {
+				const capacity = view.pty.dimensions;
+				const grid = view.override ?? capacity;
+				if (!capacity || !grid) { return undefined; }
+				if (action.resize && capacity.columns === previous?.columns && capacity.rows === previous?.rows) { return undefined; }
+				if (action.grid && (grid.columns !== action.grid.columns || grid.rows !== action.grid.rows)) { return undefined; }
+				if (action.text && !view.text.includes(action.text)) { return undefined; }
+				return { capacity, grid } satisfies AttachView;
+			});
 		}
 		case 'shell-pin': {
 			const find = async () => (await state()).cards.find(card => card.name === action.name);
@@ -228,7 +267,7 @@ async function perform(action: Action): Promise<unknown> {
 		case 'remote-card': {
 			const { agent } = await inspect(action.agent);
 			const card = await until(`${agent.address}'s card and details`, async () => (await state()).cards.find(card =>
-				card.runId === `${agent.machine_id}/${agent.agent_id}` && card.details.machine?.value === action.machine));
+				card.runId === `${agent.reference.machine_id}/${agent.reference.agent_id}` && card.details.machine?.value === action.machine));
 			assert.strictEqual(card.details.address?.value, agent.address);
 			assert.ok(!card.pinned, JSON.stringify(card));
 			await until(`${card.alias}'s terminal tab`, () => hasAgentTab(card) || undefined);
@@ -259,7 +298,7 @@ async function perform(action: Action): Promise<unknown> {
 			assert.strictEqual(sent, `Delivered ${message} to ${agent.name} (${agent.address}).`);
 			await until('the message to appear on the recipient terminal', () =>
 				facade('screen', action.to, '--lines', '120').includes(action.text) || undefined);
-			const received = fs.readFileSync(`${process.env.FACADE_IT_RECORD}.received.#${agent.agent_id}`, 'utf8')
+			const received = fs.readFileSync(`${process.env.FACADE_IT_RECORD}.received.#${agent.reference.agent_id}`, 'utf8')
 				.trimEnd().split(/\r?\n/u).map(line => JSON.parse(line) as string);
 			assert.strictEqual(received.filter(text => text.endsWith(` · ${message.split('@')[0]}\n${action.text}`)).length, 1);
 			return true;
@@ -282,18 +321,16 @@ async function perform(action: Action): Promise<unknown> {
 			// The Windows Node fixture needs SystemRoot to initialize its random number generator.
 			const systemRoot = process.platform === 'win32' ? process.env.SystemRoot : undefined;
 			fs.mkdirSync(user, { recursive: true });
-			const args: V3StartArgs = {
+			const args: StartArgs = {
 				cli: 'claude', name: 'Worktree agent', folder: cwd, worktree: action.branch,
 				env: {
 					...(systemRoot ? { SystemRoot: systemRoot } : {}),
 					PATH: process.env.PATH ?? '', HOME: user, USERPROFILE: user, FACADE_HOME: home,
 					CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR!, FACADE_IT_RECORD: process.env.FACADE_IT_RECORD!
 				},
-				cols: 80, rows: 24
+				size: { cols: 80, rows: 24 }
 			};
-			const reply = await callInCore(home, 'agent.start', args, [3, 3]);
-			assert.ok(reply.result && !reply.error, JSON.stringify(reply));
-			const started = (reply.result as V3StartResult).agent;
+			const { agent: started } = await coreCall(home, 'agent.start', args);
 			assert.ok(started.pid && fs.existsSync(started.cwd), JSON.stringify(started));
 			return started;
 		}
@@ -337,14 +374,22 @@ export async function activate(): Promise<void> {
 		assert.ok(folder, 'the test window has a workspace folder');
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel snapshot', async () => (await state())?.loading === false || undefined, 90_000);
-		if (process.env.FACADE_IT_WINDOW_PROTOCOL === '3') {
+		if (process.env.FACADE_IT_WINDOW_NO_COMPONENT === '1') {
 			assert.strictEqual(vscode.extensions.getExtension('facade.facadecode-window'), undefined);
 		}
-		const hello = await helloInCore(home, [3, 3]);
-		const core = hello.result as HelloResult | undefined;
-		assert.ok(core?.protocol === 3 && core.machine_id, JSON.stringify(hello));
+		const oldEngine = vscode.workspace.getConfiguration('facade').get('rustEngine') === 'off';
+		let machineId: string | null = null;
+		if (oldEngine) {
+			assert.ok(vscode.extensions.getExtension('facade.facadecode-window'));
+		} else {
+			const hello = await helloInCore(home);
+			assert.ok('result' in hello, JSON.stringify(hello));
+			const core = hello.result as HelloResult;
+			assert.ok(core.api_version === 1 && core.machine_id, JSON.stringify(hello));
+			machineId = core.machine_id;
+		}
 		answer(`${control}.ready`, { result: {
-			folder, remote: vscode.env.remoteName ?? null, home, machineId: core.machine_id, platform: process.platform, hostPid: process.pid
+			folder, remote: vscode.env.remoteName ?? null, home, machineId, platform: process.platform, hostPid: process.pid
 		} satisfies WindowReady });
 		void actions();
 	} catch (error) {

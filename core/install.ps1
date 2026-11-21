@@ -34,6 +34,7 @@ $versions = Join-Path $InstallRoot 'versions'
 $work = Join-Path $versions ('.install-' + [guid]::NewGuid())
 $next = Join-Path $work 'next'
 $previous = Join-Path $work 'previous'
+$downloadFailure = @{ Asset = ''; Http = '-' }
 
 function Read-Version {
     param([string] $File, [string] $InvalidMessage)
@@ -48,13 +49,26 @@ function Get-Download {
 
     $status = & curl.exe --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 `
         -fsL -w '%{http_code}' -o $Destination $Url
-    $LASTEXITCODE -eq 0 -and $status -match '\A2[0-9]{2}\z'
+    if ($LASTEXITCODE -eq 0 -and $status -match '\A2[0-9]{2}\z') { return $true }
+    if ($status -match '\A[1-5][0-9]{2}\z') {
+        $downloadFailure.Asset = $Url.Substring($Url.LastIndexOf('/') + 1)
+        $downloadFailure.Http = $status
+    } elseif ($downloadFailure.Http -eq '-') {
+        $downloadFailure.Asset = $Url.Substring($Url.LastIndexOf('/') + 1)
+    }
+    return $false
 }
 
 function Get-ReleasePackage {
     param([string] $Origin)
 
     (Get-Download "$Origin/$asset" $archive) -and (Get-Download "$Origin/SHA256SUMS" $checksums)
+}
+
+function Write-DownloadFailure {
+    if ($env:FACADE_UPGRADE_REPORT -eq '1' -and $env:FACADE_UPGRADE_ASSET_REPORT -eq '1') {
+        Write-Output "facade-upgrade-asset-error $($downloadFailure.Asset) $($downloadFailure.Http)"
+    }
 }
 
 function Add-FacadePath {
@@ -107,12 +121,14 @@ try {
             $versionFile = Join-Path $work 'latest-version'
             if (-not (Get-Download "$releases/latest/download/facade-core-version.txt" $versionFile) -and
                 -not (Get-Download "$mirror/facade-core-version.txt" $versionFile)) {
+                Write-DownloadFailure
                 throw 'Could not download the stable Facade version from GitHub or facadecode.com.'
             }
             $Version = Read-Version $versionFile 'The stable release did not provide a valid version.'
         }
         if (-not (Get-ReleasePackage "$releases/download/extension%2F$Version") -and
             -not (Get-ReleasePackage "$mirror/releases/$Version")) {
+            Write-DownloadFailure
             throw "Could not download $asset and its checksums for Facade $Version from GitHub or facadecode.com."
         }
     }

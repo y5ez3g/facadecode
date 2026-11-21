@@ -21,7 +21,7 @@ fn boss(home: &TestHome) -> (McpTestClient, String) {
 /// The machine part of the addresses Facade gives in this test's home.
 fn host(home: &TestHome) -> String {
     let listed = home.agent_list();
-    listed["agents"][0]["id"]
+    listed["agents"][0]["address"]
         .as_str()
         .unwrap()
         .split_once('@')
@@ -537,7 +537,7 @@ fn a_caller_removed_before_its_result_gets_none() {
     assert_eq!(submitted(&home, "🔔"), Vec::<String>::new());
 }
 
-/// A v3 start from a terminal caller sends the prompt from the command line and owes no result.
+/// A start from a terminal caller sends the prompt from the command line and owes no result.
 /// An inherited agent value in the launch environment does not change the caller's identity.
 #[test]
 fn a_terminal_start_s_prompt_comes_from_the_command_line_and_owes_no_result() {

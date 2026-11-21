@@ -12,9 +12,8 @@ use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use facade_base::jsonrpc::{ErrorBody, Notification, Response};
-use facade_base::keeper::{KeeperAgentChange, methods};
-use facade_base::process::ProcessExit;
+use facade_base::api_v1::keeper::{AgentChange, methods};
+use facade_base::api_v1::{ErrorBody, Notification, ProcessExit, Response};
 use serde::Serialize;
 
 use crate::cli::{Cli, exit_unknown};
@@ -214,11 +213,11 @@ impl Keeper {
 
     /// Tells a daemon that has said hello that a CLI ended.
     fn report_exit(&mut self, agent: &str, exit: ProcessExit) {
-        if !self.link.as_ref().is_some_and(Link::is_greeted) {
+        if self.link.as_ref().and_then(Link::api_version).is_none() {
             return;
         }
-        let change = KeeperAgentChange::Exit {
-            agent: agent.to_string(),
+        let change = AgentChange::Exit {
+            agent_id: agent.to_string(),
             exit,
         };
         self.post(&Notification::new(methods::CHANGED, change), None);

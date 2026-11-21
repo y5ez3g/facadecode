@@ -3,16 +3,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { timeout } from '../../base/async';
-import type { ChangedParams, HelloResult, ScreenChange, UpgradeArgs, V2AgentListResult, V3HelloParams, V3Operation, V3Topic, WatchEndedParams, WatchResult } from '../../base/coreProtocol';
+import {
+	DAEMON_API_VERSIONS, type ChangedParams, type DaemonHelloParams, type DaemonHelloResult,
+	type DaemonTopics, type WatchEndedParams, type WatchResult
+} from '../../base/coreProtocol';
 import { messageOf } from '../../base/errors';
 import type { Disposable, Event } from '../../core/ports';
 import { Connection, connectDaemonSocket, errorOf, startDaemon, unavailable, type DaemonOptions } from '../rust/rpc';
-import { DaemonError, type OrchestratorLink, type TerminalNotificationArgs, type WatchListener } from './types';
+import {
+	DaemonError, type AttachListener, type AttachWatchArgs, type EditorCalls, type EditorTopic,
+	type OrchestratorLink, type RawInputArgs, type ResizeAttach, type WatchListener
+} from './types';
 
-const PROTOCOL = 3;
-const LEGACY_PROTOCOL = 2;
-/** The keeper protocol versions the packaged program speaks (its oldest and newest), which `daemon.upgrade` tells the daemon (KEEPER.md). */
-const KEEPER_PROTOCOL: readonly [number, number] = [1, 1];
 /** How long one connection to the socket may take. */
 const CONNECT_WAIT_MS = 2_000;
 /** How long a `hello` may stay unanswered: a daemon takes connections only once it has recovered its agents. */
@@ -23,52 +25,57 @@ const START_WAIT_MS = 10_000;
 const RETRY_MS = 500;
 /** How long a call waits for the connection to come back, or for the new daemon after an `upgrading` refusal. */
 const RECONNECT_WAIT_MS = 30_000;
-/** How long the first connection waits for the new daemon after a handover. */
-const HANDOVER_WAIT_MS = 30_000;
 const MACHINE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-function incompatible(message: string): DaemonError {
-	return new DaemonError(message, 'protocol_incompatible', { reason: 'protocol_incompatible' });
+function incompatible(message: string, cause?: DaemonError): DaemonError {
+	return new DaemonError(message, 'protocol_incompatible', { reason: 'protocol_incompatible' }, cause?.code, { cause });
 }
 
-function verifyHello(result: unknown, protocol: number): HelloResult {
-	const hello = result as HelloResult | null | undefined;
-	if (hello?.protocol !== protocol) {
-		throw incompatible(`Facade core did not select daemon protocol ${protocol}.`);
+function isCatalog(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((entry: unknown) => typeof entry === 'string');
+}
+
+function verifyHello(result: unknown, offered: readonly number[]): DaemonHelloResult {
+	const hello = result as DaemonHelloResult | null | undefined;
+	if (!hello || !offered.includes(hello.api_version)) {
+		throw incompatible('Facade core did not select an offered daemon API version.');
 	}
 	if (typeof hello.build !== 'string' || !hello.build.trim() ||
-		typeof hello.machine_id !== 'string' || !MACHINE_ID.test(hello.machine_id)) {
+		typeof hello.machine_id !== 'string' || !MACHINE_ID.test(hello.machine_id) ||
+		!Number.isSafeInteger(hello.pid) || hello.pid <= 0) {
 		throw incompatible('Facade core did not identify its build and machine.');
+	}
+	if (!Number.isSafeInteger(hello.agent_count) || hello.agent_count < 0 || !isCatalog(hello.ops) || !isCatalog(hello.topics)) {
+		throw incompatible('Facade core did not provide its agent count and API catalog.');
 	}
 	return hello;
 }
 
-function isLegacyProtocol(error: unknown): boolean {
-	if (!(error instanceof DaemonError) || error.reason !== 'protocol_incompatible') {
-		return false;
-	}
-	const range = error.data.protocol?.local_protocol;
-	return Array.isArray(range) && range[0] <= LEGACY_PROTOCOL && range[1] === LEGACY_PROTOCOL;
+function unsupported(entry: string): DaemonError {
+	return new DaemonError(`Facade core did not advertise ${entry}.`, 'unsupported', { reason: 'unsupported' });
 }
 
 type Attempt =
-	| { readonly kind: 'ready'; readonly connection: Connection; readonly hello: HelloResult }
-	| { readonly kind: 'handover' }
+	| { readonly kind: 'ready'; readonly connection: Connection; readonly hello: DaemonHelloResult }
 	| { readonly kind: 'wait'; readonly absent?: boolean; readonly reason: string };
+
+interface WatchBinding {
+	readonly connection: Connection;
+	readonly number: number;
+}
 
 /** A watch the window holds: it is asked again after each reconnection, until its disposable is disposed. */
 interface Watching {
-	readonly topic: V3Topic;
-	readonly args: object;
-	readonly on: WatchListener<never, never>;
-	/** The number core gave it on the current connection. */
-	number?: number;
+	readonly request: () => { topic: keyof DaemonTopics; args: object };
+	readonly on: Omit<WatchListener<never, never>, 'snapshot'> & {
+		snapshot(snapshot: never, resize?: ResizeAttach): void;
+	};
+	binding?: WatchBinding;
 	disposed: boolean;
 }
 
 /**
- * Starts Facade if its socket is absent and requests takeover if the daemon speaks v2.
- * Only a verified v3 connection is available to callers and watches.
+ * Starts Facade if its socket is absent. Callers and watches use a verified daemon API v1 connection.
  */
 export async function connectOrchestrator(options: DaemonOptions): Promise<OrchestratorLink> {
 	const link = new Link(options);
@@ -84,10 +91,10 @@ export async function connectOrchestrator(options: DaemonOptions): Promise<Orche
 class Link implements OrchestratorLink {
 	private machine!: string;
 	private connection: Connection | undefined;
+	private hello?: DaemonHelloResult;
 	/** Counts installed connections: a call refused as `upgrading` waits for a later one. */
 	private generation = 0;
 	private publishingConnection = false;
-	private afterClosing = false;
 	private reconnecting = false;
 	/** Why the link is over: disposed, or core refused it for good. */
 	private lost: DaemonError | undefined;
@@ -116,7 +123,7 @@ class Link implements OrchestratorLink {
 		await this.reach(START_WAIT_MS);
 	}
 
-	async call<R>(op: V3Operation, args: object): Promise<R> {
+	async call<Op extends keyof EditorCalls>(op: Op, args: EditorCalls[Op]['args']): Promise<EditorCalls[Op]['result']> {
 		const machine = this.machine;
 		let afterGeneration = 0;
 		for (; ;) {
@@ -128,9 +135,10 @@ class Link implements OrchestratorLink {
 			if (!connection?.active) {
 				continue;
 			}
+			if (!this.hello?.ops.includes(op)) { throw unsupported(op); }
 			const generation = this.generation;
 			try {
-				return await connection.ask('call', { op, args }) as R;
+				return await connection.ask('call', { op, args }) as EditorCalls[Op]['result'];
 			} catch (err) {
 				if (!(err instanceof DaemonError && err.reason === 'upgrading')) {
 					throw err;
@@ -141,26 +149,37 @@ class Link implements OrchestratorLink {
 		}
 	}
 
-	notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]): boolean {
+	notify(op: 'agent.type', args: RawInputArgs): boolean {
+		if (!this.hello?.ops.includes(op)) { return false; }
 		return this.connection?.notify('call', { op, args }) ?? false;
 	}
 
-	watch<S, C>(topic: V3Topic, args: object, on: WatchListener<S, C>): Disposable {
-		const watching: Watching = { topic, args, on: on as Watching['on'], disposed: false };
+	watch<Topic extends EditorTopic>(topic: Topic, args: DaemonTopics[Topic]['args'],
+		on: WatchListener<DaemonTopics[Topic]['snapshot'], DaemonTopics[Topic]['change']>): Disposable {
+		return this.addWatch(() => ({ topic, args }), on as Watching['on']);
+	}
+
+	watchAttach(args: () => AttachWatchArgs, on: AttachListener): Disposable {
+		return this.addWatch(() => ({ topic: 'attach', args: args() }), on);
+	}
+
+	private addWatch(request: Watching['request'], on: Watching['on']): Disposable {
+		const watching: Watching = { request, on, disposed: false };
 		this.watching.add(watching);
 		if (this.connection && !this.publishingConnection) {
 			this.startWatch(this.connection, watching);
 		}
 		return {
 			dispose: () => {
-				if (watching.disposed) {
-					return;
-				}
+				if (watching.disposed) { return; }
+				const binding = watching.binding;
+				const live = binding && this.currentWatch(binding.connection, binding.number) === watching;
 				watching.disposed = true;
 				this.watching.delete(watching);
-				if (watching.number !== undefined) {
-					this.byNumber.delete(watching.number);
-					this.connection?.send('unwatch', { watch: watching.number }, () => undefined);
+				watching.binding = undefined;
+				if (binding && live) {
+					this.byNumber.delete(binding.number);
+					binding.connection.send('unwatch', { watch: binding.number }, () => undefined);
 				}
 			},
 		};
@@ -171,6 +190,7 @@ class Link implements OrchestratorLink {
 		this.stop.abort();
 		this.connection?.close();
 		this.connection = undefined;
+		this.hello = undefined;
 		this.byNumber.clear();
 		this.watching.clear();
 		this.connectListeners.clear();
@@ -192,10 +212,6 @@ class Link implements OrchestratorLink {
 					return;
 				}
 				attempt.connection.close();
-			} else if (attempt.kind === 'handover') {
-				this.afterClosing = true;
-				waitMs = HANDOVER_WAIT_MS;
-				deadline = Date.now() + waitMs;
 			} else if (!started && attempt.absent) {
 				// The launcher waits for a live keeper and starts one if it exited without CLIs.
 				started = true;
@@ -229,81 +245,30 @@ class Link implements OrchestratorLink {
 		let accepted = false;
 		try {
 			if (this.lost) { throw this.lost; }
-			let hello: HelloResult | undefined;
-			try {
-				hello = verifyHello(await this.hello(connection, deadline, 'ide', [PROTOCOL, PROTOCOL]), PROTOCOL);
-			} catch (error) {
-				if (error instanceof DaemonError && (error.reason === 'unavailable' || error.reason === 'upgrading')) {
-					return { kind: 'wait', reason: error.message };
-				}
-				if (!isLegacyProtocol(error)) { throw error; }
+			const params: DaemonHelloParams = { api_versions: [...DAEMON_API_VERSIONS], build: this.options.build, kind: 'ide' };
+			const result = await connection.ask('hello', params, Math.min(HELLO_WAIT_MS, Math.max(0, deadline - Date.now())));
+			const hello = verifyHello(result, params.api_versions);
+			accepted = true;
+			return { kind: 'ready', connection, hello };
+		} catch (error) {
+			if (error instanceof DaemonError && (error.reason === 'unavailable' || error.reason === 'upgrading')) {
+				return { kind: 'wait', reason: error.message };
 			}
-			if (hello !== undefined) {
-				accepted = true;
-				return { kind: 'ready', connection, hello };
+			if (error instanceof DaemonError && error.reason === 'invalid_argument' && error.code === -32602) {
+				throw incompatible('The running Facade core did not accept daemon API v1. Finish workspace imports in the prerelease editor, '
+					+ 'let its agents finish, and stop its daemon and keeper before switching the editor, CLI and participating SSH endpoints together. '
+					+ error.message, error);
 			}
-			if (this.afterClosing) {
-				return { kind: 'wait', reason: 'waiting for the new Orchestrator after takeover' };
-			}
-			let legacy: HelloResult;
-			try {
-				legacy = verifyHello(await this.hello(connection, deadline, 'terminal', [LEGACY_PROTOCOL, PROTOCOL]), LEGACY_PROTOCOL);
-			} catch (error) {
-				if (error instanceof DaemonError && (error.reason === 'unavailable' || error.reason === 'upgrading')) {
-					return { kind: 'wait', reason: error.message };
-				}
-				throw error;
-			}
-			await this.takeOverLegacy(connection, legacy.machine_id);
-			return { kind: 'handover' };
+			throw error;
 		} finally {
 			this.stop.signal.removeEventListener('abort', abort);
 			if (!accepted) { connection.close(); }
 		}
 	}
 
-	private async takeOverLegacy(connection: Connection, machineId: string): Promise<void> {
-		const args: UpgradeArgs = {
-			program: this.options.program,
-			build: this.options.build,
-			daemon_protocol: [LEGACY_PROTOCOL, PROTOCOL],
-			keeper_protocol: [...KEEPER_PROTOCOL],
-		};
-		try {
-			await connection.ask('call', { op: 'daemon.upgrade', args });
-		} catch (error) {
-			if (!(error instanceof DaemonError) || error.reason !== 'protocol_incompatible'
-				|| !error.message.includes('the running keeper speaks')) {
-				throw error;
-			}
-			const addresses = await this.legacyKeeperAgents(connection, machineId);
-			throw addresses.length
-				? new DaemonError(`${error.message}\n  tip: stop ${addresses.join(', ')} and retry the upgrade`, error.reason, error.data)
-				: error;
-		}
-	}
-
-	/** v2 did not include the addresses of running agents in a keeper protocol refusal. */
-	private async legacyKeeperAgents(connection: Connection, machineId: string): Promise<readonly string[]> {
-		try {
-			const machine = `id:${machineId.replace(/-/g, '')}`;
-			const listed = await connection.ask('call', { op: 'agent.list', args: { machine } }, HELLO_WAIT_MS) as V2AgentListResult;
-			return listed.agents
-				.filter(agent => agent.machine_id === machineId && agent.process === 'running' && !agent.guest)
-				.map(agent => `${agent.agent_id}@${machineId}`);
-		} catch {
-			return [];
-		}
-	}
-
-	private async hello(connection: Connection, deadline: number, kind: 'ide' | 'terminal', protocol: [number, number]): Promise<unknown> {
-		const params: V3HelloParams = { protocol, build: this.options.build, kind };
-		return connection.ask('hello', params, Math.min(HELLO_WAIT_MS, Math.max(0, deadline - Date.now())));
-	}
-
-	private install(connection: Connection, hello: HelloResult): void {
+	private install(connection: Connection, hello: DaemonHelloResult): void {
 		this.connection = connection;
-		this.afterClosing = false;
+		this.hello = hello;
 		this.generation++;
 		this.machine = hello.machine_id;
 		this.options.log(`Connected to Facade core ${hello.build}.`);
@@ -319,68 +284,87 @@ class Link implements OrchestratorLink {
 	}
 
 	private startWatch(connection: Connection, watching: Watching): void {
-		if (connection !== this.connection || !connection.active) {
+		if (!this.installed(connection) || watching.disposed) { return; }
+		const request = watching.request();
+		if (!this.hello?.topics.includes(request.topic)) {
+			this.watchRefused(watching, request.topic, unsupported(`topic ${request.topic}`));
 			return;
 		}
-		connection.send('watch', { topic: watching.topic, args: watching.args }, outcome => {
-			if (connection !== this.connection || !connection.active) {
-				return;
-			}
+		if (request.topic === 'attach' && !this.hello.ops.includes('attach.resize')) {
+			this.watchRefused(watching, request.topic, unsupported('attach.resize'));
+			return;
+		}
+		connection.send('watch', request, outcome => {
+			if (!this.installed(connection)) { return; }
 			if (outcome.error) {
-				this.watchRefused(watching, outcome.error);
+				this.watchRefused(watching, request.topic, outcome.error);
 				return;
 			}
-			const { watch, snapshot } = outcome.result as WatchResult;
-			if (watching.disposed) {
+			const result = outcome.result as WatchResult | undefined;
+			if (!result || !Number.isSafeInteger(result.watch) || result.watch < 0 || this.byNumber.has(result.watch)) {
+				this.watchRefused(watching, request.topic, incompatible('Facade core returned an invalid watch ID.'));
+				return;
+			}
+			const { watch, snapshot } = result;
+			if (watching.disposed || !this.watching.has(watching)) {
 				connection.send('unwatch', { watch }, () => undefined);
 				return;
 			}
-			watching.number = watch;
+			watching.binding = { connection, number: watch };
 			this.byNumber.set(watch, watching);
-			this.tell(() => watching.on.snapshot(snapshot as never));
+			const resize: ResizeAttach | undefined = request.topic === 'attach' ? capacity => {
+				if (this.currentWatch(connection, watch) === watching) {
+					connection.notify('call', { op: 'attach.resize', args: { ...capacity, watch } });
+				}
+			} : undefined;
+			this.tell(() => watching.on.snapshot(snapshot as never, resize));
 		});
 	}
 
-	private watchRefused(watching: Watching, err: DaemonError): void {
-		if (watching.disposed || err.reason === 'upgrading') {
+	private watchRefused(watching: Watching, topic: keyof DaemonTopics, err: DaemonError): void {
+		if (!this.watching.has(watching) || err.reason === 'upgrading') {
 			// The next connection asks again
 			return;
 		}
-		this.options.log(`Facade core refused to watch ${watching.topic}: ${err.message}`);
+		this.options.log(`Facade core refused to watch ${topic}: ${err.message}`);
 		this.watching.delete(watching);
-		if (watching.on.ended) {
-			this.tell(() => watching.on.ended?.(err));
-		} else if (watching.topic === 'screen' && err.reason === 'not_found') {
-			// The agent went while the window was disconnected: its screen's last change
-			const gone: ScreenChange = { kind: 'removed' };
-			this.tell(() => watching.on.change(gone as never));
+		this.tell(() => watching.on.ended?.(err));
+	}
+
+	private installed(connection: Connection): boolean {
+		return connection === this.connection && connection.active;
+	}
+
+	private currentWatch(connection: Connection, number: number): Watching | undefined {
+		if (!this.installed(connection)) { return undefined; }
+		const watching = this.byNumber.get(number);
+		if (watching?.binding?.connection === connection && watching.binding.number === number && !watching.disposed) {
+			return watching;
 		}
+		return undefined;
 	}
 
 	private changed(connection: Connection, params: ChangedParams): void {
-		if (connection === this.connection && connection.active) {
-			const watching = this.byNumber.get(params.watch);
-			if (watching && !watching.disposed) {
-				this.tell(() => watching.on.change(params.change as never));
-			}
+		const watching = this.currentWatch(connection, params.watch);
+		if (watching) {
+			this.tell(() => watching.on.change(params.change as never));
 		}
 	}
 
 	private watchEnded(connection: Connection, params: WatchEndedParams): void {
-		if (connection !== this.connection || !connection.active) { return; }
-		const watching = this.byNumber.get(params.watch);
-		if (!watching || watching.disposed) { return; }
+		const watching = this.currentWatch(connection, params.watch);
+		if (!watching) { return; }
 		this.byNumber.delete(params.watch);
 		this.watching.delete(watching);
-		watching.number = undefined;
+		watching.binding = undefined;
 		this.tell(() => watching.on.ended?.(errorOf(params.error)));
 	}
 
 	/** A newer Facade takes over: answers, sends nothing more, and connects again once the new daemon answers. */
 	private closing(connection: Connection): void {
+		if (!this.installed(connection)) { return; }
 		this.options.log('A newer Facade core is taking over.');
-		this.afterClosing = true;
-		connection.notify('closing');
+		connection.notify('closing', {});
 		connection.close();
 		this.lose(connection);
 	}
@@ -397,9 +381,10 @@ class Link implements OrchestratorLink {
 			return;
 		}
 		this.connection = undefined;
+		this.hello = undefined;
 		this.byNumber.clear();
 		for (const watching of this.watching) {
-			watching.number = undefined;
+			watching.binding = undefined;
 			this.tell(() => watching.on.disconnected?.());
 		}
 		void this.reconnect();

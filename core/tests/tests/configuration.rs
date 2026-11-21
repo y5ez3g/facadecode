@@ -136,7 +136,7 @@ fn an_added_cli_of_a_built_in_s_type_starts_as_its_entry_says() {
         Some("fake work"),
         "{inspected}"
     );
-    let rule = connect(&home).call("agent.inspect", json!({ "agent": "worker" }));
+    let rule = connect(&home).call("agent.inspect", json!({ "target": "worker" }));
     assert_eq!(rule["result"]["rule"], "fake", "{rule}");
 }
 
@@ -784,9 +784,9 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
     }
 }
 
-/// Shell rejects a blank rename before changing the name. In v3, a blank rename picks a name
+/// Shell rejects a blank rename before changing the name. In the API, a blank rename picks a name
 /// from the settings.
-fn rename_blank_through_v3(home: &TestHome, agent: &str, blank: &str) {
+fn rename_blank_through_api(home: &TestHome, agent: &str, blank: &str) {
     let refused = facade(home, &["rename", agent, blank], &[]);
     assert_eq!(
         (
@@ -803,7 +803,7 @@ fn rename_blank_through_v3(home: &TestHome, agent: &str, blank: &str) {
         )
     );
     assert_eq!(home.inspect_agent(agent)["agent"]["name"], agent);
-    connect(home).call_ok("agent.rename", json!({ "agent": agent, "name": blank }));
+    connect(home).call_ok("agent.rename", json!({ "target": agent, "name": blank }));
 }
 
 /// An editor-blank name, including a byte order mark, uses `names` in start and the v3 rename.
@@ -815,7 +815,7 @@ fn a_name_of_the_editor_s_spaces_alone_is_blank() {
     assert!(started.status.success(), "{}", stderr(&started));
     assert_eq!(home.agents()[0]["name"], "Solo", "{:?}", home.agents());
     settings(&home, &json!({ "names": ["Renamed"] }));
-    rename_blank_through_v3(&home, "Solo", "\u{feff}");
+    rename_blank_through_api(&home, "Solo", "\u{feff}");
     assert_eq!(home.agents()[0]["name"], "Renamed", "{:?}", home.agents());
 }
 
@@ -826,7 +826,7 @@ fn a_blank_rename_and_a_guest_are_named_from_names() {
     let home = TestHome::new("confignamed");
     settings(&home, &json!({ "names": ["Renamed"] }));
     home.start_named_fake("ada", &[]);
-    rename_blank_through_v3(&home, "ada", " ");
+    rename_blank_through_api(&home, "ada", " ");
     assert!(
         home.agents().iter().any(|agent| agent["name"] == "Renamed"),
         "{:?}",
@@ -1055,9 +1055,15 @@ fn a_start_an_entry_refuses_names_the_entry() {
     let args = json!({
         "cli": "gone", "name": "nope", "folder": home.project,
         "env": { "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path },
-        "cols": 80, "rows": 24,
+        "size": { "cols": 80, "rows": 24 },
     });
     let refused = wire.call("agent.start", args);
-    assert_eq!(refused["error"]["data"]["entry"], "gone", "{refused}");
+    assert_eq!(error_reason(&refused), "not_found", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("clis.gone.command")),
+        "{refused}"
+    );
     assert!(home.agents().is_empty(), "nothing started");
 }

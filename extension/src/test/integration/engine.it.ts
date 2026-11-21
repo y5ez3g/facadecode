@@ -116,7 +116,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			const stopped = await recordOf(id);
 			assert.strictEqual(stopped.session, session);
 			assert.strictEqual(stopped.state_detail?.how, 'stopped');
-			assert.ok(!(await listed()).some(each => each.id === stopped.address), 'the stopped agent leaves the active roster');
+			assert.ok(!(await listed()).some(each => each.address === stopped.address), 'the stopped agent leaves the active roster');
 			assert.ok(fs.existsSync(path.join(screens, id)), 'its screen log stays');
 
 			const second = await resumeCard(id);
@@ -130,7 +130,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			assert.strictEqual(resolvedFolder(resumed.cwd), resolvedFolder(launch.cwd), 'in the same folder');
 			const agent = await recordOf(id);
 			assert.strictEqual(agent.session, session);
-			assert.deepStrictEqual((await listed()).map(each => each.id), [stopped.address], 'one running agent keeps the original address');
+			assert.deepStrictEqual((await listed()).map(each => each.address), [stopped.address], 'one running agent keeps the original address');
 			assert.strictEqual(agent.process, 'running');
 			assert.ok(agent.pid, 'the resumed fake CLI has a PID');
 			await until('the resumed tab to open', () => hasAgentTab(second) || undefined);
@@ -153,7 +153,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 				return record.session === session ? record : undefined;
 			});
 			assert.strictEqual(resolvedFolder(saved.cwd), resolvedFolder(launch.cwd));
-			assert.deepStrictEqual((await listed()).map(each => each.id), [saved.address]);
+			assert.deepStrictEqual((await listed()).map(each => each.address), [saved.address]);
 		} finally {
 			await vscode.commands.executeCommand('facade.deleteAgent', { run_id: cleanup.runId });
 		}

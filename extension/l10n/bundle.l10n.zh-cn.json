@@ -390,8 +390,6 @@
 	"Invalid Facade workspace roster: {0}": "此工作区的 Facade Agent 列表无效：{0}",
 	"Invalid Facade workspace state: {0}": "Facade 工作区状态无效：{0}",
 	"Invalid Facade Pin recovery record: {0}": "Facade Pin 恢复记录无效：{0}",
-	"The previous Facade home has workspace data. Set FACADE_HOME to {0} on this extension host and reopen the workspace to import it.": "先前的 Facade 主目录中有工作区数据。请在此扩展宿主上将 FACADE_HOME 设为 {0}，然后重新打开工作区以导入数据。",
-	"Could not finish importing this workspace from {0}. Restore access with facade machine add if needed, then reopen the workspace to finish the import.": "无法完成从 {0} 导入此工作区。若有需要，请用 facade machine add 恢复访问，然后重新打开工作区以完成导入。",
 	"The old engine is active on {0}. {1} Fix the problem, set {2} to `auto`, and reload the window to try the Rust engine again.": "旧引擎正在 {0} 上运行。{1} 修复问题后，将 {2} 设为 `auto` 并重新加载窗口，以重试 Rust 引擎。",
 	"Could not open {0}: {1}": "无法打开 {0}：{1}",
 	"Could not hide {0}: {1}": "无法隐藏 {0}：{1}",
@@ -408,6 +406,5 @@
 	"Not installed": "未安装",
 	"Enter Path...": "输入路径…",
 	"Enter a path.": "请输入路径。",
-	"Could not identify the previous empty window. Enable the Facade Code Window Component in that window and reload it to finish importing.": "无法识别先前的空窗口。请在那个窗口中启用 Facade Code 窗口组件，然后重新加载该窗口以完成导入。",
 	"Leave blank to choose a name automatically": "留空以自动选择名称"
 }

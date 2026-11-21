@@ -12,12 +12,14 @@ mod requests;
 mod supervisor;
 
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use facade_base::jsonrpc::{ErrorBody, Notification, Response};
-use facade_base::keeper::{KeeperAgentChange, methods};
-use facade_base::process::ProcessExit;
+use facade_base::api_v1::keeper::{AgentChange, methods, project_error};
+use facade_base::api_v1::{ErrorBody, Notification, ProcessExit, Response};
+use facade_base::jsonrpc::{ErrorBody as LegacyError, Reason};
+use facade_base::terminal_lines::InvalidTerminalEnvelope;
 use serde::Serialize;
 
 use self::cli::Cli;
@@ -155,9 +157,22 @@ impl Keeper {
         };
         for inbound in link.drain() {
             match inbound {
-                Inbound::Line(text) => self.serve_line(&text),
+                Inbound::Line(text, terminal) => self.serve_line(&text, terminal),
+                Inbound::InvalidTerminal(error) => {
+                    let id = error
+                        .get_ref()
+                        .and_then(|cause| cause.downcast_ref::<InvalidTerminalEnvelope>())
+                        .and_then(InvalidTerminalEnvelope::request_id);
+                    if let Some(id) = id {
+                        self.post(&Response::failed(
+                            Some(id),
+                            ErrorBody::invalid_argument(error.to_string()),
+                        ));
+                    }
+                    self.link = None;
+                }
                 Inbound::Overlong => {
-                    self.post(&Response::failed(None, ErrorBody::line_too_long()), None);
+                    self.post(&Response::failed(None, ErrorBody::line_too_long()));
                     self.link = None;
                 }
                 Inbound::Closed => self.link = None,
@@ -168,17 +183,38 @@ impl Keeper {
         }
     }
 
-    /// Writes one message to the daemon, with the terminal of the CLI `agent` if given. A link
-    /// that cannot take it is dropped.
-    fn post(&mut self, message: &impl Serialize, agent: Option<&str>) {
-        let Keeper { link, clis, .. } = self;
-        let Some(open) = link else {
-            return;
-        };
-        let terminal = agent.and_then(|agent| clis.get(agent)).map(Cli::master);
-        if let Err(err) = open.write(message, terminal) {
+    /// Writes one message to the daemon. A link that cannot take it is dropped.
+    fn post(&mut self, message: &impl Serialize) {
+        if let Some(link) = &self.link {
+            let written = link.write(message);
+            self.finish_write(written);
+        }
+    }
+
+    /// A terminal preparation failure can still be answered on the link. Once writing starts,
+    /// a failed delivery closes the link and the daemon reconciles on reconnect.
+    #[allow(
+        clippy::result_large_err,
+        reason = "Terminal preparation returns the API v1 wire error by value"
+    )]
+    fn post_terminal(&mut self, response: &Response, agent: &str) -> Result<(), ErrorBody> {
+        let link = self.link.as_ref().expect("serving the daemon's request");
+        let terminal = self.clis[agent].master();
+        let prepared = link.prepare_terminal(response, terminal).map_err(|error| {
+            project_error(LegacyError::new(
+                Reason::Unavailable,
+                format!("could not copy {agent}'s terminal: {error}"),
+            ))
+        })?;
+        let written = link.write_terminal(prepared);
+        self.finish_write(written);
+        Ok(())
+    }
+
+    fn finish_write(&mut self, written: io::Result<()>) {
+        if let Err(err) = written {
             log("warn", &format!("dropped the daemon's connection: {err}"));
-            *link = None;
+            self.link = None;
         }
     }
 
@@ -187,11 +223,11 @@ impl Keeper {
         if !self.link.as_ref().is_some_and(Link::is_greeted) {
             return;
         }
-        let change = KeeperAgentChange::Exit {
-            agent: agent.to_string(),
+        let change = AgentChange::Exit {
+            agent_id: agent.to_string(),
             exit,
         };
-        self.post(&Notification::new(methods::CHANGED, change), None);
+        self.post(&Notification::new(methods::CHANGED, change));
     }
 
     /// A CLI ended. If it was being stopped, the rest of its job is ended now. Then the keeper

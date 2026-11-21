@@ -2,17 +2,29 @@
 
 use std::collections::BTreeSet;
 
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::api_v1::daemon::{
+    Caller, ForwardParams, ForwardRequest, InternalEnsureRoute, InternalEnsureRouteArgs,
+};
+use facade_base::api_v1::{CallParams, EmptyResult, ErrorBody, Operation, decode_arguments};
 use facade_base::machine::ExecutionOutcome;
+use serde_json::json;
 
 use super::Network;
 use super::routes::is_uuid_v4;
 use super::session::Reply;
-use super::wire::{self, Forward};
+use super::wire;
 
-/// Internal to authenticated machine sessions.
-pub(super) const METHOD: &str = "machine.ensure_route";
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RouteAttempt {
+    Passive,
+    Wake,
+}
 
+impl RouteAttempt {
+    pub(super) fn new(wake: bool) -> Self {
+        if wake { Self::Wake } else { Self::Passive }
+    }
+}
 impl Network {
     pub(crate) fn remembered_route(&self, machine_id: &str) -> Option<Vec<String>> {
         let state = self.0.state.lock().unwrap();
@@ -32,7 +44,34 @@ impl Network {
         }
     }
 
-    pub(crate) async fn ensure_route(&self, machine_id: &str) -> Result<(), ErrorBody> {
+    pub(crate) async fn ensure_route(
+        &self,
+        machine_id: &str,
+        caller: &Caller,
+    ) -> Result<(), ErrorBody> {
+        self.open_route(machine_id, caller, RouteAttempt::Wake)
+            .await
+    }
+
+    pub(crate) async fn probe_route(
+        &self,
+        machine_id: &str,
+        caller: &Caller,
+    ) -> Result<(), ErrorBody> {
+        self.open_route(machine_id, caller, RouteAttempt::Passive)
+            .await
+    }
+
+    pub(crate) fn query_machines(&self) -> Vec<String> {
+        self.0.state.lock().unwrap().query_machines()
+    }
+
+    async fn open_route(
+        &self,
+        machine_id: &str,
+        caller: &Caller,
+        attempt: RouteAttempt,
+    ) -> Result<(), ErrorBody> {
         let (route, identity) = {
             let state = self.0.state.lock().unwrap();
             if machine_id == state.local.machine_id || state.route(machine_id).is_some() {
@@ -49,33 +88,50 @@ impl Network {
             (route, identity)
         };
         let first = &route[0];
-        self.ensure_saved_hop(first).await?;
+        self.open_saved_hop(first, attempt).await?;
         if route.len() == 1 {
             return Ok(());
         }
-        let peer = self
-            .0
-            .state
-            .lock()
-            .unwrap()
-            .direct(first)
-            .cloned()
-            .ok_or_else(|| {
+        let peer = {
+            let state = self.0.state.lock().unwrap();
+            if attempt == RouteAttempt::Passive && state.route(machine_id).is_some() {
+                return Ok(());
+            }
+            let link = state.direct_link(first).ok_or_else(|| {
                 wire::unavailable(
                     identity.clone(),
                     ExecutionOutcome::NotExecuted,
                     "The first machine on the saved route disconnected.",
                 )
             })?;
-        let forward = Forward::control(route, METHOD);
+            link.peer.clone()
+        };
+        let forward = ForwardParams {
+            route,
+            caller: caller.clone(),
+            request: ForwardRequest::Call(CallParams {
+                op: InternalEnsureRoute::NAME.to_owned(),
+                args: json!(InternalEnsureRouteArgs {
+                    wake: attempt == RouteAttempt::Wake
+                }),
+            }),
+            time_left_ms: None,
+            from_name: None,
+            start_result: None,
+        };
         match peer
             .request(forward, None, identity.clone())?
             .answer(None)
             .await?
         {
-            Reply::Call { result, .. } => result?,
+            Reply::Call { result, .. } => {
+                decode_arguments::<EmptyResult>(result?)?;
+            }
             Reply::Watch { .. } => {
-                return Err(ErrorBody::invalid_argument("Expected a wake response."));
+                return Err(ErrorBody::invalid_argument(match attempt {
+                    RouteAttempt::Passive => "Expected a probe response.",
+                    RouteAttempt::Wake => "Expected a wake response.",
+                }));
             }
         };
         if self.0.state.lock().unwrap().route(machine_id).is_some() {

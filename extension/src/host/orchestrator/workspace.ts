@@ -10,8 +10,8 @@ import { codeOf, messageOf } from '../../base/errors';
 import { folderKeyOf, replaceFile } from '../../base/files';
 import { isJsonObject } from '../../base/json';
 import { withFileLock, withLongFileLock } from '../../base/lock';
-import { isProcessRunning, isSameStart, processStartTime, processStartTimeOf } from '../../base/system';
-import type { AgentRef, LegacyWorkspaceArgs, LegacyWorkspaceResult, V3AgentInfo } from '../../base/coreProtocol';
+import { isProcessRunning, isSameStart, processStartedAt, processStartTime, processStartTimeOf } from '../../base/system';
+import type { AgentRef, DaemonTopics } from '../../base/coreProtocol';
 import type { Disposable, Event, LogPort, RustPin } from '../../core/ports';
 import { keepWorkspaceUri, workspaceRecord } from '../../record/workspace';
 import { legacyWindowInstance } from '../windowComponent';
@@ -50,11 +50,7 @@ interface LegacySource {
 	readonly keepNativeKey?: () => Thenable<void>;
 }
 
-interface LegacyInput {
-	readonly machineId: string;
-	readonly instanceId?: string;
-	readonly load: (args: LegacyWorkspaceArgs) => Promise<LegacyWorkspaceResult>;
-}
+type AgentInfo = DaemonTopics['agents']['snapshot']['agents'][number];
 
 const WORKSPACE_KEY = 'facade.workspaceKey';
 const EMPTY_WORKSPACE_KEY = 'facade.orchestratorEmptyWorkspaceKey';
@@ -77,14 +73,13 @@ export function openRustWorkspace(context: vscode.ExtensionContext, options: {
 	const uri = workspace?.toString() ?? `untitled:${vscode.env.sessionId}`;
 	const kept = context.workspaceState.get<unknown>(WORKSPACE_KEY);
 	const nativeKey = workspace ? undefined : context.workspaceState.get<unknown>(EMPTY_WORKSPACE_KEY);
-	// A kept editor key is usable for import only when it matches the URI ledger's binding.
+	// A kept editor key identifies old Pins only when it matches the URI ledger's binding.
 	// The ledger itself also finds the old state for a window with a fresh editor profile.
 	const record = workspaceRecord(uri, home, nativeKey);
 	const bound = record.binding.key;
 	const verified = kept === bound && typeof kept === 'string' ? kept : bound;
 	const rosterFile = path.join(record.dir, ROSTER);
-	// Save the migration source before registering this URI. A second v3 window can then
-	// distinguish an existing legacy binding from one the first v3 window just created.
+	// Save the migration source before registering this URI so another window sees the same binding.
 	const key = withFileLock(rosterFile, () => {
 		const saved = readRoster(rosterFile);
 		if (saved) { return saved.legacyWorkspaceKey; }
@@ -234,10 +229,10 @@ function readRoster(file: string): SavedRoster | undefined {
 	};
 }
 
-function readLegacyPins(file: string | undefined): readonly RustPin[] {
-	if (!file) { return []; }
+function readLegacyPins(file: string | undefined): readonly RustPin[] | undefined {
+	if (!file) { return undefined; }
 	const value = readJson(file);
-	if (value === undefined) { return []; }
+	if (value === undefined) { return undefined; }
 	if (!isJsonObject(value)) {
 		throw new Error(vscode.l10n.t('Invalid Facade workspace state: {0}', file));
 	}
@@ -270,17 +265,24 @@ function readRound(file: string): RestoreRound | undefined {
 	return value as unknown as RestoreRound;
 }
 
-function activationIsLive(activation: Activation): boolean {
+function activationIsLive(activation: Activation, selfStart: number): boolean {
 	if (!isProcessRunning(activation.pid)) { return false; }
-	const start = processStartTimeOf(activation.pid, activation.start);
+	const start = activation.pid === process.pid ? selfStart : processStartTimeOf(activation.pid, activation.start);
 	return start === undefined || isSameStart(start, activation.start);
 }
+
+// Each workspace in this process must record the same start even if the native lookup is intermittent.
+let ownActivationStart: number | undefined;
 
 /** A group of simultaneously open workspace hosts shares one restore result (RULES-6.4). */
 class PinRestoreRound implements Disposable {
 	private readonly file: string;
 	private readonly restoreLock: string;
-	private readonly activation: Activation = { id: randomUUID(), pid: process.pid, start: processStartTime(process.pid)! };
+	private readonly activation: Activation = {
+		id: randomUUID(), pid: process.pid,
+		// Use the same OS clock as peers because Node can initialize after the host PID starts.
+		start: ownActivationStart ??= processStartedAt(process.pid) ?? processStartTime(process.pid)!,
+	};
 	private readonly generation: string;
 	private disposed = false;
 
@@ -289,7 +291,7 @@ class PinRestoreRound implements Disposable {
 		this.restoreLock = path.join(directory, 'orchestrator-pin-restore');
 		this.generation = withFileLock(this.file, () => {
 			const previous = readRound(this.file);
-			const activations = previous?.activations.filter(activationIsLive) ?? [];
+			const activations = previous?.activations.filter(activation => activationIsLive(activation, this.activation.start)) ?? [];
 			const round = activations.length && previous ? previous : { generation: randomUUID(), activations: [] };
 			replaceFile(this.file, `${JSON.stringify({ ...round, activations: [...activations, this.activation] })}\n`);
 			return round.generation;
@@ -389,47 +391,47 @@ export class RustWorkspace implements Disposable {
 		return result;
 	}
 
-	async importLegacy(input: LegacyInput): Promise<void> {
-		if (this.disposed) { return; }
+	/** Loads verified local Pins and reports whether the stored members can be reconciled. */
+	async loadLocalPins(): Promise<boolean> {
+		if (this.disposed) { return false; }
 		await this.legacy.keepNativeKey?.();
-		if (this.disposed) { return; }
+		if (this.disposed) { return false; }
 		const before = readRoster(this.file) ?? EMPTY;
-		if (before.imported) { this.publish(before); return; }
+		if (before.imported || before.importedPins) {
+			this.publish(before);
+			return before.imported;
+		}
 		if (this.legacy.otherRoot) {
-			throw new Error(vscode.l10n.t('The previous Facade home has workspace data. Set FACADE_HOME to {0} on this extension host and reopen the workspace to import it.', this.legacy.otherRoot));
+			this.log.event(`Prerelease workspace data is in ${this.legacy.otherRoot}. Complete its import in the prerelease editor before switching to daemon API v1.`);
 		}
 		let pinFile = this.legacy.file;
+		let pending = !!(this.legacy.key || pinFile || this.legacy.otherRoot);
 		const folderless = this.legacy.folderless;
-		let instance = folderless ? input.instanceId : undefined;
-		let missingInstance = false;
-		if (folderless && !instance) {
+		if (folderless) {
 			const windows = folderlessWindows(folderless.home, folderless.uri, folderless.kept);
-			if (windows.kept !== undefined) { pinFile = path.join(folderless.home, 'workspaces', windows.kept, OLD_STATE); }
+			if (windows.kept !== undefined) {
+				pending = true;
+				pinFile = path.join(folderless.home, 'workspaces', windows.kept, OLD_STATE);
+			}
 			const previous = pinFile || windows.any ? await legacyWindowInstance() : undefined;
 			if (previous) {
 				// The extension host holds keepWindowKey's files, while only the UI component has the native token.
 				const windowFile = `${createHash('sha256').update(previous.token).digest('hex').slice(0, 16)}.json`;
 				const key = folderlessWindowKey(path.join(folderless.home, 'windows', windowFile), folderless.uri);
 				if (key) {
-					instance = previous.instanceId;
+					pending = true;
 					pinFile = path.join(folderless.home, 'workspaces', key, OLD_STATE);
 				}
 			}
-			missingInstance = !instance && (windows.kept !== undefined || readLegacyPins(pinFile).length > 0);
 		}
-		const selector = instance ? { instance_id: instance }
-			: this.legacy.key ? { workspace_key: this.legacy.key } : undefined;
-		const pins = before.importedPins ? [] : readLegacyPins(pinFile);
-		const result = selector ? await input.load({ machine_id: input.machineId, ...selector }) : undefined;
-		if (this.disposed) { return; }
-		const missing = result?.machines.filter(machine => machine.status !== 'answered') ?? [];
+		if (this.disposed) { return false; }
+		const pins = readLegacyPins(pinFile);
 		const final = this.edit(latest => {
-			if (latest.imported) { return latest; }
+			if (latest.imported || latest.importedPins || pending && pins === undefined) { return latest; }
 			const hidden = new Set(latest.hidden.map(refKey));
 			const visiblePins = new Map(latest.pins.map(pin => [refKey(refOf(pin)), pin]));
 			const ids = new Set(latest.pins.map(pin => pin.id));
-			// Once merged, the person's edits to the new Pins survive further attempts to reach legacy machines.
-			for (const pin of latest.importedPins ? [] : pins) {
+			for (const pin of pins ?? []) {
 				const ref = refKey(refOf(pin));
 				if (!hidden.has(ref) && !visiblePins.has(ref) && !ids.has(pin.id)) {
 					visiblePins.set(ref, pin);
@@ -437,20 +439,14 @@ export class RustWorkspace implements Disposable {
 				}
 			}
 			const members = new Map(latest.members.map(ref => [refKey(ref), ref]));
-			const imported = (result?.agents ?? []).map(identityOf);
-			for (const ref of [...imported, ...Array.from(visiblePins.values(), refOf)]) {
+			for (const pin of visiblePins.values()) {
+				const ref = refOf(pin);
 				const key = refKey(ref);
 				if (!hidden.has(key)) { members.set(key, ref); }
 			}
-			return { ...latest, members: [...members.values()], pins: [...visiblePins.values()], imported: !missing.length && !missingInstance, importedPins: true };
+			return { ...latest, members: [...members.values()], pins: [...visiblePins.values()], imported: !pending, importedPins: true };
 		});
-		if (!final.imported) {
-			if (missingInstance) {
-				throw new Error(vscode.l10n.t('Could not identify the previous empty window. Enable the Facade Code Window Component in that window and reload it to finish importing.'));
-			}
-			const machines = missing.map(machine => `${machine.name} (${machine.short_id})`).join(', ');
-			throw new Error(vscode.l10n.t('Could not finish importing this workspace from {0}. Restore access with facade machine add if needed, then reopen the workspace to finish the import.', machines));
-		}
+		return final.imported;
 	}
 
 	show(ref: AgentRef): void {
@@ -476,14 +472,14 @@ export class RustWorkspace implements Disposable {
 		}));
 	}
 
-	reconcile(records: readonly V3AgentInfo[], absent: readonly AgentRef[]): void {
+	reconcile(records: readonly AgentInfo[], absent: readonly AgentRef[]): void {
 		const missing = new Set(absent.map(refKey));
 		const children = new Map<string, AgentRef[]>();
 		for (const record of records) {
 			if (!record.creator) { continue; }
-			const parent = refKey({ machine_id: record.creator_machine_id ?? record.machine_id, agent_id: record.creator });
+			const parent = refKey(record.creator);
 			const siblings = children.get(parent) ?? [];
-			siblings.push({ machine_id: record.machine_id, agent_id: record.agent_id });
+			siblings.push(identityOf(record.reference));
 			children.set(parent, siblings);
 		}
 		this.edit(latest => {

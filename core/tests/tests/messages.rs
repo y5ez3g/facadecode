@@ -432,10 +432,11 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     home.start_named_fake("other", &[]);
     let worker_address = address(&home, &worker.id);
     let mut agents = DaemonTestClient::open(&home);
-    agents.hello("terminal", DAEMON_RANGE, json!({}));
-    let watch = agents.request("watch", json!({ "topic": "agents" }))["result"]["watch"]
-        .as_u64()
-        .unwrap();
+    agents.hello("terminal", DAEMON_API_VERSIONS, json!({}));
+    let watch =
+        agents.request("watch", json!({ "topic": "agents", "args": {} }))["result"]["watch"]
+            .as_u64()
+            .unwrap();
     assert_eq!(
         home.run_facade_ok(&["rename", "worker", "  Neo  "]),
         format!("Renamed \"worker\" to \"Neo\" ({worker_address}).\n")
@@ -475,10 +476,15 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     );
     assert_eq!(home.agent_record("a1").unwrap()["name"], "Neo");
 
-    let renamed = agents.call_ok("agent.rename", json!({ "agent": "a1", "name": " " }));
-    let name = renamed["name"].as_str().expect("the replacement name");
+    let renamed = agents.call_ok("agent.rename", json!({ "target": "a1", "name": " " }));
+    let name = renamed["agent"]["name"]
+        .as_str()
+        .expect("the replacement name");
     assert!(!name.is_empty() && name != "Neo", "{renamed}");
-    assert_eq!(home.agent_from_watch(name).unwrap()["agent_id"], "a1");
+    assert_eq!(
+        home.agent_from_watch(name).unwrap()["reference"]["agent_id"],
+        "a1"
+    );
     let unknown = home.run_facade(&["rename", "nobody", "x"]);
     assert!(
         unknown.status.code() == Some(1)
@@ -560,10 +566,13 @@ fn a_message_to_a_cli_that_reads_no_input_fails_within_30_seconds_and_is_never_s
     let home = TestHome::new("sendunread");
     let deaf = home.start_named_fake("deaf", &[("FAKECLI_IGNORE_INPUT", "1")]);
     let mut wire = connect(&home);
+    let target = home.inspect_agent(&deaf.id)["agent"]["reference"].clone();
     let waiting = wire.call(
         "agent.type",
         json!({
-            "agent": deaf.id, "raw": facade_base::base64::encode(&vec![b'w'; 960 * 1024]),
+            "target": target, "input": {
+                "kind": "raw", "raw": facade_base::base64::encode(&vec![b'w'; 960 * 1024]),
+            },
         }),
     );
     assert!(waiting["result"].is_object(), "{waiting}");

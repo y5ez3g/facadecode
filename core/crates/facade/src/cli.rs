@@ -50,16 +50,29 @@ pub(crate) enum Command {
         detach: bool,
     },
     List {
+        #[arg(long)]
+        local: bool,
         #[arg(long, value_name = "MACHINE")]
         machine: Option<String>,
     },
     Attach(Target),
-    Stop(Target),
-    Resume {
-        #[arg(short = 'd', long)]
-        detach: bool,
+    Stop {
+        #[arg(value_name = "AGENT")]
+        agents: Vec<String>,
+        #[arg(long)]
+        local: bool,
         #[arg(long, value_name = "MACHINE")]
         machine: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    Resume {
+        #[arg(long)]
+        local: bool,
+        #[arg(long, value_name = "MACHINE")]
+        machine: Option<String>,
+        #[arg(short = 'd', long)]
+        detach: bool,
         #[arg(value_name = "REFERENCE")]
         reference: Option<String>,
     },
@@ -140,12 +153,19 @@ fn upgrade_version(value: &str) -> Result<String, &'static str> {
 
 #[derive(Subcommand)]
 pub(crate) enum MachineAction {
-    Add(SshTarget),
+    Add {
+        #[command(flatten)]
+        target: SshTarget,
+        #[arg(long)]
+        bidirectional: bool,
+    },
     Connect(SshTarget),
     List,
     Remove {
         #[arg(value_name = "MACHINE")]
         machine: String,
+        #[arg(long)]
+        bidirectional: bool,
     },
     Rename {
         #[arg(value_name = "MACHINE")]
@@ -155,10 +175,22 @@ pub(crate) enum MachineAction {
     },
     // Holds the SSH session after the public add command returns.
     #[command(hide = true)]
-    Link(SshTarget),
+    Link {
+        #[command(flatten)]
+        target: SshTarget,
+        #[arg(long)]
+        bidirectional: bool,
+    },
     // The far end of a machine session, which SSH runs on the other machine.
     #[command(hide = true)]
     Serve(ServeArgs),
+    #[command(hide = true)]
+    SshAdmin {
+        #[arg(long)]
+        home_hex: Option<String>,
+        #[arg(long)]
+        probe: bool,
+    },
 }
 
 #[derive(clap::Args)]
@@ -237,25 +269,46 @@ pub(crate) fn parse_from(argv: &[OsString]) -> Result<Arguments, ParseError> {
         },
     };
 
-    if let Some(Command::Machine {
-        action:
-            MachineAction::Add(target) | MachineAction::Connect(target) | MachineAction::Link(target),
-    }) = arguments.command.as_mut()
-    {
-        let first_ssh = match words.get(2) {
-            Some(word) if word == "--home" => 4,
-            _ if target.home.is_some() => 3,
-            _ => 2,
-        };
-        // The leading -- is for SSH. Clap only keeps it after the first trailing argument.
-        if words.get(first_ssh).is_some_and(|word| word == "--") {
-            target.ssh_args.insert(0, "--".into());
-        }
+    if let Some(Command::Machine { action }) = arguments.command.as_mut() {
+        keep_ssh_separator(action, &words[2..]);
     }
     if let (Some(page), Some(command)) = (scope, &arguments.command) {
         validate(page, command)?;
     }
     Ok(arguments)
+}
+
+fn keep_ssh_separator(action: &mut MachineAction, mut words: &[OsString]) {
+    let (target, bidirectional) = match action {
+        MachineAction::Add {
+            target,
+            bidirectional,
+        }
+        | MachineAction::Link {
+            target,
+            bidirectional,
+        } => (target, *bidirectional),
+        MachineAction::Connect(target) => (target, false),
+        _ => return,
+    };
+    loop {
+        words = match words {
+            [option, _, rest @ ..] if option == "--home" => rest,
+            [option, rest @ ..]
+                if option
+                    .to_str()
+                    .is_some_and(|word| word.starts_with("--home="))
+                    || (bidirectional && option == "--bidirectional") =>
+            {
+                rest
+            }
+            _ => break,
+        };
+    }
+    // The leading -- is for SSH. Clap only keeps it after the first trailing argument.
+    if words.first().is_some_and(|word| word == "--") {
+        target.ssh_args.insert(0, "--".into());
+    }
 }
 
 fn selected(command: Command) -> Result<Arguments, ParseError> {
@@ -297,7 +350,7 @@ fn public_scope(words: &[OsString]) -> Option<&'static Page> {
     match command {
         "daemon" | "keeper" | "hook" => None,
         "machine" => match words.get(1).and_then(|word| word.to_str()) {
-            Some("link" | "serve") => None,
+            Some("link" | "serve" | "ssh-admin") => None,
             Some(action) => {
                 help::page(&format!("machine {action}")).or_else(|| help::page("machine"))
             }
@@ -437,7 +490,6 @@ fn missing_argument(page: &Page, words: &[OsString], error: &clap::Error) -> Par
     };
     let find_agent = "Run 'facade list' to find an agent.";
     let (message, tip) = match page.path {
-        "stop" => ("Choose an agent to stop.".into(), find_agent),
         "attach" => ("Choose an agent to attach to.".into(), find_agent),
         "screen" => (
             "Choose an agent whose screen you want to read.".into(),
@@ -487,7 +539,7 @@ fn example_error(page: &Page, message: &str, example: &str, tip: &str) -> ParseE
 fn extra_argument(page: &Page, given: &str) -> ParseError {
     let command = page.path;
     let message = match command {
-        "attach" | "stop" | "screen" => format!("'facade {command}' accepts one agent."),
+        "attach" | "screen" => format!("'facade {command}' accepts one agent."),
         "status" | "resume" => format!("'facade {command}' accepts at most one agent."),
         "list" => "'facade list' does not take positional arguments.".into(),
         "machine list" => {
@@ -510,7 +562,7 @@ fn extra_argument(page: &Page, given: &str) -> ParseError {
         )),
         "status" => example_error(page, &message, "facade status a3@devbox", ""),
         "rename" => example_error(page, &message, r#"facade rename Nova "Shell review""#, ""),
-        "attach" | "stop" | "machine remove" | "machine rename" | "send" => {
+        "attach" | "machine remove" | "machine rename" | "send" => {
             example_error(page, &message, page.first_example(), "")
         }
         _ => example_error(page, &message, page.first_example(), &help_tip(page)),
@@ -526,18 +578,67 @@ fn validate(page: &Page, command: &Command) -> Result<(), ParseError> {
                     ..
                 },
             ..
-        }
-        | Command::List {
-            machine: Some(machine),
         } => validate_machine_selector(page, machine)?,
-        Command::Resume {
-            detach,
+        Command::List {
+            local,
+            machine: Some(machine),
+        } => {
+            if *local {
+                return Err(local_machine_conflict(page, page.usage));
+            }
+            validate_machine_selector(page, machine)?;
+        }
+        Command::Stop {
+            agents,
+            local,
             machine,
+            all,
+        } => {
+            let mut scopes = [
+                (*all, "'--all'"),
+                (*local, "'--local'"),
+                (machine.is_some(), "'--machine'"),
+                (!agents.is_empty(), "<AGENT> targets"),
+            ]
+            .into_iter()
+            .filter_map(|(given, name)| given.then_some(name));
+            match (scopes.next(), scopes.next()) {
+                (None, _) => {
+                    return Err(example_error(
+                        page,
+                        "Choose an agent to stop.",
+                        page.first_example(),
+                        "Run 'facade list' to find an agent.",
+                    ));
+                }
+                (Some(first), Some(second)) => {
+                    return Err(usage(format!(
+                        "error: Cannot combine {first} with {second}."
+                    )));
+                }
+                _ => {}
+            }
+            if let Some(machine) = machine {
+                validate_machine_selector(page, machine)?;
+            }
+        }
+        Command::Resume {
+            local,
+            machine,
+            detach,
             reference,
         } => {
-            if machine.is_some() && (*detach || reference.is_some()) {
+            if *local && machine.is_some() {
+                let listing = page.usage.lines().nth(1).expect("resume listing syntax");
+                return Err(local_machine_conflict(
+                    page,
+                    &format!("Usage: {}", listing.trim_start()),
+                ));
+            }
+            if (*detach || reference.is_some()) && (*local || machine.is_some()) {
+                let option = if *local { "--local" } else { "--machine" };
                 return Err(usage(format!(
-                    "error: '--machine' can only be used to list resumable agents and sessions, not with '-d' or <REFERENCE>.\n{}\n{}",
+                    "error: '{option}' can only be used to list resumable agents and sessions, not with '-d' or <REFERENCE>.\n{}\n{}",
                     page.usage,
                     help_tip(page)
                 )));
@@ -579,10 +680,10 @@ fn validate(page: &Page, command: &Command) -> Result<(), ParseError> {
             )));
         }
         Command::Machine {
-            action: MachineAction::Remove { machine } | MachineAction::Rename { machine, .. },
+            action: MachineAction::Remove { machine, .. } | MachineAction::Rename { machine, .. },
         } => validate_machine_selector(page, machine)?,
         Command::Machine {
-            action: MachineAction::Add(target) | MachineAction::Connect(target),
+            action: MachineAction::Add { target, .. } | MachineAction::Connect(target),
         } => {
             if target.home.as_deref() == Some("") {
                 return Err(usage(format!(
@@ -590,6 +691,21 @@ fn validate(page: &Page, command: &Command) -> Result<(), ParseError> {
                     page.usage,
                     help_tip(page)
                 )));
+            }
+            if page.path == "machine add" {
+                for word in target.ssh_args.iter().take_while(|word| *word != "--") {
+                    let option = match word.as_str() {
+                        "--bidirectional" => "--bidirectional",
+                        "--home" => "--home",
+                        word if word.starts_with("--home=") => "--home",
+                        _ => continue,
+                    };
+                    return Err(usage(format!(
+                        "error: Put '{option}' before the SSH arguments and destination.\n{}\n{}",
+                        page.usage,
+                        help_tip(page)
+                    )));
+                }
             }
             if let Err(error) = parse_ssh_destination(&target.ssh_args) {
                 return Err(match error {
@@ -604,6 +720,13 @@ fn validate(page: &Page, command: &Command) -> Result<(), ParseError> {
         _ => {}
     }
     Ok(())
+}
+
+fn local_machine_conflict(page: &Page, syntax: &str) -> ParseError {
+    usage(format!(
+        "error: Cannot combine '--local' with '--machine'.\n{syntax}\n{}",
+        help_tip(page)
+    ))
 }
 
 fn validate_machine_selector(page: &Page, machine: &str) -> Result<(), ParseError> {
@@ -740,7 +863,9 @@ mod tests {
             &["start", "--machine", "user@devbox", "codex"][..],
             &["list", "--machine", "user@devbox"],
             &["resume", "--machine", "user@devbox"],
+            &["stop", "--machine", "user@devbox"],
             &["machine", "remove", "user@devbox"],
+            &["machine", "remove", "--bidirectional", "user@devbox"],
             &["machine", "rename", "user@devbox", "lab"],
         ] {
             let words: Vec<_> = std::iter::once("facade")

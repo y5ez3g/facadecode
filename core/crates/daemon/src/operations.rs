@@ -390,15 +390,6 @@ impl Daemon {
         })
     }
 
-    pub(crate) async fn preflight_start(
-        &self,
-        args: &StartArgs,
-        by_model: bool,
-    ) -> Result<(), ErrorBody> {
-        self.check_local_start(args, by_model).await?;
-        Ok(())
-    }
-
     pub(crate) async fn start_saved_session(
         self: &Arc<Self>,
         args: StartArgs,

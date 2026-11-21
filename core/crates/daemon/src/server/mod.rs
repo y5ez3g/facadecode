@@ -13,10 +13,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use facade_base::daemon::{HelloParams, HelloResult, methods};
-use facade_base::daemon_client::Identity;
-use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine::AgentRef;
+use facade_base::api_v1::daemon::{
+    AgentRef, ClientKind, DaemonCall, DaemonWatch, HelloParams, HelloResult, MachineConnectArgs,
+    MachineConnectResult, TerminalColors, methods,
+};
+use facade_base::api_v1::{ApiVersion, ErrorBody, ErrorData, Size};
 use facade_base::sockets::{DaemonListener, ServerReader, ServerSocket, ServerWriter};
 use serde_json::Value;
 use tokio::io::BufReader;
@@ -26,8 +27,8 @@ use crate::Cancel;
 
 /// Who a connection is, as its hello settled it.
 pub(crate) struct Client {
-    /// What the client said of itself in its hello.
-    pub(crate) identity: Identity,
+    pub(crate) kind: ClientKind,
+    pub(crate) api_version: ApiVersion,
     /// The stable actor of an in-process connection, supplied by its authenticated caller.
     pub(crate) verified_actor: Option<AgentRef>,
 }
@@ -75,11 +76,11 @@ pub(crate) trait Service: Send + Sync + 'static {
     /// An authorized machine session, held until its last RPC response is written.
     type Machine: Send;
 
-    /// Answers an accepted hello. The server strips the old identity fields and attaches any
-    /// authenticated actor from its private entry point after this returns.
+    /// Answers an admitted hello. The server attaches any verified actor after this returns.
     fn hello(
         self: &Arc<Self>,
         hello: HelloParams,
+        api_version: ApiVersion,
         peer_pid: Option<u32>,
     ) -> impl Future<Output = Result<(HelloResult, Client, Self::Hold), ErrorBody>> + Send;
 
@@ -87,6 +88,7 @@ pub(crate) trait Service: Send + Sync + 'static {
     fn machine_hello(
         self: &Arc<Self>,
         hello: HelloParams,
+        api_version: ApiVersion,
         peer_pid: Option<u32>,
     ) -> impl Future<Output = Result<(HelloResult, Self::Machine), ErrorBody>> + Send;
 
@@ -94,8 +96,8 @@ pub(crate) trait Service: Send + Sync + 'static {
     fn machine_connect(
         self: &Arc<Self>,
         client: &Client,
-        args: Value,
-    ) -> impl Future<Output = Result<(Value, Self::Machine), ErrorBody>> + Send;
+        args: MachineConnectArgs,
+    ) -> impl Future<Output = Result<(MachineConnectResult, Self::Machine), ErrorBody>> + Send;
 
     /// Runs the authorized machine session over the stream after its RPC response was written.
     fn serve_machine(
@@ -105,12 +107,11 @@ pub(crate) trait Service: Send + Sync + 'static {
         write: ServerWriter,
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
 
-    /// Runs `operation` for `client`.
+    /// Runs a decoded call for `client`.
     fn call(
         self: &Arc<Self>,
         client: &Client,
-        operation: &str,
-        args: Value,
+        call: DaemonCall,
         when_full: WhenFull,
         cancel: Cancel,
     ) -> impl Future<Output = Result<Value, ErrorBody>> + Send;
@@ -119,10 +120,18 @@ pub(crate) trait Service: Send + Sync + 'static {
     fn watch(
         self: &Arc<Self>,
         client: &Client,
-        topic: &str,
-        args: Value,
+        watch: DaemonWatch,
         viewer: u64,
     ) -> impl Future<Output = Result<Watch, ErrorBody>> + Send;
+
+    /// Applies the capacity reported by an active Attach watch on this connection.
+    fn resize_viewer(
+        self: &Arc<Self>,
+        client: &Client,
+        viewer: u64,
+        size: Size,
+        colors: Option<TerminalColors>,
+    ) -> impl Future<Output = Result<(), ErrorBody>> + Send;
 
     /// Ends a watch that [`Service::watch`] started, when its client unwatches it or closes.
     fn unwatch(
@@ -168,6 +177,17 @@ pub(crate) trait RelayLines: Send + Sync {
 /// Whether hello `params` are a relay's: they carry its relay contract.
 pub(crate) fn is_relay_hello(params: &Value) -> bool {
     params.get("relay").is_some()
+}
+
+fn operation_error(reason: &str, message: impl Into<String>) -> ErrorBody {
+    ErrorBody {
+        code: -32000,
+        message: message.into(),
+        data: ErrorData {
+            reason: reason.into(),
+            details: None,
+        },
+    }
 }
 
 /// Whether `line` answers `closing`: a `closing` notification back. No MCP message is named so.

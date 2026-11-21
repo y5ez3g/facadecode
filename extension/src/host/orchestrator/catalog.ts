@@ -3,16 +3,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { LocationListArgs, V3LocationListResult } from '../../base/coreProtocol';
+import type { DaemonOperations } from '../../base/coreProtocol';
 import { messageOf } from '../../base/errors';
 import { folderKeyOf, isEqualPath } from '../../base/files';
 import type { Catalog, Disposable, Event, Location, LocationId, LocationPort, LocationRemoval, LogPort, WorkspaceFolderInfo } from '../../core/ports';
 import { editorUriOf } from '../locations/workspaceFolders';
 
+type LocationListArgs = DaemonOperations['location.list']['args'];
+type LocationListResult = DaemonOperations['location.list']['result'];
+
 interface LocationOptions {
 	readonly folders: () => readonly WorkspaceFolderInfo[];
 	readonly onDidChangeFolders: Event<void>;
-	readonly list: (args: LocationListArgs) => Promise<V3LocationListResult>;
+	readonly list: (args: LocationListArgs) => Promise<LocationListResult>;
 	readonly log: LogPort;
 }
 
@@ -24,7 +27,7 @@ export class OrchestratorLocations implements LocationPort, Disposable {
 	readonly onDidRemove = this.removed.event;
 	private readonly subscription: Disposable;
 	private readonly removals = new Map<LocationId, LocationRemoval['cause']>();
-	private rows: V3LocationListResult['locations'] = [];
+	private rows: LocationListResult['locations'] = [];
 	private pending?: LocationListArgs;
 	private catalog: Catalog;
 
@@ -105,8 +108,8 @@ export class OrchestratorLocations implements LocationPort, Disposable {
 	}
 }
 
-function locationsOf(folders: readonly WorkspaceFolderInfo[], rows: V3LocationListResult['locations']): Location[] {
-	const sources = new Map<LocationId, { row: V3LocationListResult['locations'][number]; folders: WorkspaceFolderInfo[] }>();
+function locationsOf(folders: readonly WorkspaceFolderInfo[], rows: LocationListResult['locations']): Location[] {
+	const sources = new Map<LocationId, { row: LocationListResult['locations'][number]; folders: WorkspaceFolderInfo[] }>();
 	const folderKeys = folders.map(folder => ({ folder, key: folderKeyOf(folder.path) }));
 	for (const { folder } of folderKeys) {
 		for (const row of rows) {

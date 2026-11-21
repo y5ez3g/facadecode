@@ -28,7 +28,7 @@ fn forget(home: &TestHome, point: &str) {
 fn agent(home: &TestHome, id: &str) -> Option<Value> {
     home.agents()
         .into_iter()
-        .find(|agent| agent["agent_id"] == id)
+        .find(|agent| agent["reference"]["agent_id"] == id)
 }
 
 /// Starts Facade with the marks of debug builds on, which the keeper and every later daemon
@@ -57,14 +57,14 @@ fn an_ended_agent_s_screen_leaves_memory_and_comes_back_when_read_or_shown() {
         printer(400, "FINAL", 3)
     );
     let id = start_script(&mut wire, &home, "printer", &script);
-    // The screen topic follows an active terminal, delivering its last output before the exit.
+    // Attach follows an active terminal, delivering its last output before the exit.
     let watching = wire.request(
         "watch",
-        json!({ "topic": "screen", "args": { "agent": id } }),
+        json!({ "topic": "attach", "args": { "target": id } }),
     );
     let watch = watching["result"]["watch"]
         .as_u64()
-        .expect("a screen watch");
+        .expect("an Attach watch");
     assert_eq!(watching["result"]["snapshot"]["process"], "running");
     std::fs::write(home.project.join("go"), "").unwrap();
     let exit = |event: &Value| event["change"]["kind"] == "exit";
@@ -108,7 +108,7 @@ fn an_ended_agent_s_screen_leaves_memory_and_comes_back_when_read_or_shown() {
 
     let ended = wire.request(
         "watch",
-        json!({ "topic": "screen", "args": { "agent": id } }),
+        json!({ "topic": "attach", "args": { "target": id } }),
     );
     assert_eq!(error_reason(&ended), "ended", "{ended}");
 }
@@ -180,9 +180,18 @@ fn a_restarted_daemon_reads_an_ended_agent_s_screen_only_when_asked() {
         "echo READY; while [ ! -e go ]; do sleep 0.1; done; echo DONE; exit 7",
     );
     assert!(wait_for_screen_text(&home, &id, "READY"));
+    let watching = wire.request(
+        "watch",
+        json!({
+            "topic": "attach", "args": { "target": id, "size": { "cols": 80, "rows": 24 } }
+        }),
+    );
+    let watch = watching["result"]["watch"]
+        .as_u64()
+        .expect("an Attach watch");
     let resized = wire.call(
-        "agent.resize",
-        json!({ "agent": id, "cols": 100, "rows": 30 }),
+        "attach.resize",
+        json!({ "watch": watch, "size": { "cols": 100, "rows": 30 } }),
     );
     assert!(resized["result"].is_object(), "{resized}");
     std::fs::write(home.project.join("go"), "").unwrap();
@@ -215,7 +224,8 @@ fn a_restarted_daemon_reads_an_ended_agent_s_screen_only_when_asked() {
         "the read did"
     );
     assert_eq!(
-        agent(&home, &id).map(|agent| (agent["cols"].clone(), agent["rows"].clone())),
+        agent(&home, &id)
+            .map(|agent| (agent["size"]["cols"].clone(), agent["size"]["rows"].clone())),
         Some((json!(100), json!(30)))
     );
 }

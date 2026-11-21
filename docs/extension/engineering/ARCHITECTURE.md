@@ -157,7 +157,7 @@ The **Facade: Rust Engine** setting is `auto` by default. In `auto`, use the bun
 host after existing old-engine runs in that execution environment have ended. While they are still running, stay
 on the old engine. The editor offers to reload once it can switch. Explicit `off` selects the old engine. A failure
 to start or connect to the bundled Orchestrator can fall back to the old engine and display the notice in UX-6.2. Group 6
-defines the Orchestrator-backed connection and the one-time workspace import.
+defines the Orchestrator-backed connection, the first API v1 cutover and the workspace data retained through it.
 
 ## 2 Ownership and recovery
 
@@ -791,42 +791,52 @@ what was tested and what remains. Task assignments, pauses and discussion author
 
 ### 6.1 One local Orchestrator connection per extension host
 
-**Connect to the Orchestrator in the host's Facade home using the core protocol.**
+**Connect to the Orchestrator in the host's Facade home using daemon API v1.**
 
 Use RULES-6.6 for home selection and RULES-6.7 for remote-host ownership. The editor sends operations through
 the same Orchestrator as Shell and MCP. Running agent records, session enumeration, process state, agent state and
 titles come from that Orchestrator. The workspace has no Orchestrator registration or routing role.
 
+Send `hello` with `kind:"ide"` and `api_versions:[1]`. Check the selected API version and machine identity before
+using that connection's advertised operations and topics. Send one `agent.start` after the editor's selection flow.
+The Orchestrator validates the request before creating a worktree or process. Stop uses one exact target and reports
+the result of that item. Resume passes the returned exact target from a local, folder-scoped query.
+
+For the first formal API release, complete workspace imports in the prerelease editor and wait for its agents to end.
+Stop the prerelease daemon and keeper. Replace the editor, CLI and participating SSH endpoints together and keep their
+homes and editor storage. An incompatible hello makes the Orchestrator-backed activation fail. The supported takeover
+between API v1 builds sends `closing {build}`. The editor acknowledges on that connection and verifies a fresh hello.
+
 ### 6.2 Workspace state and upgrade
 
 **Keep workspace agent addresses, Pins and terminal presentation on the editor side.**
 
-Windows of the same workspace consume and update the same list under RULES-6.1. On first open after upgrade,
-verify the saved `facade.workspaceKey` against the workspace URI ledger. Aggregate the previous protocol's logical
-windows for that key through `workspace.import_legacy`. The Orchestrator preserves the membership source during
-takeover. Each agent's machine verifies its part of the snapshot and returns agent references with per-machine results. The
-[core protocol](../../../core/protocol/PROTOCOL.md) defines the import operation.
+Windows of the same workspace consume and update the same normalized roster under RULES-6.1. Use the canonical
+workspace URI ledger and read the saved members, Pins and hidden entries from `orchestrator-workspace.json`.
+Preserve the saved import marker when legacy membership is still pending. Complete that import before the cutover
+under 6.1. Reconcile stored references with confirmed agent records and retain entries when a remote machine has
+yet to supply its snapshot.
 
-For a v2 window opened without a folder, the persisted native window token identifies its old record in
-`extension/windows/`. That record identifies the original workspace key, which locates the saved Pins even
-when the workspace sidecar is absent. Use the verified old instance ID to import its members. If evidence identifies
-old workspace data and the instance is unavailable, save the Pins that can be confirmed and leave the import pending.
-The recovery message directs the person to enable the Window Component in that window and reload. A new empty window
-stores its roster key in VS Code workspace state so the same workspace keeps its roster when the editor session changes.
-
-Merge confirmed members and the associated old `facade.pins` into the shared workspace list. Keep those members and
-Pins if some source machines are unavailable. Leave the import pending and report the missing machines, with
-`facade machine add` to re-establish access where needed. Record completion only after the full list and Pins are
-durably saved, then reconcile the list with current records and restore Pins. Regular connections carry agent
-records without window membership.
+Read local `facade.pins` from a verified legacy workspace file. For a folderless window, the persisted native
+window token can identify its original workspace key in `extension/windows/`. That key locates the local Pins even
+when the workspace sidecar is absent. Merge the confirmed Pins under the roster lock, retaining a person's current
+Pins and hidden entries. A new empty window stores its roster key in VS Code workspace state. Share the existing
+Pin restore round across windows and use the full persisted agent or session identity for recovery.
 
 ### 6.3 Terminals and the Window Component
 
 **An open terminal is an Attach to the agent's terminal session.**
 
-Use RULES-6.3 for input on reconnect, size and colors. Terminal creation and display remain workspace presentation.
-The Window Component can clean up stale terminal tabs under RULES-6.8. A missing component leaves the
-Orchestrator-backed editor usable and skips that cleanup.
+Use RULES-6.3 for input on reconnect, size and colors. Each view chooses `watch attach` when the current connection's
+hello advertises both the `attach` topic and `attach.resize`. The initial watch includes any known pane capacity.
+Later capacity and color reports use `attach.resize` with the watch ID issued on that connection. Accept a reply,
+event or closing notification only from the installed connection. Watch effects and captured callbacks also check the
+live registration and watch ID. Reconnecting verifies the new hello and takes a fresh snapshot before drawing.
+
+The editor reads pane capacity from `Pseudoterminal.setDimensions`. Before drawing a snapshot or full redraw, it
+sets the renderer grid to the frame's dimensions through `Pseudoterminal.onDidOverrideDimensions`. Terminal
+creation and display remain workspace presentation. The Window Component can clean up stale terminal tabs under
+RULES-6.8. A missing component leaves the Orchestrator-backed editor usable and skips that cleanup.
 
 ### 6.4 Distribution
 

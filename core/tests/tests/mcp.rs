@@ -137,7 +137,7 @@ fn a_managed_read_delivers_only_whole_inline_messages() {
         .unwrap()
         .iter()
         .find(|row| row["name"] == "bob")
-        .expect("Bob is still running")["id"];
+        .expect("Bob is still running")["address"];
     for message in messages {
         assert_eq!(&message["from"], bob_address, "{message}");
         let id = message["id"].as_str().expect("the inbox message number");
@@ -293,7 +293,7 @@ fn a_long_screen_is_complete_and_inline() {
         facade_base::daemon::plain(after["data"]["text"].as_str().unwrap()).contains(&expected),
         "the stopped agent retains the output"
     );
-    let screen = connect(&home).call_ok("agent.screen", json!({ "agent": "long", "lines": 200 }));
+    let screen = connect(&home).call_ok("agent.screen", json!({ "target": "long", "lines": 200 }));
     assert_eq!(screen["text"], after["data"]["text"]);
     let shell = home.run_facade_ok(&["screen", "long", "--lines", "200"]);
     assert_eq!(
@@ -631,7 +631,7 @@ fn a_start_and_send_from_an_agent_s_terminal_come_from_the_command_line() {
         home.submitted_messages(),
         ["📨 Message from the command line · m1\nfrom the boss"]
     );
-    let child = wire.call("agent.inspect", json!({ "agent": "child" }));
+    let child = wire.call("agent.inspect", json!({ "target": "child" }));
     assert_eq!(
         child["result"]["started_by"],
         json!({ "kind": "command_line" }),
@@ -1034,7 +1034,7 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     );
     let mut wire = connect(&home);
     let mut input =
-        || wire.call("agent.inspect", json!({ "agent": "ada" }))["result"]["input"].clone();
+        || wire.call("agent.inspect", json!({ "target": "ada" }))["result"]["input"].clone();
     assert!(
         wait_until(secs(15), || input()["state"] == "usable"),
         "the panel closed: {} {}",
@@ -1322,7 +1322,7 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
             .unwrap();
         assert!(started.status.success(), "{cli}: {}", stderr(&started));
         let record = home.agent_from_watch(cli).expect("the agent is listed");
-        let id = record["agent_id"].as_str().unwrap();
+        let id = record["reference"]["agent_id"].as_str().unwrap();
         let address = record["address"].as_str().unwrap();
         let (_, machine) = address.split_once('@').expect("a complete address");
         let place = format!(
@@ -1510,7 +1510,7 @@ fn reconnect_diagnostics(
             (
                 "hello",
                 "hello",
-                json!({ "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" }),
+                json!({ "api_versions": DAEMON_API_VERSIONS, "build": "test", "kind": "terminal" }),
             ),
             (
                 "inspect",
@@ -1641,14 +1641,14 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             .and_then(|hello| hello["pid"].as_i64())
             .unwrap() as i32;
         let mut wire = DaemonTestClient::open(&home);
-        assert!(wire.hello("terminal", DAEMON_RANGE, json!({}))["result"].is_object());
+        assert!(wire.hello("terminal", DAEMON_API_VERSIONS, json!({}))["result"].is_object());
         let env = json!({
             "PATH": path, "HOME": own, "XDG_CONFIG_HOME": own.join(".config"),
             "FACADE_HOME": home.path, "FAKECLI_LOOK": "agy",
         });
         let args = json!({
-            "cli": "agy", "name": "half", "folder": home.project, "env": env, "cols": 80,
-            "rows": 24,
+            "cli": "agy", "name": "half", "folder": home.project, "env": env,
+            "size": { "cols": 80, "rows": 24 },
         });
         wire.send("call", json!({ "op": "agent.start", "args": args }));
         assert!(
