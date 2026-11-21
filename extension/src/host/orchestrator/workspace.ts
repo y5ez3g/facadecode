@@ -10,7 +10,7 @@ import { codeOf, messageOf } from '../../base/errors';
 import { folderKeyOf, replaceFile } from '../../base/files';
 import { isJsonObject } from '../../base/json';
 import { withFileLock, withLongFileLock } from '../../base/lock';
-import { isProcessRunning, isSameStart, processStartTime, processStartTimeOf } from '../../base/system';
+import { isProcessRunning, isSameStart, processStartedAt, processStartTime, processStartTimeOf } from '../../base/system';
 import type { AgentRef, DaemonTopics } from '../../base/coreProtocol';
 import type { Disposable, Event, LogPort, RustPin } from '../../core/ports';
 import { keepWorkspaceUri, workspaceRecord } from '../../record/workspace';
@@ -265,17 +265,24 @@ function readRound(file: string): RestoreRound | undefined {
 	return value as unknown as RestoreRound;
 }
 
-function activationIsLive(activation: Activation): boolean {
+function activationIsLive(activation: Activation, selfStart: number): boolean {
 	if (!isProcessRunning(activation.pid)) { return false; }
-	const start = processStartTimeOf(activation.pid, activation.start);
+	const start = activation.pid === process.pid ? selfStart : processStartTimeOf(activation.pid, activation.start);
 	return start === undefined || isSameStart(start, activation.start);
 }
+
+// Each workspace in this process must record the same start even if the native lookup is intermittent.
+let ownActivationStart: number | undefined;
 
 /** A group of simultaneously open workspace hosts shares one restore result (RULES-6.4). */
 class PinRestoreRound implements Disposable {
 	private readonly file: string;
 	private readonly restoreLock: string;
-	private readonly activation: Activation = { id: randomUUID(), pid: process.pid, start: processStartTime(process.pid)! };
+	private readonly activation: Activation = {
+		id: randomUUID(), pid: process.pid,
+		// Use the same OS clock as peers because Node can initialize after the host PID starts.
+		start: ownActivationStart ??= processStartedAt(process.pid) ?? processStartTime(process.pid)!,
+	};
 	private readonly generation: string;
 	private disposed = false;
 
@@ -284,7 +291,7 @@ class PinRestoreRound implements Disposable {
 		this.restoreLock = path.join(directory, 'orchestrator-pin-restore');
 		this.generation = withFileLock(this.file, () => {
 			const previous = readRound(this.file);
-			const activations = previous?.activations.filter(activationIsLive) ?? [];
+			const activations = previous?.activations.filter(activation => activationIsLive(activation, this.activation.start)) ?? [];
 			const round = activations.length && previous ? previous : { generation: randomUUID(), activations: [] };
 			replaceFile(this.file, `${JSON.stringify({ ...round, activations: [...activations, this.activation] })}\n`);
 			return round.generation;
