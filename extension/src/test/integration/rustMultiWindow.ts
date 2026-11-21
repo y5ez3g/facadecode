@@ -285,7 +285,6 @@ export async function coldCutoverJourney(
 	});
 	assert.strictEqual(ready.legacyWorkspaceKey, path.basename(path.dirname(file)));
 	assert.deepStrictEqual(ready.members, [reference]);
-	assert.deepStrictEqual(ready.pins, [pin]);
 	await imported.close();
 	const lock = (service: string) =>
 		JSON.parse(fs.readFileSync(path.join(home, 'core', `${service}.lock`), 'utf8')) as { pid: number; birth: string };
@@ -294,7 +293,10 @@ export async function coldCutoverJourney(
 	await until('both prerelease services to exit', () =>
 		Object.values(old).every(service => !isProcessRunning(service.pid)) || undefined, 55_000);
 
+	const beforeCutover = roster();
+	assert.deepStrictEqual(beforeCutover.members, [reference]);
 	run(current, 'list', '--local');
+	assert.deepStrictEqual(roster(), beforeCutover);
 	assert.notDeepStrictEqual(lock('daemon'), old.daemon);
 	assert.notDeepStrictEqual(lock('keeper'), old.keeper);
 	const { agent: finished } = await coreCall(home, 'agent.inspect', { target: reference });
@@ -302,6 +304,21 @@ export async function coldCutoverJourney(
 	assert.strictEqual(finished.process, 'ended');
 	const history = run(current, 'screen', address, '--lines', '120');
 	assert.ok(history.includes(marker), history);
+
+	const { locations } = await coreCall(home, 'location.list', { scope: { kind: 'local' }, folders: [pin.cwd] });
+	const workspaceLocation = locations.find(location => normalizeDriveLetter(location.path) === normalizeDriveLetter(pin.cwd));
+	assert.ok(workspaceLocation, 'the saved Pin has a registered location for its cwd');
+	// Pin recovery can run before the location catalog is ready and use the same Agent's cwd key.
+	const locationKeys = [workspaceLocation.location_id, `${pin.machine_id}:${pin.cwd}`];
+	const expectPin = (pins: readonly RustPin[]) => {
+		assert.strictEqual(pins.length, 1);
+		const [restored] = pins;
+		assert.ok(locationKeys.includes(restored.location), restored.location);
+		assert.deepStrictEqual(restored, { ...pin, location: restored.location });
+	};
+	expectPin([pin]);
+	expectPin(ready.pins);
+	expectPin(beforeCutover.pins);
 	selectV1();
 	const reopened = await open(folder, 'cold');
 	assert.strictEqual(reopened.ready.machineId, pin.machine_id);
@@ -309,7 +326,7 @@ export async function coldCutoverJourney(
 	const saved = await reopened.act<SavedPin>({ kind: 'saved-pin', agent });
 	assert.strictEqual(saved.file, file);
 	assert.deepStrictEqual(roster().members, [reference]);
-	assert.deepStrictEqual(saved.pin, pin);
+	expectPin([saved.pin]);
 	await reopened.close();
 	console.log(`  ✔ Prerelease import and API v1 cold cutover kept the workspace member, finished transcript and Pin ${pin.id}. Daemon ${JSON.stringify(old.daemon)} and keeper ${JSON.stringify(old.keeper)} exited before restart.`);
 }
