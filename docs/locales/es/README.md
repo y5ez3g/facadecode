@@ -95,7 +95,7 @@ Facade instala la versión correspondiente en la máquina remota cuando hace fal
 
 > **YOLO está activado de forma predeterminada.** Con YOLO, un agente puede acceder a otros agentes de las máquinas conectadas. Establezca `"yolo": false` en el `facade.json` de su máquina para conservar las aprobaciones y el aislamiento de la CLI, y limitar MCP al árbol de creación de quien llama. El cambio se aplica en el siguiente arranque o resume. `facade status` muestra la ruta del archivo.
 
-[Documentación del producto (中文)](../../facade-code.md) · [Glosario](../../core/GLOSSARY.md)
+[Documentación del producto (en inglés)](../../PRODUCT.md) · [Glosario](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

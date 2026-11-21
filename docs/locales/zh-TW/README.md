@@ -95,7 +95,7 @@ Facade 會在需要時於遠端機器安裝相同版本。Facade 在遠端機器
 
 > **YOLO 預設開啟。** 開啟時，Agent 可操作已連線機器上的其他 Agent。將該機器的 `facade.json` 設為 `"yolo": false`，即可沿用 CLI 自己的核准和沙箱，並將 MCP 存取限於呼叫者的建立樹。設定在下次啟動或 resume 時生效。用 `facade status` 查詢檔案位置。
 
-[產品文件](../../facade-code.md) · [詞彙表](../../core/GLOSSARY.md)
+[產品指南（英文）](../../PRODUCT.md) · [詞彙表](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

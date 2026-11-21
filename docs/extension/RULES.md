@@ -1,6 +1,6 @@
 # Shared rules
 
-[Facade Code](../facade-code.md) defines the product. Group 6 owns the Orchestrator-backed VS Code entry point.
+[Facade Code](../PRODUCT.md) defines the product. Group 6 owns the Orchestrator-backed VS Code entry point.
 Groups 1–5 describe the old engine during the transition.
 
 | Group | Decides |
@@ -557,7 +557,7 @@ YOLO defaults to on. A managed agent reads it at start or resume. A Guest reads 
 a caller's MCP reach is its creation tree and the CLI keeps its native sandbox and permissions. Both settings bypass
 the Facade tool confirmation. With YOLO on, the Orchestrator also handles CLI permission and folder trust
 questions and disables the CLI sandbox where available. CLI questions for the person still appear in the terminal.
-The [product's CLI table](../facade-code.md#各个-cli-不一样的地方) owns the summary of differences.
+The [product's CLI table](../PRODUCT.md#cli-differences) owns the summary of differences.
 
 ### 6.7 Messages, machines and tools
 

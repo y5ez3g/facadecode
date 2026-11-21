@@ -1,7 +1,7 @@
 # Facade Code extension guide
 
 The extension is Facade Code's VS Code entry point. It starts and opens agents through the Orchestrator on the
-machine that hosts the workspace. The [product documentation](../docs/facade-code.md) covers the three entry points.
+machine that hosts the workspace. The [product documentation](../docs/PRODUCT.md) covers the three entry points.
 
 ## One panel for your workspace
 
@@ -75,7 +75,7 @@ normal approval and sandbox settings, and its MCP reach is its creation tree. Se
 Use `clis` to add a named entry backed by a built-in CLI, for example Codex with a separate profile, or to launch a
 custom program. A local launch uses the initiator's environment. A launch on another machine uses its login
 environment. See the [settings example](README.md#settings) and the
-[CLI differences](../docs/facade-code.md#各个-cli-不一样的地方).
+[CLI differences](../docs/PRODUCT.md#cli-differences).
 
 ## Old engine transition
 

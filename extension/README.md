@@ -70,7 +70,7 @@ a start on another machine uses its SSH login environment.
 A named entry can use a built-in CLI with its own arguments, environment, model and effort where the CLI supports them.
 Use `${env:NAME}` to read a value from the launch environment. A custom program can be started and attached to,
 and its terminal accepts direct input. Its lack of a managed CLI session means it has no MCP messaging, Resume or Pin.
-The [product's CLI table](https://github.com/y5ez3g/facadecode/blob/main/docs/facade-code.md#各个-cli-不一样的地方)
+The [product's CLI table](https://github.com/y5ez3g/facadecode/blob/main/docs/PRODUCT.md#cli-differences)
 lists the differences between CLIs.
 
 ## Old engine transition
@@ -90,7 +90,7 @@ Provide [`extension/AGENTS.md`](https://github.com/y5ez3g/facadecode/blob/main/e
 
 ### Working on it
 
-Read [AGENTS.md](AGENTS.md) before changing anything. The [product documentation](../docs/facade-code.md) defines the product and the
+Read [AGENTS.md](AGENTS.md) before changing anything. The [product documentation](../docs/PRODUCT.md) defines the product and the
 [extension's specification](../docs/extension/README.md) defines the editor's behavior; [Verification](../docs/extension/engineering/VERIFICATION.md) defines the required evidence.
 
 Use Node 24 (`.nvmrc`). Install the locked dependencies, then compile, build and test, all inside `extension/`:

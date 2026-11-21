@@ -509,7 +509,7 @@ with incompatible arguments fails explicitly.
 
 **Agents and external applications use the Orchestrator's MCP tools through `facade-mcp`.**
 
-The [product](../../facade-code.md) describes machine-scoped starts, Guest identity, addressing and message delivery.
+The [product](../../PRODUCT.md) describes machine-scoped starts, Guest identity, addressing and message delivery.
 The [generated tool descriptions](../../../core/crates/base/src/texts/tools.v3.json) define the tool arguments and
 results. The [core protocol](../../../core/protocol/PROTOCOL.md) defines the wire contract. VS Code starts and attaches through
 its own Orchestrator client. Agent messages, including the result of delivering a first prompt or a long
@@ -534,7 +534,7 @@ missing, migration reads the machine's setting once and saves the value.
 `start_agent` takes a CLI entry and can specify a machine, folder and worktree branch. The target's settings
 extend the built-in CLI catalog. If the selected entry is unavailable, report the reason and the entries available
 on that machine. A request for a model or effort the CLI does not accept uses the same refusal in Shell, MCP and
-settings validation. See the [product's CLI table](../../facade-code.md#各个-cli-不一样的地方).
+settings validation. See the [product's CLI table](../../PRODUCT.md#cli-differences).
 
 ```json
 {"cli":"claude","machine":"devbox","folder":"/work/app","worktree":"feat-x"}

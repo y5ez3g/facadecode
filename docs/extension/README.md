@@ -1,6 +1,6 @@
 # VS Code extension specification
 
-[Facade Code](../facade-code.md) defines the product, including the Orchestrator and its Shell, MCP and VS Code entry
+[Facade Code](../PRODUCT.md) defines the product, including the Orchestrator and its Shell, MCP and VS Code entry
 points. These specifications describe the editor's part. The old engine remains selectable during the transition.
 
 ## Read by responsibility
@@ -22,7 +22,7 @@ points. These specifications describe the editor's part. The old engine remains 
 | [Verification](engineering/VERIFICATION.md) | Required journeys, checks and evidence |
 
 [Core protocol](../../core/protocol/PROTOCOL.md) owns the Orchestrator wire contract. The product's
-[CLI table](../facade-code.md#各个-cli-不一样的地方) summarizes CLI differences. Detailed rules belong with the
+[CLI table](../PRODUCT.md#cli-differences) summarizes CLI differences. Detailed rules belong with the
 corresponding adapters.
 
 ## Changing a rule

@@ -5,7 +5,7 @@ together. This file routes work on the extension in `extension/`; the repository
 
 ## 1 Start here
 
-1. Read [Facade Code](../docs/facade-code.md) for the product and its VS Code entry point. Use
+1. Read [Facade Code](../docs/PRODUCT.md) for the product and its VS Code entry point. Use
    [the extension's specification index](../docs/extension/README.md) to find the editor's rules and engineering contracts.
 2. Read [RULES](../docs/extension/RULES.md), then the feature you are changing. UI work also reads [UX](../docs/extension/UX.md).
 3. Before implementation/testing, read [ARCHITECTURE](../docs/extension/engineering/ARCHITECTURE.md), especially group 5, and
@@ -15,7 +15,7 @@ together. This file routes work on the extension in `extension/`; the repository
 
 ## 2 The specification
 
-**[Facade Code](../docs/facade-code.md) defines the product.** The extension's rules in `../docs/extension/` define the
+**[Facade Code](../docs/PRODUCT.md) defines the product.** The extension's rules in `../docs/extension/` define the
 editor interaction and the optional old engine. Where code disagrees with a rule, fix the code or amend the owning rule
 first.
 

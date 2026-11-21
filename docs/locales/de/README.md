@@ -95,7 +95,7 @@ Facade installiert bei Bedarf die passende Version auf dem entfernten Rechner. F
 
 > **YOLO ist standardmäßig aktiv.** Ein Agent mit YOLO kann andere Agenten auf verbundenen Rechnern erreichen. Setzen Sie `"yolo": false` in der `facade.json` seines Rechners, um Freigaben und Sandbox der CLI beizubehalten und den MCP-Zugriff auf den Erstellungsbaum des Aufrufers zu begrenzen. Die Einstellung gilt ab dem nächsten Start oder Resume. `facade status` zeigt den Dateipfad.
 
-[Produktdokumentation (中文)](../../facade-code.md) · [Glossar](../../core/GLOSSARY.md)
+[Produktdokumentation (Englisch)](../../PRODUCT.md) · [Glossar](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

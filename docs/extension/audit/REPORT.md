@@ -1,6 +1,6 @@
 # Specification audit
 
-`docs/extension/` specifies the VS Code entry point described in [Facade Code](../../facade-code.md). The audit
+`docs/extension/` specifies the VS Code entry point described in [Facade Code](../../PRODUCT.md). The audit
 checks rule structure and references.
 
 ## Reproducible checks

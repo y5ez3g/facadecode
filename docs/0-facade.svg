@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" font-family="'Segoe UI','Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" font-family="'Segoe UI',Arial,sans-serif" role="img" aria-labelledby="overview-title overview-description">
+  <title id="overview-title">Facade Code across two machines</title>
+  <desc id="overview-description">A laptop and devbox run Orchestrators connected over SSH. VS Code and Shell attach to terminals. An external app joins as a Guest and exchanges messages through MCP.</desc>
   <defs>
     <marker id="gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
@@ -10,9 +12,9 @@
 
   <rect width="900" height="430" rx="12" fill="#ffffff"/>
 
-  <!-- 上排：看和操作的地方，外部应用 -->
+  <!-- Entry points and external apps -->
   <rect x="36" y="40" width="180" height="60" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <text x="126" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">外部应用</text>
+  <text x="126" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">External apps</text>
   <text x="126" y="86" text-anchor="middle" font-size="12" fill="#475569">Claude Desktop · Cursor</text>
 
   <rect x="300" y="40" width="220" height="60" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
@@ -23,12 +25,12 @@
   <text x="774" y="64" text-anchor="middle" font-size="15" font-weight="600" fill="#1e1b4b">Facade · Shell</text>
   <text x="774" y="86" text-anchor="middle" font-size="12" fill="#4338ca">facade attach</text>
 
-  <!-- Facade 网络 -->
+  <!-- Orchestrator network -->
   <rect x="16" y="150" width="868" height="186" rx="14" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
-  <text x="32" y="174" font-size="14" font-weight="600" fill="#166534">Orchestrator 网络 · 你自己的机器，各跑一个 Orchestrator，平级互连</text>
+  <text x="32" y="174" font-size="14" font-weight="600" fill="#166534">Orchestrator network · One Orchestrator per machine, connected as peers over SSH</text>
 
   <rect x="36" y="188" width="400" height="130" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.5"/>
-  <text x="52" y="210" font-size="13" font-weight="600" fill="#166534">笔记本 · Orchestrator</text>
+  <text x="52" y="210" font-size="13" font-weight="600" fill="#166534">Laptop · Orchestrator</text>
 
   <rect x="464" y="188" width="400" height="130" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.5"/>
   <text x="480" y="210" font-size="13" font-weight="600" fill="#166534">devbox · Orchestrator</text>
@@ -36,19 +38,19 @@
   <!-- Agent -->
   <rect x="56" y="224" width="140" height="66" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6 4"/>
   <text x="70" y="250" font-size="14" font-weight="600" fill="#0f172a">G · Guest</text>
-  <text x="70" y="272" font-size="12" fill="#475569">只有地址和收件箱</text>
+  <text x="70" y="272" font-size="12" fill="#475569">Address and inbox</text>
 
   <rect x="256" y="224" width="160" height="66" rx="8" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
   <text x="270" y="250" font-size="14" font-weight="600" fill="#0f172a">A · codex</text>
-  <text x="270" y="272" font-size="12" fill="#475569">~/app · 终端 + 收件箱</text>
+  <text x="270" y="272" font-size="12" fill="#475569">~/app · Terminal and inbox</text>
 
   <rect x="544" y="224" width="220" height="66" rx="8" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
   <text x="558" y="250" font-size="14" font-weight="600" fill="#0f172a">B · claude</text>
-  <text x="558" y="272" font-size="12" fill="#475569">/work/app-wt · 终端 + 收件箱</text>
+  <text x="558" y="272" font-size="12" fill="#475569">/work/app-wt · Terminal and inbox</text>
 
-  <!-- MCP 接入 -->
+  <!-- MCP connection -->
   <line x1="126" y1="100" x2="126" y2="222" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#gray)"/>
-  <text x="134" y="140" font-size="12" fill="#475569">Facade · MCP 加入</text>
+  <text x="134" y="140" font-size="12" fill="#475569">Join over MCP</text>
 
   <!-- Attach -->
   <line x1="320" y1="100" x2="320" y2="222" stroke="#64748b" stroke-width="1.5" marker-end="url(#gray)"/>
@@ -60,20 +62,20 @@
   <line x1="774" y1="100" x2="704" y2="222" stroke="#64748b" stroke-width="1.5" marker-end="url(#gray)"/>
   <text x="764" y="140" font-size="12" fill="#475569">Attach</text>
 
-  <!-- 消息 -->
+  <!-- Messages -->
   <line x1="196" y1="257" x2="254" y2="257" stroke="#ea580c" stroke-width="1.5" marker-end="url(#orange)"/>
-  <text x="225" y="249" text-anchor="middle" font-size="11" fill="#c2410c">消息</text>
+  <text x="225" y="249" text-anchor="middle" font-size="11" fill="#c2410c">Message</text>
 
   <line x1="418" y1="257" x2="542" y2="257" stroke="#ea580c" stroke-width="1.5" marker-start="url(#orange)" marker-end="url(#orange)"/>
-  <text x="450" y="249" text-anchor="middle" font-size="11" fill="#c2410c">消息</text>
+  <text x="450" y="249" text-anchor="middle" font-size="11" fill="#c2410c">Message</text>
 
-  <!-- 图例 -->
+  <!-- Legend -->
   <rect x="24" y="356" width="28" height="18" rx="4" fill="#ffffff" stroke="#0f172a" stroke-width="1.5"/>
-  <text x="60" y="370" font-size="12" fill="#334155">受管 Agent：Orchestrator 启动，持有它的终端</text>
+  <text x="60" y="370" font-size="12" fill="#334155">Managed agent · The Orchestrator holds its terminal</text>
   <rect x="456" y="356" width="28" height="18" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 3"/>
-  <text x="492" y="370" font-size="12" fill="#334155">Guest：外部应用经 MCP 加入，只有收件箱</text>
+  <text x="492" y="370" font-size="12" fill="#334155">Guest · Joins through MCP and has an inbox</text>
   <line x1="24" y1="400" x2="52" y2="400" stroke="#64748b" stroke-width="1.5"/>
-  <text x="60" y="404" font-size="12" fill="#334155">Attach：把窗口接到 Agent 的终端上。关掉窗口，Agent 照常运行</text>
+  <text x="60" y="404" font-size="12" fill="#334155">Attach · Closing a terminal view leaves the agent running</text>
   <line x1="456" y1="400" x2="484" y2="400" stroke="#ea580c" stroke-width="1.5"/>
-  <text x="492" y="404" font-size="12" fill="#334155">消息：Agent 之间互发，有编号和投递结果</text>
+  <text x="492" y="404" font-size="12" fill="#334155">Message · Has an address and a delivery result</text>
 </svg>

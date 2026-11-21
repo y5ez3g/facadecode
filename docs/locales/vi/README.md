@@ -95,7 +95,7 @@ Facade cài phiên bản tương ứng trên máy từ xa khi cần. Facade dùn
 
 > **YOLO được bật mặc định.** Agent bật YOLO có thể truy cập các agent khác trên máy đã kết nối. Đặt `"yolo": false` trong `facade.json` của máy đó để giữ cơ chế phê duyệt và sandbox của CLI, đồng thời giới hạn MCP trong cây tạo agent của bên gọi. Thiết lập có hiệu lực ở lần khởi chạy hoặc resume tiếp theo. `facade status` hiển thị đường dẫn tệp.
 
-[Tài liệu sản phẩm (tiếng Trung)](../../facade-code.md) · [Bảng thuật ngữ](../../core/GLOSSARY.md)
+[Tài liệu sản phẩm (tiếng Anh)](../../PRODUCT.md) · [Bảng thuật ngữ](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

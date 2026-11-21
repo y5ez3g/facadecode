@@ -95,7 +95,7 @@ facade start --machine devbox --workdir /work/app --worktree feat-x claude
 
 > **YOLO는 기본적으로 켜져 있습니다.** YOLO가 켜진 에이전트는 연결된 머신의 다른 에이전트에 접근할 수 있습니다. 해당 머신의 `facade.json`에서 `"yolo": false`를 설정하면 CLI 자체의 승인과 샌드박스가 유지되고 MCP 범위는 호출자의 생성 트리로 제한됩니다. 다음 시작 또는 resume부터 적용됩니다. `facade status`로 파일 위치를 확인하세요.
 
-[제품 문서 (중국어)](../../facade-code.md) · [용어집](../../core/GLOSSARY.md)
+[제품 문서 (영어)](../../PRODUCT.md) · [용어집](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

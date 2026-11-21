@@ -1,7 +1,7 @@
 # Architecture
 
 Facade core implements the Orchestrator, the Shell entry point and the MCP entry point in the
-[product description](../facade-code.md). [Islands](islands/) describes the parts of the Rust workspace, and the
+[product description](../PRODUCT.md). [Islands](islands/) describes the parts of the Rust workspace, and the
 [glossary](GLOSSARY.md) defines their terms.
 
 ## Processes
@@ -28,7 +28,7 @@ requests over SSH when the target agent runs on another machine.
 | Command | `facade <command>` | One command. It connects to the daemon and, when nothing responds, starts the keeper | One; `attach` adds a few for the person's keys, signals and writes |
 | Hook | `facade hook …`, run by a CLI | One hook call. It reads its input for at most a second, uses only its run's files, never connects to a daemon, and always exits 0 | One |
 | Keeper | `facade keeper` | While it holds a CLI or a daemon runs | One, around one `poll`, or on Windows one I/O completion port: no tokio, no locks |
-| Daemon | `facade daemon` | Until 5 seconds pass with no running agent, local client or unfinished work | A tokio runtime (below) |
+| Daemon | `facade daemon` | Until 30 seconds pass with no running agent, local client or unfinished work | A tokio runtime (below) |
 | Relay | `facade-mcp`, run by a CLI or an MCP client | As long as its MCP client runs | One, around one `poll`; on Windows the loop around an I/O completion port, and one thread that reads standard input |
 | CLI | `claude`, `codex`, … | Until it ends or is stopped | The CLI's own |
 
@@ -62,9 +62,10 @@ drains, sends every client `closing` and exits. The keeper starts the new daemon
 daemon recovers their terminals, records and screens. Ordinary requests use the new protocol. The newer program
 reports a refusal if it cannot complete the takeover.
 
-**A machine wakes on request.** A running daemon connects over SSH only to machines whose daemon is awake. A request
-that names a sleeping machine wakes it through its saved SSH route. Forwarded work counts toward the daemon's activity
-while it is in progress. Saved connections, and connections with no work in progress, do not keep the daemon running.
+**A machine connects on demand.** A reachable list or scoped stop probes saved SSH connections without starting
+sleeping daemons. An explicit action such as starting an agent on a named machine can wake it through a saved route.
+In-flight calls, foreground connects and active Attach watches count as activity, including on forwarding hops.
+Idle saved sessions close after 30 seconds. The machine table keeps the saved settings for the next request.
 
 ### The daemon's threads
 

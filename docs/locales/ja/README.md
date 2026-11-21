@@ -95,7 +95,7 @@ facade start --machine devbox --workdir /work/app --worktree feat-x claude
 
 > **YOLO は既定でオンです。** オンの場合、エージェントは接続先のマシンにいる他のエージェントを操作できます。実行先の `facade.json` で `"yolo": false` を指定すると、CLI の承認設定とサンドボックスが適用され、MCP の範囲は呼び出し元の作成ツリー内に限られます。次回の起動または resume から有効です。`facade status` でファイルの場所を確認できます。
 
-[製品ドキュメント（中国語）](../../facade-code.md) · [用語集](../../core/GLOSSARY.md)
+[製品ドキュメント（英語）](../../PRODUCT.md) · [用語集](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

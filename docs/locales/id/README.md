@@ -95,7 +95,7 @@ Facade memasang versi yang sesuai pada mesin jarak jauh bila diperlukan. Facade 
 
 > **YOLO aktif secara default.** Agen dengan YOLO dapat menjangkau agen di mesin yang terhubung. Tetapkan `"yolo": false` di `facade.json` mesin itu untuk mempertahankan persetujuan dan sandbox CLI serta membatasi MCP ke pohon pembuatan pemanggil. Pengaturan berlaku pada start atau resume berikutnya. `facade status` menampilkan lokasi file.
 
-[Dokumentasi produk (中文)](../../facade-code.md) · [Glosarium](../../core/GLOSSARY.md)
+[Dokumentasi produk (bahasa Inggris)](../../PRODUCT.md) · [Glosarium](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

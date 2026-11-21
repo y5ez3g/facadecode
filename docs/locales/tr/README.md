@@ -95,7 +95,7 @@ Facade gerektiğinde uzak makineye ilgili sürümü kurar. Facade uzak makinede 
 
 > **YOLO varsayılan olarak açıktır.** YOLO açıkken bir aracı bağlı makinelerdeki diğer aracılara erişebilir. CLI'nın kendi onaylarını ve korumalı alanını korumak ve MCP erişimini çağıranın oluşturma ağacıyla sınırlamak için makinenin `facade.json` dosyasına `"yolo": false` yazın. Değişiklik bir sonraki başlatma veya resume işleminde uygulanır. `facade status` dosya yolunu gösterir.
 
-[Ürün belgeleri (Çince)](../../facade-code.md) · [Terimler sözlüğü](../../core/GLOSSARY.md)
+[Ürün belgeleri (İngilizce)](../../PRODUCT.md) · [Terimler sözlüğü](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

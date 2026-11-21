@@ -95,7 +95,7 @@ facade start --machine devbox --workdir /work/app --worktree feat-x claude
 
 > **YOLO 默认开启。** 开着时 Agent 可操作已连通机器上的其他 Agent。将所在机器的 `facade.json` 设为 `"yolo": false`，就会沿用 CLI 自己的确认与沙箱，且 MCP 只限调用者的创建树。下次启动或 resume 时生效。用 `facade status` 查看文件位置。
 
-[产品正文](../../facade-code.md) · [词表](../../core/GLOSSARY.md)
+[产品指南（英文）](../../PRODUCT.md) · [词表](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

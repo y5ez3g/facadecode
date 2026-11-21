@@ -1,7 +1,7 @@
 # Features
 
 Facade core supplies the Orchestrator and its Shell and MCP entry points. The VS Code extension's Rust engine uses
-the same Orchestrator. The [product description](../facade-code.md) defines the user experience. The
+the same Orchestrator. The [product description](../PRODUCT.md) defines the user experience. The
 [daemon protocol](../../core/protocol/PROTOCOL.md) and [MCP contract](../extension/engineering/MCP.md) define the
 operations and their results.
 
@@ -17,13 +17,17 @@ gets a name and inbox when it first calls a tool. From that point it can receive
   `--workdir`, `--worktree` and `-d` before the CLI name. Arguments after that name go to the CLI, including its own
   options for models and prompts. A foreground start opens the terminal. A background start prints the name and
   reference, and the new worktree's path when requested.
-- `facade list` shows running managed agents and connected Guests, newest start or resume first. `--machine` queries
-  one machine and wakes it if needed. Use `facade status <AGENT>` to see its full title, current state, working
-  directory, launch command, session and attached viewers.
-- `facade stop <AGENT>` ends one managed agent and keeps its record, screen and inbox for 30 days. Its helpers keep
-  running.
-- `facade resume` lists resumable agents on reachable machines and CLI sessions in the current directory. `--machine`
-  selects a machine for the list. Copy a reference from the `REF` column to `facade resume <REFERENCE>`.
+- `facade list` shows running managed agents and connected Guests, newest start or resume first. It probes saved
+  connections on demand without starting a sleeping daemon. `--local` queries this machine with zero SSH, and
+  `--machine <MACHINE>` queries the named machine and wakes it if needed. Use `facade status <AGENT>` for details
+  such as the full title, working directory and attached viewers.
+- `facade stop <AGENT>...` ends one or more managed agents and keeps their records, screens and inboxes for 30 days.
+  Their helpers keep running. Use `--local`, `--machine <MACHINE>` or `--all` to stop running managed agents in one
+  scope. Scope stops skip Guests and probe remote machines without waking them. A partial failure returns 1 after
+  stopping the other targets.
+- `facade resume` lists resumable agents on reachable machines and CLI sessions in the current directory. `--local`
+  lists this machine's candidates with zero SSH. `--machine <MACHINE>` lists the named machine's resumable managed
+  agents. Copy a reference from the `REF` column to `facade resume <REFERENCE>`.
 - Resuming a managed agent keeps its reference, directory and session. Resuming a saved session creates an agent.
   A session already in use produces the reference of the agent using it. Use `-d` to resume in the background.
 - `facade rename <AGENT> <NAME>` changes the name of a running or stopped agent or connected Guest. The reference
@@ -42,8 +46,9 @@ wake it when needed.
   last screen of a stopped agent.
 - `facade type <agent> "<text>" [--enter]` types text. Use `--key Esc --key Enter` to press keys in order.
   `facade type --help` lists the key names.
-- Viewers share the terminal's current size. The most recent resize wins, including when a viewer attaches. VS Code
-  can provide terminal colors with the resize. Shell uses its terminal size and leaves the current colors in place.
+- Attach viewers share the smallest open terminal width and height. A larger Shell displays the shared grid in its
+  top-left corner. The shared grid changes as viewers resize or leave. An older screen viewer keeps the previous
+  resize rule in effect for the duration of its watch. VS Code can provide terminal colors.
 - After reconnecting, Attach redraws the current screen. It reports discarded input in bytes when any was lost.
 
 ## Messages and tools
@@ -87,7 +92,7 @@ Tool results include the requested content directly. See the [MCP contract](../e
 settings at start or resume. A Guest reads YOLO from its machine's settings and appears in `list` at its first MCP
 tool call. With YOLO on, an agent can reach any agent the Orchestrator can reach. With YOLO off, it can act within
 its creation tree. Shell and VS Code have full reach for the actions they offer. Each CLI's rules describe how it
-handles tool approval, trust and sandbox settings. See the [product description](../facade-code.md) and
+handles tool approval, trust and sandbox settings. See the [product description](../PRODUCT.md) and
 [configuration](../extension/features/CONFIGURATION.md).
 
 ## Folders and machines
@@ -98,16 +103,23 @@ handles tool approval, trust and sandbox settings. See the [product description]
   be available. `--workdir` may name the repository root or one of its subdirectories. It can also select an existing
   worktree. In VS Code, the local location picker shows workspace folders and worktrees. The picker for another
   machine offers its login home, recent folders and manual path entry.
-- `facade machine add [--home <PATH>] <SSH ARGS>...` connects and saves the SSH arguments. For example, use
-  `facade machine add -p 2222 aaron@devbox.lan`. `machine connect` uses the same arguments for a foreground
-  connection that lasts while the command runs. SSH prompts appear in that command's terminal.
-- A saved machine without running work can sleep. An operation that names it wakes it through the saved SSH route.
-  An unqualified operation sees the machines that are awake and reachable. The route may run through another machine.
+- `facade machine add [--home <PATH>] [--bidirectional] <SSH_ARGS>...` connects and saves the verified SSH
+  arguments. Facade options come before SSH arguments. If a password login is required, the command installs
+  and verifies a dedicated Facade SSH key for reconnects. `--bidirectional` also authorizes, verifies and saves
+  a return connection when the remote machine can reach the source address on SSH port 22.
+- `facade machine connect [--home <PATH>] <SSH_ARGS>...` opens a two-way connection while the foreground command
+  runs. SSH prompts appear in the command's terminal.
+- Saved connections are opened on demand. A saved machine without running work can sleep. Explicit operations
+  such as a named agent start can wake it through a saved route, including any needed intermediate machines.
 - The SSH connection uses the installed program at its fixed path. It installs or upgrades an older remote copy
   as needed to match the local version. If a newer remote version is already installed, upgrade the local copy.
-- `facade machine list` reports machines that are awake, connecting, sleeping, unreachable or needing an SSH login.
-  It gives the saved `add` command when a person needs to sign in again. `facade machine rename` gives a machine a
-  new name, and `facade machine remove` forgets a saved connection.
+- `facade machine list` reads the local machine table with zero SSH. It distinguishes a disconnected saved
+  connection, a confirmed sleeping machine, a connection failure and a machine that needs SSH login. Login
+  guidance gives the saved `add` command. `facade machine rename` gives a machine a new name.
+- `facade machine remove [--bidirectional] <MACHINE>` removes the local saved connection and revokes local
+  Facade SSH authorization for the remote machine. The default is offline. `--bidirectional` also tries to
+  remove the return connection and revoke Facade authorization on the remote machine. A partial failure
+  reports the completed removal and the side that still needs attention.
 - A Remote SSH VS Code window uses the Orchestrator on its extension host machine. Connect other machines through
   `facade machine add` on that host.
 - WSL and Dev Containers each act as machines. Inside them, Facade connects directly to the local Orchestrator. To
@@ -119,14 +131,15 @@ See [Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions).
 
 ## Restarts and diagnostics
 
-- The Orchestrator starts on demand. It exits after its idle interval when there are no running agents, local entry
-  points or unfinished calls. A forwarded operation keeps it active while the work is in progress.
+- The Orchestrator starts on demand and exits after 30 idle seconds. Saved SSH sessions also close after 30 idle
+  seconds. A foreground machine connection, an active Attach or a call in progress keeps its session active.
 - The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
   A newer build uses the same takeover to keep running CLIs and reconnect clients. For an agent already running
   before an upgrade, the Orchestrator keeps recognizing its MCP connection the old way until that run ends. Later
   starts and resumes use the new way.
-- `facade upgrade` runs the published installer for the latest stable version. Its build then takes over the running
-  Orchestrator while agents keep running, or says why it cannot.
+- `facade upgrade` checks the stable version before downloading the installer. It skips installation when
+  already up to date. `facade upgrade --version X.Y.Z` runs the installer for that release. The installed build
+  takes over a running Orchestrator when its compatibility checks pass, keeping agents running.
 - `facade status` reports the local home, settings file, versions, daemon and keeper process IDs, active agent count,
   connected machines and Guest MCP launcher. When the local Orchestrator is sleeping, status says so without
   starting it.

@@ -1,6 +1,6 @@
 # VS Code product scope
 
-[Facade Code](../facade-code.md) defines the product and its Shell, MCP and VS Code entry points. This page describes
+[Facade Code](../PRODUCT.md) defines the product and its Shell, MCP and VS Code entry points. This page describes
 the editor's scope. [Experience](EXPERIENCE.md) follows the editor journeys and [Shared rules](RULES.md) owns their
 common behavior.
 

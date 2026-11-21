@@ -95,7 +95,7 @@ W razie potrzeby Facade instaluje odpowiednią wersję na zdalnej maszynie. Faca
 
 > **YOLO jest domyślnie włączone.** Agent z YOLO może uzyskiwać dostęp do innych agentów na połączonych maszynach. Ustaw `"yolo": false` w pliku `facade.json` danej maszyny, aby zachować zatwierdzenia i piaskownicę CLI oraz ograniczyć MCP do drzewa tworzenia wywołującego. Zmiana obowiązuje przy następnym uruchomieniu lub resume. `facade status` pokazuje ścieżkę pliku.
 
-[Dokumentacja produktu (po chińsku)](../../facade-code.md) · [Słownik](../../core/GLOSSARY.md)
+[Dokumentacja produktu (po angielsku)](../../PRODUCT.md) · [Słownik](../../core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

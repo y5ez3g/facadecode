@@ -114,7 +114,7 @@ terminal tab leaves the agent running. **Resume Agent** and `facade resume` offe
 > Set `"yolo": false` in that machine's `facade.json` to keep the CLI's own approvals and sandbox and limit MCP reach
 > to the caller's creation tree. The setting takes effect on start or resume. Run `facade status` to find the file.
 
-[Product documentation (中文)](docs/facade-code.md) · [Glossary](docs/core/GLOSSARY.md)
+[Product guide](docs/PRODUCT.md) · [Glossary](docs/core/GLOSSARY.md)
 
 ## Facade Code IDE (Preview)
 

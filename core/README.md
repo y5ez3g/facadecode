@@ -1,6 +1,6 @@
 # Facade core
 
-Facade core supplies the Orchestrator for [Facade Code](../docs/facade-code.md). It runs coding CLIs as managed
+Facade core supplies the Orchestrator for [Facade Code](../docs/PRODUCT.md). It runs coding CLIs as managed
 agents, holds their terminals, delivers messages and serves the tools that agents and Guests use over MCP. Shell,
 MCP and the VS Code extension connect over a local socket or a Windows named pipe. Orchestrators communicate over SSH.
 
@@ -11,9 +11,9 @@ This Rust workspace builds two programs.
 - `facade-mcp` is the stdio server a managed CLI or external MCP client runs. It relays MCP between the client and
   the daemon.
 
-The [installation guide](../README.md) gives the Shell and MCP setup commands. `facade upgrade` selects the stable
-version and `facade upgrade --version X.Y.Z` selects an exact release. Its build then takes over the running
-Orchestrator while agents keep running, or says why it cannot. The
+The [installation guide](../README.md) gives the Shell and MCP setup commands. `facade upgrade` checks for a newer
+stable version before downloading, and `facade upgrade --version X.Y.Z` runs the installer for an exact release.
+The installed build takes over a running Orchestrator when its compatibility checks pass, while agents keep running. The
 VS Code extension ships with its own copy of the programs.
 
 ## Build and test
