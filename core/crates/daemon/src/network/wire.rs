@@ -10,15 +10,16 @@ use facade_base::jsonrpc::{
 use facade_base::machine::{
     self, ExecutionOutcome, MachineHello, MachineIdentity, ProtocolMismatch, Unavailable,
 };
-use facade_base::operations::EmptyResult;
+use facade_base::operations::{EmptyResult, Topic};
 use facade_base::v3;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::advertise;
+use super::{MachineGreeting, SessionWork, advertise};
 
 const INTRODUCTION_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const CLOSE_GRACE: Duration = Duration::from_millis(250);
 const HELLO_ID: u64 = 0;
 const INITIAL_TABLE_ID: u64 = 1;
 pub(super) const FIRST_REQUEST_ID: u64 = INITIAL_TABLE_ID + 1;
@@ -70,6 +71,21 @@ impl Forward {
             .get("method")
             .and_then(Value::as_str)
             .unwrap_or("")
+    }
+
+    pub(super) fn work(&self) -> Option<SessionWork> {
+        if self.method() != methods::WATCH {
+            return Some(SessionWork::Call);
+        }
+        match self
+            .fields
+            .get("params")
+            .and_then(|params| params.get("topic"))
+            .and_then(Value::as_str)
+        {
+            Some(v3::ScreenTopic::NAME | v3::AttachTopic::NAME) => Some(SessionWork::Viewer),
+            _ => None,
+        }
     }
 
     pub(super) fn from_origin(
@@ -297,15 +313,19 @@ pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<()
 pub(super) async fn introduce(
     read: &mut Reader<impl AsyncBufRead + Unpin>,
     write: &mut (impl AsyncWrite + Unpin),
-    local: MachineHello,
-) -> Result<MachineHello, ErrorBody> {
+    greeting: MachineGreeting,
+) -> Result<MachineGreeting, ErrorBody> {
+    let MachineGreeting {
+        machine: local,
+        capabilities,
+        foreground,
+    } = greeting;
     in_time(async {
         let hello = if local.protocol_range == v3::DAEMON_PROTOCOL_RANGE {
-            Request::new(
-                Some(HELLO_ID),
-                methods::HELLO,
-                v3::HelloParams::for_machine(local.clone()),
-            )
+            let mut hello = v3::HelloParams::for_machine(local.clone());
+            hello.capabilities = capabilities;
+            hello.foreground = foreground;
+            Request::new(Some(HELLO_ID), methods::HELLO, hello)
         } else {
             Request::new(
                 Some(HELLO_ID),
@@ -319,6 +339,8 @@ pub(super) async fn introduce(
                     window: None,
                     numbers_given: None,
                     machine: Some(local.clone()),
+                    capabilities: Vec::new(),
+                    foreground: false,
                 },
             )
         };
@@ -349,7 +371,11 @@ pub(super) async fn introduce(
                 "Inconsistent machine introduction.",
             ));
         }
-        Ok(remote)
+        Ok(MachineGreeting {
+            machine: remote,
+            capabilities: hello.capabilities,
+            foreground: false,
+        })
     })
     .await
 }
@@ -359,16 +385,12 @@ pub(super) async fn introduce(
 pub(super) async fn exchange_tables<T>(
     read: &mut Reader<impl AsyncBufRead + Unpin>,
     write: &mut (impl AsyncWrite + Unpin),
-    protocol: u32,
-    machines: Vec<v3::MachineInfo>,
+    table: Value,
     reserve: impl FnOnce(v3::AdvertiseParams) -> Result<T, ErrorBody>,
+    protocol: u32,
 ) -> Result<T, ErrorBody> {
     let received = in_time(async {
-        let table = Request::new(
-            Some(INITIAL_TABLE_ID),
-            methods::ADVERTISE,
-            advertise::encode(protocol, machines),
-        );
+        let table = Request::new(Some(INITIAL_TABLE_ID), methods::ADVERTISE, table);
         let sending = send(write, &table);
         let receiving = async {
             match read.initial().await? {
@@ -428,7 +450,7 @@ pub(super) async fn reject(
     error: &ErrorBody,
 ) {
     let response = Response::failed(id, error.clone());
-    let _ = tokio::time::timeout(Duration::from_millis(250), send(write, &response)).await;
+    let _ = tokio::time::timeout(CLOSE_GRACE, send(write, &response)).await;
 }
 
 pub(super) async fn in_time<T>(

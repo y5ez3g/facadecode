@@ -4,8 +4,12 @@
 
 use std::path::PathBuf;
 
+use facade_base::daemon::WatchResult;
 use facade_base::jsonrpc::{Reason, decode_arguments};
-use facade_base::v3::{AgentResizeArgs, AgentTarget, LegacyWorkspaceArgs, ResumeArgs};
+use facade_base::v3::{
+    AgentResizeArgs, AgentTarget, AttachResizeArgs, ForwardAttachResizeArgs, ForwardWatchResult,
+    LegacyWorkspaceArgs, MachineConnectArgs, MachineRemoveArgs, ResumeArgs,
+};
 use serde_json::json;
 
 #[path = "support/codegen.rs"]
@@ -131,6 +135,63 @@ fn typescript_types_match_json_schemas() {
             Reason::InvalidArgument
         );
     }
+
+    // The holder's viewer ID cannot replace the local watch ID in a public resize.
+    let forwarded = json!({
+        "viewer": 9, "boot_id": "ea9b4046-77ad-4f4f-b8a9-84bfe619f360", "cols": 120, "rows": 30,
+    });
+    let resize = decode_arguments::<ForwardAttachResizeArgs>(forwarded.clone()).unwrap();
+    assert_eq!(serde_json::to_value(resize).unwrap(), forwarded);
+    assert_eq!(
+        decode_arguments::<AttachResizeArgs>(forwarded)
+            .unwrap_err()
+            .data
+            .reason,
+        Reason::InvalidArgument
+    );
+    let watch = json!({ "watch": 2, "snapshot": {} });
+    let legacy_response = decode_arguments::<ForwardWatchResult>(watch.clone()).unwrap();
+    assert!(legacy_response.attach.is_none());
+    assert_eq!(serde_json::to_value(legacy_response).unwrap(), watch);
+    let routed_watch = json!({
+        "watch": 2,
+        "snapshot": {},
+        "attach": { "viewer": 9, "boot_id": "ea9b4046-77ad-4f4f-b8a9-84bfe619f360" },
+    });
+    let machine_response = decode_arguments::<ForwardWatchResult>(routed_watch.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(machine_response).unwrap(),
+        routed_watch
+    );
+    let public_response = decode_arguments::<WatchResult>(routed_watch).unwrap();
+    assert_eq!(serde_json::to_value(public_response).unwrap(), watch);
+
+    // Leave a supplied invalid ID intact for the daemon's saved-connection validation.
+    let expected_id = json!({
+        "transport": { "kind": "ssh", "ssh_destination": "alice@lab" },
+        "kind": "saved",
+        "expected_machine_id": "",
+    });
+    let connect = decode_arguments::<MachineConnectArgs>(expected_id.clone()).unwrap();
+    assert_eq!(serde_json::to_value(connect).unwrap(), expected_id);
+
+    let remove = json!({ "machine": "lab", "expected_machine_id": "" });
+    let exact_remove = decode_arguments::<MachineRemoveArgs>(remove.clone()).unwrap();
+    assert_eq!(serde_json::to_value(exact_remove).unwrap(), remove);
+    let published_remove = json!({ "machine": "lab" });
+    let legacy_remove =
+        decode_arguments::<facade_base::machine::MachineRemoveArgs>(published_remove.clone())
+            .unwrap();
+    assert_eq!(
+        serde_json::to_value(legacy_remove).unwrap(),
+        published_remove
+    );
+    let current_remove = decode_arguments::<MachineRemoveArgs>(published_remove.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(current_remove).unwrap(),
+        published_remove
+    );
+
     for args in [
         json!({ "machine_id": "dev-machine" }),
         json!({ "machine_id": "dev-machine", "workspace_key": "workspace", "window_id": "win-2" }),

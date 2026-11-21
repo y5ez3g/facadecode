@@ -24,8 +24,12 @@ public `run()` entry point.
   with a part's lock.
 - An addressed Agent is a stable machine ID and agent ID. The daemon projects a copyable
   `aN@machine` from the same rules it uses to match an address. Bare numbers and names search
-  machines that are already connected. A request with a machine can follow a saved route and wake
-  the target. A connecting machine stays visible without blocking an ordinary list.
+  machines that are already connected. A named operation that needs to start or use an Agent can
+  follow a saved route and wake the target. Reachable `list` and scoped `stop` wait for parallel
+  no-start probes and collect each machine's result. A candidate Shell's default resume listing
+  uses the same probes when its hello declares `agent.resume_list.local`. Remote stops in those
+  scopes use exact references on live routes. The machine table, local scopes and local removal
+  send no SSH.
 - The source establishes the caller. The running machine checks the caller's creation-tree root,
   YOLO and the operation's requirements. A stop, input or Attach uses a running managed agent.
   The screen reader can also read the last screen of an ended agent.
@@ -42,10 +46,11 @@ public `run()` entry point.
   text goes to the store or actor. Inspection reads this value from the same run as its screen
   facts. A recovered keeper run with no committed launch has no displayed command.
 - On Windows a stop releases the actor's copy of the pseudo console's signal pipe, then the
-  keeper link's copy, before it asks the keeper to stop. An IDE resize can carry terminal colors.
-- The service opens after recovery has listed the readable agents. Five consecutive idle seconds
-  allow it to exit. A running Agent, a connected Guest or current work keeps it active. Idle peer
-  links and their topology and roster subscriptions do not count as work.
+  keeper link's copy, before it asks the keeper to stop. Batch stop uses that same path and reports
+  each selected Agent's outcome. Scope stops report connected Guests as skipped.
+- The service opens after recovery has listed the readable agents. Thirty consecutive idle seconds
+  allow it to exit. A running Agent, a connected Guest, an ordinary client or current work keeps
+  it active. Foreground SSH, in-flight calls and live terminal watches count as machine work.
 
 ## Interface
 
@@ -59,6 +64,16 @@ public `run()` entry point.
   that keeper, with their stable references and labels.
 - A machine hello or a foreground `machine.connect` transfers its flushed connection to the network
   session. Authentication, probe, installation when needed and serve use that same SSH session.
+  A saved connect verifies any explicit or inferred expected machine ID during the handshake.
+  The candidate Terminal's connect capability allows an ordinary save to update settings for
+  the ID learned on the authenticated session. The daemon commits the saved arguments, destination,
+  remote home and machine name together before publishing the route.
+- A guarded `machine.remove` uses the supplied full machine ID as the store key under the machine
+  mutation lock. An absent saved route gives not-found for that ID. Requests without a guard use
+  the published machine selector.
+- The protocol 3 hello advertises additive capabilities. An old client can use the published
+  operations, `screen` watch and `agent.resize`. Machine views for clients without the
+  `machine.disconnected` capability project `Disconnected` as `Unreachable`.
 - The person's diagnostics read up to 200 lines of `core/logs/daemon.log`, with the home written
   as `~`. Only the daemon writes and prunes this log.
 - After a passive probe finds the service sleeping, Shell can call `offline_machine_name()`
@@ -79,7 +94,7 @@ public `run()` entry point.
 | `lib.rs` | Starts and serves this home and schedules the hourly sweep. |
 | `store/` | Owns SQLite schema, migrations, table handles and cross-table transactions. |
 | `operations.rs` | Starts, stops, resumes, renames and removes runs and records their exits. |
-| `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. |
+| `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A named Shell listing reads managed Agents on the selected machine. |
 | `delivery.rs` | Delivers typed input, messages, initial prompts and results. Replays receipts by request ID. |
 | `presence.rs` | Recovers Guests, retires their inboxes and validates editor terminal colors. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
@@ -113,6 +128,11 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     as restart preparation begins.
   - An admitted Attach reports its viewer name for the life of its watch. The actor reads the CLI
     title from the terminal and restores the last title from the screen log.
+  - Shared Attach uses the minimum column and row counts of live viewers with a valid capacity.
+    The actor recomputes on join, resize and detach. It applies PTY size and the logged screen
+    size before delivering a full redraw. The grid stays at its last size when the last viewer
+    leaves. A live legacy `screen` viewer keeps last-resize sizing until the last legacy viewer
+    leaves.
   - A screen snapshot carries the agent name, process state and any recorded exit from the actor.
     An exact final snapshot waits for the existing exit drain and admits no live viewer.
     Inspect includes the authenticated client kind and source machine of shell and editor viewers.
@@ -127,7 +147,7 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
     `lock_run_change()` serializes run transitions. `send(AgentCommand)` addresses the actor.
     `tools_connected()` holds the tools connection until its guard drops. A Guest has methods for
     applying its committed name and updating its online state.
-  - `AgentCommand` includes `WriteInput` and `ResizeTerminal`, `AttachViewer` and `RemoveViewer`,
+  - `AgentCommand` includes `WriteInput` and `ResizeTerminal`, `AttachViewer`, `ResizeViewer` and `RemoveViewer`,
     `ReadScreen` and `Inspect`, along with run transitions and paste settlement. `Input` is `Raw`
     keys, `Typed` text or keys, a `Message`, or a `BegunPaste` to finish.
   - `Screens`: `new(folder)`, `folder(id)`, `remove(id)`, `delete_without_records(kept)`.
@@ -191,7 +211,8 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 
 `Viewers`: sends the agent's screen changes to the clients watching it.
 
-- **Owns:** the viewers and those waiting for their first snapshot, the bytes queued for each, the redraws and exits they are owed, and the signal that drops a viewer too far behind.
+- **Owns:** the viewers and those waiting for their first snapshot, each shared viewer's capacity,
+  the bytes queued for each, the redraws and exits they are owed, and the signal that drops a viewer too far behind.
 - **Keeps:** At most 1 MiB of output waits for a viewer; past that it is marked behind and later gets one redraw instead. Snapshots and redraws wait for a synchronized update to end. A viewer behind gets its redraw before the exit. Before a resume, a viewer still over 1 MiB is dropped and its client told to reconnect. `Removed` comes last.
 - **Never does:** change the screen; read the terminal; decide when the exit goes out.
 - **Interface:** the actor: `new()`, `request(ViewerRequest)`, `admit(&Screen, exit, process)`, `remove(viewer)`, `show(&ParsedOutput)`, `redraw_all()`, `catch_up(&Screen, exit) -> bool`, `send_exit(&Screen, exit)`, `finish_run(&Screen, exit)`, `finish(&Screen, exit)`, `is_watched()`, `is_behind()`. The server's screen watches: `viewer_channel()`, `ViewerReceiver::{recv, stalled}`, `ViewerSnapshot`, `ViewerChange`.
@@ -376,17 +397,21 @@ An old temporary bridge may require a saved SSH route before its contribution ca
 
 ### network
 
-The network owns machine handshakes, peer routes, forwarded calls and saved SSH transport. It
-advertises the local machine and peers, and observes updates from each authenticated connection.
-The parent layer commits the original SSH arguments and remembered routes after verification.
-One foreground SSH session runs the remote probe, any needed install and the authenticated stream.
-Discovery probes already awake services. An explicit target follows a saved route hop by hop and can
-wake the service. Concurrent requests to the same saved hop use its shared attempt.
+The network owns machine handshakes, routes, forwarded calls and saved SSH transport. It advertises
+the local machine and observes the table from each authenticated session. At startup it restores
+saved connections and remembered routes. An operation dials on demand and concurrent requests for
+the same saved connection share its attempt slot. A passive probe uses `--no-start` at each hop.
+An explicit waking operation can start a remote service along a saved route.
 
-Online, connecting, sleeping and failed links are distinct. The machine view carries the last
-observed time and any raw SSH error. An attempted query can report its own failure separately.
-A forwarded operation holds work while it executes, including
-when relayed through another machine. Passive subscriptions share the existing links.
+A saved connection without a live session or an observed failure is `Disconnected`. Exit 3 from a
+no-start probe or an authenticated idle-exit notice records `Sleeping` in memory. SSH login and
+transport failures have distinct states. Queries report their own outcomes, including the hop that
+failed. An idle session can close while its saved connection remains available for a later call.
+
+Explicit temporary SSH connect keeps work on both daemons. Calls and live terminal watches hold each
+participating session, including the forwarding hops. Advertisements, keepalives and roster sync
+are passive. The network releases a saved session after 30 idle seconds. The daemon has its own
+30-second idle timer.
 
 ### guests
 
@@ -406,8 +431,10 @@ note and `core/logs/daemon.log`. The keeper points the daemon's standard error a
 `log_file.rs` prunes lines after 30 days and returns up to 200 lines to the person's clients.
 
 - `begin(Work)` counts the work until its guard drops. The idle decision uses the same lock to
-  exclude new work. After five idle seconds it asks the server to pause acceptance, then waits for
-  the server, screen writers and exit commits before removing the socket and exiting.
+  exclude new work. After 30 idle seconds it asks the server to pause acceptance, informs compatible
+  machines of the idle exit, and waits for screen writers and exit commits before removing the socket.
+  A long-lived machine watch or foreground connection counts while active. Takeover settlement
+  waits for the existing calls and run changes it can complete.
 - `take_over(UpgradeArgs, activity)` checks and installs the new build before marking the daemon
   as draining. It settles pastes and work, asks the actors to go quiet, records a clean end when
   they all do, and sends `closing`. After connections drain it settles work and asks the actors
@@ -436,6 +463,11 @@ trait and writes responses and watch changes back, without knowing what any oper
     closes.
   - Once the client closes while its input waits, nothing more from it runs.
   - A watch's response, with its snapshot, is sent before any of its changes.
+  - An `attach.resize` uses the watch ID from the requesting connection and runs in received order.
+    The source binds a remote viewer to the authenticated caller, viewer number and holder daemon
+    start ID. Each shared resize checks that binding at the holder. With a legacy holder, the
+    source uses the existing exact-agent resize on the live route. Unwatch, disconnect and
+    terminal end release that viewer.
   - A machine hello or connect hands the same buffered reader and writer to the machine session
     after its response is flushed. The old connection releases its watches before the handoff.
   - Once a newer Facade takes over, every connection past `hello` gets a `closing` notification;
@@ -455,6 +487,8 @@ trait and writes responses and watch changes back, without knowing what any oper
       applicable protocol range and client kind.
     - `call(&Client, operation, args, WhenFull, Cancel) -> Result<Value>`
     - `watch(&Client, topic, args, viewer) -> Result<Watch>`; `unwatch(&Client, topic, viewer)`
+    - `resize_viewer(&Client, viewer, ScreenSize, Option<TerminalColors>) -> Result<()>` receives
+      only the viewer number resolved by the server from the connection's watch.
     - `relay(params, peer_pid) -> Result<(Value, Arc<dyn RelayLines>)>`: the relay hello's response
       and what serves its MCP lines.
     - `machine_hello` and `machine_connect` authorize a session and return its response and
@@ -466,8 +500,8 @@ trait and writes responses and watch changes back, without knowing what any oper
   - `trait RelayLines`: `notice(line) -> bool`, `respond(line, arrived) -> Option<Value>` (blocking,
     run on a blocking thread), `failed() -> Value` (the response when answering panicked),
     `ended(closing_answered)`.
-  - `Client` carries the connection's client kind and the actor verified by the daemon's private
-    MCP connection.
+  - `Client` carries the connection's client kind, advertised capabilities and the actor verified
+    by the daemon's private MCP connection.
   - `Watch { snapshot, changes }`. `WatchChange::Ended(ErrorBody)` reports a remote watch failure.
     `WatchChange::Disconnect` cuts off a client that fell too far behind.
   - `WhenFull::{Refuse, Wait}`: input without room fails at once (a request ID) or waits until its

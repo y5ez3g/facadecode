@@ -9,7 +9,7 @@ use facade_base::machine::{ExecutionOutcome, MachineIdentity, Unavailable};
 use facade_base::v3::AgentLabel;
 use serde_json::json;
 
-use crate::errors::{AgentCommand, Problem, agent_failed, exit_code, words};
+use crate::errors::{AgentCommand, Problem, agent_failed, exit_code, stop_diagnostic, words};
 
 fn given(text: &str) -> String {
     text.to_string()
@@ -114,6 +114,30 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
         row("a9", Reason::NotFound, "no agent a9"),
         "error: No agent or guest matches \"a9\".\nRun 'facade list' to find an agent."
     );
+    let missing = agent_failed(
+        AgentCommand::Stop,
+        "nobody",
+        refused(Reason::NotFound, "no agent nobody"),
+    );
+    assert_eq!(
+        stop_diagnostic(&missing, true),
+        (
+            given("error: No active agent or guest matches \"nobody\"."),
+            Some("Run 'facade list' to check active agents."),
+        )
+    );
+    let mut guest = ErrorBody::new(Reason::Unsupported, "a5@laptop is a guest");
+    guest.data.agents = vec![agent_label("a5", "laptop", "Cursor", "online", false)];
+    let guest = agent_failed(AgentCommand::Stop, "a5@laptop", guest.into());
+    let guest_line = "error: Cursor (a5@laptop) is a guest and cannot be stopped by Facade.";
+    assert_eq!(
+        stop_diagnostic(&guest, false),
+        (
+            format!("{guest_line}\nStop it from the application running it."),
+            None,
+        )
+    );
+    assert_eq!(stop_diagnostic(&guest, true), (given(guest_line), None));
 
     let mut multiple = ErrorBody::new(
         Reason::AmbiguousReference,

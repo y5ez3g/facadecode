@@ -1,6 +1,7 @@
 //! Machine connections and routing. The daemon supplies trusted streams, saved connection
 //! settings, and the handler for requests that reach this machine.
 
+mod activity;
 mod advertise;
 mod routes;
 mod saved;
@@ -11,16 +12,18 @@ mod wake;
 mod wire;
 
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{WatchParams, methods};
-use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
+use facade_base::jsonrpc::{ErrorBody, Notification, Reason, decode_arguments};
 use facade_base::machine::{
     ConnectFailedParams, ConnectedParams, ConnectionKind, ConnectionOutcome, ExecutionOutcome,
     ForwardParams, MachineHello, MachineInfo, MachineResponseState, MachineTransport,
 };
+use facade_base::operations::EmptyResult;
 use facade_base::v3;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -32,9 +35,9 @@ use self::session::{
 use self::topology::{Link, Origin, Topology};
 use self::wire::{Forward, Reader};
 use crate::SavedConnection;
-use crate::lifecycle::WorkGuard;
 
-pub(crate) use self::session::Subscription;
+pub(crate) use self::routes::is_uuid_v4;
+pub(crate) use self::session::{Subscription, WatchRoute};
 pub(crate) use self::wire::OutboundCaller;
 
 #[derive(Debug)]
@@ -78,14 +81,23 @@ impl From<RequestFailure> for ErrorBody {
 #[derive(Clone)]
 pub(crate) struct Network(Arc<Inner>);
 
-type BeginForwardWork = dyn Fn() -> Option<WorkGuard> + Send + Sync;
+pub(crate) type SessionHold = Box<dyn Send>;
+
+#[derive(Clone, Copy)]
+pub(crate) enum SessionWork {
+    Call,
+    Viewer,
+    Foreground,
+}
+
+type BeginSessionWork = dyn Fn(SessionWork) -> Option<SessionHold> + Send + Sync;
 type DispatchV3Target = dyn Fn(V3TargetRequest) -> bool + Send + Sync;
 
 struct Inner {
     state: Mutex<Topology>,
     control_dir: Option<PathBuf>,
     events: mpsc::UnboundedSender<Event>,
-    forward_work: OnceLock<Box<BeginForwardWork>>,
+    session_work: OnceLock<Arc<BeginSessionWork>>,
     dispatch_v3_target: OnceLock<Box<DispatchV3Target>>,
 }
 
@@ -96,6 +108,12 @@ pub(crate) struct FrontConnection {
     pub(crate) transport: MachineTransport,
     pub(crate) expected_machine_id: Option<String>,
     pub(crate) kind: ConnectionKind,
+}
+
+pub(crate) struct MachineGreeting {
+    pub(crate) machine: MachineHello,
+    pub(crate) capabilities: Vec<String>,
+    pub(crate) foreground: bool,
 }
 
 pub(crate) struct SavedSsh {
@@ -135,29 +153,31 @@ pub(crate) enum TargetReply {
     Watch {
         snapshot: Value,
         changes: mpsc::Receiver<Result<Value, ErrorBody>>,
+        attach: Option<v3::AttachBinding>,
     },
 }
 
 impl Network {
     pub(crate) fn new(
         local: MachineHello,
+        capabilities: Vec<String>,
         control_dir: Option<PathBuf>,
         events: mpsc::UnboundedSender<Event>,
     ) -> Self {
         Self(Arc::new(Inner {
-            state: Mutex::new(Topology::new(local)),
+            state: Mutex::new(Topology::new(local, capabilities)),
             control_dir,
             events,
-            forward_work: OnceLock::new(),
+            session_work: OnceLock::new(),
             dispatch_v3_target: OnceLock::new(),
         }))
     }
 
-    pub(crate) fn set_forward_work(
+    pub(crate) fn set_session_work(
         &self,
-        begin: impl Fn() -> Option<WorkGuard> + Send + Sync + 'static,
+        begin: impl Fn(SessionWork) -> Option<SessionHold> + Send + Sync + 'static,
     ) {
-        assert!(self.0.forward_work.set(Box::new(begin)).is_ok());
+        assert!(self.0.session_work.set(Arc::new(begin)).is_ok());
     }
 
     pub(crate) fn set_target_v3(
@@ -169,6 +189,15 @@ impl Network {
 
     pub(crate) fn local_hello(&self) -> MachineHello {
         self.0.state.lock().unwrap().local.clone()
+    }
+
+    fn greeting(&self, foreground: bool) -> MachineGreeting {
+        let state = self.0.state.lock().unwrap();
+        MachineGreeting {
+            machine: state.local.clone(),
+            capabilities: state.capabilities.clone(),
+            foreground,
+        }
     }
 
     /// Checks an inbound introduction before the server sends a successful hello response.
@@ -197,10 +226,10 @@ impl Network {
 
     pub(crate) async fn accept_with_work<R, W>(
         &self,
-        remote: MachineHello,
+        remote: MachineGreeting,
         read: R,
         mut write: W,
-        initial_work: Option<WorkGuard>,
+        initial_work: Option<SessionHold>,
     ) -> Result<(), ErrorBody>
     where
         R: AsyncBufRead + Unpin + Send,
@@ -212,22 +241,26 @@ impl Network {
             .await?;
         registered.activate()?;
         drop(initial_work);
-        registered.run(read, write, output).await
+        let result = registered.run(read, write, output).await;
+        registered.finish(result.as_ref().err().cloned().map(Into::into));
+        result
     }
 
     /// Registers the existing session after the parent commits its saved connection.
-    pub(crate) async fn connect_with_saved<R, W, F>(
+    pub(crate) async fn connect_with_saved<R, W, F, C, G>(
         &self,
         connection: FrontConnection,
         read: R,
         mut write: W,
-        initial_work: Option<WorkGuard>,
+        initial_work: Option<SessionHold>,
         on_connected: F,
     ) -> Result<(), ErrorBody>
     where
         R: AsyncBufRead + Unpin + Send,
         W: AsyncWrite + Unpin + Send,
-        F: FnOnce(&MachineHello) -> Result<(bool, Option<SavedSsh>), ErrorBody> + Send,
+        F: FnOnce(MachineHello) -> C + Send,
+        C: Future<Output = Result<(bool, Option<SavedSsh>, G), ErrorBody>> + Send,
+        G: Send,
     {
         let mut read = Reader::new(read);
         let prepared = async {
@@ -238,15 +271,19 @@ impl Network {
                     "A bridge connection is temporary.",
                 ));
             }
-            let remote = wire::introduce(&mut read, &mut write, self.local_hello()).await?;
-            expected(&remote, connection.expected_machine_id.as_deref())?;
+            let foreground = connection.kind == ConnectionKind::Temporary
+                && matches!(connection.transport, MachineTransport::Ssh { .. });
+            let remote = wire::introduce(&mut read, &mut write, self.greeting(foreground)).await?;
+            expected(&remote.machine, connection.expected_machine_id.as_deref())?;
+            let machine = remote.machine.clone();
             let origin = Origin::Front(connection);
             let (registered, output) = self
-                .handshake(&mut read, &mut write, remote.clone(), origin)
+                .handshake(&mut read, &mut write, remote, origin)
                 .await?;
-            let (first_connection, saved) = on_connected(&remote)?;
+            let (first_connection, saved, mutation) = on_connected(machine.clone()).await?;
             registered.activate_with_saved(saved)?;
-            Ok::<_, ErrorBody>((registered, output, remote, first_connection))
+            drop(mutation);
+            Ok::<_, ErrorBody>((registered, output, machine, first_connection))
         }
         .await;
         let (registered, output, machine, first_connection) = match prepared {
@@ -267,7 +304,9 @@ impl Network {
         .into_notification();
         wire::send(&mut write, &notification).await?;
         drop(initial_work);
-        registered.run(read, write, output).await
+        let result = registered.run(read, write, output).await;
+        registered.finish(result.as_ref().err().cloned().map(Into::into));
+        result
     }
 
     pub(crate) async fn call(
@@ -355,7 +394,8 @@ impl Network {
                 snapshot,
                 changes,
                 received_at,
-            } => Ok(pending.watch(snapshot, changes, received_at)),
+                attach,
+            } => Ok(pending.watch(snapshot, changes, received_at, attach)),
             Reply::Call {
                 result: Err(error),
                 received_at,
@@ -373,16 +413,19 @@ impl Network {
         mut forward: Forward,
         deadline: Deadline,
     ) -> Result<Pending, ErrorBody> {
-        let state = self.0.state.lock().unwrap();
-        let identity = state.identity(target);
-        let Some((peer, machine)) = state.route(target) else {
-            return Err(wire::unavailable(
-                identity,
-                ExecutionOutcome::NotExecuted,
-                "There is no route to this machine.",
-            ));
+        let (peer, identity) = {
+            let state = self.0.state.lock().unwrap();
+            let identity = state.identity(target);
+            let Some((peer, machine)) = state.route(target) else {
+                return Err(wire::unavailable(
+                    identity,
+                    ExecutionOutcome::NotExecuted,
+                    "There is no route to this machine.",
+                ));
+            };
+            forward.route = machine.route.clone().expect("selected route");
+            (peer.clone(), identity)
         };
-        forward.route = machine.route.clone().expect("selected route");
         peer.request(forward, deadline, identity)
     }
 
@@ -394,7 +437,7 @@ impl Network {
         deadline: Deadline,
         cancelled: watch::Receiver<bool>,
     ) -> Result<Delivery, ErrorBody> {
-        let wake = forward.method() == wake::METHOD;
+        let route_attempt = wake::RouteAttempt::for_method(forward.method());
         let (next, identity, protocol) = {
             let state = self.0.state.lock().unwrap();
             let Some(source) = state.links.get(&source) else {
@@ -421,42 +464,33 @@ impl Network {
         };
 
         if let Some(next) = next {
-            let _work = match self.0.forward_work.get() {
-                Some(begin) if forward.method() != methods::WATCH => {
-                    Some(begin().ok_or_else(|| {
-                        wire::unavailable(
-                            identity.clone(),
-                            ExecutionOutcome::NotExecuted,
-                            "The machine is shutting down.",
-                        )
-                    })?)
-                }
-                _ => None,
-            };
-            if wake {
-                self.ensure_saved_hop(next).await?;
+            if let Some(attempt) = route_attempt {
+                self.open_saved_hop(next, attempt).await?;
             }
-            let peer = self
-                .0
-                .state
-                .lock()
-                .unwrap()
-                .direct(next)
-                .cloned()
-                .ok_or_else(|| {
+            let peer = {
+                let state = self.0.state.lock().unwrap();
+                let link = state.direct_link(next).ok_or_else(|| {
                     wire::unavailable(
                         identity.clone(),
                         ExecutionOutcome::NotExecuted,
                         &format!("The next machine on the route, {next}, is unavailable."),
                     )
                 })?;
+                if route_attempt == Some(wake::RouteAttempt::Passive)
+                    && !link.peer.supports(v3::CAP_MACHINE_PROBE_ROUTE)
+                {
+                    return wake::legacy_probe(link, &forward.route[1..], identity)
+                        .map(|()| Delivery::Local(TargetReply::Call(Ok(Value::Null))));
+                }
+                link.peer.clone()
+            };
             forward.route.remove(0);
             let mut pending = peer.request(forward, deadline, identity)?;
             let response = pending.answer(deadline).await?;
             return Ok(Delivery::Relayed(pending, response));
         }
 
-        if wake {
+        if route_attempt.is_some() {
             return Ok(Delivery::Local(TargetReply::Call(Ok(Value::Null))));
         }
 
@@ -514,27 +548,44 @@ impl Network {
         &self,
         read: &mut Reader<impl AsyncBufRead + Unpin>,
         write: &mut (impl AsyncWrite + Unpin),
-        remote: MachineHello,
+        remote: MachineGreeting,
         origin: Origin,
     ) -> Result<(Registered, mpsc::UnboundedReceiver<Output>), ErrorBody> {
-        let protocol = remote.protocol_range[1];
-        wire::exchange_tables(read, write, protocol, self.machines_v3(), |table| {
-            self.reserve(remote, origin, table)
-        })
-        .await
+        let foreground = remote.foreground
+            || matches!(&origin, Origin::Front(front) if front.kind == ConnectionKind::Temporary
+                && matches!(front.transport, MachineTransport::Ssh { .. }));
+        let protocol = remote.machine.protocol_range[1];
+        let machines = self.machines_v3();
+        let (registered, output) = wire::exchange_tables(
+            read,
+            write,
+            advertise::encode(protocol, &remote.capabilities, machines),
+            |table| self.reserve(remote, origin, table),
+            protocol,
+        )
+        .await?;
+        if foreground {
+            registered.peer.begin_foreground()?;
+        }
+        Ok((registered, output))
     }
 
     fn reserve(
         &self,
-        remote: MachineHello,
+        remote: MachineGreeting,
         origin: Origin,
         table: v3::AdvertiseParams,
     ) -> Result<(Registered, mpsc::UnboundedReceiver<Output>), ErrorBody> {
         let mut state = self.0.state.lock().unwrap();
+        let MachineGreeting {
+            machine: remote,
+            capabilities,
+            ..
+        } = remote;
         state.check_peer(&remote, &origin)?;
-        let table = state.validate_table(None, &remote, &origin, table)?;
+        let table = state.validate_table(None, &remote, &origin, &capabilities, table)?;
         let id = SessionId(state.number());
-        let (peer, output) = Peer::new();
+        let (peer, output) = Peer::new(capabilities, self.0.session_work.get().cloned());
         state.pending_links.insert(
             id,
             Link {
@@ -563,41 +614,78 @@ impl Network {
             ));
         };
         let protocol = link.remote.protocol_range[1];
-        let table = match advertise::decode(protocol, table).and_then(|table| {
-            state.validate_table(Some(session), &link.remote, &link.origin, table)
-        }) {
-            Ok(table) => table,
-            Err(error) => {
-                self.close_link(&mut state, session);
-                return Err(error);
-            }
-        };
+        let table = advertise::decode(protocol, table).and_then(|table| {
+            state.validate_table(
+                Some(session),
+                &link.remote,
+                &link.origin,
+                link.peer.capabilities(),
+                table,
+            )
+        })?;
         state.links.get_mut(&session).expect("live session").table = table;
         state.publish(&self.0.events, None);
         Ok(())
     }
 
-    fn close_link(&self, state: &mut Topology, id: SessionId) {
+    fn withdraw_link(
+        &self,
+        state: &mut Topology,
+        id: SessionId,
+        failure: Option<ssh::FailedAttempt>,
+    ) -> bool {
         if let Some(link) = state.links.remove(&id) {
-            link.peer.close();
-            if let Origin::Saved {
-                machine_id,
-                generation,
-                ..
-            } = link.origin
-                && let Some(saved) = state.saved.get_mut(&machine_id)
-                && saved.generation == generation
-            {
-                saved.active = None;
+            link.peer.stop();
+            if let Some(saved) = state.saved.get_mut(&link.remote.machine_id) {
+                if saved.active == Some(id) {
+                    saved.active = None;
+                }
                 saved.last_seen = Some(SystemTime::now());
-                saved.changed.notify_one();
+                if let Some(failure) = failure
+                    && !saved
+                        .failure
+                        .as_ref()
+                        .is_some_and(|failure| failure.sleeping)
+                    && !state
+                        .links
+                        .values()
+                        .any(|live| live.remote.machine_id == link.remote.machine_id)
+                {
+                    saved.failure = Some(failure);
+                }
             }
             let _ = self.0.events.send(Event::SessionClosed {
                 session: id,
                 machine_id: link.remote.machine_id,
             });
-            state.publish(&self.0.events, None);
+            return true;
         }
+        false
+    }
+
+    pub(crate) async fn announce_sleeping(&self) {
+        let peers: Vec<_> = self
+            .0
+            .state
+            .lock()
+            .unwrap()
+            .links
+            .values()
+            .filter(|link| link.peer.supports(v3::CAP_MACHINE_DISCONNECTED))
+            .map(|link| link.peer.clone())
+            .collect();
+        let receipts: Vec<_> = peers
+            .iter()
+            .map(|peer| {
+                peer.notify_drained(Notification::new(v3::MACHINE_SLEEPING, EmptyResult {}))
+            })
+            .collect();
+        let _ = tokio::time::timeout(wire::CLOSE_GRACE, async {
+            for receipt in receipts {
+                let _ = receipt.await;
+            }
+        })
+        .await;
     }
 }
 
@@ -616,6 +704,19 @@ struct SessionHandle {
 impl SessionHandler for SessionHandle {
     fn replace_table(&self, table: Value) -> Result<(), ErrorBody> {
         self.network.replace_table(self.source, table)
+    }
+
+    fn sleeping(&self) {
+        self.network
+            .0
+            .state
+            .lock()
+            .unwrap()
+            .observe_sleeping(self.source);
+    }
+
+    fn identity(&self, machine_id: &str) -> v3::MachineIdentity {
+        self.network.0.state.lock().unwrap().identity(machine_id)
     }
 
     async fn receive(
@@ -657,8 +758,12 @@ impl Registered {
                     ErrorBody::new(Reason::Cancelled, "The saved connection was replaced.")
                 })?;
             saved.opened(self.id, &link.remote);
+        } else if let Some(saved) = state.saved.get_mut(&link.remote.machine_id) {
+            saved.seen(&link.remote);
         }
+        state.clear_sleeping(&link.remote.machine_id);
         let events = &self.network.0.events;
+        self.peer.start_idle();
         let _ = events.send(Event::SessionOpened {
             session: self.id,
             machine: link.remote.clone(),
@@ -669,7 +774,7 @@ impl Registered {
     }
 
     async fn run<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
-        self,
+        &self,
         read: Reader<R>,
         write: W,
         output: mpsc::UnboundedReceiver<Output>,
@@ -678,15 +783,24 @@ impl Registered {
             network: self.network.clone(),
             source: self.id,
         };
-        self.peer.run(handler, read, write, output).await
+        let result = self.peer.run(handler, read, write, output).await;
+        self.peer.close();
+        result
+    }
+
+    fn finish(&self, failure: Option<ssh::FailedAttempt>) {
+        let mut state = self.network.0.state.lock().unwrap();
+        state.pending_links.remove(&self.id);
+        if self.network.withdraw_link(&mut state, self.id, failure) {
+            state.publish(&self.network.0.events, None);
+        }
     }
 }
 
 impl Drop for Registered {
     fn drop(&mut self) {
-        let mut state = self.network.0.state.lock().unwrap();
-        state.pending_links.remove(&self.id);
-        self.network.close_link(&mut state, self.id);
+        self.finish(None);
+        self.peer.close();
     }
 }
 

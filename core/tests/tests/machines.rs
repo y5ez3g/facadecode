@@ -100,8 +100,6 @@ fn ssh_arguments_for_add_connect_and_saved_sessions() {
                     "ControlMaster=auto",
                     "-o",
                     "ControlPath=/tmp/facade-qa-control/%C",
-                    "-o",
-                    "ControlPersist=60s",
                 ],
                 SshMode::Connect => &["-o", "ControlMaster=no", "-o", "ControlPath=none"],
             };
@@ -174,6 +172,394 @@ fn name_machine(home: &TestHome, name: &str) -> String {
     let selector = id.replace('-', "");
     home.run_facade_ok(&["machine", "rename", &selector, name]);
     id
+}
+
+fn add_saved(home: &TestHome, destination: &str, other: &TestHome) -> String {
+    home.run_facade_ok(&[
+        "machine",
+        "add",
+        "--home",
+        other.path.to_str().unwrap(),
+        destination,
+    ])
+}
+
+#[test]
+fn an_authenticated_batch_readd_updates_the_same_saved_machine() {
+    let local = TestHome::new("readd-local");
+    let remote = TestHome::new("readd-remote");
+    install_machine_ssh(
+        &[("laptop", &local), ("devbox", &remote)],
+        &test_binaries().facade,
+    );
+    let local_id = name_machine(&local, "laptop");
+    let remote_id = name_machine(&remote, "devbox");
+    add_saved(&local, "devbox", &remote);
+    let attempts = ssh_attempts(&remote);
+    let serves = ssh_serves(&remote);
+
+    let remote_home = remote.path.to_str().unwrap();
+    local.run_facade_ok(&[
+        "machine",
+        "add",
+        "--home",
+        remote_home,
+        "-p",
+        "2222",
+        "devbox",
+    ]);
+    let machine = machine_json(&local, &remote_id).expect("the same peer ID is still saved");
+    let saved = saved_ssh(&machine, &local_id);
+    assert_eq!(saved["ssh_args"], json!(["-p", "2222", "devbox"]));
+    assert_eq!(saved["remote_home"], remote_home);
+    let after = ssh_attempts(&remote);
+    let new_attempts = after.strip_prefix(&attempts).unwrap();
+    assert!(new_attempts.contains("batch 2222 "), "{after}");
+    assert!(
+        new_attempts.lines().all(|line| line.starts_with("batch ")),
+        "{after}"
+    );
+    assert!(
+        !ssh_serves(&remote)
+            .strip_prefix(&serves)
+            .unwrap()
+            .contains("admin")
+    );
+}
+
+#[test]
+fn a_guarded_removal_matches_the_exact_saved_id_even_when_a_name_matches() {
+    let local = TestHome::new("guarded-remove-local");
+    let remote = TestHome::new("guarded-remove-remote");
+    install_machine_ssh(
+        &[("laptop", &local), ("devbox", &remote)],
+        &test_binaries().facade,
+    );
+    let local_id = name_machine(&local, "laptop");
+    // The name is a valid full machine ID, but it belongs to no machine in this pair.
+    let absent_id = "6cac4a9c-6bf1-4513-96f5-d5b2bb9aa13d";
+    let remote_id = name_machine(&remote, absent_id);
+    assert_ne!(remote_id, absent_id);
+    add_saved(&local, "devbox", &remote);
+    let attempts = ssh_attempts(&remote);
+
+    let mut daemon = connect(&local);
+    let absent = daemon.call(
+        "machine.remove",
+        json!({ "machine": absent_id, "expected_machine_id": absent_id }),
+    );
+    assert_eq!(error_reason(&absent), "not_found", "{absent}");
+    let saved = machine_json(&local, &remote_id).expect("the real machine is still saved");
+    assert_eq!(saved_ssh(&saved, &local_id)["kind"], "saved");
+
+    let removed = daemon.call_ok(
+        "machine.remove",
+        json!({ "machine": remote_id, "expected_machine_id": remote_id }),
+    );
+    assert_eq!(removed["machine_id"], remote_id);
+    assert_eq!(ssh_attempts(&remote), attempts);
+}
+
+#[test]
+fn cold_roster_and_local_lists_never_use_a_saved_ssh_route() {
+    let local = TestHome::new("cold-local");
+    let remote = TestHome::new("cold-remote");
+    install_machine_ssh(
+        &[("laptop", &local), ("devbox", &remote)],
+        &test_binaries().facade,
+    );
+    name_machine(&local, "laptop");
+    name_machine(&remote, "devbox");
+    remote.start_fake("RemoteWorker");
+    let session = "86da4482-2bae-4a45-b193-a5664c19826a";
+    let saved = local.start_fake_with("Ada", &[("FAKECLI_SESSION", session)]);
+    assert!(wait_until(LOADED_TIMEOUT, || local
+        .inspect_agent(&saved.address)["agent"]["session"]
+        == session));
+    local.run_facade_ok(&["stop", &saved.address]);
+    add_saved(&local, "devbox", &remote);
+    let attempts = ssh_attempts(&remote);
+    assert!(!attempts.is_empty());
+
+    // Each command starts with its own cold daemon and the same committed saved route.
+    local.kill_home_processes();
+    assert!(local.hello_result().is_none());
+    let roster = local.run_facade(&["machine", "list"]);
+    assert_eq!(
+        (roster.status.code(), stderr(&roster)),
+        (Some(0), String::new())
+    );
+    let roster = Table::parse(&stdout(&roster));
+    let saved_machine = roster.row("NAME", "devbox").expect("the saved machine");
+    assert_eq!(roster.cell(saved_machine, "STATE"), "Disconnected");
+    assert_eq!(roster.cell(saved_machine, "ROUTE"), "Direct");
+    assert_eq!(roster.cell(saved_machine, "SAVED"), "Yes");
+    assert_eq!(ssh_attempts(&remote), attempts);
+
+    local.kill_home_processes();
+    assert!(local.hello_result().is_none());
+    let listed = local.run_facade(&["list", "--local"]);
+    assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
+    assert!(listed.stdout.is_empty());
+    assert_eq!(
+        stderr(&listed),
+        "No active agents on laptop.\nStart one with 'facade start codex', or run 'facade resume' to find saved sessions.\n"
+    );
+    assert_eq!(ssh_attempts(&remote), attempts);
+
+    local.kill_home_processes();
+    assert!(local.hello_result().is_none());
+    let resumed = local.run_facade(&["resume", "--local"]);
+    assert_eq!(resumed.status.code(), Some(0), "{}", stderr(&resumed));
+    assert_eq!(
+        stderr(&resumed),
+        "Resume one with 'facade resume <REFERENCE>'.\n"
+    );
+    let table = Table::parse(&stdout(&resumed));
+    assert_eq!(table.column("REF"), [saved.address.as_str()]);
+    assert_eq!(table.column("TYPE"), ["Managed"]);
+    assert_eq!(ssh_attempts(&remote), attempts);
+
+    local.kill_home_processes();
+    assert!(local.hello_result().is_none());
+    let stopped = local.run_facade(&["stop", "--local"]);
+    assert_eq!(stopped.status.code(), Some(0), "{}", stderr(&stopped));
+    assert!(stopped.stdout.is_empty());
+    assert_eq!(
+        stderr(&stopped),
+        "No running managed agents to stop on laptop.\n"
+    );
+    assert_eq!(ssh_attempts(&remote), attempts);
+}
+
+#[test]
+fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
+    let local = TestHome::new("scope-local");
+    let awake = TestHome::new("scope-awake");
+    let sleeping = TestHome::new("scope-sleeping");
+    let unavailable = TestHome::new("scope-login");
+    install_machine_ssh(
+        &[
+            ("laptop", &local),
+            ("devbox", &awake),
+            ("staging", &sleeping),
+            ("gpu", &unavailable),
+        ],
+        &test_binaries().facade,
+    );
+    name_machine(&local, "laptop");
+    name_machine(&awake, "devbox");
+    name_machine(&sleeping, "staging");
+    name_machine(&unavailable, "gpu");
+    for (destination, peer) in [
+        ("devbox", &awake),
+        ("staging", &sleeping),
+        ("gpu", &unavailable),
+    ] {
+        add_saved(&local, destination, peer);
+    }
+    local.kill_home_processes();
+    sleeping.kill_home_processes();
+    unavailable.kill_home_processes();
+    std::fs::write(unavailable.folder().join("ssh-needs-login"), []).unwrap();
+    assert!(sleeping.hello_result().is_none() && unavailable.hello_result().is_none());
+    let session = "3182c480-42a0-4aa0-b112-58e2c865031c";
+    let worker = awake.start_fake_with("Worker", &[("FAKECLI_SESSION", session)]);
+    assert!(wait_until(LOADED_TIMEOUT, || awake
+        .inspect_agent(&worker.address)["agent"]["session"]
+        == session));
+    let pixel = local.start_fake("Pixel");
+
+    let previous = ssh_serves(&sleeping);
+    let named = local.run_facade(&["stop", "--machine", "staging"]);
+    assert_eq!(named.status.code(), Some(0), "{}", stderr(&named));
+    assert!(named.stdout.is_empty());
+    assert_eq!(
+        stderr(&named),
+        "No running managed agents to stop on staging.\n"
+    );
+    assert_eq!(ssh_serves(&sleeping), format!("{previous}no-start\n"));
+    assert!(sleeping.hello_result().is_none());
+    assert!(alive(&worker.process) && alive(&pixel.process));
+
+    let previous = ssh_serves(&sleeping);
+    let listed = local.run_facade(&["list"]);
+    assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
+    let table = Table::parse(&stdout(&listed));
+    assert_eq!(table.column("REF"), [&pixel.address, &worker.address]);
+    let warning = stderr(&listed);
+    assert!(
+        warning.starts_with("warning: ") && warning.contains("gpu"),
+        "{warning}"
+    );
+    assert!(
+        warning.ends_with("Run 'facade machine list' to check machine status.\n"),
+        "{warning}"
+    );
+    assert_eq!(ssh_serves(&sleeping), format!("{previous}no-start\n"));
+    assert!(sleeping.hello_result().is_none());
+
+    let previous = ssh_serves(&sleeping);
+    let stopped = local.run_facade(&["stop", "--all"]);
+    assert_eq!(stopped.status.code(), Some(1), "{}", stderr(&stopped));
+    assert_eq!(
+        stdout(&stopped),
+        format!(
+            "Stopped Pixel ({}).\nStopped Worker ({}).\n",
+            pixel.address, worker.address
+        )
+    );
+    assert_eq!(
+        stderr(&stopped),
+        "error: Could not connect to machine \"gpu\": SSH needs interaction.\nRun 'facade machine list' to check machine status.\n"
+    );
+    assert_eq!(ssh_serves(&sleeping), format!("{previous}no-start\n"));
+    assert!(!alive(&worker.process) && !alive(&pixel.process));
+    assert!(sleeping.hello_result().is_none() && unavailable.hello_result().is_none());
+
+    let previous = ssh_serves(&sleeping);
+    let named = local.run_facade(&["list", "--machine", "staging"]);
+    assert_eq!(named.status.code(), Some(0), "{}", stderr(&named));
+    assert!(named.stdout.is_empty());
+    assert_eq!(
+        stderr(&named),
+        "No active agents on staging.\nStart one with 'facade start --machine staging codex', or run 'facade resume --machine staging' to find saved sessions.\n"
+    );
+    assert_eq!(ssh_serves(&sleeping), format!("{previous}wake\n"));
+    assert!(sleeping.hello_result().is_some());
+
+    let previous = ssh_serves(&awake);
+    local.kill_home_processes();
+    assert!(local.hello_result().is_none() && awake.hello_result().is_some());
+    let reachable = local.run_facade(&["resume"]);
+    assert_eq!(reachable.status.code(), Some(0), "{}", stderr(&reachable));
+    let table = Table::parse(&stdout(&reachable));
+    assert!(table.column("REF").contains(&worker.address.as_str()));
+    assert_eq!(ssh_serves(&awake), format!("{previous}no-start\n"));
+
+    let resumable = local.run_facade(&["resume", "--machine", "devbox"]);
+    assert_eq!(resumable.status.code(), Some(0), "{}", stderr(&resumable));
+    assert_eq!(
+        stderr(&resumable),
+        "Resume one with 'facade resume <REFERENCE>'.\n"
+    );
+    let table = Table::parse(&stdout(&resumable));
+    assert_eq!(table.column("TYPE"), ["Managed"]);
+    assert_eq!(table.column("REF"), [worker.address.as_str()]);
+    let resumed = local.run_facade(&["resume", "-d", table.column("REF")[0]]);
+    assert_eq!(resumed.status.code(), Some(0), "{}", stderr(&resumed));
+    assert!(resumed.stderr.is_empty(), "{}", stderr(&resumed));
+    assert_eq!(
+        stdout(&resumed),
+        format!("Resumed Worker ({}) in the background.\n", worker.address)
+    );
+    assert_ne!(
+        awake.started_agent(&stdout(&resumed)).process,
+        worker.process
+    );
+}
+
+#[test]
+fn a_foreground_connection_keeps_both_daemons_awake_until_it_closes() {
+    let local = TestHome::new("foreground-laptop");
+    let remote = TestHome::new("foreground-devbox");
+    install_machine_ssh(
+        &[("laptop", &local), ("devbox", &remote)],
+        &test_binaries().facade,
+    );
+    let local_id = name_machine(&local, "laptop");
+    let remote_id = name_machine(&remote, "devbox");
+    let link = MachineLink::open(&local, "devbox", &remote);
+    wait_for_route(&local, &remote_id, &[&remote_id]);
+    wait_for_route(&remote, &local_id, &[&local_id]);
+    let local_daemon = local.daemon_pid().expect("local daemon");
+    let remote_daemon = remote.daemon_pid().expect("remote daemon");
+    let attempts = ssh_attempts(&remote);
+
+    std::thread::sleep(secs(32));
+
+    assert_eq!(
+        local.daemon_pid(),
+        Some(local_daemon),
+        "{}",
+        local.daemon_log()
+    );
+    assert_eq!(
+        remote.daemon_pid(),
+        Some(remote_daemon),
+        "{}",
+        remote.daemon_log()
+    );
+    assert_eq!(ssh_attempts(&remote), attempts);
+    let reverse = remote.run_facade_ok(&["machine", "list"]);
+    let table = Table::parse(&reverse);
+    let row = table
+        .row("NAME", "laptop")
+        .expect("the foreground peer on the receiving side");
+    assert_eq!(table.cell(row, "STATE"), "Online");
+    drop(link);
+
+    local.wait_for_idle_exit();
+    remote.wait_for_idle_exit();
+    assert_eq!(ssh_attempts(&remote), attempts);
+}
+
+#[test]
+fn a_saved_watch_keeps_ssh_open_until_detach_and_idle_dials_nothing() {
+    let local = TestHome::new("watch-laptop");
+    let remote = TestHome::new("watch-devbox");
+    install_machine_ssh(
+        &[("laptop", &local), ("devbox", &remote)],
+        &test_binaries().facade,
+    );
+    name_machine(&local, "laptop");
+    let remote_id = name_machine(&remote, "devbox");
+    local.start_fake("Local");
+    let worker = remote.start_fake("Remote");
+    add_saved(&local, "devbox", &remote);
+    let mut viewer = TestTerminal::spawn(
+        local
+            .command(&test_binaries().facade)
+            .args(["attach", &worker.address]),
+        100,
+        30,
+    );
+    assert!(viewer.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯")));
+    let attempts = ssh_attempts(&remote);
+    std::thread::sleep(secs(32));
+    remote.run_facade_ok(&["type", &worker.address, "still attached"]);
+    assert!(
+        viewer.wait_for(LOADED_TIMEOUT, |screen| screen.contains("still attached")),
+        "{}",
+        viewer.text()
+    );
+    assert_eq!(ssh_attempts(&remote), attempts);
+
+    viewer.send(b"\x1d");
+    assert!(
+        viewer
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert!(
+        wait_until(LOADED_TIMEOUT, || {
+            machine_json(&local, &remote_id).is_some_and(|machine| machine.get("route").is_none())
+        }),
+        "the idle saved transport stayed alive: {}",
+        local.daemon_log()
+    );
+    let roster = Table::parse(&local.run_facade_ok(&["machine", "list"]));
+    let row = roster
+        .row("NAME", "devbox")
+        .expect("the saved direct route");
+    assert_eq!(roster.cell(row, "STATE"), "Disconnected");
+    std::thread::sleep(secs(12));
+    assert_eq!(
+        ssh_attempts(&remote),
+        attempts,
+        "the daemon did not dial a disconnected route again"
+    );
+    assert!(alive(&worker.process));
 }
 
 struct MachineLink(Child);
@@ -281,9 +667,6 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     commit("current HEAD");
     let head = git(&remote.project, &["rev-parse", "HEAD"]);
     let folder = facade_base::files::real_path(&remote.project).unwrap();
-    // Model a server that accepts its initial foreground login and rejects BatchMode.
-    let password_only = remote.folder().join("ssh-password-only");
-    std::fs::write(&password_only, []).unwrap();
     let remote_home = remote.path.to_str().unwrap();
     let add = local
         .command(&programs.facade)
@@ -310,6 +693,14 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     let added = stdout(&output);
     assert!(output.status.success(), "{added}\n{}", stderr(&output));
     assert!(added.contains("Saved the connection to"), "{added}");
+    let attempts = ssh_attempts(&remote);
+    assert!(!attempts.is_empty(), "add did not try SSH");
+    assert!(
+        attempts
+            .lines()
+            .all(|attempt| attempt.starts_with("batch 2222 ")),
+        "add should reuse the existing noninteractive login: {attempts}"
+    );
     let status = connect(&local).call_ok("daemon.status", json!({ "machine": "devbox" }));
     assert_eq!(
         real_path(Path::new(status["home"].as_str().unwrap())).unwrap(),
@@ -317,12 +708,9 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "the first call immediately reaches the saved machine"
     );
     assert_eq!(
-        std::fs::read_to_string(remote.folder().join("ssh-attempts"))
-            .unwrap()
-            .lines()
-            .collect::<Vec<_>>(),
-        ["interactive 2222 login"],
-        "add and the first operation use one foreground SSH stream"
+        ssh_attempts(&remote),
+        attempts,
+        "the first operation reuses the saved machine session"
     );
     let machine = machine_json(&local, &remote_id).expect("the saved devbox");
     assert_eq!(machine["state"], "online", "{machine}");
@@ -466,13 +854,12 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     }
     assert!(remote.screen(address).contains(marker));
 
-    // This phase models a saved login that also works without interaction.
-    std::fs::remove_file(password_only).unwrap();
     assert_eq!(
         local.run_facade_ok(&["stop", address]),
         format!("Stopped worker ({address}).\n")
     );
     remote.wait_for_idle_exit();
+    local.run_facade_ok(&["list"]);
     let sleeping = wait_for_machine_state(&local, &remote_id, "sleeping");
     assert!(sleeping.get("route").is_none(), "{sleeping}");
     let machine_table = local.run_facade(&["machine", "list"]);
@@ -494,7 +881,6 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         remote.hello_result().is_none(),
         "machine list leaves the peer asleep"
     );
-    local.run_facade_ok(&["list"]);
     let roster = local.agent_list();
     let peer = machine_in(&roster, &remote_id).expect("the saved machine remains listed");
     assert_eq!(peer["state"], "sleeping", "{roster}");
@@ -512,6 +898,470 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     );
     assert_eq!(remote.hello_result().unwrap()["machine_id"], remote_id);
     wait_for_route(&local, &remote_id, &[&remote_id]);
+}
+
+fn ssh_attempts(home: &TestHome) -> String {
+    std::fs::read_to_string(home.folder().join("ssh-attempts")).unwrap_or_default()
+}
+
+fn ssh_serves(home: &TestHome) -> String {
+    std::fs::read_to_string(home.folder().join("ssh-serves")).unwrap_or_default()
+}
+
+fn run_using(home: &TestHome, program: &Path, args: &[&str]) -> std::process::Output {
+    home.command(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("could not run Facade")
+}
+
+fn run_using_ok(home: &TestHome, program: &Path, args: &[&str]) -> String {
+    let output = run_using(home, program, args);
+    assert!(
+        output.status.success(),
+        "{} {args:?}: {}",
+        program.display(),
+        stderr(&output)
+    );
+    stdout(&output)
+}
+
+/// Replay against the independently published package on the same platform. The full gate
+/// exercises the compatibility wire paths without requiring release archives in CI.
+#[test]
+#[ignore = "requires the independently published 0.1.6 package in FACADE_TEST_PUBLISHED_016"]
+fn published_016_and_current_cold_dial_each_other() {
+    let package = std::path::PathBuf::from(std::env::var_os("FACADE_TEST_PUBLISHED_016").unwrap());
+    assert!(package.is_absolute(), "provide an absolute package path");
+    let published = package.join(program_name("facade"));
+    let programs = test_binaries();
+    assert!(published.is_file() && published != programs.facade);
+
+    for (caller, holder) in [
+        (programs.facade.as_path(), published.as_path()),
+        (published.as_path(), programs.facade.as_path()),
+    ] {
+        let source = TestHome::new("cold-caller");
+        let remote = TestHome::new("cold-holder");
+        install_machine_ssh_with_programs(&[
+            ("caller", &source, caller),
+            ("holder", &remote, holder),
+        ]);
+        assert_eq!(
+            run_using_ok(&source, &published, &["--version"]),
+            "facade 0.1.6\n"
+        );
+        for (program, home, name) in [(caller, &source, "caller"), (holder, &remote, "holder")] {
+            run_using_ok(home, program, &["machine", "list"]);
+            let hello = home.hello_result().expect("the daemon is listening");
+            let id = hello["machine_id"].as_str().unwrap();
+            run_using_ok(home, program, &["machine", "rename", id, name]);
+        }
+        // The published release has no debug CLI entry. Both builds run the same test program.
+        remote.add_custom_cli("qa-fake", &programs.fakecli);
+        let started = run_using_ok(
+            &remote,
+            holder,
+            &["start", "-d", "-n", "PeerWorker", "qa-fake"],
+        );
+        let address = started_ref(&started);
+        let kept = remote.started_agent(&started);
+        assert!(address.ends_with("@holder"), "{started}");
+        assert!(wait_for_screen_text(&remote, address, "❯"));
+
+        if holder == published.as_path() {
+            for args in [
+                ["list", "--local"],
+                ["resume", "--local"],
+                ["stop", "--all"],
+            ] {
+                let output = run_using(&remote, caller, &args);
+                assert_eq!(
+                    output.status.code(),
+                    Some(1),
+                    "{args:?}: {}",
+                    stderr(&output)
+                );
+                assert!(output.stdout.is_empty());
+                assert!(
+                    stderr(&output).contains("facade upgrade"),
+                    "{args:?}: {}",
+                    stderr(&output)
+                );
+            }
+            assert!(
+                alive(&kept.process),
+                "an unsupported scope left the old agent running"
+            );
+        }
+
+        let home = remote.path.to_str().unwrap();
+        let added = run_using_ok(
+            &source,
+            caller,
+            &["machine", "add", "--home", home, "holder"],
+        );
+        assert!(added.contains("Saved the connection to holder."), "{added}");
+        source.wait_for_idle_exit();
+        let before = ssh_attempts(&remote);
+        assert!(!before.is_empty());
+        assert!(source.hello_result().is_none());
+        assert!(alive(&kept.process));
+
+        let output = run_using_ok(&source, caller, &["list", "--machine", "holder"]);
+        let table = Table::parse(&output);
+        assert_eq!(table.column("REF"), [address], "{output}");
+        assert_eq!(table.column("NAME"), ["PeerWorker"], "{output}");
+        assert!(
+            ssh_attempts(&remote).len() > before.len(),
+            "cold lookup did not dial SSH"
+        );
+        let receipt = run_using_ok(&source, caller, &["type", address, "mixed-build hello"]);
+        assert_eq!(
+            receipt,
+            format!("Typed into PeerWorker ({address})'s terminal.\n")
+        );
+        assert!(wait_for_screen_text(&remote, address, "mixed-build hello"));
+        assert!(alive(&kept.process));
+    }
+}
+
+#[cfg(unix)]
+mod authorization {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    struct Keys {
+        authorized: PathBuf,
+        initial: String,
+        host_key: String,
+        known_hosts: PathBuf,
+        initial_trust: String,
+    }
+
+    fn generate(home: &TestHome, path: &Path) -> String {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let result = home
+            .command("/usr/bin/ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(path)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}", stderr(&result));
+        fs::read_to_string(path.with_extension("pub")).unwrap()
+    }
+
+    fn keys(home: &TestHome) -> Keys {
+        let initial = generate(home, &home.folder().join("existing-login-key"));
+        let host_key = generate(
+            home,
+            &home.folder().join("ssh-host-keys/ssh_host_ed25519_key"),
+        );
+        let ssh = home.user_home().join(".ssh");
+        fs::create_dir(&ssh).unwrap();
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+        let authorized = ssh.join("authorized_keys");
+        fs::write(&authorized, &initial).unwrap();
+        fs::set_permissions(&authorized, fs::Permissions::from_mode(0o600)).unwrap();
+        let known_hosts = ssh.join("known_hosts");
+        let initial_trust = format!("qa-other.invalid {host_key}");
+        fs::write(&known_hosts, &initial_trust).unwrap();
+        fs::set_permissions(&known_hosts, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(home.folder().join("ssh-password-only"), []).unwrap();
+        Keys {
+            authorized,
+            initial,
+            host_key,
+            known_hosts,
+            initial_trust,
+        }
+    }
+
+    fn authorize_arguments<'a>(home: &'a TestHome, destination: &'a str) -> [&'a str; 6] {
+        [
+            "machine",
+            "add",
+            "--bidirectional",
+            "--home",
+            home.path.to_str().unwrap(),
+            destination,
+        ]
+    }
+
+    fn add_pair(local: &TestHome, remote: &TestHome) -> std::process::Output {
+        local
+            .command(&test_binaries().facade)
+            .env(
+                "FACADE_TEST_SSH_HOST_KEYS",
+                local.folder().join("ssh-host-keys"),
+            )
+            .args(authorize_arguments(remote, "devbox"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    }
+
+    fn kept_key(home: &TestHome, by: &Keys, name: &str, id: &str) {
+        let private = home.path.join("core/ssh/id_ed25519");
+        assert_eq!(
+            fs::metadata(&private).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let key = fs::read_to_string(private.with_extension("pub")).unwrap();
+        let key = key.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        let text = fs::read_to_string(&by.authorized).unwrap();
+        assert!(
+            text.starts_with(&by.initial),
+            "the previous authorization remains"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with(&key)
+                    && line.ends_with(&format!("# facade:{name}:{id}")))
+                .count(),
+            1,
+            "{text}"
+        );
+    }
+
+    fn pair(local: &TestHome, remote: &TestHome) -> (String, String, Keys, Keys) {
+        let local_keys = keys(local);
+        let remote_keys = keys(remote);
+        install_machine_ssh(
+            &[("laptop", local), ("devbox", remote)],
+            &test_binaries().facade,
+        );
+        let local_id = name_machine(local, "laptop");
+        let remote_id = name_machine(remote, "devbox");
+        (local_id, remote_id, local_keys, remote_keys)
+    }
+
+    #[test]
+    fn bidirectional_add_proves_each_key_then_removes_only_the_paired_authorizations() {
+        let local = TestHome::new("key-laptop");
+        let remote = TestHome::new("key-devbox");
+        let (local_id, remote_id, local_keys, remote_keys) = pair(&local, &remote);
+        let result = add_pair(&local, &remote);
+        assert_eq!(
+            result.status.code(),
+            Some(0),
+            "{}\n{}",
+            stdout(&result),
+            stderr(&result)
+        );
+        let receipts = stdout(&result);
+        let lines: Vec<_> = receipts.lines().collect();
+        assert_eq!(lines.len(), 4, "{receipts}");
+        assert!(
+            lines[0].starts_with("Installed Facade SSH key on devbox (allows "),
+            "{receipts}"
+        );
+        assert!(
+            lines[1].starts_with("Installed devbox's Facade SSH key on laptop (allows "),
+            "{receipts}"
+        );
+        assert!(
+            lines[2].starts_with("Saved forward connection to devbox ("),
+            "{receipts}"
+        );
+        assert!(
+            lines[3].starts_with("Saved return connection from devbox to laptop (")
+                && lines[3].ends_with("@192.0.2.1)."),
+            "{receipts}"
+        );
+        kept_key(&local, &remote_keys, "laptop", &local_id);
+        kept_key(&remote, &local_keys, "devbox", &remote_id);
+        let trust = fs::read_to_string(&remote_keys.known_hosts).unwrap();
+        let new_trust = trust.strip_prefix(&remote_keys.initial_trust).unwrap();
+        assert_eq!(new_trust.lines().count(), 1, "{trust}");
+        let mut fields = new_trust.split_whitespace();
+        assert_eq!(fields.next(), Some("192.0.2.1"));
+        assert_eq!(
+            fields.take(2).collect::<Vec<_>>(),
+            local_keys
+                .host_key
+                .split_whitespace()
+                .take(2)
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            ssh_attempts(&remote)
+                .lines()
+                .any(|attempt| attempt.starts_with("interactive "))
+        );
+        assert!(ssh_serves(&remote).lines().any(|entry| entry == "admin"));
+
+        for (source, destination, name) in
+            [(&local, &remote, "devbox"), (&remote, &local, "laptop")]
+        {
+            source.kill_home_processes();
+            destination.kill_home_processes();
+            let attempts = ssh_attempts(destination);
+            let listed = source.run_facade(&["list", "--machine", name]);
+            assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
+            assert!(stderr(&listed).starts_with(&format!("No active agents on {name}.\n")));
+            assert!(
+                ssh_attempts(destination).len() > attempts.len(),
+                "the saved route is cold"
+            );
+        }
+
+        let removed = local.run_facade(&["machine", "remove", "--bidirectional", "devbox"]);
+        assert_eq!(
+            removed.status.code(),
+            Some(0),
+            "{}\n{}",
+            stdout(&removed),
+            stderr(&removed)
+        );
+        assert_eq!(
+            stdout(&removed),
+            "Removed the saved connection to devbox.\nRemoved the saved return connection from devbox to laptop.\n"
+        );
+        assert!(removed.stderr.is_empty(), "{}", stderr(&removed));
+        assert_eq!(
+            fs::read_to_string(local_keys.authorized).unwrap(),
+            local_keys.initial
+        );
+        assert_eq!(
+            fs::read_to_string(remote_keys.authorized).unwrap(),
+            remote_keys.initial
+        );
+    }
+
+    #[test]
+    fn failed_return_proof_rolls_back_just_the_return_and_leaves_the_forward_saved() {
+        let local = TestHome::new("return-fails-laptop");
+        let remote = TestHome::new("return-fails-devbox");
+        let (local_id, remote_id, local_keys, remote_keys) = pair(&local, &remote);
+        fs::write(local.folder().join("ssh-proof-other-key"), []).unwrap();
+        let result = add_pair(&local, &remote);
+        assert_eq!(
+            result.status.code(),
+            Some(1),
+            "{}\n{}",
+            stdout(&result),
+            stderr(&result)
+        );
+        assert!(stdout(&result).contains("Saved forward connection to devbox ("));
+        assert!(
+            stderr(&result).contains("Could not connect from devbox back to "),
+            "{}",
+            stderr(&result)
+        );
+        kept_key(&local, &remote_keys, "laptop", &local_id);
+        assert_eq!(
+            fs::read_to_string(&local_keys.authorized).unwrap(),
+            local_keys.initial
+        );
+        let trust = fs::read_to_string(&remote_keys.known_hosts).unwrap();
+        assert!(
+            trust
+                .strip_prefix(&remote_keys.initial_trust)
+                .is_some_and(|remaining| remaining.trim().is_empty()),
+            "return rollback must preserve the native trust file: {trust}",
+        );
+        let machine = machine_json(&local, &remote_id).unwrap();
+        assert_eq!(saved_ssh(&machine, &local_id)["kind"], "saved");
+
+        let attempts = ssh_attempts(&remote);
+        let result = local.run_facade(&["machine", "remove", "devbox"]);
+        assert_eq!(result.status.code(), Some(0), "{}", stderr(&result));
+        assert_eq!(stdout(&result), "Removed the saved connection to devbox.\n");
+        assert_eq!(ssh_attempts(&remote), attempts, "default removal is local");
+        kept_key(&local, &remote_keys, "laptop", &local_id);
+    }
+
+    #[test]
+    fn reciprocal_remove_revokes_the_peer_key_when_the_return_route_is_already_absent() {
+        let local = TestHome::new("no-return-laptop");
+        let remote = TestHome::new("no-return-devbox");
+        let (local_id, _, local_keys, remote_keys) = pair(&local, &remote);
+        let added = add_pair(&local, &remote);
+        assert_eq!(added.status.code(), Some(0), "{}", stderr(&added));
+
+        // Remove the saved route at the daemon boundary, leaving its SSH grants intact.
+        connect(&remote).call_ok(
+            "machine.remove",
+            json!({ "machine": local_id, "expected_machine_id": local_id }),
+        );
+        kept_key(&local, &remote_keys, "laptop", &local_id);
+
+        let removed = local.run_facade(&["machine", "remove", "--bidirectional", "devbox"]);
+        assert_eq!(removed.status.code(), Some(0), "{}", stderr(&removed));
+        assert_eq!(
+            stdout(&removed),
+            "Removed the saved connection to devbox.\nNo saved return connection from devbox to laptop.\n"
+        );
+        assert!(removed.stderr.is_empty(), "{}", stderr(&removed));
+        assert_eq!(
+            fs::read_to_string(local_keys.authorized).unwrap(),
+            local_keys.initial
+        );
+        assert_eq!(
+            fs::read_to_string(remote_keys.authorized).unwrap(),
+            remote_keys.initial
+        );
+    }
+
+    #[test]
+    fn bidirectional_remove_confirms_peer_identity_before_revoking_remote_authorization() {
+        let local = TestHome::new("remove-laptop");
+        let remote = TestHome::new("remove-devbox");
+        let (local_id, remote_id, local_keys, remote_keys) = pair(&local, &remote);
+        let result = add_pair(&local, &remote);
+        assert_eq!(
+            result.status.code(),
+            Some(0),
+            "{}\n{}",
+            stdout(&result),
+            stderr(&result)
+        );
+        let remote_authorization = fs::read_to_string(&remote_keys.authorized).unwrap();
+
+        remote.kill_home_processes();
+        let wrong_id = "8abd1e14-8b27-42c0-8eb6-6b687b7b9af0";
+        assert_ne!(wrong_id, remote_id);
+        rusqlite::Connection::open(remote.path.join("core/facade.db"))
+            .unwrap()
+            .execute("UPDATE machine SET machine_id = ?1", [wrong_id])
+            .unwrap();
+        let result = local.run_facade(&["machine", "remove", "--bidirectional", "devbox"]);
+        assert_eq!(
+            result.status.code(),
+            Some(1),
+            "{}\n{}",
+            stdout(&result),
+            stderr(&result)
+        );
+        assert_eq!(stdout(&result), "Removed the saved connection to devbox.\n");
+        let error = stderr(&result);
+        assert!(
+            error.starts_with("error: Could not confirm removal on devbox: "),
+            "{error}"
+        );
+        assert_eq!(
+            error.lines().skip(1).collect::<Vec<_>>(),
+            [
+                "Check the return connection and SSH authorization on devbox.".to_owned(),
+                format!(
+                    "On devbox, use 'facade machine list' to verify the saved return connection to laptop (machine ID {local_id}). If confirmed, run 'facade machine remove <MACHINE>' with the ID shown for that row."
+                ),
+            ],
+        );
+        assert_eq!(
+            fs::read_to_string(local_keys.authorized).unwrap(),
+            local_keys.initial
+        );
+        assert_eq!(
+            fs::read_to_string(remote_keys.authorized).unwrap(),
+            remote_authorization
+        );
+    }
 }
 
 /// Both interfaces list the newest agents first and provide the same usable addresses.
@@ -1204,6 +2054,11 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     let distant = third.start_named_fake("lookout", &[]);
     let target = format!("{}@{}", distant.id, third_id.replace('-', ""));
     third.run_facade_ok(&["type", &distant.id, "through the middle", "--enter"]);
+    assert!(wait_for_screen_text(
+        &third,
+        &distant.address,
+        "through the middle"
+    ));
     assert!(
         first
             .run_facade_ok(&["screen", "lookout"])
@@ -1292,25 +2147,37 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     std::fs::write(&hold, []).unwrap();
     drop(right);
     third.kill_home_processes();
-    let connecting = wait_for_machine_state(&first, &third_id, "connecting");
-    assert!(connecting.get("route").is_none(), "{connecting}");
-    let listed = first.agent_list();
-    assert_eq!(
-        machine_in(&listed, &third_id).unwrap()["state"],
-        "connecting",
-        "{listed}"
-    );
-    assert!(
-        listed["agents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|agent| agent["name"] == "other"),
-        "{listed}"
-    );
-
-    std::fs::write(third.folder().join("ssh-offline"), []).unwrap();
-    std::fs::remove_file(hold).unwrap();
+    assert!(wait_until(LOADED_TIMEOUT, || {
+        machine_json(&first, &third_id).is_some_and(|row| row.get("route").is_none())
+    }));
+    std::thread::scope(|scope| {
+        let probe = scope.spawn(|| first.run_facade(&["list"]));
+        let connecting = wait_until(secs(15), || {
+            machine_json(&first, &third_id).is_some_and(|row| row["state"] == "connecting")
+        });
+        let listed = first.agent_list();
+        std::fs::write(third.folder().join("ssh-offline"), []).unwrap();
+        std::fs::remove_file(hold).unwrap();
+        let probe = probe.join().unwrap();
+        assert!(
+            connecting,
+            "the reachable list did not start an SSH attempt"
+        );
+        assert_eq!(
+            machine_in(&listed, &third_id).unwrap()["state"],
+            "connecting",
+            "{listed}"
+        );
+        assert!(
+            listed["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|agent| agent["name"] == "other"),
+            "{listed}"
+        );
+        assert!(probe.status.success(), "{}", stderr(&probe));
+    });
     let disconnected = wait_for_machine_state(&first, &third_id, "unreachable");
     assert!(disconnected.get("unreachable").is_none(), "{disconnected}");
     assert!(disconnected.get("route").is_none(), "{disconnected}");
@@ -1331,6 +2198,7 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     );
 
     std::fs::write(third.folder().join("ssh-needs-login"), []).unwrap();
+    first.run_facade_ok(&["list"]);
     let needs_login = wait_for_machine_state(&first, &third_id, "ssh_interaction_required");
     let direct = saved_ssh(&needs_login, &first_id);
     assert_eq!(direct["state"], "ssh_interaction_required");

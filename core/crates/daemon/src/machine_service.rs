@@ -17,18 +17,19 @@ use tokio::io::BufReader;
 use tokio::sync::mpsc;
 
 use crate::lifecycle::Work;
-use crate::network::{Event, FrontConnection, SavedSsh, TargetReply};
-use crate::network_operations::{machine_query_failure, machine_query_result};
+use crate::network::{Event, FrontConnection, MachineGreeting, SavedSsh, TargetReply, is_uuid_v4};
+use crate::network_operations::{machine_query_failure, machine_query_result, machine_selector};
 use crate::records::root_of;
 use crate::server::Client;
-use crate::service::value_of;
+use crate::service::{client_declares, value_of};
 use crate::{Daemon, SavedConnection, blocking_in_place};
 
 pub(crate) enum MachineStream {
-    Incoming(MachineHello),
+    Incoming(MachineGreeting),
     Foreground {
         session: FrontConnection,
         argv: Vec<String>,
+        allow_verified_update: bool,
     },
 }
 
@@ -113,8 +114,13 @@ impl Daemon {
                 keeper: self.runs.keeper_info(),
                 topics: Vec::new(),
                 ops: Vec::new(),
+                capabilities: crate::daemon_capabilities(),
             },
-            MachineStream::Incoming(remote),
+            MachineStream::Incoming(MachineGreeting {
+                machine: remote,
+                capabilities: hello.capabilities,
+                foreground: hello.foreground,
+            }),
         ))
     }
 
@@ -128,7 +134,27 @@ impl Daemon {
                 "only a terminal client can open an SSH connection",
             ));
         }
-        let v3::MachineConnectArgs { transport, kind } = decode_arguments(args)?;
+        if args.get("expected_machine_id").is_some_and(Value::is_null) {
+            return Err(ErrorBody::invalid_argument(
+                "expected_machine_id must be a machine ID",
+            ));
+        }
+        let v3::MachineConnectArgs {
+            transport,
+            kind,
+            expected_machine_id,
+        } = decode_arguments(args)?;
+        if expected_machine_id
+            .as_ref()
+            .is_some_and(|id| kind != ConnectionKind::Saved || !is_uuid_v4(id))
+        {
+            return Err(ErrorBody::invalid_argument(
+                "expected_machine_id must be a full machine ID for a saved connection",
+            ));
+        }
+        let allow_verified_update = kind == ConnectionKind::Saved
+            && (expected_machine_id.is_some()
+                || client_declares(client, v3::CAP_MACHINE_CONNECT_EXPECTED_ID));
         let (transport, argv, expected_machine_id) = match transport {
             v3::MachineTransport::Ssh {
                 ssh_destination,
@@ -137,10 +163,19 @@ impl Daemon {
             } => {
                 let argv = checked_ssh_args(&ssh_destination, ssh_args)?;
                 let expected = if kind == ConnectionKind::Saved {
-                    self.saved_ssh()?
+                    let known = self
+                        .saved_ssh()?
                         .into_iter()
                         .find(|saved| saved.argv == argv && saved.config.remote_home == remote_home)
-                        .map(|saved| saved.config.machine_id)
+                        .map(|saved| saved.config.machine_id);
+                    if let (Some(known), Some(given)) = (&known, &expected_machine_id)
+                        && known != given
+                    {
+                        return Err(ErrorBody::refused(format!(
+                            "the saved SSH destination expects machine ID {known}, got {given}",
+                        )));
+                    }
+                    expected_machine_id.or(known)
                 } else {
                     None
                 };
@@ -182,7 +217,11 @@ impl Daemon {
         };
         Ok((
             value_of(result),
-            MachineStream::Foreground { session, argv },
+            MachineStream::Foreground {
+                session,
+                argv,
+                allow_verified_update,
+            },
         ))
     }
 
@@ -198,10 +237,14 @@ impl Daemon {
         match stream {
             MachineStream::Incoming(remote) => {
                 self.network
-                    .accept_with_work(remote, read, write, Some(initial_work))
+                    .accept_with_work(remote, read, write, Some(Box::new(initial_work)))
                     .await
             }
-            MachineStream::Foreground { session, argv } => {
+            MachineStream::Foreground {
+                session,
+                argv,
+                allow_verified_update,
+            } => {
                 let transport = session.transport.clone();
                 let kind = session.kind;
                 self.network
@@ -209,9 +252,10 @@ impl Daemon {
                         session,
                         read,
                         write,
-                        Some(initial_work),
-                        |remote: &MachineHello| {
-                            let saved = match &transport {
+                        Some(Box::new(initial_work)),
+                        |remote: MachineHello| async move {
+                            let changing = self.machine_changes.lock().await;
+                            let (first, saved) = match &transport {
                                 MachineTransport::Ssh {
                                     ssh_destination,
                                     remote_home,
@@ -224,16 +268,22 @@ impl Daemon {
                                         },
                                         argv,
                                     };
-                                    Some(self.keep_ssh(saved)?)
+                                    let update_id =
+                                        allow_verified_update.then_some(remote.machine_id.as_str());
+                                    let (first, saved) =
+                                        self.keep_ssh(saved, &remote.name, update_id)?;
+                                    (first, Some(saved))
                                 }
-                                _ => None,
+                                _ => {
+                                    let first = blocking_in_place(|| {
+                                        self.store
+                                            .remember_machine(&remote.machine_id, &remote.name)
+                                    })
+                                    .map_err(ErrorBody::internal)?;
+                                    (first, None)
+                                }
                             };
-                            let first = blocking_in_place(|| {
-                                self.store
-                                    .remember_machine(&remote.machine_id, &remote.name)
-                            })
-                            .map_err(ErrorBody::internal)?;
-                            Ok((first, saved))
+                            Ok((first, saved, changing))
                         },
                     )
                     .await
@@ -276,8 +326,10 @@ impl Daemon {
     }
 
     pub(crate) fn restore_machine_connections(&self) -> anyhow::Result<()> {
+        let names = blocking_in_place(|| self.store.known_machine_names())?;
         for saved in blocking_in_place(|| self.store.saved_ssh())? {
-            drop(self.network.start_saved_ssh(saved));
+            let name = names.get(&saved.config.machine_id).cloned();
+            self.network.restore_saved_ssh(saved, name);
         }
         for (id, route) in blocking_in_place(|| self.store.remembered_routes())? {
             self.network.remember_route(id, route);
@@ -285,16 +337,24 @@ impl Daemon {
         Ok(())
     }
 
-    fn keep_ssh(&self, saved: SavedSsh) -> Result<SavedSsh, ErrorBody> {
-        let kept = blocking_in_place(|| self.store.save_verified_ssh(&saved))
-            .map_err(ErrorBody::internal)?;
+    fn keep_ssh(
+        &self,
+        saved: SavedSsh,
+        name: &str,
+        expected_machine_id: Option<&str>,
+    ) -> Result<(bool, SavedSsh), ErrorBody> {
+        let (kept, first) = blocking_in_place(|| {
+            self.store
+                .save_verified_ssh(&saved, name, expected_machine_id)
+        })
+        .map_err(ErrorBody::internal)?;
         if kept.config != saved.config || kept.argv != saved.argv {
             return Err(ErrorBody::refused(format!(
                 "this machine already has a saved SSH connection through {}",
                 kept.config.ssh_destination
             )));
         }
-        Ok(kept)
+        Ok((first, kept))
     }
 
     fn publish_machine_table(&self) {
@@ -453,10 +513,21 @@ impl Daemon {
 
     pub(crate) async fn remove_machine(
         &self,
-        target: v3::MachineInfo,
+        args: v3::MachineRemoveArgs,
     ) -> Result<MachineRemoveResult, ErrorBody> {
         let _changing = self.machine_changes.lock().await;
-        let machine_id = &target.machine_id;
+        let (id, name) = if let Some(id) = args.expected_machine_id {
+            if !is_uuid_v4(&id) {
+                return Err(ErrorBody::invalid_argument(
+                    "expected_machine_id must be a full machine ID",
+                ));
+            }
+            (id.clone(), id)
+        } else {
+            let target = self.select_machine(machine_selector(&args.machine)?)?;
+            (target.machine_id, target.name)
+        };
+        let machine_id = &id;
         if *machine_id == self.machine_id {
             return Err(self.machine_failure(
                 machine_id,
@@ -468,7 +539,7 @@ impl Daemon {
             .machines_v3()
             .into_iter()
             .find(|machine| machine.machine_id == *machine_id)
-            .map_or(target.name, |machine| machine.name);
+            .map_or(name, |machine| machine.name);
         let saved = blocking_in_place(|| self.store.delete_connection(machine_id))
             .map_err(ErrorBody::internal)?
             .ok_or_else(|| {
@@ -583,7 +654,7 @@ fn identities(rows: &[v3::MachineInfo]) -> Vec<MachineIdentity> {
         .collect()
 }
 
-fn offline_machine(identity: MachineIdentity) -> v3::MachineInfo {
+pub(crate) fn offline_machine(identity: MachineIdentity) -> v3::MachineInfo {
     v3::MachineInfo {
         selector: addresses::exact_machine_selector(&identity.machine_id),
         state: v3::MachineState::Unreachable,
@@ -595,5 +666,6 @@ fn offline_machine(identity: MachineIdentity) -> v3::MachineInfo {
         build: None,
         route: None,
         connections: Vec::new(),
+        capabilities: Vec::new(),
     }
 }

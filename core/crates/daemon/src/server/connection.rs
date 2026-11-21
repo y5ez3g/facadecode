@@ -16,7 +16,7 @@ use facade_base::jsonrpc::{
     parse_request,
 };
 use facade_base::machine::{AgentRef, MachineConnect, ProtocolMismatch};
-use facade_base::operations::{CallParams, EmptyResult, Operation};
+use facade_base::operations::{CallParams, EmptyResult, Operation, Topic};
 use facade_base::sockets::{ServerPeer, ServerReader, ServerSocket};
 use facade_base::v3::{self, DAEMON_PROTOCOL_RANGE, TAKEOVER_DAEMON_PROTOCOL_RANGE};
 use serde::Serialize;
@@ -89,6 +89,8 @@ impl Peer {
 /// A watch this connection started.
 struct Watching {
     forwarder: JoinHandle<()>,
+    /// Cleared before reporting the watch's end to the client.
+    live: Arc<AtomicBool>,
     topic: String,
     viewer: u64,
 }
@@ -266,6 +268,12 @@ impl<S: Service> Connection<S> {
             } else if let Some(refused) = self.service.draining() {
                 self.outbox.answer(id, Err(refused)).await;
             } else if self.verified_actor.is_none() && super::is_relay_hello(&params) {
+                if params["foreground"] == true {
+                    self.outbox
+                        .answer(id, Err(foreground_requires_machine()))
+                        .await;
+                    return Next::End;
+                }
                 return Next::Relay(id, params);
             } else {
                 return self.hello(id, params).await;
@@ -358,6 +366,7 @@ impl<S: Service> Connection<S> {
         if protocol == Protocol::Takeover {
             result.topics.clear();
             result.ops = vec![DaemonUpgrade::NAME.to_string()];
+            result.capabilities.clear();
             result.agent = None;
             result.window = None;
         }
@@ -368,7 +377,8 @@ impl<S: Service> Connection<S> {
         Ok(value_of(result))
     }
 
-    /// Runs a call in a task of its own, or in its agent's lane for typing and resizing.
+    /// Awaits Attach resize in receive order, queues typing and legacy resize in their agent's
+    /// lane, or runs an ordinary call in its own task.
     async fn call(
         &mut self,
         client: Arc<Client>,
@@ -389,10 +399,11 @@ impl<S: Service> Connection<S> {
             return Next::End;
         }
         let typing = matches!(call.op.as_str(), AgentType::NAME | AgentResize::NAME);
+        let attach_resize = call.op == v3::AttachResize::NAME;
         // While a newer Facade takes over, a new call does nothing. An attached terminal's keys and
         // size, sent without an ID, are no new calls: they reach the agent until `closing` is
         // answered.
-        let attached = typing && id.is_none();
+        let attached = (typing || attach_resize) && id.is_none();
         if call.op != DaemonUpgrade::NAME
             && !attached
             && let Some(refused) = self.service.draining()
@@ -404,6 +415,12 @@ impl<S: Service> Connection<S> {
             let Some(id) = id else { return Next::Read };
             let accepted = self.service.machine_connect(&client, call.args).await;
             return self.switch_to_machine(id, accepted, Next::Read).await;
+        }
+        if attach_resize {
+            // Wait for the viewer's acknowledgment before reading the next request.
+            let result = self.resize_viewer(&client, call.args).await;
+            self.outbox.answer(id, result).await;
+            return Next::Read;
         }
         if typing {
             let context = LaneContext {
@@ -496,21 +513,53 @@ impl<S: Service> Connection<S> {
             snapshot: started.snapshot,
         };
         self.outbox.answer(id, Ok(value_of(answer))).await;
+        let live = Arc::new(AtomicBool::new(!started.changes.is_closed()));
         let forwarder = tokio::spawn(forward(
             self.outbox.clone(),
             self.peer.clone(),
             number,
             started.changes,
+            live.clone(),
         ));
         self.watches.insert(
             number,
             Watching {
                 forwarder,
+                live,
                 topic,
                 viewer,
             },
         );
         Ok(())
+    }
+
+    async fn resize_viewer(&mut self, client: &Client, args: Value) -> Result<Value, ErrorBody> {
+        if args.get("viewer").is_some() || args.get("boot_id").is_some() {
+            return Err(ErrorBody::invalid_argument(
+                "attach.resize takes a connection watch ID",
+            ));
+        }
+        let v3::AttachResizeArgs {
+            watch,
+            cols,
+            rows,
+            colors,
+        } = decode_arguments(args)?;
+        let Some(watching) = self.watches.get(&watch).filter(|watching| {
+            watching.topic == v3::AttachTopic::NAME && watching.live.load(Ordering::Relaxed)
+        }) else {
+            let message = format!("no active attach watch {watch} on this connection");
+            return Err(ErrorBody::new(Reason::NotFound, message));
+        };
+        self.service
+            .resize_viewer(
+                client,
+                watching.viewer,
+                v3::ScreenSize { cols, rows },
+                colors,
+            )
+            .await?;
+        Ok(value_of(EmptyResult {}))
     }
 
     async fn unwatch(&mut self, client: &Client, params: Value) -> Result<Value, ErrorBody> {
@@ -576,6 +625,9 @@ fn hello_params(params: Value) -> Result<(HelloParams, Protocol), ErrorBody> {
         let message = "unsupported client kind; run 'facade upgrade' to update Facade Code";
         return Err(ErrorBody::new(Reason::IncompatibleProtocol, message));
     }
+    if hello.foreground && hello.kind != ClientKind::Machine {
+        return Err(foreground_requires_machine());
+    }
     let [oldest, newest] = hello.protocol_range;
     let range = oldest..=newest;
     let protocol = if hello.kind == ClientKind::Machine {
@@ -602,10 +654,16 @@ fn hello_params(params: Value) -> Result<(HelloParams, Protocol), ErrorBody> {
             sessions: Vec::new(),
             window: None,
             numbers_given: None,
+            capabilities: hello.capabilities,
+            foreground: hello.foreground,
             machine: hello.machine,
         },
         protocol,
     ))
+}
+
+fn foreground_requires_machine() -> ErrorBody {
+    ErrorBody::refused("only a machine hello can request foreground activity")
 }
 
 fn protocol_mismatch(hello: v3::HelloParams) -> ErrorBody {
@@ -639,15 +697,17 @@ async fn forward(
     peer: Arc<Peer>,
     number: u64,
     mut changes: mpsc::Receiver<WatchChange>,
+    live: Arc<AtomicBool>,
 ) {
     while let Some(change) = changes.recv().await {
         match change {
             WatchChange::Change(change) => {
                 if !outbox.change(number, change).await {
-                    return;
+                    break;
                 }
             }
             WatchChange::Ended(error) => {
+                live.store(false, Ordering::Relaxed);
                 let params = WatchEndedParams {
                     watch: number,
                     error,
@@ -661,6 +721,7 @@ async fn forward(
                 return;
             }
             WatchChange::Disconnect => {
+                live.store(false, Ordering::Relaxed);
                 super::log(
                     "warn",
                     "disconnecting a client whose watch fell too far behind",
@@ -670,6 +731,7 @@ async fn forward(
             }
         }
     }
+    live.store(false, Ordering::Relaxed);
 }
 
 pub(super) fn value_of(value: impl Serialize) -> Value {

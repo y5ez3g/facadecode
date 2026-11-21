@@ -12,7 +12,7 @@ use facade_base::v3::{
     AdvertiseParams, ConnectionKind, ConnectionState, MachineConnection, MachineHello,
     MachineIdentity, MachineInfo, MachineState,
 };
-use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::routes::{self, Conflict, LiveIdentities, is_uuid_v4};
 use super::session::Peer;
@@ -22,11 +22,13 @@ use crate::SavedConnection;
 
 pub(super) struct Topology {
     pub(super) local: MachineHello,
+    pub(super) capabilities: Vec<String>,
     pub(super) links: BTreeMap<SessionId, Link>,
     /// The identities already accepted during a handshake, held until it succeeds or closes.
     pub(super) pending_links: BTreeMap<SessionId, Link>,
     pub(super) saved: BTreeMap<String, Saved>,
     pub(super) remembered_routes: BTreeMap<String, Vec<String>>,
+    sleeping: BTreeMap<String, MachineInfo>,
     next: u64,
     selected: BTreeMap<String, Selected>,
 }
@@ -36,8 +38,7 @@ pub(super) struct Saved {
     pub(super) argv: Vec<String>,
     pub(super) generation: u64,
     pub(super) stop: watch::Sender<bool>,
-    pub(super) changed: Arc<Notify>,
-    pub(super) waiters: Vec<oneshot::Sender<Result<MachineHello, ErrorBody>>>,
+    pub(super) passive_waiters: Vec<oneshot::Sender<Result<MachineHello, ErrorBody>>>,
     pub(super) wake_waiters: Vec<oneshot::Sender<Result<MachineHello, ErrorBody>>>,
     pub(super) connecting: bool,
     pub(super) name: Option<String>,
@@ -97,13 +98,15 @@ struct Selected {
 }
 
 impl Topology {
-    pub(super) fn new(local: MachineHello) -> Self {
+    pub(super) fn new(local: MachineHello, capabilities: Vec<String>) -> Self {
         let mut state = Self {
             local,
+            capabilities,
             links: BTreeMap::new(),
             pending_links: BTreeMap::new(),
             saved: BTreeMap::new(),
             remembered_routes: BTreeMap::new(),
+            sleeping: BTreeMap::new(),
             next: 1,
             selected: BTreeMap::new(),
         };
@@ -136,8 +139,74 @@ impl Topology {
     }
 
     pub(super) fn direct(&self, machine: &str) -> Option<&Arc<Peer>> {
-        let (peer, row) = self.route(machine)?;
-        (row.route.as_ref()?.len() == 1).then_some(peer)
+        self.direct_link(machine).map(|link| &link.peer)
+    }
+
+    pub(super) fn direct_link(&self, machine: &str) -> Option<&Link> {
+        let selected = self.selected.get(machine)?;
+        if selected.row.route.as_ref()?.len() != 1 {
+            return None;
+        }
+        self.links.get(&selected.via?)
+    }
+
+    pub(super) fn query_machines(&self) -> Vec<String> {
+        let mut ids: BTreeSet<_> = self
+            .selected
+            .values()
+            .filter(|entry| {
+                entry.row.route.is_some() || self.wake_path(&entry.row.machine_id).is_some()
+            })
+            .map(|entry| entry.row.machine_id.clone())
+            .collect();
+        ids.extend(self.remembered_routes.iter().filter_map(|(id, route)| {
+            let first = route.first()?;
+            (self.saved.contains_key(first) || self.direct(first).is_some()).then(|| id.clone())
+        }));
+        ids.into_iter().collect()
+    }
+
+    pub(super) fn observe_sleeping(&mut self, session: SessionId) {
+        let Some(link) = self.links.get(&session) else {
+            return;
+        };
+        let id = &link.remote.machine_id;
+        if let Some(saved) = self.saved.get_mut(id) {
+            saved.failure = Some(FailedAttempt::sleeping());
+        } else {
+            let mut row = link.table[id].clone();
+            row.state = MachineState::Sleeping;
+            row.last_seen = Some(facade_base::time::iso_time(SystemTime::now()));
+            row.boot_id = None;
+            row.build = None;
+            row.route = None;
+            row.capabilities.clear();
+            row.connections.clear();
+            self.sleeping.insert(id.clone(), row);
+        }
+    }
+
+    pub(super) fn clear_sleeping(&mut self, machine_id: &str) {
+        self.sleeping.remove(machine_id);
+    }
+
+    pub(super) fn route_supports(&self, machine: &str, capability: &str) -> bool {
+        if machine == self.local.machine_id {
+            return self.capabilities.iter().any(|cap| cap == capability);
+        }
+        let Some(selected) = self.selected.get(machine) else {
+            return false;
+        };
+        let Some(link) = selected.via.and_then(|via| self.links.get(&via)) else {
+            return false;
+        };
+        selected.row.route.as_ref().is_some_and(|route| {
+            route.iter().all(|hop| {
+                link.table
+                    .get(hop)
+                    .is_some_and(|row| row.capabilities.iter().any(|cap| cap == capability))
+            })
+        })
     }
 
     /// A local saved connection or a saved destination announced by an online machine.
@@ -210,6 +279,7 @@ impl Topology {
         session: Option<SessionId>,
         remote: &MachineHello,
         origin: &Origin,
+        capabilities: &[String],
         table: AdvertiseParams,
     ) -> Result<BTreeMap<String, MachineInfo>, ErrorBody> {
         let source = origin.describe(remote);
@@ -238,6 +308,9 @@ impl Topology {
                 return Err(ErrorBody::invalid_argument(
                     "The machine table repeats a machine.",
                 ));
+            }
+            if row.machine_id == remote.machine_id {
+                row.capabilities = capabilities.to_vec();
             }
             if row.route.is_none() && row.boot_id.is_none() && row.state != MachineState::Online {
                 offline.push(row);
@@ -362,11 +435,15 @@ impl Topology {
             return;
         }
         if changed || joined.is_some() {
-            let params = advertise::encode(self.local.protocol_range[1], self.machines());
-            let table = Notification::new(methods::ADVERTISE, params);
             for (&id, link) in &self.links {
                 if changed || Some(id) == joined {
-                    link.peer.notify(table.clone());
+                    let params = advertise::encode(
+                        link.remote.protocol_range[1],
+                        link.peer.capabilities(),
+                        self.machines(),
+                    );
+                    link.peer
+                        .notify(Notification::new(methods::ADVERTISE, params));
                 }
             }
         }
@@ -388,6 +465,7 @@ impl Topology {
             build: Some(self.local.build.clone()),
             route: Some(Vec::new()),
             connections: self.connections(),
+            capabilities: self.capabilities.clone(),
         };
         let mut selected = BTreeMap::from([(
             own.machine_id.clone(),
@@ -445,6 +523,12 @@ impl Topology {
                         via: None,
                     });
             }
+        }
+        for (id, row) in &self.sleeping {
+            selected.entry(id.clone()).or_insert_with(|| Selected {
+                row: row.clone(),
+                via: None,
+            });
         }
         selected
     }

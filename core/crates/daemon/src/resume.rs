@@ -24,33 +24,73 @@ use crate::{Daemon, blocking_in_place, command_line};
 
 pub(crate) const RESUME_RECORDS: &str = "machine.resume_records";
 
+pub(crate) enum ResumeListOrigin {
+    CandidateShell,
+    Local,
+    Forwarded,
+}
+
 impl Daemon {
     pub(crate) async fn resume_candidates(
         self: &Arc<Self>,
         caller: &Caller,
         mut args: ResumeListArgs,
-        forwarded: bool,
+        origin: ResumeListOrigin,
     ) -> Result<ResumeListResult, ErrorBody> {
         require_person(caller)?;
+        if args.local && args.machine.is_some() {
+            return Err(ErrorBody::invalid_argument(
+                "choose either local resume listing or a machine",
+            ));
+        }
+        if args.local {
+            args.all = true;
+        }
+        let forwarded = matches!(origin, ResumeListOrigin::Forwarded);
         let selected = if forwarded {
             None
         } else {
             self.machine_for(args.machine.as_deref())?
         };
+        let named_cli = matches!(caller, Caller::Terminal { .. })
+            && args.all
+            && selected.is_some()
+            && args.folder.is_none();
         if let Some(id) = selected.as_ref().filter(|id| *id != &self.machine_id) {
             self.ensure_machine_route(id).await?;
             args.machine = None;
-            let mut found: ResumeListResult = decode_arguments(
-                self.network_call(
-                    id,
-                    caller.clone(),
-                    v3::AgentResumeList::NAME,
-                    value_of(args),
-                    None,
-                    None,
-                )
-                .await?,
-            )?;
+            let mut found = if named_cli {
+                let items = decode_arguments(
+                    self.network_call(
+                        id,
+                        caller.clone(),
+                        RESUME_RECORDS,
+                        value_of(args),
+                        None,
+                        None,
+                    )
+                    .await?,
+                )?;
+                let machines = self
+                    .public_machines()?
+                    .into_iter()
+                    .filter(|row| row.machine_id == *id)
+                    .map(|row| machine_query_result(row, MachineQueryStatus::Answered))
+                    .collect();
+                ResumeListResult { items, machines }
+            } else {
+                decode_arguments(
+                    self.network_call(
+                        id,
+                        caller.clone(),
+                        v3::AgentResumeList::NAME,
+                        value_of(args),
+                        None,
+                        None,
+                    )
+                    .await?,
+                )?
+            };
             for item in &mut found.items {
                 self.project_resume_candidate(item, true)?;
             }
@@ -61,16 +101,25 @@ impl Daemon {
             return Ok(found);
         }
 
-        let rows = self.public_machines()?;
-        let mut local = self.local_resume_candidates(&args, true).await?;
+        let reachable = args.all && args.machine.is_none() && !args.local && !forwarded;
+        let rows = if reachable && matches!(origin, ResumeListOrigin::CandidateShell) {
+            self.probe_machine_queries(None).await?
+        } else {
+            self.public_machines()?
+                .into_iter()
+                .map(|row| machine_query_result(row, MachineQueryStatus::Unavailable))
+                .collect()
+        };
+        let mut local = self.local_resume_candidates(&args, !named_cli).await?;
         let mut machines = Vec::new();
         let mut jobs = JoinSet::new();
-        for row in rows {
+        for mut row in rows {
             if row.machine_id == self.machine_id {
-                machines.push(machine_query_result(row, MachineQueryStatus::Answered));
-            } else if args.all && args.machine.is_none() && !forwarded {
+                row.status = MachineQueryStatus::Answered;
+                machines.push(row);
+            } else if reachable {
                 if row.state != v3::MachineState::Online {
-                    machines.push(machine_query_result(row, MachineQueryStatus::Unavailable));
+                    machines.push(row);
                     continue;
                 }
                 let (daemon, caller) = (self.clone(), caller.clone());
@@ -84,6 +133,7 @@ impl Daemon {
                                 machine: None,
                                 folder: None,
                                 all: true,
+                                local: false,
                             }),
                             None,
                             None,
@@ -95,10 +145,10 @@ impl Daemon {
             }
         }
         while let Some(task) = jobs.join_next().await {
-            let (row, result) = task.map_err(ErrorBody::internal)?;
-            let mut query = machine_query_result(row, MachineQueryStatus::Answered);
+            let (mut query, result) = task.map_err(ErrorBody::internal)?;
             match result {
                 Ok(items) => {
+                    query.status = MachineQueryStatus::Answered;
                     for mut item in items
                         .into_iter()
                         .filter(|item| item.machine_id == query.machine_id)

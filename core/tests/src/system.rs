@@ -83,7 +83,7 @@ pub fn powershell_script(command: &str) -> Option<String> {
 }
 
 /// The variables that keep a process's settings inside `user`, the test's home folder, besides
-/// `HOME`. On Windows, programs find their settings through `USERPROFILE` and `APPDATA`.
+/// `HOME`. On Windows, this also isolates OpenSSH's shared administrator authorization.
 #[cfg(unix)]
 pub fn home_variables(_user: &Path) -> Vec<(&'static str, String)> {
     Vec::new()
@@ -92,13 +92,15 @@ pub fn home_variables(_user: &Path) -> Vec<(&'static str, String)> {
 pub fn home_variables(user: &Path) -> Vec<(&'static str, String)> {
     let roaming = user.join("AppData").join("Roaming");
     let local = user.join("AppData").join("Local");
-    for folder in [&roaming, &local] {
+    let program_data = user.join("ProgramData");
+    for folder in [&roaming, &local, &program_data] {
         std::fs::create_dir_all(folder).expect("could not create the test's home folder");
     }
     vec![
         ("USERPROFILE", user.display().to_string()),
         ("APPDATA", roaming.display().to_string()),
         ("LOCALAPPDATA", local.display().to_string()),
+        ("ProgramData", program_data.display().to_string()),
     ]
 }
 

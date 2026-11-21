@@ -30,14 +30,20 @@ fn hello_reports_protocol_build_and_capabilities() {
             .is_some_and(|build| build == env!("CARGO_PKG_VERSION")),
         "{welcome}"
     );
-    assert_eq!(
-        result["topics"],
-        json!(["agents", "screen", "machines"]),
+    let legacy_topics = ["agents", "screen", "machines"];
+    let topics = result["topics"].as_array().expect("the topic names");
+    assert!(
+        legacy_topics
+            .iter()
+            .all(|topic| topics.contains(&json!(topic))),
         "{welcome}"
     );
     assert!(
         result["ops"].as_array().is_some_and(|ops| [
             "agent.start",
+            "agent.list",
+            "agent.stop",
+            "agent.resize",
             "agent.rename",
             "agent.send",
             "machine.add",
@@ -63,10 +69,47 @@ fn hello_reports_protocol_build_and_capabilities() {
     );
     assert!(wire.call("agent.screen", json!({ "agent": "w1" }))["result"]["text"].is_string());
     let mut editor = DaemonTestClient::open(&home);
-    let editor = editor.hello("ide", DAEMON_RANGE, json!({}));
+    let editor = editor.hello(
+        "ide",
+        DAEMON_RANGE,
+        json!({ "capabilities": ["attach", "machine.disconnected"] }),
+    );
     assert_eq!(
         result["machine_id"], editor["result"]["machine_id"],
         "{editor}"
+    );
+    let advertised = &editor["result"];
+    let operations = advertised["ops"].as_array().expect("the operation names");
+    for added in ["list", "stop", "attach.resize"] {
+        assert!(operations.contains(&json!(added)), "{editor}");
+    }
+    assert!(
+        advertised["topics"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("attach")),
+        "{editor}"
+    );
+    let capabilities = advertised["capabilities"]
+        .as_array()
+        .expect("the capabilities");
+    for capability in [
+        "agent.resume_list.local",
+        "machine.disconnected",
+        "machine.connect.expected_machine_id",
+        "machine.remove.expected_machine_id",
+    ] {
+        assert!(capabilities.contains(&json!(capability)), "{editor}");
+    }
+
+    let conflicting = wire.call(
+        "agent.resume_list",
+        json!({ "local": true, "machine": "devbox" }),
+    );
+    assert_eq!(
+        error_reason(&conflicting),
+        "invalid_argument",
+        "{conflicting}"
     );
 }
 

@@ -30,17 +30,18 @@ mod upgrade;
 use std::borrow::Cow;
 use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 
 use facade_base::address::default_machine_name;
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
 use facade_base::daemon_client::DaemonClient;
 use facade_base::operations::NoArgs;
 use facade_base::process::{EndReason, ProcessExit};
-use facade_base::v3::{AgentTarget, MachineList};
+use facade_base::v3::{AgentTarget, MachineList, Scope, StopSelection};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use cli::{Command, MachineAction, ParseError, StartOptions, Target};
+use cli::{Command, MachineAction, ParseError, ServeArgs, SshTarget, StartOptions, Target};
 use daemon_client::{connect_or_start, reconnect};
 
 /// How an attachment began, for the line before the agent's screen.
@@ -108,10 +109,11 @@ fn main() {
         Command::Keeper
             | Command::Daemon { .. }
             | Command::Machine {
-                action: MachineAction::Add(_)
+                action: MachineAction::Add { .. }
                     | MachineAction::Connect(_)
-                    | MachineAction::Link(_)
+                    | MachineAction::Link { .. }
                     | MachineAction::Serve(_)
+                    | MachineAction::SshAdmin { .. }
             }
     ) {
         facade_base::service::default_broken_pipe();
@@ -122,7 +124,7 @@ fn main() {
             | Command::Keeper
             | Command::Daemon { .. }
             | Command::Machine {
-                action: MachineAction::Serve(_)
+                action: MachineAction::Serve(_) | MachineAction::SshAdmin { .. }
             }
     );
     let code = run(command).unwrap_or_else(|error| {
@@ -357,6 +359,22 @@ fn missing_cli(options: StartOptions) -> i32 {
     2
 }
 
+fn scope(local: bool, machine: Option<String>) -> Scope {
+    match machine {
+        Some(machine) => Scope::Machine { machine },
+        None if local => Scope::Local,
+        None => Scope::Reachable,
+    }
+}
+
+fn select_machine_home(home: Option<PathBuf>) {
+    if let Some(home) = home {
+        // SAFETY: hidden SSH commands select the home before opening a socket or starting threads.
+        // Any service started below inherits this home.
+        unsafe { std::env::set_var("FACADE_HOME", home) };
+    }
+}
+
 /// Runs a command and returns its exit code.
 fn run(command: Command) -> anyhow::Result<i32> {
     match command {
@@ -377,14 +395,12 @@ fn run(command: Command) -> anyhow::Result<i32> {
         Command::Daemon { takeover: true, .. } => daemon_client::takeover(),
         Command::Daemon { detach: true, .. } => daemon_client::detach(),
         Command::Daemon { .. } => facade_daemon::run().map(|()| 0),
-        Command::Machine { action } => machine::run(action, &connect_or_start, &|home, wake| {
-            if let Some(home) = home {
-                // SAFETY: the initial command chooses the home before opening a socket or starting
-                // any threads. The keeper and daemon inherit this home if started below.
-                unsafe { std::env::set_var("FACADE_HOME", home) };
-            }
-            daemon_client::machine_socket(wake)
-        }),
+        Command::Machine { action } => machine::run(
+            action,
+            &connect_or_start,
+            &daemon_client::machine_socket,
+            &select_machine_home,
+        ),
         Command::Start { options, .. } if options.cli_and_args.is_empty() => {
             Ok(missing_cli(options))
         }
@@ -412,15 +428,17 @@ fn run(command: Command) -> anyhow::Result<i32> {
             let shown = commands::resume(&mut client, reference, terminal)?;
             show(client, shown)
         }
-        Command::Resume { machine, .. } => {
-            commands::resume_list(&mut connect_or_start()?, machine).map(done)
+        Command::Resume { local, machine, .. } => {
+            commands::resume_list(&mut connect_or_start()?, scope(local, machine)).map(done)
         }
         Command::Attach(Target { agent }) => {
             require_console("attach", &read_screen_tip(&agent))?;
             let target = AgentTarget::Address { agent };
             attach::attach(connect_or_start()?, target, Opening::Attached, &reconnect)
         }
-        Command::List { machine } => commands::list(&mut connect_or_start()?, machine).map(done),
+        Command::List { local, machine } => {
+            commands::list(&mut connect_or_start()?, scope(local, machine)).map(done)
+        }
         Command::Screen {
             lines,
             target: Target { agent },
@@ -436,8 +454,25 @@ fn run(command: Command) -> anyhow::Result<i32> {
             target: Target { agent },
             name,
         } => commands::rename(&mut connect_or_start()?, agent, name).map(done),
-        Command::Stop(Target { agent }) => {
-            commands::stop(&mut connect_or_start()?, agent).map(done)
+        Command::Stop {
+            agents,
+            local,
+            machine,
+            ..
+        } => {
+            let selection = if agents.is_empty() {
+                StopSelection::All {
+                    scope: scope(local, machine),
+                }
+            } else {
+                StopSelection::Targets {
+                    targets: agents
+                        .into_iter()
+                        .map(|agent| AgentTarget::Address { agent })
+                        .collect(),
+                }
+            };
+            commands::stop(&mut connect_or_start()?, selection)
         }
         Command::Status { agent: Some(agent) } => {
             commands::inspect(&mut connect_or_start()?, agent).map(done)

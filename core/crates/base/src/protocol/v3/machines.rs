@@ -15,6 +15,8 @@ use super::{
 pub enum MachineState {
     Online,
     Connecting,
+    /// A saved connection without an active session or an observed failure.
+    Disconnected,
     Sleeping,
     Unreachable,
     SshInteractionRequired,
@@ -199,6 +201,9 @@ pub struct MachineInfo {
     pub ssh_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
+    /// Protocol additions supported by this machine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
     /// The remaining hops, ending at this machine. Empty for the table's own machine.
     /// Absent for a saved destination without a route.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,11 +280,28 @@ pub struct MachineConnectArgs {
     pub transport: MachineTransport,
     /// A bridge is always temporary.
     pub kind: ConnectionKind,
+    /// The machine ID a saved connection must authenticate before its route changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_machine_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "V3MachineRemoveArgs")]
+pub struct MachineRemoveArgs {
+    /// An input machine selector.
+    pub machine: String,
+    /// Remove the saved connection for this exact full machine ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_machine_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[schemars(rename = "V3MachinesChange")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Keep the existing MachineInfo payload for consumers of machine watch changes"
+)]
 pub enum MachinesChange {
     Updated {
         machine: MachineInfo,

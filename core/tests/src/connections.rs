@@ -241,8 +241,7 @@ fn ide_hello(home: &TestHome, window: &Value, more: Value) -> (DaemonTestClient,
 }
 
 /// Starts the daemon if needed and connects to it. As `facade` does, it tries until a daemon
-/// answers: one that exits after five idle seconds between the check and the connection, as on a
-/// machine that stalls the test, is started anew.
+/// answers: one that exits while idle between the check and the connection is started anew.
 pub fn connect(home: &TestHome) -> DaemonTestClient {
     let until = std::time::Instant::now() + LOADED_TIMEOUT;
     loop {

@@ -37,8 +37,10 @@ to speak of, so every other crate can depend on it and it depends on none of the
   and for lines that carry descriptors.
 - A build takes over from a running one only when both versions are three numbers and its own are
   higher (`takes_over`). The command that asks and the daemon that is asked both decide by it.
-- Ordinary daemon and machine connections use protocol 3. The takeover client can negotiate
-  protocols 2 and 3. The keeper and MCP relay continue at protocol 1.
+- Ordinary daemon and machine connections use protocol 3. Their hello advertises operations,
+  topics and capabilities. Missing capabilities select the published protocol 3 behavior.
+  The takeover client can negotiate protocols 2 and 3. The keeper and MCP relay continue at
+  protocol 1.
 - The files in `core/protocol/` are exactly what the types generate; the `protocol_files` test
   fails on any difference.
 - Each public path has one place: a module moved inside the crate is re-exported at the root, never
@@ -138,6 +140,12 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `AgentTarget::Reference` gives the daemon an exact target for an existing Attach or Pin. The
   machine-to-machine `ForwardCall` carries the resolved recipient so a retry uses the same record.
   `MachineQueryResult` gives the connection state and the outcome of that particular query.
+  `List` and `Stop` use `Scope` to select this machine, a named machine or reachable machines.
+  `BatchStopResult` carries each target's outcome with any machine query failures.
+  `AttachTopic` uses the same terminal frames as `ScreenTopic`. `AttachResize` refers to the
+  client's watch. An authenticated forwarded watch carries the holder's viewer and daemon
+  start ID for resize forwarding. A capable daemon supports exact saved-connection removal by
+  full machine ID. See the [protocol guide](../../../core/protocol/PROTOCOL.md).
 - `jsonrpc`: `Request`, `Response`, `Notification`, `ErrorBody` with one constructor per reason
   (`invalid_argument`, `refused`, `internal`, …), `Reason`, `read_request`, `encode_line`,
   `decode_arguments`, `MAX_LINE_BYTES`.
@@ -168,9 +176,22 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.
-- `install::upgrade_command(version: Option<&str>) -> Command` builds a command that runs the published installer
-  with the current environment and an optional validated version pin. SSH pins the installer to the local release.
-  Both prefer GitHub and download the matching website script if acquisition from GitHub fails.
+- `ssh` prepares the fixed-path administration bootstrap and SSH arguments for Shell. It resolves the SSH account
+  and the source IP observed by the remote sshd. Dedicated keys live in the Facade home's `core/ssh/` folder,
+  with owner-only access to the private file. `SshKeyProof` checks the dedicated key used by an independent
+  OpenSSH login. Authorization changes and host trust changes carry the exact entries to roll back.
+  Authorization removal uses the Facade machine ID. Windows administrators use the shared OpenSSH authorization
+  file with its required access list. For an unknown return host, the authenticated server key goes in a safe
+  configured native user known_hosts file. The strict proof and saved reconnect apply OpenSSH's configured
+  trust and revocation policy. A changed or revoked key, or no safe user file for first-time trust, fails the
+  return and preserves the forward connection. Host trust appends honor HashKnownHosts. Rollback blanks
+  only this attempt's confirmed records in place and preserves unrelated native appends.
+- `install::latest_stable(current)` checks both Core version files and provides a fixed pin only for a newer
+  metadata-confirmed release. If both files return 404, a GitHub release tag at or below the current version
+  confirms the up-to-date result. `installed_bin` identifies the active standalone launcher.
+  `upgrade_command(version)` builds the installer command with the current environment and optional validated
+  pin. SSH pins its installer to the local release. Both prefer GitHub and fall back to the matching website script.
+  Shell can opt in to a receipt carrying the exact failed file and HTTP status.
 - `console::{VtModes, ConsoleReader, ConsoleSignals, visible_content_end}`: what attach needs of
   the person's console beside crossterm's size and raw mode. On Windows, Attach can read the
   visible content boundary and consume an exact queued release from its detach chord.

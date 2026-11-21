@@ -1,5 +1,6 @@
 //! Daemon operations after the server has authenticated the caller.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +27,7 @@ use crate::machine_service::MachineStream;
 use crate::network_operations::{machine_query_result, machine_selector, require_person};
 use crate::operations::StartOrigin;
 use crate::records::{self, LookupCandidate, OperationTarget, Reach};
+use crate::resume::ResumeListOrigin;
 use crate::server::{self, Client, RelayLines, WhenFull};
 use crate::store::CreationSource;
 use crate::{Cancel, Daemon, Sender, blocking_in_place};
@@ -37,6 +39,11 @@ pub(crate) struct Forwarded {
     pub(crate) from_name: Option<String>,
     pub(crate) request_id: Option<String>,
     pub(crate) remaining: Option<Duration>,
+}
+
+enum StopRoute {
+    Explicit,
+    Live,
 }
 
 impl From<&Caller> for Reach {
@@ -102,6 +109,7 @@ impl server::Service for Daemon {
             keeper: self.runs.keeper_info(),
             topics: v3::topic_names(),
             ops: v3::operation_names(),
+            capabilities: crate::daemon_capabilities(),
         };
         let client = Client {
             identity: Identity {
@@ -110,6 +118,7 @@ impl server::Service for Daemon {
                 sessions: Vec::new(),
             },
             verified_actor: None,
+            capabilities: hello.capabilities,
         };
         Ok((result, client, ()))
     }
@@ -130,15 +139,28 @@ impl server::Service for Daemon {
         let Some(_active) = self.lifecycle.begin(work) else {
             return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
         };
-        self.run_operation(
-            &self.local_caller(client)?,
-            operation,
-            args,
-            when_full,
-            cancel,
-            None,
-        )
-        .await
+        let caller = self.local_caller(client)?;
+        let result = if operation == v3::AgentResumeList::NAME {
+            let origin = if matches!(caller, Caller::Terminal { .. })
+                && client_declares(client, v3::CAP_RESUME_LIST_LOCAL)
+            {
+                ResumeListOrigin::CandidateShell
+            } else {
+                ResumeListOrigin::Local
+            };
+            self.resume_candidates(&caller, decode_or_default(args)?, origin)
+                .await
+                .map(value_of)
+        } else {
+            self.run_operation(&caller, operation, args, when_full, cancel, None)
+                .await
+        };
+        if accepts_disconnected(client) {
+            return result;
+        }
+        result
+            .map(legacy_machine_result)
+            .map_err(legacy_machine_error)
     }
 
     async fn watch(
@@ -148,11 +170,36 @@ impl server::Service for Daemon {
         args: Value,
         viewer: u64,
     ) -> Result<server::Watch, ErrorBody> {
-        self.start_watch(client, topic, args, viewer).await
+        let result = self.start_watch(client, topic, args, viewer).await;
+        if accepts_disconnected(client) {
+            result
+        } else {
+            result.map_err(legacy_machine_error)
+        }
     }
 
     async fn unwatch(self: &Arc<Self>, _client: &Client, _topic: &str, viewer: u64) {
         self.end_viewer(viewer).await;
+    }
+
+    async fn resize_viewer(
+        self: &Arc<Self>,
+        client: &Client,
+        viewer: u64,
+        size: v3::ScreenSize,
+        colors: Option<v3::TerminalColors>,
+    ) -> Result<(), ErrorBody> {
+        let Some(_active) = self.lifecycle.begin(Work::Call) else {
+            return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
+        };
+        let result = self
+            .resize_active_viewer(&self.local_caller(client)?, viewer, size, colors)
+            .await;
+        if accepts_disconnected(client) {
+            result
+        } else {
+            result.map_err(legacy_machine_error)
+        }
     }
 
     async fn relay(
@@ -192,16 +239,22 @@ impl Daemon {
                 self.list_agents_v3(caller, decode_or_default(args)?)
                     .await?,
             )),
+            v3::List::NAME if !forwarded => {
+                let args: v3::ListArgs = decode_or_default(args)?;
+                Ok(value_of(self.list_scoped_agents(caller, args.scope).await?))
+            }
+            v3::Stop::NAME if !forwarded => {
+                let args: v3::StopArgs = decode_arguments(args)?;
+                Ok(value_of(
+                    self.stop_selection(caller, args.selection, cancel).await?,
+                ))
+            }
             v3::AgentStart::NAME | v3::AgentCheckStart::NAME => {
                 let started = self
                     .start_request(caller, operation, decode_arguments(args)?, incoming, cancel)
                     .await?;
                 Ok(started)
             }
-            v3::AgentResumeList::NAME => Ok(value_of(
-                self.resume_candidates(caller, decode_or_default(args)?, forwarded)
-                    .await?,
-            )),
             v3::AgentResume::NAME => Ok(value_of(
                 self.resume_request(caller, decode_arguments(args)?, forwarded)
                     .await?,
@@ -246,9 +299,14 @@ impl Daemon {
             }
             v3::MachineRemove::NAME if !forwarded => {
                 require_person(caller)?;
-                let request: facade_base::machine::MachineRemoveArgs = decode_arguments(args)?;
-                let target = self.select_machine(machine_selector(&request.machine)?)?;
-                Ok(value_of(self.remove_machine(target).await?))
+                if args.get("expected_machine_id").is_some_and(Value::is_null) {
+                    return Err(ErrorBody::invalid_argument(
+                        "expected_machine_id must be a machine ID",
+                    ));
+                }
+                Ok(value_of(
+                    self.remove_machine(decode_arguments(args)?).await?,
+                ))
             }
             v3::MachineRename::NAME => {
                 require_person(caller)?;
@@ -290,6 +348,174 @@ impl Daemon {
                 self.agent_operation(caller, operation, args, when_full, cancel, incoming)
                     .await
             }
+        }
+    }
+
+    async fn stop_selection(
+        self: &Arc<Self>,
+        caller: &Caller,
+        selection: v3::StopSelection,
+        cancel: Cancel,
+    ) -> Result<v3::BatchStopResult, ErrorBody> {
+        let mut items = Vec::new();
+        let machines = match selection {
+            v3::StopSelection::Targets { targets } => {
+                if targets.is_empty() {
+                    return Err(ErrorBody::invalid_argument(
+                        "give at least one agent to stop",
+                    ));
+                }
+                let mut seen = BTreeSet::new();
+                let mut selected = Vec::new();
+                for target in targets {
+                    let resolved = self
+                        .addressed_agent(caller, target.clone(), OperationTarget::Stop)
+                        .await;
+                    let reference = match &resolved {
+                        Ok(reference) => Some(reference.clone()),
+                        Err(error) => {
+                            single_error_agent(error).map(|agent| agent.reference.clone())
+                        }
+                    };
+                    if reference.as_ref().is_none_or(|id| seen.insert(id.clone())) {
+                        selected.push((target, reference, resolved));
+                    }
+                }
+                for (target, reference, resolved) in selected {
+                    let result = match resolved {
+                        Ok(reference) => {
+                            self.stop_selected(
+                                caller,
+                                reference,
+                                StopRoute::Explicit,
+                                cancel.clone(),
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    items.push(self.stop_item(target, reference, None, result));
+                }
+                Vec::new()
+            }
+            v3::StopSelection::All { scope } => {
+                let (mut agents, machines) = self.query_scoped_agents(caller, scope).await?;
+                agents.sort_by(|a, b| {
+                    b.info
+                        .started_at
+                        .cmp(&a.info.started_at)
+                        .then_with(|| a.info.reference().cmp(&b.info.reference()))
+                });
+                for candidate in agents {
+                    let agent = candidate.label();
+                    let reference = agent.reference.clone();
+                    let target = AgentTarget::Reference {
+                        reference: reference.clone(),
+                    };
+                    if candidate.info.kind == v3::AgentKind::Guest {
+                        items.push(v3::StopItem {
+                            target,
+                            reference: Some(reference),
+                            address: Some(agent.address.clone()),
+                            agent: Some(agent),
+                            outcome: v3::StopOutcome::Skipped,
+                        });
+                        continue;
+                    }
+                    let result = self
+                        .stop_selected(caller, reference.clone(), StopRoute::Live, cancel.clone())
+                        .await;
+                    items.push(self.stop_item(target, Some(reference), Some(agent), result));
+                }
+                machines
+            }
+        };
+        Ok(v3::BatchStopResult { items, machines })
+    }
+
+    async fn stop_selected(
+        self: &Arc<Self>,
+        caller: &Caller,
+        reference: AgentRef,
+        route: StopRoute,
+        cancel: Cancel,
+    ) -> Result<v3::StopResult, ErrorBody> {
+        if cancel.is_requested() {
+            return Err(ErrorBody::new(
+                Reason::Cancelled,
+                "the stop was cancelled before it ran",
+            ));
+        }
+        let args = value_of(AgentTarget::Reference {
+            reference: reference.clone(),
+        });
+        let response =
+            if matches!(route, StopRoute::Live) && reference.machine_id != self.machine_id {
+                // A scoped stop uses the existing exact operation without a waking lookup.
+                let result = self
+                    .network_call(
+                        &reference.machine_id,
+                        caller.clone(),
+                        v3::AgentStop::NAME,
+                        args,
+                        None,
+                        None,
+                    )
+                    .await?;
+                self.project_remote_response(v3::AgentStop::NAME, &reference, result)?
+            } else {
+                self.agent_operation(
+                    caller,
+                    v3::AgentStop::NAME,
+                    args,
+                    WhenFull::Refuse,
+                    cancel,
+                    None,
+                )
+                .await?
+            };
+        let stopped: v3::StopResult = decode_arguments(response)?;
+        if stopped.reference != reference {
+            return Err(ErrorBody::refused("the machine reported a different agent"));
+        }
+        Ok(stopped)
+    }
+
+    fn stop_item(
+        &self,
+        target: AgentTarget,
+        reference: Option<AgentRef>,
+        fallback: Option<v3::AgentLabel>,
+        result: Result<v3::StopResult, ErrorBody>,
+    ) -> v3::StopItem {
+        let (address, agent, outcome) = match result {
+            Ok(stopped) => (
+                Some(stopped.address),
+                stopped.agent.or(fallback),
+                v3::StopOutcome::Stopped { exit: stopped.exit },
+            ),
+            Err(error) => {
+                let agent = single_error_agent(&error)
+                    .filter(|agent| reference.as_ref().is_none_or(|id| id == &agent.reference))
+                    .cloned()
+                    .or(fallback);
+                let address = agent
+                    .as_ref()
+                    .map(|agent| agent.address.clone())
+                    .or_else(|| {
+                        reference
+                            .as_ref()
+                            .and_then(|reference| self.agent_address(reference).ok())
+                    });
+                (address, agent, v3::StopOutcome::Failed { error })
+            }
+        };
+        v3::StopItem {
+            target,
+            reference,
+            address,
+            agent,
+            outcome,
         }
     }
 
@@ -547,17 +773,12 @@ impl Daemon {
                 v3::AgentResize::NAME => {
                     let request: v3::AgentResizeArgs = decode_arguments(args)?;
                     check_size(request.cols, request.rows)?;
-                    let command = match request.colors {
-                        Some(colors) if matches!(caller, Caller::Ide { .. }) => {
-                            AgentCommand::ResizeTerminal {
-                                cols: request.cols,
-                                rows: request.rows,
-                                colors: Some(crate::presence::terminal_colors(&colors)?),
-                            }
-                        }
-                        Some(_) => {
-                            return Err(ErrorBody::refused("only an editor sets terminal colors"));
-                        }
+                    let command = match terminal_colors(caller, request.colors)? {
+                        Some(colors) => AgentCommand::ResizeTerminal {
+                            cols: request.cols,
+                            rows: request.rows,
+                            colors: Some(colors),
+                        },
                         None => AgentCommand::Resize(request.cols, request.rows),
                     };
                     if !agent.send(command).await {
@@ -1187,6 +1408,74 @@ pub(crate) fn stored_message(message: v3::Message) -> daemon::Message {
         result,
         at: message.at,
         delivery: message.delivery,
+    }
+}
+
+pub(crate) fn accepts_disconnected(client: &Client) -> bool {
+    client_declares(client, v3::CAP_MACHINE_DISCONNECTED)
+}
+
+pub(crate) fn client_declares(client: &Client, capability: &str) -> bool {
+    client
+        .capabilities
+        .iter()
+        .any(|offered| offered == capability)
+}
+
+fn legacy_machine_result(mut value: Value) -> Value {
+    project_legacy_machine_rows(value.get_mut("machines"));
+    if let Some(items) = value.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items {
+            project_legacy_machine_rows(
+                item.get_mut("error")
+                    .and_then(|error| error.get_mut("data"))
+                    .and_then(|data| data.get_mut("machines")),
+            );
+        }
+    }
+    value
+}
+
+fn project_legacy_machine_rows(rows: Option<&mut Value>) {
+    if let Some(machines) = rows.and_then(Value::as_array_mut) {
+        for machine in machines {
+            if machine["state"] == "disconnected" {
+                machine["state"] = value_of(v3::MachineState::Unreachable);
+            }
+        }
+    }
+}
+
+pub(crate) fn legacy_machine_error(mut error: ErrorBody) -> ErrorBody {
+    for machine in &mut error.data.machines {
+        project_legacy_machine_state(&mut machine.state);
+    }
+    error
+}
+
+pub(crate) fn project_legacy_machine_state(state: &mut v3::MachineState) {
+    if *state == v3::MachineState::Disconnected {
+        *state = v3::MachineState::Unreachable;
+    }
+}
+
+pub(crate) fn terminal_colors(
+    caller: &Caller,
+    colors: Option<v3::TerminalColors>,
+) -> Result<Option<facade_screen::TerminalColors>, ErrorBody> {
+    match colors {
+        Some(colors) if matches!(caller, Caller::Ide { .. }) => {
+            crate::presence::terminal_colors(&colors).map(Some)
+        }
+        Some(_) => Err(ErrorBody::refused("only an editor sets terminal colors")),
+        None => Ok(None),
+    }
+}
+
+fn single_error_agent(error: &ErrorBody) -> Option<&v3::AgentLabel> {
+    match error.data.agents.as_slice() {
+        [agent] => Some(agent),
+        _ => None,
     }
 }
 

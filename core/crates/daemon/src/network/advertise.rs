@@ -4,8 +4,23 @@ use facade_base::jsonrpc::{ErrorBody, decode_arguments};
 use facade_base::{machine, v3};
 use serde_json::Value;
 
-pub(super) fn encode(protocol: u32, machines: Vec<v3::MachineInfo>) -> Value {
+pub(super) fn encode(
+    protocol: u32,
+    capabilities: &[String],
+    mut machines: Vec<v3::MachineInfo>,
+) -> Value {
     if protocol >= v3::DAEMON_PROTOCOL_RANGE[0] {
+        let supports_disconnected = capabilities
+            .iter()
+            .any(|cap| cap == v3::CAP_MACHINE_DISCONNECTED);
+        for machine in &mut machines {
+            if !supports_disconnected && machine.state == v3::MachineState::Disconnected {
+                machine.state = v3::MachineState::Unreachable;
+            }
+            if capabilities.is_empty() {
+                machine.capabilities.clear();
+            }
+        }
         serde_json::to_value(v3::AdvertiseParams { machines })
     } else {
         let machines = machines
@@ -62,6 +77,7 @@ fn current_row(row: machine::MachineInfo) -> v3::MachineInfo {
         state: v3::MachineState::Online,
         last_seen: None,
         ssh_error: None,
+        capabilities: Vec::new(),
         connections: row
             .connections
             .into_iter()

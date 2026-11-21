@@ -247,6 +247,12 @@ pub struct HelloParams {
     /// Refused for any other kind with `invalid_argument`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub numbers_given: Option<NumbersGiven>,
+    /// Additions to protocol 3 understood by this client.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    /// Keep an authenticated machine session active until this foreground connection closes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub foreground: bool,
     /// Required on a machine session, absent on a local client connection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub machine: Option<MachineHello>,
@@ -262,6 +268,8 @@ impl HelloParams {
             sessions: Vec::new(),
             window: None,
             numbers_given: None,
+            capabilities: Vec::new(),
+            foreground: false,
             machine: Some(machine),
         }
     }
@@ -535,6 +543,9 @@ pub struct HelloResult {
     pub topics: Vec<String>,
     /// Operation names accepted by `call`.
     pub ops: Vec<String>,
+    /// Additions to protocol 3 supported by this daemon.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
 }
 
 /// The keeper holding the agents' terminals.

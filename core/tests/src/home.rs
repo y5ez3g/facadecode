@@ -786,7 +786,7 @@ impl TestHome {
     }
 
     /// Waits for both service sockets to disappear, then confirms both processes ended. Starts no
-    /// service while waiting. The daemon exits after five idle seconds, and a service removes its
+    /// service while waiting. The daemon exits after 30 idle seconds, and a service removes its
     /// socket as the last thing it does: the waits leave room above both for a loaded machine.
     pub fn wait_for_idle_exit(&self) {
         assert!(

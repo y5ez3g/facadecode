@@ -1,19 +1,24 @@
 Connect to a remote machine over SSH and save it.
 
 Runs SSH in this terminal so you can answer host key or password prompts,
-then installs or upgrades Facade on the remote machine if needed. Put '--home'
-before SSH options and destination; everything after is passed to ssh.
+installs a dedicated Facade SSH key when needed for passwordless reconnects,
+and installs or upgrades Facade on the remote machine. Put Facade options
+before SSH options and destination; everything after is passed to ssh. Pass
+'--bidirectional' to also authorize and save a return connection from that
+machine back to this machine.
 
-Usage: facade machine add [--home <PATH>] <SSH_ARGS>...
+Usage: facade machine add [OPTIONS] <SSH_ARGS>...
 
 Examples
   facade machine add devbox
   facade machine add user@10.0.0.5
   facade machine add -p 2222 -i ~/.ssh/work user@devbox
+  facade machine add --bidirectional devbox
 
 Arguments
   <SSH_ARGS>...  SSH flags and destination, passed directly to ssh
 
 Options
-      --home <PATH>  Facade home directory on the remote machine (default: ~/.facade)
-  -h, --help         Show help
+      --home <PATH>    Facade home directory on the remote machine (default: ~/.facade)
+      --bidirectional  Also authorize, verify, and save a return connection from that machine
+  -h, --help           Show help

@@ -68,6 +68,405 @@ fn gone(pid: i32) -> bool {
 /// release that changes the version changes none of them.
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
+#[cfg(debug_assertions)]
+mod release_sources {
+    use super::*;
+
+    const GITHUB: &str = "https://github.com/y5ez3g/facadecode/releases";
+    const MIRROR: &str = "https://facadecode.com";
+    const GITHUB_METADATA: &str =
+        "https://github.com/y5ez3g/facadecode/releases/latest/download/facade-core-version.txt";
+    const MIRROR_METADATA: &str = "https://facadecode.com/facade-core-version.txt";
+
+    struct Releases {
+        folder: PathBuf,
+        curl: PathBuf,
+        // If the client misses the test curl override, a normal HTTPS fetch can only reach this
+        // isolated, closed-to-clients proxy socket.
+        proxy: std::net::TcpListener,
+    }
+
+    impl Releases {
+        fn new(home: &TestHome) -> Self {
+            let folder = home.folder().join("release-fixture");
+            let script = format!(
+                "#!/bin/sh\nfixture='{}'\n{}",
+                sh_path(&folder).replace('\'', "'\\''"),
+                CURL
+            );
+            let curl = install_script(&folder, "qa-curl", &script);
+            let proxy = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            Self {
+                folder,
+                curl,
+                proxy,
+            }
+        }
+
+        fn response(&self, route: &str, code: u16, body: &str) {
+            std::fs::write(
+                self.folder.join(format!("{route}.status")),
+                format!("{code}\n"),
+            )
+            .unwrap();
+            std::fs::write(self.folder.join(format!("{route}.body")), body).unwrap();
+        }
+
+        fn redirect(&self, version: &str) {
+            self.response("redirect", 302, "");
+            std::fs::write(
+                self.folder.join("redirect.location"),
+                format!("{GITHUB}/tag/extension%2F{version}\n"),
+            )
+            .unwrap();
+        }
+
+        fn upgrade(&self, home: &TestHome, arguments: &[&str]) -> std::process::Output {
+            let proxy = format!("http://{}", self.proxy.local_addr().unwrap());
+            home.command(&test_binaries().facade)
+                .env("FACADE_TEST_RELEASE_CURL", &self.curl)
+                .env("HTTPS_PROXY", &proxy)
+                .env("ALL_PROXY", &proxy)
+                .env("NO_PROXY", "")
+                .arg("upgrade")
+                .args(arguments)
+                .stdin(Stdio::null())
+                .output()
+                .expect("could not run facade upgrade")
+        }
+
+        fn requests(&self) -> Vec<String> {
+            std::fs::read_to_string(self.folder.join("requests"))
+                .expect("curl fixture received the HTTP requests")
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    const CURL: &str = r#"
+set -eu
+url=
+output=
+format=
+head=no
+fail=no
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --output|-o) output=$2; shift 2 ;;
+        --write-out|-w) format=$2; shift 2 ;;
+        --url) url=$2; shift 2 ;;
+        --proto|--proto-redir|--connect-timeout|--max-time|--max-redirs) shift 2 ;;
+        -q|--disable|--silent|--show-error|-sS|-s|-L|--location) shift ;;
+        -I|--head|-sSI|-IsS) head=yes; shift ;;
+        -f|-fsL|-fsS|-fsSL|--fail|--fail-with-body) fail=yes; shift ;;
+        https://*) url=$1; shift ;;
+        *) printf '%s\n' "Unexpected curl argument: $1" >&2; exit 64 ;;
+    esac
+done
+printf '%s\n' "$url" >> "$fixture/requests"
+case "$url" in
+    https://facadecode.com/facade-core-version.txt) route=mirror ;;
+    https://github.com/y5ez3g/facadecode/releases/latest/download/facade-core-version.txt) route=github ;;
+    https://github.com/y5ez3g/facadecode/releases/latest) route=redirect ;;
+    https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/install.*) route=installer ;;
+    https://facadecode.com/releases/*/install.*) route=installer ;;
+    https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/facade-core-*|https://facadecode.com/releases/*/facade-core-*) route=archive ;;
+    https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/SHA256SUMS|https://facadecode.com/releases/*/SHA256SUMS) route=checksums ;;
+    *) printf '%s\n' "Unexpected release URL: $url" >&2; exit 64 ;;
+esac
+IFS= read -r code < "$fixture/$route.status"
+location=
+if [ -f "$fixture/$route.location" ]; then
+    IFS= read -r location < "$fixture/$route.location"
+fi
+body() {
+    if [ "$head" = yes ]; then
+        printf 'HTTP/1.1 %s\r\n' "$code"
+        if [ -n "$location" ]; then printf 'Location: %s\r\n' "$location"; fi
+        printf '\r\n'
+    elif [ "$fail" = no ] || [ "$code" -lt 400 ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            printf '%s\n' "$line"
+        done < "$fixture/$route.body"
+    fi
+}
+case "$output" in
+    NUL|/dev/null) ;;
+    "") body ;;
+    *) body > "$output" ;;
+esac
+while [ -n "$format" ]; do
+    case "$format" in
+        '%{http_code}'*) printf '%s' "$code"; format=${format#'%{http_code}'} ;;
+        '%{response_code}'*) printf '%s' "$code"; format=${format#'%{response_code}'} ;;
+        '%{redirect_url}'*) printf '%s' "$location"; format=${format#'%{redirect_url}'} ;;
+        '%{url_effective}'*) printf '%s' "$url"; format=${format#'%{url_effective}'} ;;
+        '\n'*) printf '\n'; format=${format#??} ;;
+        *) printf '%s' "${format%"${format#?}"}"; format=${format#?} ;;
+    esac
+done
+if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
+"#;
+
+    fn installer_url(origin: &str, version: &str) -> String {
+        let extension = if cfg!(windows) { "ps1" } else { "sh" };
+        let prefix = if origin == GITHUB {
+            format!("{origin}/download/extension%2F{version}")
+        } else {
+            format!("{origin}/releases/{version}")
+        };
+        format!("{prefix}/install.{extension}")
+    }
+
+    fn installer_receipt() -> &'static str {
+        if cfg!(windows) {
+            "param([string] $Version)\n[Console]::WriteLine(\"Installed Facade $Version in qa-bin.\")\n"
+        } else {
+            "test \"$1\" = --version || exit 64\nprintf 'Installed Facade %s in qa-bin.\\n' \"$2\"\n"
+        }
+    }
+
+    #[test]
+    fn upgrade_selects_the_highest_valid_stable_version() {
+        for (name, mirror, github, wanted) in [
+            ("both", (200, "0.1.9"), (200, "0.1.10"), "0.1.10"),
+            ("mirror", (200, "0.1.8"), (404, ""), "0.1.8"),
+            ("github", (200, "0.1.99-rc.1"), (200, "0.1.9"), "0.1.9"),
+        ] {
+            let home = TestHome::new(name);
+            let sources = Releases::new(&home);
+            sources.response("mirror", mirror.0, mirror.1);
+            sources.response("github", github.0, github.1);
+            sources.response("installer", 200, installer_receipt());
+            let output = sources.upgrade(&home, &[]);
+            assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+            assert_eq!(
+                stdout(&output),
+                format!("Installed Facade {wanted} in qa-bin.\n")
+            );
+            assert!(output.stderr.is_empty(), "{}", stderr(&output));
+            let requests = sources.requests();
+            assert_eq!(requests.len(), 3, "{requests:?}");
+            assert!(
+                requests[..2].iter().any(|url| url == GITHUB_METADATA),
+                "{requests:?}"
+            );
+            assert!(
+                requests[..2].iter().any(|url| url == MIRROR_METADATA),
+                "{requests:?}"
+            );
+            assert_eq!(requests[2], installer_url(GITHUB, wanted));
+        }
+    }
+
+    #[test]
+    fn upgrade_skips_download_when_already_current_or_a_legacy_tag_confirms_it() {
+        for legacy in [false, true] {
+            let home = TestHome::new("upgrade-current");
+            let agent = home.start_fake("existing");
+            let daemon = home.daemon_pid();
+            let keeper = keeper(&home);
+            let sources = Releases::new(&home);
+            if legacy {
+                sources.response("mirror", 404, "");
+                sources.response("github", 404, "");
+                sources.redirect(&older());
+            } else {
+                sources.response("mirror", 200, CURRENT);
+                sources.response("github", 200, CURRENT);
+            }
+            let output = sources.upgrade(&home, &[]);
+            assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+            assert_eq!(
+                stdout(&output),
+                format!("Facade {CURRENT} is already up to date.\n")
+            );
+            assert!(output.stderr.is_empty(), "{}", stderr(&output));
+            let mut requests = sources.requests();
+            if legacy {
+                assert_eq!(
+                    requests.pop().as_deref(),
+                    Some("https://github.com/y5ez3g/facadecode/releases/latest")
+                );
+            }
+            requests.sort();
+            assert_eq!(requests, [MIRROR_METADATA, GITHUB_METADATA]);
+            assert_eq!(home.daemon_pid(), daemon);
+            assert!(alive(&keeper) && alive(&agent.process));
+        }
+    }
+
+    #[test]
+    fn a_fixed_upgrade_version_never_reads_stable_metadata() {
+        let home = TestHome::new("upgrade-pin");
+        let sources = Releases::new(&home);
+        sources.response("installer", 200, installer_receipt());
+        let output = sources.upgrade(&home, &["--version", CURRENT]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert_eq!(
+            stdout(&output),
+            format!("Installed Facade {CURRENT} in qa-bin.\n")
+        );
+        assert!(output.stderr.is_empty(), "{}", stderr(&output));
+        assert_eq!(sources.requests(), [installer_url(GITHUB, CURRENT)]);
+    }
+
+    #[test]
+    fn missing_fixed_version_installer_names_the_asset_and_status() {
+        let home = TestHome::new("upgrade-missing");
+        let sources = Releases::new(&home);
+        let version = newer();
+        sources.response("installer", 404, "");
+        let output = sources.upgrade(&home, &["--version", &version]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(output.stdout.is_empty(), "{}", stdout(&output));
+        let github = installer_url(GITHUB, &version);
+        let asset = github.rsplit_once('/').unwrap().1;
+        assert_eq!(
+            stderr(&output),
+            format!("error: Could not upgrade Facade to {version}: {asset} returned HTTP 404.\n")
+        );
+        assert_eq!(
+            sources.requests(),
+            [github, installer_url(MIRROR, &version)]
+        );
+    }
+
+    fn target_asset() -> String {
+        let os = match std::env::consts::OS {
+            "windows" => "win32",
+            "macos" => "darwin",
+            os => os,
+        };
+        let arch = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        let archive = if cfg!(windows) { "zip" } else { "tar.gz" };
+        format!("facade-core-{os}-{arch}.{archive}")
+    }
+
+    fn package_download_error(version: &str, asset: &str) -> String {
+        let prefix = if cfg!(windows) {
+            ""
+        } else {
+            "facade install: "
+        };
+        format!(
+            "{prefix}Could not download {asset} and its checksums for Facade {version} from GitHub or facadecode.com."
+        )
+    }
+
+    #[test]
+    fn an_older_installers_missing_asset_is_reported_with_confirmed_http_status() {
+        let version = newer();
+        let asset = target_asset();
+        let detail = package_download_error(&version, &asset);
+        let installer = if cfg!(windows) {
+            format!("param([string] $Version)\n[Console]::Error.WriteLine('{detail}')\nexit 1\n")
+        } else {
+            format!("printf '%s\\n' '{detail}' >&2\nexit 1\n")
+        };
+        for archive_status in [404, 200] {
+            let home = TestHome::new("upgrade-package");
+            let sources = Releases::new(&home);
+            sources.response("installer", 200, &installer);
+            sources.response("archive", archive_status, "");
+            sources.response("checksums", 404, "");
+            let missing = if archive_status == 404 {
+                asset.as_str()
+            } else {
+                "SHA256SUMS"
+            };
+            let output = sources.upgrade(&home, &["--version", &version]);
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(output.stdout.is_empty(), "{}", stdout(&output));
+            assert_eq!(
+                stderr(&output),
+                format!(
+                    "error: Could not upgrade Facade to {version}: {missing} returned HTTP 404.\n"
+                )
+            );
+            let mut expected = vec![installer_url(GITHUB, &version)];
+            for origin in [
+                format!("{GITHUB}/download/extension%2F{version}"),
+                format!("{MIRROR}/releases/{version}"),
+            ] {
+                expected.push(format!("{origin}/{asset}"));
+                if archive_status == 200 {
+                    expected.push(format!("{origin}/SHA256SUMS"));
+                }
+            }
+            assert_eq!(sources.requests(), expected);
+        }
+    }
+
+    #[test]
+    fn the_shell_uses_the_asset_receipt_it_requested_from_the_installer() {
+        let version = newer();
+        let archive = target_asset();
+        let detail = package_download_error(&version, &archive);
+        for (status, transport) in [
+            ("404", "curl: (22) The requested URL returned error: 404"),
+            ("-", "curl: (7) Failed to connect to the release host"),
+        ] {
+            let home = TestHome::new("upgrade-asset-report");
+            let sources = Releases::new(&home);
+            let receipt = format!("facade-upgrade-asset-error SHA256SUMS {status}");
+            let installer = if cfg!(windows) {
+                format!(
+                    "param([string] $Version)\nif ($env:FACADE_UPGRADE_REPORT -ne '1' -or $env:FACADE_UPGRADE_ASSET_REPORT -ne '1') {{ exit 64 }}\n[Console]::Error.WriteLine('{transport}')\n[Console]::WriteLine('{receipt}')\n[Console]::Error.WriteLine('{detail}')\nexit 1\n"
+                )
+            } else {
+                format!(
+                    "test \"$FACADE_UPGRADE_REPORT\" = 1 && test \"$FACADE_UPGRADE_ASSET_REPORT\" = 1 || exit 64\nprintf '%s\\n' '{transport}' >&2\nprintf '%s\\n' '{receipt}'\nprintf '%s\\n' '{detail}' >&2\nexit 1\n"
+                )
+            };
+            sources.response("installer", 200, &installer);
+            let output = sources.upgrade(&home, &["--version", &version]);
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(output.stdout.is_empty(), "{}", stdout(&output));
+            let error = stderr(&output);
+            if status == "404" {
+                assert_eq!(
+                    error,
+                    format!(
+                        "error: Could not upgrade Facade to {version}: SHA256SUMS returned HTTP 404.\n"
+                    )
+                );
+            } else {
+                assert!(error.contains(&format!("Could not upgrade Facade to {version}")));
+                assert!(error.contains("SHA256SUMS"), "{error}");
+                assert_eq!(error.lines().filter(|line| *line == transport).count(), 1);
+                assert_eq!(error.lines().filter(|line| *line == detail).count(), 1);
+            }
+            assert_eq!(sources.requests(), [installer_url(GITHUB, &version)]);
+        }
+    }
+
+    #[test]
+    fn a_release_check_failure_cannot_choose_an_installer() {
+        let home = TestHome::new("upgrade-no-version");
+        let sources = Releases::new(&home);
+        sources.response("mirror", 500, "");
+        sources.response("github", 404, "");
+        let output = sources.upgrade(&home, &[]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(output.stdout.is_empty(), "{}", stdout(&output));
+        assert!(
+            stderr(&output)
+                .starts_with("error: Could not check for updates from GitHub or facadecode.com: "),
+            "{}",
+            stderr(&output)
+        );
+        let mut requests = sources.requests();
+        requests.sort();
+        assert_eq!(requests, [MIRROR_METADATA, GITHUB_METADATA]);
+    }
+}
+
 /// The numbers of this Facade's version: major, minor and patch.
 fn version() -> [u64; 3] {
     let numbers: Vec<u64> = CURRENT

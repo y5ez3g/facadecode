@@ -32,6 +32,11 @@ const STARTUP_PRINTS: &str = "Unexpected SSH stdout during the machine handshake
 pub(crate) enum Problem {
     /// A Shell operation failure with its complete diagnostic and any guidance.
     Operation(String),
+    /// A Shell diagnostic with guidance that a batch can print once.
+    OperationWithFollowUp {
+        message: String,
+        follow_up: &'static str,
+    },
     /// An operation wanted a running agent and the Orchestrator found an ended one.
     Ended { diagnostic: String, agent: String },
     /// The start command omitted the CLI name.
@@ -80,6 +85,9 @@ impl Problem {
     fn lines(&self) -> (String, Option<String>) {
         match self {
             Problem::Operation(message) => (message.clone(), None),
+            Problem::OperationWithFollowUp { message, follow_up } => {
+                (format!("{message}\n{follow_up}"), None)
+            }
             Problem::Ended { diagnostic, agent } => (
                 service_words(diagnostic),
                 Some(format!(
@@ -188,6 +196,15 @@ fn service_error(error: &anyhow::Error) -> Option<&ErrorBody> {
 }
 
 pub(crate) const CHECK_MACHINES: &str = "Run 'facade machine list' to check machine status.";
+const FIND_AGENT: &str = "Run 'facade list' to find an agent.";
+const FIND_MACHINE: &str = "Run 'facade machine list' to find a machine.";
+const STOP_GUEST: &str = "Stop it from the application running it.";
+
+pub(crate) fn unsupported_command(command: &str) -> Problem {
+    Problem::Operation(format!(
+        "The running Orchestrator does not support {command}.\nRun 'facade upgrade' and try again."
+    ))
+}
 
 pub(crate) fn quoted(text: &str) -> String {
     format!("\"{}\"", single_line(text).replace('"', "\\\""))
@@ -228,7 +245,7 @@ pub(crate) fn machine_query_detail(machine: &MachineQueryResult) -> String {
     let fallback = match machine.state {
         MachineState::Connecting => "The connection is still being established.",
         MachineState::Sleeping => "The remote service is sleeping.",
-        MachineState::SshInteractionRequired => "SSH needs a login or verification.",
+        MachineState::SshInteractionRequired => "SSH needs interaction.",
         _ => match machine.status {
             MachineQueryStatus::TimedOut => "The query timed out.",
             MachineQueryStatus::Error => "The query failed.",
@@ -244,16 +261,27 @@ pub(crate) fn machine_query_detail(machine: &MachineQueryResult) -> String {
     )
 }
 
+pub(crate) fn machine_query_unanswered(machine: &MachineQueryResult) -> bool {
+    match machine.status {
+        MachineQueryStatus::Answered => false,
+        MachineQueryStatus::Unavailable => machine.state != MachineState::Sleeping,
+        MachineQueryStatus::TimedOut | MachineQueryStatus::Error => true,
+    }
+}
+
 pub(crate) fn machine_query_failed(machine: &MachineQueryResult) -> Problem {
     connection_failed(&machine.name, &machine_query_detail(machine))
 }
 
 fn connection_failed(machine: &str, detail: &str) -> Problem {
-    Problem::Operation(format!(
-        "Could not connect to machine {}: {}\n{CHECK_MACHINES}",
-        quoted(machine),
-        single_line(detail)
-    ))
+    Problem::OperationWithFollowUp {
+        message: format!(
+            "Could not connect to machine {}: {}",
+            quoted(machine),
+            single_line(detail)
+        ),
+        follow_up: CHECK_MACHINES,
+    }
 }
 
 fn candidate_rows(rows: &[Vec<String>]) -> String {
@@ -278,6 +306,7 @@ fn machine_failure(command: &str, selector: &str, error: &ErrorBody) -> Option<P
                     let state = match machine.state {
                         MachineState::Online => "Online",
                         MachineState::Connecting => "Connecting",
+                        MachineState::Disconnected => "Disconnected",
                         MachineState::Sleeping => "Sleeping",
                         MachineState::Unreachable => "Unreachable",
                         MachineState::SshInteractionRequired => "Needs SSH login",
@@ -294,6 +323,8 @@ fn machine_failure(command: &str, selector: &str, error: &ErrorBody) -> Option<P
             let cli = if command == "start" { " codex" } else { "" };
             let example = if matches!(command, "start" | "list" | "resume") {
                 format!("Example: facade {command} --machine {example}{cli}")
+            } else if command == "stop --machine" {
+                format!("Example: facade stop --machine {example}")
             } else {
                 "Use the machine ID in the agent reference.".into()
             };
@@ -304,10 +335,10 @@ fn machine_failure(command: &str, selector: &str, error: &ErrorBody) -> Option<P
                 candidate_rows(&rows)
             )))
         }
-        Reason::NotFound if error.message == NO_MACHINE => Some(Problem::Operation(format!(
-            "No machine matches {}.\nRun 'facade machine list' to find a machine.",
-            quoted(selector)
-        ))),
+        Reason::NotFound if error.message == NO_MACHINE => Some(Problem::OperationWithFollowUp {
+            message: format!("No machine matches {}.", quoted(selector)),
+            follow_up: FIND_MACHINE,
+        }),
         Reason::Unavailable | Reason::SshInteractionRequired => {
             if let Some(machine) = data.machines.first() {
                 let detail = machine
@@ -604,10 +635,10 @@ pub(crate) fn agent_failed(
             }
             _ => "",
         };
-        return Problem::Operation(format!(
-            "No {scope}agent or guest matches {}.\nRun 'facade list' to find an agent.",
-            quoted(input),
-        ))
+        return Problem::OperationWithFollowUp {
+            message: format!("No {scope}agent or guest matches {}.", quoted(input)),
+            follow_up: FIND_AGENT,
+        }
         .into();
     }
     about_agent(input, error)
@@ -638,9 +669,10 @@ fn agent_refusal(
             format!("{target} has stopped and cannot accept input.")
         }
         (AgentCommand::Stop, Reason::Unsupported) if agent.state == AgentState::Online => {
-            format!(
-                "{target} is a guest and cannot be stopped by Facade.\nStop it from the application running it."
-            )
+            return Some(Problem::OperationWithFollowUp {
+                message: format!("{target} is a guest and cannot be stopped by Facade."),
+                follow_up: STOP_GUEST,
+            });
         }
         (AgentCommand::Screen, Reason::Unsupported) if agent.state == AgentState::Online => {
             format!("{target} is a guest and has no terminal screen.")
@@ -691,6 +723,26 @@ fn agent_refusal(
         _ => return None,
     };
     Some(Problem::Operation(message))
+}
+
+/// The batch prints shared guidance after reporting the failed targets and machines.
+pub(crate) fn stop_diagnostic(
+    error: &anyhow::Error,
+    grouped: bool,
+) -> (String, Option<&'static str>) {
+    if grouped
+        && let Some(Problem::OperationWithFollowUp { message, follow_up }) =
+            error.downcast_ref::<Problem>()
+    {
+        let follow_up = match *follow_up {
+            FIND_AGENT => Some("Run 'facade list' to check active agents."),
+            FIND_MACHINE => Some(CHECK_MACHINES),
+            STOP_GUEST => None,
+            other => Some(other),
+        };
+        return (format!("error: {message}"), follow_up);
+    }
+    (words(error), None)
 }
 
 fn stop_unconfirmed(agent: &AgentLabel) -> Problem {

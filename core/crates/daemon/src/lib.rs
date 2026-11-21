@@ -1,7 +1,7 @@
 //! Manages agents and serves clients in one Facade home. A client starts the daemon; the daemon
 //! starts the keeper for its first run. Each service keeps a copy of every terminal, so either can
 //! replace the other after it ends. The daemon recovers readable agent records, exits, checkpoints
-//! and screen logs before it accepts clients (`recovery.rs`), and exits after five idle seconds
+//! and screen logs before it accepts clients (`recovery.rs`), and exits after 30 idle seconds
 //! (`lifecycle/`).
 //!
 //! Its parts each own their data and are joined here, never to each other:
@@ -223,7 +223,7 @@ pub(crate) struct Daemon {
     /// `core/results/`, MCP results too long to return inline.
     results: PathBuf,
     /// What each open watch lets go of when it ends, by its viewer number.
-    watch_ends: Mutex<HashMap<u64, AgentHandle>>,
+    watch_ends: Mutex<HashMap<u64, topics::ViewerBinding>>,
 }
 
 impl Daemon {
@@ -236,6 +236,10 @@ impl Daemon {
 }
 
 impl LifecycleActivity for Daemon {
+    async fn announce_machine_sleeping(&self) {
+        self.network.announce_sleeping().await;
+    }
+
     fn holds_agents(&self) -> bool {
         self.agents
             .lock()
@@ -316,6 +320,21 @@ impl LifecycleActivity for Daemon {
         }
         all_quiet
     }
+}
+
+pub(crate) fn daemon_capabilities() -> Vec<String> {
+    use facade_base::v3;
+    [
+        v3::CAP_RESUME_LIST_LOCAL,
+        v3::CAP_MACHINE_DISCONNECTED,
+        v3::CAP_MACHINE_CONNECT_EXPECTED_ID,
+        v3::CAP_MACHINE_REMOVE_EXPECTED_ID,
+        v3::CAP_MACHINE_PROBE_ROUTE,
+        v3::CAP_ATTACH,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 /// Reads the committed name of the local machine while its daemon is sleeping.
@@ -428,6 +447,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             ssh_cleans_processes: facade_base::system::ssh_cleans_processes(Duration::from_secs(1))
                 .await,
         },
+        daemon_capabilities(),
         control_dir,
         network_events,
     );
@@ -478,9 +498,15 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     // Clients are accepted only after recovery, so that they see every readable agent.
     let listener = server::bind()?;
     let lifecycle = daemon.lifecycle.clone();
-    daemon
-        .network
-        .set_forward_work(move || lifecycle.begin(Work::Call));
+    daemon.network.set_session_work(move |work| {
+        let work = match work {
+            network::SessionWork::Call => Work::Call,
+            network::SessionWork::Viewer | network::SessionWork::Foreground => Work::MachineSession,
+        };
+        lifecycle
+            .begin(work)
+            .map(|guard| Box::new(guard) as network::SessionHold)
+    });
     let weak_daemon = Arc::downgrade(&daemon);
     daemon.network.set_target_v3(move |request| {
         let Some(daemon) = weak_daemon.upgrade() else {

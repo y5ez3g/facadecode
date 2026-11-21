@@ -7,25 +7,50 @@ use std::time::Duration;
 use facade_base::daemon::{AgentsUpdate, WatchParams};
 use facade_base::jsonrpc::{AgentRemoval, ErrorBody, Reason, decode_arguments};
 use facade_base::machine::AgentRef;
-use facade_base::operations::Topic;
+use facade_base::operations::{CallParams, Operation, Topic};
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::v3::{
-    AgentTarget, AgentsChange, AgentsSnapshot, AgentsTopic, AttachmentInfo, AttachmentKind, Caller,
-    MachinesChange, MachinesTopic, NoArgs, ScreenChange, ScreenSnapshot, ScreenTopic,
-    ScreenWatchArgs,
+    self, AgentTarget, AgentsChange, AgentsSnapshot, AgentsTopic, AttachBinding, AttachTopic,
+    AttachmentInfo, AttachmentKind, Caller, MachinesChange, MachinesTopic, NoArgs, ScreenChange,
+    ScreenSize, ScreenSnapshot, ScreenTopic, ScreenWatchArgs, TerminalColors,
 };
 use serde::Serialize;
 use tokio::sync::{broadcast::error::RecvError, mpsc, oneshot};
 
-use crate::agent::{AgentCommand, AgentHandle, ViewerChange, viewer_channel};
+use crate::agent::{AgentCommand, AgentHandle, ViewerChange, ViewerSizing, viewer_channel};
+use crate::network::WatchRoute;
 use crate::records::{OperationTarget, Reach};
 use crate::server::{Client, Watch, WatchChange};
-use crate::service::{actor_stopped, check_size, decode_or_default, value_of};
+use crate::service::{
+    accepts_disconnected, actor_stopped, check_size, decode_or_default, legacy_machine_error,
+    project_legacy_machine_state, terminal_colors, value_of,
+};
 use crate::store::RemovalCause;
 use crate::{Daemon, blocking_in_place};
 
 const SCREEN_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const CHANGES_WAITING: usize = 64;
+
+#[derive(Clone)]
+pub(crate) struct ViewerBinding {
+    caller: Caller,
+    target: ViewerTarget,
+}
+
+#[derive(Clone)]
+enum ViewerTarget {
+    Local {
+        agent: AgentHandle,
+        sizing: ViewerSizing,
+    },
+    Remote {
+        reference: AgentRef,
+        attach: Option<AttachBinding>,
+        route: WatchRoute,
+        changes: mpsc::Sender<WatchChange>,
+        disconnected: bool,
+    },
+}
 
 impl Daemon {
     pub(crate) async fn start_watch(
@@ -37,7 +62,8 @@ impl Daemon {
     ) -> Result<Watch, ErrorBody> {
         let caller = self.local_caller(client)?;
         match topic {
-            ScreenTopic::NAME => {
+            ScreenTopic::NAME | AttachTopic::NAME => {
+                let sizing = viewer_sizing(topic);
                 let args: ScreenWatchArgs = decode_arguments(args)?;
                 if args.allow_ended && !matches!(args.target, AgentTarget::Reference { .. }) {
                     return Err(ErrorBody::invalid_argument(
@@ -51,9 +77,17 @@ impl Daemon {
                     .addressed_agent(&caller, args.target.clone(), operation)
                     .await?;
                 if reference.machine_id != self.machine_id {
-                    self.watch_remote_screen(reference, caller, args).await
+                    self.watch_remote_screen(
+                        reference,
+                        caller,
+                        args,
+                        viewer,
+                        sizing,
+                        accepts_disconnected(client),
+                    )
+                    .await
                 } else {
-                    self.watch_local_screen(&caller, &reference, args, viewer)
+                    self.watch_local_screen(&caller, &reference, args, viewer, sizing)
                         .await
                 }
             }
@@ -63,7 +97,7 @@ impl Daemon {
             }
             MachinesTopic::NAME => {
                 let NoArgs {} = decode_or_default(args)?;
-                self.watch_machines()
+                self.watch_machines(accepts_disconnected(client))
             }
             _ => Err(ErrorBody::invalid_argument(format!(
                 "unknown topic {topic}"
@@ -73,9 +107,183 @@ impl Daemon {
 
     pub(crate) async fn end_viewer(&self, viewer: u64) {
         let ending = self.watch_ends.lock().unwrap().remove(&viewer);
-        if let Some(agent) = ending {
+        if let Some(ViewerBinding {
+            target: ViewerTarget::Local { agent, .. },
+            ..
+        }) = ending
+        {
             agent.send(AgentCommand::RemoveViewer { viewer }).await;
         }
+    }
+
+    pub(crate) fn attach_binding(&self, viewer: u64) -> Option<AttachBinding> {
+        let shared = self
+            .watch_ends
+            .lock()
+            .unwrap()
+            .get(&viewer)
+            .is_some_and(|watched| {
+                matches!(
+                    watched.target,
+                    ViewerTarget::Local {
+                        sizing: ViewerSizing::Shared,
+                        ..
+                    }
+                )
+            });
+        shared.then(|| AttachBinding {
+            viewer,
+            boot_id: self.network.local_hello().boot_id,
+        })
+    }
+
+    fn viewer_target(&self, caller: &Caller, viewer: u64) -> Result<ViewerTarget, ErrorBody> {
+        self.watch_ends
+            .lock()
+            .unwrap()
+            .get(&viewer)
+            .filter(|watched| &watched.caller == caller)
+            .map(|watched| watched.target.clone())
+            .ok_or_else(viewer_ended)
+    }
+
+    pub(crate) async fn resize_active_viewer(
+        &self,
+        caller: &Caller,
+        viewer: u64,
+        size: ScreenSize,
+        colors: Option<TerminalColors>,
+    ) -> Result<(), ErrorBody> {
+        match self.viewer_target(caller, viewer)? {
+            ViewerTarget::Local {
+                agent,
+                sizing: ViewerSizing::Shared,
+            } => {
+                self.resize_local_viewer(caller, agent, viewer, size, colors)
+                    .await
+            }
+            ViewerTarget::Local { .. } => Err(viewer_ended()),
+            ViewerTarget::Remote {
+                reference,
+                attach,
+                route,
+                changes,
+                disconnected,
+            } => {
+                check_size(size.cols, size.rows)?;
+                let result = if let Some(AttachBinding { viewer, boot_id }) = attach {
+                    let params = v3::ForwardAttachResizeArgs {
+                        viewer,
+                        boot_id,
+                        cols: size.cols,
+                        rows: size.rows,
+                        colors,
+                    };
+                    route
+                        .call(
+                            caller.clone(),
+                            v3::AttachResize::NAME,
+                            value_of(params),
+                            SCREEN_SNAPSHOT_TIMEOUT,
+                        )
+                        .await
+                } else {
+                    let params = v3::AgentResizeArgs {
+                        target: AgentTarget::Reference {
+                            reference: reference.clone(),
+                        },
+                        cols: size.cols,
+                        rows: size.rows,
+                        colors,
+                    };
+                    let call = v3::ForwardCall {
+                        call: CallParams {
+                            op: v3::AgentResize::NAME.to_owned(),
+                            args: value_of(params),
+                        },
+                        by_model: false,
+                        from_name: None,
+                        recipient: None,
+                    };
+                    route
+                        .call(
+                            caller.clone(),
+                            "call",
+                            value_of(call),
+                            SCREEN_SNAPSHOT_TIMEOUT,
+                        )
+                        .await
+                };
+                let result = result
+                    .map(|_| ())
+                    .map_err(|error| self.remote_screen_error(&reference, error));
+                if let Err(error) = &result
+                    && matches!(error.data.reason, Reason::Unavailable | Reason::NotFound)
+                {
+                    self.end_viewer(viewer).await;
+                    let error = if disconnected {
+                        error.clone()
+                    } else {
+                        legacy_machine_error(error.clone())
+                    };
+                    let _ = changes.send(WatchChange::Ended(error)).await;
+                }
+                result
+            }
+        }
+    }
+
+    pub(crate) async fn resize_forwarded_viewer(
+        &self,
+        caller: &Caller,
+        args: v3::ForwardAttachResizeArgs,
+    ) -> Result<(), ErrorBody> {
+        if args.boot_id != self.network.local_hello().boot_id {
+            return Err(viewer_ended());
+        }
+        let ViewerTarget::Local {
+            agent,
+            sizing: ViewerSizing::Shared,
+        } = self.viewer_target(caller, args.viewer)?
+        else {
+            return Err(viewer_ended());
+        };
+        let size = ScreenSize {
+            cols: args.cols,
+            rows: args.rows,
+        };
+        self.resize_local_viewer(caller, agent, args.viewer, size, args.colors)
+            .await
+    }
+
+    async fn resize_local_viewer(
+        &self,
+        caller: &Caller,
+        agent: AgentHandle,
+        viewer: u64,
+        size: ScreenSize,
+        colors: Option<TerminalColors>,
+    ) -> Result<(), ErrorBody> {
+        self.local_target(caller, &agent.info().reference(), OperationTarget::Type)
+            .map_err(|error| match error.data.reason {
+                Reason::Ended | Reason::NotFound => viewer_ended(),
+                _ => error,
+            })?;
+        check_size(size.cols, size.rows)?;
+        let colors = terminal_colors(caller, colors)?;
+        let (reply, received) = oneshot::channel();
+        if !agent
+            .send(AgentCommand::ResizeViewer {
+                viewer,
+                size,
+                colors,
+                reply,
+            })
+            .await
+        {
+            return Err(viewer_ended());
+        }
+        received.await.map_err(|_| viewer_ended())?
     }
 
     pub(crate) async fn start_forwarded_watch(
@@ -89,7 +297,8 @@ impl Daemon {
                 let NoArgs {} = decode_or_default(params.args)?;
                 self.watch_agent_records(caller, false)
             }
-            ScreenTopic::NAME => {
+            ScreenTopic::NAME | AttachTopic::NAME => {
+                let sizing = viewer_sizing(&params.topic);
                 let args: ScreenWatchArgs = decode_arguments(params.args)?;
                 let AgentTarget::Reference { reference } = &args.target else {
                     return Err(ErrorBody::invalid_argument(
@@ -101,7 +310,7 @@ impl Daemon {
                         "the terminal belongs to another machine",
                     ));
                 }
-                self.watch_local_screen(caller, &reference.clone(), args, viewer)
+                self.watch_local_screen(caller, &reference.clone(), args, viewer, sizing)
                     .await
             }
             _ => Err(ErrorBody::refused(
@@ -111,27 +320,29 @@ impl Daemon {
     }
 
     async fn watch_local_screen(
-        &self,
+        self: &Arc<Self>,
         caller: &Caller,
         reference: &AgentRef,
         args: ScreenWatchArgs,
         viewer: u64,
+        sizing: ViewerSizing,
     ) -> Result<Watch, ErrorBody> {
         let operation = OperationTarget::Attach {
             allow_ended: args.allow_ended,
         };
         let agent = self.local_target(caller, reference, operation)?;
-        self.watch_agent_screen(&agent, caller, args, viewer)
+        self.watch_agent_screen(&agent, caller, args, viewer, sizing)
             .await
             .map_err(|error| self.with_agent_error(&agent, error))
     }
 
     async fn watch_agent_screen(
-        &self,
+        self: &Arc<Self>,
         agent: &AgentHandle,
         caller: &Caller,
         args: ScreenWatchArgs,
         viewer: u64,
+        sizing: ViewerSizing,
     ) -> Result<Watch, ErrorBody> {
         if let Some(size) = args.size {
             check_size(size.cols, size.rows)?;
@@ -148,6 +359,7 @@ impl Daemon {
         };
         let added = AgentCommand::AttachViewer {
             viewer,
+            sizing,
             name: args.viewer,
             attachment: kind.map(|kind| AttachmentInfo {
                 kind,
@@ -209,11 +421,17 @@ impl Daemon {
                 changes: sent,
             });
         }
-        self.watch_ends
-            .lock()
-            .unwrap()
-            .insert(viewer, agent.clone());
-        let agent = agent.clone();
+        self.watch_ends.lock().unwrap().insert(
+            viewer,
+            ViewerBinding {
+                caller: caller.clone(),
+                target: ViewerTarget::Local {
+                    agent: agent.clone(),
+                    sizing,
+                },
+            },
+        );
+        let daemon = self.clone();
         tokio::spawn(async move {
             let forward = async {
                 while let Some(change) = feed.recv().await {
@@ -229,7 +447,7 @@ impl Daemon {
                 () = changes.closed() => {}
                 _ = stalled => { let _ = changes.send(WatchChange::Disconnect).await; }
             }
-            agent.send(AgentCommand::RemoveViewer { viewer }).await;
+            daemon.end_viewer(viewer).await;
         });
         Ok(Watch {
             snapshot: value_of(snapshot),
@@ -242,14 +460,26 @@ impl Daemon {
         reference: AgentRef,
         caller: Caller,
         mut args: ScreenWatchArgs,
+        viewer: u64,
+        sizing: ViewerSizing,
+        disconnected: bool,
     ) -> Result<Watch, ErrorBody> {
         self.ensure_machine_route(&reference.machine_id).await?;
         let address = self.agent_address(&reference)?;
         args.target = AgentTarget::Reference {
             reference: reference.clone(),
         };
+        let shared = sizing == ViewerSizing::Shared
+            && self
+                .network
+                .route_supports(&reference.machine_id, v3::CAP_ATTACH);
         let params = WatchParams {
-            topic: ScreenTopic::NAME.into(),
+            topic: if shared {
+                AttachTopic::NAME
+            } else {
+                ScreenTopic::NAME
+            }
+            .into(),
             args: value_of(args),
         };
         let report_failure = matches!(caller, Caller::Terminal { .. });
@@ -257,7 +487,7 @@ impl Daemon {
             .network
             .watch(
                 &reference.machine_id,
-                caller,
+                caller.clone(),
                 params,
                 Some(SCREEN_SNAPSHOT_TIMEOUT),
             )
@@ -278,6 +508,28 @@ impl Daemon {
                 changes: sent,
             });
         }
+        if sizing == ViewerSizing::Shared {
+            let attach = if shared {
+                Some(subscription.attach.take().ok_or_else(|| {
+                    ErrorBody::invalid_argument("the machine did not confirm its Attach viewer")
+                })?)
+            } else {
+                None
+            };
+            self.watch_ends.lock().unwrap().insert(
+                viewer,
+                ViewerBinding {
+                    caller,
+                    target: ViewerTarget::Remote {
+                        reference: reference.clone(),
+                        attach,
+                        route: subscription.route(),
+                        changes: changes.clone(),
+                        disconnected,
+                    },
+                },
+            );
+        }
         let daemon = self.clone();
         tokio::spawn(async move {
             let forward = async {
@@ -290,6 +542,11 @@ impl Daemon {
                         }
                         Err(error) if report_failure => {
                             let error = daemon.remote_screen_error(&reference, error);
+                            let error = if disconnected {
+                                error
+                            } else {
+                                legacy_machine_error(error)
+                            };
                             let _ = changes.send(WatchChange::Ended(error)).await;
                             return;
                         }
@@ -299,6 +556,7 @@ impl Daemon {
                 let _ = changes.send(WatchChange::Disconnect).await;
             };
             tokio::select! { () = forward => {}, () = changes.closed() => {} }
+            daemon.end_viewer(viewer).await;
         });
         Ok(Watch {
             snapshot: value_of(snapshot),
@@ -397,9 +655,9 @@ impl Daemon {
         })
     }
 
-    fn watch_machines(self: &Arc<Self>) -> Result<Watch, ErrorBody> {
+    fn watch_machines(self: &Arc<Self>, disconnected: bool) -> Result<Watch, ErrorBody> {
         let mut following = self.machine_views.subscribe();
-        let snapshot = self.public_machines()?;
+        let snapshot = self.watched_machines(disconnected)?;
         let mut known: BTreeMap<_, _> = snapshot
             .iter()
             .map(|row| (row.machine_id.clone(), row.clone()))
@@ -415,7 +673,7 @@ impl Daemon {
                 if matches!(next, Err(RecvError::Closed)) {
                     return;
                 }
-                let Ok(rows) = daemon.public_machines() else {
+                let Ok(rows) = daemon.watched_machines(disconnected) else {
                     let _ = changes.send(WatchChange::Disconnect).await;
                     return;
                 };
@@ -456,6 +714,31 @@ impl Daemon {
             changes: sent,
         })
     }
+
+    fn watched_machines(&self, disconnected: bool) -> Result<Vec<v3::MachineInfo>, ErrorBody> {
+        let mut rows = self.public_machines()?;
+        if !disconnected {
+            for machine in &mut rows {
+                project_legacy_machine_state(&mut machine.state);
+            }
+        }
+        Ok(rows)
+    }
+}
+
+fn viewer_sizing(topic: &str) -> ViewerSizing {
+    if topic == AttachTopic::NAME {
+        ViewerSizing::Shared
+    } else {
+        ViewerSizing::Legacy
+    }
+}
+
+fn viewer_ended() -> ErrorBody {
+    ErrorBody::new(
+        Reason::NotFound,
+        "this terminal watch ended; open it again to resize",
+    )
 }
 
 async fn remote_update(

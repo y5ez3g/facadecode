@@ -1,17 +1,19 @@
 //! The machine roster and the receipts for changes to it.
 
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use facade_base::daemon::display_name;
 use facade_base::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{MachineRemoveArgs, MachineRenameArgs};
+use facade_base::machine::{MachineRemoveResult, MachineRenameArgs};
 use facade_base::operations::NoArgs;
+use facade_base::ssh;
 use facade_base::time::parse_iso_time;
 use facade_base::v3::address::display_machine_id;
 use facade_base::v3::{
     ConnectionKind, MachineConnection, MachineIdentity, MachineInfo, MachineList, MachineRemove,
-    MachineRename, MachineState,
+    MachineRemoveArgs, MachineRename, MachineState,
 };
 
 use crate::errors::{about_machine, repair_command};
@@ -44,6 +46,7 @@ pub(super) fn list(daemon: &mut DaemonClient) -> anyhow::Result<()> {
                 diagnostics.extend(diagnostic(machine, &id, saved));
             }
             let route = match machine.route.as_deref() {
+                _ if saved.is_some() => "Direct".into(),
                 Some([hop, .., _]) => {
                     let via = ordered
                         .iter()
@@ -52,7 +55,6 @@ pub(super) fn list(daemon: &mut DaemonClient) -> anyhow::Result<()> {
                     format!("via {via}")
                 }
                 Some([_]) => "Direct".into(),
-                _ if saved.is_some() => "Direct".into(),
                 _ => "-".into(),
             };
             let version = machine
@@ -89,17 +91,64 @@ pub(super) fn list(daemon: &mut DaemonClient) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(super) fn remove(daemon: &mut DaemonClient, machine: String) -> anyhow::Result<()> {
-    let result = daemon.call::<MachineRemove>(MachineRemoveArgs {
-        machine: machine.clone(),
-    });
-    let removed = result.map_err(|error| edit_error(daemon, &machine, None, error))?;
-    let name = display_name(removed.name.as_deref().unwrap_or(&machine));
-    println_or_end!("Removed the saved connection to {name}.");
-    if let Some(via) = removed.via {
-        println_or_end!("{name} is still reachable via {}.", display_name(&via));
+pub(super) fn remove(daemon: &mut DaemonClient, machine: String) -> anyhow::Result<i32> {
+    let removed = remove_route(daemon, &machine)
+        .map_err(|error| edit_error(daemon, &machine, None, error))?;
+    let authorization = revoke_key(&removed.machine_id);
+    let name = print_removed(&removed, &machine);
+    match authorization {
+        Ok(_) => Ok(0),
+        Err(RevocationFailure::Elevate(path)) => {
+            eprintln!(
+                "note: SSH authorization for {name} still needs cleanup in {}. \
+                 Use an elevated Administrator terminal.",
+                path.display()
+            );
+            Ok(0)
+        }
+        Err(RevocationFailure::Other(error)) => Err(error.context(format!(
+            "Could not revoke SSH authorization for {name} on this machine"
+        ))),
     }
-    Ok(())
+}
+
+pub(super) fn remove_route(
+    daemon: &mut DaemonClient,
+    machine: &str,
+) -> anyhow::Result<MachineRemoveResult> {
+    daemon.call::<MachineRemove>(MachineRemoveArgs {
+        machine: machine.to_owned(),
+        expected_machine_id: None,
+    })
+}
+
+pub(super) fn print_removed(removed: &MachineRemoveResult, given: &str) -> String {
+    let name = display_name(removed.name.as_deref().unwrap_or(given));
+    println_or_end!("Removed the saved connection to {name}.");
+    if let Some(via) = &removed.via {
+        println_or_end!("{name} is still reachable via {}.", display_name(via));
+    }
+    name
+}
+
+pub(super) enum RevocationFailure {
+    Elevate(PathBuf),
+    Other(anyhow::Error),
+}
+
+pub(super) fn revoke_key(machine_id: &str) -> Result<bool, RevocationFailure> {
+    let file = ssh::authorization_file().map_err(RevocationFailure::Other)?;
+    file.revoke_peer(machine_id).map_err(|error| {
+        let elevation = format!(
+            "writing {} requires an elevated Administrator terminal",
+            file.path().display()
+        );
+        if file.administrators() && error.to_string() == elevation {
+            RevocationFailure::Elevate(file.path().to_owned())
+        } else {
+            RevocationFailure::Other(error)
+        }
+    })
 }
 
 pub(super) fn rename(
@@ -219,6 +268,7 @@ fn state_label(state: MachineState, local: bool) -> &'static str {
     match state {
         MachineState::Online => "Online",
         MachineState::Connecting => "Connecting",
+        MachineState::Disconnected => "Disconnected",
         MachineState::Sleeping => "Sleeping",
         MachineState::Unreachable => "Unreachable",
         MachineState::SshInteractionRequired => "Needs SSH login",

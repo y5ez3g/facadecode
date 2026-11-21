@@ -21,9 +21,11 @@
   "topics": [
     "agents",
     "screen",
+    "attach",
     "machines"
   ],
   "ops": [
+    "list",
     "agent.list",
     "agent.inspect",
     "agent.start",
@@ -33,11 +35,13 @@
     "location.list",
     "cli.list",
     "agent.stop",
+    "stop",
     "agent.remove",
     "agent.rename",
     "agent.type",
     "agent.send",
     "agent.resize",
+    "attach.resize",
     "agent.screen",
     "daemon.status",
     "workspace.import_legacy",
@@ -302,6 +306,57 @@
     "AgentsSnapshot": {
       "$ref": "#/$defs/V3AgentsSnapshot"
     },
+    "AttachBinding": {
+      "type": "object",
+      "properties": {
+        "viewer": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "boot_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "viewer",
+        "boot_id"
+      ],
+      "description": "The watch's identity at the holder of a running agent's terminal."
+    },
+    "AttachResizeArgs": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The Attach watch ID on the connection issuing this call."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width in columns, at least 2."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height in rows, at least 1."
+        },
+        "colors": {
+          "$ref": "#/$defs/TerminalColors"
+        }
+      },
+      "required": [
+        "watch",
+        "cols",
+        "rows"
+      ]
+    },
     "AttachmentInfo": {
       "type": "object",
       "properties": {
@@ -324,8 +379,43 @@
         "vs_code"
       ]
     },
+    "BatchStopResult": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StopItem"
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/V3MachineQueryResult"
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
     "CallParams": {
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "list"
+            },
+            "args": {
+              "$ref": "#/$defs/ListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -465,6 +555,21 @@
           "type": "object",
           "properties": {
             "op": {
+              "const": "stop"
+            },
+            "args": {
+              "$ref": "#/$defs/StopArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
               "const": "agent.remove"
             },
             "args": {
@@ -529,6 +634,21 @@
             },
             "args": {
               "$ref": "#/$defs/V3ResizeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "attach.resize"
+            },
+            "args": {
+              "$ref": "#/$defs/AttachResizeArgs"
             }
           },
           "required": [
@@ -633,7 +753,7 @@
               "const": "machine.remove"
             },
             "args": {
-              "$ref": "#/$defs/MachineRemoveArgs"
+              "$ref": "#/$defs/V3MachineRemoveArgs"
             }
           },
           "required": [
@@ -1154,11 +1274,71 @@
         "outcome_unknown"
       ]
     },
+    "ForwardAttachResizeArgs": {
+      "type": "object",
+      "properties": {
+        "viewer": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The holder's viewer ID from the live watch response."
+        },
+        "boot_id": {
+          "type": "string",
+          "description": "The holder's daemon start ID from the same response."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "colors": {
+          "$ref": "#/$defs/TerminalColors"
+        }
+      },
+      "required": [
+        "viewer",
+        "boot_id",
+        "cols",
+        "rows"
+      ],
+      "description": "Parameters of a forwarded `attach.resize` on an authenticated machine session."
+    },
     "ForwardCall": {
       "$ref": "#/$defs/V3ForwardCall"
     },
     "ForwardParams": {
       "$ref": "#/$defs/V3ForwardParams"
+    },
+    "ForwardWatchResult": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Watch ID scoped to this machine session."
+        },
+        "snapshot": {
+          "description": "The snapshot for the forwarded watch's topic."
+        },
+        "attach": {
+          "description": "The holder supplies this binding for a live shared Attach.",
+          "$ref": "#/$defs/AttachBinding"
+        }
+      },
+      "required": [
+        "watch",
+        "snapshot"
+      ],
+      "description": "A response to a forwarded watch on an authenticated machine session."
     },
     "HelloParams": {
       "$ref": "#/$defs/V3HelloParams"
@@ -1184,12 +1364,12 @@
           "description": "The answering daemon's introduction on a machine session.",
           "$ref": "#/$defs/MachineHello"
         },
-        "ops": {
+        "capabilities": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Operation names accepted by `call`."
+          "description": "Additions to protocol 3 supported by this daemon."
         },
         "pid": {
           "type": "integer",
@@ -1197,12 +1377,12 @@
           "minimum": 0,
           "description": "The daemon's process ID."
         },
-        "topics": {
+        "ops": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Topic names accepted by `watch`."
+          "description": "Operation names accepted by `call`."
         },
         "agents": {
           "type": "integer",
@@ -1213,6 +1393,13 @@
         "keeper": {
           "description": "The keeper holding the agents' terminals. Omitted while no keeper runs; the daemon starts\none for the first agent.",
           "$ref": "#/$defs/KeeperInfo"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Topic names accepted by `watch`."
         }
       },
       "required": [
@@ -1495,6 +1682,15 @@
         "machines"
       ]
     },
+    "ListArgs": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/Scope",
+          "description": "Omit the scope to query reachable machines without waking them."
+        }
+      }
+    },
     "LocationInfo": {
       "$ref": "#/$defs/V3LocationInfo"
     },
@@ -1679,16 +1875,7 @@
       ]
     },
     "MachineRemoveArgs": {
-      "type": "object",
-      "properties": {
-        "machine": {
-          "type": "string",
-          "description": "An input machine selector."
-        }
-      },
-      "required": [
-        "machine"
-      ]
+      "$ref": "#/$defs/V3MachineRemoveArgs"
     },
     "MachineRemoveResult": {
       "type": "object",
@@ -1755,13 +1942,22 @@
       ]
     },
     "MachineState": {
-      "type": "string",
-      "enum": [
-        "online",
-        "connecting",
-        "sleeping",
-        "unreachable",
-        "ssh_interaction_required"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "online",
+            "connecting",
+            "sleeping",
+            "unreachable",
+            "ssh_interaction_required"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "disconnected",
+          "description": "A saved connection without an active session or an observed failure."
+        }
       ]
     },
     "MachineTransport": {
@@ -2351,6 +2547,10 @@
         },
         "all": {
           "type": "boolean"
+        },
+        "local": {
+          "type": "boolean",
+          "description": "Query this machine alone without starting SSH. Mutually exclusive with `machine`."
         }
       }
     },
@@ -2434,6 +2634,51 @@
         "at"
       ],
       "description": "What last went into an agent's message input with Enter: what the person submitted in its\nterminal and its CLI took, text typed with `agent.type` and `enter`, or a message delivered\nthrough the terminal."
+    },
+    "Scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reachable"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "local"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "machine"
+            },
+            "machine": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "machine"
+          ]
+        }
+      ],
+      "description": "The machines included in a list or range stop."
     },
     "ScreenArgs": {
       "$ref": "#/$defs/V3ScreenArgs"
@@ -2771,8 +3016,128 @@
         "machines"
       ]
     },
+    "StopArgs": {
+      "type": "object",
+      "properties": {
+        "selection": {
+          "$ref": "#/$defs/StopSelection"
+        }
+      },
+      "required": [
+        "selection"
+      ]
+    },
+    "StopItem": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/AgentTarget"
+        },
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentLabel"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "stopped"
+            },
+            "exit": {
+              "$ref": "#/$defs/ProcessExit"
+            }
+          },
+          "required": [
+            "status",
+            "exit"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "failed"
+            },
+            "error": {
+              "$ref": "#/$defs/ErrorBody"
+            }
+          },
+          "required": [
+            "status",
+            "error"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "skipped"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "description": "A connected Guest in a range stop."
+        }
+      ]
+    },
     "StopResult": {
       "$ref": "#/$defs/V3StopResult"
+    },
+    "StopSelection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "targets"
+            },
+            "targets": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AgentTarget"
+              },
+              "description": "At least one target. Targets resolving to the same agent are stopped once.",
+              "minItems": 1
+            }
+          },
+          "required": [
+            "kind",
+            "targets"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "all"
+            },
+            "scope": {
+              "$ref": "#/$defs/Scope",
+              "description": "Remote discovery and stop on a range leave sleeping machines asleep."
+            }
+          },
+          "required": [
+            "kind",
+            "scope"
+          ]
+        }
+      ]
     },
     "TerminalColors": {
       "type": "object",
@@ -4385,6 +4750,21 @@
           "type": "object",
           "properties": {
             "op": {
+              "const": "list"
+            },
+            "args": {
+              "$ref": "#/$defs/ListArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
               "const": "agent.list"
             },
             "args": {
@@ -4520,6 +4900,21 @@
           "type": "object",
           "properties": {
             "op": {
+              "const": "stop"
+            },
+            "args": {
+              "$ref": "#/$defs/StopArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
               "const": "agent.remove"
             },
             "args": {
@@ -4584,6 +4979,21 @@
             },
             "args": {
               "$ref": "#/$defs/V3ResizeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "attach.resize"
+            },
+            "args": {
+              "$ref": "#/$defs/AttachResizeArgs"
             }
           },
           "required": [
@@ -4688,7 +5098,7 @@
               "const": "machine.remove"
             },
             "args": {
-              "$ref": "#/$defs/MachineRemoveArgs"
+              "$ref": "#/$defs/V3MachineRemoveArgs"
             }
           },
           "required": [
@@ -4911,6 +5321,17 @@
         "kind": {
           "$ref": "#/$defs/ClientKind"
         },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Additions to protocol 3 understood by this client."
+        },
+        "foreground": {
+          "type": "boolean",
+          "description": "Keep an authenticated machine session active until this foreground connection closes."
+        },
         "machine": {
           "$ref": "#/$defs/MachineHello"
         }
@@ -5047,6 +5468,10 @@
         "kind": {
           "$ref": "#/$defs/ConnectionKind",
           "description": "A bridge is always temporary."
+        },
+        "expected_machine_id": {
+          "type": "string",
+          "description": "The machine ID a saved connection must authenticate before its route changes."
         }
       },
       "required": [
@@ -5141,6 +5566,13 @@
         "build": {
           "type": "string"
         },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Protocol additions supported by this machine."
+        },
         "route": {
           "type": "array",
           "items": {
@@ -5220,6 +5652,22 @@
         "selector",
         "state",
         "status"
+      ]
+    },
+    "V3MachineRemoveArgs": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "An input machine selector."
+        },
+        "expected_machine_id": {
+          "type": "string",
+          "description": "Remove the saved connection for this exact full machine ID."
+        }
+      },
+      "required": [
+        "machine"
       ]
     },
     "V3MachineTransport": {
@@ -6052,6 +6500,21 @@
           "properties": {
             "topic": {
               "const": "screen"
+            },
+            "args": {
+              "$ref": "#/$defs/V3ScreenWatchArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "const": "attach"
             },
             "args": {
               "$ref": "#/$defs/V3ScreenWatchArgs"

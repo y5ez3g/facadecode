@@ -358,6 +358,7 @@ dependencies = [
  "facade-daemon",
  "facade-keeper",
  "facade-rules",
+ "facade-screen",
  "serde",
  "serde_json",
  "tokio",

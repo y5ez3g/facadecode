@@ -24,7 +24,7 @@ attempt. A client can retry temporary transport failures. Report a decoded refus
 or settings problem.
 
 Nothing runs at login. A command starts the keeper, and the keeper starts the daemon; `hello.keeper` is absent while no keeper
-runs. The daemon exits after 5 seconds with no running agent, connected client, or unfinished work, and the keeper, holding no
+runs. The daemon exits after 30 seconds with no running agent, connected client, or unfinished work, and the keeper, holding no
 CLI, exits with it. Ended records and screens stay in the home. The next command starts them again and reads them. Linux needs
 kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed.
 
@@ -38,7 +38,19 @@ representable integers. A notification omits the ID and receives no response.
 Ordinary terminal, editor and machine sessions offer `[3,3]`. Wait for a successful `hello`.
 Its `ops` and `topics` list the operations and watches available to the client. Shell and IDE
 introduce their client kind and build. The daemon supplies verified actor identity on its private
-MCP connection. The machine introduction carries a stable machine ID and a boot ID.
+MCP connection. The machine introduction carries a stable machine ID and a daemon start ID.
+
+An optional `capabilities` array in the hello parameters and result advertises additions to
+protocol 3. A missing array has the same meaning as an empty array. Use `ops` and `topics` to
+discover `list`, `stop`, `attach.resize` and the `attach` topic. The daemon advertises
+`agent.resume_list.local` for local-only resume queries, `machine.connect.expected_machine_id`
+for a saved connection guarded by the expected machine ID, and `machine.remove.expected_machine_id`
+for exact removal. A terminal that declares the resume capability opts into passive queries for an
+`all: true` resume listing. A terminal that declares the connect capability allows a saved connection
+to update the settings for the machine authenticated on that stream. A client that advertises
+`machine.disconnected` can receive the `disconnected` machine state. Older clients receive
+`unreachable` for that state. Machine sessions also use `attach` and `machine.probe_route` to
+discover support for shared Attach and passive route probes.
 
 A watch gives its number and first snapshot before its ordered changes. End it with `unwatch`.
 Use the watch number to interpret each change in the type for that topic. Ignore unrecognized
@@ -52,8 +64,8 @@ In this exchange `→` marks a client message and `←` marks a daemon message. 
 contains only a short example terminal sequence.
 
 ```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[3,3],"build":"1.4.2","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","machines"],"ops":["agent.list","agent.inspect","agent.start","agent.start_preflight","agent.resume_list","agent.resume","location.list","cli.list","agent.stop","agent.remove","agent.rename","agent.type","agent.send","agent.resize","agent.screen","daemon.status","workspace.import_legacy","machine.list","machine.add","machine.connect","machine.remove","machine.rename","daemon.log","daemon.upgrade"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[3,3],"build":"0.1.6","kind":"terminal","capabilities":["machine.disconnected","attach","machine.connect.expected_machine_id","agent.resume_list.local"]}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"build":"0.1.6","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","attach","machines"],"ops":["list","agent.list","agent.inspect","agent.start","agent.start_preflight","agent.resume_list","agent.resume","location.list","cli.list","agent.stop","stop","agent.remove","agent.rename","agent.type","agent.send","agent.resize","attach.resize","agent.screen","daemon.status","workspace.import_legacy","machine.list","machine.add","machine.connect","machine.remove","machine.rename","daemon.log","daemon.upgrade"],"capabilities":["agent.resume_list.local","machine.disconnected","machine.connect.expected_machine_id","machine.remove.expected_machine_id","machine.probe_route","attach"]}}
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"cli":"claude","folder":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","address":"a1@devbox","type":"managed","name":"Pixel","cli":"claude","args":[],"cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":1234,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:25:00.000Z","started_at":"2026-11-09T17:25:00.000Z","root":"a1","yolo":true,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"}}}}
@@ -99,16 +111,30 @@ the last known SSH error.
 
 ### Listing and inspecting
 
-`agent.list` returns active agents and Guests in the permitted view, newest start first. Each
+`list` and `agent.list` return active agents and Guests in the permitted view, newest start first. Each
 entry contains a stable `reference` and the public row including its copyable `id`, `type`,
 `state`, CLI, working folder and start time. The `agents` watch also includes ended records
 and the synchronization state of remote contributors. A synced contribution can be an empty
 list. A removal change carries the machine, agent ID and confirmed cause. Inspect returns the
 agent record, input information, current terminal viewers, and recorded startup source when known.
 
-The list's machine connection state and its query status are separate facts. A normal bare list
-reports an unfinished connection as `connecting` and returns the currently available records.
-An online machine can still fail or time out in this query.
+The `list` scope defaults to `{"kind":"reachable"}`. It queries the local machine and can probe
+saved connections without waking sleeping daemons. A scope of `{"kind":"local"}` queries only the
+local machine and opens no SSH connection. A scope of `{"kind":"machine","machine":"devbox"}`
+queries the named machine and can wake it. An online machine can still fail or time out in a
+query. Read each machine's query `status` separately from its connection `state`.
+
+Here the local query has no active agents. The reachable query also reports a timed-out machine.
+
+```text
+→ {"jsonrpc":"2.0","id":8,"method":"call","params":{"op":"list","args":{"scope":{"kind":"local"}}}}
+← {"jsonrpc":"2.0","id":8,"result":{"agents":[],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","selector":"devbox","state":"online","status":"answered"}]}}
+→ {"jsonrpc":"2.0","id":9,"method":"call","params":{"op":"list","args":{}}}
+← {"jsonrpc":"2.0","id":9,"result":{"agents":[],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","selector":"devbox","state":"online","status":"answered"},{"machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","short_id":"ea9b4046","name":"lab","selector":"lab","state":"unreachable","status":"timed_out","error":"SSH connection timed out."}]}}
+```
+
+`agent.list` keeps its existing query behavior. A bare `agent.list` can return the currently
+available records while a connection is `connecting`.
 
 ### States
 
@@ -124,7 +150,7 @@ An online machine can still fail or time out in this query.
   given, and `reason` is `tools_unavailable`; or a CLI that runs by a built-in's rule showed nothing of what it does within 60
   seconds of its start or resume, and `reason` is `not_ready`. A program without a rule is `unknown` instead: nothing
   promises it reports.
-- `just_done`: a turn ended while no `screen` watch showed the agent. It stays until one does; `agent.screen` does not count.
+- `just_done`: a turn ended while no `screen` or `attach` watch showed the agent. It stays until one does; `agent.screen` does not count.
   Work before the CLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a question the CLI
   shows. Words after the CLI's name at its start are the CLI's own and ask nothing.
 - `working`: the CLI works, or stopped working less than a second ago.
@@ -172,6 +198,21 @@ the name it replaced. `agent.remove` returns the removed record's stable referen
 A confirmed expiry or explicit removal also appears as
 `record_removal` in a precise missing-record error.
 
+`stop` accepts a nonempty list of targets in a `targets` selection or a machine scope in an
+`all` selection. It resolves explicit targets in order and stops each resolved agent once.
+An `all` selection skips connected Guests. For remote scopes it probes saved connections
+without waking sleeping daemons and uses that same policy through the stop. Both selections
+continue after individual failures. Each item reports `stopped` with its `exit`, `failed`
+with its error, or `skipped`. The optional `machines` array reports the scope's machine outcomes.
+
+```text
+→ {"jsonrpc":"2.0","id":10,"method":"call","params":{"op":"stop","args":{"selection":{"kind":"targets","targets":[{"agent":"a4@devbox"},{"agent":"missing@devbox"}]}}}}
+← {"jsonrpc":"2.0","id":10,"result":{"items":[{"target":{"agent":"a4@devbox"},"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a4"},"address":"a4@devbox","status":"stopped","exit":{"code":0,"at":"2026-11-09T17:27:00.000Z"}},{"target":{"agent":"missing@devbox"},"status":"failed","error":{"code":-32000,"message":"No agent matches missing@devbox.","data":{"reason":"not_found"}}}]}}
+```
+
+To stop this machine's managed agents, use `{"selection":{"kind":"all","scope":{"kind":"local"}}}`
+as the arguments to `stop`.
+
 ### Resume, locations and status
 
 `agent.resume_list` gives resumable agent records and CLI sessions in the requested scope. Use
@@ -182,6 +223,11 @@ saved Pin may instead provide the exact `machine_id`, mutually exclusive with `m
 also be selected by its full ID or eight-character prefix in the requested directory. The resume
 receipt indicates when it created a new agent from a saved session.
 `session_not_found` means the selected running machine confirmed the session is absent.
+
+With the `agent.resume_list.local` capability, set `local: true` to list this machine's
+resumable managed agents and, when `folder` is supplied, its saved CLI sessions in that
+folder. This scope opens no SSH connections. `local: true` and `machine` are mutually
+exclusive. For a named-machine lookup of managed agents, omit `folder`.
 
 `location.list` returns the working locations and Git kinds known on the selected machine.
 Local results can identify their requested workspace roots as `source_folder`. `cli.list`
@@ -264,17 +310,36 @@ bytes to the viewer's terminal parser. Process changes for each watch in arrival
 `redraw` supplies a terminal sequence that replaces the visible screen. Preserve parser state between messages. Do not treat
 the decoded bytes as plain text; use `agent.screen` when you want plain text.
 
-A v3 screen watch can set `report_activity`. Its snapshot then includes `working`, which is true while the agent is
+A `screen` or `attach` watch can set `report_activity`. Its snapshot then includes `working`, which is true while the agent is
 starting or working. The watch receives an `activity` change each time that answer changes.
 
-A v3 screen watch can also request `size` with `cols` and `rows`. For a live run it sets the shared
-layout before the initial snapshot. If the size waits for a checkpoint, this watch waits for
-that checkpoint too. Always use the dimensions in the snapshot to draw its frame.
+Use the `attach` topic and `attach.resize` operation when the daemon advertises both. An
+`attach` watch reports its initial terminal capacity in `size`. Report later sizes through
+`attach.resize` with the watch ID on the same connection. When the active viewers all use
+`attach`, the agent uses the smallest reported column count and the smallest reported row
+count. Closing or ending a watch removes its viewer from the shared layout.
 
-An agent has one terminal size. Set the viewer to `snapshot.cols` columns and `snapshot.rows` rows before applying
-`snapshot.redraw`. `agent.resize` changes the size for every viewer, and the last resize wins. When the size changes, every
-viewer receives a `redraw` with its own `cols` and `rows`. Resize the viewer to those dimensions before applying its `data`.
-These dimensions may differ from the snapshot, so a screen viewer does not need the `agents` topic to learn the redraw's size.
+The snapshot and each `redraw` give the actual layout in `cols` and `rows`. Set the viewer
+to those dimensions before applying the terminal bytes. A viewer with more room draws the
+shared grid in the upper left. It redraws locally when its own terminal grows and the
+shared layout stays the same. When the shared layout changes, the daemon sends a `redraw`.
+
+In this exchange a viewer starts at 80 columns and 24 rows, then raises its capacity.
+
+```text
+→ {"jsonrpc":"2.0","id":11,"method":"watch","params":{"topic":"attach","args":{"agent":"a2@devbox","size":{"cols":80,"rows":24}}}}
+← {"jsonrpc":"2.0","id":11,"result":{"watch":2,"snapshot":{"agent_id":"a2","address":"a2@devbox","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":80,"rows":24,"redraw":"G1s/MjAyNmw=","process":"running"}}}
+→ {"jsonrpc":"2.0","id":12,"method":"call","params":{"op":"attach.resize","args":{"watch":2,"cols":120,"rows":40}}}
+← {"jsonrpc":"2.0","id":12,"result":{}}
+← {"jsonrpc":"2.0","method":"changed","params":{"watch":2,"change":{"kind":"redraw","cols":120,"rows":40,"data":"G1s/MjAyNmw="}}}
+→ {"jsonrpc":"2.0","id":13,"method":"unwatch","params":{"watch":2}}
+← {"jsonrpc":"2.0","id":13,"result":{}}
+```
+
+For older daemons, use the `screen` topic with `agent.resize`. A `screen` watch can specify
+`size` before its initial snapshot and waits if that resize is waiting for a checkpoint.
+While a live `screen` watch exists for an agent, the last resize wins. The daemon returns to
+the shared Attach layout after the last `screen` watch leaves.
 
 A successful `agent.resize` response accepts the request. If the screen log is full while its checkpoint is being written,
 only the latest requested size is kept. It takes effect when the checkpoint writer finishes, whether publication succeeded
@@ -308,7 +373,7 @@ provide no response.
 
 A screen snapshot has the stable reference fields and current address. Reconnect and draw the
 new snapshot before sending input again. Keys typed while disconnected are discarded. A v3
-`agent.resize` can supply foreground, background and cursor colors for a verified IDE client.
+`agent.resize` or `attach.resize` can supply foreground, background and cursor colors for a verified IDE client.
 The applied colors answer OSC 10, 11 and 12. `agent.screen` reads the requested tail of the
 logical screen and scrollback as text, including for an ended agent.
 
@@ -361,8 +426,17 @@ unavailable.
 A machine session is a bidirectional daemon v3 connection over SSH. Each direction numbers
 requests independently. After the machine hello, each daemon verifies the other and completes
 its first `advertise` exchange before the route is ready. Later advertisements replace the
-sending machine's table. A boot ID distinguishes concurrent uses of the same saved machine ID.
+sending machine's table. The daemon start ID (`boot_id`) distinguishes concurrent uses of the
+same saved machine ID. An authenticated machine hello with `foreground: true` holds the session
+active until the connection closes. Omission has the same meaning as `false`.
 On Linux, `ssh_cleans_processes` records a known login cleanup policy.
+
+`machine.list` reads the known roster without opening SSH connections. A saved connection with
+no live session and no observed failure appears as `disconnected` to clients that advertise
+`machine.disconnected`. `sleeping` records a confirmed idle daemon. `unreachable` records a
+transport or protocol failure, and `ssh_interaction_required` asks for a foreground login.
+Machine rows can carry a machine's `capabilities`. Missing capabilities give no assurance
+that the corresponding operation is supported.
 
 The `forward` route lists remaining machine IDs through the destination. Each hop removes its
 own receiver ID and preserves the verified originating `Caller`. A forwarded `call` uses
@@ -371,9 +445,46 @@ target. Internal `agent.deliver_start_result` is for authenticated machine sessi
 An unsent call can be reported as `not_executed`. A sent call that loses its reply can report
 `outcome_unknown`. A watch that loses its route ends with `watch_ended`.
 
+Authenticated machine sessions use `machine.probe_route` to open saved connections passively.
+Like `machine.ensure_route`, this control request carries `route` and `method` in the
+`forward` envelope, with no application arguments and a null success result. An older hop
+can be used over live connections. If that is unavailable, the probe fails without trying a
+waking call. A saved session can close after 30 seconds idle. In-flight operations and live
+Attach watches keep the participating sessions active. Before exiting idle, a daemon sends
+`machine.sleeping` with empty parameters to machines that advertised `machine.disconnected`.
+The receiver records sleep for the authenticated sender.
+
+A forwarded watch on an authenticated machine session returns `ForwardWatchResult`.
+Only the machine holding a live shared Attach adds `attach: { viewer, boot_id }`. Each hop
+can replace `watch` for its own session and preserves the holder's binding. Legacy `screen`
+watches and ended snapshots omit the binding. The local client receives its own `watch` and
+the snapshot.
+
+For a shared Attach, the source forwards `method: "attach.resize"` with its route and verified
+caller. The forwarded `params` carry `ForwardAttachResizeArgs` with `viewer`, `boot_id`,
+`cols`, `rows` and optional `colors`. The holder checks the viewer, originating caller and
+daemon start ID. The binding expires when the watch closes or ends. For a legacy holder the
+source uses `screen` and translates a validated resize into `agent.resize` for the watch's
+exact agent over its established route.
+
 The local `machine.connect` response authorizes the foreground stream before the machine
-handshake. Its result is followed by `connected` or `connect_failed`. A save with `machine.add`
-records the verified SSH destination and its raw SSH arguments.
+handshake. Its result is followed by `connected` or `connect_failed`. With the
+`machine.connect.expected_machine_id` capability, a saved connection can specify the ID it
+expects to authenticate. The daemon confirms that ID before changing the saved connection.
+An invalid ID fails validation. On mismatch the existing connection stays saved. The
+`machine.add` operation remains available to save a verified SSH destination and its raw
+SSH arguments. `machine.remove` deletes a saved connection locally and returns its machine ID.
+When the daemon advertises `machine.remove.expected_machine_id`, pass that full ID in
+`expected_machine_id` to require its exact saved connection. An invalid ID fails validation.
+If that saved connection is absent, the daemon returns `not_found`, even when another
+machine's name spells the ID. The original selector applies when the guard is omitted.
+
+```text
+→ {"jsonrpc":"2.0","id":14,"method":"call","params":{"op":"machine.connect","args":{"transport":{"kind":"ssh","ssh_destination":"alice@lab"},"kind":"saved","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}}
+← {"jsonrpc":"2.0","id":14,"result":{"ssh_destination":"alice@lab","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}
+→ {"jsonrpc":"2.0","id":15,"method":"call","params":{"op":"machine.remove","args":{"machine":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}}
+← {"jsonrpc":"2.0","id":15,"result":{"machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","name":"lab","ssh_destination":"alice@lab","reachable":false}}
+```
 
 ## Version 2 takeover and old data
 

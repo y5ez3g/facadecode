@@ -8,7 +8,7 @@ session during a machine connection.
 
 | Group | Commands |
 | --- | --- |
-| Agents | `start`, `list`, `resume`, `stop`, `rename` |
+| Agents | `start`, `stop`, `list`, `resume`, `rename` |
 | Interact | `attach`, `send`, `screen`, `type` |
 | System | `status`, `machine`, `upgrade` |
 
@@ -31,10 +31,16 @@ the agent's exit code or 128 plus its signal number. A closed stdout pipe ends t
 platform's SIGPIPE behavior or handles a failed write.
 
 The Orchestrator supplies copyable agent references such as `a5@laptop` and message IDs such as `m42@laptop`.
-An unqualified `list` uses current connections. `list --machine` waits for the named machine and can wake it.
-`resume` shows stopped agents with resumable sessions and CLI sessions in a common table. After a send, Shell
-prints a delivery receipt once a managed agent receives it or a Guest takes it from its inbox. The editor and
-other structured callers use the daemon protocol.
+An unqualified `list` queries reachable machines on demand and leaves sleeping machines idle. `list --machine`
+waits for the named machine and can wake it. `resume` shows stopped agents with resumable sessions and lists
+independent CLI sessions from the current folder. A named `resume --machine` lists managed agents on that
+machine and provides references that include its selector. `list --local` and `resume --local` stay on this
+machine and open zero SSH connections even if they start the local daemon.
+
+`stop <AGENT>...` accepts one or more references. `stop --local`, `stop --machine <MACHINE>` and `stop --all`
+are exclusive alternatives. Scope stops skip connected Guests. A remote scope stop leaves sleeping machines
+idle. Shell prints confirmed stops before reporting failed items and machines. A partial failure returns 1.
+After a send, Shell prints a receipt once a managed agent receives it or a Guest takes it from its inbox.
 
 ## Connections and installation
 
@@ -62,10 +68,13 @@ for the requested build to answer a new v3 hello.
 `facade daemon --detach` is the background entry for an editor or relay. The caller confirms readiness with hello.
 The installer's `facade daemon --takeover` entry checks the selected Facade home and exits 0 if the services are idle.
 For a running service, it waits for the installed build to answer with protocol 3. The installer activates the
-public `facade` and `facade-mcp` paths after this check succeeds. `facade upgrade` runs the published stable
-installer. `facade upgrade --version X.Y.Z` runs the installer pinned to that release, including a candidate
-available under the exact version. Both report the actual installed version and launcher directory. Machine
-connections pin the installer to the local release.
+public `facade` and `facade-mcp` paths after this check succeeds. `facade upgrade` checks stable release metadata
+first. It prints the up-to-date receipt when the current version is at or above the stable channel without
+running an installer or asking for takeover. `facade upgrade --version X.Y.Z` runs the installer pinned to
+that release, including a candidate available under the exact version. The pinned path bypasses the stable
+check and can install an older release when services are idle. A running newer daemon may refuse the takeover.
+Both forms report the actual version and installed launcher folder when available. Machine connections pin
+the installer to the local release.
 
 In debug builds, `FACADE_TEST_DAEMON_PROTOCOL` and `FACADE_TEST_KEEPER_PROTOCOL` take a `low,high` range for
 testing compatibility decisions. Release builds advertise the supported protocol ranges.
@@ -86,18 +95,23 @@ the call.
 
 ### attach
 
-`attach.rs` owns the console until the attachment ends. It reports itself as a Shell client on its machine and follows
-a `screen` watch. The Orchestrator authorizes the managed agent and supplies its name, public reference and stable
-identity. Foreground start and resume, or a reconnect, can read the final snapshot of the exact run. Each reconnect
-watches that same stable identity and begins with a fresh redraw. Only the first watch asks for scrollback.
+`attach.rs` owns the console until the attachment ends. It reports itself as a Shell client on its machine. A
+daemon that offers `attach` and `attach.resize` receives the console capacity on the watch and on each size
+change. An older daemon receives the existing `screen` watch and `agent.resize` operation. The Orchestrator
+authorizes the managed agent and supplies its name, public reference and stable identity. Foreground start
+and resume, or a reconnect, can read the final snapshot of the exact run. Each reconnect watches that same
+stable identity and begins with a fresh redraw. Only the first watch asks for scrollback.
 
 The console sends key and resize notifications through the current connection. It drops queued input when a
 connection ends and counts keys typed while disconnected. It leaves keys already handed to that connection there.
 During a planned takeover, any write already in progress completes before Attach acknowledges `closing`. The
 reconnect shows the current screen before it resumes sending input. It shows a bottom-line notice on stderr when
-any bytes could not be sent. The same policy applies to a local or remote terminal. Shell resize reports the current
-rows and columns. A pane too small for a shared redraw reports the layout size and waits for a frame it can draw.
-A resize refreshes the pane even if its new size already matches the shared layout.
+any bytes could not be sent. The same policy applies to a local or remote terminal. The Orchestrator chooses the
+smallest active viewer size in each dimension. Shell keeps a `Screen` at the confirmed shared size and updates it
+from snapshots, redraws and output. An equally sized console accepts the terminal stream directly. A larger
+console draws the shared grid at the top left and clears the margins through `Screen::redraw_in_viewport`.
+An undersized console reports the current layout size. Changing the console size triggers a local redraw even
+if the shared size stays the same.
 
 The terminal is restored before the final diagnostic. A detach, an agent exit, a removal, and a permanent connection
 failure use their corresponding status and message. Detach closes an alternate-screen view or moves the main-screen
@@ -120,22 +134,39 @@ and write only the run's own session file. The inherited run hint is separate fr
 
 ### machine
 
-`machine.rs` runs the foreground machine commands. `add` and `connect` accept the person's login SSH arguments in
-order, with a Facade `--home` prefix when supplied. SSH can ask for credentials or host keys in the person's terminal.
-`add` uses a local `machine link` process that keeps the authenticated SSH connection. It reports success and
-returns after the Orchestrator confirms the saved connection. The same process carries traffic until either end
-closes the link. `connect` stays open for the lifetime of that command. Machine state and the original SSH error
-come from the Orchestrator's machine view.
+`machine.rs` runs the machine commands. `add` and `connect` accept the person's login SSH arguments in order,
+with Facade options before the SSH arguments. SSH can ask for credentials or host keys in the person's console.
+`machine list` reads the local machine table without opening SSH. A saved connection with no live session or
+observed error displays `Disconnected`. The Orchestrator reports a confirmed sleeping machine, a connection
+error or a need for SSH login as distinct states.
+
+`add` reuses working batch credentials. If password login is needed, it uses the authenticated login to confirm
+the remote Facade identity and install the local dedicated public key. It verifies that key on an independent,
+noninteractive SSH connection, confirms the same machine ID and only then saves the verified connection. A
+second add for the same machine ID can update its credentials. Explicit `add --bidirectional` also verifies and
+saves a return connection using the source address seen by the remote SSH service. It rolls back authorization
+and host trust added for a return that fails, keeping the confirmed forward connection. A temporary `connect`
+carries traffic in both directions for as long as the foreground command stays open. It also works where only
+one side can initiate SSH.
+
+`remove` deletes the local saved connection and revokes Facade-marked local authorization for the other machine
+with zero SSH. `remove --bidirectional` first uses the saved SSH login to confirm the remote machine ID and
+request reciprocal cleanup. The remote side checks authorization even when a saved return connection is absent.
+Shell performs local cleanup after the remote attempt, reports each side's outcome and returns 1 when it cannot
+confirm both sides. Removal matches authorization to a machine ID so a machine rename does not interfere.
 
 The hidden `machine serve` validates the first machine hello, opens the daemon socket for the selected home and
 relays the machine protocol. A passive `machine serve --no-start` returns 3 when the Orchestrator is sleeping.
-SSH runs the installed program at its fixed path. The platform commands live in Base and the installer contract is
-shared with the background connection path. Both probe that program with `--version`. Older initiating builds
-query a different entry point, so update the machines that initiate connections before their remote targets.
+SSH runs the installed program at its fixed path. The platform commands live in Base and the installer contract
+is shared with the background connection path. A hidden SSH administration entry handles enrollment and
+reciprocal removal over an already authenticated login. Ordinary connections to 0.1.6 retain the existing
+machine framing with batch credentials. Enrollment and reciprocal cleanup require a build with the
+administration entry.
 
 ## Dependencies
 
 - [base](base.md) supplies the shared protocol, socket and console operations, shell process arguments and installers.
+- [screen](screen.md) redraws the canonical agent grid within a larger Shell console.
 - [rules](rules.md) supplies managed hook formats and session reporting.
 - [keeper](keeper.md) and [daemon](daemon.md) supply their service entry points.
 

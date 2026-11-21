@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{agent, before, inspection, now};
 use crate::commands::{age, inspect_text, list_text, sleeping_text, state_words, status_text};
-use crate::errors::delivery_receipt;
+use crate::errors::{delivery_receipt, machine_query_unanswered};
 use crate::{TableLayout, render_table, table};
 
 /// Remove the last column's padding from each line.
@@ -36,6 +36,7 @@ fn the_v3_roster_keeps_public_rows_stable_references_and_machine_query_states() 
         ("online", "timed_out"),
         ("online", "error"),
         ("connecting", "unavailable"),
+        ("disconnected", "unavailable"),
         ("sleeping", "unavailable"),
         ("unreachable", "unavailable"),
         ("ssh_interaction_required", "unavailable"),
@@ -59,6 +60,10 @@ fn the_v3_roster_keeps_public_rows_stable_references_and_machine_query_states() 
         let wire = json!({ "agents": wire_rows, "machines": [machine] });
         let list: AgentListResult = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(serde_json::to_value(&list).unwrap(), wire);
+        assert_eq!(
+            machine_query_unanswered(&list.machines[0]),
+            status != "answered" && state != "sleeping",
+        );
     }
 }
 

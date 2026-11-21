@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use facade_base::daemon::{ClientKind, DAEMON_PROTOCOL_VERSION, ScreenTopic, ScreenWatchArgs};
-use facade_base::daemon_client::{DaemonClient, Identity};
+use facade_base::daemon_client::{DaemonClient, Identity, UpgradeClient};
 use facade_base::jsonrpc::{ErrorBody, Notification, Reason, Request, Response, encode_line};
 use facade_base::sockets::{DaemonListener, ServerSocket};
+use facade_base::v3;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -72,8 +73,13 @@ async fn read_hello(connection: ServerSocket) -> BufReader<ServerSocket> {
 /// so, naming both builds, and panics at nothing a peer sends.
 #[test]
 fn an_answer_to_hello_this_build_cannot_read_is_another_protocol_s() {
-    for version in [DAEMON_PROTOCOL_VERSION, 3] {
-        let socket = TestSocket::new(&format!("hello-unread-{version}"));
+    let legacy_range = [DAEMON_PROTOCOL_VERSION; 2];
+    for (range, selected) in [
+        (legacy_range, 9),
+        (v3::DAEMON_PROTOCOL_RANGE, DAEMON_PROTOCOL_VERSION),
+        (v3::TAKEOVER_DAEMON_PROTOCOL_RANGE, 9),
+    ] {
+        let socket = TestSocket::new(&format!("hello-unread-{}-{}", range[0], range[1]));
         let mut identity = terminal();
         identity.agent = Some("a1".into());
         identity.sessions = vec!["session-1".into()];
@@ -83,16 +89,25 @@ fn an_answer_to_hello_this_build_cannot_read_is_another_protocol_s() {
             connection.read_line(&mut line).await.unwrap();
             let request: Request = serde_json::from_str(&line).unwrap();
             assert_eq!(request.method, "hello");
-            let mut expected = json!({ "protocol": [version, version], "build": facade_base::build_id(), "kind": "terminal" });
-            let result = if version == DAEMON_PROTOCOL_VERSION {
+            let mut expected =
+                json!({ "protocol": range, "build": facade_base::build_id(), "kind": "terminal" });
+            if range == legacy_range {
                 expected["agent"] = json!("a1");
                 expected["sessions"] = json!(["session-1"]);
-                json!({ "protocol": 9, "build": "9.9.9" })
-            } else {
+            }
+            let result = if range == v3::DAEMON_PROTOCOL_RANGE {
+                expected["capabilities"] = json!([
+                    v3::CAP_MACHINE_DISCONNECTED,
+                    v3::CAP_ATTACH,
+                    v3::CAP_MACHINE_CONNECT_EXPECTED_ID,
+                    v3::CAP_RESUME_LIST_LOCAL
+                ]);
                 json!({
-                    "protocol": DAEMON_PROTOCOL_VERSION, "build": "9.9.9", "pid": 1, "agents": 0,
+                    "protocol": selected, "build": "9.9.9", "pid": 1, "agents": 0,
                     "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "topics": [], "ops": [],
                 })
+            } else {
+                json!({ "protocol": selected, "build": "9.9.9" })
             };
             assert_eq!(request.params, expected);
             let answer = Response::ok(request.id.unwrap(), result);
@@ -101,25 +116,20 @@ fn an_answer_to_hello_this_build_cannot_read_is_another_protocol_s() {
             line.clear();
             let _ = connection.read_line(&mut line).await;
         });
-        let connect = if version == DAEMON_PROTOCOL_VERSION {
-            DaemonClient::connect
+        let until = Instant::now() + Duration::from_secs(5);
+        let err = if range == v3::TAKEOVER_DAEMON_PROTOCOL_RANGE {
+            UpgradeClient::connect(&socket.0, until, &mut |_| true).err()
         } else {
-            DaemonClient::connect_v3
-        };
-        let connected = connect(
-            &socket.0,
-            &identity,
-            Instant::now() + Duration::from_secs(5),
-            &mut |_| true,
-        );
-        let err = connected.err().expect("an incompatible hello must fail");
+            let connect = if range == legacy_range {
+                DaemonClient::connect
+            } else {
+                DaemonClient::connect_v3
+            };
+            connect(&socket.0, &identity, until, &mut |_| true).err()
+        }
+        .expect("an incompatible hello must fail");
         daemon.join().unwrap();
         let body = err.downcast_ref::<ErrorBody>().unwrap();
-        let selected = if version == DAEMON_PROTOCOL_VERSION {
-            9
-        } else {
-            DAEMON_PROTOCOL_VERSION
-        };
         assert_eq!(
             body.data.reason,
             Reason::IncompatibleProtocol,

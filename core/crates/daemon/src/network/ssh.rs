@@ -22,7 +22,6 @@ use super::{SavedSsh, wire};
 
 const STDERR_BYTES: usize = 32 * 1024;
 const EXIT_GRACE: Duration = Duration::from_millis(250);
-pub(super) const RETRY_AFTER: Duration = Duration::from_secs(10);
 
 pub(super) struct FailedAttempt {
     pub(super) error: ErrorBody,
@@ -41,6 +40,14 @@ impl From<ErrorBody> for FailedAttempt {
 }
 
 impl FailedAttempt {
+    pub(super) fn sleeping() -> Self {
+        Self {
+            error: ErrorBody::new(Reason::Unavailable, "The machine is sleeping."),
+            sleeping: true,
+            ssh_error: None,
+        }
+    }
+
     pub(super) fn from_ssh(
         ssh: &SavedSsh,
         diagnostics: Diagnostics,
@@ -48,14 +55,15 @@ impl FailedAttempt {
         sleeping: bool,
     ) -> Self {
         let ssh_error = (!diagnostics.stderr.trim().is_empty()).then(|| diagnostics.stderr.clone());
-        let error = if sleeping {
-            ErrorBody::new(Reason::Unavailable, "The machine is sleeping.")
-        } else {
-            ssh_failure(ssh, diagnostics, error)
-        };
+        if sleeping {
+            return Self {
+                ssh_error,
+                ..Self::sleeping()
+            };
+        }
         Self {
-            error,
-            sleeping,
+            error: ssh_failure(ssh, diagnostics, error),
+            sleeping: false,
             ssh_error,
         }
     }
@@ -306,8 +314,12 @@ pub(super) struct Diagnostics {
 }
 
 impl Diagnostics {
+    pub(super) fn exit_code(&self) -> Option<i32> {
+        self.status.and_then(|status| status.code())
+    }
+
     pub(super) fn needs_interaction(&self) -> bool {
-        if self.status.and_then(|status| status.code()) != Some(255) {
+        if self.exit_code() != Some(255) {
             return false;
         }
         let stderr = self.stderr.to_ascii_lowercase();

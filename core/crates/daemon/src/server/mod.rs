@@ -18,6 +18,7 @@ use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::AgentRef;
 use facade_base::sockets::{DaemonListener, ServerReader, ServerSocket, ServerWriter};
+use facade_base::v3;
 use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::sync::{mpsc, watch};
@@ -28,6 +29,8 @@ use crate::Cancel;
 pub(crate) struct Client {
     /// What the client said of itself in its hello.
     pub(crate) identity: Identity,
+    /// The features the client advertised in its hello.
+    pub(crate) capabilities: Vec<String>,
     /// The stable actor of an in-process connection, supplied by its authenticated caller.
     pub(crate) verified_actor: Option<AgentRef>,
 }
@@ -75,8 +78,9 @@ pub(crate) trait Service: Send + Sync + 'static {
     /// An authorized machine session, held until its last RPC response is written.
     type Machine: Send;
 
-    /// Answers an accepted hello. The server strips the old identity fields and attaches any
-    /// authenticated actor from its private entry point after this returns.
+    /// Answers an accepted hello and carries its capabilities into the client. The server strips
+    /// the old identity fields and attaches any authenticated actor from its private entry point
+    /// after this returns.
     fn hello(
         self: &Arc<Self>,
         hello: HelloParams,
@@ -123,6 +127,15 @@ pub(crate) trait Service: Send + Sync + 'static {
         args: Value,
         viewer: u64,
     ) -> impl Future<Output = Result<Watch, ErrorBody>> + Send;
+
+    /// Applies the capacity reported by an active Attach watch on this connection.
+    fn resize_viewer(
+        self: &Arc<Self>,
+        client: &Client,
+        viewer: u64,
+        size: v3::ScreenSize,
+        colors: Option<v3::TerminalColors>,
+    ) -> impl Future<Output = Result<(), ErrorBody>> + Send;
 
     /// Ends a watch that [`Service::watch`] started, when its client unwatches it or closes.
     fn unwatch(

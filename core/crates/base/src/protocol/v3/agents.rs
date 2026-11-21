@@ -5,12 +5,12 @@ use std::collections::BTreeMap;
 use schemars::{JsonSchema, Schema};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::jsonrpc::AgentRemoval;
+use crate::jsonrpc::{AgentRemoval, ErrorBody};
 use crate::process::{ProcessExit, ProcessState};
 
 use super::{
-    AgentRef, AgentSyncState, InputInfo, MachineQueryResult, Message, Said, StateDetail,
-    ToolsReason, ToolsState, present,
+    AgentRef, AgentSyncState, AgentTarget, InputInfo, MachineQueryResult, Message, Said,
+    StateDetail, ToolsReason, ToolsState, present,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -67,6 +67,83 @@ pub struct AgentListResult {
     pub machines: Vec<MachineQueryResult>,
 }
 
+/// The machines included in a list or range stop.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Scope {
+    #[default]
+    Reachable,
+    Local,
+    Machine {
+        machine: String,
+    },
+}
+
+impl Scope {
+    fn is_reachable(&self) -> bool {
+        matches!(self, Self::Reachable)
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ListArgs {
+    /// Omit the scope to query reachable machines without waking them.
+    #[serde(default, skip_serializing_if = "Scope::is_reachable")]
+    pub scope: Scope,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct StopArgs {
+    pub selection: StopSelection,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StopSelection {
+    Targets {
+        /// At least one target. Targets resolving to the same agent are stopped once.
+        #[schemars(length(min = 1))]
+        targets: Vec<AgentTarget>,
+    },
+    All {
+        /// Remote discovery and stop on a range leave sleeping machines asleep.
+        scope: Scope,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct BatchStopResult {
+    pub items: Vec<StopItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<MachineQueryResult>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct StopItem {
+    pub target: AgentTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<AgentRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentLabel>,
+    #[serde(flatten)]
+    pub outcome: StopOutcome,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum StopOutcome {
+    Stopped {
+        exit: ProcessExit,
+    },
+    Failed {
+        error: ErrorBody,
+    },
+    /// A connected Guest in a range stop.
+    Skipped,
+}
+
 /// Shared arguments for start and preflight.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "V3StartArgs")]
@@ -114,6 +191,9 @@ pub struct ResumeListArgs {
     pub folder: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub all: bool,
+    /// Query this machine alone without starting SSH. Mutually exclusive with `machine`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

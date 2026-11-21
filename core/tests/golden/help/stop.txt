@@ -1,16 +1,27 @@
-Stop a running agent.
+Stop one or more running agents.
 
-The agent's record and saved session are kept, so you can read its final
-screen or resume it later.
+Keeps each agent's record, final screen, and saved session so you can read
+its screen or resume it later. Connected guests cannot be stopped by Facade
+and are skipped when stopping all agents on a machine or across machines.
 
-Usage: facade stop <AGENT>
+Usage:
+  facade stop <AGENT>...
+  facade stop --local
+  facade stop --machine <MACHINE>
+  facade stop --all
 
 Examples
   facade stop Nova
-  facade stop a5@laptop
+  facade stop a1 a2@devbox
+  facade stop --local
+  facade stop --machine devbox
+  facade stop --all
 
 Arguments
-  <AGENT>  Agent reference, agent ID, or unique name
+  <AGENT>...  Agent references, agent IDs, or unique names
 
 Options
-  -h, --help  Show help
+      --local              Stop all running managed agents on this machine only
+      --machine <MACHINE>  Stop all running managed agents on that machine only
+      --all                Stop all running managed agents across reachable machines
+  -h, --help               Show help

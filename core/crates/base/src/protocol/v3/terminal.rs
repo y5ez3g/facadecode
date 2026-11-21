@@ -96,6 +96,18 @@ pub struct AgentResizeArgs {
     pub colors: Option<TerminalColors>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AttachResizeArgs {
+    /// The Attach watch ID on the connection issuing this call.
+    pub watch: u64,
+    /// Terminal width in columns, at least 2.
+    pub cols: u16,
+    /// Terminal height in rows, at least 1.
+    pub rows: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colors: Option<TerminalColors>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenSize {
     /// Terminal width in columns, at least 2.

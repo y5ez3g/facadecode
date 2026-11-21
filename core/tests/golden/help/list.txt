@@ -1,14 +1,17 @@
 List active agents and connected guests.
 
 Shows currently running managed agents and connected MCP guests across
-reachable machines, newest first. Stopped agents move to 'facade resume'.
+reachable machines, newest first. Connects to reachable machines on
+demand without waking sleeping ones. Stopped agents move to 'facade resume'.
 
-Usage: facade list [--machine <MACHINE>]
+Usage: facade list [--local | --machine <MACHINE>]
 
 Examples
   facade list
+  facade list --local
   facade list --machine devbox
 
 Options
-      --machine <MACHINE>  List agents on this machine only
-  -h, --help               Show help
+      --local                List agents on this machine only without using SSH
+      --machine <MACHINE>    List agents on that machine only
+  -h, --help                 Show help

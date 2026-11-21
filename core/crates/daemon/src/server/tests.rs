@@ -40,6 +40,7 @@ impl Service for Hellos {
             keeper: None,
             topics: Vec::new(),
             ops: Vec::new(),
+            capabilities: Vec::new(),
         };
         let identity = Identity {
             kind: hello.kind,
@@ -48,6 +49,7 @@ impl Service for Hellos {
         };
         let client = Client {
             identity,
+            capabilities: hello.capabilities,
             verified_actor: None,
         };
         Ok((result, client, ()))
@@ -96,6 +98,16 @@ impl Service for Hellos {
         _: Value,
         _: u64,
     ) -> Result<Watch, ErrorBody> {
+        Err(ErrorBody::invalid_argument("no topics"))
+    }
+
+    async fn resize_viewer(
+        self: &Arc<Self>,
+        _: &Client,
+        _: u64,
+        _: v3::ScreenSize,
+        _: Option<v3::TerminalColors>,
+    ) -> Result<(), ErrorBody> {
         Err(ErrorBody::invalid_argument("no topics"))
     }
 

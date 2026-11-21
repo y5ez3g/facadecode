@@ -1330,28 +1330,35 @@ fn a_codex_run_keeps_the_version_its_installation_names_and_a_resume_reads_it_ag
 #[test]
 fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
     let home = TestHome::new("continue");
-    let programs = home.folder().join("programs");
-    install_program(&programs, "claude", &test_binaries().fakecli);
-    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
-    let project_name: String = home
-        .project
-        .to_string_lossy()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect();
-    let history = home.user_home().join(".claude/projects").join(project_name);
-    std::fs::create_dir_all(&history).unwrap();
     std::fs::write(
-        history.join(format!("{FIRST}.jsonl")),
-        format!(
-            "{}\n",
-            json!({
-                "type": "user", "sessionId": FIRST, "cwd": home.project,
-                "message": { "role": "user", "content": "resume this saved conversation" }
-            })
-        ),
+        home.path.join("facade.json"),
+        json!({ "clis": { "claude": { "type": "claude", "program": test_binaries().fakecli } } })
+            .to_string(),
     )
     .unwrap();
+    let path = home.test_path();
+    let other = home.folder().join("another-folder");
+    std::fs::create_dir(&other).unwrap();
+    for (project, session) in [(&home.project, FIRST), (&other, SECOND)] {
+        let project_name: String = project
+            .to_string_lossy()
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect();
+        let history = home.user_home().join(".claude/projects").join(project_name);
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(
+            history.join(format!("{session}.jsonl")),
+            format!(
+                "{}\n",
+                json!({
+                    "type": "user", "sessionId": session, "cwd": project,
+                    "message": { "role": "user", "content": "resume this saved conversation" }
+                })
+            ),
+        )
+        .unwrap();
+    }
     let file = home.folder().join("after.args");
     let mut wire = connect(&home);
     let mut args = json!({
@@ -1366,6 +1373,23 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
     assert_eq!(first["result"]["agent"]["session"], FIRST);
     home.run_facade_ok(&["stop", before]);
     home.remove_agent(before);
+    for (folder, session) in [(&home.project, FIRST), (&other, SECOND)] {
+        let listed = home
+            .command(&test_binaries().facade)
+            .current_dir(folder)
+            .args(["resume", "--local"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
+        assert_eq!(
+            stderr(&listed),
+            "Resume one with 'facade resume <REFERENCE>'.\n"
+        );
+        let table = Table::parse(&stdout(&listed));
+        assert_eq!(table.column("TYPE"), ["Session"]);
+        assert_eq!(table.column("REF"), [&session[..8]]);
+    }
     args["env"]["FAKECLI_ARGS"] = json!(file);
     let started = wire.call("agent.resume", args);
     let address = started["result"]["agent"]["address"]

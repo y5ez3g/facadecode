@@ -11,7 +11,7 @@
 //! daemon's memory, threads and idle CPU (over 30 s, from 40 s after the starts, once they have
 //! settled), and the keeper's memory; one message from a guest to
 //! every agent at once, each response's latency, and each message found in the fake CLIs' log; and
-//! keystroke echo through `facade attach` to an agent running `cat`. Then the same keystrokes and
+//! keystroke echo through `facade attach` to an agent running the fake CLI. Then the same keystrokes and
 //! messages while `--flooders` more agents print continuously (0 skips them). `--large` agents in
 //! a home of their own (0, the default, skips them; macOS gives about 480 terminals unless
 //! `kern.tty.ptmx_max` is raised): their start, the daemon's memory and one message to each.
@@ -34,9 +34,6 @@ use std::time::{Duration, Instant};
 
 use facade_scenarios::serde_json::{self, Value, json};
 use facade_scenarios::*;
-
-/// What each flooding agent runs: a line every 10 ms, forever.
-const FLOOD: &str = r#"use Time::HiRes qw(usleep); $|=1; while (1) { print "flood $$ 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"; usleep(10000) }"#;
 
 /// How much worse than its baseline a measure may be (D6.9).
 const WORSE_BY: f64 = 0.20;
@@ -466,6 +463,7 @@ fn main() {
 
     println!("== {} fake agents", options.agents);
     let home = TestHome::new("stress");
+    home.add_custom_cli_with("flood", &test_binaries().fakecli, &["--flood"]);
     let (agents, started) = start(&home, options.agents);
     report["start"] = started;
     // Idle once the starts have settled: their actors' timers still fire for a while after them.
@@ -474,29 +472,13 @@ fn main() {
     let mut guest =
         McpTestClient::open_guest(&home, "claude", &[("CLAUDE_CODE_SESSION_ID", "stress")]);
     report["messages"] = message_everyone(&home, &mut guest, &agents, "load");
-    // The agent keys are typed to and echoed by: `cat` on Unix; on Windows the test CLI, which draws
-    // each key it gets, as an MSYS `cat` under a pseudo console gets none.
-    #[cfg(unix)]
-    let echoing: &[&str] = &["/bin/cat"];
-    #[cfg(windows)]
-    let echoing: &[&str] = &["fake"];
-    let (quiet, _) = start_many(&home, 1, "quiet", echoing);
+    let (quiet, _) = start_many(&home, 1, "quiet", &["fake"]);
     let quiet = &quiet[0].0;
     std::thread::sleep(secs(1));
     report["keys"] = key_latency(&home, quiet, 50);
     if options.flooders > 0 {
         println!("== while {} more agents print", options.flooders);
-        // Perl, which prints without stopping: the system's on Unix, Git's on Windows.
-        #[cfg(unix)]
-        let perl = "/usr/bin/perl".to_string();
-        #[cfg(windows)]
-        let perl = git_install()
-            .join("usr")
-            .join("bin")
-            .join("perl.exe")
-            .display()
-            .to_string();
-        start_many(&home, options.flooders, "flood", &[&perl, "-e", FLOOD]);
+        start_many(&home, options.flooders, "flood", &["flood"]);
         std::thread::sleep(secs(3));
         let daemon = daemon(&home);
         report["flood"] = json!({ "daemon_cpu_percent": cpu_percent(daemon, secs(8)) });

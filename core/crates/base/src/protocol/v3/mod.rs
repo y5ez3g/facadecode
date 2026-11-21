@@ -17,7 +17,7 @@ pub use super::daemon::{
 };
 pub use super::machine::{
     AgentRef, CliListResult, ConnectionKind, ConnectionState, MachineAddResult, MachineHello,
-    MachineIdentity, MachineQueryArgs, MachineQueryStatus, MachineRemove, MachineRename,
+    MachineIdentity, MachineQueryArgs, MachineQueryStatus, MachineRemoveResult, MachineRename,
     MessageRef, SshInteraction,
 };
 pub use super::operations::{EmptyResult, NoArgs};
@@ -30,6 +30,12 @@ pub use terminal::*;
 
 pub const DAEMON_PROTOCOL_RANGE: [u32; 2] = [3, 3];
 pub const TAKEOVER_DAEMON_PROTOCOL_RANGE: [u32; 2] = [2, 3];
+pub const CAP_RESUME_LIST_LOCAL: &str = "agent.resume_list.local";
+pub const CAP_MACHINE_DISCONNECTED: &str = "machine.disconnected";
+pub const CAP_MACHINE_CONNECT_EXPECTED_ID: &str = "machine.connect.expected_machine_id";
+pub const CAP_MACHINE_REMOVE_EXPECTED_ID: &str = "machine.remove.expected_machine_id";
+pub const CAP_MACHINE_PROBE_ROUTE: &str = MACHINE_PROBE_ROUTE;
+pub const CAP_ATTACH: &str = "attach";
 
 /// Introduces a daemon client or a machine. Actor identity is supplied by the daemon.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -39,6 +45,12 @@ pub struct HelloParams {
     pub protocol_range: [u32; 2],
     pub build: String,
     pub kind: ClientKind,
+    /// Additions to protocol 3 understood by this client.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    /// Keep an authenticated machine session active until this foreground connection closes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub foreground: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub machine: Option<MachineHello>,
 }
@@ -50,6 +62,8 @@ impl HelloParams {
             protocol_range: machine.protocol_range,
             build: machine.build.clone(),
             kind: ClientKind::Machine,
+            capabilities: Vec::new(),
+            foreground: false,
             machine: Some(machine),
         }
     }
@@ -128,7 +142,6 @@ macro_rules! operations {
 
         pub fn visit_operations(visitor: &mut impl OperationVisitor) {
             $(visitor.operation::<$marker>();)*
-            visitor.operation::<MachineRemove>();
             visitor.operation::<MachineRename>();
             visitor.operation::<LogRead>();
             visitor.operation::<DaemonUpgrade>();
@@ -137,6 +150,7 @@ macro_rules! operations {
 }
 
 operations! {
+    List: "list", "Lists active agents in the requested machine scope.", ListArgs => AgentListResult;
     AgentList: "agent.list", "Lists reachable agents and machine query outcomes.", MachineQueryArgs => AgentListResult;
     AgentInspect: "agent.inspect", "Describes an agent and its terminal viewers.", AgentSelectorArgs => AgentInspectResult;
     AgentStart: "agent.start", "Starts a new managed agent.", StartArgs => StartResult;
@@ -146,17 +160,20 @@ operations! {
     LocationList: "location.list", "Lists working locations on a machine.", LocationListArgs => LocationListResult;
     CliList: "cli.list", "Lists CLIs available in the selected launch environment.", CliListArgs => CliListResult;
     AgentStop: "agent.stop", "Stops the agent's CLI and keeps the agent record.", AgentSelectorArgs => StopResult;
+    Stop: "stop", "Stops selected managed agents and reports each outcome.", StopArgs => BatchStopResult;
     AgentRemove: "agent.remove", "Removes a managed agent.", AgentSelectorArgs => RemoveResult;
     AgentRename: "agent.rename", "Changes an agent's name.", AgentRenameArgs => RenameResult;
     AgentType: "agent.type", "Sends input to a managed agent's terminal.", AgentTypeArgs => TypeResult;
     AgentSend: "agent.send", "Sends a message to an agent.", AgentSendArgs => SendResult;
     AgentResize: "agent.resize", "Resizes a managed agent's terminal.", AgentResizeArgs => EmptyResult;
+    AttachResize: "attach.resize", "Reports the terminal size of an Attach watch on this connection.", AttachResizeArgs => EmptyResult;
     AgentScreen: "agent.screen", "Reads the last logical lines of an agent's screen.", AgentScreenArgs => ScreenText;
     DaemonStatus: "daemon.status", "Reports the daemon's status on a machine.", StatusArgs => StatusResult;
     WorkspaceImportLegacy: "workspace.import_legacy", "Reads the verified members of a legacy workspace.", LegacyWorkspaceArgs => LegacyWorkspaceResult;
     MachineList: "machine.list", "Lists known machines and routes.", NoArgs => MachineListResult;
     MachineAdd: "machine.add", "Saves a verified SSH connection.", MachineAddArgs => MachineAddResult;
     MachineConnect: "machine.connect", "Authorizes a foreground machine connection.", MachineConnectArgs => MachineConnectResult;
+    MachineRemove: "machine.remove", "Removes the local saved connection and reports remaining reachability.", MachineRemoveArgs => MachineRemoveResult;
 }
 
 pub struct AgentsTopic;
@@ -177,6 +194,15 @@ impl Topic for ScreenTopic {
     type Change = ScreenChange;
 }
 
+pub struct AttachTopic;
+impl Topic for AttachTopic {
+    const NAME: &'static str = "attach";
+    const DOC: &'static str = "The managed agent's terminal, sized for its live Attach viewers.";
+    type Args = ScreenWatchArgs;
+    type Snapshot = ScreenSnapshot;
+    type Change = ScreenChange;
+}
+
 pub struct MachinesTopic;
 impl Topic for MachinesTopic {
     const NAME: &'static str = "machines";
@@ -189,6 +215,7 @@ impl Topic for MachinesTopic {
 pub fn visit_topics(visitor: &mut impl TopicVisitor) {
     visitor.topic::<AgentsTopic>();
     visitor.topic::<ScreenTopic>();
+    visitor.topic::<AttachTopic>();
     visitor.topic::<MachinesTopic>();
 }
 

@@ -217,10 +217,12 @@ pub fn specialize_operation_and_topic_schemas(
     definitions.insert("WatchParams".into(), watch);
     let snapshots: Vec<Value> = topics.iter().map(|topic| topic.snapshot.clone()).collect();
     let changes: Vec<Value> = topics.iter().map(|topic| topic.change.clone()).collect();
-    for (name, field, choices) in [
+    for (name, field, mut choices) in [
         ("WatchResult", "snapshot", snapshots),
         ("ChangedParams", "change", changes),
     ] {
+        // The adjacent screen and Attach topics share their snapshot and change types.
+        choices.dedup();
         let property = definitions
             .get_mut(name)
             .and_then(|schema| schema.pointer_mut(&format!("/properties/{field}")))
@@ -604,6 +606,19 @@ fn compatibility_definitions(normal: &mut Map<String, Value>) {
     topics.topic::<daemon::WindowsTopic>();
     let topics = topics.1;
     let mut legacy = types.definitions();
+    // The common Rust envelopes carry v3 capabilities internally. The v2 reference keeps its
+    // original fields.
+    for (name, fields) in [
+        ("HelloParams", &["capabilities", "foreground"][..]),
+        ("HelloResult", &["capabilities"][..]),
+    ] {
+        let properties = legacy[name]["properties"]
+            .as_object_mut()
+            .expect("expected the legacy hello fields");
+        for field in fields {
+            properties.remove(*field);
+        }
+    }
     specialize_operation_and_topic_schemas(&mut legacy, &calls, &topics);
     let versioned: BTreeSet<String> = legacy
         .iter()
@@ -676,6 +691,8 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
         v3::AdvertiseParams,
         v3::ForwardParams,
         v3::ForwardCall,
+        v3::ForwardWatchResult,
+        v3::ForwardAttachResizeArgs,
         v3::ReadMessagesArgs,
         v3::ReadMessagesResult,
     );

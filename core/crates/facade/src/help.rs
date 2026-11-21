@@ -73,9 +73,9 @@ managed agents."#,
   facade start --machine devbox -d codex"#,
         details: r#"Agents
   start     Start an agent
+  stop      Stop running agents
   list      List active agents
   resume    List or resume agents and sessions
-  stop      Stop an agent
   rename    Rename an agent
 
 Interact
@@ -99,31 +99,45 @@ Learn more at https://facadecode.com"#,
     START,
     Page {
         path: "stop",
-        intro: r#"Stop a running agent.
+        intro: r#"Stop one or more running agents.
 
-The agent's record and saved session are kept, so you can read its final
-screen or resume it later."#,
-        usage: r#"Usage: facade stop <AGENT>"#,
+Keeps each agent's record, final screen, and saved session so you can read
+its screen or resume it later. Connected guests cannot be stopped by Facade
+and are skipped when stopping all agents on a machine or across machines."#,
+        usage: r#"Usage:
+  facade stop <AGENT>...
+  facade stop --local
+  facade stop --machine <MACHINE>
+  facade stop --all"#,
         examples: r#"  facade stop Nova
-  facade stop a5@laptop"#,
+  facade stop a1 a2@devbox
+  facade stop --local
+  facade stop --machine devbox
+  facade stop --all"#,
         details: r#"Arguments
-  <AGENT>  Agent reference, agent ID, or unique name
+  <AGENT>...  Agent references, agent IDs, or unique names
 
 Options
-  -h, --help  Show help"#,
+      --local              Stop all running managed agents on this machine only
+      --machine <MACHINE>  Stop all running managed agents on that machine only
+      --all                Stop all running managed agents across reachable machines
+  -h, --help               Show help"#,
     },
     Page {
         path: "list",
         intro: r#"List active agents and connected guests.
 
 Shows currently running managed agents and connected MCP guests across
-reachable machines, newest first. Stopped agents move to 'facade resume'."#,
-        usage: r#"Usage: facade list [--machine <MACHINE>]"#,
+reachable machines, newest first. Connects to reachable machines on
+demand without waking sleeping ones. Stopped agents move to 'facade resume'."#,
+        usage: r#"Usage: facade list [--local | --machine <MACHINE>]"#,
         examples: r#"  facade list
+  facade list --local
   facade list --machine devbox"#,
         details: r#"Options
-      --machine <MACHINE>  List agents on this machine only
-  -h, --help               Show help"#,
+      --local                List agents on this machine only without using SSH
+      --machine <MACHINE>    List agents on that machine only
+  -h, --help                 Show help"#,
     },
     Page {
         path: "resume",
@@ -134,9 +148,10 @@ and saved sessions in the current directory. Pass a reference from the list
 to open it in this terminal, or pass '-d' to resume in the background. Press
 Ctrl+] to detach and leave it running."#,
         usage: r#"Usage:
-  facade resume [--machine <MACHINE>]
+  facade resume [--local | --machine <MACHINE>]
   facade resume [-d|--detach] <REFERENCE>"#,
         examples: r#"  facade resume
+  facade resume --local
   facade resume --machine devbox
   facade resume a5@laptop
   facade resume 7f3e9a1c
@@ -145,9 +160,10 @@ Ctrl+] to detach and leave it running."#,
   <REFERENCE>  Stopped agent reference, agent ID, unique name, or session ID
 
 Options
-      --machine <MACHINE>  List resumable agents and sessions on this machine only
-  -d, --detach           Resume in the background
-  -h, --help             Show help"#,
+      --local              List resumable agents and sessions on this machine only
+      --machine <MACHINE>  List resumable agents on that machine only
+  -d, --detach             Resume in the background
+  -h, --help               Show help"#,
     },
     Page {
         path: "rename",
@@ -169,6 +185,7 @@ Options
         intro: r#"Open a running managed agent's terminal.
 
 Streams the agent's live terminal here so you can watch or type directly.
+Active viewers share the smallest open terminal size and resize together.
 Press Ctrl+] to detach and leave the agent running in the background."#,
         usage: r#"Usage: facade attach <AGENT>"#,
         examples: r#"  facade attach Nova
@@ -276,18 +293,23 @@ Run 'facade machine <COMMAND> --help' for examples and options."#,
         intro: r#"Connect to a remote machine over SSH and save it.
 
 Runs SSH in this terminal so you can answer host key or password prompts,
-then installs or upgrades Facade on the remote machine if needed. Put '--home'
-before SSH options and destination; everything after is passed to ssh."#,
-        usage: r#"Usage: facade machine add [--home <PATH>] <SSH_ARGS>..."#,
+installs a dedicated Facade SSH key when needed for passwordless reconnects,
+and installs or upgrades Facade on the remote machine. Put Facade options
+before SSH options and destination; everything after is passed to ssh. Pass
+'--bidirectional' to also authorize and save a return connection from that
+machine back to this machine."#,
+        usage: r#"Usage: facade machine add [OPTIONS] <SSH_ARGS>..."#,
         examples: r#"  facade machine add devbox
   facade machine add user@10.0.0.5
-  facade machine add -p 2222 -i ~/.ssh/work user@devbox"#,
+  facade machine add -p 2222 -i ~/.ssh/work user@devbox
+  facade machine add --bidirectional devbox"#,
         details: r#"Arguments
   <SSH_ARGS>...  SSH flags and destination, passed directly to ssh
 
 Options
-      --home <PATH>  Facade home directory on the remote machine (default: ~/.facade)
-  -h, --help         Show help"#,
+      --home <PATH>    Facade home directory on the remote machine (default: ~/.facade)
+      --bidirectional  Also authorize, verify, and save a return connection from that machine
+  -h, --help           Show help"#,
     },
     Page {
         path: "machine connect",
@@ -320,18 +342,22 @@ and whether its SSH connection is saved."#,
     },
     Page {
         path: "machine remove",
-        intro: r#"Delete a saved SSH machine connection.
+        intro: r#"Remove a saved SSH connection.
 
-Removes the saved connection and closes the direct SSH link if open.
-Running agents on that machine are not stopped."#,
-        usage: r#"Usage: facade machine remove <MACHINE>"#,
+Removes the local saved connection and revokes local Facade SSH
+authorization for the other machine. Use '--bidirectional' to remove the
+saved return connection and revoke Facade SSH authorization there.
+Agents on both machines keep running."#,
+        usage: r#"Usage: facade machine remove [--bidirectional] <MACHINE>"#,
         examples: r#"  facade machine remove devbox
-  facade machine remove 9a0d44b2"#,
+  facade machine remove 9a0d44b2
+  facade machine remove --bidirectional devbox"#,
         details: r#"Arguments
   <MACHINE>  Machine name or ID (from 'facade machine list')
 
 Options
-  -h, --help  Show help"#,
+      --bidirectional  Clean up the connection on both machines
+  -h, --help           Show help"#,
     },
     Page {
         path: "machine rename",
@@ -353,8 +379,10 @@ Options
         path: "upgrade",
         intro: r#"Upgrade Facade.
 
-Installs the latest stable release or the specified version, then hands off
-running services without stopping active agents."#,
+Checks the latest stable release first and skips downloading when already up
+to date or ahead of the stable channel. Installs a newer release or the
+specified version, then hands off running services without stopping active
+agents."#,
         usage: r#"Usage: facade upgrade [--version X.Y.Z]"#,
         examples: r#"  facade upgrade
   facade upgrade --version 0.1.6"#,

@@ -124,7 +124,7 @@ fn a_daemon_outlives_the_terminal_that_launched_it() {
 }
 
 /// With no agent running, the keeper exits on the daemon's next idle offer. The daemon stays while
-/// a client is connected and exits 5 seconds after the last one leaves, removing its socket last.
+/// a client is connected and exits 30 seconds after the last one leaves, removing its socket last.
 /// Records, screens, and numbering survive, and the next command starts Facade again.
 #[test]
 fn the_services_exit_when_idle_and_the_records_survive() {
@@ -144,7 +144,7 @@ fn the_services_exit_when_idle_and_the_records_survive() {
     let keeper_process = process_identity(keeper);
     let daemon_process = process_identity(daemon);
     type_raw(&mut wire, &agent, "bye\r");
-    std::thread::sleep(secs(7));
+    std::thread::sleep(secs(32));
     assert!(
         alive(&daemon_process) && alive(&keeper_process),
         "the daemon exited with a client connected, or the keeper before it"
@@ -152,12 +152,12 @@ fn the_services_exit_when_idle_and_the_records_survive() {
     drop(wire);
     let left = Instant::now();
     assert!(
-        wait_until(secs(12), || !alive(&daemon_process)),
+        wait_until(LOADED_TIMEOUT, || !alive(&daemon_process)),
         "the daemon did not exit when idle: {}",
         home.daemon_log()
     );
     assert!(
-        left.elapsed() >= Duration::from_millis(4500),
+        left.elapsed() >= Duration::from_millis(29_500),
         "the daemon exited {:?} after the last client left",
         left.elapsed()
     );
@@ -202,7 +202,7 @@ fn a_client_arriving_as_the_daemon_exits_reaches_the_next_daemon() {
     let exiting = home.lock_record("daemon").unwrap().0;
     let exiting_process = process_identity(exiting);
     assert!(
-        wait_until(secs(15), || stopped(exiting)),
+        wait_until(LOADED_TIMEOUT, || stopped(exiting)),
         "the idle daemon did not stop after deciding to exit"
     );
     let listed = std::thread::scope(|scope| {

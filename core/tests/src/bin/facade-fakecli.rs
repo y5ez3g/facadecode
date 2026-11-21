@@ -13,6 +13,7 @@
 //! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
 //! the frame it drew is written (`note_key_time`). `FAKECLI_READ_GATE=<file>` holds input reads
 //! until the test creates the file.
+//! For the stress test, `--flood` writes a line every 10 milliseconds until the agent stops.
 //!
 //! Sessions: `--resume <id>` selects session `<id>`, as `FAKECLI_SESSION=<id>` does for a new
 //! start. `FAKECLI_SESSION_HOOK` is the shell command of its session-start hook, which it runs with
@@ -48,6 +49,7 @@
 //! a draft in color with the cursor before it, as a draft the person moved the cursor back over;
 //! what is typed goes in before it. `FAKECLI_KEYS=<file>` appends every byte it reads to `<file>`.
 //! `FAKECLI_SCREEN_FILE=<file>` prints the file's lines before drawing its input.
+//! `FAKECLI_WRAP_TRANSCRIPT=1` writes full transcript lines so the terminal wraps them.
 //! `FAKECLI_IGNORE_KEYS` lists keys it ignores, `space` and `backspace`, comma-separated;
 //! `FAKECLI_NO_LEADING_SPACE=1` draws no space where its input starts; `FAKECLI_SPACE_SUGGESTS=<text>`
 //! draws `<text>` on the row under the input while the input starts with a space, as a CLI that
@@ -212,6 +214,7 @@ fn base64(bytes: &[u8]) -> String {
 
 struct FakeCli {
     transcript: Vec<String>,
+    wrap_transcript: bool,
     draft: Vec<InputSegment>,
     pastes: usize,
     log: Option<std::fs::File>,
@@ -600,7 +603,11 @@ impl FakeCli {
         let room = rows.saturating_sub(6);
         let start = self.transcript.len().saturating_sub(room);
         for line in &self.transcript[start..] {
-            frame.push_str(&truncate_chars(line, cols));
+            if self.wrap_transcript {
+                frame.push_str(line);
+            } else {
+                frame.push_str(&truncate_chars(line, cols));
+            }
             frame.push_str("\r\n");
         }
         let input_row = rows.saturating_sub(3);
@@ -895,6 +902,21 @@ fn main() -> anyhow::Result<()> {
     if let Some(code) = run_script_beside()? {
         std::process::exit(code);
     }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--flood")
+    {
+        let mut out = std::io::stdout().lock();
+        loop {
+            writeln!(
+                out,
+                "flood {} 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                std::process::id()
+            )?;
+            out.flush()?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     if std::env::var_os("FAKECLI_HOOKS").is_some() {
         run_hooks();
         return Ok(());
@@ -1085,6 +1107,7 @@ fn run() -> anyhow::Result<()> {
     let agy = std::env::var("FAKECLI_LOOK").is_ok_and(|look| look == "agy");
     let mut app = FakeCli {
         transcript: Vec::new(),
+        wrap_transcript: std::env::var("FAKECLI_WRAP_TRANSCRIPT").is_ok_and(|value| value == "1"),
         draft: Vec::new(),
         pastes: 0,
         log,

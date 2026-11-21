@@ -1,3 +1,4 @@
+use facade_base::daemon::WatchResult;
 use facade_base::jsonrpc::Request;
 use facade_base::machine::{AdvertiseParams, MachineInfo};
 use serde_json::json;
@@ -22,6 +23,17 @@ impl SessionHandler for Handler {
     fn replace_table(&self, table: Value) -> Result<(), ErrorBody> {
         assert!(self.tables.send(decode_arguments(table)?).is_ok());
         Ok(())
+    }
+
+    fn sleeping(&self) {
+        panic!("unexpected sleep notice");
+    }
+
+    fn identity(&self, machine_id: &str) -> MachineIdentity {
+        MachineIdentity {
+            machine_id: machine_id.into(),
+            name: machine_id.into(),
+        }
     }
 
     async fn receive(
@@ -57,7 +69,7 @@ async fn watch_snapshot(from_peer: &mut Reader<impl AsyncBufRead + Unpin>, id: u
 
 #[tokio::test(start_paused = true)]
 async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
-    let (peer, output) = Peer::new();
+    let (peer, output) = Peer::new(Vec::new(), None);
     let (peer_stream, client_stream) = duplex(4096);
     let (read, write) = split(peer_stream);
     let (client_read, mut to_peer) = split(client_stream);
@@ -113,7 +125,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
             machine_id: "destination".into(),
             name: "Destination".into(),
         };
-        let (downstream, mut downstream_output) = Peer::new();
+        let (downstream, mut downstream_output) = Peer::new(Vec::new(), None);
         let mut pending = downstream
             .request(
                 Forward::decode(params.clone()).unwrap(),
@@ -158,7 +170,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
                 .await
                 .unwrap()
         );
-        let Some(Output::Notification(unwatch)) = downstream_output.recv().await else {
+        let Some(Output::Notification(unwatch, None)) = downstream_output.recv().await else {
             panic!("expected the downstream watch to be released");
         };
         assert_eq!(unwatch.method, methods::UNWATCH);
@@ -179,6 +191,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
                 .send(Ok(Delivery::Local(TargetReply::Watch {
                     snapshot: snapshot.clone(),
                     changes,
+                    attach: None,
                 })))
                 .is_ok()
         );
@@ -212,7 +225,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
 
 #[tokio::test(start_paused = true)]
 async fn an_error_reply_has_a_receipt_but_a_local_deadline_does_not() {
-    let (peer, _output) = Peer::new();
+    let (peer, _output) = Peer::new(Vec::new(), None);
     let machine = MachineIdentity {
         machine_id: "peer".into(),
         name: "peer".into(),
@@ -277,7 +290,7 @@ fn v2_relay_deadlines_stay_distinct_from_a_lost_route() {
 async fn watch_receipts_keep_the_frame_time_when_consumption_is_delayed() {
     use facade_base::machine::MachineResponseState;
 
-    let (peer, _output) = Peer::new();
+    let (peer, _output) = Peer::new(Vec::new(), None);
     let machine = MachineIdentity {
         machine_id: "peer".into(),
         name: "peer".into(),
@@ -297,11 +310,12 @@ async fn watch_receipts_keep_the_frame_time_when_consumption_is_delayed() {
         snapshot,
         changes,
         received_at,
+        attach,
     } = pending.answer(None).await.unwrap()
     else {
         panic!("the peer answered with a watch");
     };
-    let mut subscription = pending.watch(snapshot, changes, received_at);
+    let mut subscription = pending.watch(snapshot, changes, received_at, attach);
 
     let before = SystemTime::now();
     let change = json!({ "kind": "updated" });

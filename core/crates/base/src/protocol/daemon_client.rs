@@ -240,10 +240,26 @@ impl DaemonClient {
                     sessions: identity.sessions.clone(),
                     window: None,
                     numbers_given: None,
+                    capabilities: Vec::new(),
+                    foreground: false,
                     machine: None,
                 },
             )
         } else {
+            let mut capabilities = Vec::new();
+            if protocol_range == v3::DAEMON_PROTOCOL_RANGE {
+                capabilities
+                    .extend([v3::CAP_MACHINE_DISCONNECTED, v3::CAP_ATTACH].map(str::to_owned));
+                if identity.kind == ClientKind::Terminal {
+                    capabilities.extend(
+                        [
+                            v3::CAP_MACHINE_CONNECT_EXPECTED_ID,
+                            v3::CAP_RESUME_LIST_LOCAL,
+                        ]
+                        .map(str::to_owned),
+                    );
+                }
+            }
             Request::new(
                 Some(HELLO_ID),
                 methods::HELLO,
@@ -251,6 +267,8 @@ impl DaemonClient {
                     protocol_range,
                     build: crate::build_id(),
                     kind: identity.kind,
+                    capabilities,
+                    foreground: false,
                     machine: None,
                 },
             )

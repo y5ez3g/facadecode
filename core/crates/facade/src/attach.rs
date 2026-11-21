@@ -17,12 +17,16 @@ use facade_base::console::{
 use facade_base::daemon;
 use facade_base::daemon_client::{Cut, DaemonClient, RECONNECT_DELAY, takeover_timeout};
 use facade_base::jsonrpc::{self, ErrorBody, Reason};
-use facade_base::operations::{CallParams, Operation};
+use facade_base::operations::{CallParams, Operation, Topic};
 use facade_base::paths::ClientSocket;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::unix_process::signal_number;
-use facade_base::v3::{self, AgentRef, AgentTarget, ScreenChange, ScreenSnapshot, ScreenTopic};
+use facade_base::v3::{
+    self, AgentRef, AgentTarget, AttachResize, AttachTopic, ScreenChange, ScreenSnapshot,
+    ScreenTopic,
+};
 use facade_base::{base64, service, system};
+use facade_screen::{REDRAW_SCROLLBACK_ROWS, Screen};
 use unicode_width::UnicodeWidthChar;
 
 use crate::daemon_client::{ConnectFailure, Reconnect};
@@ -48,7 +52,10 @@ static VT_MODES: Mutex<Option<VtModes>> = Mutex::new(None);
 static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Held while writing to the person's terminal and while restoring it, so that none of the agent's
 /// output lands in the middle of the restoration or after it.
-static TERMINAL: Mutex<()> = Mutex::new(());
+static TERMINAL: Mutex<Display> = Mutex::new(Display {
+    shared: None,
+    visible_frame: false,
+});
 
 /// The person's terminal size, when both dimensions are nonzero.
 pub(crate) fn console_size() -> Option<(u16, u16)> {
@@ -78,45 +85,40 @@ pub(crate) fn attach(
     let allow_ended =
         !matches!(opening, Opening::Attached) && matches!(target, AgentTarget::Reference { .. });
     // The person's scrollback stays above the agent's screen, which brings its own.
-    let (watch, snapshot) =
-        match watch_screen(&mut client, target.clone(), &viewer, true, allow_ended) {
-            Ok(watched) => watched,
-            // An older daemon may refuse an ended run even with an exact target and allow_ended.
-            Err(error) if allow_ended && watch_reason(&error) == Some(Reason::Ended) => {
-                let agent = inspect_agent(&mut client, target);
-                let shown = agent.as_ref().map_or_else(
-                    || single_line(&address),
-                    |agent| agent_label(Some(&agent.name), &agent.address),
-                );
-                let end = AttachEnd::AgentExited {
-                    exit: agent.and_then(|agent| agent.exit),
-                    status: None,
-                    resume_hint: None,
-                };
-                let code = end.code();
-                let mut stderr = std::io::stderr().lock();
-                let _ = writeln!(
-                    stderr,
-                    "{}\n{}",
-                    opening_line(&opening, &shown),
-                    result_line(&end, &shown, &address)
-                );
-                return Ok(code);
-            }
-            Err(error) => return Err(opening_error(&address, error)),
-        };
+    let watched = match watch_first(&mut client, &target, &viewer, allow_ended, reconnect) {
+        Ok(watched) => watched,
+        // An older daemon may refuse an ended run even with an exact target and allow_ended.
+        Err(error) if allow_ended && watch_reason(&error) == Some(Reason::Ended) => {
+            let agent = inspect_agent(&mut client, target);
+            let shown = agent.as_ref().map_or_else(
+                || single_line(&address),
+                |agent| agent_label(Some(&agent.name), &agent.address),
+            );
+            let end = AttachEnd::AgentExited {
+                exit: agent.and_then(|agent| agent.exit),
+                status: None,
+                resume_hint: None,
+            };
+            let code = end.code();
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(
+                stderr,
+                "{}\n{}",
+                opening_line(&opening, &shown),
+                result_line(&end, &shown, &address)
+            );
+            return Ok(code);
+        }
+        Err(error) => return Err(opening_error(&address, error)),
+    };
+    let snapshot = &watched.snapshot;
     let shown = agent_label(snapshot.name.as_deref(), &snapshot.address);
     let input = Arc::new(AgentInput::new(
         snapshot.reference(),
         snapshot.address.clone(),
     ));
     input.lock().agent_name.clone_from(&snapshot.name);
-    let screen = ScreenWatch {
-        client,
-        watch,
-        snapshot,
-        visible_frame: false,
-    };
+    let screen = ScreenWatch { client, watched };
     // Register before entering raw mode so a termination signal can be handled even during setup.
     let signals = ConsoleSignals::new()?;
     let _ = writeln!(std::io::stderr(), "{}", opening_line(&opening, &shown));
@@ -315,12 +317,62 @@ fn exit_code(exit: &ProcessExit) -> i32 {
     }
 }
 
-/// A watch on the agent's screen: its connection, its number and the snapshot it began with.
+/// A watch on the agent's screen and the connection that owns it.
 struct ScreenWatch {
     client: DaemonClient,
-    watch: u64,
+    watched: WatchedScreen,
+}
+
+struct WatchedScreen {
+    watch: Watch,
     snapshot: ScreenSnapshot,
-    visible_frame: bool,
+    capacity: Option<(u16, u16)>,
+    include_scrollback: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Watch {
+    Legacy(u64),
+    Shared(u64),
+}
+
+impl Watch {
+    fn attach_id(self) -> Option<u64> {
+        match self {
+            Self::Shared(watch) => Some(watch),
+            Self::Legacy(_) => None,
+        }
+    }
+
+    fn next_change(self, client: &mut DaemonClient) -> anyhow::Result<Option<ScreenChange>> {
+        match self {
+            Self::Shared(watch) => client.next_change::<AttachTopic>(watch),
+            Self::Legacy(watch) => client.next_change::<ScreenTopic>(watch),
+        }
+    }
+}
+
+/// An initial watch refused during takeover starts again with the replacement's hello.
+fn watch_first(
+    client: &mut DaemonClient,
+    target: &AgentTarget,
+    viewer: &str,
+    allow_ended: bool,
+    reconnect: &Reconnect,
+) -> anyhow::Result<WatchedScreen> {
+    // A transparent retry would replay the topic selected from the previous daemon's hello.
+    client.disable_auto_reconnect();
+    let watched = watch_screen(client, target.clone(), viewer, true, allow_ended);
+    if watched
+        .as_ref()
+        .is_err_and(|error| watch_reason(error) == Some(Reason::Upgrading))
+    {
+        *client = reconnect(Instant::now() + takeover_timeout(), &|| false, &mut |_| {
+            true
+        })?;
+        return watch_screen(client, target.clone(), viewer, true, allow_ended);
+    }
+    watched
 }
 
 /// Watches the agent's screen. The scrollback comes only on the first watch; after a reconnect
@@ -331,7 +383,8 @@ fn watch_screen(
     viewer: &str,
     include_scrollback: bool,
     allow_ended: bool,
-) -> anyhow::Result<(u64, ScreenSnapshot)> {
+) -> anyhow::Result<WatchedScreen> {
+    let capacity = console_size();
     let args = v3::ScreenWatchArgs {
         target,
         keep_scrollback: true,
@@ -339,15 +392,44 @@ fn watch_screen(
         viewer: Some(viewer.into()),
         allow_ended,
         report_activity: true,
-        size: console_size()
+        size: capacity
             .filter(|&(cols, _)| cols >= 2)
             .map(|(cols, rows)| v3::ScreenSize { cols, rows }),
     };
+    let (watch, snapshot) = if client
+        .hello_result
+        .topics
+        .iter()
+        .any(|name| name == AttachTopic::NAME)
+        && client
+            .hello_result
+            .ops
+            .iter()
+            .any(|name| name == AttachResize::NAME)
+    {
+        let (watch, snapshot) = client.watch::<AttachTopic>(args)?;
+        (Watch::Shared(watch), snapshot)
+    } else {
+        let (watch, snapshot) = watch_legacy(client, args)?;
+        (Watch::Legacy(watch), snapshot)
+    };
+    Ok(WatchedScreen {
+        watch,
+        snapshot,
+        capacity,
+        include_scrollback,
+    })
+}
+
+fn watch_legacy(
+    client: &mut DaemonClient,
+    args: v3::ScreenWatchArgs,
+) -> anyhow::Result<(u64, ScreenSnapshot)> {
     let (watch, snapshot) = client.watch::<ScreenTopic>(args.clone())?;
     // An older daemon may ignore the initial size. Request a fresh snapshot with its
     // scrollback after resizing; a regular redraw has only the visible screen.
     if let Some(size) = args.size
-        && include_scrollback
+        && args.include_scrollback
         && snapshot.process != Some(ProcessState::Ended)
         && snapshot.exit.is_none()
         && snapshot.exit_status.is_none()
@@ -388,7 +470,8 @@ fn follow_agent(
         };
         let closing = screen.client.closing.is_some();
         input.disconnected(closing);
-        if let Some(_terminal) = attached_terminal() {
+        if let Some(mut terminal) = attached_terminal() {
+            terminal.shared = None;
             show_activity(false);
         }
         service::mark_for_test("attach-disconnected");
@@ -417,41 +500,50 @@ fn show_snapshot(
     input: &AgentInput,
 ) -> anyhow::Result<Option<AttachEnd>> {
     // Keep the redraw, displayed identity and notice together so restoration sees one snapshot.
-    let Some(_terminal) = attached_terminal() else {
+    let Some(mut terminal) = attached_terminal() else {
         return Ok(Some(AttachEnd::Detached));
     };
-    screen.visible_frame = draw_frame(
-        &screen.snapshot.redraw,
-        screen.snapshot.cols,
-        screen.snapshot.rows,
+    let watched = &mut screen.watched;
+    let snapshot = &mut watched.snapshot;
+    let grid = (snapshot.cols, snapshot.rows);
+    let capacity = console_size();
+    let attach_id = watched.watch.attach_id();
+    terminal.draw_frame(
+        &snapshot.redraw,
+        grid,
+        capacity,
+        attach_id.is_some(),
+        watched.include_scrollback,
     );
-    show_activity(screen.snapshot.working.unwrap_or_default());
+    show_activity(snapshot.working.unwrap_or_default());
     {
         let mut queue = input.lock();
-        queue.agent_name.clone_from(&screen.snapshot.name);
-        queue.address.clone_from(&screen.snapshot.address);
-        queue.reported_size = Some((screen.snapshot.cols, screen.snapshot.rows));
+        queue.agent_name.clone_from(&snapshot.name);
+        queue.address.clone_from(&snapshot.address);
+        queue.reported_size = if attach_id.is_some() {
+            watched.capacity
+        } else {
+            Some(grid)
+        };
         queue
             .waiting
             .retain(|item| !matches!(item, Outgoing::Resize));
     }
-    let status = screen.snapshot.exit_status;
-    if screen.snapshot.process == Some(ProcessState::Ended)
-        || screen.snapshot.exit.is_some()
-        || status.is_some()
+    let status = snapshot.exit_status;
+    if snapshot.process == Some(ProcessState::Ended) || snapshot.exit.is_some() || status.is_some()
     {
         return Ok(Some(AttachEnd::AgentExited {
-            exit: screen.snapshot.exit.take(),
+            exit: snapshot.exit.take(),
             status,
-            resume_hint: screen.snapshot.resume_hint.take(),
+            resume_hint: snapshot.resume_hint.take(),
         }));
     }
-    input.push_resize();
-    let Some(loss) = input.connected(screen.client.writer.try_clone()?) else {
+    input.push_resize(capacity);
+    let Some(loss) = input.connected(screen.client.writer.try_clone()?, attach_id) else {
         return Ok(Some(AttachEnd::Detached));
     };
     if loss.queued > 0 || loss.disconnected > 0 {
-        let shown = agent_label(screen.snapshot.name.as_deref(), &screen.snapshot.address);
+        let shown = agent_label(snapshot.name.as_deref(), &snapshot.address);
         let queued = (loss.queued > 0).then(|| {
             format!(
                 "warning: {} bytes queued before disconnect were not sent",
@@ -472,21 +564,28 @@ fn show_until_closed(
     screen: &mut ScreenWatch,
     input: &AgentInput,
 ) -> anyhow::Result<Option<AttachEnd>> {
-    while let Some(change) = screen.client.next_change::<ScreenTopic>(screen.watch)? {
+    let watch = screen.watched.watch;
+    while let Some(change) = watch.next_change(&mut screen.client)? {
         // Detaching shuts the connection down, whatever the read returned.
         if input.is_detached() {
             return Ok(Some(AttachEnd::Detached));
         }
         return Ok(Some(match change {
             ScreenChange::Output { data } => {
-                if screen.visible_frame {
-                    write_output(&data);
+                if let Some(mut terminal) = attached_terminal() {
+                    terminal.write_output(&data);
                 }
                 continue;
             }
             ScreenChange::Redraw { data, cols, rows } => {
-                if let Some(_terminal) = attached_terminal() {
-                    screen.visible_frame = draw_frame(&data, cols, rows);
+                if let Some(mut terminal) = attached_terminal() {
+                    terminal.draw_frame(
+                        &data,
+                        (cols, rows),
+                        console_size(),
+                        watch.attach_id().is_some(),
+                        false,
+                    );
                 }
                 continue;
             }
@@ -545,14 +644,7 @@ fn reconnect_screen(
             break;
         }
         let error = match watched {
-            Ok((watch, snapshot)) => {
-                return Ok(ScreenWatch {
-                    client,
-                    watch,
-                    snapshot,
-                    visible_frame: false,
-                });
-            }
+            Ok(watched) => return Ok(ScreenWatch { client, watched }),
             Err(error) => error,
         };
         match watch_reason(&error) {
@@ -604,7 +696,7 @@ fn watch_before(
     target: AgentTarget,
     viewer: &str,
     deadline: Instant,
-) -> anyhow::Result<(u64, ScreenSnapshot)> {
+) -> anyhow::Result<WatchedScreen> {
     set_watch_timeout(client, deadline)?;
     let watched = watch_screen(client, target, viewer, false, true)?;
     client.writer.set_read_timeout(None)?;
@@ -656,7 +748,7 @@ fn follow_signals(signals: ConsoleSignals, input: Arc<AgentInput>) {
         for signal in signals {
             let (name, number) = match signal {
                 ConsoleSignal::Resized => {
-                    input.push_resize();
+                    input.resized();
                     continue;
                 }
                 ConsoleSignal::Ended { name, number } => (name, number),
@@ -679,7 +771,7 @@ fn read_keys(input: &AgentInput) {
         loop {
             let read = match console.read(&mut buffer) {
                 Ok(ConsoleRead::Resized) => {
-                    input.push_resize();
+                    input.resized();
                     continue;
                 }
                 Ok(ConsoleRead::Keys(read @ 1..)) => read,
@@ -770,7 +862,7 @@ struct InputQueue {
     /// Display identity from the snapshot most recently drawn.
     agent_name: Option<String>,
     address: String,
-    /// The last viewport size confirmed by a snapshot or queued by the person's terminal.
+    /// The last capacity sent or queued, initially the watch size (legacy uses the snapshot grid).
     reported_size: Option<(u16, u16)>,
     waiting: VecDeque<Outgoing>,
     /// The key bytes in `waiting`.
@@ -781,6 +873,8 @@ struct InputQueue {
     /// The connection to send on; none while disconnected. A failed write ends it only if it is
     /// still the one the write used.
     connection: Option<Arc<ClientSocket>>,
+    /// The Attach watch on `connection`, or none when it uses the legacy resize operation.
+    attach_watch: Option<u64>,
     /// Whether the writer is sending something it took from `waiting`.
     writing: bool,
     /// A connection opening or finishing a takeover write; detaching shuts it down.
@@ -815,8 +909,8 @@ enum Outgoing {
 }
 
 impl Outgoing {
-    /// The notification that sends this to the agent; none for a resize without a known size.
-    fn line(self, target: AgentTarget) -> Option<Vec<u8>> {
+    /// The notification for this connection, if it accepts the reported size.
+    fn line(self, target: AgentTarget, attach_watch: Option<u64>) -> Option<Vec<u8>> {
         match self {
             Outgoing::Keys(keys) => Some(notification::<v3::AgentType>(v3::AgentTypeArgs {
                 target,
@@ -827,13 +921,23 @@ impl Outgoing {
             })),
             Outgoing::Resize => {
                 let (cols, rows) = console_size()?;
-                let args = v3::AgentResizeArgs {
-                    target,
-                    cols,
-                    rows,
-                    colors: None,
-                };
-                Some(notification::<v3::AgentResize>(args))
+                match attach_watch {
+                    Some(watch) if cols >= 2 => {
+                        Some(notification::<AttachResize>(v3::AttachResizeArgs {
+                            watch,
+                            cols,
+                            rows,
+                            colors: None,
+                        }))
+                    }
+                    Some(_) => None,
+                    None => Some(notification::<v3::AgentResize>(v3::AgentResizeArgs {
+                        target,
+                        cols,
+                        rows,
+                        colors: None,
+                    })),
+                }
             }
         }
     }
@@ -886,16 +990,28 @@ impl AgentInput {
         );
     }
 
-    /// Queues a changed viewport size, coalescing repeated console events and waiting resizes.
-    fn push_resize(&self) {
-        let mut queue = self.lock();
-        let Some(size) = console_size() else {
+    /// Refreshes the local drawing and reports capacity independently of the shared grid.
+    fn resized(&self) {
+        let Some(mut terminal) = attached_terminal() else {
             return;
         };
-        if queue.reported_size == Some(size) {
+        let capacity = console_size();
+        self.push_resize(capacity);
+        if let Some(shared) = &mut terminal.shared
+            && shared.capacity != capacity
+        {
+            shared.capacity = capacity;
+            shared.draw(None, false);
+        }
+    }
+
+    /// Queues a changed capacity, coalescing repeated console events and waiting resizes.
+    fn push_resize(&self, size: Option<(u16, u16)>) {
+        let mut queue = self.lock();
+        if size.is_none() || queue.reported_size == size {
             return;
         }
-        queue.reported_size = Some(size);
+        queue.reported_size = size;
         let waits = queue.waiting.iter().any(|o| matches!(o, Outgoing::Resize));
         if !waits {
             queue.waiting.push_back(Outgoing::Resize);
@@ -929,13 +1045,18 @@ impl AgentInput {
     }
 
     /// Enables the writer and takes the unsent counts to report after the redraw.
-    fn connected(&self, connection: ClientSocket) -> Option<ReconnectLoss> {
+    fn connected(
+        &self,
+        connection: ClientSocket,
+        attach_watch: Option<u64>,
+    ) -> Option<ReconnectLoss> {
         let mut queue = self.lock();
         if queue.detached {
             return None;
         }
         queue.opening = None;
         queue.connection = Some(Arc::new(connection));
+        queue.attach_watch = attach_watch;
         self.wake.notify_all();
         Some(std::mem::take(&mut queue.reconnect_loss))
     }
@@ -1006,8 +1127,8 @@ impl AgentInput {
 
     /// The writer thread: sends the waiting input in order until the attachment ends.
     fn send_queued(&self) {
-        while let Some((connection, outgoing)) = self.next_to_send() {
-            let sent = match outgoing.line(self.target()) {
+        while let Some((connection, attach_watch, outgoing)) = self.next_to_send() {
+            let sent = match outgoing.line(self.target(), attach_watch) {
                 Some(line) => (&*connection).write_all(&line),
                 None => Ok(()),
             };
@@ -1028,7 +1149,7 @@ impl AgentInput {
 
     /// Waits for input and a connection, then takes the next input with the connection to send it
     /// on. None once the attachment has ended.
-    fn next_to_send(&self) -> Option<(Arc<ClientSocket>, Outgoing)> {
+    fn next_to_send(&self) -> Option<(Arc<ClientSocket>, Option<u64>, Outgoing)> {
         let mut queue = self.lock();
         while !queue.detached {
             if let Some(connection) = queue.connection.clone()
@@ -1038,7 +1159,7 @@ impl AgentInput {
                     queue.waiting_key_bytes -= keys.len();
                 }
                 queue.writing = true;
-                return Some((connection, outgoing));
+                return Some((connection, queue.attach_watch, outgoing));
             }
             queue = self.wake.wait(queue).unwrap();
         }
@@ -1047,14 +1168,14 @@ impl AgentInput {
 }
 
 /// Takes the person's terminal for writing, even if an earlier writer panicked.
-fn lock_terminal() -> MutexGuard<'static, ()> {
+fn lock_terminal() -> MutexGuard<'static, Display> {
     TERMINAL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Takes the person's terminal while it is the attachment's; none once it is restored.
-fn attached_terminal() -> Option<MutexGuard<'static, ()>> {
+fn attached_terminal() -> Option<MutexGuard<'static, Display>> {
     let terminal = lock_terminal();
     RAW_MODE_ACTIVE.load(SeqCst).then_some(terminal)
 }
@@ -1078,35 +1199,107 @@ fn show_activity(working: bool) {
     }
 }
 
-/// Writes the agent's terminal bytes, base64 as the daemon sends them, while the person's terminal
-/// is the attachment's. After the restoration more output would turn the agent's modes back on and
-/// cover the result.
-fn write_output(data: &str) {
-    if let Some(_terminal) = attached_terminal() {
-        write_screen(data);
+/// The terminal drawing for the current watch, held under the same lock as its writes.
+struct Display {
+    shared: Option<SharedScreen>,
+    /// The legacy stream can continue only after a frame fit on the console.
+    visible_frame: bool,
+}
+
+impl Display {
+    fn draw_frame(
+        &mut self,
+        data: &str,
+        grid: (u16, u16),
+        capacity: Option<(u16, u16)>,
+        shared: bool,
+        include_scrollback: bool,
+    ) {
+        if shared {
+            let Ok(bytes) = base64::decode(data) else {
+                return;
+            };
+            let scrollback = if include_scrollback {
+                REDRAW_SCROLLBACK_ROWS
+            } else {
+                0
+            };
+            let mut frame = SharedScreen {
+                screen: Screen::new(grid.0, grid.1, scrollback),
+                capacity,
+            };
+            frame.screen.feed(&bytes);
+            frame.draw(Some(&bytes), include_scrollback);
+            self.shared = Some(frame);
+        } else {
+            self.visible_frame = fits(grid, capacity);
+            if self.visible_frame {
+                self.write_output(data);
+            } else {
+                show_too_small(grid);
+            }
+        }
+    }
+
+    fn write_output(&mut self, data: &str) {
+        if self.shared.is_none() && !self.visible_frame {
+            return;
+        }
+        let Ok(bytes) = base64::decode(data) else {
+            return;
+        };
+        if let Some(shared) = &mut self.shared {
+            shared.screen.feed(&bytes);
+            if fits(shared.grid(), shared.capacity) {
+                shared.draw(Some(&bytes), false);
+            }
+        } else {
+            write_screen(&bytes);
+        }
     }
 }
 
-/// Draws a full frame only where its layout fits. The caller holds [`TERMINAL`].
-fn draw_frame(data: &str, cols: u16, rows: u16) -> bool {
-    let fits = console_size().is_none_or(|(width, height)| width >= cols && height >= rows);
-    if fits {
-        write_screen(data);
-    } else {
-        show_status(&format!(
-            "The shared layout is {cols}×{rows}. Enlarge this terminal to see the current screen."
-        ));
-    }
-    fits
+/// The daemon's grid, replayed at the confirmed size even when it cannot currently be drawn.
+struct SharedScreen {
+    screen: Screen,
+    capacity: Option<(u16, u16)>,
 }
 
-/// Writes base64 screen data while the caller holds [`TERMINAL`].
-fn write_screen(data: &str) {
-    let Ok(bytes) = base64::decode(data) else {
-        return;
-    };
-    track_alternate_screen(&bytes);
-    write_terminal(&bytes);
+impl SharedScreen {
+    fn grid(&self) -> (u16, u16) {
+        (self.screen.cols(), self.screen.rows())
+    }
+
+    /// With the same geometry, the daemon's bytes can go straight to the console. A local resize
+    /// needs a full frame even if the console has returned to the exact shared size.
+    fn draw(&self, direct: Option<&[u8]>, include_scrollback: bool) {
+        let grid = self.grid();
+        if !fits(grid, self.capacity) {
+            show_too_small(grid);
+        } else if self.capacity.is_some_and(|size| size != grid) {
+            write_screen(&self.screen.redraw_in_viewport(true, include_scrollback));
+        } else if let Some(bytes) = direct {
+            write_screen(bytes);
+        } else {
+            write_screen(&self.screen.redraw(true, include_scrollback));
+        }
+    }
+}
+
+fn fits((cols, rows): (u16, u16), capacity: Option<(u16, u16)>) -> bool {
+    capacity.is_none_or(|(width, height)| width >= cols && height >= rows)
+}
+
+fn show_too_small((cols, rows): (u16, u16)) {
+    show_status(&format!(
+        "The shared layout is {cols}×{rows}. Enlarge this terminal to see the current screen."
+    ));
+}
+
+/// Writes screen bytes while the caller holds [`TERMINAL`].
+fn write_screen(bytes: &[u8]) {
+    track_alternate_screen(bytes);
+    write_terminal(bytes);
 }
 
 /// Follows alternate-screen modes 1049, 1047 and 47, also inside combined mode sequences, and the
@@ -1204,10 +1397,11 @@ const RESTORE_TERMINAL_SEQUENCE: &[u8] =
 /// The sequences go out while the console still reads them; then its modes go back, those entered
 /// after raw mode first.
 fn finish_attachment(input: &AgentInput, end: anyhow::Result<AttachEnd>) {
-    let _terminal = lock_terminal();
+    let mut terminal = lock_terminal();
     if !RAW_MODE_ACTIVE.swap(false, SeqCst) {
         return;
     }
+    terminal.shared = None;
     show_activity(false);
     let alternate = ALTERNATE_SCREEN_ACTIVE.load(SeqCst);
     write_terminal(&restoration(alternate));
@@ -1337,7 +1531,10 @@ mod tests {
         // Leave the writer idle so all the connected keys are still waiting at disconnect.
         let input = input();
         let (old_writer, _old_daemon) = connection();
-        assert_eq!(input.connected(old_writer), Some(ReconnectLoss::default()));
+        assert_eq!(
+            input.connected(old_writer, None),
+            Some(ReconnectLoss::default())
+        );
         input.push_keys(&vec![b'x'; MAX_QUEUED_KEY_BYTES]);
         input.push_keys(b"too many");
         input.disconnected(false);
@@ -1350,7 +1547,7 @@ mod tests {
         );
         let (writer, mut daemon) = connection();
         assert_eq!(
-            input.connected(writer),
+            input.connected(writer, None),
             Some(ReconnectLoss {
                 queued: MAX_QUEUED_KEY_BYTES,
                 disconnected: 6,
@@ -1373,7 +1570,10 @@ mod tests {
         let input = input();
         spawn_with(&input, AgentInput::send_queued);
         let (writer, daemon) = connection();
-        assert_eq!(input.connected(writer), Some(ReconnectLoss::default()));
+        assert_eq!(
+            input.connected(writer, None),
+            Some(ReconnectLoss::default())
+        );
         drop(daemon);
         // The write fails, so whether these keys arrived is unknown: they are neither kept nor
         // counted as unsent.
@@ -1387,7 +1587,7 @@ mod tests {
         input.push_keys(b"offline");
         let (writer, mut daemon) = connection();
         assert_eq!(
-            input.connected(writer),
+            input.connected(writer, None),
             Some(ReconnectLoss {
                 queued: 0,
                 disconnected: 7,
@@ -1405,7 +1605,10 @@ mod tests {
         spawn_with(&input, AgentInput::send_queued);
         // The daemon reads nothing, so the writer soon blocks in a write.
         let (writer, daemon) = connection();
-        assert_eq!(input.connected(writer), Some(ReconnectLoss::default()));
+        assert_eq!(
+            input.connected(writer, None),
+            Some(ReconnectLoss::default())
+        );
         let chunk = vec![b'k'; 64 * 1024];
         let maximum_unsent = 40 * chunk.len();
         let (done, finished) = std::sync::mpsc::channel();

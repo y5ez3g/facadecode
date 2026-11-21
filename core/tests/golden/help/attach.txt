@@ -1,6 +1,7 @@
 Open a running managed agent's terminal.
 
 Streams the agent's live terminal here so you can watch or type directly.
+Active viewers share the smallest open terminal size and resize together.
 Press Ctrl+] to detach and leave the agent running in the background.
 
 Usage: facade attach <AGENT>
