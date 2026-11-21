@@ -74,6 +74,7 @@ mod release_sources {
 
     const GITHUB: &str = "https://github.com/y5ez3g/facadecode/releases";
     const MIRROR: &str = "https://facadecode.com";
+    const GITHUB_LATEST: &str = "https://github.com/y5ez3g/facadecode/releases/latest";
     const GITHUB_METADATA: &str =
         "https://github.com/y5ez3g/facadecode/releases/latest/download/facade-core-version.txt";
     const MIRROR_METADATA: &str = "https://facadecode.com/facade-core-version.txt";
@@ -112,13 +113,9 @@ mod release_sources {
             std::fs::write(self.folder.join(format!("{route}.body")), body).unwrap();
         }
 
-        fn redirect(&self, version: &str) {
+        fn redirect(&self, location: &str) {
             self.response("redirect", 302, "");
-            std::fs::write(
-                self.folder.join("redirect.location"),
-                format!("{GITHUB}/tag/extension%2F{version}\n"),
-            )
-            .unwrap();
+            std::fs::write(self.folder.join("redirect.location"), location).unwrap();
         }
 
         fn upgrade(&self, home: &TestHome, arguments: &[&str]) -> std::process::Output {
@@ -175,20 +172,30 @@ case "$url" in
     https://github.com/y5ez3g/facadecode/releases/download/extension%2F*/SHA256SUMS|https://facadecode.com/releases/*/SHA256SUMS) route=checksums ;;
     *) printf '%s\n' "Unexpected release URL: $url" >&2; exit 64 ;;
 esac
-IFS= read -r code < "$fixture/$route.status"
-location=
-if [ -f "$fixture/$route.location" ]; then
-    IFS= read -r location < "$fixture/$route.location"
+case "$route:$head" in
+    mirror:no|github:no|archive:yes|checksums:yes) expected=$(printf '\t%%{http_code}') ;;
+    redirect:yes) expected=$(printf '%%{redirect_url}\t%%{http_code}') ;;
+    installer:no) expected='%{http_code}' ;;
+    *) printf '%s\n' "Unexpected release request: $route:$head" >&2; exit 64 ;;
+esac
+if [ "$format" != "$expected" ]; then
+    printf '%s\n' "Unexpected curl write-out for $route: [$format]" >&2
+    exit 64
 fi
+IFS= read -r code < "$fixture/$route.status"
+# Keep a possible final unterminated line, including any CR bytes.
+write_file() {
+    line=
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+    done < "$1"
+    printf '%s' "$line"
+}
 body() {
     if [ "$head" = yes ]; then
-        printf 'HTTP/1.1 %s\r\n' "$code"
-        if [ -n "$location" ]; then printf 'Location: %s\r\n' "$location"; fi
-        printf '\r\n'
+        printf 'HTTP/1.1 %s\r\n\r\n' "$code"
     elif [ "$fail" = no ] || [ "$code" -lt 400 ]; then
-        while IFS= read -r line || [ -n "$line" ]; do
-            printf '%s\n' "$line"
-        done < "$fixture/$route.body"
+        write_file "$fixture/$route.body"
     fi
 }
 case "$output" in
@@ -200,7 +207,7 @@ while [ -n "$format" ]; do
     case "$format" in
         '%{http_code}'*) printf '%s' "$code"; format=${format#'%{http_code}'} ;;
         '%{response_code}'*) printf '%s' "$code"; format=${format#'%{response_code}'} ;;
-        '%{redirect_url}'*) printf '%s' "$location"; format=${format#'%{redirect_url}'} ;;
+        '%{redirect_url}'*) write_file "$fixture/$route.location"; format=${format#'%{redirect_url}'} ;;
         '%{url_effective}'*) printf '%s' "$url"; format=${format#'%{url_effective}'} ;;
         '\n'*) printf '\n'; format=${format#??} ;;
         *) printf '%s' "${format%"${format#?}"}"; format=${format#?} ;;
@@ -230,9 +237,17 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
     #[test]
     fn upgrade_selects_the_highest_valid_stable_version() {
         for (name, mirror, github, wanted) in [
-            ("both", (200, "0.1.9"), (200, "0.1.10"), "0.1.10"),
+            ("both", (200, "0.1.9\n"), (200, "0.1.10\r\n"), "0.1.10"),
             ("mirror", (200, "0.1.8"), (404, ""), "0.1.8"),
             ("github", (200, "0.1.99-rc.1"), (200, "0.1.9"), "0.1.9"),
+            ("body-lf", (200, "0.1.\n99"), (200, "0.1.9"), "0.1.9"),
+            ("body-crlf", (200, "0.1.\r\n99"), (200, "0.1.9"), "0.1.9"),
+            (
+                "body-extra-line",
+                (200, "0.1.99\r\n\r\n"),
+                (200, "0.1.9"),
+                "0.1.9",
+            ),
         ] {
             let home = TestHome::new(name);
             let sources = Releases::new(&home);
@@ -262,16 +277,21 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
 
     #[test]
     fn upgrade_skips_download_when_already_current_or_a_legacy_tag_confirms_it() {
-        for legacy in [false, true] {
+        let previous = older();
+        for redirect in [
+            None,
+            Some(format!("{GITHUB}/tag/extension%2F{previous}")),
+            Some(format!("{GITHUB}/tag/extension/{previous}")),
+        ] {
             let home = TestHome::new("upgrade-current");
             let agent = home.start_fake("existing");
             let daemon = home.daemon_pid();
             let keeper = keeper(&home);
             let sources = Releases::new(&home);
-            if legacy {
+            if let Some(location) = &redirect {
                 sources.response("mirror", 404, "");
                 sources.response("github", 404, "");
-                sources.redirect(&older());
+                sources.redirect(location);
             } else {
                 sources.response("mirror", 200, CURRENT);
                 sources.response("github", 200, CURRENT);
@@ -284,16 +304,55 @@ if [ "$fail" = yes ] && [ "$code" -ge 400 ]; then exit 22; fi
             );
             assert!(output.stderr.is_empty(), "{}", stderr(&output));
             let mut requests = sources.requests();
-            if legacy {
-                assert_eq!(
-                    requests.pop().as_deref(),
-                    Some("https://github.com/y5ez3g/facadecode/releases/latest")
-                );
+            if redirect.is_some() {
+                assert_eq!(requests.pop().as_deref(), Some(GITHUB_LATEST));
             }
             requests.sort();
             assert_eq!(requests, [MIRROR_METADATA, GITHUB_METADATA]);
             assert_eq!(home.daemon_pid(), daemon);
             assert!(alive(&keeper) && alive(&agent.process));
+        }
+    }
+
+    #[test]
+    fn a_legacy_redirect_requires_an_exact_stable_tag() {
+        let previous = older();
+        let next = newer();
+        let location = format!("{GITHUB}/tag/extension/{previous}");
+        let invalid = "did not redirect to a stable extension release tag";
+        for (redirect, detail) in [
+            (format!("{location}\n"), invalid.to_owned()),
+            (format!("{location}\r\n"), invalid.to_owned()),
+            (format!("{location}-rc.1"), invalid.to_owned()),
+            (
+                format!("{MIRROR}/tag/extension/{previous}"),
+                invalid.to_owned(),
+            ),
+            (
+                format!("{GITHUB}/tag/extension/{next}"),
+                format!(
+                    "release {next} is newer than this build, but facade-core-version.txt returned HTTP 404 from both origins"
+                ),
+            ),
+        ] {
+            let home = TestHome::new("upgrade-tag");
+            let sources = Releases::new(&home);
+            sources.response("mirror", 404, "");
+            sources.response("github", 404, "");
+            sources.redirect(&redirect);
+            let output = sources.upgrade(&home, &[]);
+            assert_eq!(output.status.code(), Some(1), "{redirect:?}");
+            assert!(output.stdout.is_empty(), "{}", stdout(&output));
+            assert_eq!(
+                stderr(&output),
+                format!(
+                    "error: Could not check for updates from GitHub or facadecode.com: {GITHUB}/latest: {detail}\n"
+                )
+            );
+            let mut requests = sources.requests();
+            assert_eq!(requests.pop().as_deref(), Some(GITHUB_LATEST));
+            requests.sort();
+            assert_eq!(requests, [MIRROR_METADATA, GITHUB_METADATA]);
         }
     }
 
