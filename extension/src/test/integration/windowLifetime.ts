@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AgentListEntry, V3InspectResult } from '../../base/coreProtocol';
+import type { AgentListEntry, InspectResult } from '../../base/coreProtocol';
 import { endEditors, normalizeDriveLetter, until } from './editors';
 import type { Step } from './rustWindowDriver';
 
@@ -26,7 +26,7 @@ export async function checkClosedAgent(
 	step: Extract<Closed, { readonly after: 'reload' }>,
 	screen: (agent: string) => string,
 	list: () => Promise<AgentListEntry[]>,
-	inspect: (agent: string) => Promise<V3InspectResult>,
+	inspect: (agent: string) => Promise<InspectResult>,
 	remote = false
 ): Promise<void> {
 	await until('the closed window to detach from the agent', async () => (await inspect(step.before.id)).viewers.length === 0 || undefined);
@@ -34,7 +34,7 @@ export async function checkClosedAgent(
 	await new Promise(resolve => setTimeout(resolve, remote ? 305_000 : 95_000));
 	const agents = await list();
 	const { agent, viewers } = await inspect(step.before.id);
-	assert.deepStrictEqual(agents.map(each => each.id), [agent.address]);
+	assert.deepStrictEqual(agents.map(each => each.address), [agent.address]);
 	assert.deepStrictEqual([agent.pid, agent.process, agent.session, viewers], [step.before.pid, 'running', step.before.session, []]);
 	assert.strictEqual(normalizeDriveLetter(agent.cwd), normalizeDriveLetter(step.before.cwd));
 	assert.ok(screen(step.before.id).includes(step.screenText), 'the closed window’s screen still holds its transcript');

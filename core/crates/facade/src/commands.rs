@@ -5,23 +5,23 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::SystemTime;
 
+use facade_base::api_v1::daemon::{
+    AgentCreator, AgentInfo, AgentInspect, AgentKind, AgentList, AgentListArgs, AgentListEntry,
+    AgentRef, AgentRename, AgentResume, AgentResumeList, AgentScreen, AgentSend, AgentStart,
+    AgentState, AgentStop, AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, AttachmentKind,
+    BatchStopResult, CliList, CliListArgs, DaemonStatus, FolderScope, InspectResult,
+    MachineIdentity, MachineList, MachineQuery, MachineState, ProcessState, QueryStatus,
+    RenameArgs, ResumeArgs, ResumeCandidate, ResumeListArgs, ResumeTarget, Scope, ScreenArgs,
+    SendArgs, SingleMachineScope, StartArgs, StatusArgs, StatusResult, StopArgs, StopItem,
+    StopOutcome, StopSelection, TerminalInput,
+};
+use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::api_v1::{NoArgs, Size};
 use facade_base::daemon::{DEFAULT_TERMINAL_SIZE, HowEnded, WaitKind, display_line, plain};
-use facade_base::daemon_client::{DaemonClient, made_request_id};
-use facade_base::operations::Operation;
-use facade_base::process::ProcessState;
+use facade_base::daemon_client::made_request_id;
 use facade_base::time::parse_iso_time;
 use facade_base::v3::address::{
-    default_machine_name, exact_machine_selector, parse_machine_selector,
-};
-use facade_base::v3::{
-    AgentCreator, AgentInfo, AgentInspect, AgentInspectResult, AgentKind, AgentList, AgentListRow,
-    AgentRename, AgentRenameArgs, AgentResume, AgentResumeList, AgentScreen, AgentScreenArgs,
-    AgentSelectorArgs, AgentSend, AgentSendArgs, AgentStart, AgentState, AgentStop, AgentTarget,
-    AgentType, AgentTypeArgs, AttachmentKind, BatchStopResult, CAP_RESUME_LIST_LOCAL, CliList,
-    CliListArgs, DaemonStatus, List, ListArgs, MachineIdentity, MachineList, MachineQueryArgs,
-    MachineQueryResult, MachineQueryStatus, MachineState, NoArgs, ResumeArgs, ResumeCandidate,
-    ResumeListArgs, ResumeTarget, Scope, StartArgs, StatusArgs, StatusResult, Stop, StopArgs,
-    StopItem, StopOutcome, StopSelection,
+    default_machine_name, exact_machine_selector, format_agent_address, parse_machine_selector,
 };
 
 use crate::errors::{self, AgentCommand, Problem};
@@ -67,14 +67,11 @@ pub(crate) fn start(
         name,
         folder: Some(folder),
         folder_is_default,
-        machine,
-        env: environment(),
-        cols,
-        rows,
+        scope: Some(single_machine_scope(machine)),
+        env: Some(environment()),
+        size: Size { cols, rows },
         prompt: None,
         call_id: None,
-        result_message_id: None,
-        result_message_machine_id: None,
         request_id: Some(made_request_id()),
         worktree: worktree.clone(),
         model: None,
@@ -109,8 +106,8 @@ fn available_clis(
     };
     let listed = client.call::<CliList>(CliListArgs {
         folder,
-        machine,
-        env: environment(),
+        scope: Some(single_machine_scope(machine)),
+        env: Some(environment()),
     })?;
     if listed.settings_problem.is_some() {
         return Ok(Vec::new());
@@ -121,6 +118,13 @@ fn available_clis(
         .filter(|entry| entry.available)
         .map(|entry| entry.cli)
         .collect())
+}
+
+fn single_machine_scope(machine: Option<String>) -> SingleMachineScope {
+    match machine {
+        Some(machine) => SingleMachineScope::Machine { machine },
+        None => SingleMachineScope::Local,
+    }
 }
 
 fn start_folder(
@@ -177,20 +181,18 @@ pub(crate) fn resume(
     env.insert("PWD".into(), current_dir()?);
     let resumed = client
         .call::<AgentResume>(ResumeArgs {
-            target: ResumeTarget {
-                reference: reference.clone(),
-                machine: None,
+            target: ResumeTarget::Selector {
+                selector: reference.clone(),
+                scope: None,
                 folder: None,
             },
-            machine_id: None,
-            env,
-            cols,
-            rows,
+            env: Some(env),
+            size: Size { cols, rows },
         })
         .map_err(|error| errors::agent_failed(AgentCommand::Resume, &reference, error))?;
     let cli = &resumed.agent.cli;
     if terminal.is_some() {
-        let opening = if resumed.from_saved_session {
+        let opening = if resumed.from_saved_session == Some(true) {
             Opening::SavedSession { cli: cli.clone() }
         } else {
             Opening::Resumed
@@ -198,7 +200,7 @@ pub(crate) fn resume(
         return Ok(Some(shown(&resumed.agent, opening)));
     }
     let agent = label(&resumed.agent);
-    if resumed.from_saved_session {
+    if resumed.from_saved_session == Some(true) {
         println_or_end!(
             "Started {agent} in the background from a saved {} session.",
             single_line(cli)
@@ -211,24 +213,13 @@ pub(crate) fn resume(
 
 fn shown(agent: &AgentInfo, opening: Opening) -> Shown {
     Shown {
-        target: AgentTarget::Reference {
-            reference: agent.reference(),
-        },
+        target: AgentTarget::Reference(agent.reference.clone()),
         opening,
     }
 }
 
 pub(crate) fn resume_list(client: &mut DaemonClient, scope: Scope) -> anyhow::Result<()> {
     let local = matches!(scope, Scope::Local);
-    if local
-        && !client
-            .hello_result
-            .capabilities
-            .iter()
-            .any(|capability| capability == CAP_RESUME_LIST_LOCAL)
-    {
-        return Err(errors::unsupported_command("'facade resume --local'").into());
-    }
     let machine = named_machine(&scope);
     let folder = if machine.is_none() {
         Some(current_dir()?)
@@ -236,13 +227,12 @@ pub(crate) fn resume_list(client: &mut DaemonClient, scope: Scope) -> anyhow::Re
         None
     };
     let args = ResumeListArgs {
-        machine: machine.map(str::to_owned),
+        scope: Some(scope.clone()),
         folder,
-        all: true,
-        local,
+        folder_scope: Some(FolderScope::All),
     };
     let listed = if local {
-        // Keep the request on the connection that advertised local resume.
+        // Keep local resume on the negotiated connection.
         let id = client.begin_call::<AgentResumeList>(args)?;
         client.result::<AgentResumeList>(id)
     } else {
@@ -255,7 +245,10 @@ pub(crate) fn resume_list(client: &mut DaemonClient, scope: Scope) -> anyhow::Re
         eprintln!("No resumable agents or sessions found{on}.");
         eprintln!("Start a new agent with 'facade start{option} codex'.");
     } else {
-        println_or_end!("{}", resume_list_text(&listed.items, SystemTime::now()));
+        println_or_end!(
+            "{}",
+            resume_list_text(&listed.items, &listed.machines, SystemTime::now())
+        );
         eprintln!("Resume one with 'facade resume <REFERENCE>'.");
     }
     if matches!(scope, Scope::Reachable) {
@@ -266,18 +259,11 @@ pub(crate) fn resume_list(client: &mut DaemonClient, scope: Scope) -> anyhow::Re
 
 pub(crate) fn list(client: &mut DaemonClient, scope: Scope) -> anyhow::Result<()> {
     let machine = named_machine(&scope);
-    let listed = if client.hello_result.ops.iter().any(|op| op == List::NAME) {
-        client.call::<List>(ListArgs {
-            scope: scope.clone(),
+    let listed = client
+        .call::<AgentList>(AgentListArgs {
+            scope: Some(scope.clone()),
         })
-    } else if matches!(scope, Scope::Local) {
-        return Err(errors::unsupported_command("'facade list --local'").into());
-    } else {
-        client.call::<AgentList>(MachineQueryArgs {
-            machine: machine.map(str::to_owned),
-        })
-    }
-    .map_err(|error| errors::query_failed("list", machine, error))?;
+        .map_err(|error| errors::query_failed("list", machine, error))?;
     check_named_query(&scope, &listed.machines)?;
     if listed.agents.is_empty() {
         let (on, option) = query_scope(&scope, &listed.machines);
@@ -286,8 +272,7 @@ pub(crate) fn list(client: &mut DaemonClient, scope: Scope) -> anyhow::Result<()
             "Start one with 'facade start{option} codex', or run 'facade resume{option}' to find saved sessions."
         );
     } else {
-        let rows: Vec<_> = listed.agents.iter().map(|entry| &entry.row).collect();
-        println_or_end!("{}", list_text(&rows, SystemTime::now()));
+        println_or_end!("{}", list_text(&listed.agents, SystemTime::now()));
     }
     if matches!(scope, Scope::Reachable) {
         report_machines(&listed.machines);
@@ -302,10 +287,10 @@ fn named_machine(scope: &Scope) -> Option<&str> {
     }
 }
 
-fn check_named_query(scope: &Scope, machines: &[MachineQueryResult]) -> anyhow::Result<()> {
+fn check_named_query(scope: &Scope, machines: &[MachineQuery]) -> anyhow::Result<()> {
     if matches!(scope, Scope::Machine { .. })
         && let Some(machine) = machines.first()
-        && machine.status != MachineQueryStatus::Answered
+        && machine.status != QueryStatus::Answered
     {
         return Err(errors::machine_query_failed(machine).into());
     }
@@ -313,7 +298,7 @@ fn check_named_query(scope: &Scope, machines: &[MachineQueryResult]) -> anyhow::
 }
 
 /// Use the selected machine's name for empty results and its copyable selector for commands.
-fn query_scope(scope: &Scope, machines: &[MachineQueryResult]) -> (String, String) {
+fn query_scope(scope: &Scope, machines: &[MachineQuery]) -> (String, String) {
     match scope {
         Scope::Reachable => (String::new(), String::new()),
         Scope::Local => {
@@ -337,7 +322,7 @@ fn query_scope(scope: &Scope, machines: &[MachineQueryResult]) -> (String, Strin
     }
 }
 
-fn report_machines(machines: &[MachineQueryResult]) {
+fn report_machines(machines: &[MachineQuery]) {
     let mut failed = false;
     for machine in machines
         .iter()
@@ -383,8 +368,8 @@ pub(crate) fn inspect(client: &mut DaemonClient, agent: String) -> anyhow::Resul
 
 pub(crate) fn screen(client: &mut DaemonClient, agent: String, lines: u16) -> anyhow::Result<()> {
     let screen = client
-        .call::<AgentScreen>(AgentScreenArgs {
-            agent: agent.clone(),
+        .call::<AgentScreen>(ScreenArgs {
+            target: AgentTarget::Selector(agent.clone()),
             lines: Some(lines),
         })
         .map_err(|error| errors::agent_failed(AgentCommand::Screen, &agent, error))?;
@@ -412,11 +397,15 @@ pub(crate) fn type_input(
     };
     let typed = client
         .call::<AgentType>(AgentTypeArgs {
-            target: agent_selector(&agent).target,
-            raw: None,
-            text,
-            enter,
-            keys: (!keys.is_empty()).then_some(keys),
+            target: AgentTarget::Selector(agent.clone()),
+            input: if keys.is_empty() {
+                TerminalInput::Text {
+                    text: text.unwrap_or_default(),
+                    enter,
+                }
+            } else {
+                TerminalInput::Keys { keys }
+            },
         })
         .map_err(|error| errors::agent_failed(AgentCommand::Type, &agent, error))?;
     let recipient = typed.agent.as_ref().map_or_else(
@@ -447,11 +436,10 @@ impl TypeAction {
 }
 
 pub(crate) fn send(client: &mut DaemonClient, to: String, text: String) -> anyhow::Result<()> {
-    let args = AgentSendArgs {
-        to: to.clone(),
+    let args = SendArgs {
+        to: AgentTarget::Selector(to.clone()),
         text,
         reply_to: None,
-        reply_to_machine_id: None,
         request_id: Some(made_request_id()),
         time_left_ms: None,
         allow_unsupported_receipt: true,
@@ -465,8 +453,8 @@ pub(crate) fn send(client: &mut DaemonClient, to: String, text: String) -> anyho
 
 pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> anyhow::Result<()> {
     let renamed = client
-        .call::<AgentRename>(AgentRenameArgs {
-            target: agent_selector(&agent).target,
+        .call::<AgentRename>(RenameArgs {
+            target: AgentTarget::Selector(agent.clone()),
             name,
         })
         .map_err(|error| errors::agent_failed(AgentCommand::Rename, &agent, error))?;
@@ -484,32 +472,12 @@ pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> 
 }
 
 pub(crate) fn stop(client: &mut DaemonClient, selection: StopSelection) -> anyhow::Result<i32> {
-    if !client.hello_result.ops.iter().any(|op| op == Stop::NAME) {
-        if let StopSelection::Targets { targets } = &selection
-            && let [target] = targets.as_slice()
-        {
-            return stop_one_legacy(client, target.clone()).map(|()| 0);
-        }
-        return Err(errors::unsupported_command(match selection {
-            StopSelection::Targets { .. } => "stopping multiple agents",
-            StopSelection::All {
-                scope: Scope::Reachable,
-            } => "'facade stop --all'",
-            StopSelection::All {
-                scope: Scope::Local,
-            } => "'facade stop --local'",
-            StopSelection::All {
-                scope: Scope::Machine { .. },
-            } => "'facade stop --machine'",
-        })
-        .into());
-    }
     let (scope, grouped) = match &selection {
         StopSelection::All { scope } => (Some(scope.clone()), true),
         StopSelection::Targets { targets } => (None, targets.len() != 1),
     };
     let result = client
-        .call::<Stop>(StopArgs { selection })
+        .call::<AgentStop>(StopArgs { selection })
         .map_err(|error| {
             errors::query_failed(
                 "stop --machine",
@@ -518,27 +486,6 @@ pub(crate) fn stop(client: &mut DaemonClient, selection: StopSelection) -> anyho
             )
         })?;
     Ok(report_stop(scope.as_ref(), grouped, result))
-}
-
-fn stop_one_legacy(client: &mut DaemonClient, target: AgentTarget) -> anyhow::Result<()> {
-    let input = target_address(&target).into_owned();
-    let stopped = client
-        .call::<AgentStop>(AgentSelectorArgs { target })
-        .map_err(|error| errors::agent_failed(AgentCommand::Stop, &input, error))?;
-    let label = errors::agent_label(
-        stopped.agent.as_ref().map(|agent| agent.name.as_str()),
-        &stopped.address,
-    );
-    if stopped.already_ended {
-        return Err(errors::already_stopped(
-            &label,
-            &stopped.address,
-            stopped.agent.as_ref().is_some_and(|agent| agent.resumable),
-        )
-        .into());
-    }
-    println_or_end!("Stopped {label}.");
-    Ok(())
 }
 
 fn report_stop(scope: Option<&Scope>, grouped: bool, result: BatchStopResult) -> i32 {
@@ -574,20 +521,17 @@ fn report_stop(scope: Option<&Scope>, grouped: bool, result: BatchStopResult) ->
     }
 
     let target_failures = result.items.into_iter().filter_map(|item| {
-        let StopOutcome::Failed { mut error } = item.outcome else {
+        let StopOutcome::Failed { error } = item.outcome else {
             return None;
         };
-        if error.data.agents.is_empty() {
-            error.data.agents.extend(item.agent);
-        }
-        Some(errors::agent_failed(
-            AgentCommand::Stop,
+        Some(errors::stop_failed(
             &target_address(&item.target),
-            error.into(),
+            item.agent.as_ref(),
+            error,
         ))
     });
-    let machine_failures = result
-        .machines
+    let machines = result.machines.as_deref().unwrap_or_default();
+    let machine_failures = machines
         .iter()
         .filter(|machine| errors::machine_query_unanswered(machine))
         .map(|machine| errors::machine_query_failed(machine).into());
@@ -610,7 +554,7 @@ fn report_stop(scope: Option<&Scope>, grouped: bool, result: BatchStopResult) ->
         && !stopped
         && let Some(scope) = scope
     {
-        let (on, _) = query_scope(scope, &result.machines);
+        let (on, _) = query_scope(scope, machines);
         eprintln!("No running managed agents to stop{on}.");
     }
     i32::from(failed)
@@ -618,31 +562,32 @@ fn report_stop(scope: Option<&Scope>, grouped: bool, result: BatchStopResult) ->
 
 fn target_address(target: &AgentTarget) -> Cow<'_, str> {
     match target {
-        AgentTarget::Address { agent } => Cow::Borrowed(agent),
-        AgentTarget::Reference { reference } => Cow::Owned(reference.exact_address()),
+        AgentTarget::Selector(agent) => Cow::Borrowed(agent),
+        AgentTarget::Reference(reference) => Cow::Owned(agent_address(reference, None)),
     }
 }
 
 fn stop_address(item: &StopItem) -> Cow<'_, str> {
-    item.address
-        .as_deref()
-        .or_else(|| item.agent.as_ref().map(|agent| agent.address.as_str()))
-        .map_or_else(
-            || {
-                item.reference.as_ref().map_or_else(
-                    || target_address(&item.target),
-                    |reference| Cow::Owned(reference.exact_address()),
-                )
-            },
-            Cow::Borrowed,
-        )
+    item.agent.as_ref().map_or_else(
+        || target_address(&item.target),
+        |agent| Cow::Borrowed(&agent.address),
+    )
 }
 
-fn agent_selector(agent: &str) -> AgentSelectorArgs {
-    AgentSelectorArgs {
-        target: AgentTarget::Address {
-            agent: agent.to_owned(),
-        },
+fn agent_address(reference: &AgentRef, machine: Option<&str>) -> String {
+    let address_ref = facade_base::machine::AgentRef {
+        agent_id: reference.agent_id.clone(),
+        machine_id: reference.machine_id.clone(),
+    };
+    match machine {
+        Some(selector) => format_agent_address(&address_ref, selector),
+        None => format_agent_address(&address_ref, &exact_machine_selector(&reference.machine_id)),
+    }
+}
+
+fn agent_selector(agent: &str) -> AgentTargetArgs {
+    AgentTargetArgs {
+        target: AgentTarget::Selector(agent.to_owned()),
     }
 }
 
@@ -655,7 +600,9 @@ pub(crate) fn status(client: Option<&mut DaemonClient>) -> anyhow::Result<()> {
     let cli_version = facade_base::version();
     let text = match client {
         Some(client) => {
-            let result = client.call::<DaemonStatus>(StatusArgs::default())?;
+            let result = client.call::<DaemonStatus>(StatusArgs {
+                scope: Some(SingleMachineScope::Local),
+            })?;
             status_text(
                 &result,
                 &client.hello_result.machine_id,
@@ -766,13 +713,13 @@ fn title_cell(title: Option<&str>) -> String {
     value_or_dash(&title).into()
 }
 
-pub(crate) fn list_text(agents: &[&AgentListRow], now: SystemTime) -> String {
+pub(crate) fn list_text(agents: &[AgentListEntry], now: SystemTime) -> String {
     let rows: Vec<_> = agents
         .iter()
         .map(|agent| {
             vec![
                 agent.name.clone(),
-                agent.id.clone(),
+                agent.address.clone(),
                 errors::state_name(agent.state).into(),
                 agent.cli.clone(),
                 kind_words(agent.kind).into(),
@@ -789,7 +736,11 @@ pub(crate) fn list_text(agents: &[&AgentListRow], now: SystemTime) -> String {
     roster_table(&ROSTER_COLUMNS, &rows)
 }
 
-pub(crate) fn resume_list_text(items: &[ResumeCandidate], now: SystemTime) -> String {
+pub(crate) fn resume_list_text(
+    items: &[ResumeCandidate],
+    machines: &[MachineQuery],
+    now: SystemTime,
+) -> String {
     let mut prefixes = HashMap::new();
     for item in items.iter().filter(|item| item.agent.is_none()) {
         *prefixes.entry(session_prefix(&item.session)).or_insert(0) += 1;
@@ -797,9 +748,13 @@ pub(crate) fn resume_list_text(items: &[ResumeCandidate], now: SystemTime) -> St
     let rows: Vec<_> = items
         .iter()
         .map(|item| {
-            let (reference, state, kind) = if item.agent.is_some() {
+            let (reference, state, kind) = if let ResumeTarget::Agent { reference } = &item.target {
                 let state = if item.stopped { "Stopped" } else { "Exited" };
-                (item.target.reference.as_str(), state, "Managed")
+                let machine = machines
+                    .iter()
+                    .find(|machine| machine.machine_id == reference.machine_id)
+                    .map(|machine| machine.selector.as_str());
+                (agent_address(reference, machine), state, "Managed")
             } else {
                 let prefix = session_prefix(&item.session);
                 let id = if prefixes[prefix] > 1 {
@@ -807,11 +762,11 @@ pub(crate) fn resume_list_text(items: &[ResumeCandidate], now: SystemTime) -> St
                 } else {
                     prefix
                 };
-                (id, "Saved", "Session")
+                (id.to_owned(), "Saved", "Session")
             };
             vec![
                 item.name.as_deref().unwrap_or("-").into(),
-                reference.into(),
+                reference,
                 state.into(),
                 item.cli.clone(),
                 kind.into(),
@@ -834,7 +789,7 @@ fn session_prefix(id: &str) -> &str {
 }
 
 pub(crate) fn inspect_text(
-    inspected: &AgentInspectResult,
+    inspected: &InspectResult,
     machine_names: &HashMap<String, String>,
 ) -> String {
     let agent = &inspected.agent;
@@ -848,7 +803,7 @@ pub(crate) fn inspect_text(
     let machine = agent
         .address
         .rsplit_once('@')
-        .map_or(agent.machine_id.as_str(), |(_, machine)| machine);
+        .map_or(agent.reference.machine_id.as_str(), |(_, machine)| machine);
     let (folder, launch_command, session) = if managed {
         (
             agent.cwd.as_str(),
@@ -982,7 +937,7 @@ pub(crate) fn status_text(
         launcher,
         ServiceFields {
             cli_version: (version != cli_version).then_some(cli_version),
-            agents: Some(status.agents),
+            agents: Some(status.agent_count),
             machines: &machines,
             home: &status.home,
             settings: &status.settings_file,
@@ -995,7 +950,7 @@ pub(crate) fn status_text(
 #[derive(Default)]
 struct ServiceFields<'a> {
     cli_version: Option<&'a str>,
-    agents: Option<usize>,
+    agents: Option<u64>,
     machines: &'a str,
     home: &'a str,
     settings: &'a str,

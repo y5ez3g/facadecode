@@ -471,7 +471,7 @@ impl TestHome {
         agent
     }
 
-    /// The active roster and its machine query outcomes on v3.
+    /// The active roster and its machine query outcomes.
     pub fn agent_list(&self) -> Value {
         connect(self).call_ok("agent.list", json!({}))
     }
@@ -485,7 +485,7 @@ impl TestHome {
             .cloned()
     }
 
-    /// Sends a v3 start with a first message from the terminal caller.
+    /// Starts with a first message from the terminal caller.
     pub fn start_with_prompt(
         &self,
         name: &str,
@@ -505,17 +505,17 @@ impl TestHome {
             "agent.start",
             json!({
                 "name": name, "cli": cli, "prompt": prompt, "folder": self.project,
-                "env": env, "cols": 120, "rows": 30,
+                "env": env, "size": { "cols": 120, "rows": 30 },
             }),
         )
     }
 
-    pub fn inspect_agent(&self, agent: &str) -> Value {
-        connect(self).call_ok("agent.inspect", json!({ "agent": agent }))
+    pub fn inspect_agent(&self, target: &str) -> Value {
+        connect(self).call_ok("agent.inspect", json!({ "target": target }))
     }
 
-    pub fn remove_agent(&self, agent: &str) {
-        connect(self).call_ok("agent.remove", json!({ "agent": agent }));
+    pub fn remove_agent(&self, target: &str) {
+        connect(self).call_ok("agent.remove", json!({ "target": target }));
     }
 
     /// The agent named in the background start or resume receipt, and the
@@ -542,7 +542,7 @@ impl TestHome {
     pub fn agent_record(&self, id: &str) -> Option<Value> {
         self.agents()
             .into_iter()
-            .find(|agent| agent["agent_id"] == id)
+            .find(|agent| agent["reference"]["agent_id"] == id)
     }
 
     /// The table `facade list` prints.
@@ -660,13 +660,16 @@ impl TestHome {
         let mut reader = BufReader::new(stream);
         let hello = json!({
             "jsonrpc": "2.0", "id": 1, "method": "hello",
-            "params": { "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" },
+            "params": { "api_versions": DAEMON_API_VERSIONS, "build": "test", "kind": "terminal" },
         });
         writer.write_all(format!("{hello}\n").as_bytes()).ok()?;
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;
         let response: Value = serde_json::from_str(&line).ok()?;
-        response.get("result").cloned()
+        response
+            .get("result")
+            .filter(|hello| hello["api_version"] == 1)
+            .cloned()
     }
 
     /// The keeper PID reported by the daemon.
@@ -679,8 +682,10 @@ impl TestHome {
     /// The complete agent list from the `agents` topic.
     pub fn agents(&self) -> Vec<Value> {
         let mut wire = DaemonTestClient::open(self);
-        wire.hello("terminal", DAEMON_RANGE, json!({}));
-        let watching = wire.request("watch", json!({ "topic": "agents" }));
+        let welcome = wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
+        assert_eq!(welcome["result"]["api_version"], 1, "{welcome}");
+        let watching = wire.request("watch", json!({ "topic": "agents", "args": {} }));
+        assert!(watching.get("result").is_some(), "{watching}");
         watching["result"]["snapshot"]["agents"]
             .as_array()
             .cloned()

@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use facade_base::v3::{ScreenChange, ScreenSnapshot};
+use facade_base::api_v1::daemon::{ScreenChange, ScreenSnapshot};
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 use facade_screen::Screen;
@@ -66,7 +66,7 @@ fn base(home: &TestHome) -> std::path::PathBuf {
 fn editor(home: &TestHome) -> DaemonTestClient {
     drop(connect(home));
     let mut wire = DaemonTestClient::open(home);
-    let hello = wire.hello("ide", DAEMON_RANGE, json!({}));
+    let hello = wire.hello("ide", DAEMON_API_VERSIONS, json!({}));
     assert!(hello["result"].is_object(), "{hello}");
     wire
 }
@@ -76,10 +76,10 @@ fn start_shell(wire: &mut DaemonTestClient, home: &TestHome, folder: &str, name:
     let args = json!({
         "cli": home.shell_cli(), "args": ["-c", "echo READY; sleep 600"], "name": name,
         "folder": folder, "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
-        "cols": 80, "rows": 24,
+        "size": { "cols": 80, "rows": 24 },
     });
     let started = wire.call("agent.start", args);
-    started["result"]["agent"]["agent_id"]
+    started["result"]["agent"]["reference"]["agent_id"]
         .as_str()
         .unwrap_or_else(|| panic!("{name} did not start: {started}"))
         .to_string()
@@ -96,11 +96,11 @@ fn fake_env(home: &TestHome) -> Value {
 /// Starts the test CLI as agent `name` at `folder`, and waits for its input box.
 fn start_fake(wire: &mut DaemonTestClient, home: &TestHome, folder: &str, name: &str) -> String {
     let args = json!({
-        "cli": "fake", "name": name, "folder": folder, "env": fake_env(home), "cols": 80,
-        "rows": 24,
+        "cli": "fake", "name": name, "folder": folder, "env": fake_env(home),
+        "size": { "cols": 80, "rows": 24 },
     });
     let started = wire.call("agent.start", args);
-    let id = started["result"]["agent"]["agent_id"]
+    let id = started["result"]["agent"]["reference"]["agent_id"]
         .as_str()
         .unwrap_or_else(|| panic!("{name} did not start: {started}"))
         .to_string();
@@ -116,7 +116,7 @@ fn start_fake(wire: &mut DaemonTestClient, home: &TestHome, folder: &str, name: 
 fn agent(home: &TestHome, id: &str) -> Value {
     home.agents()
         .into_iter()
-        .find(|agent| agent["agent_id"] == id)
+        .find(|agent| agent["reference"]["agent_id"] == id)
         .unwrap_or_else(|| panic!("no agent {id}"))
 }
 
@@ -273,7 +273,7 @@ fn an_editor_s_agents_outlive_a_daemon_restart() {
 fn attach(wire: &mut DaemonTestClient, id: &str, viewer: &str) -> (u64, ScreenSnapshot) {
     let watching = wire.request(
         "watch",
-        json!({ "topic": "screen", "args": { "agent": id, "viewer": viewer } }),
+        json!({ "topic": "attach", "args": { "target": id, "viewer": viewer } }),
     );
     let watch = watching["result"]["watch"]
         .as_u64()
@@ -297,11 +297,14 @@ fn two_editors_attach_to_one_running_agent_at_once() {
     let second_view = attach(&mut second, &id, "second editor");
     type_raw(&mut first, &id, "SHARED");
     for (wire, (watch, snapshot)) in [(&first, first_view), (&second, second_view)] {
-        assert_eq!(snapshot.agent_id, id);
-        assert_eq!(snapshot.machine_id, record["machine_id"].as_str().unwrap());
+        assert_eq!(snapshot.reference.agent_id, id);
+        assert_eq!(
+            snapshot.reference.machine_id,
+            record["reference"]["machine_id"].as_str().unwrap()
+        );
         assert_eq!(snapshot.address, record["address"].as_str().unwrap());
         assert!(snapshot.exit.is_none(), "{snapshot:?}");
-        let mut screen = Screen::new(snapshot.cols, snapshot.rows, 0);
+        let mut screen = Screen::new(snapshot.size.cols, snapshot.size.rows, 0);
         screen.feed(&facade_base::base64::decode(&snapshot.redraw).unwrap());
         let mut received = 0;
         assert!(
@@ -312,8 +315,8 @@ fn two_editors_attach_to_one_running_agent_at_once() {
                         facade_scenarios::serde_json::from_value(notice["change"].clone()).unwrap();
                     let data = match change {
                         ScreenChange::Output { data } => data,
-                        ScreenChange::Redraw { data, cols, rows } => {
-                            screen.resize(cols, rows);
+                        ScreenChange::Redraw { data, size } => {
+                            screen.resize(size.cols, size.rows);
                             data
                         }
                         other => panic!("unexpected screen change: {other:?}"),
@@ -350,40 +353,40 @@ fn two_editors_attach_to_one_running_agent_at_once() {
     };
     let watched = second.request(
         "watch",
-        json!({ "topic": "screen", "args": { "agent": address } }),
+        json!({ "topic": "attach", "args": { "target": address } }),
     );
     check("screen watch", watched, terminal);
     for (operation, args, why) in [
-        ("agent.screen", json!({ "agent": address }), terminal),
+        ("agent.screen", json!({ "target": address }), terminal),
         (
             "agent.type",
-            json!({ "agent": address, "text": "hello" }),
+            json!({ "target": address, "input": { "kind": "text", "text": "hello" } }),
             terminal,
-        ),
-        (
-            "agent.resize",
-            json!({ "agent": address, "cols": 80, "rows": 24 }),
-            terminal,
-        ),
-        (
-            "agent.stop",
-            json!({ "agent": address }),
-            "is a Guest and cannot be stopped by Facade",
         ),
         (
             "agent.resume",
-            json!({ "reference": address, "cols": 80, "rows": 24 }),
+            json!({ "target": { "kind": "selector", "selector": address }, "size": { "cols": 80, "rows": 24 } }),
             "is a Guest and cannot be resumed",
         ),
         (
             "agent.remove",
-            json!({ "agent": address }),
+            json!({ "target": address }),
             "is a Guest and cannot be removed",
         ),
     ] {
         check(operation, second.call(operation, args), why);
     }
-    let inspected = second.call("agent.inspect", json!({ "agent": address }));
+    let stopped = second.call_ok(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [address] } }),
+    );
+    assert_eq!(stopped["items"][0]["status"], "failed", "{stopped}");
+    check(
+        "agent.stop",
+        json!({ "error": stopped["items"][0]["error"] }),
+        "is a Guest and cannot be stopped by Facade",
+    );
+    let inspected = second.call("agent.inspect", json!({ "target": address }));
     assert_eq!(
         inspected["result"]["input"]["state"], "unknown",
         "{inspected}"
@@ -433,7 +436,7 @@ fn two_creations_of_one_branch_never_claim_the_other_s_branch() {
             "op": "agent.start",
             "args": {
                 "cli": "fake", "name": name, "folder": real(&repo), "worktree": "review",
-                "env": env, "cols": 80, "rows": 24,
+                "env": env, "size": { "cols": 80, "rows": 24 },
             },
         })
     };
@@ -454,7 +457,7 @@ fn two_creations_of_one_branch_never_claim_the_other_s_branch() {
         "{refused}"
     );
     assert!(
-        refused["error"]["data"].get("kept").is_none(),
+        refused["error"]["data"]["details"].get("kept").is_none(),
         "it claims nothing it did not make: {refused}"
     );
 }
@@ -479,16 +482,13 @@ fn an_agent_resumes_with_its_own_folder_and_session() {
     let started = first.call(
         "agent.start",
         json!({
-            "cli": "fake", "name": "kept", "folder": folder, "env": env, "cols": 80, "rows": 24,
+            "cli": "fake", "name": "kept", "folder": folder, "env": env, "size": { "cols": 80, "rows": 24 },
         }),
     );
-    let id = started["result"]["agent"]["agent_id"]
+    let reference = &started["result"]["agent"]["reference"];
+    let id = reference["agent_id"]
         .as_str()
         .unwrap_or_else(|| panic!("{started}"))
-        .to_string();
-    let address = started["result"]["agent"]["address"]
-        .as_str()
-        .unwrap()
         .to_string();
     assert!(
         wait_until(secs(15), || agent(&home, &id)["session"] == session),
@@ -496,7 +496,7 @@ fn an_agent_resumes_with_its_own_folder_and_session() {
         agent(&home, &id)
     );
     let check = |record: &Value| {
-        assert_eq!(record["agent_id"], id.as_str(), "{record}");
+        assert_eq!(record["reference"], *reference, "{record}");
         assert_eq!(record["cwd"], folder, "{record}");
         assert_eq!(record["session"], session, "{record}");
         assert_eq!(record["process"], "running", "{record}");
@@ -511,7 +511,7 @@ fn an_agent_resumes_with_its_own_folder_and_session() {
     let mut other = editor(&home);
     let resumed = other.call(
         "agent.resume",
-        json!({ "reference": address, "env": env, "cols": 80, "rows": 24 }),
+        json!({ "target": { "kind": "agent", "reference": reference }, "env": env, "size": { "cols": 80, "rows": 24 } }),
     );
     assert!(resumed["result"].is_object(), "{resumed}");
     check(&agent(&home, &id));
@@ -525,16 +525,17 @@ fn an_agents_colors_follow_the_last_editor_to_resize() {
     let folder = real(&home.project);
     let mut first = editor(&home);
     let id = start_fake(&mut first, &home, &folder, "painter");
-    let resize = |wire: &mut DaemonTestClient, colors: Value| {
+    let (first_watch, _) = attach(&mut first, &id, "first editor");
+    let resize = |wire: &mut DaemonTestClient, watch: u64, colors: Value| {
         let resized = wire.call(
-            "agent.resize",
-            json!({ "agent": id, "cols": 80, "rows": 24, "colors": colors }),
+            "attach.resize",
+            json!({ "watch": watch, "size": { "cols": 120, "rows": 40 }, "colors": colors }),
         );
         assert!(resized["result"].is_object(), "{resized}");
     };
     let mut colors =
         json!({ "foreground": "#333333", "background": "#ffffff", "cursor": "#000000" });
-    resize(&mut first, colors.clone());
+    resize(&mut first, first_watch, colors.clone());
     type_raw(&mut first, &id, "/fake colors\r");
     for reply in [
         "color 10;rgb:3333/3333/3333 bel",
@@ -549,7 +550,7 @@ fn an_agents_colors_follow_the_last_editor_to_resize() {
     }
 
     colors["background"] = json!("#1e1e1e");
-    resize(&mut first, colors);
+    resize(&mut first, first_watch, colors);
     type_raw(&mut first, &id, "/fake colors\r");
     assert!(wait_for_screen_text(
         &home,
@@ -558,8 +559,10 @@ fn an_agents_colors_follow_the_last_editor_to_resize() {
     ));
 
     let mut second = editor(&home);
+    let (second_watch, _) = attach(&mut second, &id, "second editor");
     resize(
         &mut second,
+        second_watch,
         json!({ "foreground": "#eeeeee", "background": "#225588", "cursor": "#000000" }),
     );
     let theirs = "color 11;rgb:2222/5555/8888 st";
@@ -579,10 +582,10 @@ fn an_agents_colors_follow_the_last_editor_to_resize() {
         wait_until(secs(10), || {
             let observed = connect(&home).request(
                 "watch",
-                json!({ "topic": "screen", "args": { "agent": id } }),
+                json!({ "topic": "attach", "args": { "target": id } }),
             );
             let screen = &observed["result"]["snapshot"];
-            screen["cols"] == 93 && screen["rows"] == 31
+            screen["size"] == json!({ "cols": 93, "rows": 31 })
         }),
         "the terminal attach sets the dimensions"
     );

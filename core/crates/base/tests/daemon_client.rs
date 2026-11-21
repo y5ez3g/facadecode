@@ -251,3 +251,112 @@ fn a_caller_that_manages_reconnection_receives_the_upgrading_refusal() {
     assert_eq!(client.closing.as_deref(), Some("0.2.1"));
     daemon.join().unwrap();
 }
+
+// The v1 hello, authorization and first bytes of the admitted machine stream share one socket.
+#[test]
+fn api_v1_machine_handoff_preserves_the_buffered_peer_line() {
+    use facade_base::api_v1::daemon::{
+        ConnectionKind, MachineConnect, MachineConnectArgs, MachineTransport, MachineTransportInput,
+    };
+    use facade_base::api_v1::daemon_client::DaemonClient as ApiClient;
+    use std::io::BufRead as _;
+
+    let socket = TestSocket::new("api-v1-machine-handoff");
+    let peer_hello = concat!(
+        "{\"jsonrpc\":\"2.0\", \"id\":83, \"method\":\"hello\", \"params\":",
+        "{\"api_versions\":[1],\"build\":\"peer-build\",\"kind\":\"machine\",",
+        "\"machine\":{\"machine_id\":\"11111111-1111-4111-8111-111111111111\",",
+        "\"boot_id\":\"22222222-2222-4222-8222-222222222222\",\"name\":\"peer\"}}}\n",
+    );
+    let daemon = stand_in(&socket.0, move |connection| async move {
+        let mut connection = BufReader::new(connection);
+        let mut line = String::new();
+        connection.read_line(&mut line).await.unwrap();
+        let hello: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            hello,
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "hello",
+                "params": {
+                    "api_versions": [1], "build": facade_base::build_id(), "kind": "terminal"
+                }
+            }),
+        );
+        let answer = facade_base::api_v1::Response::ok(1, api_v1_hello_result(1));
+        connection
+            .write_all(&facade_base::api_v1::encode_line(&answer))
+            .await
+            .unwrap();
+
+        line.clear();
+        connection.read_line(&mut line).await.unwrap();
+        let call: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(call["params"]["op"], "machine.connect");
+        assert_eq!(
+            call["params"]["args"]["transport"],
+            json!({"kind":"bridge"})
+        );
+        let id = call["id"].as_u64().unwrap();
+        let answer = facade_base::api_v1::Response::ok(id, json!({"transport":{"kind":"bridge"}}));
+        let mut bytes = facade_base::api_v1::encode_line(&answer);
+        bytes.extend_from_slice(peer_hello.as_bytes());
+        connection.write_all(&bytes).await.unwrap();
+        line.clear();
+        let _ = connection.read_line(&mut line).await;
+    });
+
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut client = ApiClient::connect(&socket.0, until, &mut |_| true)
+        .unwrap()
+        .expect("v1 daemon hello");
+    let authorized = client
+        .call::<MachineConnect>(MachineConnectArgs {
+            transport: MachineTransportInput::Bridge,
+            kind: ConnectionKind::Temporary,
+            expected_machine_id: None,
+        })
+        .unwrap();
+    assert!(matches!(authorized.transport, MachineTransport::Bridge));
+    let (mut reader, writer) = client.into_stream();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert_eq!(line, peer_hello);
+    drop(reader);
+    drop(writer);
+    daemon.join().unwrap();
+}
+
+#[test]
+fn api_v1_client_refuses_a_selected_version_outside_its_offer() {
+    use facade_base::api_v1::daemon_client::DaemonClient as ApiClient;
+    use facade_base::api_v1::{ErrorBody as ApiError, Response as ApiResponse};
+
+    let socket = TestSocket::new("api-v1-unoffered-version");
+    let daemon = stand_in(&socket.0, |connection| async move {
+        let mut connection = read_hello(connection).await;
+        let answer = ApiResponse::ok(1, api_v1_hello_result(2));
+        connection
+            .write_all(&facade_base::api_v1::encode_line(&answer))
+            .await
+            .unwrap();
+        let mut ignored = String::new();
+        let _ = connection.read_line(&mut ignored).await;
+    });
+
+    let until = Instant::now() + Duration::from_secs(5);
+    let error = ApiClient::connect(&socket.0, until, &mut |_| true)
+        .err()
+        .expect("unoffered API selection must fail");
+    assert_eq!(
+        error.downcast_ref::<ApiError>().unwrap().data.reason,
+        "protocol_incompatible",
+    );
+    daemon.join().unwrap();
+}
+
+fn api_v1_hello_result(version: u64) -> serde_json::Value {
+    json!({
+        "api_version": version, "build": "9.9.9+fixture", "pid": 1, "agent_count": 0,
+        "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "topics": [], "ops": []
+    })
+}

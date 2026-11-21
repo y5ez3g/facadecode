@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
-use facade_base::daemon_client::DaemonClient;
+use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -339,7 +339,8 @@ impl Relay {
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{ClientKind, HelloParams, methods};
+    use facade_base::api_v1::daemon::{ClientKind, decode_hello};
+    use facade_base::daemon::methods;
     use facade_base::jsonrpc::Request;
     use serde_json::json;
 
@@ -374,10 +375,10 @@ mod tests {
         assert!(frames.next().is_none());
 
         let ordinary = json!({
-            "protocol": [2, 2], "build": "test", "kind": "mcp", "agent": "a1",
+            "api_versions": [1], "build": "test", "kind": "mcp",
         });
         assert!(!crate::server::is_relay_hello(&ordinary));
-        let hello: HelloParams = decode_arguments(ordinary).unwrap();
+        let hello = decode_hello(ordinary).unwrap();
         assert_eq!(hello.kind, ClientKind::Mcp);
     }
 

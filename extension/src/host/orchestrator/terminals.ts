@@ -5,7 +5,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import * as vscode from 'vscode';
 import { timeout } from '../../base/async';
-import type { AgentRef, ScreenChange, ScreenSize, V3ScreenSnapshot } from '../../base/coreProtocol';
+import type { AgentRef, DaemonTopics } from '../../base/coreProtocol';
 import type { Disposable, PairFacts, RunId } from '../../core/ports';
 import type { ScreenBinding } from '../execution/agentPty';
 import { AgentTerminals, type AgentTerminal } from '../execution/agentTerminals';
@@ -15,6 +15,9 @@ type TerminalOptions = ConstructorParameters<typeof AgentTerminals>[0];
 type Options = Pick<TerminalOptions, 'media' | 'icon' | 'log' | 'colours' | 'terminalOwner'> & { readonly viewer: string };
 type Target = { readonly ref: AgentRef; readonly address: string };
 type Draw = Parameters<ScreenBinding['watchScreen']>[0];
+type ScreenSnapshot = DaemonTopics['attach']['snapshot'];
+type ScreenChange = DaemonTopics['attach']['change'];
+type Size = ScreenSnapshot['size'];
 
 const OPEN_WAIT_MS = 10_000;
 const SCREEN_RETRY_MS = 250;
@@ -106,7 +109,7 @@ export class OrchestratorTerminals implements vscode.Disposable {
 			this.suspend(pair, view);
 			if (!pair.shown) { this.unreachable(pair, view); }
 		} else if (!view.watch && !view.retry) {
-			this.watchScreen(pair, view);
+			this.watchAttach(pair, view);
 		}
 	}
 
@@ -189,19 +192,19 @@ export class OrchestratorTerminals implements vscode.Disposable {
 		pair.view = view;
 		if (!pair.reachable || !this.link.connected) { this.suspend(pair, view); }
 		if (pair.reachable) {
-			this.watchScreen(pair, view);
+			this.watchAttach(pair, view);
 		} else {
 			this.unreachable(pair, view);
 		}
 		return { dispose: () => { if (pair.view === view) { this.closeView(pair); } } };
 	}
 
-	private watchScreen(pair: Pair, view: View): void {
+	private watchAttach(pair: Pair, view: View): void {
 		const watch: NonNullable<View['watch']> = {};
 		view.watch = watch;
 		const current = () => pair.view === view && view.watch === watch;
 		const handle = this.link.watchAttach(() => ({
-			reference: view.target.ref,
+			target: view.target.ref,
 			viewer: this.options.viewer,
 			keep_scrollback: true,
 			size: screenSize(pair.terminal.pty.dimensions)
@@ -216,22 +219,23 @@ export class OrchestratorTerminals implements vscode.Disposable {
 				this.failAttach(pair, error);
 				if (error.reason === 'unavailable') {
 					this.suspend(pair, view);
-					// A remote screen can end after the roster's last reachable update. Reacquire it in that case.
-					view.retry = setTimeout(() => {
+					// A remote Attach can end after the roster's last reachable update.
+					const retry = setTimeout(() => {
+						if (pair.view !== view || view.retry !== retry) { return; }
 						view.retry = undefined;
-						if (pair.view === view && pair.reachable) { this.watchScreen(pair, view); }
+						if (pair.reachable) { this.watchAttach(pair, view); }
 					}, SCREEN_RETRY_MS);
-					view.retry.unref();
+					view.retry = retry.unref();
 				}
 			}
 		});
 		if (current()) { watch.handle = handle; } else { handle.dispose(); }
 	}
 
-	private snapshot(pair: Pair, view: View, snapshot: V3ScreenSnapshot, resize: ResizeAttach | undefined): void {
-		if (!sameRef(view.target.ref, snapshot)) { return; }
+	private snapshot(pair: Pair, view: View, snapshot: ScreenSnapshot, resize: ResizeAttach): void {
+		if (!sameRef(view.target.ref, snapshot.reference)) { return; }
 		view.resizeAttach = resize;
-		this.redraw(pair, view, snapshot.cols, snapshot.rows, snapshot.redraw);
+		this.redraw(pair, view, snapshot.size, snapshot.redraw);
 		view.ended = snapshot.process === 'ended';
 		if (view.ended) {
 			this.failAttach(pair, new Error(vscode.l10n.t('{0} has ended. Use Resume Agent to continue it.', view.target.address)));
@@ -259,7 +263,7 @@ export class OrchestratorTerminals implements vscode.Disposable {
 		}
 		if (!view.ready) { return; }
 		if (change.kind === 'redraw') {
-			this.redraw(pair, view, change.cols, change.rows, change.data);
+			this.redraw(pair, view, change.size, change.data);
 		} else if (change.kind === 'output') {
 			pair.terminal.pty.output(++view.seq, decode(change.data, view.decoder));
 		} else if (change.kind === 'exit') {
@@ -267,7 +271,7 @@ export class OrchestratorTerminals implements vscode.Disposable {
 		}
 	}
 
-	private redraw(pair: Pair, view: View, cols: number, rows: number, data: string): void {
+	private redraw(pair: Pair, view: View, { cols, rows }: Size, data: string): void {
 		view.decoder = new StringDecoder('utf8');
 		pair.terminal.pty.setGrid({ columns: cols, rows });
 		view.draw({ screen: decode(data, view.decoder), seq: ++view.seq });
@@ -276,29 +280,23 @@ export class OrchestratorTerminals implements vscode.Disposable {
 	private input(pair: Pair, data: string): void {
 		const view = pair.view;
 		if (!view || view.ended) { return; }
-		if (view.ready && this.link.notify('agent.type', { reference: view.target.ref, raw: encodeTerminalInput(data) })) { return; }
+		if (view.ready && this.link.notify('agent.type', { target: view.target.ref, input: { kind: 'raw', raw: encodeTerminalInput(data) } })) { return; }
 		if (view.ready) { this.suspend(pair, view); }
 		view.dropped += Buffer.byteLength(data, 'utf8');
 	}
 
 	private resize(pair: Pair): void {
 		const view = pair.view;
-		if (!view?.ready || view.ended) { return; }
-		const pty = pair.terminal.pty;
-		const dimensions = pty.dimensions ?? (view.resizeAttach ? undefined : pty.confirmedGrid);
-		const size = screenSize(dimensions);
+		if (!view?.ready || !view.resizeAttach || view.ended) { return; }
+		const size = screenSize(pair.terminal.pty.dimensions);
 		if (!size) { return; }
 		const colors = this.options.colours?.currentHex();
-		const args = { ...size, ...colors && { colors } };
-		if (view.resizeAttach) {
-			view.resizeAttach(args);
-		} else {
-			this.link.notify('agent.resize', { reference: view.target.ref, ...args });
-		}
+		view.resizeAttach({ size, colors });
 	}
 
 	private suspend(pair: Pair, view: View): void {
 		view.ready = false;
+		view.resizeAttach = undefined;
 		if (!view.disconnected) {
 			view.disconnected = true;
 			pair.terminal.pty.screenNote(vscode.l10n.t('Connection lost. Reconnecting. Keys typed while disconnected are not sent.'));
@@ -308,6 +306,7 @@ export class OrchestratorTerminals implements vscode.Disposable {
 	private stopWatching(view: View): void {
 		const watch = view.watch;
 		view.watch = undefined;
+		view.resizeAttach = undefined;
 		clearTimeout(view.retry);
 		view.retry = undefined;
 		watch?.handle?.dispose();
@@ -340,7 +339,7 @@ function sameRef(left: AgentRef, right: AgentRef): boolean {
 	return left.machine_id === right.machine_id && left.agent_id === right.agent_id;
 }
 
-function screenSize(dimensions: vscode.TerminalDimensions | undefined): ScreenSize | undefined {
+function screenSize(dimensions: vscode.TerminalDimensions | undefined): Size | undefined {
 	if (dimensions && dimensions.columns >= 2 && dimensions.rows >= 1) {
 		return { cols: dimensions.columns, rows: dimensions.rows };
 	}

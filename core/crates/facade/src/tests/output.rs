@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use facade_base::v3::{
-    AgentListResult, AgentListRow, AttachmentInfo, AttachmentKind, SendResult, StatusResult,
+use facade_base::api_v1::daemon::{
+    AgentListEntry, AgentListResult, AttachmentInfo, AttachmentKind, SendResult, StatusResult,
 };
 use serde_json::{Value, json};
 use unicode_width::UnicodeWidthStr;
@@ -22,14 +22,13 @@ fn trimmed(text: &str) -> String {
 }
 
 #[test]
-fn the_v3_roster_keeps_public_rows_stable_references_and_machine_query_states() {
-    let rows = json!([{
-        "id": "a3@peer", "name": "Pixel", "type": "managed",
+fn the_v1_roster_keeps_public_rows_stable_references_and_machine_query_states() {
+    let wire_rows = json!([{
+        "reference": { "agent_id": "a3", "machine_id": "401b070c-c174-4c94-abb1-cd1efda7a62b" },
+        "address": "a3@peer", "name": "Pixel", "type": "managed",
         "state": "working", "cli": "claude", "title": "Review",
         "folder": "/work/site", "started_at": before(60),
     }]);
-    let mut wire_rows = rows.clone();
-    wire_rows[0]["reference"] = json!({ "agent_id": "a3", "machine_id": "peer-id" });
 
     for (state, status) in [
         ("online", "answered"),
@@ -193,22 +192,24 @@ fn every_state_has_its_words() {
 #[test]
 fn the_list_is_one_row_per_agent_with_a_copyable_ref() {
     let title = "A title with forty visible characters and some more";
-    let rows: Vec<AgentListRow> = serde_json::from_value(json!([
+    let rows: Vec<AgentListEntry> = serde_json::from_value(json!([
         {
-            "id": "a5@laptop", "name": "Visor", "type": "guest", "state": "online",
+            "reference": { "agent_id": "a5", "machine_id": "11111111-1111-4111-8111-111111111111" },
+            "address": "a5@laptop", "name": "Visor", "type": "guest", "state": "online",
             "cli": "cursor", "folder": "/work/site", "started_at": before(60),
         },
         {
-            "id": "a3@devbox", "name": "Pixel", "type": "managed", "state": "working",
+            "reference": { "agent_id": "a3", "machine_id": "22222222-2222-4222-8222-222222222222" },
+            "address": "a3@devbox", "name": "Pixel", "type": "managed", "state": "working",
             "cli": "claude", "title": title, "folder": "/work/site", "started_at": before(120),
         },
         {
-            "id": "a4@devbox", "name": "Ada", "type": "managed", "state": "waiting_for_you",
+            "reference": { "agent_id": "a4", "machine_id": "22222222-2222-4222-8222-222222222222" },
+            "address": "a4@devbox", "name": "Ada", "type": "managed", "state": "waiting_for_you",
             "cli": "codex", "folder": "/work/site", "started_at": before(300),
         },
     ]))
     .unwrap();
-    let rows: Vec<&AgentListRow> = rows.iter().collect();
     assert_eq!(
         trimmed(&list_text(&rows, now())),
         "NAME    REF         STATE             CLI      TYPE      WORKING DIRECTORY   STARTED   TITLE\n\
@@ -303,7 +304,8 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
     };
     let added = shown(
         json!({
-            "cli": "fake work", "creator": "a2", "yolo": true
+            "cli": "fake work", "yolo": true,
+            "creator": { "agent_id": "a2", "machine_id": "22222222-2222-4222-8222-222222222222" },
         }),
         Some("claude"),
         Some(json!({ "kind": "agent", "address": "a2@devbox" })),
@@ -326,7 +328,7 @@ fn inspect_describes_custom_programs_guests_and_ended_agents() {
     let guest = shown(
         json!({
             "type": "guest", "cli": "cursor", "state": "online",
-            "pid": null, "cols": null, "rows": null,
+            "pid": null, "size": null,
         }),
         None,
         None,
@@ -368,7 +370,7 @@ fn status_shows_settings_services_and_connected_machines() {
         "build": build,
         "daemon_pid": 16968,
         "keeper_pid": 16752,
-        "agents": 12,
+        "agent_count": 12,
         "machines": [
             { "machine_id": "peer-id", "short_id": "peer", "name": "peer",
               "selector": "peer", "state": "online", "status": "answered" },
@@ -417,7 +419,7 @@ fn receipt(delivery: Value) -> SendResult {
         "id": "m42@peer",
         "recipient": {
             "reference": { "agent_id": "a3", "machine_id": "peer-id" },
-            "address": "a3@peer", "name": "Pixel", "cli": "claude",
+            "address": "a3@peer", "type": "managed", "name": "Pixel", "cli": "claude",
             "state": "idle", "resumable": false,
         },
         "message": {

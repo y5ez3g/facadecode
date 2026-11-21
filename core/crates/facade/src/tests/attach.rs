@@ -1,7 +1,7 @@
 //! The lines around an attachment: before the screen, while reconnecting, and after the terminal is
 //! restored.
 
-use facade_base::process::ProcessExit;
+use facade_base::api_v1::ProcessExit;
 use serde_json::json;
 
 use crate::Opening;

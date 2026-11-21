@@ -202,6 +202,7 @@ have full reach for the actions they offer.
 | build | The programs of one build, in `core/bin/<build>/`, with its ConPTY folder on Windows | — |
 | install | Copy a build's programs, and on Windows its ConPTY folder, into `core/bin/<build>/` | — |
 | version | A three-part version number | — |
+| API version | The positive integer selected independently by the daemon or keeper for one connection | build version |
 | sync | The daemon giving a keeper the terminals it lacks, with `agent.sync` | hand over |
 | takeover, take over | Switching the running Orchestrator to a newer build | hand over, upgrade (for the service switch) |
 | drain | The daemon letting calls under way finish before a newer build takes over | — |

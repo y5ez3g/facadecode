@@ -9,12 +9,11 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant as ClockInstant};
 
 use anyhow::Context;
+use facade_base::api_v1::ApiVersion;
+use facade_base::api_v1::keeper::{StartArgs, StopArgs, SyncArgs};
 use facade_base::daemon::KeeperInfo;
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{
-    AgentStart, AgentStop, AgentSync, KeeperAgentArgs, KeeperHeldAgent, KeeperStartArgs,
-    KeeperStartWireArgs, KeeperSyncArgs,
-};
+use facade_base::keeper::KeeperHeldAgent;
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::service::{self, Report, RestartBackoff, Service};
 use facade_base::terminal::PtyMaster;
@@ -62,7 +61,7 @@ struct Connection {
     first: Option<Arc<KeeperClient>>,
     identity: Option<ProcessIdentity>,
     build: Option<String>,
-    protocol_range: Option<[u32; 2]>,
+    api_version: Option<ApiVersion>,
     requested: bool,
     reservations: usize,
     sent: usize,
@@ -129,7 +128,7 @@ impl KeeperLink {
                 first: None,
                 identity: None,
                 build: None,
-                protocol_range: None,
+                api_version: None,
                 requested: false,
                 reservations: 0,
                 sent: 0,
@@ -157,7 +156,7 @@ impl KeeperLink {
         mut reservation: StartReservation,
         id: &str,
         number: u64,
-        args: KeeperStartArgs,
+        args: StartArgs,
         exits: ExitSink,
         kind: RunKind,
         credential_digest: Option<[u8; 32]>,
@@ -179,9 +178,7 @@ impl KeeperLink {
             .begin(id, number, Arc::clone(&exits), credential_digest);
         reservation.sent = true;
         self.connection.lock().unwrap().sent += 1;
-        let response = keeper
-            .call::<AgentStart>(&KeeperStartWireArgs::from(args))
-            .await;
+        let response = keeper.start(&args).await;
         let started = match response {
             Err(error) => {
                 if error.uncertain() {
@@ -189,57 +186,48 @@ impl KeeperLink {
                 }
                 Err(error.into())
             }
-            Ok((process, terminal)) => match terminal {
-                None => {
+            Ok((process, master)) => match master.try_clone() {
+                Err(error) => {
                     keeper.fence();
                     Err(ErrorBody::new(
-                        Reason::Internal,
-                        format!("the keeper started {id} without passing its terminal"),
+                        Reason::Unavailable,
+                        format!("could not keep {id}'s terminal: {error}"),
                     ))
                 }
-                Some(master) => match master.try_clone() {
-                    Err(error) => {
-                        keeper.fence();
-                        Err(ErrorBody::new(
-                            Reason::Unavailable,
-                            format!("could not keep {id}'s terminal: {error}"),
-                        ))
+                Ok(copy) => {
+                    if kind == RunKind::Start {
+                        crate::gate_for_test("after-run-start-response");
                     }
-                    Ok(copy) => {
-                        if kind == RunKind::Start {
-                            crate::gate_for_test("after-run-start-response");
-                        }
-                        let identity = ProcessIdentity {
-                            pid: process.pid,
-                            birth: process.birth,
-                        };
-                        let credential = credential_digest.map(|digest| RunCredentialRecord {
-                            digest,
-                            process: identity.clone(),
-                        });
-                        self.runs.register(
-                            id,
-                            Run {
-                                identity: identity.clone(),
-                                master: copy,
-                                exit: None,
-                                stopping: false,
-                                role: RunRole::Agent,
-                                committed: kind == RunKind::Start,
-                                installed: false,
-                                number,
-                                exits: Some(exits),
-                                credential_digest,
-                            },
-                        );
-                        Ok(StartedRun {
-                            pid: identity.pid,
-                            process: identity,
-                            master,
-                            credential,
-                        })
-                    }
-                },
+                    let identity = ProcessIdentity {
+                        pid: process.pid,
+                        birth: process.birth,
+                    };
+                    let credential = credential_digest.map(|digest| RunCredentialRecord {
+                        digest,
+                        process: identity.clone(),
+                    });
+                    self.runs.register(
+                        id,
+                        Run {
+                            identity: identity.clone(),
+                            master: copy,
+                            exit: None,
+                            stopping: false,
+                            role: RunRole::Agent,
+                            committed: kind == RunKind::Start,
+                            installed: false,
+                            number,
+                            exits: Some(exits),
+                            credential_digest,
+                        },
+                    );
+                    Ok(StartedRun {
+                        pid: identity.pid,
+                        process: identity,
+                        master,
+                        credential,
+                    })
+                }
             },
         };
         if started.is_err() {
@@ -442,9 +430,9 @@ impl KeeperLink {
         })
     }
 
-    /// Reads the protocol range from the last accepted keeper hello.
-    pub(crate) fn keeper_protocol_range(&self) -> Option<[u32; 2]> {
-        self.connection.lock().unwrap().protocol_range
+    /// Reads the API version selected by the last reconciled keeper.
+    pub(crate) fn keeper_api_version(&self) -> Option<ApiVersion> {
+        self.connection.lock().unwrap().api_version
     }
 
     /// Finds the keeper holding the startup lock and waits at most ten seconds for its hello.
@@ -459,7 +447,17 @@ impl KeeperLink {
                 Ok(keeper) => {
                     let found = FoundKeeper::Connected {
                         build: keeper.hello.build.clone(),
-                        held: keeper.hello.held_agents.clone(),
+                        held: keeper
+                            .hello
+                            .agents
+                            .iter()
+                            .map(|agent| KeeperHeldAgent {
+                                id: agent.agent_id.clone(),
+                                pid: agent.pid,
+                                birth: agent.birth.clone(),
+                                stopping: agent.stopping,
+                            })
+                            .collect(),
                     };
                     let mut state = self.connection.lock().unwrap();
                     state.first = Some(keeper);
@@ -545,25 +543,20 @@ impl KeeperLink {
         keeper: &KeeperClient,
         held: &KeeperHeldAgent,
     ) -> Result<PtyMaster, ErrorBody> {
-        let args = KeeperSyncArgs {
-            agent: held.id.clone(),
+        let args = SyncArgs {
+            agent_id: held.id.clone(),
             pid: held.pid,
             birth: held.birth.clone(),
         };
-        let (_, terminal) = keeper.call::<AgentSync>(&args).await?;
-        terminal.ok_or_else(|| {
-            ErrorBody::new(
-                Reason::Internal,
-                format!("the keeper answered for {} without its terminal", held.id),
-            )
-        })
+        keeper.take_terminal(&args).await
     }
 
     async fn stop_with(keeper: &KeeperClient, id: &str) -> Result<(), ErrorBody> {
         keeper
-            .call::<AgentStop>(&KeeperAgentArgs { agent: id.into() })
-            .await?;
-        Ok(())
+            .stop(&StopArgs {
+                agent_id: id.into(),
+            })
+            .await
     }
 
     async fn stop_unrecorded(keeper: &KeeperClient, id: &str) -> Result<(), ErrorBody> {
@@ -578,7 +571,7 @@ impl KeeperLink {
     async fn connect(&self, holder: &ProcessIdentity) -> Result<Arc<KeeperClient>, ConnectError> {
         let keeper = KeeperClient::connect(
             &self.core,
-            Some(holder),
+            holder,
             self.events.clone(),
             self.changes.clone(),
         )
@@ -588,7 +581,6 @@ impl KeeperLink {
             let mut state = self.connection.lock().unwrap();
             state.identity = Some(keeper.identity.clone());
             state.build = Some(keeper.hello.build.clone());
-            state.protocol_range = Some(keeper.hello.protocol_range);
         }
         Ok(keeper)
     }
@@ -597,6 +589,7 @@ impl KeeperLink {
         {
             let mut state = self.connection.lock().unwrap();
             state.phase = Phase::Ready(Arc::clone(&keeper));
+            state.api_version = Some(keeper.hello.api_version);
             state.requested = false;
             state.ready_at = Some(ClockInstant::now());
         }
@@ -611,15 +604,15 @@ impl KeeperLink {
         }
         let mut plan = self
             .runs
-            .reconcile(keeper.identity.pid, &keeper.hello.held_agents)?;
+            .reconcile(keeper.identity.pid, &keeper.hello.agents)?;
         for held in plan.unrecorded {
-            Self::stop_unrecorded(keeper, &held.id).await?;
+            Self::stop_unrecorded(keeper, &held.agent_id).await?;
         }
-        for (args, master, stopping) in self.runs.missing(&keeper.hello.held_agents)? {
+        for (args, master, stopping) in self.runs.missing(&keeper.hello.agents)? {
             if stopping {
-                plan.stops.push(args.agent.clone());
+                plan.stops.push(args.agent_id.clone());
             }
-            keeper.send_master::<AgentSync>(&args, &master).await?;
+            keeper.give_terminal(&args, master).await?;
         }
         for id in plan.stops {
             Self::stop_with(keeper, &id).await?;

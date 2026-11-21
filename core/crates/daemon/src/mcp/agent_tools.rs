@@ -1,11 +1,11 @@
 //! What the agent tools share beyond their daemon calls: the checks of a `start_agent` call, and the
 //! failure a refused start answers.
 
+use facade_base::api_v1;
 use facade_base::daemon::check_message_text;
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::jsonrpc::Reason;
 use serde_json::{Map, Value, json};
 
-use super::addresses::Addresses;
 use super::{Problems, envelope};
 
 /// Refuses a start's prompt as Facade refuses a message's text, and a model or an effort that is
@@ -29,12 +29,22 @@ pub(super) fn check_start(arguments: &Map<String, Value>, problems: &mut Problem
 }
 
 /// A start the daemon refused, saying where a worktree it made stays.
-pub(super) fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
-    let mut refused = envelope::refusal_with_addresses(error, addresses);
-    if let Some(unavailable) = &error.data.unavailable {
+pub(super) fn start_daemon_refused(error: &api_v1::ErrorBody) -> Value {
+    let mut tool_error = envelope::tool_error(error);
+    if error.data.reason == "invalid_argument"
+        && error
+            .data
+            .details
+            .as_ref()
+            .is_some_and(|details| details.contains_key("available_clis"))
+    {
+        tool_error.data.reason = Reason::NotFound;
+    }
+    let mut refused = envelope::refusal(&tool_error);
+    if let Some(unavailable) = &tool_error.data.unavailable {
         refused["data"]["execution"] = json!(unavailable.execution);
     }
-    let kept_worktree = error
+    let kept_worktree = tool_error
         .data
         .kept
         .as_ref()
@@ -54,19 +64,20 @@ pub(super) fn start_refused(error: &ErrorBody, addresses: &Addresses<'_>) -> Val
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::Kept;
-    use facade_base::jsonrpc::Reason;
-
     use super::*;
 
     #[test]
     fn a_start_failure_names_the_folder_of_its_kept_worktree() {
-        let mut error = ErrorBody::new(Reason::WorktreeFailed, "Git failed");
-        error.data.kept = Some(Kept {
-            branch: Some("review".into()),
-            path: Some("/work/review".into()),
-        });
-        let refused = start_refused(&error, &Addresses::default());
+        let error = serde_json::from_value(json!({
+            "code": -32000,
+            "message": "Git failed",
+            "data": {
+                "reason": "worktree_failed",
+                "details": { "kept": { "branch": "review", "path": "/work/review" } },
+            },
+        }))
+        .unwrap();
+        let refused = start_daemon_refused(&error);
         assert_eq!(refused["reason"], "worktree_failed");
         assert_eq!(
             refused["data"]["kept"],
@@ -76,19 +87,18 @@ mod tests {
             refused["message"],
             "Git failed; the worktree it made stays at /work/review"
         );
-        assert_eq!(
-            error.data.kept.unwrap().path.as_deref(),
-            Some("/work/review")
-        );
+        assert_eq!(error.data.details.unwrap()["kept"]["path"], "/work/review");
     }
 
     #[test]
     fn a_start_reports_a_daemon_not_found_as_not_found() {
-        let error = ErrorBody::new(
-            Reason::NotFound,
-            "the agent this start acts for is no longer listed",
-        );
-        let refused = start_refused(&error, &Addresses::default());
+        let error = serde_json::from_value(json!({
+            "code": -32000,
+            "message": "the agent this start acts for is no longer listed",
+            "data": { "reason": "not_found" },
+        }))
+        .unwrap();
+        let refused = start_daemon_refused(&error);
         assert_eq!(refused["reason"], "not_found", "{refused}");
         assert_eq!(refused["message"], error.message, "{refused}");
     }

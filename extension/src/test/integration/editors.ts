@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import { createConnection } from 'net';
 import * as path from 'path';
 import { createInterface } from 'readline';
-import type { HelloResult, Response, V2HelloParams, V3HelloParams, V3Operations } from '../../base/coreProtocol';
+import type { DaemonHelloParams, DaemonHelloResult, DaemonOperations, Response } from '../../base/coreProtocol';
 
 /** VS Code's fsPath lowercases the drive letter. Compare it like a path from Node or core. */
 export function normalizeDriveLetter(file: string): string {
@@ -253,18 +253,18 @@ export function detachedStartReference(stdout: string, name: string): string {
 }
 
 /** Reads the daemon's hello result as a terminal client. */
-export async function helloInCore(home: string, protocol: V3HelloParams['protocol']): Promise<Response> {
-	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' });
+export async function helloInCore(home: string): Promise<Response> {
+	return await readCore(home, { build: 'facade-editor-test', api_versions: [1], kind: 'terminal' });
 }
 
-export async function callInCore(home: string, op: string, args: object, protocol: V3HelloParams['protocol']): Promise<Response> {
-	return await readCore(home, { build: 'facade-editor-test', protocol, kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
+export async function callInCore(home: string, op: string, args: object): Promise<Response> {
+	return await readCore(home, { build: 'facade-editor-test', api_versions: [1], kind: 'terminal' }, { method: 'call', params: { op, args } }, 45_000);
 }
 
-export async function coreCall<O extends keyof V3Operations>(home: string, op: O, args: V3Operations[O]['args']): Promise<V3Operations[O]['result']> {
-	const reply = await callInCore(home, op, args, [3, 3]);
-	if (reply.error) { throw new Error(`${op}: ${JSON.stringify(reply.error)}`); }
-	return reply.result as V3Operations[O]['result'];
+export async function coreCall<O extends keyof DaemonOperations>(home: string, op: O, args: DaemonOperations[O]['args']): Promise<DaemonOperations[O]['result']> {
+	const reply = await callInCore(home, op, args);
+	if ('error' in reply) { throw new Error(`${op}: ${JSON.stringify(reply.error)}`); }
+	return reply.result as DaemonOperations[O]['result'];
 }
 
 export class CoreConnectionClosed extends Error {
@@ -273,7 +273,7 @@ export class CoreConnectionClosed extends Error {
 	}
 }
 
-async function readCore(home: string, hello: V2HelloParams | V3HelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
+async function readCore(home: string, hello: DaemonHelloParams, next?: { readonly method: string; readonly params: object }, timeout = 5_000): Promise<Response> {
 	const socket = createConnection(coreSocket(home));
 	const lines = createInterface({ input: socket });
 	const timer = setTimeout(() => socket.destroy(new Error(`The test driver could not read core within ${timeout} ms`)), timeout);
@@ -286,7 +286,11 @@ async function readCore(home: string, hello: V2HelloParams | V3HelloParams, next
 			lines.on('line', line => {
 				try {
 					const response = JSON.parse(line) as Response;
-					if (response.id === 1 && next && !response.error) { send(2, next.method, next.params); }
+					if (response.id === 1 && next && 'result' in response) {
+						const accepted = response.result as DaemonHelloResult;
+						assert.ok(hello.api_versions.includes(accepted.api_version), JSON.stringify(response));
+						send(2, next.method, next.params);
+					}
 					else if (response.id === 1 || response.id === 2) { resolve(response); }
 				} catch (error) { reject(error); }
 			});
@@ -311,18 +315,18 @@ export async function until<T>(what: string, probe: () => Promise<T | undefined>
 
 /**
  * Removes the active managed agents of the run's own Facade home, then waits for its idle daemon to take its socket away.
- * The v3 client only connects to an existing daemon, identifies agents by exact reference, and closes before the idle wait.
+ * The client only connects to an existing daemon, identifies agents by exact reference, and closes before the idle wait.
  */
 export async function endCore(home: string, ms = 30_000): Promise<void> {
 	if (!coreListens(home)) { return; }
 	try {
-		const hello = await helloInCore(home, [3, 3]);
-		if (hello.error) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
-		const { machine_id: machine } = hello.result as HelloResult;
-		const { agents } = await coreCall(home, 'agent.list', { machine });
+		const hello = await helloInCore(home);
+		if ('error' in hello) { throw new Error(`cleanup hello: ${JSON.stringify(hello.error)}`); }
+		const { machine_id: machine } = hello.result as DaemonHelloResult;
+		const { agents } = await coreCall(home, 'agent.list', { scope: { kind: 'local' } });
 		for (const agent of agents) {
 			if (agent.type === 'managed' && agent.reference.machine_id === machine) {
-				const removed = await coreCall(home, 'agent.remove', { reference: agent.reference });
+				const removed = await coreCall(home, 'agent.remove', { target: agent.reference });
 				assert.deepStrictEqual(removed.reference, agent.reference);
 			}
 		}

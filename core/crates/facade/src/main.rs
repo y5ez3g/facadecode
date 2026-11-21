@@ -33,11 +33,11 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use facade_base::address::default_machine_name;
+use facade_base::api_v1::NoArgs;
+use facade_base::api_v1::daemon::{AgentTarget, MachineList, Scope, StopSelection};
+use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
-use facade_base::daemon_client::DaemonClient;
-use facade_base::operations::NoArgs;
 use facade_base::process::{EndReason, ProcessExit};
-use facade_base::v3::{AgentTarget, MachineList, Scope, StopSelection};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -433,7 +433,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
         }
         Command::Attach(Target { agent }) => {
             require_console("attach", &read_screen_tip(&agent))?;
-            let target = AgentTarget::Address { agent };
+            let target = AgentTarget::Selector(agent);
             attach::attach(connect_or_start()?, target, Opening::Attached, &reconnect)
         }
         Command::List { local, machine } => {
@@ -466,10 +466,7 @@ fn run(command: Command) -> anyhow::Result<i32> {
                 }
             } else {
                 StopSelection::Targets {
-                    targets: agents
-                        .into_iter()
-                        .map(|agent| AgentTarget::Address { agent })
-                        .collect(),
+                    targets: agents.into_iter().map(AgentTarget::Selector).collect(),
                 }
             };
             commands::stop(&mut connect_or_start()?, selection)

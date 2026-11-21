@@ -16,6 +16,12 @@ stable version before downloading, and `facade upgrade --version X.Y.Z` runs the
 The installed build takes over a running Orchestrator when its compatibility checks pass, while agents keep running. The
 VS Code extension ships with its own copy of the programs.
 
+The daemon and keeper independently negotiate API v1. Clients offer `hello.params.api_versions` and each endpoint
+returns its selected `hello.result.api_version`. Both endpoints use JSON-RPC 2.0. The external MCP relay negotiates
+`relay:1` on its own connection. Before the first cutover from a prerelease build, finish workspace import and let
+active agents finish. Stop the prerelease daemon and keeper, then switch the programs and participating SSH peers
+together. Reuse the Facade home and editor workspace state. See the [cold cutover and takeover](../docs/core/ARCHITECTURE.md) notes.
+
 ## Build and test
 
 From the repository root:
@@ -145,5 +151,5 @@ on no other Facade crate.
 - [Features](../docs/core/FEATURES.md): what core supports and how to use it.
 - [Glossary](../docs/core/GLOSSARY.md): one word for each thing.
 - [Engineering](../docs/core/ENGINEERING.md): how a team of agents builds core.
-- [Daemon protocol](protocol/PROTOCOL.md), [keeper protocol](protocol/KEEPER.md) and
+- [Daemon API](protocol/PROTOCOL.md), [keeper API](protocol/KEEPER.md) and
   [Facade's MCP tools](../docs/extension/engineering/MCP.md).

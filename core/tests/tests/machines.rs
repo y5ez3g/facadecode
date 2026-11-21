@@ -17,20 +17,22 @@ fn machine_serve_passes_only_machine_hello_to_the_daemon() {
     let home = TestHome::new("machinefirst");
     let hello = |params| json!({ "jsonrpc": "2.0", "id": 1, "method": "hello", "params": params });
     let machine = json!({
-        "kind": "machine", "protocol": DAEMON_RANGE, "build": "test",
+        "kind": "machine", "api_versions": [1], "build": "test",
         "machine": {
             "machine_id": "67cafe12-9a12-4b73-8e9f-cc2d44289832",
             "boot_id": "833b79e1-0fca-44f9-b480-1d8072f3d975", "name": "peer",
-            "protocol": DAEMON_RANGE, "build": "test",
         },
     });
     let valid = hello(machine.clone());
     let mut relay = machine;
     relay["relay"] = json!({});
-    let serve = |input: String| {
-        let mut child = home
-            .command(&test_binaries().facade)
-            .args(["machine", "serve"])
+    let serve = |input: String, no_start| {
+        let mut command = home.command(&test_binaries().facade);
+        command.args(["machine", "serve"]);
+        if no_start {
+            command.arg("--no-start");
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -40,8 +42,8 @@ fn machine_serve_passes_only_machine_hello_to_the_daemon() {
         child.wait_with_output().unwrap()
     };
     for first in [
-        hello(json!({ "kind": "terminal", "protocol": DAEMON_RANGE, "build": "test" })),
-        hello(json!({ "kind": "machine", "protocol": DAEMON_RANGE, "build": "test" })),
+        hello(json!({ "kind": "terminal", "api_versions": [1], "build": "test" })),
+        hello(json!({ "kind": "machine", "api_versions": [1], "build": "test" })),
         hello(relay),
         json!({
             "jsonrpc": "2.0", "id": 1, "method": "call",
@@ -49,27 +51,96 @@ fn machine_serve_passes_only_machine_hello_to_the_daemon() {
         }),
     ] {
         // A valid introduction in the second frame must not start a session.
-        let output = serve(format!("{first}\n{valid}\n"));
-        assert_eq!(output.status.code(), Some(1), "{first}: {output:?}");
-        assert!(output.stdout.is_empty(), "{first}: {output:?}");
-        assert!(
-            stderr(&output).contains("requires a machine hello as its first frame"),
-            "{first}: {}",
-            stderr(&output)
-        );
+        let output = serve(format!("{first}\n{valid}\n"), false);
+        for line in stdout(&output).lines() {
+            let reply: Value = serde_json::from_str(line).unwrap();
+            assert!(reply.get("result").is_none(), "{first}: {reply}");
+        }
         assert!(!home.path.join("core").exists(), "{first}: daemon started");
     }
 
-    // A machine introduction reaches the daemon, which negotiates the protocol version.
-    let mut future = valid;
-    let version = json!([u32::MAX, u32::MAX]);
-    future["params"]["protocol"] = version.clone();
-    future["params"]["machine"]["protocol"] = version;
-    let output = serve(format!("{future}\n"));
+    let passive = serve(format!("{valid}\n"), true);
+    assert_eq!(passive.status.code(), Some(3), "{passive:?}");
+    assert!(passive.stdout.is_empty(), "{passive:?}");
+    assert!(
+        !home.path.join("core").exists(),
+        "the passive entry opened a daemon"
+    );
+
+    // A valid introduction reaches the actual daemon and selects the API version.
+    let output = serve(format!("{valid}\n"), false);
     assert!(output.status.success(), "{}", stderr(&output));
-    let reply: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(reply["id"], future["id"], "{reply}");
-    assert_eq!(error_reason(&reply), "protocol_incompatible", "{reply}");
+    let first = stdout(&output);
+    let reply: Value =
+        serde_json::from_str(first.lines().next().expect("the machine hello reply")).unwrap();
+    assert_eq!(reply["id"], valid["id"], "{reply}");
+    assert_eq!(reply["result"]["api_version"], 1, "{reply}");
+    assert!(reply["result"]["machine"]["boot_id"].is_string(), "{reply}");
+}
+
+#[test]
+fn machine_serve_refuses_invalid_v1_offers_before_opening_the_daemon() {
+    let home = TestHome::new("machine-v1-offer");
+    let introduction = json!({
+        "kind": "machine", "build": "test",
+        "machine": {
+            "machine_id": "67cafe12-9a12-4b73-8e9f-cc2d44289832",
+            "boot_id": "833b79e1-0fca-44f9-b480-1d8072f3d975",
+            "name": "peer",
+        },
+    });
+    let hello = |id, offer: Value| {
+        let mut params = introduction.clone();
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(offer.as_object().unwrap().clone());
+        json!({ "jsonrpc": "2.0", "id": id, "method": "hello", "params": params })
+    };
+    let continuation = hello(18, json!({ "api_versions": [1] }));
+    let invalid = json!({
+        "code": -32602,
+        "message": "Provide hello.params.api_versions as a non-empty array of positive integers. Use a Facade API v1 build.",
+        "data": { "reason": "invalid_argument" },
+    });
+    let disjoint = json!({
+        "code": -32000,
+        "message": "No common daemon API version.",
+        "data": { "reason": "protocol_incompatible", "details": { "supported_api_versions": [1] } },
+    });
+    let cases = [
+        (json!({}), &invalid),
+        (json!({ "protocol": [3, 3] }), &invalid),
+        (json!({ "api_versions": null }), &invalid),
+        (json!({ "api_versions": [] }), &invalid),
+        (json!({ "api_versions": "1" }), &invalid),
+        (json!({ "api_versions": [0] }), &invalid),
+        (json!({ "api_versions": [2] }), &disjoint),
+    ];
+    for (offer, error) in cases {
+        let first = hello(17, offer);
+        let mut child = home
+            .command(&test_binaries().facade)
+            .args(["machine", "serve"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // A valid second frame must not open a daemon after the first is refused.
+        writeln!(child.stdin.take().unwrap(), "{first}\n{continuation}").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{first}: {output:?}");
+        assert!(output.stderr.is_empty(), "{first}: {}", stderr(&output));
+        assert!(output.stdout.ends_with(b"\n"), "{first}: {output:?}");
+        let reply: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            reply,
+            json!({ "jsonrpc": "2.0", "id": 17, "error": error }),
+            "{first}"
+        );
+        assert!(!home.path.join("core").exists(), "{first}: daemon opened");
+    }
 }
 
 /// All modes pass an encoded home in one word and keep interactive and saved options distinct.
@@ -153,13 +224,18 @@ fn wait_for_machine_state(home: &TestHome, id: &str, state: &str) -> Value {
     found.unwrap()
 }
 
-fn saved_ssh<'a>(machine: &'a Value, initiator: &str) -> &'a Value {
+fn saved_ssh(machine: &Value, initiator: &str, peer: &str) -> Value {
     machine["connections"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|link| link["kind"] == "saved" && link["initiator_machine_id"] == initiator)
-        .unwrap_or_else(|| panic!("no saved SSH link from {initiator}: {machine}"))
+        .find(|link| {
+            link["kind"] == "saved"
+                && link["initiator_machine_id"] == initiator
+                && link["machine_id"] == peer
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("no saved SSH link from {initiator} to {peer}: {machine}"))
 }
 
 fn name_machine(home: &TestHome, name: &str) -> String {
@@ -182,6 +258,113 @@ fn add_saved(home: &TestHome, destination: &str, other: &TestHome) -> String {
         other.path.to_str().unwrap(),
         destination,
     ])
+}
+
+#[test]
+#[ignore = "requires the exact isolated accepted CLI binary in FACADE_TEST_API_V1_PRERELEASE"]
+fn cold_cutover_keeps_prerelease_agent_records_and_saved_transport() {
+    let old = std::path::PathBuf::from(
+        std::env::var_os("FACADE_TEST_API_V1_PRERELEASE").expect("the accepted CLI artifact"),
+    );
+    assert!(old.is_absolute() && old.is_file(), "{}", old.display());
+    let local = TestHome::new("v1-cutover-a");
+    let remote = TestHome::new("v1-cutover-b");
+    let machines = [("laptop", &local), ("devbox", &remote)];
+    install_machine_ssh(&machines, &old);
+    let old_call = |home: &TestHome, args: &[&str]| {
+        let output = home
+            .command(&old)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        stdout(&output)
+    };
+    let open_old = |home: &TestHome, name: &str| {
+        old_call(home, &["daemon", "--detach"]);
+        let mut wire = DaemonTestClient::open(home);
+        let hello = wire.hello_prerelease("terminal", [3, 3], json!({}));
+        assert_eq!(hello["result"]["protocol"], 3, "{hello}");
+        let id = hello["result"]["machine_id"].as_str().unwrap().to_string();
+        old_call(home, &["machine", "rename", &id, name]);
+        (wire, id)
+    };
+    let (mut prior, local_id) = open_old(&local, "laptop");
+    let (remote_wire, remote_id) = open_old(&remote, "devbox");
+    drop(remote_wire);
+    let out = old_call(&local, &["start", "-d", "--name", "kept", "fake"]);
+    let address = started_ref(&out);
+    old_call(&local, &["stop", address]);
+    let record = prior.call_ok("agent.inspect", json!({ "agent": address }))["agent"].clone();
+    assert_eq!(record["process"], "ended", "{record}");
+    assert_eq!(record["machine_id"], local_id, "{record}");
+    old_call(
+        &local,
+        &[
+            "machine",
+            "add",
+            "--home",
+            remote.path.to_str().unwrap(),
+            "-p",
+            "2222",
+            "devbox",
+        ],
+    );
+    let old_row = machine_in(&prior.call_ok("machine.list", json!({})), &remote_id).unwrap();
+    let old_route = old_row["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|link| link["kind"] == "saved" && link["initiator_machine_id"] == local_id)
+        .expect("the prerelease saved SSH link");
+    assert_eq!(old_route["remote_home"], json!(remote.path));
+    assert!(!old_route["ssh_args"].as_array().unwrap().is_empty());
+    let old_keeper = local.lock_record("keeper").expect("the prerelease keeper");
+    let old_daemon = local.lock_record("daemon").expect("the prerelease daemon");
+    drop(prior);
+    local.kill_home_processes();
+    remote.kill_home_processes();
+    assert!(!alive(&facade_base::process::ProcessIdentity {
+        pid: old_keeper.0 as u32,
+        birth: old_keeper.1
+    }));
+    assert!(!alive(&facade_base::process::ProcessIdentity {
+        pid: old_daemon.0 as u32,
+        birth: old_daemon.1
+    }));
+    let previous = ssh_attempts(&remote);
+    install_machine_ssh(&machines, &test_binaries().facade);
+
+    let mut current = connect(&local);
+    assert_eq!(local.hello_result().unwrap()["machine_id"], local_id);
+    let reference = json!({ "machine_id": local_id, "agent_id": record["agent_id"] });
+    let after = current.call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(after["agent"]["reference"], reference);
+    for field in ["address", "name", "cli", "cwd", "process", "exit"] {
+        assert_eq!(after["agent"][field], record[field], "{field}: {after}");
+    }
+    let roster = current.call_ok("machine.list", json!({}));
+    assert_eq!(
+        machine_in(&roster, &remote_id).unwrap()["state"],
+        "disconnected"
+    );
+    let row = machine_in(&roster, &local_id).unwrap();
+    let route = saved_ssh(&row, &local_id, &remote_id);
+    assert_eq!(route["transport"]["kind"], "ssh", "{route}");
+    for field in ["ssh_destination", "ssh_args", "remote_home"] {
+        assert_eq!(
+            route["transport"][field], old_route[field],
+            "{field}: {route}"
+        );
+    }
+    assert_eq!(
+        ssh_attempts(&remote),
+        previous,
+        "the cold read does not dial"
+    );
+    drop(connect(&remote));
+    assert_eq!(remote.hello_result().unwrap()["machine_id"], remote_id);
 }
 
 #[test]
@@ -208,10 +391,13 @@ fn an_authenticated_batch_readd_updates_the_same_saved_machine() {
         "2222",
         "devbox",
     ]);
-    let machine = machine_json(&local, &remote_id).expect("the same peer ID is still saved");
-    let saved = saved_ssh(&machine, &local_id);
-    assert_eq!(saved["ssh_args"], json!(["-p", "2222", "devbox"]));
-    assert_eq!(saved["remote_home"], remote_home);
+    let machine = machine_json(&local, &local_id).expect("the local roster row");
+    let saved = saved_ssh(&machine, &local_id, &remote_id);
+    assert_eq!(
+        saved["transport"]["ssh_args"],
+        json!(["-p", "2222", "devbox"])
+    );
+    assert_eq!(saved["transport"]["remote_home"], remote_home);
     let after = ssh_attempts(&remote);
     let new_attempts = after.strip_prefix(&attempts).unwrap();
     assert!(new_attempts.contains("batch 2222 "), "{after}");
@@ -249,8 +435,8 @@ fn a_guarded_removal_matches_the_exact_saved_id_even_when_a_name_matches() {
         json!({ "machine": absent_id, "expected_machine_id": absent_id }),
     );
     assert_eq!(error_reason(&absent), "not_found", "{absent}");
-    let saved = machine_json(&local, &remote_id).expect("the real machine is still saved");
-    assert_eq!(saved_ssh(&saved, &local_id)["kind"], "saved");
+    let saved = machine_json(&local, &local_id).expect("the local roster row");
+    assert_eq!(saved_ssh(&saved, &local_id, &remote_id)["kind"], "saved");
 
     let removed = daemon.call_ok(
         "machine.remove",
@@ -701,7 +887,10 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
             .all(|attempt| attempt.starts_with("batch 2222 ")),
         "add should reuse the existing noninteractive login: {attempts}"
     );
-    let status = connect(&local).call_ok("daemon.status", json!({ "machine": "devbox" }));
+    let status = connect(&local).call_ok(
+        "daemon.status",
+        json!({ "scope": { "kind": "machine", "machine": "devbox" } }),
+    );
     assert_eq!(
         real_path(Path::new(status["home"].as_str().unwrap())).unwrap(),
         real_path(&remote.path).unwrap(),
@@ -715,44 +904,49 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     let machine = machine_json(&local, &remote_id).expect("the saved devbox");
     assert_eq!(machine["state"], "online", "{machine}");
     assert_eq!(machine["route"], json!([remote_id]), "{machine}");
-    let connection = saved_ssh(&machine, &local_id);
+    let connection = saved_ssh(
+        &machine_json(&local, &local_id).unwrap(),
+        &local_id,
+        &remote_id,
+    );
     assert_eq!(connection["state"], "connected");
-    assert_eq!(connection["ssh_args"], json!(["-p", "2222", "devbox"]));
-    assert_eq!(connection["remote_home"], remote_home);
+    assert_eq!(
+        connection["transport"]["ssh_args"],
+        json!(["-p", "2222", "devbox"])
+    );
+    assert_eq!(connection["transport"]["remote_home"], remote_home);
 
     let env = local
         .isolating_env()
         .into_iter()
         .collect::<std::collections::BTreeMap<_, _>>();
     let mut wire = connect(&local);
-    let local_clis = wire.call("cli.list", json!({ "folder": local.project, "env": env }));
+    let local_clis = wire.call_ok("cli.list", json!({ "folder": local.project, "env": env }));
     assert!(
-        local_clis["result"]["clis"]
+        local_clis["clis"]
             .as_array()
             .unwrap()
             .iter()
             .any(|cli| cli["cli"] == "laptop-only" && cli["available"] == true),
         "{local_clis}"
     );
-    let locations = wire.call(
+    let locations = wire.call_ok(
         "location.list",
-        json!({ "machine": "devbox", "folders": [folder] }),
+        json!({ "scope": { "kind": "machine", "machine": "devbox" }, "folders": [folder] }),
     );
     assert!(
-        locations["result"]["locations"]
+        locations["locations"]
             .as_array()
             .unwrap()
             .iter()
             .any(|location| location["path"] == json!(folder) && location["kind"] == "main"),
         "{locations}"
     );
-    let available = wire.call(
+    let available = wire.call_ok(
         "cli.list",
-        json!({ "machine": "devbox", "folder": folder, "env": env }),
+        json!({ "scope": { "kind": "machine", "machine": "devbox" }, "folder": folder, "env": env }),
     );
-    let remote_clis = available["result"]["clis"]
-        .as_array()
-        .expect("the remote CLI list");
+    let remote_clis = available["clis"].as_array().expect("the remote CLI list");
     assert!(
         !remote_clis.iter().any(|cli| cli["cli"] == "laptop-only"),
         "{available}"
@@ -814,7 +1008,7 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
     let agent = &inspected["agent"];
     let worktree = facade_base::files::real_path(&worktree).unwrap();
     assert_eq!(agent["address"], address);
-    assert_eq!(agent["machine_id"], remote_id);
+    assert_eq!(agent["reference"]["machine_id"], remote_id);
     assert_eq!(agent["cwd"], worktree.to_str().unwrap());
     assert_eq!(
         started,
@@ -890,7 +1084,10 @@ fn a_remote_start_opens_a_worktree_at_the_remote_head() {
         "a bare roster leaves the peer asleep"
     );
 
-    let status = connect(&local).call_ok("daemon.status", json!({ "machine": "devbox" }));
+    let status = connect(&local).call_ok(
+        "daemon.status",
+        json!({ "scope": { "kind": "machine", "machine": "devbox" } }),
+    );
     assert_eq!(
         real_path(Path::new(status["home"].as_str().unwrap())).unwrap(),
         real_path(&remote.path).unwrap(),
@@ -1265,8 +1462,8 @@ mod authorization {
                 .is_some_and(|remaining| remaining.trim().is_empty()),
             "return rollback must preserve the native trust file: {trust}",
         );
-        let machine = machine_json(&local, &remote_id).unwrap();
-        assert_eq!(saved_ssh(&machine, &local_id)["kind"], "saved");
+        let machine = machine_json(&local, &local_id).unwrap();
+        assert_eq!(saved_ssh(&machine, &local_id, &remote_id)["kind"], "saved");
 
         let attempts = ssh_attempts(&remote);
         let result = local.run_facade(&["machine", "remove", "devbox"]);
@@ -1404,19 +1601,22 @@ fn agent_lists_are_newest_first_across_machines() {
     let mut agents = listed["agents"].as_array().unwrap().clone();
     let ids: Vec<_> = agents
         .iter()
-        .map(|agent| agent["id"].as_str().unwrap())
+        .map(|agent| agent["address"].as_str().unwrap())
         .collect();
     assert_eq!(ids, expected);
     assert!(agents.windows(2).all(|pair| {
         pair[0]["started_at"].as_str().unwrap() >= pair[1]["started_at"].as_str().unwrap()
     }));
     assert!(agents.iter().all(|agent| agent["type"] == "managed"
-        && agent.get("address").is_none()
+        && agent.get("id").is_none()
         && agent.get("agent_id").is_none()
         && agent.get("label").is_none()));
 
     for agent in &mut agents {
-        agent.as_object_mut().unwrap().shift_remove("reference");
+        let agent = agent.as_object_mut().unwrap();
+        agent.shift_remove("reference");
+        let address = agent.shift_remove("address").unwrap();
+        agent.insert("id".into(), address);
     }
     let mut mcp = McpTestClient::open(&first, &caller.id);
     let response = mcp.call("list_agents", json!({}));
@@ -1490,7 +1690,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
         "fake",
     ]);
     let worker = second.agent_from_watch("worker").expect("the remote run");
-    let id = worker["agent_id"].as_str().unwrap();
+    let id = worker["reference"]["agent_id"].as_str().unwrap();
     // The command line names an agent of another machine with its machine: a1@second.
     let address = started_ref(&started);
     assert_eq!(address, format!("{id}@second"));
@@ -1501,8 +1701,8 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     let target = format!("{id}@{}", second_id.replace('-', ""));
     let from = format!("{}@first", sender.id);
     assert_eq!(worker["cwd"], project, "{worker}");
-    assert_eq!(worker["machine_id"], second_id, "{worker}");
-    let remote = connect(&first).call("agent.inspect", json!({ "agent": target }));
+    assert_eq!(worker["reference"]["machine_id"], second_id, "{worker}");
+    let remote = connect(&first).call("agent.inspect", json!({ "target": target }));
     assert_eq!(remote["result"]["agent"]["pid"], worker["pid"], "{remote}");
     // Each machine has an a1 and reaches the other: the address names the worker alone.
     assert!(wait_for_screen_text(&second, &target, "❯"));
@@ -1626,7 +1826,7 @@ fn two_machines_start_message_attach_and_stop_the_same_agent() {
     let mut wire = connect(&first);
     assert!(
         wait_until(secs(15), || {
-            let refused = wire.call("agent.screen", json!({ "agent": target }));
+            let refused = wire.call("agent.screen", json!({ "target": target }));
             error_reason(&refused) == "unavailable"
         }),
         "the remote target is still reachable after dropping the link"
@@ -1714,7 +1914,7 @@ fn start_folder_uses_the_remote_login_folder_and_requires_absolute_paths() {
         real_path(&second.user_home()).unwrap(),
         "{agent}"
     );
-    assert_eq!(agent["machine_id"], second_id, "{agent}");
+    assert_eq!(agent["reference"]["machine_id"], second_id, "{agent}");
 
     let refused = first.run_facade(&[
         "start",
@@ -1775,7 +1975,7 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
         .wait_for_response(id, LOADED_TIMEOUT)
         .expect("the cut link settles the call");
     assert_eq!(
-        first["error"]["data"]["unavailable"]["execution"], "outcome_unknown",
+        first["error"]["data"]["details"]["execution"], "outcome_unknown",
         "{first}"
     );
     drop(sending);
@@ -1794,7 +1994,7 @@ fn a_cross_machine_send_replays_its_original_settlement_after_reconnect() {
     let mut reconnected = connect(&origin);
     let offline = reconnected.call("agent.send", args.clone());
     assert_eq!(
-        offline["error"]["data"]["unavailable"]["execution"], "outcome_unknown",
+        offline["error"]["data"]["details"]["execution"], "outcome_unknown",
         "{offline}"
     );
     assert!(
@@ -1842,7 +2042,7 @@ fn the_editor_selects_the_remote_agent_by_its_roster_reference() {
     let _link = MachineLink::open(&local, "remote", &remote);
     wait_for_route(&local, &remote_id, &[&remote_id]);
     let mut editor = DaemonTestClient::open(&local);
-    let hello = editor.hello("ide", DAEMON_RANGE, json!({}));
+    let hello = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
     assert_eq!(hello["result"]["machine_id"], local_id, "{hello}");
     assert!(hello["result"].get("window").is_none(), "{hello}");
     let roster = editor.call("agent.list", json!({}));
@@ -1853,10 +2053,10 @@ fn the_editor_selects_the_remote_agent_by_its_roster_reference() {
         .find(|row| row["reference"]["machine_id"] == remote_id)
         .unwrap();
     assert_eq!(row["reference"]["agent_id"], teller.id);
-    assert_eq!(row["id"], format!("{}@remote", teller.id));
-    let inspected = editor.call("agent.inspect", json!({ "reference": row["reference"] }));
+    assert_eq!(row["address"], format!("{}@remote", teller.id));
+    let inspected = editor.call("agent.inspect", json!({ "target": row["reference"] }));
     assert_eq!(
-        inspected["result"]["agent"]["address"], row["id"],
+        inspected["result"]["agent"]["address"], row["address"],
         "{inspected}"
     );
     assert_eq!(
@@ -1868,7 +2068,7 @@ fn the_editor_selects_the_remote_agent_by_its_roster_reference() {
         "{inspected}"
     );
 
-    let adopt = editor.call("agent.adopt", json!({ "agent": row["id"] }));
+    let adopt = editor.call("agent.adopt", json!({ "target": row["reference"] }));
     assert_eq!(error_reason(&adopt), "invalid_argument", "{adopt}");
     let mut mcp = McpTestClient::open_configured(&local, &caller.id);
     let listed = mcp.call("list_agents", json!({}));
@@ -1900,9 +2100,18 @@ fn the_editor_selects_the_remote_agent_by_its_roster_reference() {
     assert!(remote.listed_agent("wrong-source").is_none());
 }
 
-/// Both v2 windows in the same workspace contribute their real membership after takeover.
+/// Finish the accepted editor's import before cutting two isolated machines over to v1.
 #[test]
-fn a_legacy_workspace_import_recovers_both_machines_after_adding_the_route() {
+#[ignore = "requires the exact isolated accepted CLI binary in FACADE_TEST_API_V1_PRERELEASE"]
+fn a_legacy_workspace_import_recovers_both_machines_before_cold_cutover() {
+    let prerelease = std::path::PathBuf::from(
+        std::env::var_os("FACADE_TEST_API_V1_PRERELEASE").expect("the accepted CLI artifact"),
+    );
+    assert!(
+        prerelease.is_absolute() && prerelease.is_file(),
+        "{}",
+        prerelease.display()
+    );
     let local = TestHome::new("import-owner");
     let remote = TestHome::new("import-peer");
     let old = v2_facade(&local);
@@ -1924,13 +2133,13 @@ fn a_legacy_workspace_import_recovers_both_machines_after_adding_the_route() {
         } })
     };
     let mut first = DaemonTestClient::open(&local);
-    let first_welcome = first.hello("ide", [2, 2], describe("legacy-first"));
+    let first_welcome = first.hello_prerelease("ide", [2, 2], describe("legacy-first"));
     let local_id = first_welcome["result"]["machine_id"].as_str().unwrap();
     let first_window = &first_welcome["result"]["window"];
     assert_eq!(first_welcome["result"]["build"], V2_TEST_BUILD);
     assert_eq!(first_window["machine_id"], local_id, "{first_welcome}");
     let mut second = DaemonTestClient::open(&local);
-    let second_welcome = second.hello("ide", [2, 2], describe("legacy-second"));
+    let second_welcome = second.hello_prerelease("ide", [2, 2], describe("legacy-second"));
     let second_window = &second_welcome["result"]["window"];
     assert_eq!(second_window["machine_id"], local_id, "{second_welcome}");
     assert_ne!(second_window["window_id"], first_window["window_id"]);
@@ -1947,7 +2156,7 @@ fn a_legacy_workspace_import_recovers_both_machines_after_adding_the_route() {
     let local_run = start(&mut first, &local, "legacy-local");
     assert_eq!(local_run["windows"], json!([first_window]), "{local_run}");
     let mut peer = DaemonTestClient::open(&remote);
-    let peer_welcome = peer.hello("terminal", [2, 2], json!({}));
+    let peer_welcome = peer.hello_prerelease("terminal", [2, 2], json!({}));
     let peer_id = peer_welcome["result"]["machine_id"].as_str().unwrap();
     assert_ne!(local_id, peer_id);
     let peer_run = start(&mut peer, &remote, "legacy-peer");
@@ -1973,12 +2182,21 @@ fn a_legacy_workspace_import_recovers_both_machines_after_adding_the_route() {
     );
     drop((first, second, peer, bridge));
 
-    install_machine_ssh(&endpoints, &test_binaries().facade);
+    install_machine_ssh(&endpoints, &prerelease);
+    let call = |home: &TestHome, args: &[&str]| {
+        let output = home
+            .command(&prerelease)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+    };
     for home in [&local, &remote] {
-        home.run_facade_ok(&["daemon", "--takeover"]);
+        call(home, &["daemon", "--takeover"]);
     }
     let mut editor = DaemonTestClient::open(&local);
-    let hello = editor.hello("ide", DAEMON_RANGE, json!({}));
+    let hello = editor.hello_prerelease("ide", [3, 3], json!({}));
     assert_eq!(hello["result"]["protocol"], 3, "{hello}");
     assert!(hello["result"].get("window").is_none(), "{hello}");
     let selector = json!({ "machine_id": local_id, "workspace_key": workspace });
@@ -1991,13 +2209,16 @@ fn a_legacy_workspace_import_recovers_both_machines_after_adding_the_route() {
     assert_eq!(partial_machines[0]["machine_id"], peer_id, "{partial}");
     assert_eq!(partial_machines[0]["status"], "unavailable", "{partial}");
 
-    local.run_facade_ok(&[
-        "machine",
-        "add",
-        "--home",
-        remote.path.to_str().unwrap(),
-        "qa-peer",
-    ]);
+    call(
+        &local,
+        &[
+            "machine",
+            "add",
+            "--home",
+            remote.path.to_str().unwrap(),
+            "qa-peer",
+        ],
+    );
     let complete = editor.call("workspace.import_legacy", selector);
     let complete_machines = complete["result"]["machines"].as_array().unwrap();
     assert_eq!(complete_machines.len(), 1, "{complete}");
@@ -2010,8 +2231,8 @@ fn a_legacy_workspace_import_recovers_both_machines_after_adding_the_route() {
         "{complete}"
     );
     for (reference, run, window) in [
-        (owner_ref, local_run, first_window),
-        (peer_ref, peer_run, second_window),
+        (&owner_ref, local_run, first_window),
+        (&peer_ref, peer_run, second_window),
     ] {
         let single = editor.call(
             "workspace.import_legacy",
@@ -2024,6 +2245,29 @@ fn a_legacy_workspace_import_recovers_both_machines_after_adding_the_route() {
             live["result"]["agent"]["machine_id"], run["machine_id"],
             "{live}"
         );
+    }
+    let before = [(&local, owner_ref), (&remote, peer_ref)].map(|(home, reference)| {
+        let mut wire = DaemonTestClient::open(home);
+        let hello = wire.hello_prerelease("terminal", [3, 3], json!({}));
+        assert_eq!(hello["result"]["machine_id"], reference["machine_id"]);
+        let live = wire.call_ok("agent.inspect", json!({ "reference": reference }));
+        call(home, &["stop", live["agent"]["address"].as_str().unwrap()]);
+        let finished = wire.call_ok("agent.inspect", json!({ "reference": reference }));
+        assert_eq!(finished["agent"]["process"], "ended", "{finished}");
+        (home, reference, finished["agent"].clone())
+    });
+    drop(editor);
+    for home in [&local, &remote] {
+        home.kill_home_processes();
+    }
+    install_machine_ssh(&endpoints, &test_binaries().facade);
+    for (home, reference, finished) in before {
+        let mut editor = connect(home);
+        let kept = editor.call_ok("agent.inspect", json!({ "target": reference }));
+        assert_eq!(kept["agent"]["reference"], reference, "{kept}");
+        for field in ["name", "address", "process", "exit"] {
+            assert_eq!(kept["agent"][field], finished[field], "{field}: {kept}");
+        }
     }
 }
 
@@ -2068,9 +2312,11 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     let nearby = first.start_named_fake("lookout", &[]);
     // Both machines have an a1 and first reaches third: the address names the nearby one alone.
     assert!(wait_for_screen_text(&first, &nearby.address, "❯"));
-    let refused = connect(&first).call("agent.screen", json!({ "agent": "lookout" }));
+    let refused = connect(&first).call("agent.screen", json!({ "target": "lookout" }));
     assert_eq!(error_reason(&refused), "ambiguous_reference", "{refused}");
-    let candidates = refused["error"]["data"]["candidates"].as_array().unwrap();
+    let candidates = refused["error"]["data"]["details"]["candidates"]
+        .as_array()
+        .unwrap();
     assert!(
         candidates.contains(&json!(format!("{}@first", nearby.id))),
         "{refused}"
@@ -2100,11 +2346,15 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     assert_eq!(connected["state"], "online");
     assert_eq!(connected["route"], json!([third_id]));
     assert!(connected.get("unreachable").is_none(), "{connected}");
-    let ssh = saved_ssh(&connected, &first_id);
+    let ssh = saved_ssh(
+        &machine_json(&first, &first_id).unwrap(),
+        &first_id,
+        &third_id,
+    );
     assert_eq!(ssh["state"], "connected");
-    assert_eq!(ssh["ssh_destination"], "third");
-    assert_eq!(ssh["ssh_args"], json!(["-p", "2222", "third"]));
-    assert_eq!(ssh["remote_home"], home);
+    assert_eq!(ssh["transport"]["ssh_destination"], "third");
+    assert_eq!(ssh["transport"]["ssh_args"], json!(["-p", "2222", "third"]));
+    assert_eq!(ssh["transport"]["remote_home"], home);
     let last_seen = connected["last_seen"]
         .as_str()
         .expect("a timestamp of the first connection");
@@ -2155,7 +2405,8 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
         let connecting = wait_until(secs(15), || {
             machine_json(&first, &third_id).is_some_and(|row| row["state"] == "connecting")
         });
-        let listed = first.agent_list();
+        let listed = connect(&first).call_ok("agent.list", json!({ "scope": { "kind": "local" } }));
+        let pending = machine_json(&first, &third_id).unwrap();
         std::fs::write(third.folder().join("ssh-offline"), []).unwrap();
         std::fs::remove_file(hold).unwrap();
         let probe = probe.join().unwrap();
@@ -2163,11 +2414,8 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
             connecting,
             "the reachable list did not start an SSH attempt"
         );
-        assert_eq!(
-            machine_in(&listed, &third_id).unwrap()["state"],
-            "connecting",
-            "{listed}"
-        );
+        assert_eq!(pending["state"], "connecting", "{pending}");
+        assert!(machine_in(&listed, &third_id).is_none(), "{listed}");
         assert!(
             listed["agents"]
                 .as_array()
@@ -2181,10 +2429,13 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     let disconnected = wait_for_machine_state(&first, &third_id, "unreachable");
     assert!(disconnected.get("unreachable").is_none(), "{disconnected}");
     assert!(disconnected.get("route").is_none(), "{disconnected}");
-    let direct = saved_ssh(&disconnected, &first_id);
-    assert_eq!(direct["state"], "unavailable", "{disconnected}");
-    assert_eq!(direct["ssh_args"], ssh["ssh_args"]);
-    assert_eq!(direct["remote_home"], ssh["remote_home"]);
+    let direct = saved_ssh(
+        &machine_json(&first, &first_id).unwrap(),
+        &first_id,
+        &third_id,
+    );
+    assert_eq!(direct["state"], "disconnected", "{disconnected}");
+    assert_eq!(direct["transport"], ssh["transport"]);
     assert!(
         disconnected["last_seen"].as_str().unwrap() >= last_seen,
         "{disconnected}"
@@ -2200,10 +2451,13 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
     std::fs::write(third.folder().join("ssh-needs-login"), []).unwrap();
     first.run_facade_ok(&["list"]);
     let needs_login = wait_for_machine_state(&first, &third_id, "ssh_interaction_required");
-    let direct = saved_ssh(&needs_login, &first_id);
+    let direct = saved_ssh(
+        &machine_json(&first, &first_id).unwrap(),
+        &first_id,
+        &third_id,
+    );
     assert_eq!(direct["state"], "ssh_interaction_required");
-    assert_eq!(direct["ssh_args"], ssh["ssh_args"]);
-    assert_eq!(direct["remote_home"], ssh["remote_home"]);
+    assert_eq!(direct["transport"], ssh["transport"]);
     let repair = &direct["ssh_interaction"];
     assert_eq!(
         repair["command"],
@@ -2212,7 +2466,7 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
         ])
     );
     assert!(
-        repair["reason"]
+        repair["message"]
             .as_str()
             .unwrap()
             .contains("Permission denied (publickey).")
@@ -2248,22 +2502,19 @@ fn three_machines_switch_routes_and_keep_saved_ssh_diagnostics() {
         .unwrap();
     assert_eq!(mcp_offline, &offline, "{listed}");
 
-    let refused = connect(&first).call("agent.screen", json!({ "agent": target }));
+    let refused = connect(&first).call("agent.screen", json!({ "target": target }));
     assert_eq!(
         error_reason(&refused),
         "ssh_interaction_required",
         "{refused}"
     );
-    assert_eq!(
-        refused["error"]["data"]["ssh_interaction"], *repair,
-        "{refused}"
-    );
+    assert_eq!(refused["error"]["data"]["details"], *repair, "{refused}");
     assert!(
-        connect(&first).call("agent.screen", json!({ "agent": "other" }))["result"].is_object(),
+        connect(&first).call("agent.screen", json!({ "target": "other" }))["result"].is_object(),
         "the offline saved peer does not block a unique reachable agent"
     );
     first.run_facade_ok(&["machine", "remove", "lookout-host"]);
     assert!(
-        connect(&first).call("agent.screen", json!({ "agent": "other" }))["result"].is_object()
+        connect(&first).call("agent.screen", json!({ "target": "other" }))["result"].is_object()
     );
 }

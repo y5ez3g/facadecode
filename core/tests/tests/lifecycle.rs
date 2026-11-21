@@ -177,10 +177,10 @@ fn the_services_exit_when_idle_and_the_records_survive() {
             .any(|line| line.starts_with("State ") && line[5..].trim() == "Exited (code 4)"),
         "{inspected}"
     );
-    assert_eq!(home.hello_result().unwrap()["agents"], 0);
+    assert_eq!(home.hello_result().unwrap()["agent_count"], 0);
     let records = home.agents();
     assert_eq!(records.len(), 1, "{records:?}");
-    assert_eq!(records[0]["agent_id"], agent, "{records:?}");
+    assert_eq!(records[0]["reference"]["agent_id"], agent, "{records:?}");
     assert!(home.screen(&agent).contains("LAST-WORDS"));
     assert_eq!(
         start_script(&mut connect(&home), &home, "next", "sleep 60"),

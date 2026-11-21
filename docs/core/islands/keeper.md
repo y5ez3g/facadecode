@@ -1,9 +1,9 @@
 # Keeper
 
-The keeper is the long-lived parent of every CLI in a Facade home, one per home. It holds a copy of
-each CLI's terminal, so a terminal outlives a daemon crash, and it keeps one daemon running. It is
-its own island because it must stay small and stable: CLIs and terminals survive anything that
-happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `facade keeper`.
+One keeper per Facade home starts the CLIs, holds a copy of each CLI's terminal, and keeps a daemon
+running. Its terminal copies let a CLI survive a daemon crash or takeover. A replacement keeper can
+take over the CLIs that the daemon still holds. The `facade-keeper` crate in `core/crates/keeper`
+runs as `facade keeper`.
 
 ## Owns
 
@@ -29,16 +29,17 @@ happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `fa
 - One thread, one wait: `poll` on Unix, an I/O completion port on Windows. No tokio, no locks, no
   other threads, and no thread per CLI.
 - Only the process holding `keeper.lock` serves; a second keeper reports `contention` and exits.
-- A connection is accepted only from this user's process whose pid and birth match
-  `core/daemon.lock`; a newly proved connection replaces the one before.
-- `hello` comes first and only once per connection; anything else before it is
-  `invalid_argument`.
+- The keeper accepts a connection after proving the daemon's user, PID and birth against
+  `core/daemon.lock`. The daemon checks `core/keeper.lock` before sending `hello`. A newly proved
+  connection replaces the previous one and starts a new handshake.
+- `hello` and each `call` require a JSON-RPC `id`. The first successful `hello` fixes the API version
+  for that connection. A call before hello or another hello after success returns `invalid_argument`.
 - A CLI starts with every signal at its default, no signal blocked, exactly the environment
   `agent.start` gave, in its own session with the PTY as its controlling terminal.
 - A group signal is sent only after the leader's pid, birth and group prove the group is still
   the CLI's. A forked CLI stays unreaped until its group is dealt with, so its IDs cannot be reused.
-- `changed` for a CLI always follows the response to its `agent.start`, and goes only to a link that
-  said hello.
+- The keeper sends `changed` after the associated start, stop or sync response, and only on a link
+  that completed `hello`.
 - The daemon always starts from the launcher, `core/bin/facade daemon`, so it runs whichever build
   the launcher points at.
 - The keeper exits when no daemon runs and it holds no CLI, and never otherwise except on
@@ -77,15 +78,19 @@ happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `fa
 - Both read the startup report on `FACADE_STARTUP_CHANNEL`: `started`, `contention` or
   `failed <reason>`.
 
-**The daemon**, over the keeper protocol ([KEEPER.md](../../../core/protocol/KEEPER.md);
-types in `facade_base::keeper`):
+**The daemon** uses the [keeper protocol](../../../core/protocol/KEEPER.md), typed in
+`facade_base::api_v1::keeper`.
 
-- Requests the keeper serves: `hello`, then `call` with `agent.start`, `agent.stop`,
-  `agent.sync` and `daemon.ping`.
-- The one notification it sends: `changed`, when a CLI ended.
-- Terminals travel with `SCM_RIGHTS` on Unix, at most one per message. On Windows a terminal is the
-  line's `terminal` member: handles the sender duplicated into the receiver's process
-  (`facade_base::terminal_lines`).
+- `hello {api_versions:[1]}` selects version `1` from the keeper's own support set. The result
+  gives the selected `api_version`, software `build` and held `agents`. A valid offer with no
+  common version returns `protocol_incompatible` with `details.supported_api_versions`.
+- The daemon sends `call {op,args}` to run `agent.start`, `agent.stop`, `agent.sync` or `daemon.ping`.
+  The response echoes the request ID and contains a result or a shared `ErrorBody`.
+- The keeper sends `changed {kind:"exit",agent_id,exit}` when a CLI ends, using the shared `ProcessExit`.
+- A successful `agent.start` response returns one terminal copy. An `agent.sync` request or successful
+  response can carry one copy. On macOS and Linux, `SCM_RIGHTS` carries a PTY master descriptor with
+  the first byte of the line. On Windows, the top-level `terminal` member names handles already
+  duplicated into the authenticated receiver's process. The receiver closes unused copies.
 
 **Programs it starts:** `core/bin/facade daemon`, and the CLIs `agent.start` names.
 
@@ -95,8 +100,8 @@ types in `facade_base::keeper`):
 ## Depends on
 
 - **`facade-base`:**
-  - protocol: `keeper` (types, versions, timeouts), `jsonrpc` (framing, `ErrorBody`), `operations`
-    (`CallParams`);
+  - protocol uses `api_v1` for JSON-RPC and errors, `api_v1::keeper` for version negotiation and typed
+    operations, and `keeper` for resolved launches and supervision timeouts;
   - platform:
     - `service` (locks, peer proof, `launch`, `StartupChannel`, inherited descriptors, private
       home);
@@ -105,7 +110,8 @@ types in `facade_base::keeper`):
     - `limits`, `paths`, `programs::launcher`;
   - `log` (writes a line and prunes the service's own log), `time`.
 - **On Windows:** `sockets::server_pipe`, `service::authenticate_client`,
-  `terminal_lines::{PeerProcess, add_terminal, take_terminal}`, `terminal::PtyMaster`,
+  `terminal_lines::{PeerProcess, add_terminal, take_terminal, PreparedTerminal, InvalidTerminalEnvelope}`,
+  `terminal::PtyMaster`,
   `unix_process::WaitPacket`, `programs::{quoted_command, bin_dir, CONPTY_FOLDER}`.
 - **Third party:** `serde`, `serde_json`, `anyhow`; on Unix `nix`, `libc`, `signal-hook`; on Windows
   `windows-sys`.
@@ -166,9 +172,10 @@ stopped, its SIGKILL deadline. The `Tie` says how the keeper learns of the CLI's
 
 ### Requests
 
-The link (`link.rs`) reads every line that has arrived and takes the descriptor each line carries.
-`keeper/requests.rs` turns each line into a `Request`, carries it out, and writes the response with
-the master it carries, if any.
+The link reads complete lines and takes ownership of their resources. The shared JSON-RPC and
+keeper decoders check the request before the platform handler runs it. The handler writes the
+response and attaches its terminal copy when the operation calls for one. When an input line exceeds
+64 MiB including its newline, the keeper sends `capacity_exceeded` with a null ID and closes the link.
 
 - **`agent.start`:** opens the PTY (`terminal.rs`), spawns the CLI and reads its birth. A CLI
   whose birth cannot be read is killed and the start fails.
@@ -177,8 +184,10 @@ the master it carries, if any.
      whichever comes first.
   2. A repeated stop keeps the first deadline.
   3. A SIGKILL that fails is tried again after 100 ms.
-- **`agent.sync`:** gives the master to whichever side lacks it. When the daemon syncs a CLI
-  that has already ended, the keeper reports `changed` right after the response.
+- **`agent.sync`:** checks the CLI's PID and birth. It gives a copy of the master to whichever side
+  lacks it, closes a redundant incoming copy, and returns `not_found` when neither side has one.
+  When the daemon gives the keeper a terminal for a CLI that already ended, the keeper acknowledges
+  the sync and then reports `changed`.
 
 ### Ends
 
@@ -214,8 +223,10 @@ as closing a terminal does.
 - **Another proved daemon connects.** It becomes the daemon being watched, and its connection
   replaces the old one. A daemon the keeper forked and no longer watches is still reaped when it
   exits.
-- **The keeper itself ended.** The daemon still holds every master. It starts a new keeper through
-  the launcher and syncs each CLI to it with `agent.sync`. Those CLIs then end without an exit code.
+- **The keeper itself ended.** The daemon retains every master, its client connections and their
+  Attach subscriptions. It starts a replacement keeper through the launcher, proves its PID and
+  birth, and syncs each CLI with `agent.sync`. When an adopted CLI later ends, the Unix keeper reports
+  the observation time. The Windows keeper reads the exit code through the held process handle.
 
 ### On Windows
 
@@ -228,11 +239,16 @@ The same keeper, in `src/windows/`; the Unix modules are not built there.
 - **The listener and the link** (`link.rs`): each instance of the keeper's pipe
   (`sockets::server_pipe`, owner only) waits in an overlapped `ConnectNamedPipe`; once one connects,
   the next instance waits. The client is proved with `service::authenticate_client` before a byte is
-  read. The link keeps one overlapped read under way; dropping it cancels that read and waits for
-  it. A write is waited for up to `SEND_TIMEOUT`, then cancelled, and the link dropped; its
-  completion never reaches the port. A terminal leaves in a line through `add_terminal`, duplicated
-  into the daemon, and arrives through `take_terminal`, which also closes one a line should not
-  carry.
+  read. The link keeps one overlapped read under way and cancels and waits for it when it closes.
+  `take_terminal` strips the top-level member as each complete line is assembled. Each assembled
+  line owns its copies until it is handled or dropped. If the read completes as the link closes,
+  the keeper closes the duplicate handles from its complete frames. A malformed member closes
+  the link after an `invalid_argument` response if the request ID can be verified.
+- **Writes with a terminal** use `add_terminal` in `link.rs` to prepare duplicates in the daemon process.
+  After `SEND_TIMEOUT` the link cancels an outstanding write and checks its final completion. The
+  receiver owns the duplicates once the complete line, including the newline, has been written.
+  An incomplete write closes the link and reclaims the undelivered duplicates. A failure to prepare
+  duplicates returns `unavailable` before sending a success response.
 - **A start** (`console.rs`): the package's `conpty.dll` is loaded once, from
   `core/bin/<build>/conpty/`, with its search limited to that folder and System32; without it a start
   fails with an error naming the folder. Then:
@@ -248,8 +264,8 @@ The same keeper, in `src/windows/`; the Unix modules are not built there.
      end, then `ClosePseudoConsole`, which frees the `HPCON` and closes the package's own copies
      without waiting for the console host: the pseudo console lives on through the copies of the signal
      pipe the services hold.
-     - The keeper does not keep the `HPCON`. It holds the package's own copy of the signal pipe,
-       so a stop's hang-up, which closes the keeper's copy, would not end the console.
+     - Closing the `HPCON` releases the package's signal pipe copy. The two services can then hang
+       up the console by closing the copies they hold.
 - **Ends** (`cli.rs`, `supervisor.rs`): a wait completion packet (`WaitPacket`) for each CLI and the
   daemon, on the process handle the keeper holds, so a CLI's exit always has its code, whether the
   keeper started it or took it over through `agent.sync`. A CLI that cannot be watched is refused

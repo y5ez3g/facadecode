@@ -4,11 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use facade_base::api_v1::{Size, daemon as wire};
 use facade_base::daemon::{AgentResumeArgs, HowEnded, is_session_id};
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{AgentRef, MachineQueryStatus};
 use facade_base::operations::Operation;
 use facade_base::process::ProcessState;
+use facade_base::v3::address::{AgentAddress, AgentKey, parse_agent_address};
 use facade_base::v3::{
     self, Caller, ResumeArgs, ResumeCandidate, ResumeListArgs, ResumeListResult, ResumeResult,
     ResumeTarget, SessionMatch,
@@ -16,50 +18,50 @@ use facade_base::v3::{
 use facade_rules::entries;
 use tokio::task::JoinSet;
 
+use crate::api;
 use crate::network_operations::{machine_query_result, require_person};
 use crate::operations::StartOrigin;
 use crate::records::{self, OperationTarget, Reach};
 use crate::service::{check_size, sender_from, value_of};
 use crate::{Daemon, blocking_in_place, command_line};
 
-pub(crate) const RESUME_RECORDS: &str = "machine.resume_records";
-
-pub(crate) enum ResumeListOrigin {
-    CandidateShell,
-    Local,
-    Forwarded,
-}
+pub(crate) const RESUME_RECORDS: &str = "internal.resume_records";
 
 impl Daemon {
-    pub(crate) async fn resume_candidates(
+    pub(crate) async fn api_resume_candidates(
         self: &Arc<Self>,
         caller: &Caller,
-        mut args: ResumeListArgs,
-        origin: ResumeListOrigin,
+        request: wire::ResumeListArgs,
+        forwarded: bool,
     ) -> Result<ResumeListResult, ErrorBody> {
         require_person(caller)?;
-        if args.local && args.machine.is_some() {
+        let scope = request.scope.unwrap_or(wire::Scope::Local);
+        let reachable = matches!(scope, wire::Scope::Reachable);
+        let machine = match scope {
+            wire::Scope::Machine { machine } => Some(machine),
+            _ => None,
+        };
+        if forwarded && (reachable || machine.is_some()) {
             return Err(ErrorBody::invalid_argument(
-                "choose either local resume listing or a machine",
+                "a forwarded resume list needs local scope",
             ));
         }
-        if args.local {
-            args.all = true;
-        }
-        let forwarded = matches!(origin, ResumeListOrigin::Forwarded);
+        let named_records = machine.is_some() && request.folder.is_none();
+        let mut args = ResumeListArgs {
+            machine,
+            folder: request.folder,
+            all: named_records || matches!(request.folder_scope, Some(wire::FolderScope::All)),
+            local: !reachable,
+        };
         let selected = if forwarded {
             None
         } else {
             self.machine_for(args.machine.as_deref())?
         };
-        let named_cli = matches!(caller, Caller::Terminal { .. })
-            && args.all
-            && selected.is_some()
-            && args.folder.is_none();
         if let Some(id) = selected.as_ref().filter(|id| *id != &self.machine_id) {
-            self.ensure_machine_route(id).await?;
+            self.ensure_machine_route(id, caller).await?;
             args.machine = None;
-            let mut found = if named_cli {
+            let mut found = if named_records {
                 let items = decode_arguments(
                     self.network_call(
                         id,
@@ -101,16 +103,18 @@ impl Daemon {
             return Ok(found);
         }
 
-        let reachable = args.all && args.machine.is_none() && !args.local && !forwarded;
-        let rows = if reachable && matches!(origin, ResumeListOrigin::CandidateShell) {
-            self.probe_machine_queries(None).await?
+        let rows = if reachable {
+            self.probe_machine_queries(None, caller).await?
         } else {
             self.public_machines()?
                 .into_iter()
                 .map(|row| machine_query_result(row, MachineQueryStatus::Unavailable))
                 .collect()
         };
-        let mut local = self.local_resume_candidates(&args, !named_cli).await?;
+        if reachable && !args.all && args.folder.is_none() {
+            args.folder = Some(self.login_environment().await?.1);
+        }
+        let mut local = self.local_resume_candidates(&args, !named_records).await?;
         let mut machines = Vec::new();
         let mut jobs = JoinSet::new();
         for mut row in rows {
@@ -149,10 +153,10 @@ impl Daemon {
             match result {
                 Ok(items) => {
                     query.status = MachineQueryStatus::Answered;
-                    for mut item in items
-                        .into_iter()
-                        .filter(|item| item.machine_id == query.machine_id)
-                    {
+                    for mut item in items.into_iter().filter(|item| {
+                        item.machine_id == query.machine_id
+                            && (args.all || args.folder.as_deref() == Some(item.folder.as_str()))
+                    }) {
                         self.project_resume_candidate(&mut item, true)?;
                         local.push(item);
                     }
@@ -255,19 +259,120 @@ impl Daemon {
         Ok(items)
     }
 
-    pub(crate) async fn resume_request(
+    pub(crate) async fn api_resume(
         self: &Arc<Self>,
         caller: &Caller,
-        mut args: ResumeArgs,
+        args: wire::ResumeArgs,
         forwarded: bool,
     ) -> Result<ResumeResult, ErrorBody> {
         require_person(caller)?;
-        check_size(args.cols, args.rows)?;
-        if args.machine_id.is_some() && args.target.machine.is_some() {
-            return Err(ErrorBody::invalid_argument(
-                "choose a machine or a saved machine ID",
-            ));
+        check_size(args.size.cols, args.size.rows)?;
+        let exact_machine = match &args.target {
+            wire::ResumeTarget::Agent { reference } => Some(reference.machine_id.clone()),
+            wire::ResumeTarget::Session { machine_id, .. } => Some(machine_id.clone()),
+            wire::ResumeTarget::Selector {
+                scope: Some(wire::SingleMachineScope::Local),
+                ..
+            } => Some(self.machine_id.clone()),
+            wire::ResumeTarget::Selector { .. } => None,
+        };
+        if let Some(id) = exact_machine.as_ref().filter(|id| *id != &self.machine_id) {
+            if forwarded {
+                return Err(ErrorBody::invalid_argument(
+                    "a forwarded resume needs this machine",
+                ));
+            }
+            if !crate::network::is_uuid_v4(id) {
+                return Err(ErrorBody::invalid_argument(
+                    "resume requires a full machine ID",
+                ));
+            }
+            return self
+                .forward_resume(id, caller, args.target, args.size)
+                .await;
         }
+        let (target, exact_session) = match args.target {
+            wire::ResumeTarget::Agent { reference } => {
+                let id = reference.agent_id;
+                if !matches!(
+                    parse_agent_address(&id),
+                    Ok(AgentAddress::Local(AgentKey::Number(number))) if number == id
+                ) {
+                    return Err(ErrorBody::invalid_argument(
+                        "resume requires an exact agent ID",
+                    ));
+                }
+                (
+                    ResumeTarget {
+                        reference: id,
+                        machine: None,
+                        folder: None,
+                    },
+                    None,
+                )
+            }
+            wire::ResumeTarget::Session {
+                cli,
+                session,
+                folder,
+                ..
+            } => {
+                if cli.is_empty()
+                    || facade_rules::parse_session_id(&session).as_deref() != Some(session.as_str())
+                    || !Path::new(&folder).is_absolute()
+                {
+                    return Err(ErrorBody::invalid_argument(
+                        "resume needs a full session ID and an absolute folder",
+                    ));
+                }
+                (
+                    ResumeTarget {
+                        reference: session.clone(),
+                        machine: None,
+                        folder: Some(folder),
+                    },
+                    Some((cli, session)),
+                )
+            }
+            wire::ResumeTarget::Selector {
+                selector,
+                scope,
+                folder,
+            } => (
+                ResumeTarget {
+                    reference: selector,
+                    machine: api::single_machine(scope),
+                    folder,
+                },
+                None,
+            ),
+        };
+        self.resume_request(
+            caller,
+            ResumeArgs {
+                target,
+                machine_id: exact_machine,
+                env: args.env.unwrap_or_default(),
+                cols: args.size.cols,
+                rows: args.size.rows,
+            },
+            forwarded,
+            exact_session,
+        )
+        .await
+    }
+
+    async fn resume_request(
+        self: &Arc<Self>,
+        caller: &Caller,
+        args: ResumeArgs,
+        forwarded: bool,
+        exact_session: Option<(String, String)>,
+    ) -> Result<ResumeResult, ErrorBody> {
+        let size = Size {
+            cols: args.cols,
+            rows: args.rows,
+        };
         let selected = match args.machine_id.as_ref() {
             Some(id) => Some(id.clone()),
             None => self.machine_for(args.target.machine.as_deref())?,
@@ -278,82 +383,51 @@ impl Daemon {
                     "a forwarded resume needs this machine",
                 ));
             }
-            return self.forward_resume(id, caller, args).await;
+            let target = self.remote_resume_target(caller, id, &args.target).await?;
+            return self.forward_resume(id, caller, target, size).await;
         }
 
         let input = args
             .target
             .reference
             .trim_matches(facade_base::settings::is_space);
-        let syntax = v3::address::parse_agent_address(input)
-            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-        let pinned_number = match syntax {
-            v3::address::AgentAddress::Local(v3::address::AgentKey::Number(number))
-                if selected.is_some() =>
-            {
-                Some(number)
-            }
-            _ => None,
-        };
-        let agent = if let Some(number) = pinned_number {
-            Ok(AgentRef {
-                agent_id: number.into(),
-                machine_id: self.machine_id.clone(),
-            })
-        } else if selected.is_some() || forwarded {
-            let cards = self
-                .agents()
-                .iter()
-                .map(|agent| self.lookup_candidate(agent))
-                .collect::<Result<Vec<_>, _>>()?;
-            let key = match syntax {
-                v3::address::AgentAddress::Local(key) => key,
-                v3::address::AgentAddress::Qualified { agent, machine, .. }
-                    if self.select_machine(machine)?.machine_id == self.machine_id =>
-                {
-                    agent
+        let agent = if exact_session.is_some() {
+            Err(ErrorBody::new(Reason::NotFound, "expected a saved session"))
+        } else {
+            let syntax = parse_agent_address(input)
+                .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+            match syntax {
+                AgentAddress::Local(AgentKey::Number(number)) if selected.is_some() => {
+                    Ok(AgentRef {
+                        agent_id: number.into(),
+                        machine_id: self.machine_id.clone(),
+                    })
+                }
+                _ if selected.is_some() || forwarded => {
+                    let key = self.resume_key(syntax, &self.machine_id)?;
+                    let cards = self
+                        .agents()
+                        .iter()
+                        .map(|agent| self.lookup_candidate(agent))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    records::lookup(key, &Reach::from(caller), OperationTarget::Resume, &cards)
                 }
                 _ => {
-                    return Err(ErrorBody::invalid_argument(
-                        "the agent address names a different machine",
-                    ));
+                    self.addressed_agent(
+                        caller,
+                        v3::AgentTarget::Address {
+                            agent: input.to_owned(),
+                        },
+                        OperationTarget::Resume,
+                    )
+                    .await
                 }
-            };
-            records::lookup(key, &Reach::from(caller), OperationTarget::Resume, &cards)
-        } else {
-            self.addressed_agent(
-                caller,
-                v3::AgentTarget::Address {
-                    agent: input.to_owned(),
-                },
-                OperationTarget::Resume,
-            )
-            .await
-        };
-        let legacy_session = input
-            .split_once(':')
-            .filter(|(entry, id)| {
-                !entry.is_empty() && facade_rules::parse_session_id(id).as_deref() == Some(*id)
-            })
-            .map(|(cli, id)| (Some(cli), id.to_owned()));
-        let session_selector = legacy_session.or_else(|| {
-            if !agent
-                .as_ref()
-                .is_err_and(|error| error.data.reason == Reason::NotFound)
-            {
-                return None;
             }
-            let id = facade_rules::parse_session_id(input).or_else(|| {
-                (input.len() == 8 && is_session_id(input)).then(|| {
-                    if input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                        input.to_ascii_lowercase()
-                    } else {
-                        input.to_owned()
-                    }
-                })
-            })?;
-            Some((None, id))
-        });
+        };
+        let session_selector = exact_session
+            .as_ref()
+            .map(|(cli, id)| (Some(cli.as_str()), id.clone()))
+            .or_else(|| session_selector(input, &agent));
         let (candidate, session_env) = if let Some((cli, id)) = &session_selector {
             let folder = args.target.folder.clone().or_else(|| {
                 (!forwarded)
@@ -379,7 +453,8 @@ impl Daemon {
             let mut candidates = self.saved_candidates(path, env.clone(), *cli)?;
             let mut matched = BTreeSet::new();
             candidates.retain(|(rule, item)| {
-                (item.session == *id || (id.len() == 8 && item.session.starts_with(id)))
+                (item.session == *id
+                    || (exact_session.is_none() && matches_session(&item.session, id)))
                     && matched.insert((rule.clone(), item.session.clone()))
             });
             if candidates.len() > 1 {
@@ -455,8 +530,12 @@ impl Daemon {
             (Err(error), _) => return Err(error),
         };
         if agent.machine_id != self.machine_id {
-            args.target.reference = agent.agent_id;
-            return self.forward_resume(&agent.machine_id, caller, args).await;
+            let target = wire::ResumeTarget::Agent {
+                reference: api::wire_ref(&agent),
+            };
+            return self
+                .forward_resume(&agent.machine_id, caller, target, size)
+                .await;
         }
 
         let handle = self.local_target(caller, &agent, OperationTarget::Resume)?;
@@ -484,27 +563,168 @@ impl Daemon {
         })
     }
 
-    async fn forward_resume(
+    fn resume_key<'a>(
         &self,
-        id: &str,
+        address: AgentAddress<'a>,
+        machine_id: &str,
+    ) -> Result<AgentKey<'a>, ErrorBody> {
+        match address {
+            AgentAddress::Local(key) => Ok(key),
+            AgentAddress::Qualified { agent, machine, .. }
+                if self.select_machine(machine)?.machine_id == machine_id =>
+            {
+                Ok(agent)
+            }
+            AgentAddress::Qualified { .. } => Err(ErrorBody::invalid_argument(
+                "the agent address names a different machine",
+            )),
+        }
+    }
+
+    async fn remote_resume_target(
+        self: &Arc<Self>,
         caller: &Caller,
-        mut args: ResumeArgs,
-    ) -> Result<ResumeResult, ErrorBody> {
-        self.ensure_machine_route(id).await?;
-        args.machine_id = Some(id.to_owned());
-        args.target.machine = None;
-        args.env.clear();
-        let mut result: ResumeResult = decode_arguments(
+        id: &str,
+        selector: &ResumeTarget,
+    ) -> Result<wire::ResumeTarget, ErrorBody> {
+        let input = selector
+            .reference
+            .trim_matches(facade_base::settings::is_space);
+        let syntax = parse_agent_address(input)
+            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        let agent = match self.resume_key(syntax, id)? {
+            AgentKey::Number(agent_id) => Ok(AgentRef {
+                agent_id: agent_id.into(),
+                machine_id: id.into(),
+            }),
+            key => {
+                let (records, _) = self.query_agents(caller, Some(id), false).await?;
+                records::lookup(key, &Reach::from(caller), OperationTarget::Resume, &records)
+            }
+        };
+        if let Err(error) = &agent
+            && error.data.reason != Reason::NotFound
+        {
+            return Err(error.clone());
+        }
+        let Some((cli, session)) = session_selector(input, &agent) else {
+            return agent.map(|agent| wire::ResumeTarget::Agent {
+                reference: api::wire_ref(&agent),
+            });
+        };
+        if let (Some(cli), Some(folder)) = (cli, selector.folder.as_ref())
+            && agent
+                .as_ref()
+                .is_err_and(|error| error.data.reason == Reason::NotFound)
+        {
+            return Ok(wire::ResumeTarget::Session {
+                machine_id: id.into(),
+                cli: cli.into(),
+                session,
+                folder: folder.clone(),
+            });
+        }
+        let reply: ResumeListResult = decode_arguments(
             self.network_call(
                 id,
                 caller.clone(),
-                v3::AgentResume::NAME,
-                value_of(args),
+                v3::AgentResumeList::NAME,
+                value_of(ResumeListArgs {
+                    machine: None,
+                    folder: selector.folder.clone(),
+                    all: false,
+                    local: true,
+                }),
                 None,
                 None,
             )
             .await?,
         )?;
+        let mut sessions: Vec<_> = reply
+            .items
+            .into_iter()
+            .filter(|item| {
+                item.machine_id == id
+                    && item.agent.is_none()
+                    && cli.is_none_or(|cli| cli == item.cli)
+                    && matches_session(&item.session, &session)
+            })
+            .collect();
+        if sessions.len() > 1 || (agent.is_ok() && !sessions.is_empty()) {
+            let mut error = ErrorBody::new(
+                Reason::AmbiguousReference,
+                format!("{input} names multiple resume targets"),
+            );
+            if let Ok(agent) = agent {
+                error.data.candidates.push(self.agent_address(&agent)?);
+            }
+            for session in sessions {
+                error.data.sessions.push(session_match(&session));
+                error.data.candidates.push(session.target.reference);
+            }
+            return Err(error);
+        }
+        if let Some(session) = sessions.pop() {
+            return Ok(wire::ResumeTarget::Session {
+                machine_id: id.into(),
+                cli: session.cli,
+                session: session.session,
+                folder: session.folder,
+            });
+        }
+        agent
+            .map(|agent| wire::ResumeTarget::Agent {
+                reference: api::wire_ref(&agent),
+            })
+            .map_err(|error| {
+                if error.data.reason == Reason::NotFound {
+                    ErrorBody::new(
+                        Reason::SessionNotFound,
+                        format!("no saved session {input} is in that folder"),
+                    )
+                } else {
+                    error
+                }
+            })
+    }
+
+    async fn forward_resume(
+        &self,
+        id: &str,
+        caller: &Caller,
+        target: wire::ResumeTarget,
+        size: Size,
+    ) -> Result<ResumeResult, ErrorBody> {
+        self.ensure_machine_route(id, caller).await?;
+        let expected_agent = match &target {
+            wire::ResumeTarget::Agent { reference } => Some(reference.agent_id.clone()),
+            _ => None,
+        };
+        let request = wire::ForwardParams {
+            route: Vec::new(),
+            caller: api::wire_caller(caller),
+            request: wire::ForwardRequest::Call(wire::CallParams {
+                op: v3::AgentResume::NAME.into(),
+                args: value_of(wire::ResumeArgs {
+                    target,
+                    size,
+                    env: None,
+                }),
+            }),
+            time_left_ms: None,
+            from_name: None,
+            start_result: None,
+        };
+        let reply = self.call_peer(id, request, None).await?;
+        let mut result: ResumeResult =
+            decode_arguments(api::receive_call_result(v3::AgentResume::NAME, reply)?)?;
+        if result.agent.machine_id != id
+            || expected_agent.is_some_and(|agent_id| result.agent.agent_id != agent_id)
+        {
+            return Err(ErrorBody::refused(
+                "the machine returned a different resume target",
+            ));
+        }
         result.agent.address = self.agent_address(&result.agent.reference())?;
         Ok(result)
     }
@@ -577,6 +797,39 @@ impl Daemon {
             Ok(items)
         })
     }
+}
+
+fn session_selector<'a>(
+    input: &'a str,
+    agent: &Result<AgentRef, ErrorBody>,
+) -> Option<(Option<&'a str>, String)> {
+    if let Some((cli, id)) = input.rsplit_once(':')
+        && !cli.is_empty()
+        && facade_rules::parse_session_id(id).as_deref() == Some(id)
+    {
+        return Some((Some(cli), id.to_owned()));
+    }
+    if !agent
+        .as_ref()
+        .is_err_and(|error| error.data.reason == Reason::NotFound)
+    {
+        return None;
+    }
+    facade_rules::parse_session_id(input)
+        .or_else(|| {
+            (input.len() == 8 && is_session_id(input)).then(|| {
+                if input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    input.to_ascii_lowercase()
+                } else {
+                    input.to_owned()
+                }
+            })
+        })
+        .map(|id| (None, id))
+}
+
+fn matches_session(session: &str, query: &str) -> bool {
+    session == query || (query.len() == 8 && session.starts_with(query))
 }
 
 fn session_match(candidate: &ResumeCandidate) -> SessionMatch {

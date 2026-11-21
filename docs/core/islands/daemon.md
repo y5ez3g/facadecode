@@ -26,16 +26,16 @@ public `run()` entry point.
   `aN@machine` from the same rules it uses to match an address. Bare numbers and names search
   machines that are already connected. A named operation that needs to start or use an Agent can
   follow a saved route and wake the target. Reachable `list` and scoped `stop` wait for parallel
-  no-start probes and collect each machine's result. A candidate Shell's default resume listing
-  uses the same probes when its hello declares `agent.resume_list.local`. Remote stops in those
+  no-start probes and collect each machine's result. Explicit reachable resume uses the same
+  probes. An omitted resume scope selects the local machine. Remote stops in those
   scopes use exact references on live routes. The machine table, local scopes and local removal
   send no SSH.
 - The source establishes the caller. The running machine checks the caller's creation-tree root,
   YOLO and the operation's requirements. A stop, input or Attach uses a running managed agent.
   The screen reader can also read the last screen of an ended agent.
 - A start on a peer loads that peer's login environment and resolves its CLI and directory there.
-  A worktree starts from the selected checkout's HEAD. Preflight checks the same requirements
-  without creating a branch. An existing Agent resumes from its stored directory, CLI arguments,
+  A worktree starts from the selected checkout's HEAD. The start checks its requirements
+  before creating the branch or CLI process. An existing Agent resumes from its stored directory, CLI arguments,
   model and effort. During upgrade, a record without launch options takes the selected CLI's
   configured model and effort once and keeps an empty list of CLI arguments.
 - A start writes the record and any initial prompt before the run becomes available. It reserves
@@ -54,26 +54,28 @@ public `run()` entry point.
 
 ## Interface
 
-- [Daemon operations and topics](../../../core/protocol/PROTOCOL.md) use protocol 3 in normal
-  connections. The editor and shell identify their client kind. Internal MCP calls use the actor
-  established by the relay connection.
-- A protocol 2 terminal can request a compatible takeover. The keeper and relay protocols stay
-  at their existing versions. A takeover hands the PTY back to the daemon holding the new build.
+- [Daemon operations and topics](../../../core/protocol/PROTOCOL.md) use JSON-RPC API v1. Each
+  connection negotiates its supported version and gets the operation and topic directory for its
+  client kind. Internal MCP calls use the actor proved by the independent relay connection.
+- A terminal can request takeover by a newer build. The daemon checks the target daemon's
+  supported API separately from the version negotiated with the keeper holding its CLIs.
+  A compatible takeover hands each PTY back to the new daemon through `agent.sync`.
   Recovery reads the original SQLite counters and screen records before it accepts business calls.
   A keeper protocol refusal of a local terminal's takeover names the live managed agents holding
   that keeper, with their stable references and labels.
 - A machine hello or a foreground `machine.connect` transfers its flushed connection to the network
   session. Authentication, probe, installation when needed and serve use that same SSH session.
   A saved connect verifies any explicit or inferred expected machine ID during the handshake.
-  The candidate Terminal's connect capability allows an ordinary save to update settings for
-  the ID learned on the authenticated session. The daemon commits the saved arguments, destination,
-  remote home and machine name together before publishing the route.
+  An ordinary v1 Terminal save can update settings for the ID learned on that authenticated
+  session. The daemon commits the saved arguments, destination, remote home and machine name
+  before publishing the route. The `connected` notification carries the peer's SSH cleanup
+  observation when its admitted hello reported one.
 - A guarded `machine.remove` uses the supplied full machine ID as the store key under the machine
-  mutation lock. An absent saved route gives not-found for that ID. Requests without a guard use
-  the published machine selector.
-- The protocol 3 hello advertises additive capabilities. An old client can use the published
-  operations, `screen` watch and `agent.resize`. Machine views for clients without the
-  `machine.disconnected` capability project `Disconnected` as `Unreachable`.
+  mutation lock. It returns the full normalized transport from the deleted row. An absent saved
+  route gives not-found for that ID. Requests without a guard use the published machine selector.
+- The first v1 start reads existing data after the old daemon and keeper have stopped. The old
+  range-based protocol handshakes retire at this cutover. Later formal versions follow the
+  endpoint-specific compatibility policy.
 - The person's diagnostics read up to 200 lines of `core/logs/daemon.log`, with the home written
   as `~`. Only the daemon writes and prunes this log.
 - After a passive probe finds the service sleeping, Shell can call `offline_machine_name()`
@@ -91,6 +93,7 @@ public `run()` entry point.
 
 | File | Responsibility |
 |---|---|
+| `api.rs` | Projects typed API v1 values around the daemon's existing records and errors. |
 | `lib.rs` | Starts and serves this home and schedules the hourly sweep. |
 | `store/` | Owns SQLite schema, migrations, table handles and cross-table transactions. |
 | `operations.rs` | Starts, stops, resumes, renames and removes runs and records their exits. |
@@ -131,7 +134,6 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - Shared Attach uses the minimum column and row counts of live viewers with a valid capacity.
     The actor recomputes on join, resize and detach. It applies PTY size and the logged screen
     size before delivering a full redraw. The grid stays at its last size when the last viewer
-    leaves. A live legacy `screen` viewer keeps last-resize sizing until the last legacy viewer
     leaves.
   - A screen snapshot carries the agent name, process state and any recorded exit from the actor.
     An exact final snapshot waits for the existing exit drain and admits no live viewer.
@@ -291,7 +293,7 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     `take_keeper_only(HeldAgent, KeeperOnly::{Unreadable, NoRecord})`,
     `delete_folders_without_records(&kept)`, `let_go_of_unused_plugins(agents)`.
   - Other: `environment_of(id)` (the running CLI's environment, blocking), `busy()` (why the
-    daemon may not exit), `keeper_info()`, `keeper_protocol()`.
+    daemon may not exit), `keeper_info()`, `keeper_api_version()`.
 
 `runs/mod.rs` joins its two child islands and calls them one after the other, never holding a lock
 of one while calling the other. `start` has keeper_link register the run, then tells preparation
@@ -318,7 +320,9 @@ The keeper connection, the run registry, and starts not yet registered.
   reconnects, at once while runs need a keeper; a failed restart backs off from 0.5 to 30 seconds.
   A start or stop waits up to 10 seconds for a ready keeper, and each request up to 10 seconds for
   its response. The keeper is pinged every second. Lock order: the registry, then pending starts;
-  the connection lock is a leaf. The keeper is proved (`authenticate_server`) before its hello. The registry's copy
+  the connection lock is a leaf. Runs proves the keeper's process and birth against its lock before
+  offering its supported API versions. It rejects the whole frame if a required terminal is absent or
+  a terminal arrives on a reply or notification that cannot carry one. The registry's copy
   of a run's terminal lets go before any `agent.stop` for that run (a stop, an abandoned start, a stop
   sent again); `agent.sync` passes each copy as it is.
 - **Never does:** end a keeper; touch folders, plugins or sessions.
@@ -327,7 +331,7 @@ The keeper connection, the run registry, and starts not yet registered.
   Repeated, Kept(ExitRecorded), Dropped}`, `installed`, `release`, `abandon`, `remove`,
   `ended_run_released(id, deadline)`, `running_process`, the recovery calls (`take_back ->
   PtyMaster`, `register_recovered(&HeldAgent, &PtyMaster, ..)`), `busy`,
-  `keeper_info`, `keeper_protocol`. `busy` says, in this order: runs are being handed to the
+  `keeper_info`, `keeper_api_version`. `busy` says, in this order: runs are being handed to the
   keeper; an unreadable record's exit cannot be saved; an agent is running; an exit is being saved
   or its output drained; the keeper is being started or a start is waiting.
 
@@ -389,11 +393,8 @@ The same start preflight checks the folder and optional worktree branch for ever
 Worktree creation serializes writers to the repository's `.worktrees` directory. It uses the current
 checkout's HEAD and preserves the branch's path segments.
 
-Workspace migration reads the old SQLite descriptions and memberships. The editor identifies the
-legacy machine and exactly one workspace key, logical window ID or instance ID. A workspace key can
-name several logical windows. Their full references select members on each Agent's running machine.
-The editor retains partial results and continues migration when a known source reaches the network.
-An old temporary bridge may require a saved SSH route before its contribution can be read.
+The editor imports old workspace membership using the previous build before the first v1 start.
+Workspaces retain their imported members and Pins across the cutover.
 
 ### network
 
@@ -456,8 +457,8 @@ trait and writes responses and watch changes back, without knowing what any oper
     nothing but responses.
   - At most 8 MiB of responses and changes wait per connection; senders wait for room.
   - At most 16 calls run at once per connection.
-  - `agent.type` and `agent.resize` for one agent from one connection run in the order sent, in
-    that agent's lane. Typing waiting in a lane is at most 1 MiB of requests; a resize takes no
+  - `agent.type` and `attach.resize` for one agent from one connection run in the order sent.
+    Typing waiting in a lane is at most 1 MiB of requests. A resize takes no
     room. Without room, a call with a request ID is refused with `capacity_exceeded`; a
     notification waits, and so does the connection's reading, until there is room or the client
     closes.
@@ -465,8 +466,7 @@ trait and writes responses and watch changes back, without knowing what any oper
   - A watch's response, with its snapshot, is sent before any of its changes.
   - An `attach.resize` uses the watch ID from the requesting connection and runs in received order.
     The source binds a remote viewer to the authenticated caller, viewer number and holder daemon
-    start ID. Each shared resize checks that binding at the holder. With a legacy holder, the
-    source uses the existing exact-agent resize on the live route. Unwatch, disconnect and
+    start ID. Each shared resize checks that binding at the holder. Unwatch, disconnect and
     terminal end release that viewer.
   - A machine hello or connect hands the same buffered reader and writer to the machine session
     after its response is flushed. The old connection releases its watches before the handoff.
@@ -483,11 +483,11 @@ trait and writes responses and watch changes back, without knowing what any oper
     `closing` is true and saying so in `paused`; `serve_connection(service, socket: ServerSocket)`: one
     connection, also the daemon's own in-process MCP server's.
   - `trait Service`, implemented by the daemon:
-    - `hello(HelloParams, peer_pid) -> (HelloResult, Client, Hold)` runs after the server checks the
-      applicable protocol range and client kind.
-    - `call(&Client, operation, args, WhenFull, Cancel) -> Result<Value>`
-    - `watch(&Client, topic, args, viewer) -> Result<Watch>`; `unwatch(&Client, topic, viewer)`
-    - `resize_viewer(&Client, viewer, ScreenSize, Option<TerminalColors>) -> Result<()>` receives
+    - `hello(HelloParams, api_version, peer_pid) -> (HelloResult, Client, Hold)` runs after the
+      server selects a supported API version and checks the client kind.
+    - `call(&Client, DaemonCall, WhenFull, Cancel) -> Result<Value>`
+    - `watch(&Client, DaemonWatch, viewer) -> Result<Watch>` and `unwatch(&Client, topic, viewer)`
+    - `resize_viewer(&Client, viewer, Size, Option<TerminalColors>) -> Result<()>` receives
       only the viewer number resolved by the server from the connection's watch.
     - `relay(params, peer_pid) -> Result<(Value, Arc<dyn RelayLines>)>`: the relay hello's response
       and what serves its MCP lines.
@@ -500,7 +500,7 @@ trait and writes responses and watch changes back, without knowing what any oper
   - `trait RelayLines`: `notice(line) -> bool`, `respond(line, arrived) -> Option<Value>` (blocking,
     run on a blocking thread), `failed() -> Value` (the response when answering panicked),
     `ended(closing_answered)`.
-  - `Client` carries the connection's client kind, advertised capabilities and the actor verified
+  - `Client` carries the connection's client kind, selected API version and the actor verified
     by the daemon's private MCP connection.
   - `Watch { snapshot, changes }`. `WatchChange::Ended(ErrorBody)` reports a remote watch failure.
     `WatchChange::Disconnect` cuts off a client that fell too far behind.

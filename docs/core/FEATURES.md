@@ -111,8 +111,11 @@ handles tool approval, trust and sandbox settings. See the [product description]
   runs. SSH prompts appear in the command's terminal.
 - Saved connections are opened on demand. A saved machine without running work can sleep. Explicit operations
   such as a named agent start can wake it through a saved route, including any needed intermediate machines.
-- The SSH connection uses the installed program at its fixed path. It installs or upgrades an older remote copy
-  as needed to match the local version. If a newer remote version is already installed, upgrade the local copy.
+- The SSH connection first uses the remote program at its installed path. The daemon API handshake decides
+  compatibility, so the builds can have different software versions. A permitted explicit connection can install
+  a program on an uninstalled peer through the regular installer. A passive connection runs the installed
+  `machine serve --no-start` and negotiates with a running daemon. It reports a missing installation when no remote
+  program is present.
 - `facade machine list` reads the local machine table with zero SSH. It distinguishes a disconnected saved
   connection, a confirmed sleeping machine, a connection failure and a machine that needs SSH login. Login
   guidance gives the saved `add` command. `facade machine rename` gives a machine a new name.
@@ -134,9 +137,10 @@ See [Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions).
 - The Orchestrator starts on demand and exits after 30 idle seconds. Saved SSH sessions also close after 30 idle
   seconds. A foreground machine connection, an active Attach or a call in progress keeps its session active.
 - The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
-  A newer build uses the same takeover to keep running CLIs and reconnect clients. For an agent already running
-  before an upgrade, the Orchestrator keeps recognizing its MCP connection the old way until that run ends. Later
-  starts and resumes use the new way.
+  An API-compatible takeover replaces the daemon. The live keeper retains its CLIs and terminals while clients
+  reconnect. Complete prerelease workspace import and let active agents finish before stopping both prerelease
+  services. Switch programs and participating SSH peers together for the first API v1 cutover, retaining the existing
+  Facade home and editor workspace data.
 - `facade upgrade` checks the stable version before downloading the installer. It skips installation when
   already up to date. `facade upgrade --version X.Y.Z` runs the installer for that release. The installed build
   takes over a running Orchestrator when its compatibility checks pass, keeping agents running.

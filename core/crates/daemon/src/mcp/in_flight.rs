@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use facade_base::daemon_client::{DaemonClient, cancel_line};
+use facade_base::api_v1::{daemon::cancel_line, daemon_client::DaemonClient};
 use facade_base::paths::ClientSocket;
 use tokio::sync::watch;
 

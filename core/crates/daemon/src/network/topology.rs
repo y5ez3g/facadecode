@@ -5,24 +5,24 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use facade_base::address::is_machine_name;
-use facade_base::daemon::methods;
-use facade_base::jsonrpc::{ErrorBody, Notification, Reason};
-use facade_base::machine::{self, MachineIdConflict, MachineTransport};
+use facade_base::api_v1::daemon::{
+    ConnectedMachine, ConnectionKind as ApiConnectionKind, MachineTransport, methods,
+};
+use facade_base::api_v1::{ApiVersion, ErrorBody, Notification};
 use facade_base::v3::{
-    AdvertiseParams, ConnectionKind, ConnectionState, MachineConnection, MachineHello,
-    MachineIdentity, MachineInfo, MachineState,
+    AdvertiseParams, ConnectionKind, ConnectionState, MachineConnection, MachineIdentity,
+    MachineInfo, MachineState,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::routes::{self, Conflict, LiveIdentities, is_uuid_v4};
 use super::session::Peer;
 use super::ssh::FailedAttempt;
-use super::{Event, FrontConnection, SessionId, advertise, wire};
+use super::{Event, FrontConnection, MachineGreeting, SessionId, advertise, wire};
 use crate::SavedConnection;
 
 pub(super) struct Topology {
-    pub(super) local: MachineHello,
-    pub(super) capabilities: Vec<String>,
+    pub(super) local: ConnectedMachine,
     pub(super) links: BTreeMap<SessionId, Link>,
     /// The identities already accepted during a handshake, held until it succeeds or closes.
     pub(super) pending_links: BTreeMap<SessionId, Link>,
@@ -38,8 +38,8 @@ pub(super) struct Saved {
     pub(super) argv: Vec<String>,
     pub(super) generation: u64,
     pub(super) stop: watch::Sender<bool>,
-    pub(super) passive_waiters: Vec<oneshot::Sender<Result<MachineHello, ErrorBody>>>,
-    pub(super) wake_waiters: Vec<oneshot::Sender<Result<MachineHello, ErrorBody>>>,
+    pub(super) passive_waiters: Vec<oneshot::Sender<Result<ConnectedMachine, ErrorBody>>>,
+    pub(super) wake_waiters: Vec<oneshot::Sender<Result<ConnectedMachine, ErrorBody>>>,
     pub(super) connecting: bool,
     pub(super) name: Option<String>,
     pub(super) last_seen: Option<SystemTime>,
@@ -48,7 +48,8 @@ pub(super) struct Saved {
 }
 
 pub(super) struct Link {
-    pub(super) remote: MachineHello,
+    pub(super) remote: ConnectedMachine,
+    pub(super) api_version: ApiVersion,
     pub(super) origin: Origin,
     pub(super) peer: Arc<Peer>,
     pub(super) table: BTreeMap<String, MachineInfo>,
@@ -65,7 +66,7 @@ pub(super) enum Origin {
 }
 
 impl Origin {
-    fn describe(&self, remote: &MachineHello) -> String {
+    fn describe(&self, remote: &ConnectedMachine) -> String {
         match self {
             Self::Incoming => format!(
                 "Incoming session from {} ({})",
@@ -75,10 +76,9 @@ impl Origin {
                 MachineTransport::Bridge => {
                     format!("Bridge to {} ({})", remote.name, remote.machine_id)
                 }
-                MachineTransport::Ssh {
-                    ssh_destination,
-                    remote_home,
-                } => ssh_source(ssh_destination, remote_home.as_deref()),
+                MachineTransport::Ssh(ssh) => {
+                    ssh_source(&ssh.ssh_destination, ssh.remote_home.as_deref())
+                }
             },
             Self::Saved { source, .. } => source.clone(),
         }
@@ -98,10 +98,9 @@ struct Selected {
 }
 
 impl Topology {
-    pub(super) fn new(local: MachineHello, capabilities: Vec<String>) -> Self {
+    pub(super) fn new(local: ConnectedMachine) -> Self {
         let mut state = Self {
             local,
-            capabilities,
             links: BTreeMap::new(),
             pending_links: BTreeMap::new(),
             saved: BTreeMap::new(),
@@ -122,14 +121,6 @@ impl Topology {
 
     pub(super) fn machines(&self) -> Vec<MachineInfo> {
         self.selected.values().map(|row| row.row.clone()).collect()
-    }
-
-    pub(super) fn legacy_machines(&self) -> Vec<machine::MachineInfo> {
-        self.selected
-            .values()
-            .filter(|entry| entry.row.route.is_some())
-            .map(|entry| advertise::legacy_row(&entry.row))
-            .collect()
     }
 
     pub(super) fn route(&self, machine: &str) -> Option<(&Arc<Peer>, &MachineInfo)> {
@@ -190,25 +181,6 @@ impl Topology {
         self.sleeping.remove(machine_id);
     }
 
-    pub(super) fn route_supports(&self, machine: &str, capability: &str) -> bool {
-        if machine == self.local.machine_id {
-            return self.capabilities.iter().any(|cap| cap == capability);
-        }
-        let Some(selected) = self.selected.get(machine) else {
-            return false;
-        };
-        let Some(link) = selected.via.and_then(|via| self.links.get(&via)) else {
-            return false;
-        };
-        selected.row.route.as_ref().is_some_and(|route| {
-            route.iter().all(|hop| {
-                link.table
-                    .get(hop)
-                    .is_some_and(|row| row.capabilities.iter().any(|cap| cap == capability))
-            })
-        })
-    }
-
     /// A local saved connection or a saved destination announced by an online machine.
     pub(super) fn wake_path(&self, machine: &str) -> Option<Vec<String>> {
         if self.saved.contains_key(machine) {
@@ -247,10 +219,15 @@ impl Topology {
 
     pub(super) fn check_peer(
         &self,
-        remote: &MachineHello,
+        greeting: &MachineGreeting,
         origin: &Origin,
     ) -> Result<(), ErrorBody> {
-        wire::protocol(&self.local, remote)?;
+        if greeting.api_version != ApiVersion::MIN {
+            return Err(ErrorBody::invalid_argument(
+                "Unexpected machine API version.",
+            ));
+        }
+        let remote = &greeting.machine;
         if !is_uuid_v4(&remote.machine_id)
             || !is_uuid_v4(&remote.boot_id)
             || !is_machine_name(&remote.name)
@@ -265,8 +242,8 @@ impl Topology {
             })
             .map_err(conflicted)?;
         if remote.machine_id == self.local.machine_id {
-            return Err(ErrorBody::new(
-                Reason::Refused,
+            return Err(wire::error(
+                "refused",
                 "This connection leads back to this Facade home.",
             ));
         }
@@ -277,9 +254,8 @@ impl Topology {
     pub(super) fn validate_table(
         &self,
         session: Option<SessionId>,
-        remote: &MachineHello,
+        remote: &ConnectedMachine,
         origin: &Origin,
-        capabilities: &[String],
         table: AdvertiseParams,
     ) -> Result<BTreeMap<String, MachineInfo>, ErrorBody> {
         let source = origin.describe(remote);
@@ -308,9 +284,6 @@ impl Topology {
                 return Err(ErrorBody::invalid_argument(
                     "The machine table repeats a machine.",
                 ));
-            }
-            if row.machine_id == remote.machine_id {
-                row.capabilities = capabilities.to_vec();
             }
             if row.route.is_none() && row.boot_id.is_none() && row.state != MachineState::Online {
                 offline.push(row);
@@ -435,20 +408,16 @@ impl Topology {
             return;
         }
         if changed || joined.is_some() {
+            let table = advertise::encode(self.machines());
             for (&id, link) in &self.links {
                 if changed || Some(id) == joined {
-                    let params = advertise::encode(
-                        link.remote.protocol_range[1],
-                        link.peer.capabilities(),
-                        self.machines(),
-                    );
                     link.peer
-                        .notify(Notification::new(methods::ADVERTISE, params));
+                        .notify(Notification::new(methods::ADVERTISE, &table));
                 }
             }
         }
         if changed || switched {
-            let machines = self.legacy_machines();
+            let machines = self.machines();
             let _ = events.send(Event::RoutesChanged { machines });
         }
     }
@@ -465,7 +434,7 @@ impl Topology {
             build: Some(self.local.build.clone()),
             route: Some(Vec::new()),
             connections: self.connections(),
-            capabilities: self.capabilities.clone(),
+            capabilities: Vec::new(),
         };
         let mut selected = BTreeMap::from([(
             own.machine_id.clone(),
@@ -556,21 +525,25 @@ impl Topology {
         for link in self.links.values() {
             match &link.origin {
                 Origin::Front(front) => {
-                    let (ssh_destination, remote_home) = match &front.transport {
-                        MachineTransport::Ssh {
-                            ssh_destination,
-                            remote_home,
-                        } => (Some(ssh_destination.clone()), remote_home.clone()),
-                        MachineTransport::Bridge => (None, None),
+                    let (ssh_destination, ssh_args, remote_home) = match &front.transport {
+                        MachineTransport::Ssh(ssh) => (
+                            Some(ssh.ssh_destination.clone()),
+                            ssh.ssh_args.clone(),
+                            ssh.remote_home.clone(),
+                        ),
+                        MachineTransport::Bridge => (None, Vec::new(), None),
                     };
                     merge_connection(
                         &mut connections,
                         MachineConnection {
                             machine_id: link.remote.machine_id.clone(),
                             initiator_machine_id: local.clone(),
-                            kind: front.kind,
+                            kind: match front.kind {
+                                ApiConnectionKind::Saved => ConnectionKind::Saved,
+                                ApiConnectionKind::Temporary => ConnectionKind::Temporary,
+                            },
                             ssh_destination,
-                            ssh_args: Vec::new(),
+                            ssh_args,
                             remote_home,
                             state: ConnectionState::Connected,
                             ssh_interaction: None,
@@ -633,13 +606,14 @@ fn describe_path(source: &str, route: &[String], boot: &str) -> String {
 }
 
 fn conflicted(Conflict { machine_id, paths }: Conflict) -> ErrorBody {
-    let mut error = ErrorBody::new(
-        Reason::MachineIdConflict,
+    let mut error = wire::error(
+        "machine_id_conflict",
         format!(
             "Machine ID {machine_id} is in use by two running daemons. Paths: {} and {}. Use a new empty Facade home on the copied machine.",
             paths[0], paths[1],
         ),
     );
-    error.data.machine_id_conflict = Some(MachineIdConflict { machine_id, paths });
+    wire::detail(&mut error, "machine_id", serde_json::json!(machine_id));
+    wire::detail(&mut error, "paths", serde_json::json!(paths));
     error
 }

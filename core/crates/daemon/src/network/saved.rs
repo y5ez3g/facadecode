@@ -2,8 +2,9 @@
 
 use std::time::SystemTime;
 
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{ExecutionOutcome, MachineHello, SshInteraction};
+use facade_base::api_v1::ErrorBody;
+use facade_base::api_v1::daemon::ConnectedMachine;
+use facade_base::machine::{ExecutionOutcome, SshInteraction};
 use facade_base::time::iso_time;
 use facade_base::v3::{self, MachineConnection, MachineInfo, MachineState};
 use tokio::sync::{oneshot, watch};
@@ -14,39 +15,13 @@ use super::wake::RouteAttempt;
 use super::wire::Reader;
 use super::{Event, Network, SavedSsh, SessionId, expected, wire};
 
-type Waiter = oneshot::Sender<Result<MachineHello, ErrorBody>>;
+type Waiter = oneshot::Sender<Result<ConnectedMachine, ErrorBody>>;
 
 impl Network {
     pub(crate) fn restore_saved_ssh(&self, ssh: SavedSsh, name: Option<String>) {
         let mut state = self.0.state.lock().unwrap();
         self.install_saved(&mut state, ssh).name = name;
         state.publish(&self.0.events, None);
-    }
-
-    pub(crate) fn start_saved_ssh(
-        &self,
-        ssh: SavedSsh,
-    ) -> oneshot::Receiver<Result<MachineHello, ErrorBody>> {
-        let (waiter, ready) = oneshot::channel();
-        let mut state = self.0.state.lock().unwrap();
-        let id = ssh.config.machine_id.clone();
-        if let Some(saved) = state.saved.get(&id) {
-            if saved.config != ssh.config || saved.argv != ssh.argv {
-                let existing = ssh_source(
-                    &saved.config.ssh_destination,
-                    saved.config.remote_home.as_deref(),
-                );
-                let _ = waiter.send(Err(ErrorBody::new(
-                    Reason::Refused,
-                    format!("Machine {id} already has a saved connection via {existing}."),
-                )));
-                return ready;
-            }
-        } else {
-            self.install_saved(&mut state, ssh);
-        }
-        self.queue_saved(&mut state, &id, RouteAttempt::Passive, waiter);
-        ready
     }
 
     fn install_saved<'a>(&self, state: &'a mut Topology, ssh: SavedSsh) -> &'a mut Saved {
@@ -76,7 +51,7 @@ impl Network {
         state: &mut Topology,
         ssh: SavedSsh,
         id: SessionId,
-        remote: &MachineHello,
+        remote: &ConnectedMachine,
     ) -> Origin {
         let config = &ssh.config;
         let prior = state.saved.remove(&config.machine_id);
@@ -111,7 +86,9 @@ impl Network {
             self.queue_saved(&mut state, machine_id, attempt, waiter);
             ready
         };
-        ready.await.map_err(ErrorBody::internal)??;
+        ready
+            .await
+            .map_err(|error| wire::error("internal", error.to_string()))??;
         Ok(())
     }
 
@@ -137,7 +114,7 @@ impl Network {
         if attempt == RouteAttempt::Wake
             && !saved.connecting
             && let Some(failure) = &saved.failure
-            && failure.error.data.ssh_interaction.is_some()
+            && failure.interaction.is_some()
         {
             let _ = waiter.send(Err(failure.error.clone()));
             return;
@@ -181,8 +158,8 @@ impl Network {
         };
         saved.stop.send_replace(true);
         for waiter in saved.passive_waiters.into_iter().chain(saved.wake_waiters) {
-            let _ = waiter.send(Err(ErrorBody::new(
-                Reason::Cancelled,
+            let _ = waiter.send(Err(wire::error(
+                "cancelled",
                 "The saved connection was removed.",
             )));
         }
@@ -200,23 +177,17 @@ impl Network {
         attempt: RouteAttempt,
     ) -> Result<(), FailedAttempt> {
         let config = &ssh.config;
-        let local = self.greeting(false);
+        let local = self.local_hello();
         let wake = attempt == RouteAttempt::Wake;
         let Pipes {
             read,
             mut write,
             process,
-        } = Pipes::open(
-            ssh,
-            &local.machine.build,
-            wake,
-            self.0.control_dir.as_deref(),
-        )
-        .await?;
+        } = Pipes::open(ssh, &local.build, wake, self.0.control_dir.as_deref()).await?;
         let mut read = Reader::new(read);
         let mut introduced = false;
         let handshaken = async {
-            let remote = wire::introduce(&mut read, &mut write, local).await?;
+            let remote = wire::introduce(&mut read, &mut write, local, false).await?;
             introduced = true;
             expected(&remote.machine, Some(&config.machine_id))?;
             let origin = Origin::Saved {
@@ -241,7 +212,7 @@ impl Network {
                         Some(FailedAttempt::from_ssh(
                             ssh,
                             diagnostics,
-                            ErrorBody::new(Reason::Unavailable, "The SSH connection failed."),
+                            wire::error("unavailable", "The SSH connection failed."),
                             false,
                         ))
                     }
@@ -255,7 +226,7 @@ impl Network {
                 let diagnostics = process.finish().await;
                 let sleeping = !wake
                     && !introduced
-                    && error.data.reason == Reason::Unavailable
+                    && error.data.reason == "unavailable"
                     && diagnostics.exit_code() == Some(3);
                 Err(FailedAttempt::from_ssh(ssh, diagnostics, error, sleeping))
             }
@@ -287,17 +258,29 @@ impl Network {
             return;
         }
         if failure.sleeping {
-            failure
-                .error
-                .data
-                .machines
-                .push(saved.sleeping_row(&failure.ssh_error));
+            wire::detail(
+                &mut failure.error,
+                "machines",
+                serde_json::json!([saved.sleeping_row(&failure.ssh_error)]),
+            );
+        }
+        if failure.error.data.reason == "unavailable" {
+            let identity = facade_base::machine::MachineIdentity {
+                machine_id: config.machine_id.clone(),
+                name: saved.name.clone().unwrap_or_else(|| saved.selector()),
+            };
+            wire::detail(
+                &mut failure.error,
+                "execution",
+                serde_json::json!(ExecutionOutcome::NotExecuted),
+            );
+            wire::detail(&mut failure.error, "machine", serde_json::json!(identity));
         }
         let error = &failure.error;
         for waiter in saved.passive_waiters.drain(..) {
             let _ = waiter.send(Err(error.clone()));
         }
-        if attempt == RouteAttempt::Wake || error.data.ssh_interaction.is_some() {
+        if attempt == RouteAttempt::Wake || failure.interaction.is_some() {
             for waiter in saved.wake_waiters.drain(..) {
                 let _ = waiter.send(Err(error.clone()));
             }
@@ -319,10 +302,10 @@ impl Network {
 
 impl Saved {
     pub(super) fn interaction(&self) -> Option<&SshInteraction> {
-        self.failure.as_ref()?.error.data.ssh_interaction.as_ref()
+        self.failure.as_ref()?.interaction.as_ref()
     }
 
-    pub(super) fn seen(&mut self, remote: &MachineHello) {
+    pub(super) fn seen(&mut self, remote: &ConnectedMachine) {
         self.name = Some(remote.name.clone());
         self.failure = None;
         self.last_seen = Some(SystemTime::now());
@@ -335,7 +318,7 @@ impl Saved {
         }
     }
 
-    pub(super) fn opened(&mut self, id: SessionId, remote: &MachineHello) {
+    pub(super) fn opened(&mut self, id: SessionId, remote: &ConnectedMachine) {
         self.active = Some(id);
         self.connecting = false;
         self.seen(remote);

@@ -11,9 +11,9 @@ fn remove_ends_a_running_agent_first_and_removes_an_ended_one() {
     let worker = home.start_fake("worker");
     let ended = home.start_fake("ended");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
+    wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
     // Removing a running agent must stop it before removing its record.
-    let removed = wire.call("agent.remove", json!({ "agent": worker.id }));
+    let removed = wire.call("agent.remove", json!({ "target": worker.id }));
     assert!(removed["error"].is_null(), "{removed}");
     assert!(!alive(&worker.process), "the removed agent must stop");
     assert!(
@@ -22,17 +22,21 @@ fn remove_ends_a_running_agent_first_and_removes_an_ended_one() {
     );
     // An ended agent can be removed immediately. The list shows running agents alone; the agents
     // topic keeps the ended record.
-    wire.call("agent.stop", json!({ "agent": ended.id }));
+    let stopped = wire.call_ok(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [ended.id] } }),
+    );
+    assert_eq!(stopped["items"][0]["status"], "stopped", "{stopped}");
     assert!(
         wait_until(secs(10), || home
             .agent_record(&ended.id)
             .is_some_and(|record| record["process"] == "ended")),
         "the agent did not end"
     );
-    assert!(wire.call("agent.remove", json!({ "agent": ended.id }))["error"].is_null());
+    wire.call_ok("agent.remove", json!({ "target": ended.id }));
     assert!(home.agent_record(&ended.id).is_none());
     assert_eq!(
-        error_reason(&wire.call("agent.remove", json!({ "agent": ended.id }))),
+        error_reason(&wire.call("agent.remove", json!({ "target": ended.id }))),
         "not_found"
     );
 }
@@ -96,20 +100,25 @@ fn stop_returns_process_exit() {
     let home = TestHome::new("stopexit");
     home.start_fake("w1");
     let mut wire = connect(&home);
-    let stopped = wire.call("agent.stop", json!({ "agent": "w1" }));
+    let selection = json!({ "selection": { "kind": "targets", "targets": ["w1"] } });
+    let stopped = wire.call_ok("agent.stop", selection.clone());
+    let items = stopped["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{stopped}");
+    assert_eq!(items[0]["status"], "stopped", "{stopped}");
+    let exit = &items[0]["exit"];
     // A hang-up ends the CLI by SIGHUP on Unix; on Windows the console's closing ends it with
     // 0xC000013A, a code.
     #[cfg(unix)]
-    let ended = stopped["result"]["signal"] == "SIGHUP";
+    let ended = exit["signal"] == "SIGHUP";
     #[cfg(windows)]
-    let ended = stopped["result"]["code"] == json!(0xC000013A_u32 as i32);
-    assert!(ended && stopped["result"]["at"].is_string(), "{stopped}");
-    assert!(
-        stopped["result"].get("already_ended").is_none(),
-        "{stopped}"
+    let ended = exit["code"] == json!(0xC000013A_u32 as i32);
+    assert!(ended && exit["at"].is_string(), "{stopped}");
+    let again = wire.call_ok("agent.stop", selection);
+    assert_eq!(again["items"][0]["status"], "failed", "{again}");
+    assert_eq!(
+        again["items"][0]["error"]["data"]["reason"], "ended",
+        "{again}"
     );
-    let again = wire.call("agent.stop", json!({ "agent": "w1" }));
-    assert_eq!(error_reason(&again), "ended", "{again}");
 }
 
 /// Concurrent starts use distinct default names while unused suggestions remain: a default name
@@ -120,7 +129,7 @@ fn concurrent_starts_reserve_unused_default_names() {
     let mut wire = connect(&home);
     let args = json!({
         "cli": home.shell_cli(), "args": ["-c", "sleep 60"], "folder": home.project,
-        "cols": 80, "rows": 24,
+        "size": { "cols": 80, "rows": 24 },
     });
     let asked: Vec<u64> = (0..40)
         .map(|_| wire.send("call", json!({ "op": "agent.start", "args": args })))
@@ -285,7 +294,7 @@ fn blank_names_get_defaults_and_supplied_names_are_trimmed() {
     // In the order they started.
     let mut agents = home.agents();
     agents.sort_by_key(|agent| {
-        agent["agent_id"].as_str().unwrap_or_default()[1..]
+        agent["reference"]["agent_id"].as_str().unwrap_or_default()[1..]
             .parse::<u32>()
             .unwrap_or_default()
     });

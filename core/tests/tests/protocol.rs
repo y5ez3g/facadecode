@@ -6,143 +6,152 @@ use std::io::Write;
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
+fn hello_v1(wire: &mut DaemonTestClient) -> Value {
+    let welcome = wire.request(
+        "hello",
+        json!({ "api_versions": [1], "build": "test", "kind": "terminal" }),
+    );
+    assert_eq!(welcome["result"]["api_version"], 1, "{welcome}");
+    welcome
+}
+
 #[test]
-fn hello_reports_protocol_build_and_capabilities() {
+fn hello_selects_api_version_and_advertises_the_session_catalog() {
     let home = TestHome::new("hello");
     home.start_fake("w1");
-    let mut wire = DaemonTestClient::open(&home);
-    let welcome = wire.hello("terminal", [1, 9], json!({}));
-    let result = &welcome["result"];
-    assert_eq!(result["protocol"], 3, "{welcome}");
-    assert!(
-        result["machine_id"]
-            .as_str()
-            .is_some_and(|id| !id.is_empty()),
-        "{welcome}"
-    );
-    assert!(
-        result.get("window").is_none(),
-        "only editors bind a window: {welcome}"
-    );
-    assert!(
-        result["build"]
-            .as_str()
-            .is_some_and(|build| build == env!("CARGO_PKG_VERSION")),
-        "{welcome}"
-    );
-    let legacy_topics = ["agents", "screen", "machines"];
-    let topics = result["topics"].as_array().expect("the topic names");
-    assert!(
-        legacy_topics
-            .iter()
-            .all(|topic| topics.contains(&json!(topic))),
-        "{welcome}"
-    );
-    assert!(
-        result["ops"].as_array().is_some_and(|ops| [
-            "agent.start",
-            "agent.list",
-            "agent.stop",
-            "agent.resize",
-            "agent.rename",
-            "agent.send",
-            "machine.add",
-            "machine.connect",
-            "machine.list",
-            "machine.remove",
-            "machine.rename",
-        ]
-        .iter()
-        .all(|wanted| ops.iter().any(|op| op == wanted))),
-        "{welcome}"
-    );
-    // Hello identifies the daemon, keeper, and agent count.
-    assert!(
-        result["pid"].is_number() && result["keeper"]["pid"].is_number(),
-        "{welcome}"
-    );
-    assert_eq!(result["agents"], 1, "{welcome}");
-    // A second hello fails without closing the connection.
-    assert_eq!(
-        error_reason(&wire.hello("terminal", DAEMON_RANGE, json!({}))),
-        "invalid_argument"
-    );
-    assert!(wire.call("agent.screen", json!({ "agent": "w1" }))["result"]["text"].is_string());
-    let mut editor = DaemonTestClient::open(&home);
-    let editor = editor.hello(
-        "ide",
-        DAEMON_RANGE,
-        json!({ "capabilities": ["attach", "machine.disconnected"] }),
-    );
-    assert_eq!(
-        result["machine_id"], editor["result"]["machine_id"],
-        "{editor}"
-    );
-    let advertised = &editor["result"];
-    let operations = advertised["ops"].as_array().expect("the operation names");
-    for added in ["list", "stop", "attach.resize"] {
-        assert!(operations.contains(&json!(added)), "{editor}");
-    }
-    assert!(
-        advertised["topics"]
+
+    let terminal_operations = [
+        "agent.inspect",
+        "agent.list",
+        "agent.remove",
+        "agent.rename",
+        "agent.resume",
+        "agent.resume_list",
+        "agent.screen",
+        "agent.send",
+        "agent.start",
+        "agent.stop",
+        "agent.type",
+        "attach.resize",
+        "cli.list",
+        "daemon.log",
+        "daemon.status",
+        "daemon.upgrade",
+        "location.list",
+        "machine.connect",
+        "machine.list",
+        "machine.remove",
+        "machine.rename",
+    ];
+    for kind in ["terminal", "ide"] {
+        let mut wire = DaemonTestClient::open(&home);
+        let hello = json!({ "api_versions": [2, 1, 1], "build": "test", "kind": kind });
+        let welcome = wire.request("hello", hello.clone());
+        let result = &welcome["result"];
+        assert_eq!(welcome["id"], 1, "{welcome}");
+        assert_eq!(result["api_version"], 1, "{welcome}");
+        assert_eq!(result["build"], env!("CARGO_PKG_VERSION"), "{welcome}");
+        assert_eq!(result["agent_count"], 1, "{welcome}");
+        assert!(result["machine_id"].is_string(), "{welcome}");
+        assert!(
+            result["pid"].is_number() && result["keeper"]["pid"].is_number(),
+            "{welcome}"
+        );
+        assert!(
+            result.get("protocol").is_none() && result.get("agents").is_none(),
+            "{welcome}"
+        );
+
+        let mut operations: Vec<_> = result["ops"]
             .as_array()
             .unwrap()
-            .contains(&json!("attach")),
-        "{editor}"
-    );
-    let capabilities = advertised["capabilities"]
-        .as_array()
-        .expect("the capabilities");
-    for capability in [
-        "agent.resume_list.local",
-        "machine.disconnected",
-        "machine.connect.expected_machine_id",
-        "machine.remove.expected_machine_id",
-    ] {
-        assert!(capabilities.contains(&json!(capability)), "{editor}");
-    }
+            .iter()
+            .map(|op| op.as_str().unwrap())
+            .collect();
+        operations.sort_unstable();
+        let expected: Vec<_> = terminal_operations
+            .iter()
+            .copied()
+            .filter(|op| kind == "terminal" || !matches!(*op, "daemon.upgrade" | "machine.connect"))
+            .collect();
+        assert_eq!(operations, expected, "{welcome}");
+        let mut topics: Vec<_> = result["topics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|topic| topic.as_str().unwrap())
+            .collect();
+        topics.sort_unstable();
+        assert_eq!(topics, ["agents", "attach", "machines"], "{welcome}");
 
-    let conflicting = wire.call(
-        "agent.resume_list",
-        json!({ "local": true, "machine": "devbox" }),
-    );
-    assert_eq!(
-        error_reason(&conflicting),
-        "invalid_argument",
-        "{conflicting}"
-    );
+        let duplicate = wire.request("hello", hello);
+        assert_eq!(error_reason(&duplicate), "invalid_argument", "{duplicate}");
+        assert!(wire.call_ok("agent.screen", json!({ "target": "w1" }))["text"].is_string());
+    }
 }
 
 #[test]
-fn a_client_without_a_shared_protocol_or_of_an_unknown_kind_is_refused() {
+fn invalid_offers_and_external_mcp_are_refused_before_admission() {
     let home = TestHome::new("versions");
     home.start_fake("w1");
-    let mut old = DaemonTestClient::open(&home);
+    let mut hello = json!({ "build": "test", "kind": "terminal" });
+    let mut absent = DaemonTestClient::open(&home);
+    let response = absent.request("hello", hello.clone());
+    assert_eq!(response["id"], 1, "{response}");
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    assert_eq!(error_reason(&response), "invalid_argument", "{response}");
+
+    for offer in [
+        json!([]),
+        json!(null),
+        json!([0]),
+        json!([-1]),
+        json!(["1"]),
+        json!("1"),
+    ] {
+        let mut wire = DaemonTestClient::open(&home);
+        hello["api_versions"] = offer;
+        let rejected = wire.request("hello", hello.clone());
+        assert_eq!(rejected["id"], 1, "{rejected}");
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        assert_eq!(error_reason(&rejected), "invalid_argument", "{rejected}");
+        assert!(rejected.get("result").is_none(), "{rejected}");
+    }
+
+    let mut wire = DaemonTestClient::open(&home);
+    hello["api_versions"] = json!([2]);
+    let incompatible = wire.request("hello", hello.clone());
+    assert_eq!(incompatible["id"], 1, "{incompatible}");
+    assert_eq!(incompatible["error"]["code"], -32000, "{incompatible}");
     assert_eq!(
-        error_reason(&old.hello("terminal", [0, 0], json!({}))),
-        "protocol_incompatible"
+        error_reason(&incompatible),
+        "protocol_incompatible",
+        "{incompatible}"
     );
-    let mut newer = DaemonTestClient::open(&home);
     assert_eq!(
-        error_reason(&newer.hello("terminal", [4, 4], json!({}))),
-        "protocol_incompatible"
+        incompatible["error"]["data"]["details"]["supported_api_versions"],
+        json!([1])
     );
-    let mut stranger = DaemonTestClient::open(&home);
-    assert_eq!(
-        error_reason(&stranger.hello("hologram", DAEMON_RANGE, json!({}))),
-        "protocol_incompatible"
+
+    let mut external = DaemonTestClient::open(&home);
+    let refused = external.request(
+        "hello",
+        json!({ "api_versions": [1], "build": "test", "kind": "mcp" }),
     );
+    assert_eq!(refused["id"], 1, "{refused}");
+    assert_eq!(error_reason(&refused), "refused", "{refused}");
 }
 
 #[test]
-fn a_v1_client_is_refused_and_the_keeper_keeps_the_live_process() {
-    let home = TestHome::new("v1refusal");
+fn a_prerelease_range_offer_is_refused_and_the_keeper_keeps_the_live_process() {
+    let home = TestHome::new("prerelease-refusal");
     let agent = home.start_fake("kept");
-    let keeper = home.keeper_pid().expect("the keeper");
+    let keeper = home.lock_record("keeper").expect("the keeper");
     let mut client = DaemonTestClient::open(&home);
-    let v1 = client.hello("terminal", [1, 1], json!({}));
-    assert_eq!(error_reason(&v1), "protocol_incompatible", "{v1}");
-    assert_eq!(home.keeper_pid(), Some(keeper));
+    let refusal = client.hello_prerelease("terminal", [3, 3], json!({}));
+    assert_eq!(refusal["error"]["code"], -32602, "{refusal}");
+    assert_eq!(error_reason(&refusal), "invalid_argument", "{refusal}");
+    assert_eq!(home.lock_record("keeper"), Some(keeper));
     assert!(alive(&agent.process));
     assert_eq!(home.agent_record(&agent.id).unwrap()["pid"], agent.pid);
 }
@@ -150,22 +159,30 @@ fn a_v1_client_is_refused_and_the_keeper_keeps_the_live_process() {
 #[test]
 fn requests_require_hello_and_reject_unknown_methods_operations_and_topics() {
     let home = TestHome::new("tables");
-    home.start_fake("w1");
+    let agent = home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
     assert!(
-        wire.call("agent.stop", json!({ "agent": "w1" }))["error"]["message"]
+        wire.call(
+            "agent.stop",
+            json!({ "selection": { "kind": "targets", "targets": ["w1"] } })
+        )["error"]["message"]
             .as_str()
             .is_some_and(|m| m.contains("hello"))
     );
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
+    hello_v1(&mut wire);
+    assert!(alive(&agent.process));
     assert_eq!(
         error_reason(&wire.call("agent.teleport", json!({}))),
         "invalid_argument"
     );
     assert_eq!(
-        error_reason(&wire.request("watch", json!({ "topic": "weather" }))),
+        error_reason(&wire.request("watch", json!({ "topic": "weather", "args": {} }))),
         "invalid_argument"
     );
+    let retired = wire.call("agent.start_preflight", json!({}));
+    assert_eq!(retired["error"]["code"], -32602, "{retired}");
+    let non_object = wire.call("agent.list", json!([]));
+    assert_eq!(non_object["error"]["code"], -32602, "{non_object}");
     let unknown = wire.request("subscribe", json!({}));
     assert_eq!(unknown["error"]["code"], -32601, "{unknown}");
     assert!(
@@ -181,12 +198,14 @@ fn a_start_with_no_cli_or_no_terminal_size_is_an_invalid_argument() {
     let home = TestHome::new("startargs");
     home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
+    hello_v1(&mut wire);
     let cwd = home.project.to_string_lossy().into_owned();
     for args in [
-        json!({ "folder": cwd, "cols": 80, "rows": 24 }),
-        json!({ "cli": "fake", "folder": cwd, "cols": 0, "rows": 24 }),
+        json!({ "folder": cwd, "size": { "cols": 80, "rows": 24 } }),
+        json!({ "cli": "fake", "folder": cwd, "size": { "cols": 0, "rows": 24 } }),
         json!({ "cli": "fake", "folder": cwd }),
+        json!({ "cli": "fake", "folder": cwd, "size": { "cols": 80, "rows": 24 }, "unknown_field": true }),
+        json!({ "cli": "fake", "folder": cwd, "size": { "cols": 80, "rows": 24 }, "name": null }),
     ] {
         assert_eq!(
             error_reason(&wire.call("agent.start", args.clone())),
@@ -194,7 +213,14 @@ fn a_start_with_no_cli_or_no_terminal_size_is_an_invalid_argument() {
             "{args}"
         );
     }
-    assert_eq!(home.agents().len(), 1, "invalid starts must not add agents");
+    let listed = wire.call_ok("agent.list", json!({ "scope": { "kind": "local" } }));
+    let agents = listed["agents"].as_array().unwrap();
+    assert_eq!(
+        agents.len(),
+        1,
+        "invalid starts must not add agents: {listed}"
+    );
+    assert_eq!(agents[0]["name"], "w1", "{listed}");
 }
 
 /// Malformed requests receive JSON-RPC errors with null IDs: -32700 for invalid JSON, -32600 for an
@@ -229,11 +255,13 @@ fn malformed_requests_get_json_rpc_errors_and_oversized_lines_close_connection()
     // A valid hello must work after malformed requests.
     stream
         .write_all(
-            b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"hello\",\"params\":{\"protocol\":[3,\
-              3],\"build\":\"t\",\"kind\":\"terminal\"}}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"hello\",\"params\":{\"api_versions\":[1],\
+              \"build\":\"t\",\"kind\":\"terminal\"}}\n",
         )
         .unwrap();
-    assert_eq!(response()["id"], 7);
+    let hello = response();
+    assert_eq!(hello["id"], 7, "{hello}");
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
     // Reject an unterminated line that exceeds the limit, then close the connection.
     let chunk = vec![b'a'; 1 << 20];
     for _ in 0..65 {
@@ -242,6 +270,7 @@ fn malformed_requests_get_json_rpc_errors_and_oversized_lines_close_connection()
         }
     }
     let refused = response();
+    assert_eq!(refused["id"], Value::Null, "{refused}");
     assert_eq!(
         refused["error"]["data"]["reason"], "capacity_exceeded",
         "{refused}"
@@ -258,15 +287,20 @@ fn malformed_requests_get_json_rpc_errors_and_oversized_lines_close_connection()
 #[test]
 fn unread_responses_backpressure_the_connection() {
     let home = TestHome::new("outbox");
-    let mut wire = connect(&home);
-    let agent = start_script(
-        &mut wire,
-        &home,
-        "scrollback",
-        "seq 1 3000 | sed 's/$/ some text to fill the line up/'; echo DONE; sleep 60",
-    );
-    assert!(wait_for_screen_text(&home, &agent, "DONE"));
-    let rss = || -> u64 { resident_kib(home.daemon_pid().expect("expected a running daemon")) };
+    home.run_facade_ok(&["daemon", "--detach"]);
+    let mut wire = DaemonTestClient::open(&home);
+    let welcome = hello_v1(&mut wire);
+    let started = wire.call_ok("agent.start", json!({
+        "cli": home.shell_cli(), "name": "scrollback", "folder": home.project,
+        "size": { "cols": 80, "rows": 24 },
+        "args": ["-c", "seq 1 3000 | sed 's/$/ some text to fill the line up/'; echo DONE; sleep 60"],
+    }));
+    let agent = started["agent"]["address"]
+        .as_str()
+        .expect("the Shell agent address");
+    assert!(wait_for_screen_text(&home, agent, "DONE"));
+    let daemon = welcome["result"]["pid"].as_i64().unwrap() as i32;
+    let rss = || resident_kib(daemon);
     let before = rss();
     let stream = ClientSocket::connect(home.daemon_socket()).unwrap();
     let mut writer = stream.try_clone().unwrap();
@@ -276,7 +310,7 @@ fn unread_responses_backpressure_the_connection() {
                 "{}\n",
                 json!({
                     "jsonrpc": "2.0", "id": 0, "method": "hello",
-                    "params": { "protocol": DAEMON_RANGE, "build": "t", "kind": "terminal" },
+                    "params": { "api_versions": [1], "build": "t", "kind": "terminal" },
                 })
             )
             .as_bytes(),
@@ -287,7 +321,7 @@ fn unread_responses_backpressure_the_connection() {
             let call = json!({
                 "jsonrpc": "2.0", "id": id, "method": "call",
                 "params": {
-                    "op": "agent.screen", "args": { "agent": "scrollback", "lines": 2000 },
+                    "op": "agent.screen", "args": { "target": "scrollback", "lines": 2000 },
                 },
             });
             if writer.write_all(format!("{call}\n").as_bytes()).is_err() {
@@ -302,7 +336,7 @@ fn unread_responses_backpressure_the_connection() {
     assert!(grown < 40_000, "the daemon grew by {grown} KiB");
     // Other clients must still receive responses.
     assert!(
-        wire.call("agent.screen", json!({ "agent": agent, "lines": 1 }))["result"]["text"]
+        wire.call("agent.screen", json!({ "target": agent, "lines": 1 }))["result"]["text"]
             .is_string()
     );
     drop(stream);
@@ -315,7 +349,8 @@ fn the_person_s_client_reads_the_daemon_s_log_and_an_agent_s_tool_is_refused() {
     let home = TestHome::new("daemonlog");
     let ada = home.start_named_fake("ada", &[]);
     home.run_facade_ok(&["send", "ada", "hello ada"]);
-    let mut wire = connect(&home);
+    let mut wire = DaemonTestClient::open(&home);
+    hello_v1(&mut wire);
     let read = wire.call("daemon.log", json!({}));
     let lines: Vec<String> = read["result"]["lines"]
         .as_array()
@@ -334,4 +369,15 @@ fn the_person_s_client_reads_the_daemon_s_log_and_an_agent_s_tool_is_refused() {
     let mut managed = McpTestClient::open(&home, &ada.id);
     let refused = managed.call("daemon.log", json!({}));
     assert_eq!(refused["reason"], "unsupported", "{refused}");
+
+    let mut relay = McpTestClient::relay_configured(&home, &ada.id);
+    let catalog = relay.request("tools/list", json!({}));
+    assert!(
+        catalog["result"]["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "list_agents")),
+        "{catalog}"
+    );
+    let roster = relay.call("list_agents", json!({}));
+    assert_eq!(roster["status"], "success", "{roster}");
 }

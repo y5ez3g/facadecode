@@ -54,7 +54,7 @@ fn facts(answer: &Value) -> (&Value, &Value, Option<&Value>) {
 fn fake_start(home: &TestHome, name: &str) -> Value {
     json!({
         "cli": "fake", "name": name, "folder": home.project,
-        "env": { "PATH": home.path_with_test_programs() }, "cols": 80, "rows": 24,
+        "env": { "PATH": home.path_with_test_programs() }, "size": { "cols": 80, "rows": 24 },
     })
 }
 
@@ -525,7 +525,10 @@ fn two_starts_with_one_request_id_at_once_start_one_agent() {
         two.wait_for_response(second, secs(30)).expect("an answer"),
     ];
     for answer in &answers {
-        assert_eq!(answer["result"]["agent"]["agent_id"], "a1", "{answer}");
+        assert_eq!(
+            answer["result"]["agent"]["reference"]["agent_id"], "a1",
+            "{answer}"
+        );
     }
     assert_eq!(answers[1]["result"]["repeated"], true);
     assert_eq!(home.agents().len(), 1, "one agent");
@@ -588,7 +591,7 @@ fn a_repeated_start_with_a_worktree_makes_no_second_worktree() {
     let again = person.call("agent.start", args);
     assert_eq!(
         (
-            &again["result"]["agent"]["agent_id"],
+            &again["result"]["agent"]["reference"]["agent_id"],
             &again["result"]["repeated"]
         ),
         (&json!("a1"), &json!(true)),

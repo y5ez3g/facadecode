@@ -23,7 +23,7 @@ use crate::{Daemon, Sender, log};
 /// How long a started agent waits before its creator is told.
 const WAIT_REPORT_DELAY: Duration = Duration::from_secs(20);
 
-pub(crate) const DELIVER_WAIT_NOTICE: &str = "machine.deliver_wait_notice";
+pub(crate) const DELIVER_WAIT_NOTICE: &str = "internal.deliver_wait_notice";
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct WaitNotice {

@@ -3,14 +3,16 @@
 //! nothing to and reads nothing from the terminal; holding it is the whole point.
 
 use std::io;
-use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
 use std::time::{Duration, Instant};
 
+use facade_base::api_v1::ProcessExit;
+use facade_base::api_v1::keeper::HeldAgent;
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs, STOP_TIMEOUT};
-use facade_base::process::{ProcessExit, ProcessIdentity};
+use facade_base::keeper::{KeeperStartArgs, STOP_TIMEOUT};
+use facade_base::process::ProcessIdentity;
 use facade_base::terminal::PtyMaster;
-use facade_base::unix_process::{self, Observed, ProcessObservation, WaitPacket};
+use facade_base::unix_process::{self, Observed, Presence, ProcessObservation, WaitPacket};
 use windows_sys::Win32::System::JobObjects::TerminateJobObject;
 use windows_sys::Win32::System::Threading::{GetExitCodeProcess, TerminateProcess};
 
@@ -36,6 +38,11 @@ pub(super) struct Cli {
     master: PtyMaster,
     /// While a stop is under way: when the job is killed.
     kill_deadline: Option<Instant>,
+}
+
+pub(super) enum Adoption {
+    Held(Cli),
+    Ended(ProcessExit),
 }
 
 impl Cli {
@@ -77,26 +84,45 @@ impl Cli {
         })
     }
 
-    /// Takes over a CLI another keeper started, with the terminal the daemon handed in. None when
-    /// that process is already gone.
+    /// Takes over a CLI another keeper started, with the terminal the daemon handed in. A live
+    /// process with a different birth cannot be adopted.
     pub(super) fn adopt(
         agent: String,
         process: ProcessIdentity,
         master: PtyMaster,
         port: &mut Port,
-    ) -> Result<Option<Cli>, ErrorBody> {
-        let watch = match ProcessObservation::open(&process) {
-            Ok(Observed::Ended) => return Ok(None),
-            Ok(Observed::Watching(watch)) => watch,
-            Err(err) => return Err(cannot_watch(&agent, &process, err)),
+    ) -> Result<Adoption, ErrorBody> {
+        let watch_error = |err| cannot_watch(&agent, &process, err);
+        let Some(birth) = unix_process::birth(process.pid).map_err(watch_error)? else {
+            return Ok(Adoption::Ended(process_exit(None)));
         };
+        if birth != process.birth {
+            let current = ProcessIdentity {
+                pid: process.pid,
+                birth,
+            };
+            if unix_process::presence(&current).map_err(watch_error)? == Presence::Running {
+                return Err(ErrorBody::invalid_argument(format!(
+                    "{agent}'s CLI birth does not match process {}",
+                    process.pid
+                )));
+            }
+            return Ok(Adoption::Ended(process_exit(None)));
+        }
+        let watch = match ProcessObservation::open(&process).map_err(watch_error)? {
+            Observed::Ended => return Ok(Adoption::Ended(process_exit(None))),
+            Observed::Watching(watch) => watch,
+        };
+        if watch.ended().map_err(watch_error)? == Some(true) {
+            return Ok(Adoption::Ended(process_exit(Some(watch.as_handle()))));
+        }
         let key = port.key();
         let watched = watch.as_handle().try_clone_to_owned().and_then(|handle| {
             let ended = WaitPacket::arm(port.handle(), handle.as_handle(), key)?;
             Ok((handle, ended))
         });
-        let (handle, ended) = watched.map_err(|err| cannot_watch(&agent, &process, err))?;
-        Ok(Some(Cli {
+        let (handle, ended) = watched.map_err(watch_error)?;
+        Ok(Adoption::Held(Cli {
             agent,
             process,
             handle,
@@ -122,9 +148,9 @@ impl Cli {
     }
 
     /// How the CLI appears in `hello`'s list.
-    pub(super) fn as_held(&self) -> KeeperHeldAgent {
-        KeeperHeldAgent {
-            id: self.agent.clone(),
+    pub(super) fn as_held(&self) -> HeldAgent {
+        HeldAgent {
+            agent_id: self.agent.clone(),
             pid: self.process.pid,
             birth: self.process.birth.clone(),
             stopping: self.is_stopping(),
@@ -172,24 +198,21 @@ impl Cli {
 
     /// The CLI's exit, once its key completed.
     pub(super) fn exit(&self) -> ProcessExit {
-        let mut code = 0u32;
-        // SAFETY: the handle is open and allows reading the exit code.
-        let read = unsafe { GetExitCodeProcess(self.handle.as_raw_handle(), &mut code) };
-        ProcessExit {
-            at: facade_base::time::iso_now(),
-            // Carried as an i32: 0xC000013A is -1073741510.
-            code: (read != 0).then_some(code as i32),
-            signal: None,
-            reason: None,
-        }
+        process_exit(Some(self.handle.as_handle()))
     }
 }
 
-/// An exit the keeper cannot know the details of, stamped now.
-pub(super) fn exit_unknown() -> ProcessExit {
+fn process_exit(handle: Option<BorrowedHandle<'_>>) -> ProcessExit {
+    let code = handle.and_then(|handle| {
+        let mut code = 0u32;
+        // SAFETY: the handle is open and allows reading the exit code.
+        let read = unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) };
+        // Carried as an i32: 0xC000013A is -1073741510.
+        (read != 0).then_some(code as i32)
+    });
     ProcessExit {
         at: facade_base::time::iso_now(),
-        code: None,
+        code,
         signal: None,
         reason: None,
     }

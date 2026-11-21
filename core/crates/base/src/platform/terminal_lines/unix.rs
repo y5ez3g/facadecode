@@ -34,11 +34,21 @@ impl Receiver {
         };
         // The line's newline comes after it.
         let end = begin + line.len() as u64 + 1;
-        // A terminal is one descriptor: a line with another count, or whose descriptors the
-        // kernel dropped, carries none, and those that came are closed.
         let terminal = match self.0.take_carried(begin, end) {
+            Ok(fds) if fds.is_empty() => None,
             Ok(mut fds) if fds.len() == 1 => fds.pop().map(PtyMaster::from),
-            _ => None,
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "a terminal line carries more than one descriptor",
+                ));
+            }
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "a terminal line's descriptors were truncated",
+                ));
+            }
         };
         Ok(Some((line, terminal)))
     }

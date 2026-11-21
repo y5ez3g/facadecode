@@ -2,11 +2,8 @@ use std::convert::Infallible;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use facade_base::daemon::HelloResult;
-use facade_base::daemon_client::Identity;
-use facade_base::jsonrpc::Reason;
+use facade_base::api_v1::daemon::SUPPORTED_API_VERSIONS;
 use facade_base::paths::ClientSocket;
-use facade_base::v3::DAEMON_PROTOCOL_RANGE;
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 
@@ -26,30 +23,23 @@ impl Service for Hellos {
     async fn hello(
         self: &Arc<Self>,
         hello: HelloParams,
+        api_version: ApiVersion,
         _: Option<u32>,
     ) -> Result<(HelloResult, Client, ()), ErrorBody> {
         let result = HelloResult {
             machine: None,
-            protocol: hello.protocol_range[1],
+            api_version,
             build: "test".into(),
             machine_id: String::new(),
-            window: None,
             pid: std::process::id(),
-            agent: None,
             agent_count: 0,
             keeper: None,
             topics: Vec::new(),
             ops: Vec::new(),
-            capabilities: Vec::new(),
-        };
-        let identity = Identity {
-            kind: hello.kind,
-            agent: None,
-            sessions: Vec::new(),
         };
         let client = Client {
-            identity,
-            capabilities: hello.capabilities,
+            kind: hello.kind,
+            api_version,
             verified_actor: None,
         };
         Ok((result, client, ()))
@@ -58,6 +48,7 @@ impl Service for Hellos {
     async fn machine_hello(
         self: &Arc<Self>,
         _: HelloParams,
+        _: ApiVersion,
         _: Option<u32>,
     ) -> Result<(HelloResult, Self::Machine), ErrorBody> {
         Err(ErrorBody::invalid_argument("no machine sessions"))
@@ -66,8 +57,8 @@ impl Service for Hellos {
     async fn machine_connect(
         self: &Arc<Self>,
         _: &Client,
-        _: Value,
-    ) -> Result<(Value, Self::Machine), ErrorBody> {
+        _: MachineConnectArgs,
+    ) -> Result<(MachineConnectResult, Self::Machine), ErrorBody> {
         Err(ErrorBody::invalid_argument("no machine sessions"))
     }
 
@@ -83,8 +74,7 @@ impl Service for Hellos {
     async fn call(
         self: &Arc<Self>,
         _: &Client,
-        _: &str,
-        _: Value,
+        _: DaemonCall,
         _: WhenFull,
         _: Cancel,
     ) -> Result<Value, ErrorBody> {
@@ -94,8 +84,7 @@ impl Service for Hellos {
     async fn watch(
         self: &Arc<Self>,
         _: &Client,
-        _: &str,
-        _: Value,
+        _: DaemonWatch,
         _: u64,
     ) -> Result<Watch, ErrorBody> {
         Err(ErrorBody::invalid_argument("no topics"))
@@ -105,8 +94,8 @@ impl Service for Hellos {
         self: &Arc<Self>,
         _: &Client,
         _: u64,
-        _: v3::ScreenSize,
-        _: Option<v3::TerminalColors>,
+        _: Size,
+        _: Option<TerminalColors>,
     ) -> Result<(), ErrorBody> {
         Err(ErrorBody::invalid_argument("no topics"))
     }
@@ -126,7 +115,7 @@ impl Service for Hellos {
     }
 
     fn draining(&self) -> Option<ErrorBody> {
-        let refused = ErrorBody::new(Reason::Upgrading, "a newer Facade is taking over");
+        let refused = operation_error("upgrading", "a newer Facade is taking over");
         self.draining.lock().unwrap().then_some(refused)
     }
 
@@ -157,7 +146,7 @@ fn hello() -> Value {
     json!({
         "jsonrpc": "2.0", "id": 1, "method": "hello",
         "params": {
-            "protocol": DAEMON_PROTOCOL_RANGE,
+            "api_versions": SUPPORTED_API_VERSIONS,
             "build": "test", "kind": "terminal"
         },
     })
@@ -171,10 +160,7 @@ async fn a_connection_made_while_a_newer_facade_takes_over_is_sent_only_its_hell
     });
     let (mut before, mut writer) = open(&service);
     send(&mut writer, hello());
-    assert_eq!(
-        receive(&mut before)["result"]["protocol"],
-        DAEMON_PROTOCOL_RANGE[1]
-    );
+    assert_eq!(receive(&mut before)["result"]["api_version"], 1);
     *service.draining.lock().unwrap() = true;
     service.closing.send_replace(Some("0.2.1".into()));
     assert_eq!(

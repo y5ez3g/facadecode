@@ -1,22 +1,23 @@
-//! The machine introduction and JSON-RPC lines carried by each end of a session.
+//! The API v1 introduction and JSON-RPC lines carried by each end of a machine session.
 
 use std::io;
 use std::time::Duration;
 
-use facade_base::daemon::{ClientKind, HelloParams, HelloResult, methods};
-use facade_base::jsonrpc::{
-    ErrorBody, MAX_LINE_BYTES, Reason, Request, Response, decode_arguments, encode_line,
+use facade_base::api_v1::daemon::{
+    self, AdvertiseParams, ClientKind, ConnectedMachine, ForwardParams, ForwardRequest,
+    HelloParams, MachineHelloParams, methods,
 };
-use facade_base::machine::{
-    self, ExecutionOutcome, MachineHello, MachineIdentity, ProtocolMismatch, Unavailable,
+use facade_base::api_v1::{
+    ApiVersion, ApiVersions, EmptyResult, ErrorBody, ErrorData, MAX_LINE_BYTES, MachineMessage,
+    MalformedRequest, Request, Response, ResponseBody, Topic, decode_arguments, encode_line,
+    parse_request, read_machine_message,
 };
-use facade_base::operations::{EmptyResult, Topic};
-use facade_base::v3;
+use facade_base::machine::{ExecutionOutcome, MachineIdentity};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::{MachineGreeting, SessionWork, advertise};
+use super::{MachineGreeting, SessionWork};
 
 const INTRODUCTION_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) const CLOSE_GRACE: Duration = Duration::from_millis(250);
@@ -28,126 +29,20 @@ pub(super) const REQUEST_TIMEOUT: &str = "The request timed out.";
 pub(super) const TIMEOUT_BEFORE_SEND: &str = "The request timed out before it was sent.";
 pub(super) const TIMEOUT_BEFORE_TARGET: &str = "The request timed out before reaching the machine.";
 
-pub(super) enum Frame {
-    Request(Request),
-    Response(Response),
-}
-
-pub(crate) enum OutboundCaller {
-    Legacy(machine::Caller),
-    Current(v3::Caller),
-}
-
-impl From<machine::Caller> for OutboundCaller {
-    fn from(caller: machine::Caller) -> Self {
-        Self::Legacy(caller)
-    }
-}
-
-impl From<v3::Caller> for OutboundCaller {
-    fn from(caller: v3::Caller) -> Self {
-        Self::Current(caller)
-    }
-}
-
-/// The hop reads only the route and deadline. Only the destination decodes the application fields.
-pub(super) struct Forward {
-    pub(super) route: Vec<String>,
-    pub(super) time_left_ms: Option<u64>,
-    fields: serde_json::Map<String, Value>,
-}
-
-impl Forward {
-    pub(super) fn control(route: Vec<String>, method: &str) -> Self {
-        Self {
-            route,
-            time_left_ms: None,
-            fields: serde_json::Map::from_iter([("method".to_owned(), Value::from(method))]),
+pub(super) fn work(forward: &ForwardParams) -> Option<SessionWork> {
+    match &forward.request {
+        ForwardRequest::Call(_) => Some(SessionWork::Call),
+        ForwardRequest::Watch(watch) if watch.topic == daemon::AttachTopic::NAME => {
+            Some(SessionWork::Viewer)
         }
-    }
-
-    pub(super) fn method(&self) -> &str {
-        self.fields
-            .get("method")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-    }
-
-    pub(super) fn work(&self) -> Option<SessionWork> {
-        if self.method() != methods::WATCH {
-            return Some(SessionWork::Call);
-        }
-        match self
-            .fields
-            .get("params")
-            .and_then(|params| params.get("topic"))
-            .and_then(Value::as_str)
-        {
-            Some(v3::ScreenTopic::NAME | v3::AttachTopic::NAME) => Some(SessionWork::Viewer),
-            _ => None,
-        }
-    }
-
-    pub(super) fn from_origin(
-        caller: impl Into<OutboundCaller>,
-        method: String,
-        params: Value,
-        request_id: Option<String>,
-    ) -> Self {
-        let value = match caller.into() {
-            OutboundCaller::Legacy(caller) => serde_json::to_value(machine::ForwardParams {
-                caller,
-                route: Vec::new(),
-                time_left_ms: None,
-                request_id,
-                method,
-                params,
-            }),
-            OutboundCaller::Current(caller) => serde_json::to_value(v3::ForwardParams {
-                caller,
-                route: Vec::new(),
-                time_left_ms: None,
-                request_id,
-                method,
-                params,
-            }),
-        };
-        Self::decode(value.expect("forward parameters serialize"))
-            .expect("forward parameters form an envelope")
-    }
-
-    pub(super) fn decode(params: Value) -> Result<Self, ErrorBody> {
-        let Value::Object(mut fields) = params else {
-            return Err(ErrorBody::invalid_argument(
-                "Expected a forwarding envelope.",
-            ));
-        };
-        let route = decode_arguments(fields.remove("route").unwrap_or(Value::Null))?;
-        let time_left_ms = decode_arguments(fields.remove("time_left_ms").unwrap_or(Value::Null))?;
-        Ok(Self {
-            route,
-            time_left_ms,
-            fields,
-        })
-    }
-
-    pub(super) fn encode(mut self) -> Value {
-        self.fields.insert(
-            "route".to_owned(),
-            serde_json::to_value(self.route).expect("route serializes"),
-        );
-        if let Some(time_left_ms) = self.time_left_ms {
-            self.fields
-                .insert("time_left_ms".to_owned(), Value::from(time_left_ms));
-        }
-        Value::Object(self.fields)
+        ForwardRequest::Watch(_) => None,
     }
 }
 
 /// For a timed call, leave the frame open so the remaining time is written after the body.
-pub(super) fn forward_line(id: u64, mut forward: Forward, timed: bool) -> Vec<u8> {
+pub(super) fn forward_line(id: u64, mut forward: ForwardParams, timed: bool) -> Vec<u8> {
     forward.time_left_ms = None;
-    let mut line = encode_line(&Request::new(Some(id), methods::FORWARD, forward.encode()));
+    let mut line = encode_line(&Request::new(Some(id), methods::FORWARD, forward));
     if timed {
         let prefix = line
             .strip_suffix(b"}}\n")
@@ -158,13 +53,13 @@ pub(super) fn forward_line(id: u64, mut forward: Forward, timed: bool) -> Vec<u8
 }
 
 pub(super) fn forward_end(left: u64) -> String {
-    let closing = "}}\n";
-    format!(",\"time_left_ms\":{left}{closing}")
+    format!(",\"time_left_ms\":{left}}}}}\n")
 }
 
 pub(super) struct Reader<R> {
     read: R,
     line: Vec<u8>,
+    parsed_line: Vec<u8>,
 }
 
 impl<R: AsyncBufRead + Unpin> Reader<R> {
@@ -172,65 +67,81 @@ impl<R: AsyncBufRead + Unpin> Reader<R> {
         Self {
             read,
             line: Vec::new(),
+            parsed_line: Vec::new(),
         }
     }
 
     /// Keeps the original buffered reader intact across the handshake.
-    pub(super) async fn next(&mut self) -> Result<Option<Frame>, ErrorBody> {
+    pub(super) async fn next(&mut self) -> Result<Option<MachineMessage>, MalformedRequest> {
         self.line.clear();
         let count = (&mut self.read)
             .take(MAX_LINE_BYTES as u64 + 1)
             .read_until(b'\n', &mut self.line)
             .await
-            .map_err(io_error)?;
+            .map_err(|error| MalformedRequest {
+                id: None,
+                error: io_error(error),
+            })?;
         if count == 0 {
             return Ok(None);
         }
         if count > MAX_LINE_BYTES {
-            return Err(ErrorBody::line_too_long());
+            return Err(MalformedRequest {
+                id: None,
+                error: ErrorBody::line_too_long(),
+            });
         }
-        match parse(&self.line) {
-            Ok(frame) if self.line.ends_with(b"\n") => Ok(Some(frame)),
-            _ => Err(ErrorBody::invalid_argument(
-                "Expected a machine protocol line.",
-            )),
+        if !self.line.ends_with(b"\n") {
+            return Err(MalformedRequest {
+                id: None,
+                error: ErrorBody::invalid_request("Incomplete machine protocol line."),
+            });
         }
+        read_machine_message(&mut self.line.as_slice(), &mut self.parsed_line).map_err(|_| {
+            parse_request(&self.line)
+                .err()
+                .unwrap_or_else(|| MalformedRequest {
+                    id: None,
+                    error: ErrorBody::invalid_request("Invalid machine protocol line."),
+                })
+        })
     }
 
-    async fn initial(&mut self) -> Result<Frame, ErrorBody> {
-        match self.next().await {
-            Ok(Some(frame)) => Ok(frame),
-            Ok(None) => Err(ErrorBody::new(
-                Reason::Unavailable,
-                "The machine session closed during its handshake.",
-            )),
-            Err(error) if error.data.reason == Reason::InvalidArgument => Err(unexpected_output()),
-            Err(error) => Err(error),
-        }
+    async fn initial(&mut self) -> Result<MachineMessage, ErrorBody> {
+        self.next()
+            .await
+            .map_err(|malformed| malformed.error)?
+            .ok_or_else(|| {
+                error(
+                    "unavailable",
+                    "The machine session closed during its handshake.",
+                )
+            })
     }
 }
 
-fn parse(line: &[u8]) -> serde_json::Result<Frame> {
-    let mut frame: serde_json::Map<String, Value> = serde_json::from_slice(line)?;
-    if frame.contains_key("method") {
-        return decode_frame(frame).map(Frame::Request);
+pub(super) fn error(reason: &str, message: impl Into<String>) -> ErrorBody {
+    ErrorBody {
+        code: -32000,
+        message: message.into(),
+        data: ErrorData {
+            reason: reason.to_owned(),
+            details: None,
+        },
     }
-    // A null application result is a result as well.
-    let result = frame.remove("result");
-    let mut response: Response = decode_frame(frame)?;
-    response.result = result;
-    Ok(Frame::Response(response))
 }
 
-fn decode_frame<T: serde::de::DeserializeOwned>(
-    frame: serde_json::Map<String, Value>,
-) -> serde_json::Result<T> {
-    serde_json::from_value(Value::Object(frame))
+pub(super) fn detail(error: &mut ErrorBody, name: &str, value: Value) {
+    error
+        .data
+        .details
+        .get_or_insert_default()
+        .insert(name.to_owned(), value);
 }
 
 pub(super) fn io_error(error: io::Error) -> ErrorBody {
-    ErrorBody::new(
-        Reason::Unavailable,
+    self::error(
+        "unavailable",
         format!("Machine session I/O failed: {error}"),
     )
 }
@@ -240,17 +151,12 @@ pub(super) fn unavailable(
     execution: ExecutionOutcome,
     detail: &str,
 ) -> ErrorBody {
-    let mut error = ErrorBody::new(
-        Reason::Unavailable,
-        unavailable_message(&machine, execution, detail),
-    );
-    error.data.unavailable = Some(Unavailable {
-        execution,
-        machine: Some(machine),
-        window: None,
-        matches: Vec::new(),
-        unanswered: Vec::new(),
-    });
+    let message = unavailable_message(&machine, execution, detail);
+    let mut error = error("unavailable", message);
+    error.data.details = Some(serde_json::Map::from_iter([
+        ("execution".to_owned(), json!(execution)),
+        ("machine".to_owned(), json!(machine)),
+    ]));
     error
 }
 
@@ -266,114 +172,76 @@ fn unavailable_message(
     format!("{}: {detail} {outcome}", machine.name)
 }
 
-/// A v2 hop reports its deadline using an existing transport error and diagnostic.
 pub(super) fn reports_timeout(error: &ErrorBody) -> bool {
-    let Some(details) = &error.data.unavailable else {
+    let Some(details) = &error.data.details else {
         return false;
     };
-    let Some(machine) = &details.machine else {
+    let Some(machine) = details
+        .get("machine")
+        .and_then(|value| serde_json::from_value::<MachineIdentity>(value.clone()).ok())
+    else {
+        return false;
+    };
+    let Some(execution) = details
+        .get("execution")
+        .and_then(|value| serde_json::from_value::<ExecutionOutcome>(value.clone()).ok())
+    else {
         return false;
     };
     [REQUEST_TIMEOUT, TIMEOUT_BEFORE_SEND, TIMEOUT_BEFORE_TARGET]
         .into_iter()
-        .any(|detail| error.message == unavailable_message(machine, details.execution, detail))
-}
-
-pub(super) fn protocol(local: &MachineHello, remote: &MachineHello) -> Result<(), ErrorBody> {
-    let supported = local.protocol_range;
-    if remote.protocol_range == supported {
-        return Ok(());
-    }
-    let resolution = if facade_base::takes_over(&remote.build, &local.build)
-        || remote.protocol_range[0] > supported[1]
-    {
-        "Upgrade Facade on this machine first.".to_owned()
-    } else {
-        format!(
-            "Install a Facade build with protocol {} on {}.",
-            supported[1], remote.name,
-        )
-    };
-    let mut error = ErrorBody::new(
-        Reason::IncompatibleProtocol,
-        format!(
-            "Facade {} supports daemon protocol {:?}, but {} is running Facade {} with protocol {:?}. {resolution}",
-            local.build, supported, remote.name, remote.build, remote.protocol_range,
-        ),
-    );
-    error.data.protocol = Some(ProtocolMismatch {
-        local_build: local.build.clone(),
-        local_protocol: supported,
-        remote_build: remote.build.clone(),
-        remote_protocol: remote.protocol_range,
-    });
-    Err(error)
+        .any(|detail| error.message == unavailable_message(&machine, execution, detail))
 }
 
 pub(super) async fn introduce(
     read: &mut Reader<impl AsyncBufRead + Unpin>,
     write: &mut (impl AsyncWrite + Unpin),
-    greeting: MachineGreeting,
+    local: ConnectedMachine,
+    foreground: bool,
 ) -> Result<MachineGreeting, ErrorBody> {
-    let MachineGreeting {
-        machine: local,
-        capabilities,
-        foreground,
-    } = greeting;
     in_time(async {
-        let hello = if local.protocol_range == v3::DAEMON_PROTOCOL_RANGE {
-            let mut hello = v3::HelloParams::for_machine(local.clone());
-            hello.capabilities = capabilities;
-            hello.foreground = foreground;
-            Request::new(Some(HELLO_ID), methods::HELLO, hello)
-        } else {
-            Request::new(
-                Some(HELLO_ID),
-                methods::HELLO,
-                HelloParams {
-                    protocol_range: local.protocol_range,
-                    build: local.build.clone(),
-                    kind: ClientKind::Machine,
-                    agent: None,
-                    sessions: Vec::new(),
-                    window: None,
-                    numbers_given: None,
-                    machine: Some(local.clone()),
-                    capabilities: Vec::new(),
-                    foreground: false,
-                },
-            )
+        let offered = ApiVersions::new(vec![ApiVersion::MIN]).expect("the machine API v1 offer");
+        let hello = HelloParams {
+            api_versions: offered.clone(),
+            build: local.build,
+            kind: ClientKind::Machine,
+            machine: Some(MachineHelloParams {
+                machine_id: local.machine_id,
+                boot_id: local.boot_id,
+                name: local.name,
+                ssh_cleans_processes: local.ssh_cleans_processes,
+            }),
+            foreground,
         };
-        send(write, &hello).await?;
-        let Frame::Response(response) = read.initial().await? else {
-            return Err(unexpected_output());
-        };
-        if response.jsonrpc != "2.0" || response.id != Some(HELLO_ID) {
-            return Err(unexpected_output());
-        }
-        if let Some(error) = response.error {
-            return Err(error);
-        }
-        let hello: HelloResult = decode_arguments(response.result.ok_or_else(unexpected_output)?)
-            .map_err(|_| unexpected_output())?;
-        let remote = hello.machine.ok_or_else(|| {
-            ErrorBody::new(
-                Reason::IncompatibleProtocol,
-                "Expected a machine introduction.",
-            )
+        send(write, &Request::new(Some(HELLO_ID), methods::HELLO, hello)).await?;
+        let response = read.initial().await.map_err(|error| {
+            if matches!(error.code, -32700 | -32600) {
+                unexpected_output()
+            } else {
+                error
+            }
         })?;
-        protocol(&local, &remote)?;
-        if hello.protocol != local.protocol_range[1]
-            || hello.build != remote.build
-            || hello.machine_id != remote.machine_id
-        {
-            return Err(ErrorBody::invalid_argument(
-                "Inconsistent machine introduction.",
-            ));
+        let MachineMessage::Response(response) = response else {
+            return Err(unexpected_output());
+        };
+        if response.id != Some(HELLO_ID) {
+            return Err(unexpected_output());
         }
+        let result = match response.body {
+            ResponseBody::Result(result) => result,
+            ResponseBody::Error(error) => return Err(error),
+        };
+        let hello = daemon::decode_hello_result(result, &offered, ClientKind::Machine)?;
+        let remote = hello.machine.ok_or_else(unexpected_output)?;
         Ok(MachineGreeting {
-            machine: remote,
-            capabilities: hello.capabilities,
+            api_version: hello.api_version,
+            machine: ConnectedMachine {
+                machine_id: hello.machine_id,
+                boot_id: remote.boot_id,
+                name: remote.name,
+                build: hello.build,
+                ssh_cleans_processes: remote.ssh_cleans_processes,
+            },
             foreground: false,
         })
     })
@@ -385,21 +253,19 @@ pub(super) async fn introduce(
 pub(super) async fn exchange_tables<T>(
     read: &mut Reader<impl AsyncBufRead + Unpin>,
     write: &mut (impl AsyncWrite + Unpin),
-    table: Value,
-    reserve: impl FnOnce(v3::AdvertiseParams) -> Result<T, ErrorBody>,
-    protocol: u32,
+    table: AdvertiseParams,
+    reserve: impl FnOnce(AdvertiseParams) -> Result<T, ErrorBody>,
 ) -> Result<T, ErrorBody> {
     let received = in_time(async {
         let table = Request::new(Some(INITIAL_TABLE_ID), methods::ADVERTISE, table);
         let sending = send(write, &table);
         let receiving = async {
             match read.initial().await? {
-                Frame::Request(request)
-                    if request.jsonrpc == "2.0"
-                        && request.id == Some(INITIAL_TABLE_ID)
+                MachineMessage::Request(request)
+                    if request.id == Some(INITIAL_TABLE_ID)
                         && request.method == methods::ADVERTISE =>
                 {
-                    advertise::decode(protocol, request.params)
+                    decode_arguments(request.params)
                 }
                 _ => Err(ErrorBody::invalid_argument(
                     "Expected the peer's machine table.",
@@ -409,8 +275,8 @@ pub(super) async fn exchange_tables<T>(
         let (_, table) = tokio::try_join!(sending, receiving)?;
         Ok(table)
     })
-    .await?;
-    let admission = match reserve(received) {
+    .await;
+    let admission = match received.and_then(reserve) {
         Ok(admission) => admission,
         Err(error) => {
             reject(write, Some(INITIAL_TABLE_ID), &error).await;
@@ -421,16 +287,17 @@ pub(super) async fn exchange_tables<T>(
         let accepted = Response::ok(INITIAL_TABLE_ID, EmptyResult {});
         let sending = send(write, &accepted);
         let receiving = async {
-            let Frame::Response(response) = read.initial().await? else {
+            let MachineMessage::Response(response) = read.initial().await? else {
                 return Err(bad_confirmation());
             };
-            if response.jsonrpc != "2.0" || response.id != Some(INITIAL_TABLE_ID) {
+            if response.id != Some(INITIAL_TABLE_ID) {
                 return Err(bad_confirmation());
             }
-            match (response.result, response.error) {
-                (Some(Value::Object(result)), None) if result.is_empty() => Ok(()),
-                (None, Some(error)) => Err(error),
-                _ => Err(bad_confirmation()),
+            match response.body {
+                ResponseBody::Result(result) => decode_arguments::<EmptyResult>(result)
+                    .map(|_| ())
+                    .map_err(|_| bad_confirmation()),
+                ResponseBody::Error(error) => Err(error),
             }
         };
         tokio::try_join!(sending, receiving).map(|_| ())
@@ -458,12 +325,7 @@ pub(super) async fn in_time<T>(
 ) -> Result<T, ErrorBody> {
     tokio::time::timeout(INTRODUCTION_TIMEOUT, work)
         .await
-        .unwrap_or_else(|_| {
-            Err(ErrorBody::new(
-                Reason::Unavailable,
-                "The machine handshake timed out.",
-            ))
-        })
+        .unwrap_or_else(|_| Err(error("unavailable", "The machine handshake timed out.")))
 }
 
 fn unexpected_output() -> ErrorBody {

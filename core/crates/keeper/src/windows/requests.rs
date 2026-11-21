@@ -1,240 +1,201 @@
-//! The keeper protocol's requests on Windows: a line is decoded into a [`Request`], carried out
-//! against the keeper's state, and answered on the link. A terminal travels as the line's
-//! `terminal` member, handles duplicated into the receiving process.
+//! The keeper's API v1 requests on the authenticated Windows link.
 
+#![allow(
+    clippy::result_large_err,
+    reason = "Keeper requests return the shared API v1 error by value"
+)]
+
+use std::ffi::OsStr;
+use std::path::Path;
 use std::time::Instant;
 
-use facade_base::jsonrpc::{ErrorBody, Reason, Response, decode_arguments, parse_request};
-use facade_base::keeper::{
-    AgentStart, AgentStop, AgentSync, DaemonPing, KEEPER_PROTOCOL_VERSION, KeeperAgentArgs,
-    KeeperAgentChange, KeeperHelloParams, KeeperHelloResult, KeeperStartArgs, KeeperStartResult,
-    KeeperStartWireArgs, KeeperSyncArgs, MIN_KEEPER_PROTOCOL_VERSION, methods, operation_names,
-    shared_version,
+use facade_base::api_v1::keeper::{
+    HelloResult, KeeperCall, StartArgs, StartResult, SyncArgs, decode_call, decode_hello, methods,
+    project_error, select_version,
 };
-use facade_base::operations::{CallParams, Operation};
+use facade_base::api_v1::{EmptyResult, ErrorBody, Request, Response, parse_request};
+use facade_base::jsonrpc::{ErrorBody as LegacyError, Reason};
+use facade_base::keeper::KeeperStartArgs;
 use facade_base::process::ProcessIdentity;
 use facade_base::terminal::PtyMaster;
-use facade_base::terminal_lines::take_terminal;
-use serde::Serialize;
-use serde_json::{Value, json};
 
 use super::Keeper;
-use super::cli::{Cli, exit_unknown};
+use super::cli::{Adoption, Cli};
 use super::console::ConPty;
 use super::link::Link;
 use crate::log;
 
-/// Oldest and newest keeper protocol versions this keeper speaks.
-const VERSIONS: [u32; 2] = [MIN_KEEPER_PROTOCOL_VERSION, KEEPER_PROTOCOL_VERSION];
-
-/// A request the keeper understands, its arguments decoded.
-enum Request {
-    Hello(KeeperHelloParams),
-    Start(KeeperStartArgs),
-    Stop(KeeperAgentArgs),
-    Sync(KeeperSyncArgs),
-    Ping,
-}
-
-/// A successful request: the `result`, the agent whose terminal the response carries if any,
-/// and a CLI end to report right after the response.
-struct Handled {
-    result: Value,
-    terminal_of: Option<String>,
-    then: Option<KeeperAgentChange>,
-}
-
-impl Handled {
-    fn result(result: impl Serialize) -> Handled {
-        Handled {
-            result: serde_json::to_value(result).expect("keeper protocol results serialize"),
-            terminal_of: None,
-            then: None,
-        }
-    }
-
-    fn nothing() -> Handled {
-        Handled::result(json!({}))
-    }
-
-    fn with_terminal_of(mut self, agent: &str) -> Handled {
-        self.terminal_of = Some(agent.to_string());
-        self
-    }
-}
-
 impl Keeper {
-    /// Serves one line from the daemon. Only `agent.sync` may carry a terminal; one that comes
-    /// with another request, or with a line refused, is closed.
-    pub(super) fn serve_line(&mut self, text: &[u8]) {
-        let given = take_terminal(text);
+    /// Serves one line from the daemon. Id-less messages have no effects, and only a sync
+    /// request can use an incoming terminal.
+    pub(super) fn serve_line(&mut self, text: &[u8], terminal: Option<PtyMaster>) {
         let request = match parse_request(text) {
             Ok(request) => request,
-            Err(error) => {
-                self.post(&Response::failed(None, error), None);
+            Err(malformed) => {
+                self.post(&Response::failed(malformed.id, malformed.error));
                 return;
             }
         };
-        let greeted = self.link.as_ref().is_some_and(Link::is_greeted);
-        let outcome =
-            decode(&request.method, request.params, greeted).and_then(|decoded| match decoded {
-                Request::Hello(params) => self.hello(params),
-                Request::Start(args) => self.start(args),
-                Request::Stop(args) => self.stop(args),
-                Request::Sync(args) => self.sync(args, given),
-                Request::Ping => {
-                    self.supervisor.ping(Instant::now());
-                    Ok(Handled::nothing())
-                }
-            });
-        let then = match (request.id, outcome) {
-            (None, outcome) => outcome.ok().and_then(|handled| handled.then),
-            (Some(id), Err(error)) => {
-                self.post(&Response::failed(Some(id), error), None);
-                None
-            }
-            (Some(id), Ok(handled)) => {
-                let terminal_of = handled.terminal_of.as_deref();
-                self.post(&Response::ok(id, handled.result), terminal_of);
-                handled.then
-            }
+        let Some(id) = request.id else {
+            return;
         };
-        // A notification gets no response, but a CLI end it found is still reported.
-        if let Some(KeeperAgentChange::Exit { agent, exit }) = then {
-            self.report_exit(&agent, exit);
+        if let Err(error) = self.serve_request(id, request, terminal) {
+            self.post(&Response::failed(Some(id), error));
         }
     }
 
-    fn hello(&mut self, params: KeeperHelloParams) -> Result<Handled, ErrorBody> {
-        let theirs = params.protocol_range;
-        if shared_version(VERSIONS, theirs).is_none() {
-            return Err(ErrorBody::new(
-                Reason::IncompatibleProtocol,
-                format!(
-                    "the keeper speaks keeper protocol versions {}-{}; the daemon speaks {}-{}",
-                    VERSIONS[0], VERSIONS[1], theirs[0], theirs[1]
-                ),
+    fn serve_request(
+        &mut self,
+        id: u64,
+        request: Request,
+        terminal: Option<PtyMaster>,
+    ) -> Result<(), ErrorBody> {
+        let greeted = self.link.as_ref().is_some_and(Link::is_greeted);
+        match request.method.as_str() {
+            methods::HELLO => {
+                if greeted {
+                    return Err(ErrorBody::invalid_argument(
+                        "hello was already received on this connection",
+                    ));
+                }
+                if terminal.is_some() {
+                    return Err(unexpected_terminal());
+                }
+                let params = decode_hello(request.params)?;
+                let api_version = select_version(&params.api_versions)?;
+                let link = self.link.as_mut().expect("serving the daemon's request");
+                link.greet(api_version);
+                self.post(&Response::ok(
+                    id,
+                    HelloResult {
+                        api_version,
+                        build: facade_base::build_id(),
+                        agents: self.clis.values().map(Cli::as_held).collect(),
+                    },
+                ));
+            }
+            methods::CALL => {
+                if !greeted {
+                    return Err(ErrorBody::invalid_argument("send hello first"));
+                }
+                match decode_call(request.params)? {
+                    KeeperCall::Sync(args) => self.sync(id, args, terminal)?,
+                    _ if terminal.is_some() => return Err(unexpected_terminal()),
+                    KeeperCall::Start(args) => self.start(id, args)?,
+                    KeeperCall::Stop(args) => {
+                        self.stop(&args.agent_id)?;
+                        self.post(&Response::ok(id, EmptyResult {}));
+                    }
+                    KeeperCall::Ping(_) => {
+                        self.supervisor.ping(Instant::now());
+                        self.post(&Response::ok(id, EmptyResult {}));
+                    }
+                }
+            }
+            method => {
+                return Err(ErrorBody::method_not_found(format!(
+                    "unknown method {method}; keeper methods are hello and call"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn start(&mut self, id: u64, args: StartArgs) -> Result<(), ErrorBody> {
+        let args = KeeperStartArgs::from(args);
+        if self.clis.contains_key(&args.agent) {
+            return Err(ErrorBody::invalid_argument(format!(
+                "{} already has a CLI",
+                args.agent
+            )));
+        }
+        if !Path::new(&args.launch.folder).is_absolute() || args.launch.folder.contains('\0') {
+            return Err(ErrorBody::invalid_argument(
+                "cwd must be an absolute path without NUL characters",
             ));
         }
-        if let Some(link) = &mut self.link {
-            link.mark_greeted();
-        }
-        Ok(Handled::result(KeeperHelloResult {
-            protocol_range: VERSIONS,
-            build: facade_base::build_id(),
-            held_agents: self.clis.values().map(Cli::as_held).collect(),
-        }))
-    }
-
-    fn start(&mut self, args: KeeperStartArgs) -> Result<Handled, ErrorBody> {
-        if self.clis.contains_key(&args.agent) {
-            let message = format!("{} already has a CLI", args.agent);
-            return Err(ErrorBody::invalid_argument(message));
+        let program = Path::new(&args.launch.program);
+        if !program.is_absolute() && program.file_name() != Some(OsStr::new(&args.launch.program)) {
+            return Err(ErrorBody::invalid_argument(
+                "command must start with an absolute executable path or a program name",
+            ));
         }
         if self.conpty.is_none() {
-            self.conpty = Some(ConPty::load()?);
+            self.conpty = Some(ConPty::load().map_err(project_error)?);
         }
         let conpty = self.conpty.as_ref().expect("the package was just loaded");
-        let cli = Cli::spawn(&args, conpty, &mut self.port)?;
+        let cli = Cli::spawn(&args, conpty, &mut self.port).map_err(project_error)?;
         let ProcessIdentity { pid, birth } = cli.process().clone();
+        self.clis.insert(args.agent.clone(), cli);
+        if let Err(error) =
+            self.post_terminal(&Response::ok(id, StartResult { pid, birth }), &args.agent)
+        {
+            let mut cli = self
+                .clis
+                .remove(&args.agent)
+                .expect("the CLI was just started");
+            cli.kill_job(Instant::now());
+            return Err(error);
+        }
         log("info", &format!("started {}'s CLI ({pid})", args.agent));
-        let handled =
-            Handled::result(KeeperStartResult { pid, birth }).with_terminal_of(&args.agent);
-        self.clis.insert(args.agent, cli);
-        Ok(handled)
+        Ok(())
     }
 
-    fn stop(&mut self, args: KeeperAgentArgs) -> Result<Handled, ErrorBody> {
-        let cli = self
-            .clis
-            .get_mut(&args.agent)
-            .ok_or_else(|| not_held(&args.agent))?;
+    fn stop(&mut self, agent: &str) -> Result<(), ErrorBody> {
+        let cli = self.clis.get_mut(agent).ok_or_else(|| not_held(agent))?;
         cli.begin_stop(Instant::now());
-        Ok(Handled::nothing())
+        Ok(())
     }
 
     /// Makes sure both sides hold the CLI's terminal: whichever side lacks it gets a copy.
-    fn sync(
-        &mut self,
-        args: KeeperSyncArgs,
-        given: Option<PtyMaster>,
-    ) -> Result<Handled, ErrorBody> {
+    fn sync(&mut self, id: u64, args: SyncArgs, given: Option<PtyMaster>) -> Result<(), ErrorBody> {
+        let agent = args.agent_id;
         let process = ProcessIdentity {
             pid: args.pid,
             birth: args.birth,
         };
-        if let Some(cli) = self.clis.get(&args.agent) {
+        let reply = Response::ok(id, EmptyResult {});
+        if let Some(cli) = self.clis.get(&agent) {
             if cli.process() != &process {
                 return Err(ErrorBody::invalid_argument(format!(
-                    "{}'s CLI here is process {}, not {}",
-                    args.agent,
-                    cli.process().pid,
-                    process.pid
+                    "{agent}'s held CLI identity does not match process {} and birth {}",
+                    process.pid, process.birth
                 )));
             }
             // With a terminal on both sides the daemon's extra copy is closed here.
-            return match given {
-                Some(_) => Ok(Handled::nothing()),
-                None => Ok(Handled::nothing().with_terminal_of(&args.agent)),
-            };
+            if given.is_none() {
+                return self.post_terminal(&reply, &agent);
+            }
+            drop(given);
+            self.post(&reply);
+            return Ok(());
         }
-        let Some(master) = given else {
-            return Err(not_held(&args.agent));
-        };
-        match Cli::adopt(args.agent.clone(), process, master, &mut self.port)? {
-            Some(cli) => {
+        let master = given.ok_or_else(|| not_held(&agent))?;
+        match Cli::adopt(agent.clone(), process, master, &mut self.port).map_err(project_error)? {
+            Adoption::Held(cli) => {
                 log(
                     "info",
-                    &format!("now holding {}'s CLI from the daemon", args.agent),
+                    &format!("now holding {agent}'s CLI from the daemon"),
                 );
-                self.clis.insert(args.agent, cli);
-                Ok(Handled::nothing())
+                self.clis.insert(agent, cli);
+                self.post(&reply);
             }
-            None => {
-                let mut handled = Handled::nothing();
-                handled.then = Some(KeeperAgentChange::Exit {
-                    agent: args.agent,
-                    exit: exit_unknown(),
-                });
-                Ok(handled)
+            Adoption::Ended(exit) => {
+                self.post(&reply);
+                self.report_exit(&agent, exit);
             }
         }
+        Ok(())
     }
 }
 
-/// Decodes a request, enforcing that `hello` comes first and only once.
-fn decode(method: &str, params: Value, greeted: bool) -> Result<Request, ErrorBody> {
-    if method == methods::HELLO {
-        if greeted {
-            return Err(ErrorBody::invalid_argument(
-                "hello was already received on this connection",
-            ));
-        }
-        return decode_arguments(params).map(Request::Hello);
-    }
-    if !greeted {
-        return Err(ErrorBody::invalid_argument("send hello first"));
-    }
-    if method != methods::CALL {
-        return Err(ErrorBody::method_not_found(format!(
-            "unknown method {method}; keeper protocol methods are hello and call"
-        )));
-    }
-    let CallParams { op, args } = decode_arguments(params)?;
-    Ok(match op.as_str() {
-        AgentStart::NAME => Request::Start(decode_arguments::<KeeperStartWireArgs>(args)?.into()),
-        AgentStop::NAME => Request::Stop(decode_arguments(args)?),
-        AgentSync::NAME => Request::Sync(decode_arguments(args)?),
-        DaemonPing::NAME => Request::Ping,
-        _ => {
-            return Err(ErrorBody::invalid_argument(format!(
-                "unknown operation {op}; keeper operations are {}",
-                operation_names().join(", ")
-            )));
-        }
-    })
+fn unexpected_terminal() -> ErrorBody {
+    ErrorBody::invalid_argument("only agent.sync requests may carry a terminal")
 }
 
 fn not_held(agent: &str) -> ErrorBody {
-    ErrorBody::new(Reason::NotFound, format!("no CLI is held for {agent}"))
+    project_error(LegacyError::new(
+        Reason::NotFound,
+        format!("no CLI is held for {agent}"),
+    ))
 }

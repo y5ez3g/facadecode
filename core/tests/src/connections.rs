@@ -1,7 +1,8 @@
 //! Line-by-line daemon and keeper protocol connections for scenario tests.
 
-use facade_base::daemon::WindowRef;
 use facade_base::paths::ClientSocket;
+use facade_base::terminal::PtyMaster;
+use facade_base::terminal_lines::{LineReceiver, LineSender};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex};
@@ -11,8 +12,8 @@ use serde_json::{Value, json};
 
 use crate::*;
 
-/// Ordinary scenario clients use v3. The real v2 fixture negotiates its own range.
-pub const DAEMON_RANGE: [u32; 2] = [3, 3];
+/// The normal scenario client's daemon API offer.
+pub const DAEMON_API_VERSIONS: &[u32] = &[1];
 
 /// A raw daemon protocol connection to the test's Facade home.
 pub struct DaemonTestClient {
@@ -109,8 +110,17 @@ impl DaemonTestClient {
             .unwrap_or_else(|| panic!("no response to {what} within {LOADED_TIMEOUT:?}"))
     }
 
-    /// Sends hello with a client kind, version range, and additional fields.
-    pub fn hello(&mut self, kind: &str, protocol: [u32; 2], more: Value) -> Value {
+    /// Sends hello with a client kind, supported APIs, and additional fields.
+    pub fn hello(&mut self, kind: &str, api_versions: &[u32], more: Value) -> Value {
+        let mut params = json!({ "api_versions": api_versions, "build": "test", "kind": kind });
+        if let (Some(params), Some(more)) = (params.as_object_mut(), more.as_object()) {
+            params.extend(more.clone());
+        }
+        self.request("hello", params)
+    }
+
+    /// The prerelease hello used for cutover fixtures and explicit refusal checks.
+    pub fn hello_prerelease(&mut self, kind: &str, protocol: [u32; 2], more: Value) -> Value {
         let mut params = json!({ "protocol": protocol, "build": "test", "kind": kind });
         if let (Some(params), Some(more)) = (params.as_object_mut(), more.as_object()) {
             params.extend(more.clone());
@@ -149,10 +159,10 @@ impl Drop for DaemonTestClient {
     }
 }
 
-/// A raw keeper protocol connection to the test's Facade home.
+/// A keeper connection that keeps each line and its native terminal resource together.
 pub struct KeeperTestClient {
-    writer: ClientSocket,
-    pub reader: BufReader<ClientSocket>,
+    writer: LineSender,
+    reader: LineReceiver,
     next: u64,
 }
 
@@ -161,44 +171,66 @@ impl KeeperTestClient {
         let stream = ClientSocket::connect(home.keeper_socket())
             .expect("could not connect to the test keeper");
         stream.set_read_timeout(Some(LOADED_TIMEOUT)).unwrap();
+        let (pid, birth) = home
+            .lock_record("keeper")
+            .expect("the test keeper owns its lock");
+        let identity = process_identity(pid);
+        assert_eq!(
+            identity.birth, birth,
+            "the keeper lock names the connected process"
+        );
         KeeperTestClient {
-            writer: stream.try_clone().unwrap(),
-            reader: BufReader::new(stream),
+            writer: LineSender::new(stream.try_clone().unwrap(), &identity).unwrap(),
+            reader: LineReceiver::new(stream),
             next: 0,
         }
     }
 
-    /// Sends a request and waits for its response as long as a loaded machine may take.
-    pub fn request(&mut self, method: &str, params: Value) -> Value {
+    pub fn send(&mut self, method: &str, params: Value, terminal: Option<&PtyMaster>) -> u64 {
         self.next += 1;
         let id = self.next;
+        let message = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         self.writer
-            .write_all(
-                format!(
-                    "{}\n",
-                    json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
-                )
-                .as_bytes(),
-            )
+            .send(format!("{message}\n").as_bytes(), terminal)
             .unwrap();
-        loop {
-            let mut line = String::new();
-            assert!(
-                self.reader
-                    .read_line(&mut line)
-                    .expect("could not read the keeper response")
-                    > 0,
-                "the keeper closed the connection"
-            );
-            let message: Value = serde_json::from_str(&line).expect("JSON");
-            if message["id"] == id {
-                return message;
-            }
-        }
+        id
     }
 
-    pub fn call(&mut self, op: &str, args: Value) -> Value {
-        self.request("call", json!({ "op": op, "args": args }))
+    pub fn receive(&mut self) -> (Value, Option<PtyMaster>) {
+        let (line, terminal) = self
+            .reader
+            .next_line()
+            .expect("could not read the keeper line")
+            .expect("the keeper closed the connection");
+        (
+            serde_json::from_slice(&line).expect("keeper JSON"),
+            terminal,
+        )
+    }
+
+    /// Requires the very next line to be the response, so an early exit notification fails.
+    pub fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        terminal: Option<&PtyMaster>,
+    ) -> (Value, Option<PtyMaster>) {
+        let id = self.send(method, params, terminal);
+        let (reply, received) = self.receive();
+        assert_eq!(
+            reply["id"], id,
+            "expected the reply before another frame: {reply}"
+        );
+        (reply, received)
+    }
+
+    pub fn call(
+        &mut self,
+        op: &str,
+        args: Value,
+        terminal: Option<&PtyMaster>,
+    ) -> (Value, Option<PtyMaster>) {
+        self.request("call", json!({ "op": op, "args": args }), terminal)
     }
 }
 
@@ -206,38 +238,6 @@ pub fn error_reason(response: &Value) -> &str {
     response["error"]["data"]["reason"]
         .as_str()
         .unwrap_or_default()
-}
-
-/// An editor window's client, describing `window`, with Facade started first where it is not
-/// running. The window's description may give its `colors` and `env`.
-pub fn ide(home: &TestHome, window: &Value) -> DaemonTestClient {
-    ide_with(home, window, json!({}))
-}
-
-/// As [`ide`], with more fields of `hello`, such as `numbers_given`.
-pub fn ide_with(home: &TestHome, window: &Value, more: Value) -> DaemonTestClient {
-    ide_hello(home, window, more).0
-}
-
-/// An editor client and the logical window bound by its hello.
-pub fn ide_binding(home: &TestHome, window: &Value) -> (DaemonTestClient, WindowRef) {
-    let (wire, welcome) = ide_hello(home, window, json!({}));
-    let binding: WindowRef = serde_json::from_value(welcome["window"].clone())
-        .unwrap_or_else(|error| panic!("hello did not bind a logical window: {error}: {welcome}"));
-    assert_eq!(welcome["machine_id"], binding.machine_id, "{welcome}");
-    (wire, binding)
-}
-
-fn ide_hello(home: &TestHome, window: &Value, more: Value) -> (DaemonTestClient, Value) {
-    drop(connect(home));
-    let mut wire = DaemonTestClient::open(home);
-    let mut params = json!({ "window": window });
-    if let (Some(params), Some(more)) = (params.as_object_mut(), more.as_object()) {
-        params.extend(more.clone());
-    }
-    let welcome = wire.hello("ide", DAEMON_RANGE, params);
-    assert!(welcome["result"].is_object(), "{welcome}");
-    (wire, welcome["result"].clone())
 }
 
 /// Starts the daemon if needed and connects to it. As `facade` does, it tries until a daemon
@@ -252,11 +252,11 @@ pub fn connect(home: &TestHome) -> DaemonTestClient {
         if let Some(mut wire) = DaemonTestClient::try_open(home) {
             let hello = wire.send(
                 "hello",
-                json!({ "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" }),
+                json!({ "api_versions": DAEMON_API_VERSIONS, "build": "test", "kind": "terminal" }),
             );
             if wire
                 .wait_for_response(hello, secs(10))
-                .is_some_and(|welcome| welcome["result"].is_object())
+                .is_some_and(|welcome| welcome["result"]["api_version"] == 1)
             {
                 return wire;
             }
@@ -283,10 +283,10 @@ pub fn start_script(
     let path = system_folders().join(PATH_SEPARATOR);
     let args = json!({
         "cli": home.shell_cli(), "args": ["-c", script], "name": name, "folder": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+        "env": { "PATH": path, "FACADE_HOME": home.path }, "size": { "cols": 80, "rows": 24 },
     });
     let started = wire.call("agent.start", args);
-    started["result"]["agent"]["agent_id"]
+    started["result"]["agent"]["reference"]["agent_id"]
         .as_str()
         .unwrap_or_else(|| panic!("{name} did not start: {started}"))
         .to_string()
@@ -294,9 +294,11 @@ pub fn start_script(
 
 /// Sends `keys` as raw bytes, as an attached terminal does, in a call with an ID.
 pub fn type_raw(wire: &mut DaemonTestClient, agent: &str, keys: &str) {
+    let inspected = wire.call_ok("agent.inspect", json!({ "target": agent }));
+    let reference = &inspected["agent"]["reference"];
     let typed = wire.call(
         "agent.type",
-        json!({ "agent": agent, "raw": facade_base::base64::encode(keys.as_bytes()) }),
+        json!({ "target": reference, "input": { "kind": "raw", "raw": facade_base::base64::encode(keys.as_bytes()) } }),
     );
     assert!(typed["result"].is_object(), "{typed}");
 }
@@ -326,11 +328,11 @@ impl ManualReadClient {
         raw.send(
             0,
             "hello",
-            json!({ "protocol": DAEMON_RANGE, "build": "test", "kind": "terminal" }),
+            json!({ "api_versions": DAEMON_API_VERSIONS, "build": "test", "kind": "terminal" }),
         );
         assert!(
             raw.read_message()
-                .is_some_and(|response| response["result"].is_object())
+                .is_some_and(|response| response["result"]["api_version"] == 1)
         );
         raw
     }

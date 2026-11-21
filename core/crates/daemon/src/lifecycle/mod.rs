@@ -14,8 +14,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::DaemonUpgradeResult;
-use facade_base::v3::AgentLabel;
+use facade_base::api_v1::ApiVersion;
+use facade_base::api_v1::daemon::{AgentLabel, DaemonUpgradeResult};
 use tokio::sync::{Notify, oneshot, watch};
 use tokio::time::Instant;
 
@@ -32,7 +32,7 @@ pub(crate) trait LifecycleActivity: Send + Sync + 'static {
     fn screen_writes(&self) -> usize;
     fn running_count(&self) -> usize;
     fn running_managed_agents(&self) -> Vec<AgentLabel>;
-    fn keeper_protocol_range(&self) -> Option<[u32; 2]>;
+    fn keeper_api_version(&self) -> Option<ApiVersion>;
     fn keeper_build(&self) -> Option<String>;
     fn announce_machine_sleeping(&self) -> impl Future<Output = ()> + Send;
     fn settle_pastes(&self) -> impl Future<Output = Vec<oneshot::Receiver<()>>> + Send;

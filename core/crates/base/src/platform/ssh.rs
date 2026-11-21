@@ -618,7 +618,6 @@ pub enum RemoteProbe {
 pub enum BootstrapAction {
     Serve,
     Install,
-    UpgradeLocal,
     NeedsInstall,
 }
 
@@ -655,28 +654,13 @@ pub fn parse_remote_probe(line: &str) -> Result<RemoteProbe, SshArgumentError> {
     }
 }
 
-/// Chooses what can run after the probe. A passive caller leaves installation to an active one.
-pub fn bootstrap_action(
-    probe: &RemoteProbe,
-    local_build: &str,
-    wake: bool,
-) -> Result<BootstrapAction, SshArgumentError> {
-    use std::cmp::Ordering;
-
-    let local = crate::version_of(local_build).ok_or(SshArgumentError::Version)?;
-    if let RemoteProbe::Installed(version) = probe {
-        let remote = crate::version_of(version).ok_or(SshArgumentError::Version)?;
-        match remote.cmp(&local) {
-            Ordering::Equal => return Ok(BootstrapAction::Serve),
-            Ordering::Greater => return Ok(BootstrapAction::UpgradeLocal),
-            Ordering::Less => {}
-        }
+/// Chooses how to reach an installed peer. Its API hello selects compatibility.
+pub fn bootstrap_action(probe: &RemoteProbe, wake: bool) -> BootstrapAction {
+    match (probe, wake) {
+        (RemoteProbe::Installed(_), _) => BootstrapAction::Serve,
+        (RemoteProbe::Missing, true) => BootstrapAction::Install,
+        (RemoteProbe::Missing, false) => BootstrapAction::NeedsInstall,
     }
-    Ok(if wake {
-        BootstrapAction::Install
-    } else {
-        BootstrapAction::NeedsInstall
-    })
 }
 
 /// Probes, optionally installs, and hands the same SSH streams to machine serve.

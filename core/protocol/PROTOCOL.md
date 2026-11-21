@@ -1,626 +1,432 @@
 <!-- Generated from core/crates/base/src by core/crates/base/tests/protocol_files.rs: do not edit. -->
 
-# Facade daemon protocol
-
-Ordinary daemon protocol version 3 (oldest ordinary version 3). See `protocol.schema.json` for JSON Schema and `protocol.ts` for TypeScript types.
-
-[Version 2 takeover and old data](#version-2-takeover-and-old-data) describes the separate compatibility connection.
+# Facade daemon API
 
 ## Connect to the daemon
 
-The Facade home is the absolute path in `FACADE_HOME`. If unset, use `HOME/.facade`, or `USERPROFILE/.facade` if `HOME` is
-unset. On macOS and Linux the daemon socket is `/tmp/facade-core-<uid>/daemon-<key>.sock`, where `uid` is the process's real
-user ID. Only that user can access the socket folder. On Windows the daemon listens on the named pipe
-`\\.\pipe\facade-core-daemon-<key>`, and the keeper on `\\.\pipe\facade-core-keeper-<key>`. The pipes let in their owner
-alone (DACL `D:P(A;;GA;;;OW)`). Before its `hello`, a Windows client checks that the server process runs as its own user
-(`GetNamedPipeServerProcessId`, then that process's token's user SID), and closes the connection otherwise. An `ide`
-client is the exception: Node.js, which runs the editor's extension, has no API for that check, so it relies on the
-daemon pipe's DACL alone. Lines, framing and every operation are the same on every system.
+`api_versions` offers [1] in this build. The daemon selects the highest
+offered positive integer it supports and returns it as `api_version`. Repeated values are
+equivalent. An invalid offer returns `-32602 invalid_argument`. A valid offer with no common
+version returns `-32000 protocol_incompatible` and includes the endpoint's
+`details.supported_api_versions`. The client checks the selection against its offer. The
+software build and keeper API have independent versioning. See [the keeper reference](KEEPER.md).
 
-To compute `key`, encode the home's path string as UTF-8. Replace invalid path bytes with U+FFFD, as Rust's
-`Path::to_string_lossy` does. Take the first five bytes of its SHA-256 digest and write them as ten lowercase hexadecimal
-digits. Use the path exactly as it was used to start Facade; do not resolve symlinks or normalize it before hashing.
+`FACADE_HOME` selects the home. By default it is `.facade` in `HOME`, or `USERPROFILE`
+when `HOME` is unset. On macOS and Linux the socket is
+`/tmp/facade-core-<uid>/daemon-<key>.sock`. On Windows use
+`\\.\pipe\facade-core-daemon-<key>`. The endpoints admit the owning user. Core's Windows
+clients also look up the server PID and check its user SID. The editor relies on the pipe DACL.
 
-If the socket does not answer, run `facade daemon --detach` with the same `FACADE_HOME`. It starts the keeper, which starts the
-daemon, and returns code 0 when the daemon starts or another daemon holds the daemon lock. If the daemon is still starting after 10 seconds, it prints
-`facade: Facade is still starting; see {home}/core/logs` and also returns 0. Startup failure returns code 1 with the reason.
-Connect to the socket and retry `hello` for up to 10 seconds. A successful `hello` proves readiness; the `--detach` result
-alone does not.
+To calculate `key`, use the home path exactly as passed to Facade. Encode it as UTF-8, replacing
+invalid path bytes with U+FFFD. Write the first five bytes of its SHA-256 digest as ten lowercase
+hexadecimal digits.
 
-The daemon accepts connections after recovering its agents and screens. Recovery can take longer than one connection
-attempt. A client can retry temporary transport failures. Report a decoded refusal, invalid response, permission error,
-or settings problem.
-
-Nothing runs at login. A command starts the keeper, and the keeper starts the daemon; `hello.keeper` is absent while no keeper
-runs. The daemon exits after 30 seconds with no running agent, connected client, or unfinished work, and the keeper, holding no
-CLI, exits with it. Ended records and screens stay in the home. The next command starts them again and reads them. Linux needs
-kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed.
+When the daemon is asleep, a local client that intends to wake it can run
+`facade daemon --detach` with the same home. The daemon accepts connections after recovering
+its agents and screens. Wait for a successful `hello` and report a decoded refusal or
+permission failure. With no agents, clients or unfinished work the daemon exits after 30 seconds.
 
 ### Messages
 
-Send one UTF-8 JSON-RPC 2.0 object per newline. The 64 MiB line limit includes the newline.
-An oversized request receives `capacity_exceeded` with a null ID and closes the connection.
-Give outstanding requests distinct non-negative integer IDs. JavaScript clients use exactly
-representable integers. A notification omits the ID and receives no response.
+Send one UTF-8 JSON-RPC 2.0 object per line, at most 64 MiB including the newline. Give outstanding
+requests distinct IDs from 0 through the maximum unsigned 64-bit integer, using exactly
+representable integers in JavaScript. Each response echoes the ID and has one of `result` or
+`error`. Notifications omit the ID and receive no reply. An oversized request produces
+`capacity_exceeded` with a null ID and closes the stream.
 
-Ordinary terminal, editor and machine sessions offer `[3,3]`. Wait for a successful `hello`.
-Its `ops` and `topics` list the operations and watches available to the client. Shell and IDE
-introduce their client kind and build. The daemon supplies verified actor identity on its private
-MCP connection. The machine introduction carries a stable machine ID and a daemon start ID.
+A terminal or editor supplies its own kind and build. An internal MCP session acts with verified
+actor identity. `hello.result.ops` and `topics` list the supported operations and subscriptions
+for that session. Send arguments as an object every time, using `{}` for an empty set. Unknown
+input fields and discriminants fail before the operation runs. An API consumer can ignore newly
+added optional output and notification fields and skip unknown event kinds.
 
-An optional `capabilities` array in the hello parameters and result advertises additions to
-protocol 3. A missing array has the same meaning as an empty array. Use `ops` and `topics` to
-discover `list`, `stop`, `attach.resize` and the `attach` topic. The daemon advertises
-`agent.resume_list.local` for local-only resume queries, `machine.connect.expected_machine_id`
-for a saved connection guarded by the expected machine ID, and `machine.remove.expected_machine_id`
-for exact removal. A terminal that declares the resume capability opts into passive queries for an
-`all: true` resume listing. A terminal that declares the connect capability allows a saved connection
-to update the settings for the machine authenticated on that stream. A client that advertises
-`machine.disconnected` can receive the `disconnected` machine state. Older clients receive
-`unreachable` for that state. Machine sessions also use `attach` and `machine.probe_route` to
-discover support for shared Attach and passive route probes.
-
-A watch gives its number and first snapshot before its ordered changes. End it with `unwatch`.
-Use the watch number to interpret each change in the type for that topic. Ignore unrecognized
-fields and skip unknown change kinds. The Rust types supply `Unknown` or `Unrecognized`.
-
-To request cancellation on the same connection, send
-`{"jsonrpc":"2.0","method":"cancel","params":{"id":7}}`. The named call reports what happened.
-An `agent.send` can be withdrawn before its text starts entering the terminal.
-
-In this exchange `→` marks a client message and `←` marks a daemon message. The redraw
-contains only a short example terminal sequence.
-
-```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[3,3],"build":"0.1.6","kind":"terminal","capabilities":["machine.disconnected","attach","machine.connect.expected_machine_id","agent.resume_list.local"]}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"build":"0.1.6","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","attach","machines"],"ops":["list","agent.list","agent.inspect","agent.start","agent.start_preflight","agent.resume_list","agent.resume","location.list","cli.list","agent.stop","stop","agent.remove","agent.rename","agent.type","agent.send","agent.resize","attach.resize","agent.screen","daemon.status","workspace.import_legacy","machine.list","machine.add","machine.connect","machine.remove","machine.rename","daemon.log","daemon.upgrade"],"capabilities":["agent.resume_list.local","machine.disconnected","machine.connect.expected_machine_id","machine.remove.expected_machine_id","machine.probe_route","attach"]}}
-→ {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"cli":"claude","folder":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
-← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","address":"a1@devbox","type":"managed","name":"Pixel","cli":"claude","args":[],"cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":1234,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:25:00.000Z","started_at":"2026-11-09T17:25:00.000Z","root":"a1","yolo":true,"state":"starting","tools_state":"connecting"}}}
-→ {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"}}}}
-← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","address":"a1@devbox","name":"Pixel","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw=","process":"running"}}}
-← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"output","data":"aGVsbG8="}}}
-→ {"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"raw":"aGk="}}}
-→ {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"text":"run the tests","enter":true}}}
-← {"jsonrpc":"2.0","id":4,"result":{"agent":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","name":"Pixel","cli":"claude","state":"idle","resumable":false}}}
-→ {"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent":"a1@devbox"}}}
-← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"exit","exit":{"signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}}}
-← {"jsonrpc":"2.0","id":5,"result":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}
-→ {"jsonrpc":"2.0","id":6,"method":"unwatch","params":{"watch":1}}
-← {"jsonrpc":"2.0","id":6,"result":{}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":[1],"build":"1.0.0+example","kind":"terminal"}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","machine_id":"11111111-1111-4111-8111-111111111111","pid":4321,"agent_count":1,"ops":["agent.list","agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","attach.resize","cli.list","location.list","machine.list","machine.connect","machine.remove","machine.rename","daemon.status","daemon.log","daemon.upgrade"],"topics":["agents","machines","attach"],"keeper":{"pid":4320,"build":"1.0.0+example"}}}
+{"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.list","args":{"scope":{"kind":"local"}}}}
+{"jsonrpc":"2.0","id":2,"result":{"agents":[],"machines":[{"machine_id":"11111111-1111-4111-8111-111111111111","short_id":"11111111","name":"laptop","selector":"laptop","state":"online","status":"answered"}]}}
 ```
-
-An exact screen watch may set `allow_ended` to read the final redraw of a managed run. The
-snapshot includes the process state and the exit if known. The ended snapshot and the exit
-change can also include `exit_status`: the original exit code, or 128 plus the running machine's
-number for the recorded signal. An ended snapshot admits no viewer.
-Ordinary watches require a running managed agent. Inspection lists the verified client kind and
-origin of each shell or editor attachment alongside the viewer names supplied by earlier clients.
 
 ### Agent and machine addresses
 
-The daemon presents copyable addresses such as `a1@devbox`. A bare `a1` is an agent number.
-An agent can also be found by name. `Pixel@devbox` can be both a qualified name and a literal
-name. A machine selector matches both its spelling as a name and as an eight-digit ID or full
-UUID. A selector that matches two different machines is ambiguous. The daemon presents a machine
-name, short ID, or full ID only after checking it can locate the intended machine uniquely.
-When no public spelling is unique, the daemon reports `ambiguous_reference` with a rename hint.
-
-An `AgentRef` contains the full `machine_id` and `agent_id`. Clients retain it for stored
-workspace membership and to reconnect a terminal to the same agent. Calls taking `AgentTarget`
-supply exactly one of `agent` or `reference`. The same target's permissions and capabilities
-apply on both paths. A specified machine can be woken for the requested operation. An unspecified
-machine uses the routes already available to the caller.
-
-For a name, lookup prefers live records among the matches that support the operation. An ambiguous
-number can still match several machines. Receipts and error labels carry a stable reference and
-the copyable address in the requesting daemon's view. Agent error labels are limited to records
-within the caller's reach. Machine queries can report the current query failure separately from
-the last known SSH error.
+A target is a nonempty selector string or an exact `{machine_id,agent_id}` pair. A selector can
+be a local name or ID, or an address such as `a2@devbox`. Keep the full exact reference for a Pin,
+a terminal reconnect, and forwarded requests against an already resolved agent. Display
+the returned address. Ambiguous references return candidates in the error details. The
+entry daemon derives caller identity and the holder checks permissions before acting.
 
 ### Listing and inspecting
 
-`list` and `agent.list` return active agents and Guests in the permitted view, newest start first. Each
-entry contains a stable `reference` and the public row including its copyable `id`, `type`,
-`state`, CLI, working folder and start time. The `agents` watch also includes ended records
-and the synchronization state of remote contributors. A synced contribution can be an empty
-list. A removal change carries the machine, agent ID and confirmed cause. Inspect returns the
-agent record, input information, current terminal viewers, and recorded startup source when known.
+`agent.list` defaults to `reachable`. The local scope performs zero SSH, including on cold start.
+The machine scope selects one machine and can wake it. Reachable reuses active connections,
+probes saved routes concurrently without waking them, waits for the query and returns the local
+and answered records. `machines[].status` is the outcome of this query and `state` is the
+observed connection state. A failure against a named machine is an outer error. In a reachable
+query the failed machine appears alongside the records obtained.
 
-The `list` scope defaults to `{"kind":"reachable"}`. It queries the local machine and can probe
-saved connections without waking sleeping daemons. A scope of `{"kind":"local"}` queries only the
-local machine and opens no SSH connection. A scope of `{"kind":"machine","machine":"devbox"}`
-queries the named machine and can wake it. An online machine can still fail or time out in a
-query. Read each machine's query `status` separately from its connection `state`.
-
-Here the local query has no active agents. The reachable query also reports a timed-out machine.
-
-```text
-→ {"jsonrpc":"2.0","id":8,"method":"call","params":{"op":"list","args":{"scope":{"kind":"local"}}}}
-← {"jsonrpc":"2.0","id":8,"result":{"agents":[],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","selector":"devbox","state":"online","status":"answered"}]}}
-→ {"jsonrpc":"2.0","id":9,"method":"call","params":{"op":"list","args":{}}}
-← {"jsonrpc":"2.0","id":9,"result":{"agents":[],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","selector":"devbox","state":"online","status":"answered"},{"machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","short_id":"ea9b4046","name":"lab","selector":"lab","state":"unreachable","status":"timed_out","error":"SSH connection timed out."}]}}
-```
-
-`agent.list` keeps its existing query behavior. A bare `agent.list` can return the currently
-available records while a connection is `connecting`.
+`agent.inspect` returns the agent, current input observation, session tracking and viewers.
+For a managed run it can include the recorded launch command with Facade's run credential
+redacted. `agent.screen` returns the tail of the logical screen and scrollback. Its default
+is 50 lines, and it accepts 1–2,000. Ended records can still be inspected and their final
+screens read.
 
 ### States
 
-`state` in an agent record says what the agent is doing: the first that holds of `waiting_for_you`, `error`, `just_done`,
-`working`, `starting`, `idle`, and `unknown`, or `ended` once its process ended. A connected Guest reports `online`.
-`state_detail` says more:
+An active managed agent reports `starting`, `working`, `waiting_for_you`, `just_done`,
+`idle`, `error` or `unknown`. A finished process reports `ended`. A connected Guest
+reports `online`. State can reflect a CLI's own Program Status Protocol reports (OSC 7501)
+or recognized screens. A wait's detail can identify permission, questions or authentication.
+`said` records the latest observed submission with its sender. Changes to wait and error
+states are published immediately and other state changes are coalesced.
 
-- `waiting_for_you`: `kind` is `permission`, `question`, `auth`, or `unknown` where the CLI did not say, and `text` holds the
-  CLI's own words, if any. A menu or question the CLI draws in place of its input counts, also while it starts, and the bounds
-  on its start and its tools run again once it is answered.
-- `error`: the CLI reported an error, or its screen shows that the turn it reported ended failed, and `text` holds its own
-  words, if any; its CLI cannot use the Facade tools it was
-  given, and `reason` is `tools_unavailable`; or a CLI that runs by a built-in's rule showed nothing of what it does within 60
-  seconds of its start or resume, and `reason` is `not_ready`. A program without a rule is `unknown` instead: nothing
-  promises it reports.
-- `just_done`: a turn ended while no `screen` or `attach` watch showed the agent. It stays until one does; `agent.screen` does not count.
-  Work before the CLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a question the CLI
-  shows. Words after the CLI's name at its start are the CLI's own and ask nothing.
-- `working`: the CLI works, or stopped working less than a second ago.
-- `starting`: the CLI has shown nothing of what it does yet, or its Facade tools have not connected yet, within 60 seconds of
-  the start or resume of its process.
-- `unknown`: nothing shows what the CLI does now, though it did before, or a program without a rule has shown nothing yet.
-  `reason` says why: `not_shown`, `asked` (to report, without reporting since), `taken_back`, or `unrecognized` (a screen
-  its rule does not recognize).
-- `ended`: `how` is `stopped` where Facade stopped the agent, otherwise `normal` for exit code 0 and `crashed` for another
-  code or a signal. It is omitted where neither is known; `exit.reason` says what is known.
+`watch agents` sends a snapshot and ordered changes. A `machine_state` event describes sync
+state and may include v1 agent records. A `removed` event contains `machine_id`, `agent_id`
+and `cause`. When checking a pinned record, also accept `not_found.details.record_removal`
+when its value is `expired` or `removed`.
 
-States come from what the CLI reports of itself, the Program Status Protocol (OSC 7501, revision 0.4): a CLI that asks whether
-the terminal takes reports is answered that it does, and viewers see neither the question nor the reports. A full reset takes
-a report back, and so does a shell's new prompt (OSC 133 A) after work or a wait. Reports about a part of the CLI (`id=`) and
-report titles are not read. Where a CLI's rule reads its screen, the screen speaks for the CLI too: Muse Code's, until the CLI
-asks or reports, and Codex 0.166.0's and 0.167.0's, whose finished turn narrows a `working` report to idle while commands it
-left running continue. Codex's version is read from the `codex-package.json` its installation keeps above its program; other
-versions keep their own reports.
-
-`said` is the last text that went into the agent's input with Enter, on one line, and who said it, as messages name their
-sender: what the person submits in an attached terminal, once the CLI takes it, with each paste the CLI shows as a
-placeholder said as the text pasted; `agent.type` text with `enter`, from the agent
-the verified actor, or from the command line; and a message delivered through the terminal, from its sender. An Enter the person
-types reaches the CLI once the CLI has drawn the keys before it and the daemon has read the draft they make, at most 150 ms
-later, and keys sent meanwhile follow it; if the CLI drew nothing of them by then, the Enter goes and nothing is said.
-`waiting_for_you` and `error` are published on the `agents` topic at once; other state changes and `said` follow within
-200 ms. The facts states rest on and `said` are kept beside the agent's screen, so a daemon that starts again shows the same
-states before it serves clients.
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":15,"method":"watch","params":{"topic":"agents","args":{}}}
+{"jsonrpc":"2.0","id":15,"result":{"watch":2,"snapshot":{"agents":[],"machines":[]}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":2,"change":{"kind":"machine_state","machine":{"machine_id":"22222222-2222-4222-8222-222222222222","state":"synced","agents":[]}}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":2,"change":{"kind":"removed","machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2","cause":"removed"}}}
+```
 
 ### Starts, stops, and removal
 
-The start and preflight operations take `StartArgs`. The selected machine checks its CLI
-entries, availability, working folder and permissions. Set `folder_is_default` only for
-the entry's implicit folder so a remote start can use the running machine's default. A
-`worktree` names the new branch made from the current HEAD. Preflight checks without creating
-a worktree or starting a process. A Git error can describe what was kept in `data.kept`.
+`agent.start` validates launch settings, permissions, CLI availability and the folder before
+creating a worktree or starting a process. A `worktree` names the new branch created from
+HEAD. Set `folder_is_default` for an implicit folder so that a remote start can use the
+executing machine's default. The executing machine uses its own environment and default folder
+for a forwarded start. The result returns the agent and any applicable prompt receipt.
+A worktree error can identify a surviving branch or path under `details.kept`.
 
-A start can include an initial prompt. A start result gives the agent record and prompt
-information. An automatic retry uses the same request ID and returns the original outcome.
+`agent.stop` accepts a nonempty list of targets or a scope. It resolves and deduplicates by
+exact reference and preserves the order of the first occurrence. Scope stops never wake
+remote daemons from query through dispatch. The result contains per-target settlements,
+plus machine outcomes for a scoped stop. Explicit Guests receive an `unsupported` error.
+Guests found by scope are skipped. A stopped managed agent keeps its record and final screen.
+`agent.remove` stops a running managed agent before removing its record. If the stop fails,
+the record remains.
 
-`agent.stop` returns the stable reference, current public address, recorded process exit and
-agent label. A stop of an already ended process returns `ended`. A typed input receipt gives the
-agent label after its terminal accepts the input. Rename returns the renamed record's fields and
-the name it replaced. `agent.remove` returns the removed record's stable reference and address.
-A confirmed expiry or explicit removal also appears as
-`record_removal` in a precise missing-record error.
-
-`stop` accepts a nonempty list of targets in a `targets` selection or a machine scope in an
-`all` selection. It resolves explicit targets in order and stops each resolved agent once.
-An `all` selection skips connected Guests. For remote scopes it probes saved connections
-without waking sleeping daemons and uses that same policy through the stop. Both selections
-continue after individual failures. Each item reports `stopped` with its `exit`, `failed`
-with its error, or `skipped`. The optional `machines` array reports the scope's machine outcomes.
-
-```text
-→ {"jsonrpc":"2.0","id":10,"method":"call","params":{"op":"stop","args":{"selection":{"kind":"targets","targets":[{"agent":"a4@devbox"},{"agent":"missing@devbox"}]}}}}
-← {"jsonrpc":"2.0","id":10,"result":{"items":[{"target":{"agent":"a4@devbox"},"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a4"},"address":"a4@devbox","status":"stopped","exit":{"code":0,"at":"2026-11-09T17:27:00.000Z"}},{"target":{"agent":"missing@devbox"},"status":"failed","error":{"code":-32000,"message":"No agent matches missing@devbox.","data":{"reason":"not_found"}}}]}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":50,"method":"call","params":{"op":"agent.stop","args":{"selection":{"kind":"targets","targets":["a2@devbox","missing"]}}}}
+{"jsonrpc":"2.0","id":50,"result":{"items":[{"target":"a2@devbox","agent":{"reference":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"address":"a2@devbox","type":"managed","name":"Nova","cli":"codex","state":"ended","resumable":true},"status":"stopped","exit":{"signal":"SIGHUP","at":"2026-11-20T17:03:00.000Z"}},{"target":"missing","status":"failed","error":{"code":-32000,"message":"No active agent matches missing.","data":{"reason":"not_found"}}}]}}
 ```
-
-To stop this machine's managed agents, use `{"selection":{"kind":"all","scope":{"kind":"local"}}}`
-as the arguments to `stop`.
 
 ### Resume, locations and status
 
-`agent.resume_list` gives resumable agent records and CLI sessions in the requested scope. Use
-the returned `ResumeTarget` unchanged with `agent.resume`, adding `env`, `cols` and `rows`.
-For a remote CLI session the target includes its machine and actual folder. A client using a
-saved Pin may instead provide the exact `machine_id`, mutually exclusive with `machine`.
-`at` records when a managed run ended or when a saved session file changed. A saved session can
-also be selected by its full ID or eight-character prefix in the requested directory. The resume
-receipt indicates when it created a new agent from a saved session.
-`session_not_found` means the selected running machine confirmed the session is absent.
+`agent.resume_list` defaults to local. Reachable waits for passive queries as in `agent.list`.
+A named machine can be woken. `folder_scope` chooses the current directory or all managed
+record folders and does not broaden the saved session directory. Pass the returned
+`target` unchanged to `agent.resume` with its runtime `size` and optional environment.
+A full saved-session target includes the machine, CLI, session ID and absolute folder.
 
-With the `agent.resume_list.local` capability, set `local: true` to list this machine's
-resumable managed agents and, when `folder` is supplied, its saved CLI sessions in that
-folder. This scope opens no SSH connections. `local: true` and `machine` are mutually
-exclusive. For a named-machine lookup of managed agents, omit `folder`.
-
-`location.list` returns the working locations and Git kinds known on the selected machine.
-Local results can identify their requested workspace roots as `source_folder`. `cli.list`
-uses the selected machine's working folder and launch environment. `daemon.status` returns the
-home, settings path, version, process IDs, active count and machine results of the live service.
-A local Shell observation that the service is sleeping is reported locally without starting it.
-`agent.inspect` includes the current or last managed run's recorded display command when
-available. The running machine formats the executable and arguments and redacts Facade's
-injected run credential before saving the command. The environment is excluded.
+`location.list`, `cli.list` and `daemon.status` select one machine and default to local.
+Locations describe known work folders. CLI discovery uses the specified folder and
+environment. Daemon status gives the home, settings path, build, PIDs and local agent count.
 
 ### Agent messages
 
-`agent.send` delivers to an eligible managed agent or Guest. A public receipt's `id` contains the
-assigning machine, such as `m42@devbox`. The recipient's inbox uses the local `m42`. A reply to a
-message stored on another machine can carry that machine. Agent senders have copyable addresses.
-The command line and Orchestrator use `command_line` and `facade`, respectively.
+`agent.send` delivers to an eligible managed agent, Guest or person addressed by `#human`.
+The public receipt identifies the assigning machine in a message address such as
+`m42@devbox`. Replies can carry an address or a full message reference. Each reply target
+is verified at entry. A managed agent's delivery is confirmed when its terminal takes
+the submission. A Guest can read complete messages inline.
 
-The request ID, verified sender and resolved target identify automatic retries. The daemon
-can return the original settlement after withdrawal from a private receipt. The withdrawn
-message is absent from the inbox and history. A managed agent's delivery is confirmed when its
-terminal takes the submission. A Guest reads complete messages inline. The `next_cursor` of an
-inbox page is passed as `after` to continue reading with the same reply filter.
-
-A terminal can set `allow_unsupported_receipt` to receive a numbered delivery failure if the
-selected managed program has no input rule. That outcome confirms no input was sent. By default
-such requests fail before the message receives a number.
-
-A send without `reply_to` that times out and is withdrawn may carry `expected_reply_to`, the
-message the Guest was waiting for the sender to answer. The sender can use the original message's
-local ID as `reply_to` when sending the reply again.
+Automatic retries of `agent.start` and `agent.send` use the original business
+`request_id`, arguments and destination. Its 1–200 Unicode code points identify the
+request for one hour from its first execution. An expired or different ID may execute again.
+`cancel {id}` addresses the original transport request on the same connection. Only an
+`agent.send` that has yet to start pasting can be cancelled. Once the original request
+finishes it reports its actual outcome.
 
 ### YOLO and creation trees
 
-A managed agent reads YOLO from its running machine's settings on each start or resume. A Guest
-keeps the value recorded when it joined. A managed agent keeps its original creator and the root
-of its creation tree. The verified actor can reach agents in the same tree with YOLO off.
-With YOLO on it can reach other agents too. Local Shell and editor clients act with their own
-client kind. The daemon checks reach and the operation's capability before exposing an address.
+A managed agent reads YOLO from the executing machine's settings on start or resume. A Guest
+keeps the value recorded when it joined. With YOLO off, an actor's reach is its creation tree.
+With YOLO on it can reach other agents, subject to the target's supported operations. The daemon
+verifies callers before reading their records or delivering their operations.
 
 ### The relay
 
-The relay contract remains 1. The initial `hello` carries `relay: 1`, `args`, `env`, `cwd` and
-`reconnect`. Once accepted, the connection carries MCP requests and responses. MCP's date
-versions are independent of both daemon and relay versions. The daemon binds the relay actor
-using verified run or session information. The keeper speaks its separate version 1 protocol.
+The shared local socket accepts a separate relay handshake before daemon API admission.
+It identifies the verified local process using relay contract 1. Once accepted, the stream
+carries MCP JSON-RPC. A verified internal `kind:"mcp"` actor negotiates the daemon API
+independently. Direct external `kind:"mcp"` hello is refused.
+
+```jsonl relay
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"relay":1,"args":["--guest","codex"],"env":{},"cwd":null,"reconnect":false}}
+{"jsonrpc":"2.0","id":1,"result":{"relay":1}}
+{"jsonrpc":"2.0","method":"closing","params":{"build":"1.0.1+example"}}
+{"jsonrpc":"2.0","method":"closing","params":{}}
+```
 
 ### Text and keys
 
-`agent.type` takes one of `raw`, `text`, or `keys`. `facade attach` sends `raw`: the bytes a person types, queued as they come.
-Programs send `text` or `keys`. The agent's typist types them one call at a time, each call whole:
+`agent.type` uses `input.kind` to select text, named keys or raw bytes. A text call can set
+`enter:true`, and empty text with `enter:true` presses Enter alone. Text uses the terminal's
+bracketed paste mode when enabled. Keys use the active terminal modes. A successful text or
+keys receipt means the input reached the terminal. If only part was written, `partial_input`
+reports `details.text_written` with optional `enter_written`, or `details.keys_sent`.
 
-- Text goes in as one paste. When the CLI turned on bracketed paste, the text goes between the paste brackets with each line
-  break as a carriage return; otherwise it goes as given. Text takes printable characters, tabs, and line breaks; send Escape
-  and other control keys as `keys`.
-- With `enter`, Enter goes in a write of its own after the text. Empty text with `enter` presses Enter alone.
-- Keys go as a terminal sends them in the CLI's modes, including application cursor keys.
-- The typist pauses before its next stroke, even when that stroke belongs to the next call: after a paste reached the
-  terminal, 0.1 seconds and the settle time the CLI's rule gives the paste, because a CLI that reads a paste's end and an Enter
-  together may drop the Enter or take it as a line break; after an Escape, 50 ms, so the CLI does not read the two as Alt with
-  that key.
-
-A text or keys call is answered once its input reached the terminal. If the agent ends first, the call fails with `ended`
-when nothing of it was typed. Otherwise it fails with `partial_input` and says what was typed, for example `a3@devbox ended; the
-text was typed but not its Enter`; the error's data has `text_written` and `enter_written` for text, or `keys_sent` for keys.
-Raw bytes can go in between a text and its Enter.
+Raw bytes use standard Base64 with padding and require a full agent reference. They can be
+sent without an ID. A raw call with an ID acknowledges entry into the daemon's memory queue.
 
 ### Screen text
 
-`agent.screen` returns the last logical lines of the screen and scrollback, each wrapped row joined into its line, with
-`line_count`, `older_lines` when output lies above them, and `trimmed` when the scrollback let go of its oldest lines. In
-`text`, inverse text is between `[[` and `]]` and dim text between `{{` and `}}`, inverse outside dim, and each backslash,
-bracket, and brace of the screen's own text is escaped with a backslash: removing the marks and the escapes gives the text
-exactly, as `facade screen` prints it. An ended agent's screen is the one it left; `process` says it ended, and
-`observed_at` is when it ended. Text and keys have no draft protection: they can edit or submit a draft the person is typing.
+`agent.screen` joins wrapped rows into logical lines. `older_lines` tells whether additional
+lines precede the requested tail and `trimmed` reports discarded scrollback. In `text`,
+`[[…]]` marks inverse text and `{{…}}` marks dim text. A backslash escapes the brackets,
+braces and backslashes that occur literally on the screen.
 
 ### Viewers and queue limits
 
-`snapshot.redraw`, `output.data`, and `redraw.data` contain standard base64 with padding. Decode them to bytes and feed those
-bytes to the viewer's terminal parser. Process changes for each watch in arrival order. Apply `output` as continuation bytes;
-`redraw` supplies a terminal sequence that replaces the visible screen. Preserve parser state between messages. Do not treat
-the decoded bytes as plain text; use `agent.screen` when you want plain text.
+`watch attach` returns a connection-local `watch` number and snapshot. Apply its actual
+`size` before decoding `redraw` into terminal bytes. Feed subsequent `output` and `redraw`
+bytes to the same parser in arrival order. A `redraw` replaces the visible screen and may
+supply a new size. `report_activity` requests the `working` flag and activity changes.
+`allow_ended` with an exact reference reads a final terminal snapshot without an active view.
 
-A `screen` or `attach` watch can set `report_activity`. Its snapshot then includes `working`, which is true while the agent is
-starting or working. The watch receives an `activity` change each time that answer changes.
+Report initial capacity in the watch and subsequent changes via `attach.resize`. The shared
+grid takes the smallest columns and smallest rows of the active views. `unwatch` releases
+the view and acknowledges the request. A lost remote subscription sends `watch_ended`.
+Start a new watch to get a new snapshot. The last active view leaves the grid at its current size.
 
-Use the `attach` topic and `attach.resize` operation when the daemon advertises both. An
-`attach` watch reports its initial terminal capacity in `size`. Report later sizes through
-`attach.resize` with the watch ID on the same connection. When the active viewers all use
-`attach`, the agent uses the smallest reported column count and the smallest reported row
-count. Closing or ending a watch removes its viewer from the shared layout.
-
-The snapshot and each `redraw` give the actual layout in `cols` and `rows`. Set the viewer
-to those dimensions before applying the terminal bytes. A viewer with more room draws the
-shared grid in the upper left. It redraws locally when its own terminal grows and the
-shared layout stays the same. When the shared layout changes, the daemon sends a `redraw`.
-
-In this exchange a viewer starts at 80 columns and 24 rows, then raises its capacity.
-
-```text
-→ {"jsonrpc":"2.0","id":11,"method":"watch","params":{"topic":"attach","args":{"agent":"a2@devbox","size":{"cols":80,"rows":24}}}}
-← {"jsonrpc":"2.0","id":11,"result":{"watch":2,"snapshot":{"agent_id":"a2","address":"a2@devbox","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":80,"rows":24,"redraw":"G1s/MjAyNmw=","process":"running"}}}
-→ {"jsonrpc":"2.0","id":12,"method":"call","params":{"op":"attach.resize","args":{"watch":2,"cols":120,"rows":40}}}
-← {"jsonrpc":"2.0","id":12,"result":{}}
-← {"jsonrpc":"2.0","method":"changed","params":{"watch":2,"change":{"kind":"redraw","cols":120,"rows":40,"data":"G1s/MjAyNmw="}}}
-→ {"jsonrpc":"2.0","id":13,"method":"unwatch","params":{"watch":2}}
-← {"jsonrpc":"2.0","id":13,"result":{}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":40,"method":"watch","params":{"topic":"attach","args":{"target":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"viewer":"editor","size":{"cols":120,"rows":40}}}}
+{"jsonrpc":"2.0","id":40,"result":{"watch":7,"snapshot":{"reference":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"address":"a2@devbox","name":"Nova","size":{"cols":80,"rows":24},"redraw":"G1sySg==","process":"running"}}}
+{"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"target":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"input":{"kind":"raw","raw":"aGk="}}}}
+{"jsonrpc":"2.0","method":"call","params":{"op":"attach.resize","args":{"watch":7,"size":{"cols":100,"rows":30}}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":7,"change":{"kind":"redraw","size":{"cols":100,"rows":30},"data":"G1sySmhp"}}}
+{"jsonrpc":"2.0","id":42,"method":"unwatch","params":{"watch":7}}
+{"jsonrpc":"2.0","id":42,"result":{}}
 ```
 
-For older daemons, use the `screen` topic with `agent.resize`. A `screen` watch can specify
-`size` before its initial snapshot and waits if that resize is waiting for a checkpoint.
-While a live `screen` watch exists for an agent, the last resize wins. The daemon returns to
-the shared Attach layout after the last `screen` watch leaves.
-
-A successful `agent.resize` response accepts the request. If the screen log is full while its checkpoint is being written,
-only the latest requested size is kept. It takes effect when the checkpoint writer finishes, whether publication succeeded
-or failed. Input sent to that agent afterward, on any connection, waits for the size: calls with IDs fail with
-`capacity_exceeded`, while notifications wait. Snapshots and agent records show the applied size. A daemon failure before
-application loses the request.
-
-Each viewer queues up to 1 MiB of incremental screen output. Output beyond that is dropped for that viewer. When the viewer
-has room, it receives a full `redraw`, which may exceed the output budget. The agent does not wait for a viewer. Returning
-from the alternate screen also causes a redraw. If an agent is removed while a viewer is behind, the viewer receives the
-last screen, any exit it missed, and then `removed`.
-
-A connection's outbox holds up to 8 MiB of responses and changes. When it is full, the daemon waits for the client to read.
-A line larger than 8 MiB is sent alone once the outbox is empty. Up to 16 calls can run at once on a connection, with or without
-an ID. If another call has to wait for one to finish, the daemon stops reading further requests from that connection, keys
-included. `agent.type` and `agent.resize` do not count toward the 16.
-
-Each agent's waiting input holds up to 1 MiB: queued bytes, including terminal-query replies, and text and keys waiting in its
-typist. Kernel PTY buffers are separate. A connection holds up to 1 MiB more for each agent: input waiting behind that agent's
-earlier input from the connection. One `agent.type` message carries at most 1 MiB as written, a paste counted with its
-brackets and Enter. A call with an ID fails with `capacity_exceeded` if its input does not fit or a resize is waiting to take
-effect. A notification waits; while its connection holds 1 MiB for its agent, the daemon reads no further requests from that
-connection. If the connection closes while input waits, the input is dropped and nothing else from that connection runs.
-Terminal-query replies that do not fit are dropped.
-
-A successful `agent.type` result means that raw bytes entered the daemon's memory queue, or that text and keys reached the
-terminal. It does not confirm that the CLI processed them. Daemon failure can lose input not yet written. Notifications
-provide no response.
+The daemon permits up to 16 ordinary concurrent calls per connection. It allows an 8 MiB
+outbox, sending a larger frame alone after the queue drains. Each view can queue 1 MiB of
+incremental output. A view that fell behind receives a full redraw when available. Terminal
+input has a 1 MiB per-agent waiting budget. Calls with IDs can receive `capacity_exceeded`
+when input cannot fit, while notifications can wait behind the agent's pending input.
 
 ### Terminal queries and redraws
 
-A screen snapshot has the stable reference fields and current address. Reconnect and draw the
-new snapshot before sending input again. Keys typed while disconnected are discarded. A v3
-`agent.resize` or `attach.resize` can supply foreground, background and cursor colors for a verified IDE client.
-The applied colors answer OSC 10, 11 and 12. `agent.screen` reads the requested tail of the
-logical screen and scrollback as text, including for an ended agent.
-
-### Disconnections and recovery
-
-A lost response can leave the call's outcome unknown. Do not replay terminal input. A call
-refused as `upgrading` can be repeated on the new daemon. When a start or send is retried after
-a cut, reuse its original request ID. A watch is connection-scoped and starts with a new snapshot
-after reconnecting. A keeper preserves running agents and terminals during daemon replacement.
-
-A daemon that a newer build takes over drains accepted work, sends `closing`, and ends after clients have had a
-chance to answer it and stop sending keys. A replacement daemon recovers records and screens.
-A newer build joins normal operations only after a v3 hello from that build. A build unable to
-speak the running keeper's protocol receives a refusal before taking over.
-
-#### Keeper replacement
-
-If the keeper ends, the daemon keeps its clients, watches, screens, input queues, sizes, and terminal descriptors. It starts
-a replacement keeper and gives it the runs with `agent.sync`. Screens and input continue throughout. Stops keep their original SIGKILL time.
-Keeper replacement uses the same 0.5-to-30-second delay, reset after 60 healthy seconds.
-
-For the separate waits on starts and stops, see [Starts, stops, and removal](#starts-stops-and-removal). A keeper that
-disconnects before replying leaves the request's outcome unknown; Facade returns `unavailable`.
-An unresponsive keeper that is still alive is never ended by the daemon. The daemon logs how to end that keeper process so
-Facade can replace it; screens, input, and resizes continue. A broken connection to a living keeper is reconnected.
-
-Only the keeper that started a CLI can report its exit code or signal. After that keeper ends, the keeper that the daemon
-starts next holds the CLI and watches it through Linux process descriptors or macOS kqueue. When it ends, the agent is `ended`
-with an exit that has neither `code` nor `signal`. Show `exit status is unavailable`. End of terminal output does not prove
-exit.
-
-On SIGTERM or SIGINT, the keeper sends SIGKILL to the groups it is stopping, and exits. A daemon that holds runs starts
-another.
-
-#### Both services ending
-
-If both services end, the terminals close and most CLIs exit on SIGHUP. The next daemon recovers the screens and lists agents
-without a recorded exit as `ended`. Their exit has `reason: "terminal_closed"`, no `code` or `signal`, and `at` set to the time
-recovery found them. Show `the terminal closed; the CLI may still be running`.
-
-A CLI that ignores hangup can keep running outside Facade. Facade never signals a process ID read from a saved agent record.
-`agent.stop` returns the recorded exit; `agent.type` fails with `ended`; `agent.resize` succeeds without changing
-anything; `agent.remove` removes the record; `agent.resume` starts its CLI again if it has a recorded session.
-
-An exit without `code` or `signal` is not a zero exit code. Show its reason if recognized; otherwise show that its status is
-unavailable.
+A verified IDE client can report foreground, background and cursor colors on `attach.resize`.
+The applied colors answer OSC 10, 11 and 12. Reconnect and render the new snapshot before
+sending new terminal input. Discard keys typed while disconnected.
 
 ### Machine sessions
 
-A machine session is a bidirectional daemon v3 connection over SSH. Each direction numbers
-requests independently. After the machine hello, each daemon verifies the other and completes
-its first `advertise` exchange before the route is ready. Later advertisements replace the
-sending machine's table. The daemon start ID (`boot_id`) distinguishes concurrent uses of the
-same saved machine ID. An authenticated machine hello with `foreground: true` holds the session
-active until the connection closes. Omission has the same meaning as `false`.
-On Linux, `ssh_cleans_processes` records a known login cleanup policy.
+An authenticated machine session is a bidirectional daemon API connection over SSH. Each
+direction numbers its requests independently. Machine introductions supply the stable
+machine ID and the current daemon boot ID. `foreground:true` registers a foreground
+connection while it stays open. Peers acknowledge the initial `advertise` request before
+using the advertised routes. Later route updates can arrive as an id-less `advertise`
+notification. An id-less `machine.sleeping` comes from the verified peer whose daemon is
+going idle.
 
-`machine.list` reads the known roster without opening SSH connections. A saved connection with
-no live session and no observed failure appears as `disconnected` to clients that advertise
-`machine.disconnected`. `sleeping` records a confirmed idle daemon. `unreachable` records a
-transport or protocol failure, and `ssh_interaction_required` asks for a foreground login.
-Machine rows can carry a machine's `capabilities`. Missing capabilities give no assurance
-that the corresponding operation is supported.
-
-The `forward` route lists remaining machine IDs through the destination. Each hop removes its
-own receiver ID and preserves the verified originating `Caller`. A forwarded `call` uses
-`V3ForwardCall`. A send carries the resolved recipient's `AgentRef` so retries keep the same
-target. Internal `agent.deliver_start_result` is for authenticated machine sessions.
-An unsent call can be reported as `not_executed`. A sent call that loses its reply can report
-`outcome_unknown`. A watch that loses its route ends with `watch_ended`.
-
-Authenticated machine sessions use `machine.probe_route` to open saved connections passively.
-Like `machine.ensure_route`, this control request carries `route` and `method` in the
-`forward` envelope, with no application arguments and a null success result. An older hop
-can be used over live connections. If that is unavailable, the probe fails without trying a
-waking call. A saved session can close after 30 seconds idle. In-flight operations and live
-Attach watches keep the participating sessions active. Before exiting idle, a daemon sends
-`machine.sleeping` with empty parameters to machines that advertised `machine.disconnected`.
-The receiver records sleep for the authenticated sender.
-
-A forwarded watch on an authenticated machine session returns `ForwardWatchResult`.
-Only the machine holding a live shared Attach adds `attach: { viewer, boot_id }`. Each hop
-can replace `watch` for its own session and preserves the holder's binding. Legacy `screen`
-watches and ended snapshots omit the binding. The local client receives its own `watch` and
-the snapshot.
-
-For a shared Attach, the source forwards `method: "attach.resize"` with its route and verified
-caller. The forwarded `params` carry `ForwardAttachResizeArgs` with `viewer`, `boot_id`,
-`cols`, `rows` and optional `colors`. The holder checks the viewer, originating caller and
-daemon start ID. The binding expires when the watch closes or ends. For a legacy holder the
-source uses `screen` and translates a validated resize into `agent.resize` for the watch's
-exact agent over its established route.
-
-The local `machine.connect` response authorizes the foreground stream before the machine
-handshake. Its result is followed by `connected` or `connect_failed`. With the
-`machine.connect.expected_machine_id` capability, a saved connection can specify the ID it
-expects to authenticate. The daemon confirms that ID before changing the saved connection.
-An invalid ID fails validation. On mismatch the existing connection stays saved. The
-`machine.add` operation remains available to save a verified SSH destination and its raw
-SSH arguments. `machine.remove` deletes a saved connection locally and returns its machine ID.
-When the daemon advertises `machine.remove.expected_machine_id`, pass that full ID in
-`expected_machine_id` to require its exact saved connection. An invalid ID fails validation.
-If that saved connection is absent, the daemon returns `not_found`, even when another
-machine's name spells the ID. The original selector applies when the guard is omitted.
-
-```text
-→ {"jsonrpc":"2.0","id":14,"method":"call","params":{"op":"machine.connect","args":{"transport":{"kind":"ssh","ssh_destination":"alice@lab"},"kind":"saved","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}}
-← {"jsonrpc":"2.0","id":14,"result":{"ssh_destination":"alice@lab","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}
-→ {"jsonrpc":"2.0","id":15,"method":"call","params":{"op":"machine.remove","args":{"machine":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}}
-← {"jsonrpc":"2.0","id":15,"result":{"machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","name":"lab","ssh_destination":"alice@lab","reachable":false}}
+```jsonl daemon-machine
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":[1],"build":"1.0.0+example","kind":"machine","machine":{"machine_id":"11111111-1111-4111-8111-111111111111","boot_id":"33333333-3333-4333-8333-333333333333","name":"laptop"}}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.1+example","machine_id":"22222222-2222-4222-8222-222222222222","pid":4322,"agent_count":1,"ops":["agent.start","agent.stop","agent.resume_list","agent.resume","agent.inspect","agent.screen","agent.type","agent.send","agent.remove","agent.rename","cli.list","location.list","machine.rename","daemon.status","internal.agent_records","internal.resume_records","internal.ensure_route","internal.attach_resize","internal.deliver_start_result","internal.deliver_wait_notice"],"topics":["agents","attach"],"machine":{"boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","ssh_cleans_processes":true}}}
+{"jsonrpc":"2.0","id":2,"method":"advertise","params":{"machines":[]}}
+{"jsonrpc":"2.0","id":2,"result":{}}
+{"jsonrpc":"2.0","method":"advertise","params":{"machines":[]}}
+{"jsonrpc":"2.0","id":73,"method":"forward","params":{"route":["22222222-2222-4222-8222-222222222222"],"caller":{"kind":"ide","machine_id":"11111111-1111-4111-8111-111111111111"},"method":"call","params":{"op":"internal.attach_resize","args":{"viewer":81,"boot_id":"55555555-5555-4555-8555-555555555555","size":{"cols":100,"rows":30}}}}}
+{"jsonrpc":"2.0","id":73,"result":{}}
+{"jsonrpc":"2.0","method":"machine.sleeping","params":{}}
 ```
 
-## Version 2 takeover and old data
+`forward` carries a remaining route, verified caller and an inner call or watch. Each hop
+checks the next machine and the remaining time budget. Use exact references for resolved
+agent targets. An authenticated forwarded Attach can return `view:{viewer,boot_id}` for
+the holder's live view. The entry daemon uses that binding and the original caller for
+`internal.attach_resize`. The public watch response carries `watch` and `snapshot`.
 
-A dedicated takeover client offers `[2,3]` as a terminal. It sends `daemon.upgrade` with daemon
-range `[2,3]` and normally uses keeper range `[1,1]`. If the v2 daemon replies with
-`protocol_incompatible` and a message containing `the running keeper speaks`, the client may
-make one local `agent.list` call to report the addresses of running managed agents. Other
-refusals end the attempt immediately. The keeper diagnostic still ends in a failed takeover and
-the client closes the connection. After a successful takeover the client also closes the old
-connection and waits for the target build over v3 before sending ordinary calls.
+An installed remote executable tries its existing serve command and negotiates API
+compatibility. Passive queries use `--no-start`. Authenticated exit 3 reports that the
+remote daemon is sleeping. A missing executable can be installed only with explicit
+permission. Saved or temporary `machine.connect` authorizes the terminal stream and then
+hands it over for the machine handshake. The expected machine ID, if explicit or inferred
+from an existing matching configuration, is checked against that authenticated stream.
+Saved mode commits its normalized SSH arguments before emitting `connected`. With neither
+expected ID, the saved connection uses the verified peer ID on that same stream.
 
-This isolated example uses a debug candidate build advertising keeper range `[2,2]` to show
-the refusal from a running version 1 keeper and the optional read. The advertised operations
-describe the old daemon.
+A confirmed `connected.machine.ssh_cleans_processes` is the peer's observed logout cleanup
+setting and can be omitted when unknown. Shell can use `true` to display the logout warning.
 
-```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[2,3],"build":"1.4.3","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":1,"topics":["agents","screen","messages","windows","machines"],"ops":["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log","machine.connect","machine.add","machine.list","machine.remove","machine.rename","agent.list","cli.list","location.list","agent.start_preflight"]}}
-→ {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"daemon.upgrade","args":{"program":"/opt/facade/bin/facade","build":"1.4.3","daemon_protocol":[2,3],"keeper_protocol":[2,2]}}}
-← {"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"1.4.3 speaks keeper protocol 2 to 2, and the running keeper speaks 1 to 1: this new build needs every agent closed first; close them and try again","data":{"reason":"protocol_incompatible"}}}
-→ {"jsonrpc":"2.0","id":3,"method":"call","params":{"op":"agent.list","args":{"machine":"id:3f2504e04f8941d39a0c0305e82c3301"}}}
-← {"jsonrpc":"2.0","id":3,"result":{"agents":[{"agent_id":"a1","address":"a1@devbox","name":"Pixel","cli":"claude","cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","windows":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","window_id":"terminal"}],"location_id":"loc-8779b387e6b0f90a","pid":1234,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:25:00.000Z","root":"a1","yolo":true,"state":"idle","tools_state":"available"}],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","build":"1.4.2","status":"answered","answered_at":"2026-11-09T17:25:49.008Z"}]}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":30,"method":"call","params":{"op":"machine.connect","args":{"transport":{"kind":"ssh","ssh_destination":"alice@devbox","ssh_args":["alice@devbox"],"remote_home":"/home/alice/.facade"},"kind":"saved","expected_machine_id":"22222222-2222-4222-8222-222222222222"}}}
+{"jsonrpc":"2.0","id":30,"result":{"transport":{"kind":"ssh","ssh_destination":"alice@devbox","ssh_args":["alice@devbox"],"remote_home":"/home/alice/.facade"},"expected_machine_id":"22222222-2222-4222-8222-222222222222"}}
+{"jsonrpc":"2.0","method":"connected","params":{"machine":{"machine_id":"22222222-2222-4222-8222-222222222222","boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","build":"1.0.1+example","ssh_cleans_processes":true},"first_connection":true}}
 ```
 
-The compatibility hello and diagnostic types have `V2` names, including `V2HelloParams`,
-`V2HelloResult` and `V2AgentListResult`. The isolated legacy editor fixtures also use named
-v2 start, window-watch and machine records. A restored v3 workspace uses `workspace.import_legacy`
-to read verified members from existing records. It gives exactly one of `workspace_key`,
-`window_id` or `instance_id` for the specified source machine. An answered source can contribute
-zero agents. A failed or unavailable source leaves the import incomplete. Mark the import
-complete after all required contributions have answered and the workspace has saved the result.
+`machine.list` reads the local roster without SSH. Saved SSH transport data is available
+only to local people. `machine.remove` removes the local saved route without SSH and can
+return the full saved configuration. With `expected_machine_id` it removes only that exact
+record, returning `not_found` for a missing record. Reciprocal removal supplies the
+authenticated peer ID on each leg.
+
+An SSH entry that needs an interactive login gives a diagnostic in `ssh_interaction.message`
+and the corresponding command as an argument array.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":32,"method":"call","params":{"op":"machine.list","args":{}}}
+{"jsonrpc":"2.0","id":32,"result":{"machines":[{"machine_id":"22222222-2222-4222-8222-222222222222","short_id":"22222222","name":"devbox","selector":"devbox","state":"ssh_interaction_required","connections":[{"machine_id":"22222222-2222-4222-8222-222222222222","initiator_machine_id":"11111111-1111-4111-8111-111111111111","kind":"saved","state":"ssh_interaction_required","ssh_interaction":{"message":"Host key verification failed.","command":["facade","machine","add","alice@devbox"]}}]}]}}
+```
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":31,"method":"call","params":{"op":"machine.remove","args":{"machine":"devbox"}}}
+{"jsonrpc":"2.0","id":31,"result":{"machine_id":"22222222-2222-4222-8222-222222222222","name":"devbox","reachable":false,"transport":{"kind":"ssh","ssh_destination":"alice@devbox","ssh_args":["alice@devbox"],"remote_home":"/home/alice/.facade"}}}
+```
+
+### Errors and recovery
+
+Outer responses, per-target outcomes and failure notifications share
+`{code,message,data:{reason,details?}}`. The codes `-32700`, `-32600`, `-32601`, `-32602`
+and `-32000` cover parse errors, invalid requests, unknown methods, invalid typed arguments
+and Facade failures, respectively. Branch on the reason you recognize and preserve the
+message and details for an unknown reason.
+
+A failed route can report `unavailable.details.execution`. With `not_executed` the client
+can retry subject to the original permissions and wake policy. With `outcome_unknown` it
+should read the current state. Retry a start or send with the original business ID within
+its receipt window. Retry only batch items that are known to have remained unexecuted.
+Terminal input has no replay guarantee.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":3,"method":"hello","params":{"api_versions":[2],"build":"example","kind":"terminal"}}
+{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"No common daemon API version.","data":{"reason":"protocol_incompatible","details":{"supported_api_versions":[1]}}}}
+```
+
+A request too long to parse can lose its correlatable ID.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"The request exceeds the 64 MiB line limit.","data":{"reason":"capacity_exceeded"}}}
+```
+
+## Cutover and takeover
+
+For the first formal API release, finish old workspace import and active agents on the
+prerelease build, stop its daemon and keeper, and upgrade clients and endpoints together.
+Keep the Facade homes, workspace data, committed receipts, agent records, Pins and saved SSH
+arguments. Both v1 endpoints refuse the prerelease range handshakes. For each subsequent
+formal replacement, retain interoperable supported operations for at least three months from
+that endpoint's replacement release.
+
+For live daemon takeover, `daemon.upgrade` separately declares the target daemon and keeper
+API sets. The current daemon checks daemon overlap and, if a keeper holds active agents,
+checks its authenticated selected version against the target keeper set. A refusal leaves
+the running services and agents in place. On success the same keeper preserves its CLIs and
+terminal handles. The client acknowledges `closing` with an id-less notification and
+reconnects to start its watches with new snapshots.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":70,"method":"call","params":{"op":"daemon.upgrade","args":{"program":"/opt/facade/1.0.1/facade","build":"1.0.1+example","daemon_api_versions":[1],"keeper_api_versions":[1]}}}
+{"jsonrpc":"2.0","id":70,"result":{"from":"1.0.0+example","agent_count":1}}
+{"jsonrpc":"2.0","method":"closing","params":{"build":"1.0.1+example"}}
+{"jsonrpc":"2.0","method":"closing","params":{}}
+```
+
+### Disconnections and recovery
+
+If the keeper ends, the daemon keeps its clients, watches, grids and terminal handles. It
+starts a replacement keeper and returns the held terminals with `agent.sync`. On Unix the
+replacement may observe an exit without a code or signal. On Windows it can read the exit
+code from the process handle. If both services end, the next daemon can recover screens
+with an exit reason of `terminal_closed`. This leaves the CLI's exit status unavailable.
 
 ## Methods
 
 | Name | Description |
 |---|---|
-| `hello` | Starts the connection (`HelloParams`). The result (`HelloResult`) describes the daemon. |
-| `call` | Runs an operation (`CallParams`) and returns its result. |
-| `watch` | Follows a topic (`WatchParams`). The result (`WatchResult`) contains its snapshot; `changed` notifications follow. |
-| `unwatch` | Ends a watch (`UnwatchParams`). |
-| `cancel` | Cancels a call still under way on this connection, by that call's request ID (`CancelParams`), and answers `{}`. It withdraws only an `agent.send` whose message's paste has not begun, which then answers `cancelled` and is not kept; every other call goes on, and its own answer says what it did. Closing the connection withdraws nothing. |
-| `changed` | Reports a change for one watch (`ChangedParams`). |
-| `watch_ended` | Ends a forwarded watch (`WatchEndedParams`). |
-| `advertise` | Replaces the directly connected machine's table (`AdvertiseParams`). |
-| `forward` | Forwards a request to its destination (`ForwardParams`). |
-| `connected` | Reports the foreground connection's successful handshake to the local CLI (`ConnectedParams`). |
-| `connect_failed` | Reports a foreground connection failure to the local CLI (`ConnectFailedParams`). |
-| `closing` | From the daemon, a notification: a newer Facade takes over (`ClosingParams`). Every answer this connection waits for has been written. The client sends nothing more but `closing` back, a notification without params, and connects again; the new daemon answers within seconds. A client that does not answer within 0.2 seconds is cut. |
+| `hello` | Negotiate a daemon API version and discover this connection's operations and topics. |
+| `call` | Invoke a registered operation. Raw agent.type and attach.resize also accept notifications. |
+| `watch` | Subscribe to a registered topic and return a connection-local watch ID and snapshot. |
+| `unwatch` | Release a watch and acknowledge the request. |
+| `cancel` | Request cancellation of an agent.send before the paste starts. |
+| `changed` | Deliver a change to a watch. |
+| `watch_ended` | Report that a watch lost its subscription. |
+| `closing` | Announce a replacement build, or acknowledge the announcement with empty params. |
+| `advertise` | Exchange machine routing information on an authenticated peer connection. |
+| `forward` | Route a registered call or watch on an authenticated machine connection. |
+| `machine.sleeping` | Report an authenticated peer's idle exit. |
+| `connected` | Confirm an authorized foreground machine handoff. |
+| `connect_failed` | Report a foreground machine handoff failure. |
 
 ## Topics
 
 Topics available to `watch`. Their types are defined below.
 
-| Name | Arguments | Snapshot | Change | Description |
-|---|---|---|---|---|
-| `agents` | `NoArgs` | `V3AgentsSnapshot` | `V3AgentsChange` | Agent records and synchronization state of their running machines. |
-| `screen` | `V3ScreenWatchArgs` | `V3ScreenSnapshot` | `ScreenChange` | The managed agent's terminal redraw and subsequent output. |
-| `attach` | `V3ScreenWatchArgs` | `V3ScreenSnapshot` | `ScreenChange` | The managed agent's terminal, sized for its live Attach viewers. |
-| `machines` | `NoArgs` | `V3MachineInfo[]` | `V3MachinesChange` | Changes to the machine table in the daemon's view. |
+| Name | Arguments | Snapshot | Change | Audience | Description |
+|---|---|---|---|---|---|
+| `agents` | `NoArgs` | `AgentsSnapshot` | `AgentsChange` | terminal, ide, MCP actor, machine forward | Watch visible agent records. |
+| `machines` | `NoArgs` | `MachineInfo[]` | `MachinesChange` | terminal, ide, MCP actor | Watch the local machine roster. |
+| `attach` | `AttachArgs` | `ScreenSnapshot` | `ScreenChange` | terminal, ide, machine forward | Watch an agent's live or final terminal screen. |
 
 ## Operations
 
 Operations available to `call`. Set `op` to the name and `args` to its arguments. Types are defined below.
 
-| Name | Arguments | Result | Description |
-|---|---|---|---|
-| `list` | `ListArgs` | `V3AgentListResult` | Lists active agents in the requested machine scope. |
-| `agent.list` | `MachineQueryArgs` | `V3AgentListResult` | Lists reachable agents and machine query outcomes. |
-| `agent.inspect` | `V3AgentArgs` | `V3InspectResult` | Describes an agent and its terminal viewers. |
-| `agent.start` | `V3StartArgs` | `V3StartResult` | Starts a new managed agent. |
-| `agent.start_preflight` | `V3StartArgs` | `EmptyResult` | Checks the arguments of an agent start. |
-| `agent.resume_list` | `ResumeListArgs` | `ResumeListResult` | Lists resumable agents and CLI sessions. |
-| `agent.resume` | `V3ResumeArgs` | `ResumeResult` | Resumes an agent or a CLI session. |
-| `location.list` | `LocationListArgs` | `V3LocationListResult` | Lists working locations on a machine. |
-| `cli.list` | `CliListArgs` | `CliListResult` | Lists CLIs available in the selected launch environment. |
-| `agent.stop` | `V3AgentArgs` | `V3StopResult` | Stops the agent's CLI and keeps the agent record. |
-| `stop` | `StopArgs` | `BatchStopResult` | Stops selected managed agents and reports each outcome. |
-| `agent.remove` | `V3AgentArgs` | `RemoveResult` | Removes a managed agent. |
-| `agent.rename` | `V3RenameArgs` | `RenameResult` | Changes an agent's name. |
-| `agent.type` | `V3TypeArgs` | `TypeResult` | Sends input to a managed agent's terminal. |
-| `agent.send` | `V3SendArgs` | `V3SendResult` | Sends a message to an agent. |
-| `agent.resize` | `V3ResizeArgs` | `EmptyResult` | Resizes a managed agent's terminal. |
-| `attach.resize` | `AttachResizeArgs` | `EmptyResult` | Reports the terminal size of an Attach watch on this connection. |
-| `agent.screen` | `V3ScreenArgs` | `V3ScreenText` | Reads the last logical lines of an agent's screen. |
-| `daemon.status` | `StatusArgs` | `StatusResult` | Reports the daemon's status on a machine. |
-| `workspace.import_legacy` | `LegacyWorkspaceArgs` | `LegacyWorkspaceResult` | Reads the verified members of a legacy workspace. |
-| `machine.list` | `NoArgs` | `V3MachineListResult` | Lists known machines and routes. |
-| `machine.add` | `V3MachineAddArgs` | `MachineAddResult` | Saves a verified SSH connection. |
-| `machine.connect` | `V3MachineConnectArgs` | `V3MachineConnectResult` | Authorizes a foreground machine connection. |
-| `machine.remove` | `V3MachineRemoveArgs` | `MachineRemoveResult` | Removes the local saved connection and reports remaining reachability. |
-| `machine.rename` | `MachineRenameArgs` | `MachineRenameResult` | Changes the name on the selected machine. |
-| `daemon.log` | `DaemonLogArgs` | `DaemonLogResult` | Reads the daemon's log, `core/logs/daemon.log`, which Facade keeps for 30 days: its last `lines` lines, oldest first. For the person's clients alone: the log names every agent and who sent whom a message, so a call that acts for an agent or a guest answers `refused`, YOLO or not. More than 200 lines answers `invalid_argument`. |
-| `daemon.upgrade` | `UpgradeArgs` | `UpgradeResult` | Hands the running Facade over to a newer build, `program`, while every agent runs on, and answers once the handover is under way; `closing` follows on every connection past `hello`. The build must be of a higher version than this daemon's and speak its daemon protocol version; while agents run, it must also speak the running keeper's protocol, as the keeper never changes build while it holds CLIs. This daemon installs the build, points the launchers at it, drains and exits; the keeper then starts the launcher's daemon, the new build, and starts it again with its restart delay where it does not come up. Nothing rolls back. Calls that arrive meanwhile answer `upgrading` and did nothing. A second request while a handover is under way answers when the first does. |
+| Name | Arguments | Result | Audience | Description |
+|---|---|---|---|---|
+| `agent.list` | `AgentListArgs` | `AgentListResult` | terminal, ide, MCP actor | List active agents and Guests. |
+| `agent.start` | `StartArgs` | `StartResult` | terminal, ide, MCP actor, machine forward | Start an agent. |
+| `agent.stop` | `StopArgs` | `BatchStopResult` | terminal, ide, MCP actor, machine forward | Stop selected agents and report each outcome. |
+| `agent.resume_list` | `ResumeListArgs` | `ResumeListResult` | terminal, ide, machine forward | Find agents and sessions that can be resumed. |
+| `agent.resume` | `ResumeArgs` | `ResumeResult` | terminal, ide, machine forward | Resume an agent or a saved CLI session. |
+| `agent.inspect` | `AgentTargetArgs` | `InspectResult` | terminal, ide, MCP actor, machine forward | Read an agent's status and attachments. |
+| `agent.screen` | `ScreenArgs` | `ScreenText` | terminal, ide, MCP actor, machine forward | Read logical lines from an agent's screen. |
+| `agent.type` | `AgentTypeArgs` | `TypeResult` | terminal, ide, MCP actor, machine forward | Send terminal input to an agent. |
+| `agent.send` | `SendArgs` | `SendResult` | terminal, ide, MCP actor, machine forward | Send a message and report delivery. |
+| `agent.remove` | `AgentTargetArgs` | `RemoveResult` | terminal, ide, MCP actor, machine forward | Stop an agent and remove its records. |
+| `agent.rename` | `RenameArgs` | `RenameResult` | terminal, ide, MCP actor, machine forward | Change an agent's name. |
+| `attach.resize` | `AttachResizeArgs` | `EmptyResult` | terminal, ide | Set the capacity of an attached view. |
+| `cli.list` | `CliListArgs` | `CliListResult` | terminal, ide, MCP actor, machine forward | List CLIs available on a machine. |
+| `location.list` | `LocationListArgs` | `LocationListResult` | terminal, ide, MCP actor, machine forward | List working locations on a machine. |
+| `machine.list` | `NoArgs` | `MachineListResult` | terminal, ide, MCP actor | Read the local roster of known machines. |
+| `machine.connect` | `MachineConnectArgs` | `MachineConnectResult` | terminal | Authorize a foreground machine connection. |
+| `machine.remove` | `MachineRemoveArgs` | `MachineRemoveResult` | terminal, ide | Remove a saved connection. |
+| `machine.rename` | `MachineRenameArgs` | `MachineRenameResult` | terminal, ide, machine forward | Change the name of a machine. |
+| `daemon.status` | `StatusArgs` | `StatusResult` | terminal, ide, machine forward | Read a daemon's status. |
+| `daemon.log` | `LogArgs` | `LogResult` | terminal, ide | Read the last lines of the local daemon log. |
+| `daemon.upgrade` | `DaemonUpgradeArgs` | `DaemonUpgradeResult` | terminal | Arrange for a compatible build to take over. |
+| `internal.agent_records` | `InternalAgentRecordsArgs` | `AgentLookupCandidate[]` | machine forward | Read visible agent records at their holder. |
+| `internal.resume_records` | `NoArgs` | `ResumeCandidate[]` | machine forward | Read the holder's resumable agent records. |
+| `internal.ensure_route` | `InternalEnsureRouteArgs` | `EmptyResult` | machine forward | Open saved connections along a machine route. |
+| `internal.attach_resize` | `InternalAttachResizeArgs` | `EmptyResult` | machine forward | Set the capacity of a forwarded view at its holder. |
+| `internal.deliver_start_result` | `InternalDeliverStartResultArgs` | `EmptyResult` | machine forward | Deliver a start receipt to its recipient. |
+| `internal.deliver_wait_notice` | `InternalDeliverWaitNoticeArgs` | `EmptyResult` | machine forward | Deliver a wait notice to its recipient. |
 
 ## Error reasons
 
-The `data.reason` values of the daemon protocol.
-
 | Reason | When |
 |---|---|
-| `invalid_argument` | An argument is missing, malformed, or out of range, or the request is unsupported. |
-| `not_found` | The agent, run, message, or watch does not exist. |
-| `session_not_found` | The selected machine confirmed that the requested CLI session does not exist. |
-| `ambiguous_reference` | A reference names more than one agent, or the person and an agent: select one by its ID. |
-| `ended` | The agent ended: it takes no more input or messages. |
-| `partial_input` | A text or keys call stopped partway: the agent ended, or its terminal stopped taking input, after part of the call reached the terminal. The error's data says what went in. |
-| `unavailable` | The operation cannot complete: for example, a stop or a screen watch's snapshot timed out, or the keeper disconnected. |
-| `protocol_incompatible` | The two sides share no protocol version, or a required client kind, operation, or field is unsupported. |
-| `machine_id_conflict` | Two running daemons introduced themselves with the same machine ID. |
-| `ssh_interaction_required` | A saved SSH connection needs a foreground login or verification. |
-| `capacity_exceeded` | A message exceeds the line limit, or input exceeds the per-call limit or available queue room. |
-| `internal` | An internal Facade error. |
-| `refused` | The caller is not allowed to perform this operation. The keeper accepts only the daemon holding the daemon lock. |
-| `configuration_invalid` | Facade's settings file, `facade.json` in the Facade home, cannot be read as it must, which stops every launch until it is fixed. The message says each problem, with the file's path and, where known, its line and column. |
-| `cancelled` | The call was withdrawn by its `cancel` before it took effect: a message whose paste had not begun, which is not kept. |
-| `worktree_failed` | Git could not make a worktree it was asked for: `data.kept` says what it made, which stays. |
-| `upgrading` | A newer Facade is taking over: the call did nothing, and a client repeats it once the new daemon answers. |
-| `unsupported` | The CLI cannot do what the call asks of it: take a model or an effort it has no way to set, or resume a session that a CLI of another type had. |
+| `invalid_argument` | A malformed request or invalid parameters. Details may include available_clis. |
+| `not_found` | No matching record. Details may include agents and record_removal (expired or removed). |
+| `session_not_found` | No matching saved session. Details may include sessions. |
+| `ambiguous_reference` | Several objects match. Details may include candidates, agents, machines or sessions. |
+| `ended` | The agent ended. Details may include agents. |
+| `partial_input` | Some terminal input was written. Details give text_written and optional enter_written, or keys_sent. |
+| `unavailable` | The operation or route is unavailable. Details can describe the execution state and affected targets. The optional `agents: AgentLabel[]` lists only agents already resolved and authorized. |
+| `protocol_incompatible` | No usable API version. Details include supported_api_versions and may include offered_api_versions and agents. |
+| `machine_id_conflict` | The same machine ID is in use at different paths. Details give machine_id and paths. |
+| `machine_id_mismatch` | The authenticated machine ID differs from the expected one. Details give both IDs. |
+| `ssh_interaction_required` | SSH needs an interactive repair. Details give message and command. |
+| `capacity_exceeded` | The line or a connection budget was exceeded. |
+| `internal` | The daemon encountered an internal error. |
+| `refused` | The operation was refused. Details may include a settings entry and `agents: AgentLabel[]` for agents already resolved and authorized. Denials outside the caller's creation tree omit agent labels. |
+| `configuration_invalid` | The settings are invalid. Details may name an entry. |
+| `cancelled` | The send was cancelled before paste started. |
+| `worktree_failed` | Worktree creation failed. Details may identify the surviving branch or path under kept. |
+| `upgrading` | The daemon is handing over and did not begin the operation. |
+| `unsupported` | The target or parameter lacks a required capability. Details may include agents. |
 
 ## Types
 
 ### AdvertiseParams
 
-`V3AdvertiseParams`
-
-### AgentArgs
-
-`V3AgentArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machines` | `MachineInfo[]` | yes |  |
 
 ### AgentCreator
 
@@ -630,7 +436,36 @@ The source of an agent's start, as displayed to the caller.
 
 ### AgentInfo
 
-`V3AgentInfo`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `AgentRef` | yes |  |
+| `address` | `string` | yes |  |
+| `type` | `AgentKind` | yes |  |
+| `label` | `string` | no |  |
+| `unreachable` | `boolean` | no |  |
+| `name` | `string` | yes |  |
+| `cli` | `string` | yes |  |
+| `args` | `string[]` | yes |  |
+| `model` | `string` | no |  |
+| `effort` | `string` | no |  |
+| `title` | `string` | no |  |
+| `cwd` | `string` | yes |  |
+| `pid` | `number` | no |  |
+| `process` | `ProcessState` | yes |  |
+| `size` | `Size` | no |  |
+| `created_at` | `string` | yes |  |
+| `started_at` | `string` | yes |  |
+| `creator_kind` | `CreatorKind` | no |  |
+| `creator` | `AgentRef` | no |  |
+| `root` | `AgentRef` | yes |  |
+| `yolo` | `boolean` | yes |  |
+| `exit` | `ProcessExit` | no |  |
+| `session` | `string` | no |  |
+| `state` | `V3AgentState` | yes |  |
+| `state_detail` | `StateDetail` | no |  |
+| `said` | `Said` | no |  |
+| `tools_state` | `ToolsState` | yes |  |
+| `tools_reason` | `ToolsReason` | no |  |
 
 ### AgentKind
 
@@ -638,59 +473,59 @@ The source of an agent's start, as displayed to the caller.
 
 ### AgentLabel
 
-The identity and state of the reachable agent selected by an operation or offered as a match.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `reference` | `AgentRef` | yes |  |
-| `address` | `string` | yes | The agent's address in the requesting daemon's machine view. |
+| `address` | `string` | yes |  |
+| `type` | `AgentKind` | yes |  |
 | `name` | `string` | yes |  |
 | `cli` | `string` | yes |  |
 | `state` | `V3AgentState` | yes |  |
-| `resumable` | `boolean` | yes | The managed agent has a recorded session that Facade can resume. |
+| `resumable` | `boolean` | yes |  |
+
+### AgentListArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scope` | `Scope` | no |  |
 
 ### AgentListEntry
 
-A roster row and the exact reference to use for later operations.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `reference` | `AgentRef` | yes |  |
-| `id` | `string` | yes |  |
+| `address` | `string` | yes |  |
 | `name` | `string` | yes |  |
 | `type` | `AgentKind` | yes |  |
 | `state` | `V3AgentState` | yes |  |
 | `cli` | `string` | yes |  |
-| `title` | `string` | no |  |
 | `folder` | `string` | yes |  |
 | `started_at` | `string` | yes |  |
+| `title` | `string` | no |  |
 
 ### AgentListResult
 
-`V3AgentListResult`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `AgentListEntry[]` | yes |  |
+| `machines` | `MachineQuery[]` | yes |  |
 
-### AgentListRow
-
-A public roster row. The ID is the agent's copyable address.
+### AgentLookupCandidate
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | yes |  |
-| `name` | `string` | yes |  |
-| `type` | `AgentKind` | yes |  |
-| `state` | `V3AgentState` | yes |  |
-| `cli` | `string` | yes |  |
-| `title` | `string` | no |  |
-| `folder` | `string` | yes |  |
-| `started_at` | `string` | yes |  |
+| `agent` | `AgentInfo` | yes |  |
+| `has_rule` | `boolean` | yes |  |
 
 ### AgentMachineState
 
-`V3AgentMachineState`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `state` | `AgentSyncState` | yes |  |
+| `agents` | `AgentInfo[]` | no |  |
 
 ### AgentRef
-
-An agent's durable identity, independently of names and routes.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -713,19 +548,49 @@ The recorded cause of an agent record's removal.
 
 ### AgentTarget
 
-`{ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef }`
+`string \| { readonly machine_id: string; readonly agent_id: string }`
+
+### AgentTargetArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target` | `AgentTarget` | yes |  |
+
+### AgentTypeArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target` | `AgentTarget` | yes |  |
+| `input` | `TerminalInput` | yes |  |
 
 ### AgentsChange
 
-`V3AgentsChange`
+`{ readonly kind: 'updated'; readonly agent: AgentInfo } \| { readonly kind: 'removed'; readonly machine_id: string; readonly agent_id: string; readonly cause: AgentRemoval } \| { readonly kind: 'machine_state'; readonly machine: AgentMachineState }`
 
 ### AgentsSnapshot
 
-`V3AgentsSnapshot`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agents` | `AgentInfo[]` | yes |  |
+| `machines` | `AgentMachineState[]` | yes |  |
+
+### ApiVersions
+
+`number[]`
+
+### AttachArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target` | `AgentTarget` | yes |  |
+| `size` | `{ readonly cols: number; readonly rows: number }` | no |  |
+| `viewer` | `string` | no |  |
+| `keep_scrollback` | `boolean` | no |  |
+| `include_scrollback` | `boolean` | no |  |
+| `allow_ended` | `boolean` | no |  |
+| `report_activity` | `boolean` | no |  |
 
 ### AttachBinding
-
-The watch's identity at the holder of a running agent's terminal.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -736,9 +601,8 @@ The watch's identity at the holder of a running agent's terminal.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `watch` | `number` | yes | The Attach watch ID on the connection issuing this call. |
-| `cols` | `number` | yes | Terminal width in columns, at least 2. |
-| `rows` | `number` | yes | Terminal height in rows, at least 1. |
+| `watch` | `number` | yes |  |
+| `size` | `{ readonly cols: number; readonly rows: number }` | yes |  |
 | `colors` | `TerminalColors` | no |  |
 
 ### AttachmentInfo
@@ -757,26 +621,28 @@ The watch's identity at the holder of a running agent's terminal.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `items` | `StopItem[]` | yes |  |
-| `machines` | `V3MachineQueryResult[]` | no |  |
+| `machines` | `MachineQuery[]` | no |  |
 
 ### CallParams
 
-Parameters for `call`.
-
-`{ readonly op: 'list'; readonly args: ListArgs } \| { readonly op: 'agent.list'; readonly args: MachineQueryArgs } \| { readonly op: 'agent.inspect'; readonly args: V3AgentArgs } \| { readonly op: 'agent.start'; readonly args: V3StartArgs } \| { readonly op: 'agent.start_preflight'; readonly args: V3StartArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: V3ResumeArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'agent.stop'; readonly args: V3AgentArgs } \| { readonly op: 'stop'; readonly args: StopArgs } \| { readonly op: 'agent.remove'; readonly args: V3AgentArgs } \| { readonly op: 'agent.rename'; readonly args: V3RenameArgs } \| { readonly op: 'agent.type'; readonly args: V3TypeArgs } \| { readonly op: 'agent.send'; readonly args: V3SendArgs } \| { readonly op: 'agent.resize'; readonly args: V3ResizeArgs } \| { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } \| { readonly op: 'agent.screen'; readonly args: V3ScreenArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'workspace.import_legacy'; readonly args: LegacyWorkspaceArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.add'; readonly args: V3MachineAddArgs } \| { readonly op: 'machine.connect'; readonly args: V3MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: V3MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs }`
+`{ readonly op: 'agent.list'; readonly args: AgentListArgs } \| { readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.stop'; readonly args: StopArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.type'; readonly args: AgentTypeArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'agent.remove'; readonly args: AgentTargetArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.connect'; readonly args: MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'daemon.log'; readonly args: LogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: DaemonUpgradeArgs } \| { readonly op: 'internal.agent_records'; readonly args: InternalAgentRecordsArgs } \| { readonly op: 'internal.resume_records'; readonly args: NoArgs } \| { readonly op: 'internal.ensure_route'; readonly args: InternalEnsureRouteArgs } \| { readonly op: 'internal.attach_resize'; readonly args: InternalAttachResizeArgs } \| { readonly op: 'internal.deliver_start_result'; readonly args: InternalDeliverStartResultArgs } \| { readonly op: 'internal.deliver_wait_notice'; readonly args: InternalDeliverWaitNoticeArgs }`
 
 ### Caller
 
-`V3Caller`
+`{ readonly kind: 'terminal'; readonly machine_id: string } \| { readonly kind: 'ide'; readonly machine_id: string } \| { readonly kind: 'agent'; readonly agent: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean }`
 
-### ChangedParams
-
-A `changed` notification for one watch.
+### CancelParams
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `watch` | `number` | yes | The watch number returned on this connection. |
-| `change` | `V3AgentsChange \| ScreenChange \| V3MachinesChange` | yes | A change with the type defined by the watched topic. |
+| `id` | `number` | yes |  |
+
+### ChangedParams
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `watch` | `number` | yes |  |
+| `change` | `AgentsChange \| MachinesChange \| ScreenChange` | yes |  |
 
 ### CliInfo
 
@@ -793,13 +659,11 @@ A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
 
 ### CliListArgs
 
-Lists CLIs using the selected machine's launch environment and working folder.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `string` | no |  |
+| `scope` | `SingleMachineScope` | no |  |
 | `folder` | `string` | no |  |
-| `env` | `{ readonly [key: string]: string }` | no | The client's launch environment for a local query. |
+| `env` | `{ readonly [key: string]: string }` | no |  |
 
 ### CliListResult
 
@@ -810,25 +674,35 @@ Lists CLIs using the selected machine's launch environment and working folder.
 
 ### ClientKind
 
-The kind of client connecting to the daemon.
+`'terminal' \| 'ide' \| 'mcp' \| 'machine'`
 
-`'terminal' \| 'mcp' \| 'ide' \| 'machine'`
+### ClosingParams
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `build` | `string` | yes |  |
 
 ### ConnectFailedParams
-
-Foreground handshake failed after local authorization.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `error` | `ErrorBody` | yes |  |
 
-### ConnectedParams
-
-Connection verified on the foreground stream.
+### ConnectedMachine
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `MachineHello` | yes |  |
+| `machine_id` | `string` | yes |  |
+| `boot_id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+| `build` | `string` | yes |  |
+| `ssh_cleans_processes` | `boolean` | no |  |
+
+### ConnectedParams
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `ConnectedMachine` | yes |  |
 | `first_connection` | `boolean` | yes |  |
 
 ### ConnectionKind
@@ -837,31 +711,35 @@ Connection verified on the foreground stream.
 
 ### ConnectionState
 
-`'connected' \| 'unavailable' \| 'ssh_interaction_required'`
+`'connected' \| 'disconnected' \| 'ssh_interaction_required'`
 
 ### CreatorKind
 
 `'agent' \| 'command_line' \| 'vs_code'`
 
-### DaemonLogArgs
+### DaemonHelloParams
 
-Arguments for `daemon.log`.
+`HelloParams`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `lines` | `number` | no | How many of the log's last lines to read: 200 where absent, and at most 200. |
+### DaemonHelloResult
 
-### DaemonLogResult
+`HelloResult`
 
-The result of `daemon.log`.
+### DaemonUpgradeArgs
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `lines` | `string[]` | yes | The last lines of `core/logs/daemon.log`, oldest first, the home folder written as `~`. Empty where there is no log. |
+| `program` | `string` | yes |  |
+| `build` | `string` | yes |  |
+| `daemon_api_versions` | `ApiVersions` | yes |  |
+| `keeper_api_versions` | `ApiVersions` | yes |  |
 
-### DeliverStartResultArgs
+### DaemonUpgradeResult
 
-`V3DeliverStartResultArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `from` | `string` | yes |  |
+| `agent_count` | `number` | yes |  |
 
 ### DeliveredVia
 
@@ -909,92 +787,58 @@ Why an exit has no code or signal.
 
 ### ErrorBody
 
-A request error.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `code` | `number` | yes | The JSON-RPC error code: -32700 for invalid JSON, -32600 for an invalid request, -32601 for an unknown method, -32602 for invalid arguments, and -32000 for other failures. |
-| `message` | `string` | yes | A plain-language explanation of the error. |
-| `data` | `ErrorData` | yes | Structured error details. |
+| `code` | `number` | yes |  |
+| `message` | `string` | yes |  |
+| `data` | `ErrorData` | yes |  |
 
 ### ErrorData
 
-Error details for clients to inspect.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `reason` | `Reason` | yes | The error reason for clients to inspect. |
-| `text_written` | `TextWritten` | no | With `partial_input` for text: how much of the text reached the agent's terminal. |
-| `enter_written` | `boolean` | no | With `partial_input` for text: whether its Enter reached the agent's terminal. |
-| `keys_sent` | `number` | no | With `partial_input` for keys: how many keys reached the agent's terminal whole. |
-| `kept` | `Kept` | no | With `worktree.create`, or `agent.start` with a `worktree`, that failed after Git made part or all of the worktree: what it made, which stays. |
-| `entry` | `string` | no | With a refused start or resume that an entry of the settings file caused - its program not found, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot take - the entry's name, such as `claude`. A client offers to open the settings file. |
-| `protocol` | `ProtocolMismatch` | no |  |
-| `available_clis` | `string[]` | no | CLIs that can start here when the requested CLI is not configured. |
-| `message_ref` | `MessageRef` | no | The original kept message, where its delivery outcome is unknown. |
-| `record_removal` | `AgentRemoval` | no | A confirmed reason the addressed agent record was removed. |
-| `machine_id_conflict` | `MachineIdConflict` | no |  |
-| `ssh_interaction` | `SshInteraction` | no |  |
-| `unavailable` | `Unavailable` | no |  |
-| `candidates` | `string[]` | no | Complete references that matched a name or machine ID prefix. |
-| `agents` | `AgentLabel[]` | no | Reachable matches or the reachable agent whose operation failed. |
-| `machines` | `V3MachineQueryResult[]` | no | Matching machines or the selected machine whose connection failed. |
-| `sessions` | `SessionMatch[]` | no | Saved sessions matching the requested ID. |
+| `reason` | `string` | yes |  |
+| `details` | `{ readonly [key: string]: unknown }` | no |  |
 
-### ExecutionOutcome
+### FolderScope
 
-`'not_executed' \| 'outcome_unknown'`
-
-### ForwardAttachResizeArgs
-
-Parameters of a forwarded `attach.resize` on an authenticated machine session.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `viewer` | `number` | yes | The holder's viewer ID from the live watch response. |
-| `boot_id` | `string` | yes | The holder's daemon start ID from the same response. |
-| `cols` | `number` | yes |  |
-| `rows` | `number` | yes |  |
-| `colors` | `TerminalColors` | no |  |
-
-### ForwardCall
-
-`V3ForwardCall`
+`'cwd' \| 'all'`
 
 ### ForwardParams
 
-`V3ForwardParams`
+`{ readonly route: string[]; readonly caller: Caller; readonly time_left_ms?: number; readonly from_name?: string; readonly start_result?: { readonly machine_id: string; readonly message_id: string } } & ({ readonly method: 'call'; readonly params: CallParams } \| { readonly method: 'watch'; readonly params: WatchParams })`
 
 ### ForwardWatchResult
 
-A response to a forwarded watch on an authenticated machine session.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `watch` | `number` | yes | Watch ID scoped to this machine session. |
-| `snapshot` | `unknown` | yes | The snapshot for the forwarded watch's topic. |
-| `attach` | `AttachBinding` | no | The holder supplies this binding for a live shared Attach. |
+| `watch` | `number` | yes |  |
+| `snapshot` | `AgentsSnapshot \| MachineInfo[] \| ScreenSnapshot` | yes |  |
+| `view` | `AttachBinding` | no |  |
 
 ### HelloParams
 
-`V3HelloParams`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `api_versions` | `ApiVersions` | yes |  |
+| `build` | `string` | yes |  |
+| `kind` | `ClientKind` | yes |  |
+| `machine` | `MachineHelloParams` | no |  |
+| `foreground` | `boolean` | no |  |
 
 ### HelloResult
 
-The result of `hello`: daemon details and supported topics and operations.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `protocol` | `number` | yes | The highest protocol version shared by the client and daemon. |
-| `build` | `string` | yes | The daemon's build. |
-| `machine_id` | `string` | yes | The daemon's Facade machine ID. |
-| `machine` | `MachineHello` | no | The answering daemon's introduction on a machine session. |
-| `capabilities` | `string[]` | no | Additions to protocol 3 supported by this daemon. |
-| `pid` | `number` | yes | The daemon's process ID. |
-| `ops` | `string[]` | yes | Operation names accepted by `call`. |
-| `agents` | `number` | yes | The number of agent records when `hello` runs. Watch `agents` to receive changes. |
-| `keeper` | `KeeperInfo` | no | The keeper holding the agents' terminals. Omitted while no keeper runs; the daemon starts one for the first agent. |
-| `topics` | `string[]` | yes | Topic names accepted by `watch`. |
+| `api_version` | `number` | yes |  |
+| `build` | `string` | yes |  |
+| `machine_id` | `string` | yes |  |
+| `pid` | `number` | yes |  |
+| `agent_count` | `number` | yes |  |
+| `ops` | `string[]` | yes |  |
+| `topics` | `string[]` | yes |  |
+| `keeper` | `KeeperInfo` | no |  |
+| `machine` | `MachineHelloResult` | no |  |
 
 ### HiddenRows
 
@@ -1010,18 +854,6 @@ Rows of a draft scrolled out of the CLI's input, as the CLI marks them.
 How an agent's process ended.
 
 `'normal' \| 'stopped' \| 'crashed'`
-
-### InboxMessage
-
-A complete inbox message as the receiving MCP client reads it.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `id` | `string` | yes |  |
-| `from` | `string` | yes |  |
-| `at` | `string` | yes |  |
-| `text` | `string` | yes |  |
-| `reply_to` | `string` | no |  |
 
 ### InputInfo
 
@@ -1048,48 +880,64 @@ How an agent's message input reads on its screen. A reading never means input ma
 
 ### InspectResult
 
-`V3InspectResult`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `AgentInfo` | yes |  |
+| `input` | `InputInfo` | yes |  |
+| `session_tracking` | `boolean` | yes |  |
+| `viewers` | `string[]` | yes |  |
+| `rule` | `string` | no |  |
+| `started_by` | `AgentCreator` | no |  |
+| `attachments` | `AttachmentInfo[]` | no |  |
+| `launch_command` | `string` | no |  |
+
+### InternalAgentRecordsArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `active` | `boolean` | yes |  |
+
+### InternalAttachResizeArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `viewer` | `number` | yes |  |
+| `boot_id` | `string` | yes |  |
+| `size` | `{ readonly cols: number; readonly rows: number }` | yes |  |
+| `colors` | `TerminalColors` | no |  |
+
+### InternalDeliverStartResultArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `recipient` | `{ readonly machine_id: string; readonly agent_id: string }` | yes |  |
+| `message` | `{ readonly message_id: string; readonly message_ref?: { readonly machine_id: string; readonly message_id: string }; readonly from: string; readonly from_machine_id?: string; readonly from_name?: string; readonly to: string; readonly text: string; readonly reply_to?: string; readonly reply_to_machine_id?: string; readonly call_id?: string; readonly result?: { readonly agent: { readonly reference: { readonly machine_id: string; readonly agent_id: string }; readonly address: string; readonly type: AgentKind; readonly label?: string; readonly unreachable?: boolean; readonly name: string; readonly cli: string; readonly args: string[]; readonly model?: string; readonly effort?: string; readonly title?: string; readonly cwd: string; readonly pid?: number; readonly process: ProcessState; readonly size?: { readonly cols: number; readonly rows: number }; readonly created_at: string; readonly started_at: string; readonly creator_kind?: CreatorKind; readonly creator?: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean; readonly exit?: ProcessExit; readonly session?: string; readonly state: V3AgentState; readonly state_detail?: StateDetail; readonly said?: Said; readonly tools_state: ToolsState; readonly tools_reason?: ToolsReason }; readonly prompt: PromptOutcome }; readonly at: string; readonly delivery: Delivery }` | yes |  |
+
+### InternalDeliverWaitNoticeArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `recipient` | `{ readonly machine_id: string; readonly agent_id: string }` | yes |  |
+| `waiting` | `{ readonly machine_id: string; readonly agent_id: string }` | yes |  |
+| `name` | `string` | yes |  |
+| `kind` | `WaitKind` | yes |  |
+
+### InternalEnsureRouteArgs
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `wake` | `boolean` | yes |  |
+
+### JsonRpc
+
+`'2.0'`
 
 ### KeeperInfo
 
-The keeper holding the agents' terminals.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `pid` | `number` | yes | The keeper process ID. |
-| `build` | `string` | yes | The keeper build identifier. |
-
-### Kept
-
-What a worktree creation that failed partway made, which stays: its branch, its folder, or both.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `branch` | `string` | no | The branch it made. |
-| `path` | `string` | no | The folder it made, an absolute path. |
-
-### LegacyWorkspaceArgs
-
-One legacy workspace selector from the specified machine.
-
-`{ readonly machine_id: string; readonly workspace_key?: string; readonly window_id?: string; readonly instance_id?: string } & ({ readonly workspace_key: string; readonly window_id?: never; readonly instance_id?: never } \| { readonly workspace_key?: never; readonly window_id: string; readonly instance_id?: never } \| { readonly workspace_key?: never; readonly window_id?: never; readonly instance_id: string })`
-
-### LegacyWorkspaceResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agents` | `AgentRef[]` | yes |  |
-| `machines` | `V3MachineQueryResult[]` | yes |  |
-
-### ListArgs
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `scope` | `Scope` | no | Omit the scope to query reachable machines without waking them. |
-
-### LocationInfo
-
-`V3LocationInfo`
+| `pid` | `number` | yes |  |
+| `build` | `string` | yes |  |
 
 ### LocationKind
 
@@ -1101,117 +949,129 @@ What a location is.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `string` | no |  |
+| `scope` | `SingleMachineScope` | no |  |
 | `folders` | `string[]` | no |  |
 
 ### LocationListResult
 
-`V3LocationListResult`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `locations` | `V3LocationInfo[]` | yes |  |
 
-### MachineAddArgs
-
-`V3MachineAddArgs`
-
-### MachineAddResult
-
-The saved connection is ready.
+### LogArgs
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `MachineHello` | yes |  |
-| `first_connection` | `boolean` | yes |  |
+| `lines` | `number` | no |  |
+
+### LogResult
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `lines` | `string[]` | yes |  |
 
 ### MachineConnectArgs
 
-`V3MachineConnectArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `transport` | `MachineTransportInput` | yes |  |
+| `kind` | `ConnectionKind` | yes |  |
+| `expected_machine_id` | `string` | no |  |
 
 ### MachineConnectResult
 
-`V3MachineConnectResult`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `transport` | `MachineTransport` | yes |  |
+| `expected_machine_id` | `string` | no |  |
 
 ### MachineConnection
 
-`V3MachineConnection`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `initiator_machine_id` | `string` | yes |  |
+| `kind` | `ConnectionKind` | yes |  |
+| `state` | `ConnectionState` | yes |  |
+| `transport` | `SshTransport` | no |  |
+| `ssh_interaction` | `SshInteraction` | no |  |
 
-### MachineHello
-
-The introduction on each side of a machine hello.
+### MachineHelloParams
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `machine_id` | `string` | yes |  |
-| `boot_id` | `string` | yes | Changes each time the daemon starts. Distinguishes concurrent uses of a machine ID. |
+| `boot_id` | `string` | yes |  |
 | `name` | `string` | yes |  |
-| `build` | `string` | yes |  |
-| `protocol` | `[number, number]` | yes |  |
-| `ssh_cleans_processes` | `boolean` | no | On Linux, whether the system clears this user's processes at the end of the SSH session. |
+| `ssh_cleans_processes` | `boolean` | no |  |
 
-### MachineIdConflict
+### MachineHelloResult
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine_id` | `string` | yes |  |
-| `paths` | `[string, string]` | yes | Both conflicting connection paths, including their sources. |
-
-### MachineIdentity
-
-A machine's persistent identity and current display name.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machine_id` | `string` | yes |  |
+| `boot_id` | `string` | yes |  |
 | `name` | `string` | yes |  |
+| `ssh_cleans_processes` | `boolean` | no |  |
 
 ### MachineInfo
 
-`V3MachineInfo`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine_id` | `string` | yes |  |
+| `short_id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+| `selector` | `string` | yes |  |
+| `state` | `MachineState` | yes |  |
+| `boot_id` | `string` | no |  |
+| `build` | `string` | no |  |
+| `last_seen` | `string` | no |  |
+| `ssh_error` | `string` | no |  |
+| `route` | `string[]` | no |  |
+| `connections` | `MachineConnection[]` | yes |  |
 
 ### MachineListResult
 
-`V3MachineListResult`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machines` | `MachineInfo[]` | yes |  |
 
-### MachineMessage
-
-A frame from either direction of a machine session. A request without an ID is a notification.
-
-`Request \| Response`
-
-### MachineQueryArgs
-
-Selects a machine for a query. An omitted selector uses the operation's default.
+### MachineQuery
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `string` | no |  |
-
-### MachineQueryResult
-
-`V3MachineQueryResult`
-
-### MachineQueryStatus
-
-`'answered' \| 'unavailable' \| 'timed_out' \| 'error'`
+| `machine_id` | `string` | yes |  |
+| `short_id` | `string` | yes |  |
+| `name` | `string` | yes |  |
+| `selector` | `string` | yes |  |
+| `state` | `MachineState` | yes |  |
+| `status` | `QueryStatus` | yes |  |
+| `build` | `string` | no |  |
+| `last_seen` | `string` | no |  |
+| `ssh_error` | `string` | no |  |
+| `error` | `string` | no |  |
 
 ### MachineRemoveArgs
 
-`V3MachineRemoveArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `machine` | `string` | yes |  |
+| `expected_machine_id` | `string` | no |  |
 
 ### MachineRemoveResult
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `machine_id` | `string` | yes |  |
-| `name` | `string` | no | The machine whose saved connection was removed. |
-| `ssh_destination` | `string` | yes |  |
-| `remote_home` | `string` | no |  |
 | `reachable` | `boolean` | yes |  |
-| `via` | `string` | no | The next machine on a remaining indirect route, in the client's machine view. |
+| `transport` | `SshTransport` | no |  |
+| `name` | `string` | no |  |
+| `via` | `string` | no |  |
 
 ### MachineRenameArgs
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `string` | yes | An input machine selector. |
+| `machine` | `string` | yes |  |
 | `name` | `string` | yes |  |
 
 ### MachineRenameResult
@@ -1222,25 +1082,45 @@ Selects a machine for a query. An omitted selector uses the operation's default.
 | `name` | `string` | yes |  |
 | `previous_name` | `string` | no |  |
 
+### MachineSleepingParams
+
+`Record<string, never>`
+
 ### MachineState
 
-`'online' \| 'connecting' \| 'sleeping' \| 'unreachable' \| 'ssh_interaction_required' \| 'disconnected'`
+`'online' \| 'connecting' \| 'disconnected' \| 'sleeping' \| 'unreachable' \| 'ssh_interaction_required'`
 
 ### MachineTransport
 
-`V3MachineTransport`
+`{ readonly kind: 'bridge' } \| SshTransport`
+
+### MachineTransportInput
+
+`{ readonly kind: 'ssh'; readonly ssh_destination: string; readonly ssh_args?: string[]; readonly remote_home?: string } \| { readonly kind: 'bridge' }`
 
 ### MachinesChange
 
-`V3MachinesChange`
+`{ readonly kind: 'updated'; readonly machine: MachineInfo } \| { readonly kind: 'removed'; readonly machine_id: string }`
 
 ### Message
 
-`V3Message`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `message_id` | `string` | yes |  |
+| `message_ref` | `MessageRef` | no |  |
+| `from` | `string` | yes |  |
+| `from_machine_id` | `string` | no |  |
+| `from_name` | `string` | no |  |
+| `to` | `string` | yes |  |
+| `text` | `string` | yes |  |
+| `reply_to` | `string` | no |  |
+| `reply_to_machine_id` | `string` | no |  |
+| `call_id` | `string` | no |  |
+| `result` | `StartOutcome` | no |  |
+| `at` | `string` | yes |  |
+| `delivery` | `Delivery` | yes |  |
 
 ### MessageRef
-
-A message's identity on the machine that assigned its number.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -1249,19 +1129,15 @@ A message's identity on the machine that assigned its number.
 
 ### NoArgs
 
-Empty arguments: `{}`. May be omitted for topics that take no arguments.
-
 `Record<string, never>`
 
 ### Notification
 
-A message without an ID or response, such as `changed`.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `jsonrpc` | `string` | no | Always `2.0`. |
-| `method` | `string` | yes | The notification method, such as `changed`. |
-| `params` | `unknown` | no | Parameters for the notification method. |
+| `jsonrpc` | `JsonRpc` | yes |  |
+| `method` | `string` | yes |  |
+| `params` | `unknown` | yes |  |
 
 ### Overrides
 
@@ -1285,9 +1161,7 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 
 ### ProcessState
 
-The reported process state of an agent.
-
-`'running' \| 'ended'`
+`'running' \| 'ended' \| 'unknown'`
 
 ### PromptOutcome
 
@@ -1298,38 +1172,17 @@ A start prompt's message ID and what became of it.
 | `message_id` | `string` | yes |  |
 | `delivery` | `Delivery` | yes |  |
 
-### ProtocolMismatch
+### ProtocolMismatchDetails
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `local_build` | `string` | yes |  |
-| `local_protocol` | `[number, number]` | yes |  |
-| `remote_build` | `string` | yes |  |
-| `remote_protocol` | `[number, number]` | yes |  |
+| `offered_api_versions` | `ApiVersions` | no |  |
+| `supported_api_versions` | `ApiVersions` | yes |  |
+| `agents` | `AgentLabel[]` | no |  |
 
-### ReadMessagesArgs
+### QueryStatus
 
-The public MCP inbox request.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `after` | `string` | no |  |
-| `last` | `number` | no |  |
-| `wait` | `boolean` | no |  |
-| `reply_to` | `string` | no |  |
-
-### ReadMessagesResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `messages` | `InboxMessage[]` | yes |  |
-| `next_cursor` | `string` | no | Continue the page by passing this value as `after`. |
-
-### Reason
-
-Error reasons shared by both protocols.
-
-`'invalid_argument' \| 'not_found' \| 'session_not_found' \| 'ambiguous_reference' \| 'ended' \| 'partial_input' \| 'unavailable' \| 'protocol_incompatible' \| 'machine_id_conflict' \| 'ssh_interaction_required' \| 'capacity_exceeded' \| 'internal' \| 'refused' \| 'configuration_invalid' \| 'cancelled' \| 'worktree_failed' \| 'upgrading' \| 'unsupported'`
+`'answered' \| 'unavailable' \| 'timed_out' \| 'error'`
 
 ### RemoveResult
 
@@ -1340,125 +1193,87 @@ Error reasons shared by both protocols.
 
 ### RenameArgs
 
-`V3RenameArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target` | `AgentTarget` | yes |  |
+| `name` | `string` | yes |  |
 
 ### RenameResult
 
-An agent's details.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `agent_id` | `string` | yes | The stable ID is `a` followed by a number. It is unique within its Facade home while that home's SQLite database (`core/facade.db`) retains the agent number counter. |
-| `address` | `string` | yes | The copyable address, including a machine selector. The serving daemon fills client views. |
-| `type` | `AgentKind` | yes |  |
-| `label` | `string` | no | The label in the serving client's machine view. |
-| `unreachable` | `boolean` | no | The running machine is currently unreachable. |
-| `name` | `string` | yes | The display name. Names are nonempty but may repeat. |
-| `cli` | `string` | yes | The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a program started by its path or name. |
-| `args` | `string[]` | yes |  |
-| `model` | `string` | no |  |
-| `effort` | `string` | no |  |
-| `title` | `string` | no |  |
-| `cwd` | `string` | yes | The CLI's working folder at startup. |
-| `machine_id` | `string` | yes | The ID of the Facade machine that runs the agent. |
-| `pid` | `number` | no | The CLI's process ID. Omitted for a guest, whose process Facade does not know. |
-| `process` | `ProcessState` | yes | Whether the CLI is running or ended. |
-| `cols` | `number` | no | Terminal width in columns. Omitted for a guest, which has no terminal of Facade's. |
-| `rows` | `number` | no | Terminal height in rows. Omitted for a guest. |
-| `created_at` | `string` | yes | When the agent was first created, in UTC ISO 8601 format with milliseconds. |
-| `started_at` | `string` | yes | The latest start or resume time, in UTC ISO 8601 format with milliseconds. |
-| `creator_kind` | `CreatorKind` | no |  |
-| `creator` | `string` | no | The agent whose client started it. Omitted where the person started it, and for a guest. |
-| `creator_machine_id` | `string` | no | The creator's machine ID. Omitted when it is the record's own machine. |
-| `root` | `string` | yes | The first agent of its creation tree: itself where it has no creator, or else its creator's root. It stays when agents of the tree end or go. |
-| `root_machine_id` | `string` | no | The root agent's machine ID. Omitted when it is the record's own machine. |
-| `yolo` | `boolean` | yes | Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a guest as it joins. |
-| `exit` | `ProcessExit` | no | The recorded exit. Omitted while the agent is running. |
-| `session` | `string` | no | The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues. Omitted until one is reported. |
-| `state` | `V3AgentState` | yes | What the agent is doing. |
-| `state_detail` | `StateDetail` | no | More about the state: what the CLI waits for, its own words, how its process ended, or why the state is unknown. |
-| `said` | `Said` | no | The last thing that went into the agent's message input. Omitted until something has. |
-| `tools_state` | `ToolsState` | yes | Whether the agent's CLI can use Facade's tools. |
-| `tools_reason` | `ToolsReason` | no | Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable. |
-| `previous_name` | `string` | no | The name this operation replaced. |
+| `agent` | `AgentInfo` | yes |  |
+| `previous_name` | `string` | no |  |
+
+### ReplyTo
+
+`string \| { readonly machine_id: string; readonly message_id: string }`
 
 ### Request
 
-A method call. Calls with an ID receive a response; calls without an ID are notifications.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `jsonrpc` | `string` | no | Always `2.0`. |
-| `id` | `number` | no | A non-negative integer request ID, at most u64::MAX. Omit it for a notification. The response repeats this ID. |
-| `method` | `string` | yes | The method name, such as `hello` or `call`. |
-| `params` | `unknown` | no | Parameters for the named method. |
-
-### ResizeArgs
-
-`V3ResizeArgs`
+| `jsonrpc` | `JsonRpc` | yes |  |
+| `id` | `number` | no |  |
+| `method` | `string` | yes |  |
+| `params` | `unknown` | yes |  |
 
 ### Response
 
-A response containing either a result or an error.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `jsonrpc` | `string` | no | Always `2.0`. |
-| `id` | `number \| null` | yes | The request ID, or `null` for a malformed request. |
-| `result` | `unknown` | no | The success result, with the type defined by the method or operation. |
-| `error` | `ErrorBody` | no | The error on failure. Omitted when the response contains a result. |
+`{ readonly jsonrpc: JsonRpc; readonly id: number; readonly result: unknown } \| { readonly jsonrpc: JsonRpc; readonly id: number \| null; readonly error: ErrorBody }`
 
 ### ResumeArgs
 
-`V3ResumeArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target` | `ResumeTarget` | yes |  |
+| `size` | `{ readonly cols: number; readonly rows: number }` | yes |  |
+| `env` | `{ readonly [key: string]: string }` | no |  |
 
 ### ResumeCandidate
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `target` | `ResumeTarget` | yes |  |
+| `target` | `ResumeCandidateTarget` | yes |  |
+| `machine_id` | `string` | yes |  |
 | `cli` | `string` | yes |  |
 | `folder` | `string` | yes |  |
-| `machine_id` | `string` | yes |  |
 | `session` | `string` | yes |  |
 | `agent` | `AgentRef` | no |  |
-| `name` | `string` | no | The name of a managed agent. Omitted for a saved session. |
-| `stopped` | `boolean` | no | The managed run ended because Facade stopped it. |
+| `name` | `string` | no |  |
+| `stopped` | `boolean` | no |  |
 | `title` | `string` | no |  |
-| `at` | `string` | no | The managed run's exit time or the saved session's modification time. |
+| `at` | `string` | no |  |
+
+### ResumeCandidateTarget
+
+`{ readonly kind: 'agent'; readonly reference: AgentRef } \| { readonly kind: 'session'; readonly machine_id: string; readonly cli: string; readonly session: string; readonly folder: string }`
 
 ### ResumeListArgs
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `string` | no |  |
+| `scope` | `Scope` | no |  |
 | `folder` | `string` | no |  |
-| `all` | `boolean` | no |  |
-| `local` | `boolean` | no | Query this machine alone without starting SSH. Mutually exclusive with `machine`. |
+| `folder_scope` | `FolderScope` | no |  |
 
 ### ResumeListResult
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `items` | `ResumeCandidate[]` | yes |  |
-| `machines` | `V3MachineQueryResult[]` | yes |  |
+| `machines` | `MachineQuery[]` | yes |  |
 
 ### ResumeResult
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `agent` | `V3AgentInfo` | yes |  |
-| `from_saved_session` | `boolean` | no | The call created a new agent to open a saved CLI session. |
+| `agent` | `AgentInfo` | yes |  |
+| `from_saved_session` | `boolean` | no |  |
 
 ### ResumeTarget
 
-The copyable agent address or the CLI session and its working location.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `reference` | `string` | yes |  |
-| `machine` | `string` | no |  |
-| `folder` | `string` | no |  |
+`{ readonly kind: 'agent'; readonly reference: { readonly machine_id: string; readonly agent_id: string } } \| { readonly kind: 'session'; readonly machine_id: string; readonly cli: string; readonly session: string; readonly folder: string } \| { readonly kind: 'selector'; readonly selector: string; readonly scope?: SingleMachineScope; readonly folder?: string }`
 
 ### Said
 
@@ -1473,13 +1288,14 @@ What last went into an agent's message input with Enter: what the person submitt
 
 ### Scope
 
-The machines included in a list or range stop.
-
-`{ readonly kind: 'reachable' } \| { readonly kind: 'local' } \| { readonly kind: 'machine'; readonly machine: string }`
+`{ readonly kind: 'local' } \| { readonly kind: 'machine'; readonly machine: string } \| { readonly kind: 'reachable' }`
 
 ### ScreenArgs
 
-`V3ScreenArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `target` | `AgentTarget` | yes |  |
+| `lines` | `number` | no |  |
 
 ### ScreenBuffer
 
@@ -1489,71 +1305,126 @@ The screen buffer a CLI shows.
 
 ### ScreenChange
 
-A change to the `screen` topic. `exit` follows all output the CLI wrote before ending; processes still holding its terminal may write afterward. On macOS, the terminal is taken from those processes when the CLI ends. `removed` is the watch's last change. Skip unknown change kinds.  `snapshot.redraw`, `output.data`, and `redraw.data` contain standard base64 with padding. Decode them to bytes and feed those bytes to the viewer's terminal parser. Set the viewer to `snapshot.cols` by `snapshot.rows` before the initial redraw. Each redraw change carries its own `cols` and `rows`; use that size before applying its `data`. Process changes for each watch in arrival order. Apply `output` as continuation bytes; `redraw` supplies a replacement terminal sequence. Preserve parser state between messages. Do not treat the decoded bytes as plain text; use `agent.screen` for plain text.
-
-`{ readonly kind: 'output'; readonly data: string } \| { readonly kind: 'redraw'; readonly data: string; readonly cols: number; readonly rows: number } \| { readonly kind: 'activity'; readonly working: boolean } \| { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number; readonly resume_hint?: string } \| { readonly kind: 'removed' }`
-
-### ScreenSize
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `cols` | `number` | yes | Terminal width in columns, at least 2. |
-| `rows` | `number` | yes | Terminal height in rows, at least 1. |
+`{ readonly kind: 'output'; readonly data: string } \| { readonly kind: 'redraw'; readonly size: Size; readonly data: string } \| { readonly kind: 'activity'; readonly working: boolean } \| { readonly kind: 'exit'; readonly exit: ProcessExit; readonly exit_status?: number; readonly resume_hint?: string } \| { readonly kind: 'removed' }`
 
 ### ScreenSnapshot
 
-`V3ScreenSnapshot`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `AgentRef` | yes |  |
+| `address` | `string` | yes |  |
+| `size` | `Size` | yes |  |
+| `redraw` | `string` | yes |  |
+| `name` | `string` | no |  |
+| `exit` | `ProcessExit` | no |  |
+| `exit_status` | `number` | no |  |
+| `resume_hint` | `string` | no |  |
+| `process` | `ProcessState` | no |  |
+| `working` | `boolean` | no |  |
 
 ### ScreenText
 
-`V3ScreenText`
-
-### ScreenWatchArgs
-
-`V3ScreenWatchArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `reference` | `AgentRef` | yes |  |
+| `address` | `string` | yes |  |
+| `name` | `string` | no |  |
+| `process` | `ProcessState` | yes |  |
+| `observed_at` | `string` | yes |  |
+| `buffer` | `ScreenBuffer` | yes |  |
+| `text` | `string` | yes |  |
+| `line_count` | `number` | yes |  |
+| `older_lines` | `boolean` | yes |  |
+| `trimmed` | `boolean` | yes |  |
 
 ### SendArgs
 
-`V3SendArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `to` | `AgentTarget` | yes |  |
+| `text` | `string` | yes |  |
+| `reply_to` | `ReplyTo` | no |  |
+| `request_id` | `string` | no |  |
+| `time_left_ms` | `number` | no |  |
+| `allow_unsupported_receipt` | `boolean` | no |  |
 
 ### SendResult
 
-`V3SendResult`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes |  |
+| `message` | `Message` | yes |  |
+| `recipient` | `AgentLabel` | no |  |
+| `repeated` | `boolean` | no |  |
+| `withdrawn` | `boolean` | no |  |
+| `expected_reply_to` | `MessageRef` | no |  |
 
-### ServerMessage
+### SingleMachineScope
 
-A response or notification received from a server.
+`{ readonly kind: 'local' } \| { readonly kind: 'machine'; readonly machine: string }`
 
-`Notification \| Response`
-
-### SessionMatch
-
-A saved session that matched the requested session ID.
+### Size
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | yes | The full CLI session ID. |
-| `cli` | `string` | yes |  |
-| `title` | `string` | no |  |
+| `cols` | `number` | yes |  |
+| `rows` | `number` | yes |  |
 
 ### SshInteraction
 
+A diagnostic and the command that repairs the saved SSH connection.
+
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `reason` | `string` | yes |  |
-| `command` | `string[]` | yes | The complete command and arguments with which to repair the saved connection. |
+| `message` | `string` | yes |  |
+| `command` | `string[]` | yes |  |
+
+### SshTransport
+
+Normalized SSH arguments, including an empty argv when no options are required.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ssh_destination` | `string` | yes |  |
+| `ssh_args` | `string[]` | yes |  |
+| `remote_home` | `string` | no |  |
+| `kind` | `'ssh'` | yes |  |
 
 ### StartArgs
 
-`V3StartArgs`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cli` | `string` | yes |  |
+| `size` | `{ readonly cols: number; readonly rows: number }` | yes |  |
+| `args` | `string[]` | no |  |
+| `scope` | `SingleMachineScope` | no |  |
+| `folder` | `string` | no |  |
+| `folder_is_default` | `boolean` | no |  |
+| `worktree` | `string` | no |  |
+| `model` | `string` | no |  |
+| `effort` | `string` | no |  |
+| `name` | `string` | no |  |
+| `prompt` | `string` | no |  |
+| `env` | `{ readonly [key: string]: string }` | no |  |
+| `request_id` | `string` | no |  |
+| `call_id` | `string` | no |  |
 
 ### StartOutcome
 
-`V3StartOutcome`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `AgentInfo` | yes |  |
+| `prompt` | `PromptOutcome` | yes |  |
 
 ### StartResult
 
-`V3StartResult`
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `agent` | `AgentInfo` | yes |  |
+| `prompt` | `Message` | no |  |
+| `result_message_id` | `string` | no |  |
+| `result_message_machine_id` | `string` | no |  |
+| `repeated` | `boolean` | no |  |
 
 ### StateDetail
 
@@ -1576,7 +1447,7 @@ Why nothing shows what an agent's CLI is doing, or what Facade found wrong with 
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `machine` | `string` | no |  |
+| `scope` | `SingleMachineScope` | no |  |
 
 ### StatusResult
 
@@ -1587,8 +1458,8 @@ Why nothing shows what an agent's CLI is doing, or what Facade found wrong with 
 | `build` | `string` | yes |  |
 | `daemon_pid` | `number` | yes |  |
 | `keeper_pid` | `number` | no |  |
-| `agents` | `number` | yes |  |
-| `machines` | `V3MachineQueryResult[]` | yes |  |
+| `agent_count` | `number` | yes |  |
+| `machines` | `MachineQuery[]` | yes |  |
 
 ### StopArgs
 
@@ -1598,11 +1469,7 @@ Why nothing shows what an agent's CLI is doing, or what Facade found wrong with 
 
 ### StopItem
 
-`{ readonly target: AgentTarget; readonly reference?: AgentRef; readonly address?: string; readonly agent?: AgentLabel } & ({ readonly status: 'stopped'; readonly exit: ProcessExit } \| { readonly status: 'failed'; readonly error: ErrorBody } \| { readonly status: 'skipped' })`
-
-### StopResult
-
-`V3StopResult`
+`{ readonly target: string \| AgentRef; readonly agent?: AgentLabel } & ({ readonly status: 'stopped'; readonly exit: ProcessExit } \| { readonly status: 'failed'; readonly error: ErrorBody } \| { readonly status: 'skipped' })`
 
 ### StopSelection
 
@@ -1610,13 +1477,15 @@ Why nothing shows what an agent's CLI is doing, or what Facade found wrong with 
 
 ### TerminalColors
 
-The colors an editor window's terminals draw with, each `#rrggbb`. An agent of the window replies to its CLI's OSC 10, 11 and 12 queries with them; a color left out gets no reply.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `foreground` | `string` | no |  |
 | `background` | `string` | no |  |
 | `cursor` | `string` | no |  |
+
+### TerminalInput
+
+`{ readonly kind: 'text'; readonly text: string; readonly enter?: boolean } \| { readonly kind: 'keys'; readonly keys: string[] } \| { readonly kind: 'raw'; readonly raw: string }`
 
 ### TextWritten
 
@@ -1636,202 +1505,23 @@ Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that
 
 `'not_injected' \| 'connecting' \| 'available' \| 'unavailable'`
 
-### TypeArgs
-
-`V3TypeArgs`
-
 ### TypeResult
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `agent` | `AgentLabel` | no | The target that took the input. Raw terminal input keeps the empty receipt. |
-
-### Unavailable
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `execution` | `ExecutionOutcome` | yes |  |
-| `machine` | `MachineIdentity` | no |  |
-| `unanswered` | `MachineIdentity[]` | no |  |
-| `matches` | `string[]` | no | Complete addresses returned before a name lookup could finish. |
+| `agent` | `AgentLabel` | no |  |
 
 ### UnwatchParams
 
-Parameters for `unwatch`.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `watch` | `number` | yes | The watch number returned by `watch` on this connection. |
-
-### UpgradeArgs
-
-Arguments for `daemon.upgrade`: the program of a newer build that takes over, as the command that asks runs it.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `program` | `string` | yes | The program, a `facade`, with its `facade-mcp` beside it. |
-| `build` | `string` | yes | Its build, as its `hello` says it. |
-| `daemon_protocol` | `[number, number]` | yes | The daemon protocol range accepted for this takeover, lowest and highest. |
-| `keeper_protocol` | `[number, number]` | yes | The keeper protocol versions it speaks, lowest and highest. |
-
-### UpgradeResult
-
-The result of `daemon.upgrade`.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `from` | `string` | yes | The build that hands over. |
-| `agents` | `number` | yes | The agents that keep running through the takeover: those whose run runs. |
-
-### V3AdvertiseParams
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machines` | `V3MachineInfo[]` | yes |  |
-
-### V3AgentArgs
-
-`{ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef }`
-
-### V3AgentInfo
-
-An agent's details.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agent_id` | `string` | yes | The stable ID is `a` followed by a number. It is unique within its Facade home while that home's SQLite database (`core/facade.db`) retains the agent number counter. |
-| `address` | `string` | yes | The copyable address, including a machine selector. The serving daemon fills client views. |
-| `type` | `AgentKind` | yes |  |
-| `label` | `string` | no | The label in the serving client's machine view. |
-| `unreachable` | `boolean` | no | The running machine is currently unreachable. |
-| `name` | `string` | yes | The display name. Names are nonempty but may repeat. |
-| `cli` | `string` | yes | The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or an added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a program started by its path or name. |
-| `args` | `string[]` | yes |  |
-| `model` | `string` | no |  |
-| `effort` | `string` | no |  |
-| `title` | `string` | no |  |
-| `cwd` | `string` | yes | The CLI's working folder at startup. |
-| `machine_id` | `string` | yes | The ID of the Facade machine that runs the agent. |
-| `pid` | `number` | no | The CLI's process ID. Omitted for a guest, whose process Facade does not know. |
-| `process` | `ProcessState` | yes | Whether the CLI is running or ended. |
-| `cols` | `number` | no | Terminal width in columns. Omitted for a guest, which has no terminal of Facade's. |
-| `rows` | `number` | no | Terminal height in rows. Omitted for a guest. |
-| `created_at` | `string` | yes | When the agent was first created, in UTC ISO 8601 format with milliseconds. |
-| `started_at` | `string` | yes | The latest start or resume time, in UTC ISO 8601 format with milliseconds. |
-| `creator_kind` | `CreatorKind` | no |  |
-| `creator` | `string` | no | The agent whose client started it. Omitted where the person started it, and for a guest. |
-| `creator_machine_id` | `string` | no | The creator's machine ID. Omitted when it is the record's own machine. |
-| `root` | `string` | yes | The first agent of its creation tree: itself where it has no creator, or else its creator's root. It stays when agents of the tree end or go. |
-| `root_machine_id` | `string` | no | The root agent's machine ID. Omitted when it is the record's own machine. |
-| `yolo` | `boolean` | yes | Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With YOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation tree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a guest as it joins. |
-| `exit` | `ProcessExit` | no | The recorded exit. Omitted while the agent is running. |
-| `session` | `string` | no | The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues. Omitted until one is reported. |
-| `state` | `V3AgentState` | yes | What the agent is doing. |
-| `state_detail` | `StateDetail` | no | More about the state: what the CLI waits for, its own words, how its process ended, or why the state is unknown. |
-| `said` | `Said` | no | The last thing that went into the agent's message input. Omitted until something has. |
-| `tools_state` | `ToolsState` | yes | Whether the agent's CLI can use Facade's tools. |
-| `tools_reason` | `ToolsReason` | no | Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable. |
-
-### V3AgentListResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agents` | `AgentListEntry[]` | yes |  |
-| `machines` | `V3MachineQueryResult[]` | yes |  |
-
-### V3AgentMachineState
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machine_id` | `string` | yes |  |
-| `state` | `AgentSyncState` | yes |  |
-| `agents` | `V3AgentInfo[]` | no | For a synced machine, its complete records, including an empty list. |
+| `watch` | `number` | yes |  |
 
 ### V3AgentState
 
 The agent's current state.
 
 `'starting' \| 'working' \| 'waiting_for_you' \| 'just_done' \| 'idle' \| 'error' \| 'ended' \| 'unknown' \| 'online'`
-
-### V3AgentsChange
-
-`{ readonly kind: 'updated'; readonly agent: V3AgentInfo } \| { readonly kind: 'removed'; readonly machine_id: string; readonly agent_id: string; readonly cause: AgentRemoval } \| { readonly kind: 'machine_state'; readonly machine: V3AgentMachineState }`
-
-### V3AgentsSnapshot
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agents` | `V3AgentInfo[]` | yes | Records on the machine that serves this view. |
-| `machines` | `V3AgentMachineState[]` | yes |  |
-
-### V3CallParams
-
-`{ readonly op: 'list'; readonly args: ListArgs } \| { readonly op: 'agent.list'; readonly args: MachineQueryArgs } \| { readonly op: 'agent.inspect'; readonly args: V3AgentArgs } \| { readonly op: 'agent.start'; readonly args: V3StartArgs } \| { readonly op: 'agent.start_preflight'; readonly args: V3StartArgs } \| { readonly op: 'agent.resume_list'; readonly args: ResumeListArgs } \| { readonly op: 'agent.resume'; readonly args: V3ResumeArgs } \| { readonly op: 'location.list'; readonly args: LocationListArgs } \| { readonly op: 'cli.list'; readonly args: CliListArgs } \| { readonly op: 'agent.stop'; readonly args: V3AgentArgs } \| { readonly op: 'stop'; readonly args: StopArgs } \| { readonly op: 'agent.remove'; readonly args: V3AgentArgs } \| { readonly op: 'agent.rename'; readonly args: V3RenameArgs } \| { readonly op: 'agent.type'; readonly args: V3TypeArgs } \| { readonly op: 'agent.send'; readonly args: V3SendArgs } \| { readonly op: 'agent.resize'; readonly args: V3ResizeArgs } \| { readonly op: 'attach.resize'; readonly args: AttachResizeArgs } \| { readonly op: 'agent.screen'; readonly args: V3ScreenArgs } \| { readonly op: 'daemon.status'; readonly args: StatusArgs } \| { readonly op: 'workspace.import_legacy'; readonly args: LegacyWorkspaceArgs } \| { readonly op: 'machine.list'; readonly args: NoArgs } \| { readonly op: 'machine.add'; readonly args: V3MachineAddArgs } \| { readonly op: 'machine.connect'; readonly args: V3MachineConnectArgs } \| { readonly op: 'machine.remove'; readonly args: V3MachineRemoveArgs } \| { readonly op: 'machine.rename'; readonly args: MachineRenameArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'agent.deliver_start_result'; readonly args: V3DeliverStartResultArgs }`
-
-### V3Caller
-
-An identity verified by the daemon that accepted the original request.
-
-`{ readonly kind: 'terminal'; readonly machine_id: string } \| { readonly kind: 'ide'; readonly machine_id: string } \| { readonly kind: 'agent'; readonly agent: AgentRef; readonly root: AgentRef; readonly yolo: boolean }`
-
-### V3DeliverStartResultArgs
-
-A start outcome with the message number already reserved on the recipient's machine.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `recipient` | `AgentRef` | yes |  |
-| `message` | `V3Message` | yes |  |
-
-### V3ForwardCall
-
-A forwarded call and the facts verified by the originating machine.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `call` | `V3CallParams` | yes |  |
-| `by_model` | `boolean` | yes |  |
-| `from_name` | `string` | no |  |
-| `recipient` | `AgentRef` | no | The resolved destination of `agent.send`, used again on retry. |
-
-### V3ForwardParams
-
-Parameters of `forward`. The outer JSON-RPC ID identifies this hop.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `route` | `string[]` | yes | Remaining machine IDs, from this hop's receiver to the destination. |
-| `caller` | `V3Caller` | yes |  |
-| `time_left_ms` | `number` | no |  |
-| `request_id` | `string` | no |  |
-| `method` | `string` | yes |  |
-| `params` | `unknown` | yes |  |
-
-### V3HelloParams
-
-Introduces a daemon client or a machine. Actor identity is supplied by the daemon.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `protocol` | `[number, number]` | yes |  |
-| `build` | `string` | yes |  |
-| `kind` | `ClientKind` | yes |  |
-| `capabilities` | `string[]` | no | Additions to protocol 3 understood by this client. |
-| `foreground` | `boolean` | no | Keep an authenticated machine session active until this foreground connection closes. |
-| `machine` | `MachineHello` | no |  |
-
-### V3InspectResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agent` | `V3AgentInfo` | yes |  |
-| `rule` | `string` | no | The CLI rule the agent was started by: its CLI's name, such as `claude`. Omitted for an agent started by a program path or a name without a rule. |
-| `input` | `InputInfo` | yes |  |
-| `session_tracking` | `boolean` | yes | Whether the running CLI reports its session to Facade. False for an ended agent. |
-| `started_by` | `AgentCreator` | no | The recorded startup source, where it is known. |
-| `viewers` | `string[]` | yes | The viewers currently attached to the terminal. |
-| `attachments` | `AttachmentInfo[]` | no | The verified client kinds and originating machines of those attachments. |
-| `launch_command` | `string` | no | The actual launch command formatted by the running machine, with run credentials redacted. Omitted if this run's launch command was not recorded. |
 
 ### V3LocationInfo
 
@@ -1843,263 +1533,6 @@ Introduces a daemon client or a machine. Actor identity is supplied by the daemo
 | `kind` | `LocationKind` | yes | What the location is: a folder, a repository's main checkout, or a linked worktree. |
 | `source_folder` | `string` | no | The requested workspace folder that produced this local result. |
 
-### V3LocationListResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `locations` | `V3LocationInfo[]` | yes |  |
-
-### V3MachineAddArgs
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `ssh_destination` | `string` | yes |  |
-| `ssh_args` | `string[]` | no |  |
-| `remote_home` | `string` | no |  |
-| `machine_id` | `string` | yes |  |
-
-### V3MachineConnectArgs
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `transport` | `V3MachineTransport` | yes |  |
-| `kind` | `ConnectionKind` | yes | A bridge is always temporary. |
-| `expected_machine_id` | `string` | no | The machine ID a saved connection must authenticate before its route changes. |
-
-### V3MachineConnectResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `ssh_destination` | `string` | no |  |
-| `ssh_args` | `string[]` | no |  |
-| `remote_home` | `string` | no |  |
-| `expected_machine_id` | `string` | no |  |
-
-### V3MachineConnection
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machine_id` | `string` | yes | The other end of the connection. |
-| `initiator_machine_id` | `string` | yes |  |
-| `kind` | `ConnectionKind` | yes |  |
-| `ssh_destination` | `string` | no |  |
-| `ssh_args` | `string[]` | no |  |
-| `remote_home` | `string` | no |  |
-| `state` | `ConnectionState` | yes |  |
-| `ssh_interaction` | `SshInteraction` | no |  |
-
-### V3MachineInfo
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machine_id` | `string` | yes |  |
-| `boot_id` | `string` | no | The running daemon, where observed. Every advertised route carries it. |
-| `name` | `string` | yes |  |
-| `selector` | `string` | yes |  |
-| `state` | `MachineState` | yes |  |
-| `last_seen` | `string` | no |  |
-| `ssh_error` | `string` | no |  |
-| `build` | `string` | no |  |
-| `capabilities` | `string[]` | no | Protocol additions supported by this machine. |
-| `route` | `string[]` | no | The remaining hops, ending at this machine. Empty for the table's own machine. Absent for a saved destination without a route. |
-| `connections` | `V3MachineConnection[]` | yes |  |
-
-### V3MachineListResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machines` | `V3MachineInfo[]` | yes |  |
-
-### V3MachineQueryResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machine_id` | `string` | yes |  |
-| `short_id` | `string` | yes |  |
-| `name` | `string` | yes |  |
-| `selector` | `string` | yes |  |
-| `build` | `string` | no |  |
-| `state` | `MachineState` | yes |  |
-| `status` | `MachineQueryStatus` | yes | Whether this query obtained the machine's contribution. |
-| `last_seen` | `string` | no |  |
-| `ssh_error` | `string` | no |  |
-| `error` | `string` | no | The reason this query failed, when known. |
-
-### V3MachineRemoveArgs
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `machine` | `string` | yes | An input machine selector. |
-| `expected_machine_id` | `string` | no | Remove the saved connection for this exact full machine ID. |
-
-### V3MachineTransport
-
-`{ readonly kind: 'ssh'; readonly ssh_destination: string; readonly ssh_args?: string[]; readonly remote_home?: string } \| { readonly kind: 'bridge' }`
-
-### V3MachinesChange
-
-`{ readonly kind: 'updated'; readonly machine: V3MachineInfo } \| { readonly kind: 'removed'; readonly machine_id: string }`
-
-### V3Message
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `message_id` | `string` | yes | `m` followed by a number, unique within the Facade home. |
-| `message_ref` | `MessageRef` | no | The full reference, when a remote message receipt needs it. |
-| `from` | `string` | yes | The sender: an agent ID, `command_line` or `facade`. |
-| `from_machine_id` | `string` | no | The sender's machine, when different from the one that stored the message. |
-| `from_name` | `string` | no | The sender's name when it sent the message. Omitted for `command_line` and `facade`. |
-| `to` | `string` | yes | The recipient's agent ID. |
-| `text` | `string` | yes | The complete text as sent. |
-| `reply_to` | `string` | no | The message this one answers. |
-| `reply_to_machine_id` | `string` | no | The replied-to message's machine, when different from the one that stored this message. |
-| `call_id` | `string` | no | A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the call its result answers. |
-| `result` | `V3StartOutcome` | no | A result's facts, which its text words. Omitted for any other message. |
-| `at` | `string` | yes | When Facade received it, in UTC ISO 8601 format with milliseconds. |
-| `delivery` | `Delivery` | yes |  |
-
-### V3RenameArgs
-
-`{ readonly name: string } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
-
-### V3ResizeArgs
-
-`{ readonly cols: number; readonly rows: number; readonly colors?: TerminalColors } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
-
-### V3ResumeArgs
-
-The copyable agent address or the CLI session and its working location.
-
-`{ readonly reference: string; readonly machine?: string; readonly folder?: string; readonly machine_id?: string; readonly env?: { readonly [key: string]: string }; readonly cols: number; readonly rows: number } & ({ readonly machine_id?: never } \| { readonly machine?: never })`
-
-### V3ScreenArgs
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agent` | `string` | yes | The agent's address or name. |
-| `lines` | `number` | no | The number of lines to return, from 1 to 2000. Defaults to 50. |
-
-### V3ScreenSnapshot
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agent_id` | `string` | yes | The ID of the agent being viewed. |
-| `address` | `string` | yes |  |
-| `name` | `string` | no |  |
-| `machine_id` | `string` | yes | The agent's running machine, for reconnecting to its exact reference. |
-| `cols` | `number` | yes | Terminal width required to apply the redraw. |
-| `rows` | `number` | yes | Terminal height required to apply the redraw. |
-| `redraw` | `string` | yes | Base64-encoded terminal bytes that redraw the screen at this size. Restores cursor state, charsets, and modes. On the main screen, up to 1,000 rows of agent scrollback come first unless `include_scrollback` is false. `keep_scrollback` controls whether the viewer's existing scrollback is cleared before the redraw. |
-| `exit` | `ProcessExit` | no | The recorded exit, if the agent has ended. |
-| `exit_status` | `number` | no | The shell exit status calculated on the machine that ran the agent, if known. |
-| `resume_hint` | `string` | no | The CLI's resume instructions for a Shell attachment that opens an ended run. Empty when it printed none. |
-| `process` | `ProcessState` | no | The agent's process state captured with this snapshot. |
-| `working` | `boolean` | no | Whether the agent is starting or working, when the watch requested activity. |
-
-### V3ScreenText
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agent_id` | `string` | yes |  |
-| `address` | `string` | yes |  |
-| `name` | `string` | no |  |
-| `process` | `ProcessState` | yes | Whether the agent's CLI is running. An ended agent's screen is the one it left. |
-| `observed_at` | `string` | yes | When the screen was read, in UTC ISO 8601 format with milliseconds; for an ended agent, when it ended, as its screen is the one it left. |
-| `buffer` | `ScreenBuffer` | yes |  |
-| `text` | `string` | yes | The lines, joined by line feeds, each wrapped row joined into its line. Inverse text is between `[[` and `]]` and dim text between `{{` and `}}`, inverse outside dim. Each backslash, bracket, and brace of the screen's own text is escaped with a backslash, so removing the marks and the escapes gives the text exactly; see [`crate::daemon::plain`]. |
-| `line_count` | `number` | yes | How many lines `text` holds. |
-| `older_lines` | `boolean` | yes | Whether output lies above the lines read. |
-| `trimmed` | `boolean` | yes | Whether the scrollback let go of its oldest lines. |
-
-### V3ScreenWatchArgs
-
-`{ readonly keep_scrollback?: boolean; readonly include_scrollback?: boolean; readonly viewer?: string; readonly allow_ended?: boolean; readonly report_activity?: boolean; readonly size?: ScreenSize } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
-
-### V3SendArgs
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `to` | `string` | yes | The recipient's address or name. |
-| `text` | `string` | yes | The complete message: at most 8,000 characters and 540 lines of text, tabs, and line breaks, not blank. |
-| `reply_to` | `string` | no | The message this one answers, by ID or address such as `m4@gpu`. |
-| `reply_to_machine_id` | `string` | no | The storage machine of the reply's reference, after the originating daemon verified it. |
-| `request_id` | `string` | no | The caller's own ID of this send, 1 to 200 characters. A retry within an hour with the same sender, sender machine, target, and ID joins its ongoing delivery or returns its original result. A withdrawn message keeps only a private record of the outcome for retries. |
-| `time_left_ms` | `number` | no | What is left of the send's 30 seconds as it leaves the client, in milliseconds: its delivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500. |
-| `allow_unsupported_receipt` | `boolean` | no | A terminal can request a numbered delivery outcome for a target without an input rule. |
-
-### V3SendResult
-
-The receipt of a send, with the address that can be used to wait for a reply.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `id` | `string` | yes |  |
-| `message` | `V3Message` | yes |  |
-| `recipient` | `AgentLabel` | no | The recipient selected for this send, including when delivery fails. |
-| `repeated` | `boolean` | no |  |
-| `withdrawn` | `boolean` | no |  |
-| `expected_reply_to` | `MessageRef` | no | The original message the Guest was waiting for this sender to answer. It can be included when a send without `reply_to` timed out and was withdrawn. |
-
-### V3StartArgs
-
-Shared arguments for start and preflight.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `cli` | `string` | yes |  |
-| `args` | `string[]` | no |  |
-| `folder` | `string` | no |  |
-| `folder_is_default` | `boolean` | no | The entry's default folder, which is discarded when forwarding to another machine. |
-| `machine` | `string` | no |  |
-| `worktree` | `string` | no | A branch to create as a worktree from the repository's current HEAD. |
-| `model` | `string` | no |  |
-| `effort` | `string` | no |  |
-| `name` | `string` | no |  |
-| `prompt` | `string` | no |  |
-| `env` | `{ readonly [key: string]: string }` | no |  |
-| `cols` | `number` | yes |  |
-| `rows` | `number` | yes |  |
-| `call_id` | `string` | no |  |
-| `result_message_id` | `string` | no |  |
-| `result_message_machine_id` | `string` | no |  |
-| `request_id` | `string` | no |  |
-
-### V3StartOutcome
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agent` | `V3AgentInfo` | yes | The started agent as it was when its prompt was settled. |
-| `prompt` | `PromptOutcome` | yes |  |
-
-### V3StartResult
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `agent` | `V3AgentInfo` | yes | The agent's record. |
-| `prompt` | `V3Message` | no | The prompt, kept and pending, where one was given. |
-| `result_message_id` | `string` | no | The ID of the result the prompt owes the agent the client acts for, a message from `facade` once the prompt is settled. Omitted where no result is owed. |
-| `result_message_machine_id` | `string` | no | The machine that assigned `result_message_id`, when a result is owed. |
-| `repeated` | `boolean` | no | The call repeated an earlier one by its request ID: the agent is that call's, as it stands now. Omitted otherwise. |
-
-### V3StopResult
-
-A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as exit code zero.
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `reference` | `AgentRef` | yes |  |
-| `address` | `string` | yes |  |
-| `agent` | `AgentLabel` | no | The record whose run this call stopped. |
-| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
-| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
-| `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
-| `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
-| `already_ended` | `boolean` | no | The CLI had ended before this stop, so the stop signaled nothing. Omitted when false. |
-
-### V3TypeArgs
-
-`{ readonly raw?: string; readonly text?: string; readonly enter?: boolean; readonly keys?: string[] } & ({ readonly agent: string; readonly reference?: never } \| { readonly agent?: never; readonly reference: AgentRef })`
-
 ### WaitKind
 
 What a CLI waits for.
@@ -2108,8 +1541,6 @@ What a CLI waits for.
 
 ### WatchEndedParams
 
-A forwarded watch ended. A new watch starts with a fresh snapshot.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `watch` | `number` | yes |  |
@@ -2117,15 +1548,11 @@ A forwarded watch ended. A new watch starts with a fresh snapshot.
 
 ### WatchParams
 
-Parameters for `watch`.
-
-`{ readonly topic: 'agents'; readonly args?: NoArgs } \| { readonly topic: 'screen'; readonly args: V3ScreenWatchArgs } \| { readonly topic: 'attach'; readonly args: V3ScreenWatchArgs } \| { readonly topic: 'machines'; readonly args?: NoArgs }`
+`{ readonly topic: 'agents'; readonly args: NoArgs } \| { readonly topic: 'machines'; readonly args: NoArgs } \| { readonly topic: 'attach'; readonly args: AttachArgs }`
 
 ### WatchResult
 
-The result of `watch`, sent before any changes for that watch.
-
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `watch` | `number` | yes | The watch number used by `changed` notifications and `unwatch`. |
-| `snapshot` | `V3AgentsSnapshot \| V3ScreenSnapshot \| V3MachineInfo[]` | yes | The topic snapshot. Later changes arrive as ordered `changed` notifications. |
+| `watch` | `number` | yes |  |
+| `snapshot` | `AgentsSnapshot \| MachineInfo[] \| ScreenSnapshot` | yes |  |

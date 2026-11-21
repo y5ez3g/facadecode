@@ -217,7 +217,7 @@ fn roster_refs_work_for_operations_and_removal_keeps_the_empty_roster() {
     let table = home.list_table();
     assert_eq!(table.column("REF"), [&second.address, &first.address]);
     for reference in table.column("REF") {
-        let removed = connect(&home).call_ok("agent.remove", json!({ "agent": reference }));
+        let removed = connect(&home).call_ok("agent.remove", json!({ "target": reference }));
         assert_eq!(removed["address"], reference);
     }
     assert!(home.agents().is_empty(), "{:?}", home.agents());
@@ -281,7 +281,7 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
     let listed = home.agent_list();
     let row = &listed["agents"][0];
     for (row_key, record_key) in [
-        ("id", "address"),
+        ("address", "address"),
         ("name", "name"),
         ("type", "type"),
         ("cli", "cli"),
@@ -289,12 +289,7 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
     ] {
         assert_eq!(row[row_key], record[record_key], "{row}");
     }
-    assert_eq!(
-        row["reference"],
-        json!({
-            "agent_id": record["agent_id"], "machine_id": record["machine_id"]
-        })
-    );
+    assert_eq!(row["reference"], record["reference"]);
 
     let inspected = home.inspect_agent(&worker.id);
     let agent = &inspected["agent"];
@@ -474,7 +469,7 @@ fn start_workdir_uses_the_invoking_shell_for_local_paths() {
         );
         let id = started_id(&stdout(&started));
         let record = home.agent_record(&id).unwrap();
-        assert_eq!(record["machine_id"], machine_id, "{record}");
+        assert_eq!(record["reference"]["machine_id"], machine_id, "{record}");
         let started_folder = Path::new(record["cwd"].as_str().unwrap());
         assert_eq!(
             real_path(started_folder).unwrap(),
@@ -525,7 +520,7 @@ fn machine_list_and_remove_on_a_lone_machine() {
     let local = &listed["machines"][0];
     let row = &table.rows[0];
     assert_eq!(table.cell(row, "NAME"), local["name"]);
-    let id = local["machine_id"].as_str().expect("a v3 machine ID");
+    let id = local["machine_id"].as_str().expect("a machine ID");
     assert_eq!(
         table.cell(row, "ID"),
         facade_base::address::short_machine_id(id)
@@ -637,7 +632,7 @@ fn status_shows_a_running_facade() {
     );
     assert_eq!(result["daemon_pid"], daemon);
     assert_eq!(result["keeper_pid"], keeper);
-    assert_eq!(result["agents"], 1);
+    assert_eq!(result["agent_count"], 1);
     assert_eq!(home.daemon_pid(), Some(daemon as i32));
 }
 

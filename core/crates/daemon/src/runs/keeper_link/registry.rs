@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use facade_base::api_v1::keeper::{HeldAgent, SyncArgs};
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{KeeperHeldAgent, KeeperSyncArgs};
+use facade_base::keeper::KeeperHeldAgent;
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::terminal::PtyMaster;
 use tokio::sync::Notify;
@@ -58,7 +59,7 @@ pub(super) struct RunRegistry {
 
 pub(super) struct Reconciliation {
     pub stops: Vec<String>,
-    pub unrecorded: Vec<KeeperHeldAgent>,
+    pub unrecorded: Vec<HeldAgent>,
 }
 
 impl RunRegistry {
@@ -390,7 +391,7 @@ impl RunRegistry {
     pub fn reconcile(
         &self,
         keeper: u32,
-        inventory: &[KeeperHeldAgent],
+        inventory: &[HeldAgent],
     ) -> Result<Reconciliation, ErrorBody> {
         let runs = self.runs.lock().unwrap();
         let mut plan = Reconciliation {
@@ -398,7 +399,7 @@ impl RunRegistry {
             unrecorded: vec![],
         };
         for held in inventory {
-            if let Some(run) = runs.get(&held.id) {
+            if let Some(run) = runs.get(&held.agent_id) {
                 if run.identity
                     != (ProcessIdentity {
                         pid: held.pid,
@@ -407,11 +408,14 @@ impl RunRegistry {
                 {
                     return Err(ErrorBody::new(
                         Reason::Internal,
-                        format!("keeper {keeper} holds {} for another process", held.id),
+                        format!(
+                            "keeper {keeper} holds {} for another process",
+                            held.agent_id
+                        ),
                     ));
                 }
                 if run.stopping && !held.stopping {
-                    plan.stops.push(held.id.clone());
+                    plan.stops.push(held.agent_id.clone());
                 }
             } else {
                 plan.unrecorded.push(held.clone());
@@ -422,11 +426,14 @@ impl RunRegistry {
 
     pub fn missing(
         &self,
-        inventory: &[KeeperHeldAgent],
-    ) -> Result<Vec<(KeeperSyncArgs, PtyMaster, bool)>, ErrorBody> {
+        inventory: &[HeldAgent],
+    ) -> Result<Vec<(SyncArgs, PtyMaster, bool)>, ErrorBody> {
         let runs = self.runs.lock().unwrap();
         let mut terminals = Vec::new();
-        let present: HashSet<_> = inventory.iter().map(|held| held.id.as_str()).collect();
+        let present: HashSet<_> = inventory
+            .iter()
+            .map(|held| held.agent_id.as_str())
+            .collect();
         for (id, run) in runs.iter() {
             if run.exit.is_some() || present.contains(id.as_str()) {
                 continue;
@@ -438,8 +445,8 @@ impl RunRegistry {
                 )
             })?;
             terminals.push((
-                KeeperSyncArgs {
-                    agent: id.clone(),
+                SyncArgs {
+                    agent_id: id.clone(),
                     pid: run.identity.pid,
                     birth: run.identity.birth.clone(),
                 },

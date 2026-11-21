@@ -6,26 +6,24 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 
 use anyhow::{Context as _, ensure};
+use facade_base::api_v1::daemon::{
+    ConnectedParams, MachineIdentity, MachineList, MachineRemove, MachineRemoveArgs,
+    MachineRemoveResult,
+};
+use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::api_v1::{ErrorBody, NoArgs};
 use facade_base::daemon::display_name;
-use facade_base::daemon_client::DaemonClient;
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::ConnectedParams;
-use facade_base::operations::NoArgs;
 use facade_base::paths;
 use facade_base::ssh::{
     self, AuthorizationChange, AuthorizationFile, DedicatedIdentity, HostTrust,
 };
 use facade_base::v3::address::{display_machine_id, parse_machine_selector};
-use facade_base::v3::{
-    CAP_MACHINE_REMOVE_EXPECTED_ID, ConnectionKind, MachineIdentity, MachineList, MachineRemove,
-    MachineRemoveArgs,
-};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::{
     Bootstrap, HelperUnavailable, LoginChallenge, SshSession, batch_serve, bootstrap_ssh,
-    print_logout_cleanup, print_trust, protected_login, proved_serve, read_bootstrap_line,
-    reconnect_tip, require_verified_save, roster, save_ssh, ssh_destination,
+    is_full_id, print_logout_cleanup, print_trust, protected_login, proved_serve,
+    read_bootstrap_line, reconnect_tip, roster, save_ssh, ssh_destination,
 };
 use crate::{SshTarget, single_line};
 
@@ -42,6 +40,7 @@ struct Greeting {
 
 impl Greeting {
     fn local(daemon: &mut DaemonClient) -> anyhow::Result<Self> {
+        daemon.disable_auto_reconnect();
         let listed = daemon.call::<MachineList>(NoArgs {})?;
         let machine_id = daemon.hello_result.machine_id.clone();
         let name = listed
@@ -271,17 +270,6 @@ impl Drop for AdminClient {
     }
 }
 
-fn is_full_id(id: &str) -> bool {
-    id.len() == 36
-        && id.bytes().enumerate().all(|(at, byte)| {
-            if matches!(at, 8 | 13 | 18 | 23) {
-                byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        })
-}
-
 fn different_machine(id: &str, local: &Greeting) -> anyhow::Result<()> {
     ensure!(
         is_full_id(id) && !id.eq_ignore_ascii_case(&local.machine_id),
@@ -383,15 +371,8 @@ impl AdminState {
                     self.return_attempt.is_none(),
                     "a return connection is already pending"
                 );
-                let (reply, pending) = prepare_return(
-                    &self.local,
-                    daemon,
-                    connect,
-                    machine_id,
-                    &account,
-                    home,
-                    &host_keys,
-                );
+                let (reply, pending) =
+                    prepare_return(&self.local, connect, machine_id, &account, home, &host_keys);
                 self.return_attempt = pending;
                 Ok(reply)
             }
@@ -407,7 +388,7 @@ impl AdminState {
             }),
             Operation::Remove { machine_id } => {
                 different_machine(&machine_id, &self.local)?;
-                remove_here(daemon, &machine_id)
+                Ok(remove_here(daemon, &machine_id))
             }
         }
     }
@@ -442,7 +423,6 @@ struct ReturnAttempt {
 
 fn prepare_return(
     local: &Greeting,
-    daemon: &DaemonClient,
     connect: &Connect<'_>,
     machine_id: String,
     account: &str,
@@ -450,7 +430,6 @@ fn prepare_return(
     host_keys: &[String],
 ) -> (Reply, Option<ReturnAttempt>) {
     let result = (|| {
-        require_verified_save(daemon)?;
         different_machine(&machine_id, local)?;
         let address = local
             .source_ip
@@ -499,7 +478,6 @@ impl ReturnAttempt {
         host_keys: &[String],
     ) -> anyhow::Result<Option<String>> {
         let daemon = connect()?;
-        require_verified_save(&daemon)?;
         let return_args = std::mem::take(&mut self.target.ssh_args);
         self.target.ssh_args = ssh::trusted_login_args(&return_args, None)?;
         let words = ssh::ssh_login_args(&self.target.ssh_args, ssh::SshMode::Saved, None)?;
@@ -539,7 +517,6 @@ impl ReturnAttempt {
     fn save(self, connect: &Connect<'_>) -> Reply {
         let result = (|| {
             let daemon = connect()?;
-            require_verified_save(&daemon)?;
             let identity = self
                 .identity
                 .as_ref()
@@ -691,27 +668,6 @@ fn save_forward(target: &SshTarget, connect: &Connect<'_>) -> anyhow::Result<For
             None => return Err(error),
         },
     };
-    if let Err(capability) = require_verified_save(&daemon) {
-        if challenge == LoginChallenge::UnknownHost {
-            // A published local daemon can still save after ordinary host confirmation.
-            let session = bootstrap_ssh(
-                target,
-                &protected_login(target, ssh::SshMode::Add)?,
-                Bootstrap::Serve,
-                true,
-            )?;
-            session.finish(true)?;
-            match batch_serve(target) {
-                Ok(session) => return ordinary_forward(target, daemon, session),
-                Err(error) if error.downcast_ref::<LoginChallenge>().is_none() => {
-                    return Err(error);
-                }
-                Err(_) => {}
-            }
-        }
-        return Err(capability);
-    }
-
     // A host-key confirmation can make the original credentials usable in batch mode.
     let admin = match AdminClient::open(target, ssh::SshMode::Add, ssh::SshAdminMode::Enroll) {
         Err(error) if !error.is::<HelperUnavailable>() => return Err(error),
@@ -729,7 +685,6 @@ fn save_forward(target: &SshTarget, connect: &Connect<'_>) -> anyhow::Result<For
     let mut admin = admin?;
 
     let local = Greeting::local(&mut daemon)?;
-    require_verified_save(&daemon)?;
     different_machine(&admin.machine.machine_id, &local)?;
     let home = paths::facade_home()?;
     let identity = ssh::dedicated_identity(&home)?;
@@ -1002,28 +957,14 @@ fn ssh_reason(detail: &str) -> String {
     single_line(reason)
 }
 
-fn can_remove_exactly(daemon: &DaemonClient) -> bool {
-    daemon
-        .hello_result
-        .capabilities
-        .iter()
-        .any(|cap| cap == CAP_MACHINE_REMOVE_EXPECTED_ID)
-}
-
 fn remove_exactly(
     daemon: &mut DaemonClient,
     machine_id: &str,
-) -> anyhow::Result<Option<facade_base::machine::MachineRemoveResult>> {
-    ensure!(
-        can_remove_exactly(daemon),
-        "the running Orchestrator does not support verified SSH removal"
-    );
-    // This mutation must stay on the connection whose hello advertised the guard.
-    let call = daemon.begin_call::<MachineRemove>(MachineRemoveArgs {
+) -> anyhow::Result<Option<MachineRemoveResult>> {
+    match daemon.call::<MachineRemove>(MachineRemoveArgs {
         machine: machine_id.to_owned(),
         expected_machine_id: Some(machine_id.to_owned()),
-    })?;
-    match daemon.result::<MachineRemove>(call) {
+    }) {
         Ok(removed) => {
             ensure!(
                 removed.machine_id == machine_id,
@@ -1034,7 +975,7 @@ fn remove_exactly(
         Err(error)
             if error
                 .downcast_ref::<ErrorBody>()
-                .is_some_and(|body| body.data.reason == Reason::NotFound) =>
+                .is_some_and(|body| body.data.reason == "not_found") =>
         {
             Ok(None)
         }
@@ -1058,11 +999,7 @@ fn revoke(machine_id: &str) -> AuthorizationOutcome {
     }
 }
 
-fn remove_here(daemon: &mut DaemonClient, machine_id: &str) -> anyhow::Result<Reply> {
-    ensure!(
-        can_remove_exactly(daemon),
-        "the remote Orchestrator does not support verified SSH removal. Update Facade there and try again"
-    );
+fn remove_here(daemon: &mut DaemonClient, machine_id: &str) -> Reply {
     let route = match remove_exactly(daemon, machine_id) {
         Ok(Some(_)) => RouteOutcome::Removed,
         Ok(None) => RouteOutcome::Absent,
@@ -1070,27 +1007,16 @@ fn remove_here(daemon: &mut DaemonClient, machine_id: &str) -> anyhow::Result<Re
             detail: format!("{error:#}"),
         },
     };
-    Ok(Reply::Removed {
+    Reply::Removed {
         route,
         authorization: revoke(machine_id),
-    })
+    }
 }
 
 pub(super) fn remove(daemon: &mut DaemonClient, machine: String) -> anyhow::Result<i32> {
-    if !can_remove_exactly(daemon) {
-        let name = display_name(&machine);
-        let result = roster::remove(daemon, machine);
-        eprintln!(
-            "error: Could not confirm removal on {name}: the local Orchestrator does not support verified SSH removal."
-        );
-        eprintln!(
-            "Run 'facade upgrade' here and check the return connection and SSH authorization on {name}."
-        );
-        return result.map(|_| 1);
-    }
+    daemon.disable_auto_reconnect();
     let local_id = daemon.hello_result.machine_id.clone();
-    let call = daemon.begin_call::<MachineList>(NoArgs {})?;
-    let machines = daemon.result::<MachineList>(call)?.machines;
+    let machines = daemon.call::<MachineList>(NoArgs {})?.machines;
     let identities = machines
         .iter()
         .map(|machine| MachineIdentity {
@@ -1137,23 +1063,11 @@ pub(super) fn remove(daemon: &mut DaemonClient, machine: String) -> anyhow::Resu
     let local_name = display_name(&local.name);
 
     let remote = (|| {
-        let saved = local
-            .connections
-            .iter()
-            .find(|connection| {
-                connection.kind == ConnectionKind::Saved
-                    && connection.initiator_machine_id == local_id
-                    && connection.machine_id == target.machine_id
-                    && connection.ssh_destination.is_some()
-            })
+        let saved = roster::saved_ssh(&local.connections, &local_id, &target.machine_id)
             .context("there is no saved direct SSH connection")?;
         let ssh_target = SshTarget {
             home: saved.remote_home.clone(),
-            ssh_args: if saved.ssh_args.is_empty() {
-                saved.ssh_destination.iter().cloned().collect()
-            } else {
-                saved.ssh_args.clone()
-            },
+            ssh_args: roster::ssh_args(saved).to_vec(),
         };
         let mut admin =
             AdminClient::open(&ssh_target, ssh::SshMode::Saved, ssh::SshAdminMode::Remove)?;

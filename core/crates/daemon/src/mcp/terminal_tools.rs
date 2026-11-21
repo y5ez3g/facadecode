@@ -1,8 +1,8 @@
 //! The checks of the terminal tools' arguments, and what a refused input answers. Text and keys go
 //! in without draft protection: they can edit a draft or answer a menu.
 
+use facade_base::api_v1::ErrorBody;
 use facade_base::daemon::{CUT_MARK, first_control};
-use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::key_input::{KeyProblem, NAMED_KEYS, key_problems};
 use serde_json::{Map, Value, json};
 
@@ -64,8 +64,8 @@ pub(super) fn input_failure(
     failed: impl FnOnce(&str) -> Value,
 ) -> Value {
     match err.downcast_ref::<ErrorBody>() {
-        Some(error) if error.data.reason == Reason::PartialInput => {
-            let mut refusal = envelope::refusal(error);
+        Some(error) if error.data.reason == "partial_input" => {
+            let mut refusal = envelope::daemon_refusal(error);
             refusal["message"] = json!(format!(
                 "{}; only part of the input reached {agent}; read its screen before typing again",
                 error.message

@@ -2,27 +2,27 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type {
-	AgentRef, AttachResizeArgs, ScreenChange, V3Operation, V3ResizeArgs, V3ScreenSnapshot, V3ScreenWatchArgs, V3Topic, V3TypeArgs
-} from '../../base/coreProtocol';
+import type { AgentRef, DaemonOperations, DaemonTopics } from '../../base/coreProtocol';
 import type { Disposable, Event } from '../../core/ports';
 import type { encodeTerminalInput, WatchListener } from '../rust/types';
 
 export { DaemonError, encodeTerminalInput, type WatchListener } from '../rust/types';
 
-export interface TerminalNotificationArgs {
-	readonly 'agent.type': Omit<V3TypeArgs, 'agent' | 'reference' | 'raw'> & {
-		readonly reference: AgentRef;
-		readonly raw?: ReturnType<typeof encodeTerminalInput>;
-	};
-	readonly 'agent.resize': Omit<V3ResizeArgs, 'agent' | 'reference'> & { readonly reference: AgentRef };
-}
+export type EditorCalls = Pick<DaemonOperations,
+	'agent.list' | 'agent.inspect' | 'agent.start' | 'agent.resume_list' | 'agent.resume' | 'agent.stop'
+	| 'agent.remove' | 'agent.rename' | 'location.list' | 'cli.list' | 'daemon.status' | 'daemon.log'>;
+export type EditorTopic = 'agents' | 'machines';
+export type AttachWatchArgs = Omit<DaemonTopics['attach']['args'], 'target'> & { readonly target: AgentRef };
+export type RawInputArgs = DaemonOperations['agent.type']['args'] & {
+	readonly target: AgentRef;
+	readonly input: { readonly kind: 'raw'; readonly raw: ReturnType<typeof encodeTerminalInput> };
+};
 
-export type ResizeAttach = (args: Omit<AttachResizeArgs, 'watch'>) => void;
+export type ResizeAttach = (args: Omit<DaemonOperations['attach.resize']['args'], 'watch'>) => void;
 
-export interface AttachListener extends Omit<WatchListener<V3ScreenSnapshot, ScreenChange>, 'snapshot'> {
-	/** The resize function belongs to this snapshot's live watch. A legacy screen watch supplies none. */
-	snapshot(screen: V3ScreenSnapshot, resize?: ResizeAttach): void;
+export interface AttachListener extends Omit<WatchListener<DaemonTopics['attach']['snapshot'], DaemonTopics['attach']['change']>, 'snapshot'> {
+	/** The resize function belongs to this snapshot's live watch. */
+	snapshot(screen: DaemonTopics['attach']['snapshot'], resize: ResizeAttach): void;
 }
 
 export interface OrchestratorLink extends Disposable {
@@ -31,10 +31,11 @@ export interface OrchestratorLink extends Disposable {
 	readonly connected: boolean;
 	/** Fires after installing a connection and before asking for watch snapshots. */
 	readonly onDidConnect: Event<string>;
-	call<R>(op: V3Operation, args: object): Promise<R>;
+	call<Op extends keyof EditorCalls>(op: Op, args: EditorCalls[Op]['args']): Promise<EditorCalls[Op]['result']>;
 	/** True once handed to the current usable connection. */
-	notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]): boolean;
-	watch<S, C>(topic: V3Topic, args: object, on: WatchListener<S, C>): Disposable;
+	notify(op: 'agent.type', args: RawInputArgs): boolean;
+	watch<Topic extends EditorTopic>(topic: Topic, args: DaemonTopics[Topic]['args'],
+		on: WatchListener<DaemonTopics[Topic]['snapshot'], DaemonTopics[Topic]['change']>): Disposable;
 	/** Rechecks support and reads the current pane capacity each time the view is installed. */
-	watchAttach(args: () => V3ScreenWatchArgs, on: AttachListener): Disposable;
+	watchAttach(args: () => AttachWatchArgs, on: AttachListener): Disposable;
 }

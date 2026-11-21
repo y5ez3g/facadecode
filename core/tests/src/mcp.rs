@@ -128,8 +128,7 @@ impl McpTestClient {
             .expect("the run has an isolated relay command")
     }
 
-    /// Runs the active agent's relay and completes MCP's handshake. The handshake uses the run
-    /// configuration in v3 and the v2 environment when running the v2 scenario harness.
+    /// Runs the active agent's configured relay and completes MCP's handshake.
     pub fn open(home: &TestHome, agent: &str) -> McpTestClient {
         Self::open_with(home, agent, &[])
     }
@@ -137,28 +136,15 @@ impl McpTestClient {
     /// Runs `facade-mcp` for `agent` as [`McpTestClient::open`] does, with `env` added, such as
     /// test gates.
     pub fn open_with(home: &TestHome, agent: &str, env: &[(&str, &str)]) -> McpTestClient {
-        let mut command = if DAEMON_RANGE[1] >= 3 {
-            Self::configured_command(home, agent)
-        } else {
-            let mut command = home.command(&test_binaries().mcp);
-            command.env("FACADE_AGENT", agent);
-            command
-        };
+        let mut command = Self::configured_command(home, agent);
         command.envs(env.iter().copied());
         McpTestClient::spawn(home, command)
     }
 
     /// Runs the active agent's relay with only the wiring needed to select its home and identity.
     pub fn open_stripped(home: &TestHome, agent: &str) -> McpTestClient {
-        let mut command = if DAEMON_RANGE[1] >= 3 {
-            let mut command = Self::configured_command(home, agent);
-            command.env_clear();
-            command
-        } else {
-            let mut command = Command::new(&test_binaries().mcp);
-            command.env_clear().env("FACADE_AGENT", agent);
-            command
-        };
+        let mut command = Self::configured_command(home, agent);
+        command.env_clear();
         command.env("FACADE_HOME", &home.path);
         McpTestClient::spawn(home, command)
     }

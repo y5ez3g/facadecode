@@ -1,9 +1,8 @@
 //! Keeps agent records, agent and message numbers, messages, guests and editor windows in
 //! `$FACADE_HOME/core/facade.db`, with SQLite in WAL mode and `synchronous=FULL`.
 //!
-//! The daemon alone holds the connection. Each part of the daemon gets the handle of its own table
-//! (`NumberTable`, `MessageTable`, `GuestTable`, `WindowTable`, `MembershipTable`), with no
-//! transaction of its own. A write across tables is one transaction here: a record with its
+//! The daemon alone holds the connection. Its parts get table handles without independent
+//! transactions. A write across tables is one transaction here: a record with its
 //! members and its start's prompt, an agent or a guest with its inbox, and a settlement that writes
 //! a result only for a caller still there.
 //!
@@ -39,11 +38,11 @@ mod messages;
 mod windows;
 
 pub(crate) use guests::{GuestRecord, GuestTable};
-pub(crate) use membership::MembershipTable;
 pub(crate) use messages::{
     Gone, InboxPage, Kept, KeptMessage, MessageTable, RequestId, SendRoute, Settlement,
 };
-pub(crate) use windows::{LegacyWindow, WindowTable};
+#[cfg(test)]
+use windows::WindowTable;
 
 const SCHEMA_VERSION: i64 = 4;
 const FILE_NAME: &str = "facade.db";
@@ -710,12 +709,9 @@ impl Store {
         GuestTable::new(self.clone())
     }
 
+    #[cfg(test)]
     pub(crate) fn window_table(self: &Arc<Self>) -> WindowTable {
         WindowTable::new(self.clone())
-    }
-
-    pub(crate) fn membership_table(self: &Arc<Self>) -> MembershipTable {
-        MembershipTable::new(self.clone())
     }
 
     /// Makes every later write fail, as a store that cannot be written does, until it is turned

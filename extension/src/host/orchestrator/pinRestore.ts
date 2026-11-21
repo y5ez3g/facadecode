@@ -2,9 +2,11 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AgentRemoval, V3AgentInfo as AgentInfo } from '../../base/coreProtocol';
+import type { DaemonOperations, DaemonTopics } from '../../base/coreProtocol';
 import type { RustPin } from '../../core/ports';
 
+type AgentInfo = DaemonOperations['agent.inspect']['result']['agent'];
+type AgentRemoval = Extract<DaemonTopics['agents']['change'], { kind: 'removed' }>['cause'];
 type PinRecord = { readonly agent: AgentInfo } | { readonly removal: AgentRemoval };
 
 export interface PinRestoreDeps {

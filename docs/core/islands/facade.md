@@ -58,26 +58,23 @@ services. When they sleep, local status and start help use the committed machine
 reader. Agent status uses the normal connection and the Orchestrator routes that query. The caller can cancel an
 Attach reconnect while the socket opens or while the Orchestrator answers hello.
 
-The normal daemon hello offers protocol 3. A dedicated upgrade client can negotiate protocol 2 with an older
-Orchestrator or protocol 3 with a compatible build. It requests `daemon.upgrade` using the new program's absolute
-path, build ID, supported takeover range and keeper range. If the old daemon rejects an incompatible keeper upgrade
-without giving agent addresses, a read-only v2 roster request supplies the running managed agents on that machine.
-The refusal remains a failed upgrade. After an accepting response, Facade closes the upgrade connection and waits
-for the requested build to answer a new v3 hello.
+The Terminal client offers its supported daemon API versions in `hello` and uses the selected version for
+that connection. A warm replacement sends `daemon.upgrade` with the new program's absolute path, build ID,
+and the independent daemon and keeper API version sets. The running Orchestrator checks the target daemon
+set and the live keeper's negotiated version before replacement. A refusal can identify running agents that
+block replacement. After acceptance, Facade waits for the requested build to answer a fresh hello. The first
+installation of API v1 is a cold replacement of the prerelease clients, daemon and keeper.
 
 `facade daemon --detach` is the background entry for an editor or relay. The caller confirms readiness with hello.
 The installer's `facade daemon --takeover` entry checks the selected Facade home and exits 0 if the services are idle.
-For a running service, it waits for the installed build to answer with protocol 3. The installer activates the
-public `facade` and `facade-mcp` paths after this check succeeds. `facade upgrade` checks stable release metadata
+For a running service, it waits for the installed build to answer a compatible daemon hello. The installer activates
+the public `facade` and `facade-mcp` paths after this check succeeds. `facade upgrade` checks stable release metadata
 first. It prints the up-to-date receipt when the current version is at or above the stable channel without
 running an installer or asking for takeover. `facade upgrade --version X.Y.Z` runs the installer pinned to
 that release, including a candidate available under the exact version. The pinned path bypasses the stable
 check and can install an older release when services are idle. A running newer daemon may refuse the takeover.
 Both forms report the actual version and installed launcher folder when available. Machine connections pin
 the installer to the local release.
-
-In debug builds, `FACADE_TEST_DAEMON_PROTOCOL` and `FACADE_TEST_KEEPER_PROTOCOL` take a `low,high` range for
-testing compatibility decisions. Release builds advertise the supported protocol ranges.
 
 ## Modules
 
@@ -90,15 +87,15 @@ receipts. `status <AGENT>` uses `agent.inspect` for launch details and authentic
 
 Start passes the current folder and environment as local defaults. The remote Orchestrator uses the
 target machine's login environment and uses its login home when the command omits a folder. A resumed stored
-agent keeps its original folder. Start and send carry the same request ID when a takeover requires reissuing
-the call.
+agent keeps its original folder. Start and send keep their business request ID and arguments when the caller
+reissues an eligible call across a disconnect.
 
 ### attach
 
-`attach.rs` owns the console until the attachment ends. It reports itself as a Shell client on its machine. A
-daemon that offers `attach` and `attach.resize` receives the console capacity on the watch and on each size
-change. An older daemon receives the existing `screen` watch and `agent.resize` operation. The Orchestrator
-authorizes the managed agent and supplies its name, public reference and stable identity. Foreground start
+`attach.rs` owns the console until the attachment ends. It reports itself as a Shell client on its machine.
+The console sends capacity with `watch attach` and sends `attach.resize` on the connection that owns the
+active watch. The Orchestrator authorizes the managed agent and supplies its name, public reference and
+stable identity. Foreground start
 and resume, or a reconnect, can read the final snapshot of the exact run. Each reconnect watches that same
 stable identity and begins with a fresh redraw. Only the first watch asks for scrollback.
 
@@ -119,7 +116,7 @@ view into scrollback. At normal exit it does the same when the daemon supplies t
 can be empty. The instructions are shown with the exit receipt.
 Windows uses deferred wrapping during Attach so relative cursor moves after a full row use the same geometry as
 the agent's screen.
-Attach requests the agent's activity with its screen watch and sends terminal progress while the agent is starting
+Attach requests the agent's activity with its attach watch and sends terminal progress while the agent is starting
 or working. It clears progress when it reconnects or hands the terminal back.
 
 ### hooks
@@ -155,13 +152,17 @@ request reciprocal cleanup. The remote side checks authorization even when a sav
 Shell performs local cleanup after the remote attempt, reports each side's outcome and returns 1 when it cannot
 confirm both sides. Removal matches authorization to a machine ID so a machine rename does not interfere.
 
-The hidden `machine serve` validates the first machine hello, opens the daemon socket for the selected home and
-relays the machine protocol. A passive `machine serve --no-start` returns 3 when the Orchestrator is sleeping.
-SSH runs the installed program at its fixed path. The platform commands live in Base and the installer contract
-is shared with the background connection path. A hidden SSH administration entry handles enrollment and
-reciprocal removal over an already authenticated login. Ordinary connections to 0.1.6 retain the existing
-machine framing with batch credentials. Enrollment and reciprocal cleanup require a build with the
-administration entry.
+The hidden `machine serve` validates the first machine hello and its daemon API offer before opening the
+daemon socket. Invalid and incompatible offers receive a structured reply on the original request ID.
+A valid hello and its reply cross the relay byte for byte, and the session continues in both directions.
+A passive `machine serve --no-start` returns 3 when the Orchestrator is sleeping. The relay carries the
+authenticated peer's idle notification for the Orchestrator to handle.
+
+SSH attempts the installed program at its fixed path and negotiates the daemon API independently of the
+software build. A missing install uses the pinned installer when the entry permits installation. The platform
+commands live in Base and the installer contract is shared with the background connection path. A hidden SSH
+administration entry handles enrollment and reciprocal removal over an already authenticated login. Add and
+Connect take their logout warning from the verified peer flag in the confirmed `connected` notification.
 
 ## Dependencies
 

@@ -390,8 +390,6 @@
 	"Invalid Facade workspace roster: {0}": "이 작업 영역의 Facade 에이전트 목록이 유효하지 않습니다: {0}",
 	"Invalid Facade workspace state: {0}": "Facade 작업 영역의 상태가 유효하지 않습니다: {0}",
 	"Invalid Facade Pin recovery record: {0}": "Facade Pin 복구 기록이 유효하지 않습니다: {0}",
-	"The previous Facade home has workspace data. Set FACADE_HOME to {0} on this extension host and reopen the workspace to import it.": "이전 Facade 홈에 작업 영역 데이터가 있습니다. 이 확장 호스트에서 FACADE_HOME을(를) {0}(으)로 설정한 다음 작업 영역을 다시 열어 가져오세요.",
-	"Could not finish importing this workspace from {0}. Restore access with facade machine add if needed, then reopen the workspace to finish the import.": "{0}에서 이 작업 영역 가져오기를 완료할 수 없습니다. 필요한 경우 facade machine add로 액세스를 복원한 다음 작업 영역을 다시 열어 가져오기를 완료하세요.",
 	"The old engine is active on {0}. {1} Fix the problem, set {2} to `auto`, and reload the window to try the Rust engine again.": "{0}에서 이전 엔진이 실행 중입니다. {1} 문제를 해결한 뒤 {2}을(를) `auto`로 설정하고 창을 다시 로드하여 Rust 엔진을 다시 사용해 보세요.",
 	"Could not open {0}: {1}": "{0}을(를) 열 수 없습니다: {1}",
 	"Could not hide {0}: {1}": "{0}을(를) 숨길 수 없습니다: {1}",
@@ -408,6 +406,5 @@
 	"Not installed": "설치되지 않음",
 	"Enter Path...": "경로 입력...",
 	"Enter a path.": "경로를 입력하세요.",
-	"Could not identify the previous empty window. Enable the Facade Code Window Component in that window and reload it to finish importing.": "이전 빈 창을 식별할 수 없습니다. 해당 창에서 Facade Code 창 구성 요소를 활성화한 뒤 창을 다시 로드하여 가져오기를 완료하세요.",
 	"Leave blank to choose a name automatically": "비워 두면 이름을 자동으로 선택합니다"
 }

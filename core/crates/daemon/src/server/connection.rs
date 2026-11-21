@@ -7,18 +7,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::{
-    AgentResize, AgentType, CancelParams, ClientKind, ClosingParams, DaemonUpgrade, HelloParams,
-    UnwatchParams, WatchEndedParams, WatchParams, WatchResult, methods,
+use facade_base::api_v1::daemon::{
+    AgentRef, AgentTypeArgs, AgentsTopic, AttachResizeArgs, AttachTopic, CancelParams, ClientKind,
+    ClosingParams, DaemonCall, DaemonWatch, HelloParams, MachinesTopic, TerminalInput,
+    UnwatchParams, WatchEndedParams, WatchParams, WatchResult, decode_call, decode_hello,
+    decode_watch, methods, select_version,
 };
-use facade_base::jsonrpc::{
-    ErrorBody, MAX_LINE_BYTES, Notification, Reason, Response, decode_arguments, encode_line,
-    parse_request,
+use facade_base::api_v1::{
+    ApiVersion, CallParams, EmptyResult, ErrorBody, MAX_LINE_BYTES, Notification, Response, Topic,
+    decode_arguments, encode_line, parse_request,
 };
-use facade_base::machine::{AgentRef, MachineConnect, ProtocolMismatch};
-use facade_base::operations::{CallParams, EmptyResult, Operation, Topic};
 use facade_base::sockets::{ServerPeer, ServerReader, ServerSocket};
-use facade_base::v3::{self, DAEMON_PROTOCOL_RANGE, TAKEOVER_DAEMON_PROTOCOL_RANGE};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -27,7 +26,7 @@ use tokio::task::JoinHandle;
 
 use super::lanes::{LaneContext, Lanes};
 use super::outbox::Outbox;
-use super::{Client, Service, WatchChange, WhenFull};
+use super::{Client, Service, WatchChange, WhenFull, operation_error};
 use crate::Cancel;
 
 /// The most calls one connection runs at once. Further calls wait for one to be answered.
@@ -36,7 +35,6 @@ const MAX_CALLS_IN_FLIGHT: usize = 16;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a client has to answer `closing`; one that does not, such as an older one, is cut off.
 const CLOSING_ANSWERED_WITHIN: Duration = Duration::from_millis(200);
-const LEGACY_VERSION: u32 = TAKEOVER_DAEMON_PROTOCOL_RANGE[0];
 
 pub(super) type Reader = BufReader<ServerReader>;
 
@@ -91,23 +89,15 @@ struct Watching {
     forwarder: JoinHandle<()>,
     /// Cleared before reporting the watch's end to the client.
     live: Arc<AtomicBool>,
-    topic: String,
+    topic: &'static str,
     viewer: u64,
+    /// The exact target of an Attach watch, as resolved by the service.
+    reference: Option<AgentRef>,
 }
 
-/// Whether this hello opened the current protocol or only its legacy takeover path.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Protocol {
-    Current,
-    Takeover,
-}
-
-impl Protocol {
-    fn version(self) -> u32 {
-        match self {
-            Self::Current => DAEMON_PROTOCOL_RANGE[1],
-            Self::Takeover => LEGACY_VERSION,
-        }
+impl Watching {
+    fn is_live(&self) -> bool {
+        self.live.load(Ordering::Relaxed)
     }
 }
 
@@ -117,12 +107,12 @@ pub(super) struct Connection<S: Service> {
     pub(super) outbox: Outbox,
     pub(super) peer_pid: Option<u32>,
     verified_actor: Option<AgentRef>,
-    client: Option<(Arc<Client>, Protocol)>,
+    client: Option<Arc<Client>>,
     /// What the service gave the hello, held until the connection is cleaned up.
     hold: Option<S::Hold>,
     lanes: Lanes,
     call_slots: Arc<Semaphore>,
-    /// Calls with a request ID under way, each with what tells it that `cancel` named it.
+    /// Sends with a request ID under way, each with what tells it that `cancel` named it.
     calls: Arc<Mutex<HashMap<u64, watch::Sender<bool>>>>,
     watches: HashMap<u64, Watching>,
     last_watch: u64,
@@ -137,14 +127,13 @@ enum Next<M> {
     Read,
     End,
     /// Carry MCP from now on: the hello of a relay.
-    Relay(Option<u64>, Value),
+    Relay(u64, Value),
     /// Send the final ordinary RPC response and hand over the stream.
     Machine(MachineHandoff<M>),
 }
 
 struct MachineHandoff<M> {
-    id: u64,
-    response: Value,
+    response: Response,
     machine: M,
 }
 
@@ -185,16 +174,9 @@ pub(super) async fn serve<S: Service>(
     let served = connection.read_requests(&mut reader).await;
     connection.clean_up().await;
     let writer = writer.await;
-    if let Some(MachineHandoff {
-        id,
-        response,
-        machine,
-    }) = served?
-    {
+    if let Some(MachineHandoff { response, machine }) = served? {
         let mut write = writer??;
-        write
-            .write_all(&encode_line(&Response::ok(id, response)))
-            .await?;
+        write.write_all(&encode_line(&response)).await?;
         write.flush().await?;
         // The handshake is finished. The machine session counts its own active work.
         drop(work);
@@ -231,7 +213,7 @@ impl<S: Service> Connection<S> {
             }
             if line.len() > MAX_LINE_BYTES {
                 // The rest of the line is no request of its own: answer and close.
-                self.outbox.fail(ErrorBody::line_too_long()).await;
+                self.outbox.fail(None, ErrorBody::line_too_long()).await;
                 return Ok(None);
             }
             if !line.ends_with(b"\n") {
@@ -253,24 +235,25 @@ impl<S: Service> Connection<S> {
     async fn request(&mut self, line: &[u8]) -> Next<S::Machine> {
         let request = match parse_request(line) {
             Ok(request) => request,
-            Err(error) => {
-                self.outbox.fail(error).await;
+            Err(malformed) => {
+                self.outbox.fail(malformed.id, malformed.error).await;
                 return Next::Read;
             }
         };
         let (id, params) = (request.id, request.params);
         let method = request.method.as_str();
         if method == methods::HELLO {
+            let Some(id) = id else { return Next::Read };
             if self.client.is_some() {
                 let refused =
                     ErrorBody::invalid_argument("hello was already received on this connection");
-                self.outbox.answer(id, Err(refused)).await;
+                self.outbox.answer(Some(id), Err(refused)).await;
             } else if let Some(refused) = self.service.draining() {
-                self.outbox.answer(id, Err(refused)).await;
+                self.outbox.answer(Some(id), Err(refused)).await;
             } else if self.verified_actor.is_none() && super::is_relay_hello(&params) {
                 if params["foreground"] == true {
                     self.outbox
-                        .answer(id, Err(foreground_requires_machine()))
+                        .answer(Some(id), Err(foreground_requires_machine()))
                         .await;
                     return Next::End;
                 }
@@ -280,34 +263,35 @@ impl<S: Service> Connection<S> {
             }
             return Next::Read;
         }
-        let Some((client, protocol)) = self.client.clone() else {
+        let Some(client) = self.client.clone() else {
             let refused = ErrorBody::invalid_argument("send hello first");
             self.outbox.answer(id, Err(refused)).await;
             return Next::Read;
         };
-        if protocol == Protocol::Takeover
-            && !matches!(method, methods::CALL | methods::CANCEL | methods::CLOSING)
-        {
-            self.outbox.answer(id, Err(reopen_client())).await;
-            return Next::End;
-        }
         match method {
-            methods::CALL => return self.call(client, protocol, id, params, line.len()).await,
+            methods::CALL => return self.call(client, id, params, line.len()).await,
             methods::CANCEL => {
                 let result = self.cancel(params);
                 self.outbox.answer(id, result).await;
             }
             methods::WATCH => {
+                let Some(id) = id else { return Next::Read };
                 if let Err(error) = self.watch(client, id, params).await {
-                    self.outbox.answer(id, Err(error)).await;
+                    self.outbox.answer(Some(id), Err(error)).await;
                 }
             }
             methods::UNWATCH => {
+                let Some(id) = id else { return Next::Read };
                 let result = self.unwatch(&client, params).await;
-                self.outbox.answer(id, result).await;
+                self.outbox.answer(Some(id), result).await;
             }
             // The client's answer to `closing`: it sends nothing more.
             methods::CLOSING => {
+                if id.is_some() {
+                    let error = ErrorBody::invalid_argument("closing is a notification");
+                    self.outbox.answer(id, Err(error)).await;
+                    return Next::Read;
+                }
                 self.answered.notify_one();
                 return Next::End;
             }
@@ -324,33 +308,45 @@ impl<S: Service> Connection<S> {
         Next::Read
     }
 
-    async fn hello(&mut self, id: Option<u64>, params: Value) -> Next<S::Machine> {
-        let machine_hello = params["kind"] == "machine";
-        let (hello, protocol) = match hello_params(params) {
+    async fn hello(&mut self, id: u64, params: Value) -> Next<S::Machine> {
+        let (hello, api_version) = match decode_hello(params).and_then(|hello| {
+            let version = select_version(&hello.api_versions)?;
+            Ok((hello, version))
+        }) {
             Ok(hello) => hello,
             Err(error) => {
-                self.outbox.answer(id, Err(error)).await;
-                return if machine_hello { Next::End } else { Next::Read };
+                self.outbox.answer(Some(id), Err(error)).await;
+                return Next::Read;
             }
         };
         if (hello.kind == ClientKind::Mcp) != self.verified_actor.is_some() {
-            let refused =
-                ErrorBody::refused("an internal MCP connection requires a verified actor");
-            self.outbox.answer(id, Err(refused)).await;
+            let refused = operation_error(
+                "refused",
+                "an internal MCP connection requires a verified actor",
+            );
+            self.outbox.answer(Some(id), Err(refused)).await;
             return Next::End;
         }
+        if hello.foreground && hello.kind != ClientKind::Machine {
+            self.outbox
+                .answer(Some(id), Err(foreground_requires_machine()))
+                .await;
+            return Next::Read;
+        }
         if hello.kind == ClientKind::Machine {
-            let Some(id) = id else { return Next::End };
             let accepted = self
                 .service
-                .machine_hello(hello, self.peer_pid)
+                .machine_hello(hello, api_version, self.peer_pid)
                 .await
-                .map(|(result, machine)| (value_of(result), machine));
+                .map(|(mut result, machine)| {
+                    result.api_version = api_version;
+                    (result, machine)
+                });
             return self.switch_to_machine(id, accepted, Next::End).await;
         }
-        let result = self.say_hello(hello, protocol).await;
+        let result = self.say_hello(hello, api_version).await;
         let said = result.is_ok();
-        self.outbox.answer(id, result).await;
+        self.outbox.answer(Some(id), result).await;
         if said {
             self.teller = Some(self.tell_closing());
         }
@@ -360,90 +356,99 @@ impl<S: Service> Connection<S> {
     async fn say_hello(
         &mut self,
         hello: HelloParams,
-        protocol: Protocol,
+        api_version: ApiVersion,
     ) -> Result<Value, ErrorBody> {
-        let (mut result, mut client, hold) = self.service.hello(hello, self.peer_pid).await?;
-        if protocol == Protocol::Takeover {
-            result.topics.clear();
-            result.ops = vec![DaemonUpgrade::NAME.to_string()];
-            result.capabilities.clear();
-            result.agent = None;
-            result.window = None;
-        }
-        result.protocol = protocol.version();
+        let kind = hello.kind;
+        let (mut result, mut client, hold) = self
+            .service
+            .hello(hello, api_version, self.peer_pid)
+            .await?;
+        client.kind = kind;
+        client.api_version = api_version;
         client.verified_actor = self.verified_actor.take();
-        self.client = Some((Arc::new(client), protocol));
+        result.api_version = client.api_version;
+        self.client = Some(Arc::new(client));
         self.hold = Some(hold);
         Ok(value_of(result))
     }
 
-    /// Awaits Attach resize in receive order, queues typing and legacy resize in their agent's
-    /// lane, or runs an ordinary call in its own task.
+    /// Awaits Attach resize, queues input in its agent's lane, or starts an ordinary call.
     async fn call(
         &mut self,
         client: Arc<Client>,
-        protocol: Protocol,
         id: Option<u64>,
         params: Value,
         size: usize,
     ) -> Next<S::Machine> {
-        let call: CallParams = match decode_arguments(params) {
+        let call = match decode_arguments(params)
+            .and_then(|params: CallParams| decode_call(params, client.kind))
+        {
             Ok(call) => call,
             Err(error) => {
                 self.outbox.answer(id, Err(error)).await;
                 return Next::Read;
             }
         };
-        if protocol == Protocol::Takeover && (id.is_none() || call.op != DaemonUpgrade::NAME) {
-            self.outbox.answer(id, Err(reopen_client())).await;
-            return Next::End;
+        if id.is_none()
+            && !matches!(
+                &call,
+                DaemonCall::AttachResize(_)
+                    | DaemonCall::AgentType(AgentTypeArgs {
+                        input: TerminalInput::Raw { .. },
+                        ..
+                    })
+            )
+        {
+            return Next::Read;
         }
-        let typing = matches!(call.op.as_str(), AgentType::NAME | AgentResize::NAME);
-        let attach_resize = call.op == v3::AttachResize::NAME;
-        // While a newer Facade takes over, a new call does nothing. An attached terminal's keys and
-        // size, sent without an ID, are no new calls: they reach the agent until `closing` is
-        // answered.
-        let attached = (typing || attach_resize) && id.is_none();
-        if call.op != DaemonUpgrade::NAME
-            && !attached
+        // Raw input and resize notifications keep reaching the agent until `closing` is answered.
+        if id.is_some()
+            && !matches!(call, DaemonCall::DaemonUpgrade(_))
             && let Some(refused) = self.service.draining()
         {
             self.outbox.answer(id, Err(refused)).await;
             return Next::Read;
         }
-        if call.op == MachineConnect::NAME {
-            let Some(id) = id else { return Next::Read };
-            let accepted = self.service.machine_connect(&client, call.args).await;
-            return self.switch_to_machine(id, accepted, Next::Read).await;
-        }
-        if attach_resize {
-            // Wait for the viewer's acknowledgment before reading the next request.
-            let result = self.resize_viewer(&client, call.args).await;
-            self.outbox.answer(id, result).await;
-            return Next::Read;
-        }
-        if typing {
-            let context = LaneContext {
-                service: self.service.clone(),
-                client,
-                outbox: self.outbox.clone(),
-                peer: self.peer.clone(),
-            };
-            self.lanes
-                .queue(&context, id, call.op, call.args, size)
-                .await;
-            return Next::Read;
-        }
-        let Ok(slot) = self.call_slots.clone().acquire_owned().await else {
-            return Next::Read;
-        };
-        let (when_full, cancel) = match id {
-            Some(id) => {
-                let (named, cancel) = watch::channel(false);
-                self.calls.lock().unwrap().insert(id, named);
-                (WhenFull::Refuse, Cancel::of(cancel))
+        match call {
+            DaemonCall::MachineConnect(args) => {
+                let Some(id) = id else { return Next::Read };
+                let accepted = self.service.machine_connect(&client, args).await;
+                return self.switch_to_machine(id, accepted, Next::Read).await;
             }
-            None => (WhenFull::Wait, Cancel::default()),
+            DaemonCall::AttachResize(args) => {
+                // Wait for acknowledgment before reading later input or unwatch.
+                let result = self.resize_viewer(&client, args).await;
+                self.outbox.answer(id, result).await;
+            }
+            DaemonCall::AgentType(args) => {
+                let context = LaneContext {
+                    service: self.service.clone(),
+                    client,
+                    outbox: self.outbox.clone(),
+                    peer: self.peer.clone(),
+                };
+                self.lanes.queue(&context, id, args, size).await;
+            }
+            call => {
+                if let Some(id) = id {
+                    self.start_call(client, id, call).await;
+                }
+            }
+        }
+        Next::Read
+    }
+
+    async fn start_call(&mut self, client: Arc<Client>, id: u64, call: DaemonCall) {
+        let Ok(slot) = self.call_slots.clone().acquire_owned().await else {
+            return;
+        };
+        let cancellable = matches!(call, DaemonCall::AgentSend(_));
+        let cancel = if cancellable {
+            let (named, cancel) = watch::channel(false);
+            self.calls.lock().unwrap().insert(id, named);
+            Cancel::of(cancel)
+        } else {
+            Cancel::default()
         };
         let (service, outbox, calls) = (
             self.service.clone(),
@@ -451,28 +456,24 @@ impl<S: Service> Connection<S> {
             self.calls.clone(),
         );
         tokio::spawn(async move {
-            let result = service
-                .call(&client, &call.op, call.args, when_full, cancel)
-                .await;
-            if let Some(id) = id {
+            let result = service.call(&client, call, WhenFull::Refuse, cancel).await;
+            if cancellable {
                 calls.lock().unwrap().remove(&id);
             }
-            outbox.answer(id, result).await;
+            outbox.answer(Some(id), result).await;
             drop(slot);
         });
-        Next::Read
     }
 
     async fn switch_to_machine(
         &mut self,
         id: u64,
-        accepted: Result<(Value, S::Machine), ErrorBody>,
+        accepted: Result<(impl Serialize, S::Machine), ErrorBody>,
         refused: Next<S::Machine>,
     ) -> Next<S::Machine> {
         match accepted {
             Ok((response, machine)) => Next::Machine(MachineHandoff {
-                id,
-                response,
+                response: Response::ok(id, response),
                 machine,
             }),
             Err(error) => {
@@ -497,22 +498,32 @@ impl<S: Service> Connection<S> {
     async fn watch(
         &mut self,
         client: Arc<Client>,
-        id: Option<u64>,
+        id: u64,
         params: Value,
     ) -> Result<(), ErrorBody> {
-        let WatchParams { topic, args } = decode_arguments(params)?;
+        let watch = decode_watch(decode_arguments::<WatchParams>(params)?, client.kind)?;
+        let topic = match &watch {
+            DaemonWatch::Agents(_) => AgentsTopic::NAME,
+            DaemonWatch::Machines(_) => MachinesTopic::NAME,
+            DaemonWatch::Attach(_) => AttachTopic::NAME,
+        };
         if let Some(refused) = self.service.draining() {
             return Err(refused);
         }
         let viewer = super::next_viewer();
-        let started = self.service.watch(&client, &topic, args, viewer).await?;
+        let started = self.service.watch(&client, watch, viewer).await?;
+        let reference = if topic == AttachTopic::NAME {
+            serde_json::from_value(started.snapshot["reference"].clone()).ok()
+        } else {
+            None
+        };
         self.last_watch += 1;
         let number = self.last_watch;
         let answer = WatchResult {
             watch: number,
             snapshot: started.snapshot,
         };
-        self.outbox.answer(id, Ok(value_of(answer))).await;
+        self.outbox.answer(Some(id), Ok(value_of(answer))).await;
         let live = Arc::new(AtomicBool::new(!started.changes.is_closed()));
         let forwarder = tokio::spawn(forward(
             self.outbox.clone(),
@@ -528,36 +539,40 @@ impl<S: Service> Connection<S> {
                 live,
                 topic,
                 viewer,
+                reference,
             },
         );
         Ok(())
     }
 
-    async fn resize_viewer(&mut self, client: &Client, args: Value) -> Result<Value, ErrorBody> {
-        if args.get("viewer").is_some() || args.get("boot_id").is_some() {
-            return Err(ErrorBody::invalid_argument(
-                "attach.resize takes a connection watch ID",
-            ));
-        }
-        let v3::AttachResizeArgs {
+    async fn resize_viewer(
+        &mut self,
+        client: &Client,
+        AttachResizeArgs {
             watch,
-            cols,
-            rows,
+            size,
             colors,
-        } = decode_arguments(args)?;
-        let Some(watching) = self.watches.get(&watch).filter(|watching| {
-            watching.topic == v3::AttachTopic::NAME && watching.live.load(Ordering::Relaxed)
-        }) else {
-            let message = format!("no active attach watch {watch} on this connection");
-            return Err(ErrorBody::new(Reason::NotFound, message));
-        };
-        self.service
-            .resize_viewer(
-                client,
-                watching.viewer,
-                v3::ScreenSize { cols, rows },
-                colors,
+        }: AttachResizeArgs,
+    ) -> Result<Value, ErrorBody> {
+        let not_found = || {
+            operation_error(
+                "not_found",
+                format!("no active attach watch {watch} on this connection"),
             )
+        };
+        let watching = self
+            .watches
+            .get(&watch)
+            .filter(|watching| watching.topic == AttachTopic::NAME && watching.is_live())
+            .ok_or_else(not_found)?;
+        if let Some(reference) = &watching.reference {
+            self.lanes.wait_for_input(reference, &self.peer).await;
+        }
+        if self.peer.hung_up() || !watching.is_live() {
+            return Err(not_found());
+        }
+        self.service
+            .resize_viewer(client, watching.viewer, size, colors)
             .await?;
         Ok(value_of(EmptyResult {}))
     }
@@ -566,7 +581,7 @@ impl<S: Service> Connection<S> {
         let UnwatchParams { watch } = decode_arguments(params)?;
         let Some(watching) = self.watches.remove(&watch) else {
             let message = format!("no watch {watch} on this connection");
-            return Err(ErrorBody::new(Reason::NotFound, message));
+            return Err(operation_error("not_found", message));
         };
         Self::end(&self.service, client, watching).await;
         Ok(value_of(EmptyResult {}))
@@ -575,7 +590,7 @@ impl<S: Service> Connection<S> {
     async fn end(service: &Arc<S>, client: &Client, watching: Watching) {
         watching.forwarder.abort();
         service
-            .unwatch(client, &watching.topic, watching.viewer)
+            .unwatch(client, watching.topic, watching.viewer)
             .await;
     }
 
@@ -611,7 +626,7 @@ impl<S: Service> Connection<S> {
             let _ = teller.await;
         }
         let watches: Vec<Watching> = self.watches.drain().map(|(_, watching)| watching).collect();
-        if let Some((client, _)) = self.client.clone() {
+        if let Some(client) = self.client.take() {
             for watching in watches {
                 Self::end(&self.service, &client, watching).await;
             }
@@ -619,75 +634,10 @@ impl<S: Service> Connection<S> {
     }
 }
 
-fn hello_params(params: Value) -> Result<(HelloParams, Protocol), ErrorBody> {
-    let hello: v3::HelloParams = decode_arguments(params)?;
-    if hello.kind == ClientKind::Unknown {
-        let message = "unsupported client kind; run 'facade upgrade' to update Facade Code";
-        return Err(ErrorBody::new(Reason::IncompatibleProtocol, message));
-    }
-    if hello.foreground && hello.kind != ClientKind::Machine {
-        return Err(foreground_requires_machine());
-    }
-    let [oldest, newest] = hello.protocol_range;
-    let range = oldest..=newest;
-    let protocol = if hello.kind == ClientKind::Machine {
-        if hello.protocol_range != DAEMON_PROTOCOL_RANGE {
-            return Err(protocol_mismatch(hello));
-        }
-        Protocol::Current
-    } else if range.contains(&DAEMON_PROTOCOL_RANGE[1]) {
-        Protocol::Current
-    } else if range.contains(&LEGACY_VERSION) {
-        if hello.kind != ClientKind::Terminal {
-            return Err(reopen_client());
-        }
-        Protocol::Takeover
-    } else {
-        return Err(protocol_mismatch(hello));
-    };
-    Ok((
-        HelloParams {
-            protocol_range: [protocol.version(); 2],
-            build: hello.build,
-            kind: hello.kind,
-            agent: None,
-            sessions: Vec::new(),
-            window: None,
-            numbers_given: None,
-            capabilities: hello.capabilities,
-            foreground: hello.foreground,
-            machine: hello.machine,
-        },
-        protocol,
-    ))
-}
-
 fn foreground_requires_machine() -> ErrorBody {
-    ErrorBody::refused("only a machine hello can request foreground activity")
-}
-
-fn protocol_mismatch(hello: v3::HelloParams) -> ErrorBody {
-    let [oldest, newest] = hello.protocol_range;
-    let local_build = facade_base::build_id();
-    let version = DAEMON_PROTOCOL_RANGE[1];
-    let message = format!(
-        "daemon {local_build} uses daemon protocol {version}; client supports \
-         {oldest}-{newest}. Update Facade and reopen this client."
-    );
-    let mut error = ErrorBody::new(Reason::IncompatibleProtocol, message);
-    error.data.protocol = Some(ProtocolMismatch {
-        local_build,
-        local_protocol: DAEMON_PROTOCOL_RANGE,
-        remote_build: hello.build,
-        remote_protocol: hello.protocol_range,
-    });
-    error
-}
-
-fn reopen_client() -> ErrorBody {
-    ErrorBody::new(
-        Reason::IncompatibleProtocol,
-        "This client uses an older daemon protocol. Update Facade and reopen this client.",
+    operation_error(
+        "refused",
+        "only a machine hello can request foreground activity",
     )
 }
 

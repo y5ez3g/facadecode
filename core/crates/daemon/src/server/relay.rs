@@ -17,18 +17,18 @@ use super::{RelayLines, Service};
 pub(super) async fn serve<S: Service>(
     connection: &mut Connection<S>,
     reader: &mut Reader,
-    id: Option<u64>,
+    id: u64,
     params: Value,
 ) -> anyhow::Result<()> {
     let accepted = connection.service.relay(params, connection.peer_pid).await;
     let (answer, lines) = match accepted {
         Ok(accepted) => accepted,
         Err(error) => {
-            connection.outbox.answer(id, Err(error)).await;
+            connection.outbox.answer(Some(id), Err(error)).await;
             return Ok(());
         }
     };
-    connection.outbox.answer(id, Ok(answer)).await;
+    connection.outbox.answer(Some(id), Ok(answer)).await;
     connection.teller = Some(connection.tell_closing());
     let mut closing_answered = false;
     let (outbox, answered) = (connection.outbox.clone(), connection.answered.clone());

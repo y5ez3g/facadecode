@@ -93,7 +93,7 @@ export function unavailable(message: string): DaemonError {
 
 export function errorOf(body: ErrorBody | undefined): DaemonError {
 	const data = body?.data && typeof body.data.reason === 'string' ? body.data : { reason: 'internal' as const };
-	return new DaemonError(body?.message ?? 'Facade core answered with an error.', data.reason, data);
+	return new DaemonError(body?.message ?? 'Facade core answered with an error.', data.reason, data, body?.code);
 }
 
 /** Runs `facade daemon --detach` for `home`: where Facade starts, or already runs, it answers with code 0. */
@@ -209,7 +209,7 @@ export class Connection {
 			this.on.watchEnded(message.params as WatchEndedParams);
 		} else if (message.method === 'closing') {
 			this.on.closing();
-		} else if (message.method === undefined && typeof message.id === 'number') {
+		} else if (message.method === undefined && typeof message.id === 'number' && Number.isSafeInteger(message.id)) {
 			const settle = this.pending.get(message.id);
 			this.pending.delete(message.id);
 			settle?.(message.error ? { error: errorOf(message.error) } : { result: message.result });
