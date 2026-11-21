@@ -4,6 +4,7 @@
 //! travel as [`base64`].
 
 pub mod address;
+pub mod api_v1;
 pub mod base64;
 pub mod daemon;
 pub mod daemon_client;
