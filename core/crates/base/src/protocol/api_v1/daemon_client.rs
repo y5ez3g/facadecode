@@ -1,0 +1,356 @@
+//! Blocking client for the authenticated daemon API v1 connection.
+
+use std::collections::VecDeque;
+use std::io::{self, BufReader, ErrorKind, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+
+use crate::daemon::methods;
+pub use crate::daemon_client::Cut;
+use crate::daemon_client::{connect_transport, takeover_timeout, transient_transport};
+use crate::paths::ClientSocket;
+
+use super::daemon::{
+    self, AgentSend, AgentStart, ChangedParams, ClientKind, ClosingParams, HelloParams,
+    HelloResult, UnwatchParams, WatchEndedParams, WatchParams, WatchResult,
+};
+use super::{
+    ApiVersions, CallParams, EmptyResult, ErrorBody, NoArgs, Notification, Operation, Request,
+    Response, ResponseBody, ServerMessage, Topic, encode_line, read_server_message,
+};
+
+const HELLO_ID: u64 = 1;
+const TAKEOVER_POLL: Duration = Duration::from_millis(100);
+
+/// A local connection that completed the daemon API v1 hello.
+pub struct DaemonClient {
+    pub writer: ClientSocket,
+    pub hello_result: HelloResult,
+    /// The build named by the retiring daemon.
+    pub closing: Option<String>,
+    reader: BufReader<ClientSocket>,
+    line: Vec<u8>,
+    next_id: u64,
+    unread: VecDeque<Notification>,
+    /// The socket path of a reconnectable terminal session.
+    origin: Option<PathBuf>,
+}
+
+impl DaemonClient {
+    /// Opens a terminal connection and gives its hello until the deadline to complete.
+    pub fn connect(
+        socket: &Path,
+        until: Instant,
+        opening: &mut dyn FnMut(&ClientSocket) -> bool,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(writer) = connect_transport(socket, opening)? else {
+            return Ok(None);
+        };
+        let wait = until
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        // A peer that closed already may no longer allow a timeout to be set.
+        if writer.set_read_timeout(Some(wait)).is_err() {
+            return Ok(None);
+        }
+        match Self::hello(writer) {
+            Ok(mut client) if client.writer.set_read_timeout(None).is_ok() => {
+                client.origin = Some(socket.to_owned());
+                Ok(Some(client))
+            }
+            Ok(_) => Ok(None),
+            Err(error) if upgrading(&error) => Ok(None),
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(transient_transport) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Completes the terminal hello on an already connected socket.
+    pub fn hello(writer: ClientSocket) -> anyhow::Result<Self> {
+        Self::hello_as(writer, ClientKind::Terminal)
+    }
+
+    /// Completes hello on an internal socket whose MCP actor the daemon already proved.
+    pub fn hello_actor(writer: ClientSocket) -> anyhow::Result<Self> {
+        Self::hello_as(writer, ClientKind::Mcp)
+    }
+
+    fn hello_as(mut writer: ClientSocket, kind: ClientKind) -> anyhow::Result<Self> {
+        let mut reader = BufReader::new(writer.try_clone()?);
+        let mut line = Vec::new();
+        let offered = ApiVersions::new(daemon::SUPPORTED_API_VERSIONS.to_vec())
+            .expect("the daemon API has a supported version");
+        let request = Request::new(
+            Some(HELLO_ID),
+            methods::HELLO,
+            HelloParams {
+                api_versions: offered.clone(),
+                build: crate::build_id(),
+                kind,
+                machine: None,
+                foreground: false,
+            },
+        );
+        writer.write_all(&encode_line(&request))?;
+
+        let response = match read_server_message(&mut reader, &mut line)? {
+            Some(ServerMessage::Response(response)) if answers(&response, HELLO_ID) => response,
+            Some(_) => anyhow::bail!("the Orchestrator did not respond to hello"),
+            None => {
+                return Err(io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "the Orchestrator closed before hello",
+                )
+                .into());
+            }
+        };
+        let result = response_result(response)?;
+        let hello_result = daemon::decode_hello_result(result, &offered, kind)?;
+
+        Ok(Self {
+            writer,
+            hello_result,
+            closing: None,
+            reader,
+            line,
+            next_id: HELLO_ID + 1,
+            unread: VecDeque::new(),
+            origin: None,
+        })
+    }
+
+    /// Calls an operation and returns its typed result.
+    pub fn call<O: Operation>(&mut self, args: O::Args) -> anyhow::Result<O::Result> {
+        self.exchange(methods::CALL, &call_params::<O>(args)?)
+    }
+
+    /// Repeats an interrupted start or send with its original business request ID.
+    pub fn call_with_request_id<O: Operation>(
+        &mut self,
+        args: O::Args,
+        after_crash: bool,
+    ) -> anyhow::Result<(O::Result, bool)>
+    where
+        O::Args: Clone,
+    {
+        let params = call_params::<O>(args)?;
+        let can_repeat = [AgentStart::NAME, AgentSend::NAME].contains(&O::NAME)
+            && params
+                .args
+                .get("request_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty());
+        match self.exchange(methods::CALL, &params) {
+            Ok(result) => Ok((result, false)),
+            Err(error)
+                if error.is::<Cut>()
+                    && can_repeat
+                    && self.origin.is_some()
+                    && (after_crash || self.closing.is_some()) =>
+            {
+                self.connect_again()?;
+                Ok((self.exchange(methods::CALL, &params)?, true))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Starts a call without waiting, returning its connection-local request ID.
+    pub fn begin_call<O: Operation>(&mut self, args: O::Args) -> anyhow::Result<u64> {
+        self.ask(methods::CALL, &call_params::<O>(args)?)
+    }
+
+    pub fn result<O: Operation>(&mut self, id: u64) -> anyhow::Result<O::Result> {
+        self.answer_to(id)
+    }
+
+    pub fn watch<T: Topic>(&mut self, args: T::Args) -> anyhow::Result<(u64, T::Snapshot)> {
+        let params = WatchParams {
+            topic: T::NAME.to_owned(),
+            args: serde_json::to_value(args)?,
+        };
+        let started: WatchResult = self.exchange(methods::WATCH, &params)?;
+        Ok((started.watch, serde_json::from_value(started.snapshot)?))
+    }
+
+    pub fn snapshot<T: Topic>(&mut self, args: T::Args) -> anyhow::Result<T::Snapshot> {
+        let (watch, snapshot) = self.watch::<T>(args)?;
+        self.unwatch(watch)?;
+        Ok(snapshot)
+    }
+
+    /// Ends this connection's watch and waits for its acknowledgment.
+    pub fn unwatch(&mut self, watch: u64) -> anyhow::Result<()> {
+        let id = self.ask(methods::UNWATCH, &UnwatchParams { watch })?;
+        let _: EmptyResult = self.answer_to(id)?;
+        self.unread.retain(|notification| {
+            !matches!(
+                notification.method.as_str(),
+                methods::CHANGED | methods::WATCH_ENDED
+            ) || notification.params.get("watch").and_then(Value::as_u64) != Some(watch)
+        });
+        Ok(())
+    }
+
+    pub fn next_change<T: Topic>(&mut self, watch: u64) -> anyhow::Result<Option<T::Change>> {
+        while let Some(notification) = self.next_notification()? {
+            match notification.method.as_str() {
+                methods::CLOSING => {
+                    self.record_closing(notification)?;
+                    return Ok(None);
+                }
+                methods::WATCH_ENDED => {
+                    let ended: WatchEndedParams = serde_json::from_value(notification.params)?;
+                    if ended.watch == watch {
+                        return Err(ended.error.into());
+                    }
+                }
+                methods::CHANGED => {
+                    let changed: ChangedParams = serde_json::from_value(notification.params)?;
+                    if changed.watch == watch {
+                        return Ok(Some(serde_json::from_value(changed.change)?));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
+    }
+
+    /// Detaches the original buffered reader and writer after machine authorization.
+    pub fn into_stream(self) -> (BufReader<ClientSocket>, ClientSocket) {
+        (self.reader, self.writer)
+    }
+
+    pub fn disable_auto_reconnect(&mut self) {
+        self.origin = None;
+    }
+
+    pub fn connect_again(&mut self) -> anyhow::Result<()> {
+        let socket = self
+            .origin
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("this connection cannot connect again"))?;
+        let timeout = takeover_timeout();
+        let until = Instant::now() + timeout;
+        *self = loop {
+            if let Some(client) = Self::connect(&socket, until, &mut |_| true)? {
+                break client;
+            }
+            anyhow::ensure!(
+                Instant::now() < until,
+                "the Orchestrator did not respond within {} seconds of a newer build taking over",
+                timeout.as_secs()
+            );
+            std::thread::sleep(TAKEOVER_POLL);
+        };
+        Ok(())
+    }
+
+    /// Acknowledges closing after the caller has stopped any concurrent writer.
+    pub fn respond_to_closing(&mut self) {
+        let _ = self.writer.write_all(&encode_line(&Notification::new(
+            methods::CLOSING,
+            NoArgs {},
+        )));
+    }
+
+    fn record_closing(&mut self, notification: Notification) -> anyhow::Result<()> {
+        let closing: ClosingParams = serde_json::from_value(notification.params)?;
+        self.closing = Some(closing.build);
+        Ok(())
+    }
+
+    fn exchange<T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: &impl Serialize,
+    ) -> anyhow::Result<T> {
+        loop {
+            let id = self.ask(method, params)?;
+            let answer = self.answer_to(id);
+            if !matches!(&answer, Err(error) if upgrading(error)) || self.origin.is_none() {
+                return answer;
+            }
+            self.connect_again()?;
+        }
+    }
+
+    fn ask(&mut self, method: &str, params: &impl Serialize) -> anyhow::Result<u64> {
+        let id = self.next_id;
+        self.next_id = id
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("request IDs exhausted"))?;
+        self.writer
+            .write_all(&encode_line(&Request::new(Some(id), method, params)))?;
+        Ok(id)
+    }
+
+    fn answer_to<T: DeserializeOwned>(&mut self, id: u64) -> anyhow::Result<T> {
+        loop {
+            match read_server_message(&mut self.reader, &mut self.line) {
+                Ok(Some(ServerMessage::Response(response))) if answers(&response, id) => {
+                    return response_result(response);
+                }
+                Ok(Some(ServerMessage::Response(_))) => {}
+                Ok(Some(ServerMessage::Notification(notification))) => {
+                    if notification.method == methods::CLOSING {
+                        self.record_closing(notification)?;
+                        self.respond_to_closing();
+                    } else {
+                        self.unread.push_back(notification);
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::InvalidData => return Err(error.into()),
+                Ok(None) | Err(_) => return Err(Cut.into()),
+            }
+        }
+    }
+
+    fn next_notification(&mut self) -> io::Result<Option<Notification>> {
+        if let Some(notification) = self.unread.pop_front() {
+            return Ok(Some(notification));
+        }
+        while let Some(message) = read_server_message(&mut self.reader, &mut self.line)? {
+            if let ServerMessage::Notification(notification) = message {
+                return Ok(Some(notification));
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn call_params<O: Operation>(args: O::Args) -> anyhow::Result<CallParams> {
+    Ok(CallParams {
+        op: O::NAME.to_owned(),
+        args: serde_json::to_value(args)?,
+    })
+}
+
+fn answers(response: &Response, id: u64) -> bool {
+    response.id.is_none_or(|answered| answered == id)
+}
+
+fn response_result<T: DeserializeOwned>(response: Response) -> anyhow::Result<T> {
+    match response.body {
+        ResponseBody::Result(result) => Ok(serde_json::from_value(result)?),
+        ResponseBody::Error(error) => Err(error.into()),
+    }
+}
+
+/// A refusal before the operation began, while a new daemon takes over.
+pub fn upgrading(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<ErrorBody>()
+        .is_some_and(|error| error.data.reason == "upgrading")
+}

@@ -31,8 +31,8 @@ pub use build::{
     version, version_of,
 };
 pub use platform::modules::*;
-pub use protocol::v3;
 pub use protocol::{address, base64, daemon, daemon_client, jsonrpc, keeper, machine, operations};
+pub use protocol::{api_v1, v3};
 pub use texts::{instructions, skill, tools};
 
 /// Eight random bytes from the operating system, for keys and names nobody may guess. Panics if
