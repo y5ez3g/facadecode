@@ -185,20 +185,18 @@ fn request(url: &str, request: Request) -> Result<Response> {
         let discard = if cfg!(windows) { "NUL" } else { "/dev/null" };
         command.args(["--head", "--output", discard]);
     }
+    // Keep the write-out separator independent of Windows newline translation.
     let write_out = if matches!(request, Request::LatestTag) {
-        "%{redirect_url}\n%{http_code}"
+        "%{redirect_url}\t%{http_code}"
     } else {
-        "\n%{http_code}"
+        "\t%{http_code}"
     };
     let output = command
         .args(["--write-out", write_out, url])
         .output()
         .with_context(|| format!("could not run {} for {url}", program.display()))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let (body, status) = stdout
-        .trim_end_matches(['\r', '\n'])
-        .rsplit_once('\n')
-        .unwrap_or(("", stdout.trim()));
+    let (body, status) = stdout.rsplit_once('\t').unwrap_or((&stdout, ""));
     let http = match status.as_bytes() {
         [b'1'..=b'5', b'0'..=b'9', b'0'..=b'9'] => status.parse().ok(),
         _ => None,
