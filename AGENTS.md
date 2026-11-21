@@ -27,3 +27,9 @@ test subjects. Editor tests use separate temporary user-data and extensions dire
 state; do not run real Qwen probes.
 
 Validate the affected paths, build tools and behavior. Report checks actually run and any remaining limitations.
+
+## README approval
+
+Every `README.md` in this repository is protected, including the root file, nested files and translations.
+Obtain the repository owner's explicit prior approval before creating, editing, deleting, translating, renaming
+or moving any of them. This covers link-only, formatting and automated edits.

@@ -4,16 +4,14 @@
 
 # Facade Code
 
-**Run AI coding agents across your machines.**
+**The multi-agent orchestrator for VS Code.**
 
-Facade Code runs a group of AI coding CLIs on your own machines. Agents can find and message each other, read screens
-and type into terminals. You can direct them from Shell, VS Code or any application that supports MCP. Each machine
-runs its own Orchestrator, and your machines connect over SSH.
+Run native agent CLIs, edit code, and review changes in the same IDE window. Use your own accounts and coding plans, and let agents collaborate across windows and machines.
 
 [![Website: facadecode.com](https://img.shields.io/badge/Website-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![VS Code Marketplace: install](https://img.shields.io/badge/VS%20Code%20Marketplace-install-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
 [![Open VSX: install](https://img.shields.io/badge/Open%20VSX-install-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
-[![Releases](https://img.shields.io/badge/Releases-GitHub-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Releases: download the IDE](https://img.shields.io/badge/Releases-download%20the%20IDE-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
 [![Issues: report a bug](https://img.shields.io/badge/Issues-report%20a%20bug-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 **English** · [简体中文](docs/locales/zh-CN/README.md) · [繁體中文](docs/locales/zh-TW/README.md) · [Português (Brasil)](docs/locales/pt-BR/README.md) · [Español](docs/locales/es/README.md) · [Русский](docs/locales/ru/README.md) · [Deutsch](docs/locales/de/README.md) · [日本語](docs/locales/ja/README.md) · [Bahasa Indonesia](docs/locales/id/README.md) · [Français](docs/locales/fr/README.md) · [한국어](docs/locales/ko/README.md) · [Türkçe](docs/locales/tr/README.md) · [Tiếng Việt](docs/locales/vi/README.md) · [Polski](docs/locales/pl/README.md)
@@ -33,88 +31,47 @@ runs its own Orchestrator, and your machines connect over SSH.
 
 ## Install
 
-### Shell
-
-The one-line installers cover macOS, Linux and Windows on x64 and arm64. They download the package from GitHub
-and use the official website mirror when GitHub is unavailable.
-
-Run this command on macOS or Linux.
-
-```sh
-sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://facadecode.com/install.sh
-```
-
-Run this command in PowerShell on Windows.
-
-```powershell
-irm https://facadecode.com/install.ps1 | iex
-```
-
-Each GitHub Pre-release includes commands to install that exact candidate version. To select a version in the installer,
-use `--version X.Y.Z` on macOS or Linux, or `-Version X.Y.Z` in PowerShell.
-
-The installer adds `facade` and `facade-mcp` to PATH. Open a new terminal to use the updated PATH.
-
-The IDE preview's launcher also uses the name `facade`. If both programs are installed, your shell runs the first
-`facade` on PATH. Run `facade --version` and look for a line of the form `facade <version>` to verify that you have
-the Shell command. The launcher name belongs to the Orchestrator after the IDE preview is retired.
-
-Run `facade upgrade` for the stable version, or `facade upgrade --version X.Y.Z` to select an exact release.
-Install and sign in to the CLIs you want to run on each machine.
-The built-in choices are Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi.
-
-### VS Code
-
 ```sh
 code --install-extension facade.facadecode
 ```
 
-The extension includes its own Orchestrator. Open **Facade Code** in the Activity Bar and choose **New Agent**,
-**Go to Agent** or **Resume Agent**. Packages are built for macOS, Linux and Windows on x64 and arm64.
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) · [Open VSX](https://open-vsx.org/extension/facade/facadecode) · [Extension guide](extension/GUIDE.md)
+Or install **Facade Code** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). It runs on macOS (Apple silicon), Linux (x64), and Windows (x64).
 
-### MCP
+Next, install and sign in to any supported agent CLIs you plan to use: Claude Code, Codex, Antigravity, Muse Code, OpenCode, or Pi. Facade Code starts each CLI using its own sign-in and account plans.
 
-Add `facade-mcp` as a stdio MCP server in your app. This example uses an `mcpServers` object.
+> **Agents run without approval prompts by default.** With `yolo` enabled by default, agents can run commands and change files without asking first. Turn it off to restore each CLI's standard approval prompts. See the [extension README](extension/README.md#install).
 
-```json
-{
-  "mcpServers": {
-    "facade": { "command": "facade-mcp" }
-  }
-}
-```
+## Agent Panel
 
-An external connection joins as a Guest on its first tool call. Send a message, then use the `read_messages` call returned by
-`send_message` to wait for its reply.
+**Your agents and your IDE, in the same window.**
 
-## Work across machines
+Facade Code runs native agent CLIs (Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi) in editor terminal tabs beside your files, using each CLI's own commands, tools, accounts, and coding plans. A card in the panel tracks each agent's status.
 
-```sh
-facade start --name ada -d codex
-facade list
-facade attach ada
-```
+- **Work beside your code.** Each agent runs in its own terminal tab in the editor area. Closing a tab hides it while the agent keeps running; clicking its card opens it again.
+- **Track status across agents.** Cards show what was last sent to each agent and whether it is working, needs permission, or encountered an error, with details showing its title, folder, and who started it. Agents keep running through window reloads and extension restarts.
+- **Folders and worktrees.** Run agents in any workspace folder or create a Git worktree on the fly to keep code changes separate. Pin a conversation to restore it when you open the workspace again, or resume past sessions from history.
 
-Use the address printed by `facade list`. To work on another machine, register it with your usual SSH target and
-options. To reach WSL or a Dev Container from outside, start SSH inside that environment and register it the same
-way. You can also run Facade directly inside it.
+## Agent Use
 
-```sh
-facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --workdir /work/app --worktree feat-x claude
-```
+**Let agents operate other agents, just like you.**
 
-Facade installs the matching version on the remote machine when needed and runs it from its fixed installation
-path. If you need to install manually, use the same version as your local Orchestrator. In VS Code, **Go to Agent** can open the
-running agent's terminal. The workspace remembers the agents you open, their helpers and your Pins. Closing a
-terminal tab leaves the agent running. **Resume Agent** and `facade resume` offer saved work.
+Through MCP and a terminal protocol, agents can start, stop, find, and message other agents, read their terminal screens, type text, and press keys.
 
-> **YOLO defaults to on.** On connected machines, an agent with YOLO on can reach other agents across the network.
-> Set `"yolo": false` in that machine's `facade.json` to keep the CLI's own approvals and sandbox and limit MCP reach
-> to the caller's creation tree. The setting takes effect on start or resume. Run `facade status` to find the file.
+- **Start and stop agents.** An agent can start other agents with any of the six CLIs, in any folder or new worktree of your Facade windows on this computer, and give them their first task. A retried request with the same request ID never starts a second agent.
+- **Send messages.** Agents exchange messages with each other and can message you. Facade pastes the whole message once and sends it. If unsent text or a prompt question is in the way, delivery waits until the input is clear.
+- **Terminal control.** An agent can read another agent's screen, type commands, and press keys to answer prompts or help a stuck peer. When a child agent waits 20 seconds for permission, an answer, or sign-in, the agent that started it is notified.
 
-[Product guide](docs/PRODUCT.md) · [Glossary](docs/core/GLOSSARY.md)
+## Agent Mesh
+
+**Connect agents across windows, machines, and locations.**
+
+Facade Code connects agents across your Facade windows on this computer into one network. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
+
+- **Across windows.** With `yolo` on, an agent reaches every agent across your Facade windows on this computer, local and Remote - SSH alike. With it off, an agent reaches only its own group: the agent you started and those started from it.
+- **Extend over SSH.** In a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window, agents run directly on the remote machine with the tools, files, and accounts there. Local agents can start and message agents in Remote - SSH windows directly.
+- **Coordinate from your phone.** Connect the Claude mobile app to a Claude Code session on your computer using [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). That session can coordinate other agents through Facade and report progress back to your phone.
+
+<sub>Remote Control requires a supported Claude Code version, an eligible plan, and full-scope sign-in. See its [setup requirements](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
 ## Facade Code IDE (Preview)
 
@@ -124,13 +81,10 @@ Organize projects, feature worktrees, and agent teams in a dedicated workspace b
 
 Download the IDE preview: [macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [All releases](https://github.com/y5ez3g/facadecode/releases)
 
-The preview IDE installs alongside your editor with its own settings and extensions. Its extensions come from
-[Open VSX](https://open-vsx.org). A few proprietary Microsoft extensions, such as Remote Development and C/C++, run
-only in official Microsoft builds. Architecture and specifications are in [`docs/ide/`](docs/ide/).
+The IDE is a fork of VS Code that installs alongside your existing editor and shares nothing with it: settings, extensions, and the `facade` command are completely separate. Its extensions come from [Open VSX](https://open-vsx.org); a few proprietary Microsoft extensions, such as Remote Development and C/C++, run only in official Microsoft builds. Architecture and specifications are in [`docs/ide/`](docs/ide/).
 
 ## Building from Source
 
-- **Orchestrator and Shell.** See [`core/README.md`](core/README.md).
 - **Extension:** Provide [`extension/AGENTS.md`](extension/AGENTS.md) to your coding agent to build the package.
 - **IDE:** Provide [`docs/ide/RELEASE.md`](docs/ide/RELEASE.md) to your coding agent to build the application.
 

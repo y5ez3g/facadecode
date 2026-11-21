@@ -1,8 +1,7 @@
 # Translated documentation
 
 These are translations of the repository's [README](../../README.md), contribution guide and security policy.
-The VS Code extension's interface translations live in [extension/l10n/](../../extension/l10n/), and the IDE's
-runtime translations live in [ide/locales/](../../ide/locales/).
+The application's runtime translations remain in [ide/locales/](../../ide/locales/).
 
 | Language | Overview | Contributing | Security |
 | --- | --- | --- | --- |

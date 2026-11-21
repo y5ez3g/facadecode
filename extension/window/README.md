@@ -4,7 +4,7 @@
 
 # Facade Code Window Component
 
-**Cleans up stale Facade Code terminal tabs.**
+**The part of Facade Code that runs on your computer.**
 
 [![Website: facadecode.com](https://img.shields.io/badge/Website-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![Facade Code: install](https://img.shields.io/badge/Facade%20Code-install-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
@@ -16,14 +16,13 @@
 
 ## What it does
 
-When a remote VS Code window reconnects or the extension restarts, the Window Component removes leftover terminal
-tabs from the previous connection. It runs on the local VS Code client. The VS Code entry point continues to
-work without it, with stale tab cleanup unavailable.
+- **Keeps agents connected through reloads.** When a window reloads, it lets Facade Code recognize the window so its agents and their terminals come back in it.
+- **Connects your Facade windows.** Agents in different windows on your computer, local and Remote - SSH alike, can discover each other and collaborate.
+- **Runs on your computer.** It always runs on your local computer, even for remote windows. It has no interface of its own.
 
-## Old engine transition
+## If it is missing or turned off
 
-The old engine still uses the Window Component for its existing window functions. If the old engine asks for
-the component, install or enable it locally and reload the window.
+The Facade Code panel explains that the component is required and offers **Show Window Component**. Install or enable it, then reload the window.
 
 ## License
 
