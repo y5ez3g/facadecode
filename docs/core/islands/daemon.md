@@ -9,8 +9,8 @@ public `run()` entry point.
 - The local agent list, indexed by the running machine's agent number. A client can follow records
   from the local daemon and reachable peers in one subscription.
 - `core/facade.db`, including the record and message counters, run identity, launch options, creation
-  source, Guest snapshots, saved SSH arguments and remembered routes. The original window and
-  membership records remain available for workspace import.
+  source, Guest snapshots, saved SSH arguments and remembered routes. Earlier window and membership
+  records stay in the store. The extension owns current workspace membership and Pins.
 - The transactions that commit a start with its prompt, settle a message, and remove an agent with
   its inbox. A record removal keeps the reason needed to distinguish expiry from explicit removal.
 - The target and checked reply reference for a send with an internal request ID. The origin
@@ -79,6 +79,102 @@ public `run()` entry point.
 - After a passive probe finds the service sleeping, Shell can call `offline_machine_name()`
   to read the committed local machine name through Store. A read-only connection uses a
   retained WAL and SQLite's shared memory. A checkpointed database is opened as immutable.
+
+## Storage format and migrations
+
+### Current design
+
+During recovery, the daemon holds the home's service lock and opens `$FACADE_HOME/core/facade.db`.
+It owns one mutex-protected SQLite write connection in WAL mode with `synchronous=FULL`. Table
+handles share that connection. Shell's offline machine-name reader opens a separate read-only
+connection. [Store::open](../../../core/crates/daemon/src/store/mod.rs#L231-L303) ·
+[Offline name reader](../../../core/crates/daemon/src/store/mod.rs#L211-L228)
+
+| Tables and keys | What they keep |
+|---|---|
+| `machine` singleton, `numbers` and `message_numbers` counters | The local machine UUID and name, and the next Agent and message numbers. Counters only advance. A machine UUID and local `aN` or `mN` identify the record across homes. A new store seeds the Agent counter above IDs held by the keeper. [Identity SQL](../../../core/crates/daemon/src/store/mod.rs#L49-L88) · [Initialization](../../../core/crates/daemon/src/store/mod.rs#L871-L894) |
+| `agents`, `guests` and `agent_removals` by `agent_id` | Managed run and launch facts, session and creation-tree scope. A start receipt within its retention hour matches the request ID, starter machine, creator and nullable legacy window scope. Current v1 starts leave that window field absent. Guest rows retain their session, last-heard time and YOLO snapshot. Removal rows distinguish expiry from explicit removal. [Agent SQL](../../../core/crates/daemon/src/store/mod.rs#L52-L86) · [Start receipt](../../../core/crates/daemon/src/store/mod.rs#L423-L448) · [Guest SQL and saved YOLO](../../../core/crates/daemon/src/store/guests.rs#L56-L73) · [Removal SQL](../../../core/crates/daemon/src/store/mod.rs#L649-L671) |
+| `saved_connections`, `known_machines` and `remembered_routes` by `machine_id` | SSH destination, optional remote Facade home and normalized argument vector, last advertised name and contact time, and remembered hop IDs. Old SSH rows without arguments read as a one-element vector containing the destination. Reachability comes from the live network and query results. [Machine SQL and readers](../../../core/crates/daemon/src/store/machines.rs#L10-L61) |
+| `messages` by number, `send_routes` by `(sender, request_id, target)` | Messages keep inbox, delivery, paste and result facts. A repeat send matches the sender and its machine, recipient and request ID within an hour. The origin keeps its first resolved recipient and checked reply for that window plus the delivery limit. Withdrawals and eligible removed-inbox receipts retain settlement without appearing in history. [Message and route SQL](../../../core/crates/daemon/src/store/messages.rs#L42-L102) · [Receipt lookup](../../../core/crates/daemon/src/store/messages.rs#L333-L352) · [Cutoffs](../../../core/crates/daemon/src/lib.rs#L92-L117) |
+
+The persisted launch choices are encoded in `agents.launch_options`. Run authentication has its
+own retained format marker, `run_auth_version`, alongside process birth and the credential digest.
+New runs record marker 3. Recovery can identify a retained live run with marker 2 using the keeper's
+held process. Relay authentication checks the saved process identity and the evidence for that marker.
+[Launch and authentication fields](../../../core/crates/daemon/src/store/mod.rs#L845-L865) ·
+[Retained run adoption](../../../core/crates/daemon/src/store/mod.rs#L517-L533) ·
+[Relay authentication](../../../core/crates/daemon/src/relays.rs#L295-L324)
+
+The extension keeps current members, hidden members and Pins in
+`$FACADE_HOME/extension/workspaces/<key>/orchestrator-workspace.json`. SQLite preserves the earlier
+window descriptions in `windows` by logical window ID, memberships in `agent_windows` by
+`(agent_id, machine_id, window_id)`, and the `legacy_machines` import snapshot. It also retains
+the older `integration_files` table keyed by `(cli, file)`. The prior workspace import used
+`legacy_machines`. The current code still creates and populates that table during old-format
+migration, including fresh initialization, and has no production reader for it.
+[Workspace file](../../../extension/src/host/orchestrator/workspace.ts#L34-L87) ·
+[Workspace path](../../../extension/src/record/workspace.ts#L80-L97) ·
+[Roster v1 reader and invalid format refusal](../../../extension/src/host/orchestrator/workspace.ts#L214-L229) ·
+[Window SQL](../../../core/crates/daemon/src/store/windows.rs#L16-L29) ·
+[Membership SQL](../../../core/crates/daemon/src/store/membership.rs#L6-L16) ·
+[Legacy machine snapshot](../../../core/crates/daemon/src/store/machines.rs#L24-L31) ·
+[Integration file SQL](../../../core/crates/daemon/src/store/integrations.rs#L6-L17)
+
+The [agent screen](#screen) and [state](#state) own their durable files. The
+[screen log reader](../../../core/crates/daemon/src/agent/screen/codec.rs#L167-L193) accepts the plain
+header and the header requiring the same generation's checkpoint. Recovery can
+[fall back to the preceding generation](../../../core/crates/daemon/src/agent/screen/tests.rs#L377).
+The [Keeper](../../../core/protocol/KEEPER.md#clis-and-terminal-resources) and daemon hold live native
+resources during execution and recovery. They exchange native copies on authenticated links.
+
+An Agent takes its number before launch. Its record and initial prompt commit before publication.
+An ordinary message takes its number in its insert transaction. A cross-machine start can reserve
+a result number at the origin before sending the start. Prompt settlement can write its owed result
+in the same transaction. Agent and Guest deletion pair the record and inbox writes. A managed
+Agent's removal commits before its roster change. Saved SSH changes commit before the daemon updates
+the live route. [Start transaction](../../../core/crates/daemon/src/store/mod.rs#L381-L420) ·
+[Message insertion](../../../core/crates/daemon/src/store/messages.rs#L670-L700) and
+[result reservation](../../../core/crates/daemon/src/store/messages.rs#L559-L581) ·
+[Message settlement](../../../core/crates/daemon/src/store/messages.rs#L782-L839) ·
+[Managed removal](../../../core/crates/daemon/src/operations.rs#L980-L1001) ·
+[Saved SSH admission](../../../core/crates/daemon/src/machine_service.rs#L245-L276)
+
+### Opening and upgrading a store
+
+The current database schema is `user_version = 4`. SQLite reserves this number for the application.
+The daemon and Keeper negotiate their API versions independently.
+
+Fresh stores initialize in their own transaction. The open path first refuses a nonempty development
+schema missing `saved_connections` before normal WAL setup. It disables checkpoint-on-close for that
+connection to preserve the existing database and WAL.
+
+Versions below 4 enter one migration transaction. For a version below 3, the daemon first snapshots known
+machine names, adds normalized SSH arguments and last-seen timestamps, and creates the remembered-route and
+send-route tables and private receipt field. It adds Guest YOLO at version 0. Below 2 it adds the message
+withdrawal field and replaces the request index. Then it adds the agent start, launch, authentication and
+removal fields. For agents missing launch choices it snapshots configured model and effort where available,
+with empty original arguments.
+
+Every migration adds nullable `agents.launch_command` and commits data changes and version 4 together.
+A failed migration rolls back and open fails. Version 4 or higher skips migration and proceeds to normal
+reads. A newer layout may reach the ordinary writers if those reads succeed.
+Recovery keeps unreadable agent rows and reserves their IDs. Keep a consistent backup of the whole stopped home
+and its workspace state before a format change. Opening a migrated store with older code has no general rollback
+guarantee. Use the backup if the change's approved rollback procedure requires it.
+[Open guard](../../../core/crates/daemon/src/store/mod.rs#L231-L272) ·
+[Migration SQL](../../../core/crates/daemon/src/store/mod.rs#L898-L965) ·
+[Agent row reads](../../../core/crates/daemon/src/store/mod.rs#L981-L1003)
+
+Existing fixtures cover [development DB and WAL preservation](../../../core/crates/daemon/src/store/mod.rs#L1212),
+[legacy launch choices](../../../core/tests/tests/resume.rs#L707),
+[prerelease records and saved SSH](../../../core/tests/tests/machines.rs#L265),
+[legacy workspace import before cutover](../../../core/tests/tests/machines.rs#L2106),
+[send replay after restart](../../../core/tests/tests/reliability.rs#L343) and
+[repeated starts](../../../core/tests/tests/reliability.rs#L507). The ignored cold-cutover cases
+require `FACADE_TEST_API_V1_PRERELEASE`. The workspace-import case builds the pinned v2 fixture unless
+a prepared build is supplied through `FACADE_TEST_V2_BIN`.
+
+Changes to the stored contract follow the [compatibility review](../ENGINEERING.md#compatibility-contracts).
 
 ## Depends on
 

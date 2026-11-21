@@ -3,6 +3,16 @@
 The extension is Facade Code's VS Code entry point. It starts and opens agents through the Orchestrator on the
 machine that hosts the workspace. The [product documentation](../docs/PRODUCT.md) covers the three entry points.
 
+## Install for your workspace host
+
+Choose the platform VSIX and matching Window Component from the same release or
+[source package build](../docs/core/FEATURES.md#build-matching-packages-from-source) as your API v1 Shell.
+The platform VSIX has the target of the workspace host. In VS Code, use
+[Extensions: Install from VSIX](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace#_install-from-a-vsix)
+for the Facade Code package in the workspace window. Install the Window Component for the local VS Code UI.
+Set **Facade: Rust Engine** to `auto` and reopen the workspace. In a remote window, confirm that Facade Code
+is installed on the remote workspace host. Use the same Facade home as your Shell on that host.
+
 ## One panel for your workspace
 
 Use **New Agent** to pick a CLI. Choose **Change Working Location** to pick a workspace folder or a Git worktree.
@@ -48,18 +58,20 @@ Resume attempt for each stopped or crashed pinned agent, and a red card explains
 
 Ended records expire after 30 days. An unpinned card then disappears. After confirmed expiry, a pinned agent can
 continue from its saved session as a new agent. A machine that cannot be reached leaves a red card and its Pin.
-Remove from the card or `facade remove` clears the Pin and ends automatic recovery. If the session is confirmed gone,
-Facade clears the Pin and tells you. The first workspace open
-after upgrading imports the prior workspace's agents and Pins. If a machine is unavailable, Facade keeps the
-confirmed entries and reports which machine is pending. Restore access with `facade machine add` when needed.
-Pin restoration starts after the full import is saved.
+Choose **Remove** on the card to delete its record, clear the Pin and end automatic recovery. If the session is
+confirmed gone, Facade clears the Pin and tells you. Reopen the same workspace and Facade home to recover its
+saved roster and Pins. Restore an SSH route with `facade machine add` to refresh members already saved in that
+roster. Finish any pending legacy membership import in the prerelease editor before
+[switching builds](../docs/core/FEATURES.md#restarts-and-diagnostics).
+See [workspace state and recovery](../docs/extension/engineering/ARCHITECTURE.md#62-workspace-state-and-upgrade).
 
 ## SSH and agent collaboration
 
 A Remote-SSH editor connects to its remote host's Orchestrator. To reach more machines from that host, use Shell
 there to register them with `facade machine add`. WSL and Dev Containers that you want to reach as machines also use
 SSH configured inside those environments. You can use Facade directly inside either environment. See the
-[Shell and MCP setup](../README.md#install).
+[standalone Shell installation](../docs/core/FEATURES.md#install-the-standalone-shell) and the
+[MCP entry point](../docs/PRODUCT.md#mcp).
 
 Agents use MCP to find and start agents, send messages, read screens, type and press keys. Ask an agent to start a
 helper and have the helper report back to it. You can follow their work in the terminal and Panel. Use Shell to

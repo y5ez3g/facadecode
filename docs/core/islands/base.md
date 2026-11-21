@@ -313,7 +313,12 @@ What a model reads. `core/crates/base/src/texts/`.
 1. `core/crates/base/src/lib.rs`: the parts and the public modules.
 2. `src/protocol/api_v1/daemon/registry.rs` and `src/protocol/api_v1/keeper.rs` show each
    endpoint's typed registration and the operations it visits.
-3. `src/protocol/api_v1/frame.rs` defines the shared error envelope and bounded framing.
+3. A local client resolves [its Facade home](../../../core/crates/base/src/paths.rs#L16) and
+   [daemon endpoint](../../../core/crates/base/src/platform/socket_paths.rs#L39).
+   [The v1 client](../../../core/crates/base/src/protocol/api_v1/daemon_client.rs#L106) sends the hello and
+   checks the selected version before admitting the connection. The
+   [out-of-offer test](../../../core/crates/base/tests/daemon_client.rs#L253) verifies the refusal.
+   `src/protocol/api_v1/frame.rs` defines the shared error envelope and bounded framing.
 4. `src/platform/service.rs`: `lock_home`, `launch`, `StartupChannel`; then `programs.rs`:
    `point_launchers_at`, `Held`.
 5. `src/platform/unix_process.rs`: `ProcessObservation`, `signal_group`.

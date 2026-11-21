@@ -4,6 +4,12 @@ Facade Code runs coding CLIs such as Claude Code and Codex across your machines.
 messages, read terminal output and enter text. You can start and work with them from Shell, VS Code or an application
 that supports MCP.
 
+Use the [standalone Shell installation](core/FEATURES.md#install-the-standalone-shell) for `facade` and
+`facade-mcp`. For the editor entry point, use VS Code 1.105 or later and a
+[Facade Code extension package](../extension/GUIDE.md#install-for-your-workspace-host) with the Orchestrator-backed
+engine for the workspace host. To share an agent, point Shell and the editor at the same Orchestrator home on
+the execution host. Install and sign in to your coding CLI on the machine where it will run.
+
 ![Two Orchestrators connect over SSH. VS Code and Shell attach to agent terminals, and an external app joins as a Guest over MCP.](0-facade.svg)
 
 ## Orchestrator and Facade
@@ -368,8 +374,8 @@ daemon takeover keeps the keeper and its CLIs running while clients reconnect. S
 - **Status.** `facade status` reports the local Facade home, settings file, version, service PIDs, managed
   agent count, connected machines and the fixed Guest MCP launcher. It queries sleeping services without
   starting them. The daemon and keeper each retain 30 days of logs.
-- **Installation.** Follow the [installation instructions](../README.md#install) to install the Orchestrator,
-  `facade` and `facade-mcp`. The VS Code extension ships the programs for its extension host. If the Facade
+- **Installation.** Use the [standalone Shell installation](core/FEATURES.md#install-the-standalone-shell).
+  The Orchestrator-backed extension ships the programs for its extension host. If the Facade
   Code IDE launcher is also installed under `facade`, your PATH determines which command runs.
 - **Lifetime.** Services start on demand and exit after 30 idle seconds. Running agents, foreground
   connections, active Attach views and requests in progress keep the services in use.
@@ -465,9 +471,10 @@ The [VS Code product guide](extension/PRODUCT.md) explains the editor entry in m
 
 ## Common workflows
 
-1. **Start in Shell and open in VS Code.** Run `facade start -d codex` on your laptop. If the agent is named
-   Ada, select Ada in **Go to Agent…** and open its terminal. Closing the editor leaves it running. Run
-   `facade attach ada` to return to that terminal from Shell.
+1. **Start in Shell and open in VS Code.** Run `facade start -d --name Ada codex` on your laptop. Copy the
+   returned reference, also shown by `facade list --local`. Open that agent in **Go to Agent…**. Closing
+   the editor leaves it running. From Shell, use `facade attach <REFERENCE>`, Ctrl+] to detach, and
+   `facade stop <REFERENCE>` when you want to end the run.
 2. **Run on another machine.** Save devbox with `facade machine add -p 2222 aaron@devbox.lan`. Then run
    `facade start --machine devbox --workdir /work/app --worktree feat-x claude`. You can attach from both
    the laptop's terminal and VS Code.

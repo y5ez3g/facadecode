@@ -8,6 +8,48 @@ operations and their results.
 Core supports macOS and Linux on x64 and arm64, Windows 11 and Windows Server 2022 or later on x64, and Windows 11 on
 arm64. On Windows it uses native pseudo consoles.
 
+## Install the standalone Shell
+
+Use the archive for your operating system and architecture, its installer and `SHA256SUMS` from a
+[release](https://github.com/y5ez3g/facadecode/releases) whose notes identify daemon and Keeper API v1.
+Keep the checksum file beside the archive. While the matching release is unpublished, build the packages
+from your checkout with the steps below. Use the release notes or artifact revision to identify the build
+when two candidates report the same version.
+
+| Host | Package | Install from the download directory |
+| --- | --- | --- |
+| macOS or Linux | `facade-core-darwin-<arch>.tar.gz` or `facade-core-linux-<arch>.tar.gz` | `sh ./install.sh --package /absolute/path/to/archive.tar.gz` |
+| Windows | `facade-core-win32-<arch>.zip` | `.\install.ps1 -Package C:\path\to\archive.zip` |
+
+The installers check the package hash and install `facade` and `facade-mcp` together. The default bin directory is
+`~/.local/bin` on macOS and Linux and `%LOCALAPPDATA%\Facade\bin` on Windows. Open a new terminal if needed,
+then run `facade --version` and `facade status` to confirm the executable and Facade home. If the IDE launcher
+uses the same name, invoke the standalone executable by its full path.
+
+The installer keeps one build per version in an install root. If it reports different programs at the same version,
+use a distinct version or follow the selected build's replacement instructions. Keep the Facade home when
+replacing installed programs.
+
+The [VS Code extension](../../extension/GUIDE.md#install-for-your-workspace-host) ships Core for its workspace host. When using it with Shell,
+use compatible builds and the same Facade home. See [compatible takeover and planned restarts](#restarts-and-diagnostics)
+before replacing services in a home that already has agents.
+
+### Build matching packages from source
+
+Use Node 24 and the pinned Rust toolchain on the intended host. The [packaging requirements](../extension/engineering/ARCHITECTURE.md#43-packaging-and-version-support)
+describe the native targets. Run the following from `extension/`, substituting the host target and the
+workspace VSIX filename printed by packaging. This example uses Windows x64.
+
+```sh
+npm ci
+npm run package -- --target win32-x64
+node ../core/scripts/package-core.mjs --target win32-x64 --vsix build/vsix/facadecode-win32-x64-X.Y.Z.vsix --out-dir build/core
+```
+
+Use the VSIX files in `build/vsix/` and the native archive and checksum file in `build/core/`. For Shell,
+run the installer from `../core/` with the absolute path to that archive. The source packages are local test
+artifacts. See the [editor setup](../../extension/GUIDE.md#install-for-your-workspace-host).
+
 ## Agents
 
 A managed agent runs a CLI in a terminal the Orchestrator holds. A Guest is an external MCP client's connection and
@@ -139,6 +181,11 @@ See [Machine sessions](../../core/protocol/DAEMON.md#machine-sessions).
 - The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
   An API-compatible takeover replaces the daemon. The live keeper retains its CLIs and terminals while clients
   reconnect. See [Daemon takeover](../../core/protocol/DAEMON.md#daemon-takeover) for the compatibility checks.
+- If the installed and target builds cannot take over, first complete any pending legacy workspace import in the
+  prerelease editor that reads it. Restore pending machine routes there and confirm that local and remote members
+  and Pins are saved. Then close the clients, let the agents finish and wait for both services to exit. Switch
+  Shell, VS Code and the participating SSH hosts to compatible builds before reconnecting. Reuse the same Facade
+  homes and editor profile and workspace storage. Check the builds' [storage compatibility](islands/daemon.md#storage-format-and-migrations).
 - `facade upgrade` checks the stable version before downloading the installer. It skips installation when
   already up to date. `facade upgrade --version X.Y.Z` runs the regular installer for the `extension/X.Y.Z` release.
   The installed build takes over a running Orchestrator when its compatibility checks pass, keeping agents running.

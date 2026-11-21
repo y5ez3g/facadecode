@@ -11,8 +11,13 @@ This repository contains the IDE and its independently distributed extension. Pr
 - IDE specifications: `docs/ide/`. The former `facade-code-spec/` directory has moved here.
 - Translated repository documentation: `docs/locales/`. Runtime translations remain in `ide/locales/`.
 - Extension specification: `docs/extension/`.
-- Rust core: `core/`, documented in `docs/core/`. Read [core/README.md](core/README.md) and
-  [docs/core/ENGINEERING.md](docs/core/ENGINEERING.md) before changing it.
+- Rust core: `core/`. Read [core/README.md](core/README.md) and
+  [Core engineering](docs/core/ENGINEERING.md) before changing it. The
+  [island index](docs/core/ARCHITECTURE.md#islands) identifies owners, interfaces and checks.
+  The README contains earlier examples. Use [Core features](docs/core/FEATURES.md) for current Shell commands
+  and [Core engineering](docs/core/ENGINEERING.md#tests) for test isolation and cleanup.
+  For published API and stored data changes, follow the
+  [compatibility review](docs/core/ENGINEERING.md#compatibility-contracts).
 
 Run IDE development commands from `ide/`; open that folder to use its existing editor settings and development tools.
 Keep GitHub workflows and repository-wide metadata at the repository root. Each product keeps its own package manifest

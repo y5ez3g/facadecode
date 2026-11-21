@@ -16,11 +16,12 @@ Security vulnerabilities are not reported in issues; see [`SECURITY.md`](SECURIT
 
 ## Code
 
-How this repository works is in [`docs/ide/ENGINEERING.md`](docs/ide/ENGINEERING.md):
-setting up a build, the commands that check a change, and the rules below in full. IDE source is in `ide/`; open that
-folder and run its development commands there. The standalone extension is in `extension/`, with its own
-[`AGENTS.md`](extension/AGENTS.md), and its specification is in [`docs/extension/`](docs/extension/README.md). Product
-documentation is shared under `docs/`.
+Start with the [repository instructions](AGENTS.md). Use [Core engineering](docs/core/ENGINEERING.md)
+for Rust and [the standalone extension instructions](extension/AGENTS.md) for editor work. The
+[product guide](docs/PRODUCT.md) describes the shared behavior.
+
+For IDE work, open `ide/`, run its development commands there and follow [IDE engineering](docs/ide/ENGINEERING.md).
+The rules below apply to IDE changes.
 
 - Branch from `main` as `feature/<number>-<name>`.
 - Merge, never rebase: a feature lands on `main` with `--no-ff`, after review.

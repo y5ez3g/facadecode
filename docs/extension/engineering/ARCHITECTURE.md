@@ -15,6 +15,7 @@ evidence.
 | 3 Data and safety | Storage, paths, rendering, secrets and logs |
 | 4 Repository and delivery | Source layout, builds, compatibility, packaging and translations |
 | 5 Working safely | Tests, isolated editor/CLI runs and Git boundaries |
+| [6 Orchestrator-backed editor](#6-connecting-the-editor-to-the-orchestrator) | Host connection, workspace state, Attach and packages |
 
 ## 1 Components
 
@@ -802,10 +803,19 @@ using that connection's advertised operations and topics. Send one `agent.start`
 The Orchestrator validates the request before creating a worktree or process. Stop uses one exact target and reports
 the result of that item. Resume passes the returned exact target from a local, folder-scoped query.
 
-An incompatible hello makes Orchestrator-backed activation fail with a version error. When switching builds
-without a compatible takeover, let active agents finish and stop both services. Keep the Facade home and workspace
-storage. During a compatible takeover the daemon sends `closing {build}`. The editor acknowledges on that connection
-and verifies a fresh hello.
+The workspace host's [activation](../../../extension/src/extension.ts#L11) selects the engine and starts the
+[Orchestrator connection](../../../extension/src/host/orchestrator/index.ts#L77) for the resolved home. After hello,
+it opens the workspace state, installs the machine and agent watches and connects them to the Panel. The
+[agent view](../../../extension/src/host/orchestrator/agents.ts#L76) reconciles confirmed roster snapshots
+with local members and Pins. Opening a terminal uses Attach (6.3). [Deactivation](../../../extension/src/host/orchestrator/index.ts#L215)
+releases the editor's subscriptions, terminal views and connection while the Orchestrator retains the agents.
+
+An incompatible hello makes Orchestrator-backed activation fail with a version error. For a planned switch
+with a pending legacy workspace import, finish the import in the prerelease editor while it can still read
+both local and remote members and Pins. Restore any required route there and confirm the roster and Pins
+are saved. Then let active agents finish and stop both services. Keep the Facade home, editor profile and
+workspace storage. During a compatible takeover the daemon sends `closing {build}`. The editor acknowledges
+on that connection and verifies a fresh hello.
 
 ### 6.2 Workspace state and upgrade
 
