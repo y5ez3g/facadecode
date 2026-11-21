@@ -6,24 +6,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::daemon::{AgentInfo, AgentState, AgentsUpdate, FACADE, WaitKind, display_name};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::AgentRef;
+use facade_base::api_v1::daemon as wire;
+use facade_base::api_v1::daemon::Caller;
+use facade_base::model::agent::AgentRef;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::ProcessState;
-use facade_base::v3::Caller;
+use facade_base::{
+    model::agent::{AgentsUpdate, ManagedAgent, ManagedAgentState, WaitKind},
+    model::message::FACADE,
+    model::terminal::display_name,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 
+use crate::api;
 use crate::delivery::pending_message;
 use crate::messages::{self, Due, Posted};
-use crate::service::value_of;
 use crate::{Daemon, Sender, log};
 
 /// How long a started agent waits before its creator is told.
 const WAIT_REPORT_DELAY: Duration = Duration::from_secs(20);
-
-pub(crate) const DELIVER_WAIT_NOTICE: &str = "machine.deliver_wait_notice";
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct WaitNotice {
@@ -34,8 +37,8 @@ pub(crate) struct WaitNotice {
 }
 
 /// What a started agent waits on, where it is something its creator is told of.
-fn waiting_on(info: &AgentInfo) -> Option<WaitKind> {
-    if info.state != AgentState::WaitingForYou || info.creator.is_none() {
+fn waiting_on(info: &ManagedAgent) -> Option<WaitKind> {
+    if info.state != ManagedAgentState::WaitingForYou || info.creator.is_none() {
         return None;
     }
     let kind = info.state_detail.as_ref()?.kind?;
@@ -65,7 +68,7 @@ struct Wait {
 pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
     let mut changes = daemon.changes.subscribe();
     let mut waits: HashMap<String, Wait> = HashMap::new();
-    let note = |waits: &mut HashMap<String, Wait>, info: &AgentInfo| match waiting_on(info) {
+    let note = |waits: &mut HashMap<String, Wait>, info: &ManagedAgent| match waiting_on(info) {
         Some(kind) => {
             let same = waits
                 .get(&info.agent_id)
@@ -93,7 +96,6 @@ pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
             change = changes.recv() => match change {
                 Ok(AgentsUpdate::Updated { agent }) => note(&mut waits, &agent),
                 Ok(AgentsUpdate::Removed { agent_id, .. }) => drop(waits.remove(&agent_id)),
-                Ok(_) => {}
                 Err(RecvError::Lagged(_)) => {
                     let infos = daemon.agent_infos();
                     waits.retain(|id, _| infos.iter().any(|info| info.agent_id == *id));
@@ -137,7 +139,7 @@ fn waiting_text(name: &str, address: &str, kind: WaitKind) -> String {
 
 impl Daemon {
     /// Routes a wait notification to the machine that holds the creator's inbox.
-    fn tell_creator(self: &Arc<Self>, info: &AgentInfo, kind: WaitKind) {
+    fn tell_creator(self: &Arc<Self>, info: &ManagedAgent, kind: WaitKind) {
         let Some(agent_id) = info.creator.clone() else {
             return;
         };
@@ -170,13 +172,16 @@ impl Daemon {
                     .await
             } else {
                 daemon
-                    .network_call(
+                    .network_call::<wire::InternalDeliverWaitNotice>(
                         &target,
-                        caller,
-                        DELIVER_WAIT_NOTICE,
-                        value_of(notice),
+                        &caller,
+                        wire::InternalDeliverWaitNoticeArgs {
+                            recipient: api::wire_ref(&notice.recipient),
+                            waiting: api::wire_ref(&notice.waiting),
+                            name: notice.name,
+                            kind: notice.kind,
+                        },
                         Some(left),
-                        None,
                     )
                     .await
                     .map(|_| ())

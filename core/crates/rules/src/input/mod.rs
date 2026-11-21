@@ -6,7 +6,7 @@
 mod paste;
 mod probe;
 
-use facade_base::daemon::{HiddenRows, InputInfo, InputState};
+use facade_base::model::terminal::{HiddenRows, InputInfo, InputState};
 use facade_screen::{ScreenView, VisibleCell};
 use regex::Regex;
 

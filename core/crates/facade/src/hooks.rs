@@ -24,7 +24,6 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use facade_base::daemon_client::environment;
 use facade_base::paths;
 use facade_rules::hook;
 use serde_json::Value;
@@ -143,7 +142,9 @@ fn session_folder(file: &Path) -> Option<PathBuf> {
 
 /// Records a session the CLI chose for this run, or clears its file when the CLI chose none.
 fn write_own_session(folder: &Path, reported: Option<&facade_rules::Reported>) {
-    if reported.is_none_or(|session| hook::is_run_own_session(&environment().0, &session.id)) {
+    if reported
+        .is_none_or(|session| hook::is_run_own_session(&crate::launch_environment().0, &session.id))
+    {
         let file = folder.join(facade_rules::SESSION_FILE);
         let _ = facade_rules::write_session_file(&file, reported);
     }

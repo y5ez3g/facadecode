@@ -2,22 +2,55 @@
 
 use std::time::Duration;
 
-use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
-use facade_base::daemon_client::DaemonClient;
-use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
-use facade_base::v3::{self, AgentTarget, MachineIdentity, MessageRef};
+use facade_base::address::selector;
+use facade_base::api_v1::daemon::{
+    AgentInspect, AgentKind, AgentList, AgentListArgs, AgentRef, AgentScreen, AgentStart,
+    AgentState, AgentStop, AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, MachineList,
+    ScreenArgs, SingleMachineScope, StartArgs, StopArgs, StopItem, StopOutcome, StopSelection,
+    TerminalInput,
+};
+use facade_base::api_v1::{self, NoArgs, Size, daemon_client::DaemonClient};
+use facade_base::jsonrpc::decode_arguments;
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::machine::{MachineIdentity, MachineQueryResult};
+use facade_base::model::message::MessageRef;
+use facade_base::model::terminal::DEFAULT_TERMINAL_SIZE;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
-use super::addresses::{Addresses, inbox_role};
+use super::addresses::inbox_role;
 use super::daemon_calls::{CONNECT_TIMEOUT, failed, open_with};
 use super::{
-    ActorIdentity, Relay, Tool, ToolCall, V3_DEFINITIONS, agent_tools, envelope, message_tools,
-    optional, terminal_tools, text, validate,
+    ActorIdentity, Relay, Tool, ToolCall, agent_tools, envelope, message_tools, optional,
+    terminal_tools, text, validate,
 };
 use crate::messages::InboxRead;
 
 const INBOX_WAIT: Duration = Duration::from_secs(30);
+
+#[derive(Serialize)]
+struct ListedAgent {
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    kind: AgentKind,
+    state: AgentState,
+    cli: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    folder: String,
+    started_at: String,
+}
+
+#[derive(Deserialize)]
+struct ReadMessagesArgs {
+    after: Option<String>,
+    last: Option<u16>,
+    #[serde(default)]
+    wait: bool,
+    reply_to: Option<String>,
+}
 
 pub(super) fn dispatch(
     relay: &Relay,
@@ -30,7 +63,7 @@ pub(super) fn dispatch(
         Ok(actor) => actor,
         Err(error) => return Some(envelope::refusal(&error)),
     };
-    let (tool, arguments) = match validate(name, given, &V3_DEFINITIONS) {
+    let (tool, arguments) = match validate(name, given) {
         Ok(checked) => checked,
         Err(failure) => return Some(failure),
     };
@@ -63,18 +96,19 @@ fn start(
     arguments: &Map<String, Value>,
     call: &ToolCall,
 ) -> Value {
-    let (mut cols, mut rows) = DEFAULT_TERMINAL_SIZE;
+    let (cols, rows) = DEFAULT_TERMINAL_SIZE;
+    let mut size = Size { cols, rows };
     let mut folder = optional(arguments, "folder");
     let mut folder_is_default = false;
-    if actor.kind == v3::AgentKind::Managed {
-        match client.call::<v3::AgentInspect>(v3::AgentSelectorArgs {
-            target: AgentTarget::Reference {
-                reference: actor.reference.clone(),
-            },
+    if actor.kind == AgentKind::Managed {
+        match client.call::<AgentInspect>(AgentTargetArgs {
+            target: AgentTarget::Reference(AgentRef {
+                machine_id: actor.reference.machine_id.clone(),
+                agent_id: actor.reference.agent_id.clone(),
+            }),
         }) {
             Ok(inspected) => {
-                cols = inspected.agent.cols.unwrap_or(cols);
-                rows = inspected.agent.rows.unwrap_or(rows);
+                size = inspected.agent.size.unwrap_or(size);
                 if folder.is_none() {
                     folder = Some(inspected.agent.cwd);
                     folder_is_default = true;
@@ -83,31 +117,29 @@ fn start(
             Err(err) => return failed(&err, "nothing was started"),
         }
     }
-    let start = v3::StartArgs {
+    let start = StartArgs {
         cli: text(arguments, "cli"),
+        size,
         args: Vec::new(),
         folder_is_default,
         folder,
-        machine: optional(arguments, "machine"),
+        scope: optional(arguments, "machine")
+            .map(|machine| SingleMachineScope::Machine { machine }),
         worktree: optional(arguments, "worktree"),
         model: optional(arguments, "model"),
         effort: optional(arguments, "effort"),
         name: optional(arguments, "name"),
         prompt: optional(arguments, "prompt"),
-        env: Default::default(),
-        cols,
-        rows,
+        env: None,
         call_id: Some(call.id.clone()),
-        result_message_id: None,
-        result_message_machine_id: None,
         request_id: Some(call.request_id.clone()),
     };
-    match client.call_with_request_id::<v3::AgentStart>(start, true) {
+    match client.call_with_request_id::<AgentStart>(start, true) {
         Ok((started, _)) => {
             let agent = started.agent;
             let mut data = json!({
                 "id": agent.address, "name": agent.name, "folder": agent.cwd,
-                "machine_id": agent.machine_id,
+                "machine_id": agent.reference.machine_id,
             });
             if let (Some(id), Some(machine)) =
                 (started.result_message_id, started.result_message_machine_id)
@@ -119,8 +151,8 @@ fn start(
             }
             envelope::success(data)
         }
-        Err(err) => match err.downcast_ref::<ErrorBody>() {
-            Some(error) => agent_tools::start_refused(error, &Addresses::default()),
+        Err(err) => match err.downcast_ref::<api_v1::ErrorBody>() {
+            Some(error) => agent_tools::start_daemon_refused(error),
             None => failed(
                 &err,
                 "whether the agent started is not known; check with list_agents",
@@ -130,10 +162,29 @@ fn start(
 }
 
 fn list(client: &mut DaemonClient) -> Value {
-    match client.call::<v3::AgentList>(v3::MachineQueryArgs::default()) {
+    match client.call::<AgentList>(AgentListArgs { scope: None }) {
         Ok(listed) => {
-            let agents: Vec<_> = listed.agents.into_iter().map(|entry| entry.row).collect();
-            envelope::success(json!({ "agents": agents, "machines": listed.machines }))
+            let agents: Vec<_> = listed
+                .agents
+                .into_iter()
+                .map(|entry| ListedAgent {
+                    id: entry.address,
+                    name: entry.name,
+                    kind: entry.kind,
+                    state: entry.state,
+                    cli: entry.cli,
+                    title: entry.title,
+                    folder: entry.folder,
+                    started_at: entry.started_at,
+                })
+                .collect();
+            // Keep the MCP machine receipt's field order.
+            let machines: Vec<MachineQueryResult> =
+                match serde_json::from_value(json!(listed.machines)) {
+                    Ok(machines) => machines,
+                    Err(error) => return envelope::refusal(&ErrorBody::internal(error)),
+                };
+            envelope::success(json!({ "agents": agents, "machines": machines }))
         }
         Err(err) => failed(&err, "nothing was changed"),
     }
@@ -141,48 +192,72 @@ fn list(client: &mut DaemonClient) -> Value {
 
 fn stop(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
     let agent = text(arguments, "agent");
-    let target = AgentTarget::Address {
-        agent: agent.clone(),
+    let selection = StopSelection::Targets {
+        targets: vec![AgentTarget::Selector(agent.clone())],
     };
-    match client.call::<v3::AgentStop>(v3::AgentSelectorArgs { target }) {
-        Ok(stopped) => envelope::success(json!({ "id": stopped.address, "state": "ended" })),
-        Err(err) => failed(
-            &err,
-            &format!("whether {agent} stopped is not confirmed; check with read_screen"),
-        ),
+    let consequence =
+        || format!("whether {agent} stopped is not confirmed; check with read_screen");
+    match client.call::<AgentStop>(StopArgs { selection }) {
+        Ok(stopped) => match stopped.items.as_slice() {
+            [
+                StopItem {
+                    agent: Some(agent),
+                    outcome: StopOutcome::Stopped { .. },
+                    ..
+                },
+            ] => envelope::success(json!({ "id": agent.address, "state": "ended" })),
+            [
+                StopItem {
+                    outcome: StopOutcome::Failed { error },
+                    ..
+                },
+            ] => envelope::daemon_refusal(error),
+            _ => envelope::failure("unavailable", consequence()),
+        },
+        Err(err) => failed(&err, &consequence()),
     }
 }
 
 fn screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
-    let args = v3::AgentScreenArgs {
-        agent: text(arguments, "agent"),
+    let args = ScreenArgs {
+        target: AgentTarget::Selector(text(arguments, "agent")),
         lines: arguments
             .get("lines")
             .and_then(Value::as_u64)
             .and_then(|lines| u16::try_from(lines).ok()),
     };
-    match client.call::<v3::AgentScreen>(args) {
-        Ok(mut screen) => {
-            // The v3 label is for Shell receipts. Keep read_screen's existing MCP payload.
-            screen.name = None;
-            envelope::encode(screen).unwrap_or_else(|error| envelope::refusal(&error))
-        }
+    match client.call::<AgentScreen>(args) {
+        Ok(screen) => envelope::success(json!({
+            "agent_id": screen.reference.agent_id,
+            "address": screen.address,
+            "process": screen.process,
+            "observed_at": screen.observed_at,
+            "buffer": screen.buffer,
+            "text": screen.text,
+            "line_count": screen.line_count,
+            "older_lines": screen.older_lines,
+            "trimmed": screen.trimmed,
+        })),
         Err(err) => failed(&err, "nothing was changed"),
     }
 }
 
 fn type_into(client: &mut DaemonClient, arguments: &Map<String, Value>, press_keys: bool) -> Value {
     let agent = text(arguments, "agent");
-    let input = v3::AgentTypeArgs {
-        target: AgentTarget::Address {
-            agent: agent.clone(),
-        },
-        raw: None,
-        text: optional(arguments, "text"),
-        enter: arguments.get("enter") == Some(&Value::Bool(true)),
-        keys: press_keys.then(|| string_items(arguments, "keys")),
+    let input = if press_keys {
+        TerminalInput::Keys {
+            keys: string_items(arguments, "keys"),
+        }
+    } else {
+        TerminalInput::Text {
+            text: text(arguments, "text"),
+            enter: arguments.get("enter") == Some(&Value::Bool(true)),
+        }
     };
-    match client.call::<v3::AgentType>(input) {
+    match client.call::<AgentType>(AgentTypeArgs {
+        target: AgentTarget::Selector(agent.clone()),
+        input,
+    }) {
         Ok(_) => envelope::success(json!({})),
         Err(err) => {
             terminal_tools::input_failure(&err, &agent, |consequence| failed(&err, consequence))
@@ -226,7 +301,7 @@ fn read(
 
 fn inbox_read(
     client: &mut DaemonClient,
-    args: v3::ReadMessagesArgs,
+    args: ReadMessagesArgs,
     call: &ToolCall,
 ) -> Result<InboxRead, ErrorBody> {
     let local = client.hello_result.machine_id.clone();
@@ -267,7 +342,7 @@ fn message_reference(
     input: &str,
     qualified: bool,
 ) -> Result<MessageRef, ErrorBody> {
-    let address = v3::address::parse_message_address(input)
+    let address = selector::parse_message_address(input)
         .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
     let machine_id = match address.machine {
         None if qualified => {
@@ -278,16 +353,16 @@ fn message_reference(
         None => local.to_string(),
         Some(selector) => {
             if machines.is_none() {
-                let listed = client
-                    .call::<v3::MachineList>(v3::NoArgs {})
-                    .map_err(|err| {
-                        err.downcast::<ErrorBody>().unwrap_or_else(|err| {
-                            ErrorBody::new(
+                let listed =
+                    client
+                        .call::<MachineList>(NoArgs {})
+                        .map_err(|err| match err.downcast_ref::<api_v1::ErrorBody>() {
+                            Some(error) => envelope::tool_error(error),
+                            None => ErrorBody::new(
                                 Reason::Unavailable,
                                 format!("cannot list machines: {err:#}"),
-                            )
-                        })
-                    })?;
+                            ),
+                        })?;
                 *machines = Some(
                     listed
                         .machines

@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 facade-base.workspace = true
 facade-rules.workspace = true
+facade-screen.workspace = true
 facade-keeper.workspace = true
 facade-daemon.workspace = true
 anyhow.workspace = true

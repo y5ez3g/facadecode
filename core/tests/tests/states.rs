@@ -17,7 +17,7 @@ fn start_program(
 ) {
     let args = json!({
         "cli": cli, "args": args, "name": name, "folder": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+        "env": { "PATH": path, "FACADE_HOME": home.path }, "size": { "cols": 80, "rows": 24 },
     });
     let started = wire.call("agent.start", args);
     assert!(started["result"].is_object(), "{name}: {started}");
@@ -95,7 +95,7 @@ fn a_turn_is_working_then_just_done_until_a_terminal_shows_the_agent() {
     );
     connect(&home).call_ok(
         "agent.type",
-        json!({ "agent": "w1", "text": "fix the\nbuild", "enter": true }),
+        json!({ "target": "w1", "input": { "kind": "text", "text": "fix the\nbuild", "enter": true } }),
     );
     let working = reaches(&home, "w1", "working");
     assert_eq!(
@@ -223,7 +223,7 @@ fn states_and_said_survive_a_killed_daemon() {
         let file = home
             .path
             .join("core/screens")
-            .join(agent["agent_id"].as_str().unwrap())
+            .join(agent["reference"]["agent_id"].as_str().unwrap())
             .join("state");
         assert!(
             wait_until(secs(10), || std::fs::read_to_string(&file)
@@ -262,7 +262,7 @@ fn a_wait_for_the_person_is_published_at_once() {
     home.start_facade_with(&[("FACADE_TEST_PUBLISH_AFTER_MS", "60000")]);
     reporting(&home, "w1", &[]);
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
+    wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
     let watch = wire.request("watch", json!({ "topic": "agents", "args": {} }))["result"]["watch"]
         .as_u64()
         .unwrap();
@@ -640,7 +640,7 @@ fn an_agent_stopped_while_its_daemon_failed_is_listed_as_ended() {
     let mut wire = connect(&home);
     wire.send(
         "call",
-        json!({ "op": "agent.stop", "args": { "agent": "w1" } }),
+        json!({ "op": "agent.stop", "args": { "selection": { "kind": "targets", "targets": ["w1"] } } }),
     );
     assert!(
         wait_until(secs(10), || stopped(daemon)),

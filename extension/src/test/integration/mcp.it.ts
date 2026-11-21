@@ -8,7 +8,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { Response, V3HelloParams, V3InspectResult, V3ScreenText } from '../../base/coreProtocol';
+import type { Response, DaemonHelloParams, InspectResult, ScreenText } from '../../base/coreProtocol';
 import { lineReader } from '../../base/lines';
 import { unspun } from '../../base/tabSpinner';
 import { linesOf as cardLines } from '../detailLines';
@@ -130,7 +130,7 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	});
 	const address = RUST ? await until(`${card.name} in the shared roster`, async () => {
 		const { agents } = await coreCall(process.env.FACADE_HOME!, 'agent.list', {});
-		return agents.find(row => row.type === 'managed' && row.name === card.name && row.reference.agent_id === card.alias)?.id;
+		return agents.find(row => row.type === 'managed' && row.name === card.name && row.reference.agent_id === card.alias)?.address;
 	}) : cardLines(card).join(' ').match(/#a\d+/)![0];
 	const alias = RUST ? fakeAlias(address) : address;
 	// Its server answered: the agent's Facade tools are there
@@ -164,10 +164,10 @@ async function rustAgentRecord(alias: string, address: string): Promise<void> {
 		console.error(`diagnostic root given=${configured}; real=${home}; fake record prefix=${record}`);
 		try {
 			// A single terminal connection: no startup, takeover, window, reconnect, watch, attach, input or resize.
-			const hello: V3HelloParams = { protocol: [3, 3], build: 'integration-test-diagnostics', kind: 'terminal' };
+			const hello: DaemonHelloParams = { api_versions: [1], build: 'integration-test-diagnostics', kind: 'terminal' };
 			const requests = [{ method: 'hello', params: hello },
-				{ method: 'call', params: { op: 'agent.inspect', args: { agent: address } } },
-				{ method: 'call', params: { op: 'agent.screen', args: { agent: address, lines: 400 } } }];
+				{ method: 'call', params: { op: 'agent.inspect', args: { target: address } } },
+				{ method: 'call', params: { op: 'agent.screen', args: { target: address, lines: 400 } } }];
 			const socket = net.createConnection(coreSocket(configured));
 			const timer = setTimeout(() => socket.destroy(new Error('diagnostic connection exceeded 5 seconds')), 5_000);
 			try {
@@ -182,18 +182,18 @@ async function rustAgentRecord(alias: string, address: string): Promise<void> {
 							const response = JSON.parse(line) as Response;
 							if (response.id !== id) { return; }
 							const label = ['hello', 'agent.inspect', 'agent.screen (current screen captured after wait failure)'][id - 1];
-							if (response.error) {
+							if ('error' in response) {
 								console.error(`${label} unavailable at ${new Date().toISOString()}: ${JSON.stringify(response.error)}`);
 								if (id === 1) { reject(new Error('diagnostic hello refused')); return; }
 							} else if (id > 1) {
-								const inspect = response.result as V3InspectResult;
-								const screen = response.result as V3ScreenText;
-								const returned = id === 2 ? inspect?.agent?.agent_id : screen?.agent_id;
+								const inspect = response.result as InspectResult;
+								const screen = response.result as ScreenText;
+								const returned = id === 2 ? inspect?.agent?.reference.agent_id : screen?.reference.agent_id;
 								if (returned?.replace(/^#/, '') !== alias.slice(1)) {
 									console.error(`${label} unavailable: returned agent_id does not match ${alias}`);
 								} else {
 									console.error(`${label} at ${new Date().toISOString()}:\n${JSON.stringify(response.result)}`);
-									if (id === 2) { console.error(`dimensions from inspect.agent: cols=${inspect.agent.cols ?? 'unknown'} rows=${inspect.agent.rows ?? 'unknown'}; screen.line_count is not rows`); }
+									if (id === 2) { console.error(`dimensions from inspect.agent: cols=${inspect.agent.size?.cols ?? 'unknown'} rows=${inspect.agent.size?.rows ?? 'unknown'}; screen.line_count is not rows`); }
 								}
 							}
 							if (id < requests.length) { next(); } else { resolve(); }

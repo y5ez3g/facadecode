@@ -1,10 +1,9 @@
 //! Copyable MCP addresses from the machine information a tool already has.
 
-use facade_base::address::{display_machine_selector, exact_machine_selector};
-use facade_base::daemon::WindowRef;
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::MachineIdentity;
-use facade_base::v3::address;
+use facade_base::address::mcp::{display_machine_selector, exact_machine_selector};
+use facade_base::address::selector;
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::machine::{MachineIdentity, WindowRef};
 
 #[derive(Default)]
 pub(super) struct Addresses<'a> {
@@ -40,7 +39,7 @@ impl Addresses<'_> {
     }
 }
 
-/// A v3 address for a role in the caller's inbox. Local IDs carry no machine suffix.
+/// A role in the caller's inbox uses the selector spelling. Local IDs carry no machine suffix.
 pub(super) fn inbox_role(
     id: &str,
     machine_id: &str,
@@ -53,7 +52,7 @@ pub(super) fn inbox_role(
     qualified(id, machine_id, machines)
 }
 
-/// A v3 address that can be copied into a tool even when bare numbers match other machines.
+/// A copyable selector even when bare numbers match other machines.
 pub(super) fn qualified(
     id: &str,
     machine_id: &str,
@@ -67,7 +66,7 @@ pub(super) fn qualified(
         .iter()
         .find(|machine| machine.machine_id == machine_id)
         .unwrap_or(&unnamed);
-    let selector = address::display_machine_selector(machine, machines).map_err(|error| {
+    let selector = selector::display_machine_selector(machine, machines).map_err(|error| {
         ErrorBody::new(
             Reason::AmbiguousReference,
             format!("{error}; use machine rename to give it a unique name"),

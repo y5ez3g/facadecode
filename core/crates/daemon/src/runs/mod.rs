@@ -22,10 +22,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::KeeperInfo;
+use facade_base::api_v1::{
+    ApiVersion, Size,
+    daemon::KeeperInfo,
+    keeper::{HeldAgent, StartArgs},
+};
 use facade_base::instructions::{self, ManagedRun};
-use facade_base::jsonrpc::ErrorBody;
-use facade_base::keeper::{KeeperHeldAgent, KeeperStartArgs};
+use facade_base::model::error::ErrorBody;
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::programs::Held;
 use facade_base::start::StartCommand;
@@ -175,7 +178,7 @@ pub(crate) enum FoundKeeper {
     /// A keeper accepted this daemon: its build and the runs it holds.
     Connected {
         build: String,
-        held: Vec<KeeperHeldAgent>,
+        held: Vec<HeldAgent>,
     },
 }
 
@@ -252,12 +255,16 @@ impl Runs {
         rows: u16,
         exits: ExitSink,
     ) -> Result<StartedRun, ErrorBody> {
-        let args = KeeperStartArgs {
-            agent: id.to_string(),
-            launch: prepared.launch.clone(),
+        let (command, cwd) = prepared.launch.clone().into_words();
+        let args = StartArgs {
+            agent_id: id.to_string(),
+            command,
             env: prepared.env.clone(),
-            cols,
-            rows,
+            cwd,
+            size: Size {
+                cols: cols.max(2),
+                rows: rows.max(1),
+            },
         };
         let launched = self
             .link
@@ -439,13 +446,13 @@ impl Runs {
         self.link.keeper_info()
     }
 
-    /// The keeper protocol range of the keeper this daemon last said hello to.
-    pub(crate) fn keeper_protocol_range(&self) -> Option<[u32; 2]> {
-        self.link.keeper_protocol_range()
+    /// The selected API version of the last keeper to reconcile with this daemon.
+    pub(crate) fn keeper_api_version(&self) -> Option<ApiVersion> {
+        self.link.keeper_api_version()
     }
 
     /// Recovery: takes back from the startup keeper the terminal of a run it holds.
-    pub(crate) async fn take_back(&self, held: &KeeperHeldAgent) -> Result<PtyMaster, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
         self.link.take_back(held).await
     }
 
@@ -454,7 +461,7 @@ impl Runs {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_recovered(
         &self,
-        held: &KeeperHeldAgent,
+        held: &HeldAgent,
         master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
@@ -466,7 +473,7 @@ impl Runs {
         self.link
             .register_recovered(held, master, exit, number, exits)?;
         if running {
-            self.preparation.plugin_used(&held.id, rule, cwd);
+            self.preparation.plugin_used(&held.agent_id, rule, cwd);
         }
         Ok(())
     }
@@ -474,7 +481,7 @@ impl Runs {
     /// Restores the saved verifier only for the active run recovered from this keeper entry.
     pub(crate) fn restore_credential(
         &self,
-        held: &KeeperHeldAgent,
+        held: &HeldAgent,
         number: u64,
         credential: RunCredentialRecord,
     ) -> bool {
@@ -485,7 +492,7 @@ impl Runs {
     /// stopped where it has none.
     pub(crate) async fn take_keeper_only(
         &self,
-        held: KeeperHeldAgent,
+        held: HeldAgent,
         record: KeeperOnly,
     ) -> Result<(), ErrorBody> {
         self.link.take_keeper_only(held, record).await

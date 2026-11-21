@@ -55,13 +55,26 @@ read_version() {
         END { if (NR != 1 || version == "") exit 1; print version }
     ' "$1"
 }
+failed_http=-
 download() {
-    status=$(curl --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
-        -fsL -w '%{http_code}' -o "$2" "$1") || return 1
-    case "$status" in 2[0-9][0-9]) return 0 ;; *) return 1 ;; esac
+    if status=$(curl --disable --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
+        -fsL -w '%{http_code}' -o "$2" "$1"); then
+        case "$status" in 2[0-9][0-9]) return 0 ;; esac
+    fi
+    case "$status" in
+        [1-5][0-9][0-9]) failed_asset=${1##*/}; failed_http=$status ;;
+        *) [ "$failed_http" != - ] || failed_asset=${1##*/} ;;
+    esac
+    return 1
 }
 download_package() {
     download "$1/$asset" "$work/$asset" && download "$1/SHA256SUMS" "$work/SHA256SUMS"
+}
+fail_download() {
+    if [ "${FACADE_UPGRADE_REPORT:-}" = 1 ] && [ "${FACADE_UPGRADE_ASSET_REPORT:-}" = 1 ]; then
+        printf 'facade-upgrade-asset-error %s %s\n' "$failed_asset" "$failed_http"
+    fi
+    fail "$@"
 }
 [ -z "$version" ] || valid_version "$version" || fail 'Use a release version such as 0.1.6.'
 
@@ -82,12 +95,12 @@ else
         version_file="$work/latest-version"
         download "$releases/latest/download/facade-core-version.txt" "$version_file" ||
             download "$mirror/facade-core-version.txt" "$version_file" ||
-            fail 'Could not download the stable Facade version from GitHub or facadecode.com.'
+            fail_download 'Could not download the stable Facade version from GitHub or facadecode.com.'
         version=$(read_version "$version_file") || fail 'The stable release did not provide a valid version.'
     fi
     download_package "$releases/download/extension%2F$version" ||
         download_package "$mirror/releases/$version" ||
-        fail "Could not download $asset and its checksums for Facade $version from GitHub or facadecode.com."
+        fail_download "Could not download $asset and its checksums for Facade $version from GitHub or facadecode.com."
 fi
 expected=$(LC_ALL=C awk -v asset="$asset" '
     { sub(/\r$/, "") }

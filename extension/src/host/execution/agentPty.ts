@@ -76,6 +76,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	private readonly writeEmitter = new vscode.EventEmitter<string>();
 	readonly onDidWrite = this.writeEmitter.event;
+	private readonly gridEmitter = new vscode.EventEmitter<vscode.TerminalDimensions>();
+	readonly onDidOverrideDimensions = this.gridEmitter.event;
+	private screenGrid: vscode.TerminalDimensions | undefined;
 	/** Its agent's short ID, and whether its tab shows it (LIFECYCLE-2.2). */
 	private alias: string | undefined;
 	private idShown = false;
@@ -155,9 +158,22 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 	}
 
-	/** Its dimensions, once VS Code gave them. */
+	/** The pane's capacity, as reported by VS Code's setDimensions. */
 	get dimensions(): vscode.TerminalDimensions | undefined {
 		return this.size;
+	}
+
+	get confirmedGrid(): vscode.TerminalDimensions | undefined {
+		return this.screenGrid;
+	}
+
+	/** Apply the Attach frame's grid before writing its bytes (ARCHITECTURE-6.3). */
+	setGrid(grid: vscode.TerminalDimensions): void {
+		if (this.screenGrid?.columns === grid.columns && this.screenGrid.rows === grid.rows) {
+			return;
+		}
+		this.screenGrid = grid;
+		this.gridEmitter.fire(grid);
 	}
 
 	get isOpen(): boolean {
@@ -177,7 +193,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	/** Shows an Attach notice on the bottom row without moving the cursor used by later output. */
 	screenNote(text: string): void {
-		const width = (this.size?.columns ?? 80) - 1;
+		const columns = this.size?.columns ?? this.screenGrid?.columns ?? 80;
+		const width = Math.min(columns, this.screenGrid?.columns ?? columns) - 1;
 		const shown = [...plainNote(text)].slice(0, Math.max(0, width)).join('');
 		this.write(`\x1b7\x1b[999;1H\x1b[0m\x1b[2K${shown}\x1b8`);
 	}
@@ -406,6 +423,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 		// The editor names the tab by the name it was created with once its process is ready, after each open - a relaunch's too
 		this.resetDue = true;
 		this.size = dimensions;
+		this.screenGrid = undefined;
 		// A terminal opened, or opened anew, has the default mouse until it is written (LIFECYCLE-2.2)
 		this.mouseModes.reset();
 		const waiting = this.unopened;
@@ -533,6 +551,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.spinner = undefined;
 		this.binding = undefined;
 		this.writeEmitter.dispose();
+		this.gridEmitter.dispose();
 		this.nameEmitter.dispose();
 	}
 

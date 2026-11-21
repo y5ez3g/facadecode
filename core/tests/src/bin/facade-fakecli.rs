@@ -13,6 +13,7 @@
 //! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
 //! the frame it drew is written (`note_key_time`). `FAKECLI_READ_GATE=<file>` holds input reads
 //! until the test creates the file.
+//! For the stress test, `--flood` writes a line every 10 milliseconds until the agent stops.
 //!
 //! Sessions: `--resume <id>` selects session `<id>`, as `FAKECLI_SESSION=<id>` does for a new
 //! start. `FAKECLI_SESSION_HOOK` is the shell command of its session-start hook, which it runs with
@@ -48,6 +49,7 @@
 //! a draft in color with the cursor before it, as a draft the person moved the cursor back over;
 //! what is typed goes in before it. `FAKECLI_KEYS=<file>` appends every byte it reads to `<file>`.
 //! `FAKECLI_SCREEN_FILE=<file>` prints the file's lines before drawing its input.
+//! `FAKECLI_WRAP_TRANSCRIPT=1` writes full transcript lines so the terminal wraps them.
 //! `FAKECLI_IGNORE_KEYS` lists keys it ignores, `space` and `backspace`, comma-separated;
 //! `FAKECLI_NO_LEADING_SPACE=1` draws no space where its input starts; `FAKECLI_SPACE_SUGGESTS=<text>`
 //! draws `<text>` on the row under the input while the input starts with a space, as a CLI that
@@ -212,6 +214,7 @@ fn base64(bytes: &[u8]) -> String {
 
 struct FakeCli {
     transcript: Vec<String>,
+    wrap_transcript: bool,
     draft: Vec<InputSegment>,
     pastes: usize,
     log: Option<std::fs::File>,
@@ -600,7 +603,11 @@ impl FakeCli {
         let room = rows.saturating_sub(6);
         let start = self.transcript.len().saturating_sub(room);
         for line in &self.transcript[start..] {
-            frame.push_str(&truncate_chars(line, cols));
+            if self.wrap_transcript {
+                frame.push_str(line);
+            } else {
+                frame.push_str(&truncate_chars(line, cols));
+            }
             frame.push_str("\r\n");
         }
         let input_row = rows.saturating_sub(3);
@@ -895,6 +902,21 @@ fn main() -> anyhow::Result<()> {
     if let Some(code) = run_script_beside()? {
         std::process::exit(code);
     }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--flood")
+    {
+        let mut out = std::io::stdout().lock();
+        loop {
+            writeln!(
+                out,
+                "flood {} 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                std::process::id()
+            )?;
+            out.flush()?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     if std::env::var_os("FAKECLI_HOOKS").is_some() {
         run_hooks();
         return Ok(());
@@ -931,6 +953,63 @@ fn command_from_config(config: &serde_json::Value) -> anyhow::Result<Command> {
     mcp_command(config, &home, |program| Command::new(program))
 }
 
+/// The native launch rules supply these relay arguments beside the fixture's program.
+fn stand_in_mcp_args(arguments: &[String]) -> anyhow::Result<Vec<String>> {
+    if let Some(args) = arguments
+        .iter()
+        .find_map(|word| word.strip_prefix("mcp_servers.facade.args="))
+    {
+        return serde_json::from_str(args).context("reading Codex's test relay arguments");
+    }
+    if let Some(entry) = arguments
+        .iter()
+        .find_map(|word| word.strip_prefix("mcpServers.facade="))
+    {
+        let entry: serde_json::Value =
+            serde_json::from_str(entry).context("reading Muse Code's test relay entry")?;
+        return serde_json::from_value(entry["args"].clone())
+            .context("reading Muse Code's test relay arguments");
+    }
+    if let Ok(config) = std::env::var("OPENCODE_CONFIG_CONTENT") {
+        let config: serde_json::Value =
+            serde_json::from_str(&config).context("reading OpenCode's test relay entry")?;
+        if let Some(words) = config["mcp"]["facade"]["command"].as_array() {
+            let words: Vec<String> = serde_json::from_value(words.clone().into())
+                .context("reading OpenCode's test relay command")?;
+            return Ok(words.into_iter().skip(1).collect());
+        }
+    }
+    let pi = arguments.windows(2).find_map(|pair| {
+        let file = std::path::Path::new(&pair[1]);
+        (pair[0] == "-e" && file.file_name().is_some_and(|name| name == "facade-pi.mjs"))
+            .then_some(file)
+    });
+    if let Some(file) = pi {
+        let home = std::env::var_os("FACADE_HOME")
+            .map(PathBuf::from)
+            .context("the Pi stand-in needs an isolated Facade home")?;
+        anyhow::ensure!(
+            file.canonicalize()?
+                .starts_with(home.join("core/runs").canonicalize()?),
+            "the Pi stand-in's extension must be in its run directory"
+        );
+        let extension = std::fs::read_to_string(file)?;
+        let entry = extension
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("pi.registerMcpServer(\"facade\", ")
+                    .and_then(|line| line.strip_suffix(");"))
+            })
+            .context("the Pi stand-in has no Facade relay entry")?;
+        let entry: serde_json::Value =
+            serde_json::from_str(entry).context("reading Pi's test relay entry")?;
+        return serde_json::from_value(entry["args"].clone())
+            .context("reading Pi's test relay arguments");
+    }
+    Ok(Vec::new())
+}
+
 fn configured_server(arguments: &[String]) -> anyhow::Result<Option<Command>> {
     let Some(index) = arguments.iter().rposition(|arg| arg == "--mcp-config") else {
         let Some(program) = std::env::var_os("FAKECLI_MCP") else {
@@ -940,7 +1019,9 @@ fn configured_server(arguments: &[String]) -> anyhow::Result<Option<Command>> {
             std::path::Path::new(&program).is_absolute(),
             "FAKECLI_MCP needs an absolute path"
         );
-        return Ok(Some(Command::new(program)));
+        let mut command = Command::new(program);
+        command.args(stand_in_mcp_args(arguments)?);
+        return Ok(Some(command));
     };
     let file = arguments
         .get(index + 1)
@@ -1085,6 +1166,7 @@ fn run() -> anyhow::Result<()> {
     let agy = std::env::var("FAKECLI_LOOK").is_ok_and(|look| look == "agy");
     let mut app = FakeCli {
         transcript: Vec::new(),
+        wrap_transcript: std::env::var("FAKECLI_WRAP_TRANSCRIPT").is_ok_and(|value| value == "1"),
         draft: Vec::new(),
         pastes: 0,
         log,

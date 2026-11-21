@@ -1,6 +1,6 @@
 # Shared rules
 
-[Facade Code](../facade-code.md) defines the product. Group 6 owns the Orchestrator-backed VS Code entry point.
+[Facade Code](../PRODUCT.md) defines the product. Group 6 owns the Orchestrator-backed VS Code entry point.
 Groups 1–5 describe the old engine during the transition.
 
 | Group | Decides |
@@ -491,10 +491,10 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 The list contains agents started or opened there through Go to Agent, and their descendants in the creation tree.
 Descendants appear as cards automatically and open a terminal only on request. Store the list and Pins across
-reloads and reopens. On the first open after upgrade, start importing the prior workspace's agents and Pins under
-ARCHITECTURE-6.2. Keep confirmed entries while the import is pending. The Orchestrator owns agent records, processes
-and terminal state. The extension owns cards, Pins and tab placement. A remote extension host connects to the
-Orchestrator on the machine where it runs.
+reloads and reopens. Keep the Facade home and editor workspace storage when changing builds. The editor reads
+workspace members and Pins under ARCHITECTURE-6.2 and keeps confirmed entries while a source is unavailable. The Orchestrator
+owns agent records, processes and terminal state. The extension owns cards, Pins and tab placement. A remote
+extension host connects to the Orchestrator on the machine where it runs.
 
 ### 6.2 References and results
 
@@ -508,11 +508,14 @@ in use. The Panel shows the CLI's TITLE and the same state as the list; details 
 
 ### 6.3 Attach and card actions
 
-**Attach shows the running agent's terminal; closing a tab detaches that view.**
+**Attach shows the running agent's shared terminal grid. Closing a tab detaches that view.**
 
-Other views and the process keep running. Input entered during a disconnect is dropped, and the reconnected view
-reports the number of input bytes dropped after displaying the current screen. Use the last Attach or resize for terminal size and
-VS Code for terminal colors. Hide removes the card from this workspace and clears its Pin. Stop ends the agent's run
+Each open view reports the rows and columns its pane can fit. The Orchestrator takes the smallest capacity in each
+dimension across live Attach viewers that have reported it. Each view draws at the confirmed grid size. Closing a tab
+recalculates the grid for the remaining views and leaves the agent running. Use VS Code for terminal colors.
+
+Input entered during a disconnect is dropped. The reconnected view reports the number of input bytes dropped after
+displaying the current screen. Hide removes the card from this workspace and clears its Pin. Stop ends the agent's run
 and leaves its card and Pin. Remove stops the agent if it is running and removes its record. On a successful
 Remove, clear this workspace's card and Pin and close its terminal view. Rename keeps the address. The card menu
 offers Open Terminal, Hide, Stop, Remove, Pin or Unpin, and Rename. Copy Agent Reference, Filter,
@@ -553,7 +556,7 @@ YOLO defaults to on. A managed agent reads it at start or resume. A Guest reads 
 a caller's MCP reach is its creation tree and the CLI keeps its native sandbox and permissions. Both settings bypass
 the Facade tool confirmation. With YOLO on, the Orchestrator also handles CLI permission and folder trust
 questions and disables the CLI sandbox where available. CLI questions for the person still appear in the terminal.
-The [product's CLI table](../facade-code.md#各个-cli-不一样的地方) owns the summary of differences.
+The [product's CLI table](../PRODUCT.md#cli-differences) owns the summary of differences.
 
 ### 6.7 Messages, machines and tools
 
@@ -570,8 +573,8 @@ an editor whose extension host uses that machine's Orchestrator.
 **The Window Component cleans up stale terminal tabs after reconnect or extension restart.**
 
 Its existing old-engine duties apply during the transition. In the VS Code entry point, the Orchestrator has no
-window membership or automatic Remote-SSH registration. The extension uses the one-time upgrade import in 6.1
-to read previous workspace visibility.
+window membership or automatic Remote-SSH registration. The extension reads persisted workspace visibility under
+6.1 and uses the Window Component's native key to locate saved Pins for a folderless window.
 
 ## Checks
 
@@ -582,6 +585,6 @@ to read previous workspace visibility.
 | 3.1–3.4 | Work green, errors red, no dot otherwise, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
-| 6.1–6.8 | Shared workspace list and upgrade; Orchestrator agent list and Resume; Attach and card actions; Pin recovery; SSH locations; settings and transition cleanup |
+| 6.1–6.8 | Shared workspace list and upgrade, Orchestrator agent list and Resume, shared Attach grid and card actions, Pin recovery, SSH locations, settings and transition cleanup |
 
 [Verification](engineering/VERIFICATION.md) owns actual evidence.

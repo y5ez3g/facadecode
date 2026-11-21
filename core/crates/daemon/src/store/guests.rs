@@ -220,7 +220,7 @@ mod tests {
         store
             .insert_message(&crate::messages::tests::message(0, "a9"), None)
             .unwrap();
-        store.delete_guest("a9").unwrap();
+        store.delete_guest("a9", crate::an_hour_ago).unwrap();
         assert_eq!(store.guest_table().guests().unwrap().len(), 1);
         assert!(
             store.message_table().inbox("a9").unwrap().is_empty(),

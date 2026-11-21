@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use facade_base::files::immutable_uri;
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
 use rusqlite::{Connection, OpenFlags};
 
 use super::{metadata, store_error};

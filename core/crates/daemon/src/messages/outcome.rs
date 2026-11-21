@@ -1,12 +1,14 @@
 //! How a delivery ends, and by when it must.
 
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, TextWritten};
+use facade_base::model::message::{
+    DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, TextWritten,
+};
 use tokio::time::Instant;
 
-use super::{DELIVERY_TIME, RESPONSE_GRACE};
+use super::RESPONSE_GRACE;
+use crate::{DELIVERY_TIME, delivery_limit};
 
 /// How a delivery ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,20 +146,4 @@ impl Due {
             at: facade_base::time::iso_time(SystemTime::now() + left),
         }
     }
-}
-
-/// The longest a message may take from its call reaching the daemon to its delivery. A debug build
-/// reads a longer one from `FACADE_TEST_DELIVERY_MS`, once.
-pub(crate) fn delivery_limit() -> Duration {
-    static LIMIT: OnceLock<Duration> = OnceLock::new();
-    *LIMIT.get_or_init(|| {
-        #[cfg(debug_assertions)]
-        if let Some(ms) = std::env::var("FACADE_TEST_DELIVERY_MS")
-            .ok()
-            .and_then(|ms| ms.parse::<u64>().ok())
-        {
-            return Duration::from_millis(ms);
-        }
-        DELIVERY_TIME
-    })
 }

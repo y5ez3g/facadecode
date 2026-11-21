@@ -30,12 +30,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-use facade_base::daemon::{
-    AgentInfo, AgentState, DeliveryFailure, Message, TextWritten, ToolsState,
-};
-use facade_base::keeper::KeeperHeldAgent;
+use facade_base::api_v1::keeper::HeldAgent;
 use facade_base::process::{EndReason, ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
+use facade_base::{
+    model::agent::{ManagedAgent, ManagedAgentState, ToolsState},
+    model::message::{DeliveryFailure, Message, TextWritten},
+};
 use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -116,13 +117,15 @@ impl Daemon {
     /// Fails where a terminal cannot be taken back from the keeper.
     pub(crate) async fn recover(
         self: &Arc<Self>,
-        held: Vec<KeeperHeldAgent>,
+        held: Vec<HeldAgent>,
         records: Vec<AgentRecord>,
         agent_ids: &HashSet<String>,
         progress: &RecoveryProgress,
     ) -> anyhow::Result<()> {
-        let mut held: HashMap<String, KeeperHeldAgent> =
-            held.into_iter().map(|run| (run.id.clone(), run)).collect();
+        let mut held: HashMap<String, HeldAgent> = held
+            .into_iter()
+            .map(|run| (run.agent_id.clone(), run))
+            .collect();
         let slots = Arc::new(Semaphore::new(MAX_RECOVERIES_IN_FLIGHT));
         let mut recoveries = JoinSet::new();
         for record in records {
@@ -212,7 +215,7 @@ impl Daemon {
     async fn recover_agent(
         self: Arc<Self>,
         mut record: AgentRecord,
-        run: Option<KeeperHeldAgent>,
+        run: Option<HeldAgent>,
         steps: Arc<AtomicU64>,
     ) -> anyhow::Result<Recovered> {
         let id = record.agent_id.clone();
@@ -272,7 +275,7 @@ impl Daemon {
         if follows_session {
             self.catch_up_on_session(&mut record).await;
         }
-        let info = AgentInfo {
+        let info = ManagedAgent {
             address: None,
             label: None,
             unreachable: false,
@@ -284,7 +287,7 @@ impl Daemon {
             rows: Some(rows),
             exit,
             // The actor reads the state from the facts kept beside the screen, and the screen.
-            state: AgentState::Unknown,
+            state: ManagedAgentState::Unknown,
             state_detail: None,
             said: None,
             tools_state: ToolsState::NotInjected,
@@ -332,7 +335,7 @@ impl Daemon {
     fn commit_uncommitted_resume(
         &self,
         record: &mut AgentRecord,
-        run: &KeeperHeldAgent,
+        run: &HeldAgent,
     ) -> anyhow::Result<()> {
         let id = &record.agent_id;
         blocking_in_place(|| {
@@ -409,8 +412,8 @@ impl Daemon {
     async fn kept_state(
         &self,
         id: &str,
-        info: &AgentInfo,
-        run: Option<&KeeperHeldAgent>,
+        info: &ManagedAgent,
+        run: Option<&HeldAgent>,
     ) -> anyhow::Result<StateStart> {
         let file = agent::state_file(&self.screens.folder(id));
         let mut kept = tokio::task::spawn_blocking({
@@ -485,7 +488,7 @@ impl Daemon {
             .take_up(message.clone(), paste.is_some(), owes);
         if message.delivery.deadline.is_none() && !matches!(decided, TakeUp::Settle(_)) {
             // A prompt whose delivery had not begun begins it now; a later restart keeps the rest.
-            let deadline = facade_base::time::iso_time(now + messages::delivery_limit());
+            let deadline = facade_base::time::iso_time(now + crate::delivery_limit());
             self.messages.begin_prompt(number, &deadline, None);
         }
         let to = message.to.clone();

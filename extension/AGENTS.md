@@ -5,7 +5,7 @@ together. This file routes work on the extension in `extension/`; the repository
 
 ## 1 Start here
 
-1. Read [Facade Code](../docs/facade-code.md) for the product and its VS Code entry point. Use
+1. Read [Facade Code](../docs/PRODUCT.md) for the product and its VS Code entry point. Use
    [the extension's specification index](../docs/extension/README.md) to find the editor's rules and engineering contracts.
 2. Read [RULES](../docs/extension/RULES.md), then the feature you are changing. UI work also reads [UX](../docs/extension/UX.md).
 3. Before implementation/testing, read [ARCHITECTURE](../docs/extension/engineering/ARCHITECTURE.md), especially group 5, and
@@ -15,7 +15,7 @@ together. This file routes work on the extension in `extension/`; the repository
 
 ## 2 The specification
 
-**[Facade Code](../docs/facade-code.md) defines the product.** The extension's rules in `../docs/extension/` define the
+**[Facade Code](../docs/PRODUCT.md) defines the product.** The extension's rules in `../docs/extension/` define the
 editor interaction and the optional old engine. Where code disagrees with a rule, fix the code or amend the owning rule
 first.
 
@@ -30,6 +30,10 @@ Verification results accompany the tested build or handoff.
   Keep present tense. Use exact cases/values in lower layers; include a reason where it helps.
 - Separate the target from evidence: “not run,” “historical claim,” “failed” and “passed” have different meanings.
   Never make a document match a code defect just to call the work complete.
+- For Core integration, start with [ARCHITECTURE-6](../docs/extension/engineering/ARCHITECTURE.md#6-connecting-the-editor-to-the-orchestrator).
+  Read [Core compatibility review](../docs/core/ENGINEERING.md#compatibility-contracts) before changing API use
+  or the saved workspace roster, Pins or identity. The [verification cases](../docs/extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build)
+  identify the required prior-build inputs.
 - Amend the owning rule first, with its reason in the rule where it helps, then dependent schemas/scenarios/references,
   then implement. The specification keeps no change log or decision log; git history records how it changed. Code
   comments and test titles cite rules by `DOCUMENT-n.m`. Preserve the owner's decisions. Never weaken a requirement to

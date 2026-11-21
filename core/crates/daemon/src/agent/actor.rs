@@ -12,10 +12,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use facade_base::daemon::{
-    AgentInfo, AgentState, AgentsUpdate, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
-};
+use facade_base::api_v1::Size;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessState};
+use facade_base::{
+    model::agent::{AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState},
+    model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
+};
 use facade_rules::{BoxReading, InputRule, Rule};
 use facade_screen::{ParsedOutput, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
@@ -234,7 +237,7 @@ struct Actor {
     next_run: Option<u64>,
     early_exit: Option<(ProcessExit, bool)>,
     /// A size waiting for a full log's checkpoint writer; input waits until it is applied.
-    pending_size: Option<(u16, u16)>,
+    pending_size: Option<SizeRequest>,
     /// A restart waiting for a full log's checkpoint writer.
     pending_restart: Option<(u16, u16, oneshot::Sender<()>)>,
     /// Messages wait behind the run's start prompt until it comes.
@@ -259,6 +262,13 @@ struct Actor {
     untouched_input: bool,
     /// The probe of a fresh unstyled hint finishes before external keys reach the terminal.
     holds_input_for_probe: bool,
+}
+
+/// A size determined from the live viewers, or an exact size in a unit fixture.
+enum SizeRequest {
+    Shared,
+    #[cfg(test)]
+    Direct(Size),
 }
 
 async fn sleep_until(at: Option<Instant>) {
@@ -291,7 +301,7 @@ impl Actor {
         self.publish_record(agent);
     }
 
-    fn publish_record(&self, agent: AgentInfo) {
+    fn publish_record(&self, agent: ManagedAgent) {
         let _ = self.links.changes.send(AgentsUpdate::Updated {
             agent: Box::new(agent),
         });
@@ -393,6 +403,9 @@ impl Actor {
                 Some(false) => self.publish_soon(),
                 None => {}
             }
+        }
+        if self.viewers.take_removed() {
+            self.take_size(SizeRequest::Shared);
         }
         if self.prompt_ready.is_some()
             && self.links.shared.record.lock().unwrap().info.tools_state != ToolsState::Connecting
@@ -499,11 +512,9 @@ impl Actor {
             AgentCommand::WriteInput { input, run, reply } => {
                 let _ = reply.send(self.take_input(input, run));
             }
-            AgentCommand::Resize(cols, rows) => self.take_size(cols, rows, None),
-            AgentCommand::ResizeTerminal { cols, rows, colors } => {
-                if !self.ended() {
-                    self.take_size(cols, rows, colors);
-                }
+            #[cfg(test)]
+            AgentCommand::ResizeTerminal(cols, rows) => {
+                self.take_size(SizeRequest::Direct(Size { cols, rows }));
             }
             #[cfg(test)]
             AgentCommand::AddViewer {
@@ -515,7 +526,8 @@ impl Actor {
             } => {
                 self.add_viewer(ViewerRequest {
                     viewer,
-                    kind: ViewKind::Legacy,
+                    kind: ViewKind::Test,
+                    size: None,
                     tx,
                     keep_scrollback,
                     include_scrollback,
@@ -535,11 +547,6 @@ impl Actor {
                 include_scrollback,
                 reply,
             } => {
-                if let Some(size) = size
-                    && (self.pending_size.is_some() || self.size() != (size.cols, size.rows))
-                {
-                    self.take_size(size.cols, size.rows, None);
-                }
                 self.add_viewer(ViewerRequest {
                     viewer,
                     kind: ViewKind::Attach {
@@ -547,14 +554,22 @@ impl Actor {
                         attachment,
                         allow_ended,
                         report_activity,
-                        wait_for_size: size.is_some(),
                     },
+                    size,
                     tx,
                     keep_scrollback,
                     include_scrollback,
                     reply,
                 })
                 .await;
+            }
+            AgentCommand::ResizeViewer {
+                viewer,
+                size,
+                colors,
+                reply,
+            } => {
+                let _ = reply.send(self.resize_viewer(viewer, size, colors));
             }
             AgentCommand::RemoveViewer { viewer } => self.viewers.remove(viewer),
             AgentCommand::ReadScreen { lines, reply } => {
@@ -806,13 +821,51 @@ impl Actor {
         }
     }
 
-    /// Size requested by a client. An agent without a terminal keeps its last screen.
-    fn take_size(&mut self, cols: u16, rows: u16, colors: Option<TerminalColors>) {
-        if self.process != ProcessState::Running || !self.terminal.is_open() {
-            return;
+    fn can_resize(&self) -> bool {
+        self.process == ProcessState::Running && self.terminal.is_open()
+    }
+
+    fn resize_viewer(
+        &mut self,
+        viewer: u64,
+        size: Size,
+        colors: Option<TerminalColors>,
+    ) -> Result<(), ErrorBody> {
+        if !self.can_resize() || !self.viewers.update_capacity(viewer, size) {
+            return Err(ErrorBody::new(
+                Reason::NotFound,
+                "reopen the terminal watch to resize it",
+            ));
         }
         if let Some(colors) = colors {
             self.screen_mut().set_colors(colors);
+        }
+        self.take_size(SizeRequest::Shared);
+        Ok(())
+    }
+
+    /// Applies a resize or leaves it for the checkpoint writer to make room.
+    fn take_size(&mut self, request: SizeRequest) {
+        if !self.can_resize() {
+            return;
+        }
+        let size = match request {
+            SizeRequest::Shared => self.viewers.shared_size(None),
+            #[cfg(test)]
+            SizeRequest::Direct(size) => Some(size),
+        };
+        let Some(Size { cols, rows }) = size else {
+            if matches!(self.pending_size, Some(SizeRequest::Shared)) {
+                self.pending_size = None;
+                self.links.room.notify_waiters();
+            }
+            return;
+        };
+        if matches!(request, SizeRequest::Shared) && self.size() == (cols, rows) {
+            if self.pending_size.take().is_some() {
+                self.links.room.notify_waiters();
+            }
+            return;
         }
         if self.screen().is_full() {
             // The size waits for the checkpoint writer; the terminal leaves any nudge meanwhile.
@@ -820,15 +873,14 @@ impl Actor {
                 let (now_cols, now_rows) = self.size();
                 self.terminal.set_size(now_cols, now_rows);
             }
-            self.pending_size = Some((cols, rows));
+            self.pending_size = Some(request);
             return;
         }
-        self.nudge_until = None;
         self.apply_requested_size(cols, rows);
     }
 
-    /// A viewer may have just reached the shared layout's size and still need its frame.
     fn apply_requested_size(&mut self, cols: u16, rows: u16) {
+        self.nudge_until = None;
         if self.resize(cols, rows) {
             self.publish_soon();
         } else {
@@ -864,13 +916,11 @@ impl Actor {
         if self.screen().is_full() {
             return;
         }
-        if let Some((cols, rows)) = self.pending_size.take() {
-            if self.process == ProcessState::Running && self.terminal.is_open() {
-                self.apply_requested_size(cols, rows);
-            }
+        if let Some(request) = self.pending_size.take() {
+            self.take_size(request);
             self.links.room.notify_waiters();
-            self.admit_viewers();
         }
+        self.admit_viewers();
         if let Some((cols, rows, reply)) = self.pending_restart.take() {
             self.restart_screen(cols, rows);
             self.catch_up_at = Some(Instant::now());
@@ -974,25 +1024,58 @@ impl Actor {
     }
 
     fn admit_viewers(&mut self) {
+        if self
+            .screen()
+            .screen()
+            .synchronized_update_deadline()
+            .is_some()
+        {
+            return;
+        }
         let draining = self.exit.is_some() && !self.exit_sent;
-        let exit = self.exit.as_ref().filter(|_| self.exit_sent);
-        let screen = self
-            .screen
-            .as_ref()
-            .expect("the screen exists while the actor runs");
-        let record = self.links.shared.record.lock().unwrap();
-        self.viewers.set_working(matches!(
-            record.info.state,
-            AgentState::Starting | AgentState::Working
-        ));
-        self.viewers.admit(
-            screen.screen(),
-            exit,
-            self.process,
-            &record.info.name,
-            draining,
-            self.process == ProcessState::Running && self.pending_size.is_some(),
-        );
+        let waiting = self.viewers.take_waiting();
+        if waiting.is_empty() {
+            return;
+        }
+        let (name, working) = {
+            let record = self.links.shared.record.lock().unwrap();
+            (
+                record.info.name.clone(),
+                matches!(
+                    record.info.state,
+                    ManagedAgentState::Starting | ManagedAgentState::Working
+                ),
+            )
+        };
+        self.viewers.set_working(working);
+        for request in waiting {
+            if request.is_closed() {
+                continue;
+            }
+            if (draining && request.kind.waits_for_exit())
+                || (self.process == ProcessState::Running && self.pending_size.is_some())
+            {
+                self.viewers.request(request);
+                continue;
+            }
+            if self.can_resize()
+                && let Some(size) = self.viewers.shared_size(request.size)
+                && self.size() != (size.cols, size.rows)
+            {
+                if self.screen().is_full() {
+                    self.viewers.request(request);
+                    continue;
+                }
+                self.apply_requested_size(size.cols, size.rows);
+            }
+            let screen = self
+                .screen
+                .as_ref()
+                .expect("the screen exists while the actor runs");
+            let exit = self.exit.as_ref().filter(|_| self.exit_sent);
+            self.viewers
+                .admit(request, screen.screen(), exit, self.process, &name);
+        }
     }
 
     fn catch_up(&mut self) {
@@ -1539,7 +1622,7 @@ impl Actor {
         let reading = self.state.read(Instant::now(), viewing);
         self.viewers.set_working(matches!(
             reading.state,
-            AgentState::Starting | AgentState::Working
+            ManagedAgentState::Starting | ManagedAgentState::Working
         ));
         self.state_at = reading.wake;
         if let Some(kept) = self.kept.as_ref() {
@@ -1565,7 +1648,7 @@ impl Actor {
         (info.tools_state, info.tools_reason) = (reading.tools, reading.tools_reason);
         Some(matches!(
             info.state,
-            AgentState::WaitingForYou | AgentState::Error
+            ManagedAgentState::WaitingForYou | ManagedAgentState::Error
         ))
     }
 }

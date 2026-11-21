@@ -5,7 +5,7 @@
 use std::ops::Range;
 use std::time::Duration;
 
-use facade_base::daemon::HiddenRows;
+use facade_base::model::terminal::HiddenRows;
 
 use crate::{PasteCount, PastePlaceholder, PasteRule};
 

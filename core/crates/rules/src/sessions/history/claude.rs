@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
 use facade_base::time::parse_iso_time;
 use serde_json::Value;
 

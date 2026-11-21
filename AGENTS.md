@@ -11,8 +11,13 @@ This repository contains the IDE and its independently distributed extension. Pr
 - IDE specifications: `docs/ide/`. The former `facade-code-spec/` directory has moved here.
 - Translated repository documentation: `docs/locales/`. Runtime translations remain in `ide/locales/`.
 - Extension specification: `docs/extension/`.
-- Rust core: `core/`, documented in `docs/core/`. Read [core/README.md](core/README.md) and
-  [docs/core/ENGINEERING.md](docs/core/ENGINEERING.md) before changing it.
+- Rust core: `core/`. Read [core/README.md](core/README.md) and
+  [Core engineering](docs/core/ENGINEERING.md) before changing it. The
+  [island index](docs/core/ARCHITECTURE.md#islands) identifies owners, interfaces and checks.
+  The README contains earlier examples. Use [Core features](docs/core/FEATURES.md) for current Shell commands
+  and [Core engineering](docs/core/ENGINEERING.md#tests) for test isolation and cleanup.
+  For published API and stored data changes, follow the
+  [compatibility review](docs/core/ENGINEERING.md#compatibility-contracts).
 
 Run IDE development commands from `ide/`; open that folder to use its existing editor settings and development tools.
 Keep GitHub workflows and repository-wide metadata at the repository root. Each product keeps its own package manifest
@@ -27,3 +32,9 @@ test subjects. Editor tests use separate temporary user-data and extensions dire
 state; do not run real Qwen probes.
 
 Validate the affected paths, build tools and behavior. Report checks actually run and any remaining limitations.
+
+## README approval
+
+Every `README.md` in this repository is protected, including the root file, nested files and translations.
+Obtain the repository owner's explicit prior approval before creating, editing, deleting, translating, renaming
+or moving any of them. This covers link-only, formatting and automated edits.

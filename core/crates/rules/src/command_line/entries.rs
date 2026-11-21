@@ -13,7 +13,7 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::programs::{on_path, program_of, runnable};
 use facade_base::settings::{Json, Member, Node, Settings, is_space};
 use facade_base::system::{SYSTEM, System, env_var};

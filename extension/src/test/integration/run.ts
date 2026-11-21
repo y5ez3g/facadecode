@@ -20,7 +20,7 @@ import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 import { checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
-import { multiWindowDriverFiles, rustMultiWindow, shellHandoff, withRustWindows } from './rustMultiWindow';
+import { coldCutoverJourney, multiWindowDriverFiles, rustMultiWindow, sharedAttachJourney, shellHandoff, withRustWindows } from './rustMultiWindow';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -82,6 +82,9 @@ async function main(): Promise<void> {
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
+	const attachFake = process.env.FACADE_IT_FAKECLI;
+	const attachUpgrade = process.env.FACADE_IT_ATTACH_UPGRADE;
+	const prereleaseBuild = process.env.FACADE_IT_PRERELEASE_BUILD;
 	// The engine the windows run on: `old`, the default, writes `facade.rustEngine: off` into each profile; `rust` writes `auto`, which the
 	// package with core's programs takes to the Rust engine (the setting's own default is `auto`, so the suite always says it)
 	const engine = process.env.FACADE_IT_ENGINE ?? 'old';
@@ -731,7 +734,7 @@ async function main(): Promise<void> {
 			{ env: { ...env, ...profile.env }, stdio: ['ignore', 'pipe', 'pipe'] });
 		const screen = (agent: string) => execFileSync(corePrograms, ['screen', agent, '--lines', '120'], { env, encoding: 'utf8', timeout: 20_000 });
 		const list = async () => (await coreCall(facade, 'agent.list', {})).agents;
-		const inspect = (agent: string) => coreCall(facade, 'agent.inspect', { agent });
+		const inspect = (agent: string) => coreCall(facade, 'agent.inspect', { target: agent });
 		console.log('\n  Journey: the Rust window lifetime and saved Pins');
 		try {
 			await windowLifetime(start, () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', async step => {
@@ -739,15 +742,15 @@ async function main(): Promise<void> {
 					await checkClosedAgent(step, screen, list, inspect);
 				} else if (step.after === 'pins') {
 					const { agent } = await inspect(step.removed);
-					const reference = { machine_id: agent.machine_id, agent_id: agent.agent_id };
-					assert.deepStrictEqual((await coreCall(facade, 'agent.remove', { reference })).reference, reference);
+					const reference = agent.reference;
+					assert.deepStrictEqual((await coreCall(facade, 'agent.remove', { target: reference })).reference, reference);
 				}
 			});
 		} finally {
 			await endRust(facade);
 		}
 	};
-	const rustWindows = async (runName: 'multi' | 'handoff') => {
+	const rustWindows = async (runName: 'multi' | 'handoff' | 'attach' | 'cutover') => {
 		const driver = path.join(root, `driver-${runName}`);
 		const facade = path.join(home, runName);
 		const peer = path.join(root, `${runName}-peer`);
@@ -760,7 +763,39 @@ async function main(): Promise<void> {
 		for (const [name, contents] of Object.entries(multiWindowDriverFiles())) {
 			fs.writeFileSync(path.join(driver, name), contents);
 		}
-		facadeSettings(facade, alone(runName === 'handoff' ? 'codex' : 'claude'));
+		let prior: { extension: string; driver: string; program: string } | undefined;
+		if (runName === 'cutover') {
+			assert.ok(prereleaseBuild && path.isAbsolute(prereleaseBuild),
+				'Set FACADE_IT_PRERELEASE_BUILD to the absolute staged build of the accepted prerelease editor and Core.');
+			assert.ok(attachFake && path.isAbsolute(attachFake) && fs.statSync(attachFake, { throwIfNoEntry: false })?.isFile(),
+				'Set FACADE_IT_FAKECLI to the absolute path of the test build of facade-fakecli.');
+			const stage = path.join(prereleaseBuild, 'extension-it');
+			const oldDriver = path.join(root, 'driver-prerelease');
+			const program = coreProgram(path.join(stage, 'bin'));
+			assert.ok(fs.statSync(program, { throwIfNoEntry: false })?.isFile(), program);
+			fs.mkdirSync(oldDriver);
+			for (const [name, contents] of Object.entries(multiWindowDriverFiles(path.join(prereleaseBuild, 'out', 'test', 'integration')))) {
+				fs.writeFileSync(path.join(oldDriver, name), contents);
+			}
+			prior = { extension: stage, driver: oldDriver, program };
+		}
+		if (runName === 'attach') {
+			assert.ok(attachFake && path.isAbsolute(attachFake) && fs.statSync(attachFake, { throwIfNoEntry: false })?.isFile(),
+				'Set FACADE_IT_FAKECLI to the absolute path of the test build of facade-fakecli.');
+			assert.ok(!attachUpgrade || (path.isAbsolute(attachUpgrade) && fs.statSync(attachUpgrade, { throwIfNoEntry: false })?.isFile()),
+				'Use an absolute, isolated program for FACADE_IT_ATTACH_UPGRADE.');
+			fs.mkdirSync(facade, { recursive: true });
+			const clis = { ...alone('qa-fake'), 'qa-fake': { type: 'custom', program: attachFake } };
+			fs.writeFileSync(path.join(facade, 'facade.json'), JSON.stringify({ clis }));
+		} else if (prior) {
+			facadeSettings(facade, { ...alone('qa-fake'), 'qa-fake': {
+				type: 'fake', command: attachFake!, env: {
+					FAKECLI_SESSION: '960c20b4-1304-4bf8-bcc0-ef2102ad17c1', FAKECLI_STATUS: '1'
+				}
+			} });
+		} else {
+			facadeSettings(facade, alone(runName === 'handoff' ? 'codex' : 'claude'));
+		}
 		const files = {
 			prefix: path.join(root, runName),
 			read: (file: string) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '',
@@ -773,28 +808,48 @@ async function main(): Promise<void> {
 		// Each journey has its own Facade home and can start an a1.
 		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, `${runName}-cli`), CLAUDE_CONFIG_DIR: claudeConfig };
 		const start = (folder: string, name: string, control: string, port: number) => {
+			const oldEngine = runName === 'attach' && name === 'old-engine';
 			const profile = editorProfile(root, `${runName[0]}-${name}`);
 			const userSettings = path.join(profile.user, 'User', 'settings.json');
 			if (!fs.existsSync(userSettings)) {
 				fs.mkdirSync(path.dirname(userSettings), { recursive: true });
-				fs.writeFileSync(userSettings, JSON.stringify({ ...settings, 'window.dialogStyle': 'custom' }));
+				fs.writeFileSync(userSettings, JSON.stringify({
+					...settings, 'window.dialogStyle': 'custom', ...oldEngine ? { 'facade.rustEngine': 'off' } : {}
+				}));
 			}
 			return spawn(executable, [folder, '--new-window', '--disable-extensions', ...profile.args,
-				`--extensionDevelopmentPath=${extension}`,
-				...runName === 'multi' ? [`--extensionDevelopmentPath=${windowComponent}`] : [],
-				`--extensionDevelopmentPath=${driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
+				`--extensionDevelopmentPath=${prior?.extension ?? extension}`,
+				...runName === 'multi' || oldEngine ? [`--extensionDevelopmentPath=${windowComponent}`] : [],
+				`--extensionDevelopmentPath=${prior?.driver ?? driver}`, `--remote-debugging-port=${port}`, '--locale=en', ...EDITOR_FLAGS],
 				{ env: { ...env, ...profile.env, FACADE_IT_WINDOW_CONTROL: control,
-					...runName === 'handoff' ? { FACADE_IT_WINDOW_PROTOCOL: '3' } : {} }, stdio: ['ignore', 'pipe', 'pipe'] });
+					...runName === 'multi' || oldEngine ? {} : { FACADE_IT_WINDOW_NO_COMPONENT: '1' } }, stdio: ['ignore', 'pipe', 'pipe'] });
 		};
 		try {
-			await withRustWindows(files, start, open => runName === 'handoff'
-				? shellHandoff(open, repo, corePrograms, {
-					...env, ...isolatedStorage, FACADE_IT_AS: 'codex', HOME: agentsHome, USERPROFILE: agentsHome,
+			await withRustWindows(files, start, open => {
+				if (runName === 'multi') {
+					return rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files });
+				}
+				const shellEnv = {
+					...env, ...isolatedStorage, HOME: agentsHome, USERPROFILE: agentsHome,
 					APPDATA: path.join(agentsHome, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(agentsHome, 'AppData', 'Local')
-				})
-				: rustMultiWindow(open, { folder: repo, peer, shared, home: facade, remote: null, files }));
+				};
+				if (prior) {
+					return coldCutoverJourney(open, repo, shellEnv, prior.program, corePrograms, () => { prior = undefined; });
+				}
+				return runName === 'attach'
+					? sharedAttachJourney(open, repo, corePrograms, shellEnv, attachUpgrade)
+					: shellHandoff(open, repo, corePrograms, { ...shellEnv, FACADE_IT_AS: 'codex' });
+			});
 		} finally {
-			await endRust(facade);
+			if (prior) {
+				endMatching(facade);
+			} else {
+				await endRust(facade);
+			}
+			if (runName === 'attach') {
+				endMatching(facade);
+				endMatching(path.join(root, 'a-old-engine'));
+			}
 		}
 	};
 	/**
@@ -916,7 +971,7 @@ async function main(): Promise<void> {
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
-		if (['engine', 'switch', 'lifetime', 'multi-window', 'shell-handoff'].includes(only ?? '') && engine !== 'rust') {
+		if (['engine', 'switch', 'lifetime', 'multi-window', 'shell-handoff', 'shared-attach', 'cold-cutover'].includes(only ?? '') && engine !== 'rust') {
 			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
 		}
 		if (only === 'engine' || (!only && engine === 'rust')) {
@@ -930,6 +985,12 @@ async function main(): Promise<void> {
 		}
 		if (engine === 'rust' && (!only || only === 'shell-handoff')) {
 			await rustWindows('handoff');
+		}
+		if (engine === 'rust' && (only === 'shared-attach' || (!only && attachFake))) {
+			await rustWindows('attach');
+		}
+		if (engine === 'rust' && only === 'cold-cutover') {
+			await rustWindows('cutover');
 		}
 		if (only === 'switch' || (!only && engine === 'rust')) {
 			await engineSwitch();

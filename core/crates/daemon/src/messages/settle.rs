@@ -1,10 +1,10 @@
 //! Ending deliveries: by their typist, by their deadline, and the results start prompts owe.
 
-use facade_base::daemon::{
+use facade_base::model::message::{
     Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, PromptOutcome, StartOutcome,
     TextWritten, start_result_text,
 };
-use facade_base::machine::{AgentDeliverStartResultArgs, AgentRef};
+use facade_base::{model::agent::AgentRef, model::message::AgentDeliverStartResultArgs};
 use tokio::sync::watch;
 use tokio::time::Instant;
 

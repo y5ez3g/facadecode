@@ -7,10 +7,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use facade_base::daemon::{CliInfo, Overrides};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use crate::operations::StartRequest;
+use facade_base::model::agent::{CliInfo, Overrides};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::settings::Settings;
-use facade_base::v3::StartArgs;
 use facade_rules::Rule;
 use facade_rules::entries::{self, Entry, LaunchOptions};
 
@@ -50,7 +50,7 @@ pub(crate) struct Configured {
 /// Selects the configured CLI for a start. Unknown entries get the choices available here.
 pub(crate) fn configure(
     settings: &Settings,
-    args: &StartArgs,
+    args: &StartRequest,
     folder: &str,
     by_model: bool,
 ) -> Result<Configured, ErrorBody> {
@@ -254,10 +254,10 @@ impl Daemon {
         &self,
         folder: Option<String>,
         environment: BTreeMap<String, String>,
-    ) -> Result<facade_base::machine::CliListResult, ErrorBody> {
+    ) -> Result<facade_base::model::machine::CliListResult, ErrorBody> {
         let (environment, folder) = self.launch_context(folder, environment).await?;
         let clis = clis_from(&Ok(environment), &folder);
-        Ok(facade_base::machine::CliListResult {
+        Ok(facade_base::model::machine::CliListResult {
             clis: clis.rows,
             settings_problem: clis.settings_problem,
         })

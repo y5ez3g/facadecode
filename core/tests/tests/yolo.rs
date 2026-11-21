@@ -59,13 +59,13 @@ fn each_launch_reads_yolo_from_the_settings_file_and_keeps_it_for_its_run() {
     home.start_named_fake("off", &[]);
     assert_eq!(record(&home, "off")["yolo"], false);
     let mut editor = DaemonTestClient::open(&home);
-    editor.hello("ide", DAEMON_RANGE, json!({}));
+    editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
     let env = json!({ "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path });
     let from_the_editor = editor.call(
         "agent.start",
         json!({
-            "cli": "fake", "name": "from-the-editor", "folder": folder, "env": env, "cols": 80,
-            "rows": 24,
+            "cli": "fake", "name": "from-the-editor", "folder": folder, "env": env,
+            "size": { "cols": 80, "rows": 24 },
         }),
     );
     assert_eq!(
@@ -161,14 +161,15 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
         record(&home, name)
     };
     let bea = child(&mut ada, "bea");
+    let ada_ref = record(&home, "ada")["reference"].clone();
     assert_eq!(
         (
-            &bea["agent_id"],
+            &bea["reference"]["agent_id"],
             &bea["creator"],
             &bea["root"],
             &bea["yolo"]
         ),
-        (&json!("a2"), &json!("a1"), &json!("a1"), &json!(true))
+        (&json!("a2"), &ada_ref, &ada_ref, &json!(true))
     );
     let mut bea_server = McpTestClient::open(&home, "a2");
     let started_by = format!(" You were started by ada (a1@{host}). ");
@@ -183,7 +184,7 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
     let cy = child(&mut bea_server, "cy");
     assert_eq!(
         (&cy["creator"], &cy["root"]),
-        (&json!("a2"), &json!("a1")),
+        (&bea["reference"], &ada_ref),
         "a grandchild's tree is its grandparent's"
     );
     let in_terminal = home
@@ -198,14 +199,14 @@ fn a_child_joins_its_creator_s_tree_and_the_person_s_start_heads_its_own() {
     let dee = record(&home, "dee");
     assert_eq!(
         (dee.get("creator"), &dee["root"]),
-        (None, &dee["agent_id"]),
+        (None, &dee["reference"]),
         "a command in bea's terminal acts for the command line: {dee}"
     );
     home.start_named_fake("eve", &[]);
     let eve = record(&home, "eve");
     assert_eq!(
         (eve.get("creator"), &eve["root"]),
-        (None, &eve["agent_id"]),
+        (None, &eve["reference"]),
         "the person's start is the first of its own tree"
     );
     assert!(
@@ -236,7 +237,8 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
         json!({ "name": "cy", "cli": "fake", "folder": folder }),
     );
     assert_eq!(started["status"], "success", "{started}");
-    assert_eq!(record(&home, "cy")["root"], "a1");
+    let root = record(&home, "ada")["reference"].clone();
+    assert_eq!(record(&home, "cy")["root"], root);
     let listed = ada.call("list_agents", json!({}));
     let mut ids: Vec<&str> = listed["data"]["agents"]
         .as_array()
@@ -296,9 +298,10 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
         json!({ "name": "eve", "cli": "fake", "folder": folder }),
     );
     assert_eq!(launched["status"], "success", "{launched}");
+    let eve = record(&home, "eve");
     assert_eq!(
-        (&record(&home, "eve")["yolo"], &record(&home, "eve")["root"]),
-        (&json!(true), &json!("a1")),
+        (&eve["yolo"], &eve["root"]),
+        (&json!(true), &root),
         "its tree is ada's, its YOLO the file's"
     );
     assert_eq!(
@@ -340,7 +343,7 @@ fn a_guest_takes_yolo_from_the_settings_file_as_it_joins_for_its_reach() {
     let (mut off, listed, joined) = guest(&home);
     assert_eq!(
         (&joined["type"], &joined["yolo"], &joined["root"]),
-        (&json!("guest"), &json!(false), &joined["agent_id"]),
+        (&json!("guest"), &json!(false), &joined["reference"]),
         "{joined}"
     );
     assert_eq!(
@@ -362,7 +365,7 @@ fn a_guest_takes_yolo_from_the_settings_file_as_it_joins_for_its_reach() {
         on.call("read_screen", json!({ "agent": "a1" }))["status"],
         "success"
     );
-    let off_id = joined["agent_id"].as_str().unwrap();
+    let off_id = joined["reference"]["agent_id"].as_str().unwrap();
     assert_eq!(
         home.agent_record(off_id).unwrap()["yolo"],
         false,
@@ -401,7 +404,11 @@ fn a_resume_reads_yolo_from_the_settings_file_as_a_start_does() {
         .and_then(Value::as_str)
         == Some(SESSION)));
     assert_eq!(record(&home, "worker")["yolo"], true);
-    connect(&home).call("agent.stop", json!({ "agent": first.id }));
+    let stopped = connect(&home).call_ok(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [first.id] } }),
+    );
+    assert_eq!(stopped["items"][0]["status"], "stopped", "{stopped}");
     let resume = || {
         home.command(&test_binaries().facade)
             .env("PATH", home.path_with_test_programs())
@@ -521,7 +528,7 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
         let path = format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str());
         let args = json!({
             "cli": "claude", "name": name, "folder": home.project,
-            "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+            "env": { "PATH": path, "FACADE_HOME": home.path }, "size": { "cols": 80, "rows": 24 },
         });
         assert!(wire.call("agent.start", args)["result"].is_object());
         keys

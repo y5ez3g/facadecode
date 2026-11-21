@@ -3,9 +3,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'path';
-import type { AgentRef, V3AgentInfo } from '../../base/coreProtocol';
+import type { AgentRef, DaemonOperations } from '../../base/coreProtocol';
 import { folderKeyOf } from '../../base/files';
 import type { Location, RunError, RunFacts, RunId, RustPin } from '../../core/ports';
+
+type AgentInfo = DaemonOperations['agent.inspect']['result']['agent'];
+const CARD_STATES = new Set<AgentInfo['state']>([
+	'starting', 'working', 'waiting_for_you', 'just_done', 'idle', 'error', 'ended', 'unknown'
+]);
 
 export function agentKey(ref: AgentRef): RunId {
 	return `${ref.machine_id}/${ref.agent_id}`;
@@ -44,26 +49,27 @@ interface AgentPresentation {
 }
 
 /** Card facts for a managed agent (PANEL-4.1). */
-export function agentFacts(info: V3AgentInfo, view: AgentPresentation): RunFacts {
-	const reference = referenceOf(info);
+export function agentFacts(info: AgentInfo, view: AgentPresentation): RunFacts {
+	const { reference, creator } = info;
+	const { agent_id, machine_id } = reference;
 	const location = view.local ? locationOf(info.cwd, view.locations) : undefined;
 	const id = agentKey(reference);
-	const state = info.state === 'online' ? 'unknown' : info.state;
+	const state = info.state !== 'online' && CARD_STATES.has(info.state) ? info.state : 'unknown';
 	const ended = info.process === 'ended';
 	const detail = info.state_detail;
 	const startedAt = Date.parse(info.started_at);
 	return {
 		id,
 		orchestrator: { reference, state, ...(view.machine !== undefined ? { machine: view.machine } : {}) },
-		alias: info.agent_id,
+		alias: agent_id,
 		address: info.address,
 		name: info.name,
 		cli: info.cli,
 		displayName: info.cli,
 		command: info.cli,
-		location: location?.id ?? `${info.machine_id}:${info.cwd}`,
+		location: location?.id ?? `${machine_id}:${info.cwd}`,
 		cwd: info.cwd,
-		environment: location?.environment ?? `machine:${info.machine_id}`,
+		environment: location?.environment ?? `machine:${machine_id}`,
 		yolo: info.yolo,
 		createdAt: Date.parse(info.created_at),
 		startedAt,
@@ -74,9 +80,9 @@ export function agentFacts(info: V3AgentInfo, view: AgentPresentation): RunFacts
 		reporting: state === 'working' || state === 'idle' || state === 'just_done' || state === 'waiting_for_you',
 		disconnected: view.disconnected,
 		tools: info.tools_state,
-		root: agentKey({ agent_id: info.root, machine_id: info.root_machine_id ?? info.machine_id }),
-		origin: info.creator === undefined ? 'human' : 'agent',
-		...(info.creator !== undefined ? { creator: agentKey({ agent_id: info.creator, machine_id: info.creator_machine_id ?? info.machine_id }) } : {}),
+		root: agentKey(info.root),
+		origin: info.creator_kind === 'agent' || creator ? 'agent' : 'human',
+		...(creator ? { creator: agentKey(creator) } : {}),
 		...(info.session ? { sessionId: info.session, resumable: true, pinnable: true } : {}),
 		...(info.title !== undefined ? { title: info.title } : {}),
 		...(info.model !== undefined ? { model: info.model } : {}),

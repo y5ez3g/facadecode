@@ -45,7 +45,7 @@ It keeps nothing on disk.
 the wiring in [rules](rules.md); a person can also write one by hand with only the program's path.
 
 - Standard input and output: MCP, one JSON-RPC message per line.
-- Environment: the Facade home, from `FACADE_HOME`, `HOME` or `USERPROFILE` by the rule in PROTOCOL.md. A
+- Environment: the Facade home, from `FACADE_HOME`, `HOME` or `USERPROFILE` by the rule in DAEMON.md. A
   `FACADE_HOME` that is not an absolute path exits 1. The whole UTF-8 environment goes into the hello.
 - Arguments: any. Wiring passes words such as `--guest codex`, which the daemon reads from the hello. A `--socket
   <path>` that older entries still carry is passed on like any other word.
@@ -55,19 +55,19 @@ the wiring in [rules](rules.md); a person can also write one by hand with only t
 - Standard error: one line per fact, `facade-mcp: <level>: <fact>`, with level `error`, `warn` or `info`.
 
 **The daemon.** The relay contract, version 1, is part of the daemon protocol: see "The relay" in
-[PROTOCOL.md](../../../core/protocol/PROTOCOL.md), which gives the hello and the response to `closing`. The relay takes
+[DAEMON.md](../../../core/protocol/DAEMON.md), which gives the hello and the response to `closing`. The relay takes
 the hello as accepted when the daemon's first line has `id` 1, no `method` and no `error`. The daemon's side is the MCP
 server in [daemon](daemon.md).
 
 **The socket.** The relay works out the daemon socket from the Facade home by the rule in "Connect to the daemon" in
-[PROTOCOL.md](../../../core/protocol/PROTOCOL.md). [base](base.md) follows the same rule in `paths::home_key` and
+[DAEMON.md](../../../core/protocol/DAEMON.md). [base](base.md) follows the same rule in `paths::home_key` and
 `daemon_socket`. The scenario tests that go through the relay keep the two the same: the relay is given no path, so a
 different result would not connect. On Windows the socket is the named pipe
 `\\.\pipe\facade-core-daemon-<key>`, with the same home key: the first five SHA-256 bytes in hex, hashing the home as
 written without changing case or slashes.
 
 **The `facade` program.** Where no one listens, the relay runs `facade daemon --detach` from its own folder, with its
-own environment, as PROTOCOL.md tells a client to. On Windows the program is `facade.exe`, started with
+own environment, as DAEMON.md tells a client to. On Windows the program is `facade.exe`, started with
 `CREATE_NO_WINDOW`.
 
 ## Depends on

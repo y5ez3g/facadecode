@@ -6,9 +6,12 @@ mod probe;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
-use facade_base::daemon::{DeliveryFailure, InputInfo, InputState, TextWritten};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::terminal::key_down_records;
+use facade_base::{
+    model::message::{DeliveryFailure, TextWritten},
+    model::terminal::{InputInfo, InputState},
+};
 use facade_rules::{BoxReading, ConsoleTyping, LineCell, PasteRule, ProbeVerdict};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -64,7 +67,7 @@ impl Typing {
         enter: bool,
         sender: Sender,
     ) -> Result<(Typing, TypingAnswer), String> {
-        match facade_base::daemon::first_control(&text) {
+        match facade_base::model::terminal::first_control(&text) {
             Some(problem) => {
                 return Err(format!(
                     "{problem}; send Escape and other control keys as keys"
@@ -1230,7 +1233,7 @@ impl Key {
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{DeliveredVia, DeliveryStatus, MessagesWatchArgs};
+    use facade_base::model::message::{DeliveredVia, DeliveryStatus, MessagesWatchArgs};
 
     use super::*;
     use crate::messages::Messages;

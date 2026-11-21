@@ -1,0 +1,821 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Facade keeper API",
+  "description": "A single JSON-RPC 2.0 frame. Success result and change types are selected by the corresponding request or watch.",
+  "api_versions": [
+    1
+  ],
+  "anyOf": [
+    {
+      "$ref": "#/$defs/KeeperRequest"
+    },
+    {
+      "$ref": "#/$defs/KeeperNotification"
+    },
+    {
+      "$ref": "#/$defs/SuccessResponse"
+    },
+    {
+      "$ref": "#/$defs/ErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/WindowsSyncRequest"
+    },
+    {
+      "$ref": "#/$defs/WindowsStartResponse"
+    },
+    {
+      "$ref": "#/$defs/WindowsSyncResponse"
+    }
+  ],
+  "$defs": {
+    "AgentChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "exit"
+            },
+            "agent_id": {
+              "type": "string"
+            },
+            "exit": {
+              "$ref": "#/$defs/ProcessExit"
+            }
+          },
+          "required": [
+            "kind",
+            "agent_id",
+            "exit"
+          ]
+        }
+      ]
+    },
+    "AgentKind": {
+      "type": "string",
+      "enum": [
+        "managed",
+        "guest"
+      ]
+    },
+    "AgentLabel": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "address": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "cli": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "resumable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reference",
+        "address",
+        "type",
+        "name",
+        "cli",
+        "state",
+        "resumable"
+      ]
+    },
+    "AgentRef": {
+      "type": "object",
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "agent_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "machine_id",
+        "agent_id"
+      ]
+    },
+    "AgentState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "starting",
+          "description": "The CLI has not shown what it is doing yet, within 60 seconds of its start or resume."
+        },
+        {
+          "type": "string",
+          "const": "working",
+          "description": "The CLI is working, or stopped working less than a second ago."
+        },
+        {
+          "type": "string",
+          "const": "waiting_for_you",
+          "description": "The CLI waits for the person; `state_detail.kind` says for what. A menu or question it draws\nin place of its input counts, with `kind` `unknown` where it did not say, also while it\nstarts."
+        },
+        {
+          "type": "string",
+          "const": "just_done",
+          "description": "A turn ended while no terminal showed the agent. It stays so until one does. Work before the\nCLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a\nquestion the CLI shows. Words after the CLI's name at its start are the CLI's own and ask\nnothing."
+        },
+        {
+          "type": "string",
+          "const": "idle",
+          "description": "The CLI is not working and waits for nothing."
+        },
+        {
+          "type": "string",
+          "const": "error",
+          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 60 seconds of its\nstart or resume."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The CLI's process ended; `state_detail.how` says how, where that is known."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "Nothing shows what the CLI is doing; `state_detail.reason` says why."
+        },
+        {
+          "type": "string",
+          "const": "online",
+          "description": "A Guest is connected and can take messages."
+        }
+      ],
+      "description": "The agent's current state."
+    },
+    "ApiVersions": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 1
+      },
+      "minItems": 1
+    },
+    "EmptyResult": {
+      "type": "object",
+      "description": "An empty success result: `{}`."
+    },
+    "EndReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "terminal_closed",
+          "description": "Neither service held the CLI's terminal, so it closed. A CLI that ignores hangup may still\nbe running."
+        }
+      ],
+      "description": "Why an exit has no code or signal."
+    },
+    "ErrorBody": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/ErrorData"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ]
+    },
+    "ErrorData": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "HeldAgent": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "The local agent's opaque ID."
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "birth": {
+          "type": "string",
+          "description": "The operating system's process birth value, compared for equality."
+        },
+        "stopping": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "agent_id",
+        "pid",
+        "birth"
+      ]
+    },
+    "HelloParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        }
+      },
+      "required": [
+        "api_versions"
+      ]
+    },
+    "HelloResult": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        },
+        "build": {
+          "type": "string"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeldAgent"
+          }
+        }
+      },
+      "required": [
+        "api_version",
+        "build",
+        "agents"
+      ]
+    },
+    "KeeperNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "changed"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentChange"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "KeeperRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "hello"
+            },
+            "params": {
+              "$ref": "#/$defs/HelloParams"
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "method": {
+              "const": "call"
+            },
+            "params": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.start"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/StartArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.stop"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/StopArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "agent.sync"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/SyncArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "op": {
+                      "const": "daemon.ping"
+                    },
+                    "args": {
+                      "$ref": "#/$defs/PingArgs"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "args"
+                  ]
+                }
+              ]
+            },
+            "id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PingArgs": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "ProcessExit": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The exit code, if the CLI exited normally and its status is known. On Windows every exit\nhas one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is\n-1073741510."
+        },
+        "signal": {
+          "type": "string",
+          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on\nWindows."
+        },
+        "reason": {
+          "description": "Why no code or signal is available, if known. If all three fields are absent, the exit\nstatus is unavailable.",
+          "$ref": "#/$defs/EndReason"
+        },
+        "at": {
+          "type": "string",
+          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade noticed it."
+        }
+      },
+      "required": [
+        "at"
+      ],
+      "description": "A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as\nexit code zero."
+    },
+    "ProtocolMismatchDetails": {
+      "type": "object",
+      "properties": {
+        "offered_api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        },
+        "supported_api_versions": {
+          "$ref": "#/$defs/ApiVersions"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentLabel"
+          }
+        }
+      },
+      "required": [
+        "supported_api_versions"
+      ]
+    },
+    "StartArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The program followed by its arguments.",
+          "minItems": 1
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The CLI's complete environment."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "The resolved working directory."
+        },
+        "size": {
+          "type": "object",
+          "properties": {
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 2,
+              "maximum": 65535
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "cols",
+            "rows"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "agent_id",
+        "command",
+        "env",
+        "cwd",
+        "size"
+      ]
+    },
+    "StartResult": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "birth": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pid",
+        "birth"
+      ]
+    },
+    "StopArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id"
+      ]
+    },
+    "SuccessResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HelloResult"
+            },
+            {
+              "$ref": "#/$defs/StartResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            },
+            {
+              "$ref": "#/$defs/EmptyResult"
+            }
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "SyncArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "birth": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id",
+        "pid",
+        "birth"
+      ]
+    },
+    "WindowsStartResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "result": {
+          "$ref": "#/$defs/StartResult"
+        },
+        "terminal": {
+          "$ref": "#/$defs/WindowsTerminal"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result",
+        "terminal"
+      ],
+      "additionalProperties": false
+    },
+    "WindowsSyncRequest": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "call"
+        },
+        "params": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "op": {
+                  "const": "agent.sync"
+                },
+                "args": {
+                  "$ref": "#/$defs/SyncArgs"
+                }
+              },
+              "required": [
+                "op",
+                "args"
+              ]
+            }
+          ]
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "terminal": {
+          "$ref": "#/$defs/WindowsTerminal"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params",
+        "id",
+        "terminal"
+      ],
+      "additionalProperties": false
+    },
+    "WindowsSyncResponse": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        },
+        "terminal": {
+          "$ref": "#/$defs/WindowsTerminal"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result",
+        "terminal"
+      ],
+      "additionalProperties": false
+    },
+    "WindowsTerminal": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "job": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "signal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "job"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "x-facade": {
+    "operations": {
+      "agent.start": {
+        "args": {
+          "$ref": "#/$defs/StartArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/StartResult"
+        }
+      },
+      "agent.stop": {
+        "args": {
+          "$ref": "#/$defs/StopArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        }
+      },
+      "agent.sync": {
+        "args": {
+          "$ref": "#/$defs/SyncArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        }
+      },
+      "daemon.ping": {
+        "args": {
+          "$ref": "#/$defs/PingArgs"
+        },
+        "result": {
+          "$ref": "#/$defs/EmptyResult"
+        }
+      }
+    },
+    "methods": [
+      "hello",
+      "call",
+      "changed"
+    ]
+  }
+}

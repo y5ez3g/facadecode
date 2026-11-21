@@ -71,6 +71,7 @@ fn every_visible_root_command_is_in_exactly_one_group() {
         .filter(|path| !path.is_empty() && !path.contains(' '))
         .collect();
     assert_eq!(names.len(), commands.len(), "{names:?}");
+    assert_eq!(names[..5], ["start", "stop", "list", "resume", "rename"]);
     for command in commands {
         assert_eq!(names.iter().filter(|name| **name == command).count(), 1);
     }
@@ -123,7 +124,15 @@ fn every_way_of_asking_prints_one_page() {
         let args = [&["help"][..], parts.as_slice()].concat();
         assert_eq!(asking_for(&args).render(MACHINE), expected, "{args:?}");
     }
+    assert_eq!(asking_for(&["stop"]).path, "stop");
     assert_eq!(asking_for(&["machine"]).path, "machine");
+    assert_eq!(
+        asking_for(&["machine", "help", "list"]).path,
+        "machine list"
+    );
+    for hidden in ["link", "serve", "ssh-admin"] {
+        assert!(page(&format!("machine {hidden}")).is_none());
+    }
 }
 
 #[test]

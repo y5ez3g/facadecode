@@ -1,11 +1,13 @@
 //! The places a start can work in, and the worktrees a start creates.
 
-pub(crate) mod locations;
+mod locations;
+
+pub(crate) use locations::{preflight, read as read_locations};
 
 use std::path::Path;
 
-use facade_base::daemon::LocationInfo;
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
+use facade_base::model::machine::WorkingLocation;
 
 use locations::Creations;
 
@@ -28,7 +30,7 @@ impl Windows {
         &self,
         source: &Path,
         branch: &str,
-    ) -> Result<LocationInfo, ErrorBody> {
+    ) -> Result<WorkingLocation, ErrorBody> {
         locations::create_worktree(source, branch, &self.creations).await
     }
 }

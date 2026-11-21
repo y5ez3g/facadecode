@@ -3,31 +3,40 @@
 //! and the results messages write go the same way. Input of any kind reaches an agent through
 //! [`Daemon::hand_input`].
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::daemon::{
+use facade_base::address::selector as addresses;
+use facade_base::api_v1::daemon as wire;
+use facade_base::api_v1::daemon::Caller;
+use facade_base::model::agent::AgentLabel;
+use facade_base::model::message::{
     Delivery, DeliveryFailure, DeliveryStatus, FACADE, Message, SendOutcome, StartOutcome,
     TextWritten, start_result_text_at,
 };
-use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure, decode_arguments};
-use facade_base::machine::{AgentRef, ExecutionOutcome, MachineIdentity, MessageRef};
-use facade_base::operations::{CallParams, Operation};
-use facade_base::v3::address as addresses;
-use facade_base::v3::{self, AgentDeliverStartResult, Caller, ForwardCall};
-use serde_json::Value;
+use facade_base::{
+    jsonrpc::decode_arguments,
+    model::error::{ErrorBody, Reason, SendFailure},
+};
+use facade_base::{
+    model::agent::AgentRef,
+    model::machine::{ExecutionOutcome, MachineIdentity},
+    model::message::MessageRef,
+};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::agent::{
     self, AgentCommand, AgentHandle, Input, InputRejection, MessageTyping, Submission,
 };
+use crate::api;
 use crate::machine_service::machine_address_part;
 use crate::messages::{self, Due, Earlier, Outcome, Posted, PostedResult, Settled};
 use crate::operations::{check_request_id, request_words};
 use crate::records::{OperationTarget, Reach};
-use crate::service::{Forwarded, sender_from, value_of};
+use crate::service::{Forwarded, sender_from};
 use crate::store::SendRoute;
-use crate::{Cancel, Daemon, HUMAN, Sender, gate_for_test, log};
+use crate::{Cancel, Daemon, HUMAN, Sender, gate_for_test, log, send_route_cutoff};
 
 struct SendOrigin<'a> {
     machine: &'a str,
@@ -138,8 +147,8 @@ pub(crate) fn render_start_result(
     };
     Ok(start_result_text_at(
         result,
-        &addresses::format_agent_address(&agent, &selector),
-        &addresses::format_message_address(&prompt, &selector),
+        &addresses::format_agent_address(&agent.agent_id, &selector),
+        &addresses::format_message_address(&prompt.message_id, &selector),
     ))
 }
 
@@ -175,7 +184,12 @@ impl Daemon {
                 .unwrap_or_else(|_| from.exact_address());
             message.from_name.as_ref().map_or_else(
                 || address.clone(),
-                |name| format!("{} ({address})", facade_base::daemon::display_name(name)),
+                |name| {
+                    format!(
+                        "{} ({address})",
+                        facade_base::model::terminal::display_name(name)
+                    )
+                },
             )
         };
         let reply = message
@@ -270,10 +284,10 @@ impl Daemon {
     pub(crate) async fn route_send(
         self: &Arc<Self>,
         caller: &Caller,
-        mut args: v3::AgentSendArgs,
+        mut args: wire::SendArgs,
         incoming: Option<Forwarded>,
         mut cancel: Cancel,
-    ) -> Result<Value, ErrorBody> {
+    ) -> Result<wire::SendResult, ErrorBody> {
         if args.allow_unsupported_receipt && !matches!(caller, Caller::Terminal { .. }) {
             return Err(ErrorBody::refused(
                 "only a terminal can request an unsupported delivery receipt",
@@ -290,17 +304,18 @@ impl Daemon {
         };
         let due = Due::within(budget);
         let (recipient, sender, replay) = if let Some(call) = incoming {
-            let recipient = call
-                .recipient
-                .filter(|reference| {
-                    reference.machine_id == self.machine_id && reference.agent_id == args.to
-                })
-                .ok_or_else(|| {
-                    ErrorBody::invalid_argument(
+            let recipient = match &args.to {
+                wire::AgentTarget::Reference(reference)
+                    if reference.machine_id == self.machine_id =>
+                {
+                    api::agent_ref(reference.clone())
+                }
+                _ => {
+                    return Err(ErrorBody::invalid_argument(
                         "a forwarded send needs the resolved local recipient",
-                    )
-                })?;
-            args.request_id = call.request_id;
+                    ));
+                }
+            };
             (recipient, sender_from(caller, call.from_name), true)
         } else {
             let sender = sender_from(caller, self.caller_name(caller));
@@ -308,27 +323,30 @@ impl Daemon {
             if let Some(id) = request {
                 check_request_id(id)?;
             }
-            let target = args.to.trim_matches(facade_base::settings::is_space);
+            let target = match &args.to {
+                wire::AgentTarget::Selector(address) => Cow::Borrowed(address.as_str()),
+                wire::AgentTarget::Reference(reference) => {
+                    Cow::Owned(api::agent_ref(reference.clone()).exact_address())
+                }
+            };
+            let target = target.trim_matches(facade_base::settings::is_space);
             let table = self.store.message_table();
             let retained = if let Some(request) = request {
-                crate::blocking_in_place(|| table.send_target(&sender.from, request, target))
-                    .map_err(ErrorBody::internal)?
+                crate::blocking_in_place(|| {
+                    table.send_target(&sender.from, request, target, send_route_cutoff)
+                })
+                .map_err(ErrorBody::internal)?
             } else {
                 None
             };
             let (route, replay) = match retained {
                 Some(route) => (route, true),
                 None => {
-                    if args.reply_to_machine_id.is_some() {
-                        return Err(ErrorBody::invalid_argument("provide the reply in reply_to"));
-                    }
                     self.check_message_sender(caller)?;
-                    let reply = self.original_reply(caller, args.reply_to.as_deref())?;
+                    let reply = self.original_reply(caller, args.reply_to.as_ref())?;
                     let resolving = self.addressed_agent(
                         caller,
-                        v3::AgentTarget::Address {
-                            agent: args.to.clone(),
-                        },
+                        args.to.clone(),
                         OperationTarget::Send {
                             allow_unsupported_receipt: args.allow_unsupported_receipt,
                         },
@@ -349,7 +367,13 @@ impl Daemon {
                     };
                     if let Some(request) = request {
                         crate::blocking_in_place(|| {
-                            table.keep_send_target(&sender.from, request, target, &route)
+                            table.keep_send_target(
+                                &sender.from,
+                                request,
+                                target,
+                                &route,
+                                send_route_cutoff,
+                            )
                         })
                         .map_err(ErrorBody::internal)?
                     } else {
@@ -357,15 +381,17 @@ impl Daemon {
                     }
                 }
             };
-            args.reply_to = route.reply.as_ref().map(|reply| reply.message_id.clone());
-            args.reply_to_machine_id = route.reply.map(|reply| reply.machine_id);
+            args.reply_to = route
+                .reply
+                .map(|reply| wire::ReplyTo::Reference(api::wire_message_ref(reply)));
             (route.recipient, sender, replay)
         };
         let allow_reply_hint = matches!(caller, Caller::Agent { .. }) && args.reply_to.is_none();
         if recipient.machine_id != self.machine_id {
             let target = &recipient.machine_id;
             let routed =
-                tokio::time::timeout_at(due.instant, self.ensure_machine_route(target)).await;
+                tokio::time::timeout_at(due.instant, self.ensure_machine_route(target, caller))
+                    .await;
             match routed {
                 Ok(Ok(())) => {}
                 _ if replay => return Err(send_unconfirmed()),
@@ -381,44 +407,41 @@ impl Daemon {
                     "the send was cancelled before it was forwarded",
                 ));
             }
-            args.to = recipient.agent_id.clone();
-            args.time_left_ms = None;
-            let request_id = args.request_id.clone();
-            let call = ForwardCall {
-                call: CallParams {
-                    op: v3::AgentSend::NAME.into(),
-                    args: value_of(args),
-                },
-                by_model: matches!(caller, Caller::Agent { .. }),
-                from_name: sender.from_name,
-                recipient: Some(recipient.clone()),
-            };
+            let retry = args.request_id.is_some();
+            let call = api::call::<wire::AgentSend>(wire::SendArgs {
+                to: wire::AgentTarget::Reference(api::wire_ref(&recipient)),
+                time_left_ms: None,
+                ..args
+            });
             let delivering = async {
                 let mut response = self
                     .forward_call(
                         target,
-                        caller.clone(),
+                        caller,
                         call.clone(),
+                        sender.from_name.clone(),
+                        None,
                         Some(
                             send_time_left(due.instant)
                                 .map_err(|error| if replay { send_unconfirmed() } else { error })?,
                         ),
-                        request_id.clone(),
                     )
                     .await;
-                if request_id.is_some()
+                if retry
                     && response.as_ref().is_err_and(|error| {
                         error.data.unavailable.as_ref().is_some_and(|unavailable| {
                             unavailable.execution == ExecutionOutcome::OutcomeUnknown
                         })
                     })
-                    && let Ok(Ok(())) =
-                        tokio::time::timeout_at(due.instant, self.network.ensure_route(target))
-                            .await
+                    && let Ok(Ok(())) = tokio::time::timeout_at(
+                        due.instant,
+                        self.ensure_machine_route(target, caller),
+                    )
+                    .await
                     && let Ok(left) = send_time_left(due.instant)
                 {
                     let retried = self
-                        .forward_call(target, caller.clone(), call, Some(left), request_id)
+                        .forward_call(target, caller, call, sender.from_name, None, Some(left))
                         .await;
                     if retried.is_ok()
                         || retried
@@ -440,7 +463,7 @@ impl Daemon {
                     }
                 })
             };
-            let mut result: v3::SendResult = tokio::select! {
+            let mut result: wire::SendResult = tokio::select! {
                 biased;
                 result = delivering => decode_arguments(result?)?,
                 () = cancel.requested() => return Err(send_unconfirmed()),
@@ -450,16 +473,26 @@ impl Daemon {
                     && result.withdrawn
                     && result.message.delivery.reason == Some(DeliveryFailure::Timeout)
             });
-            result.expected_reply_to = self.checked_reply_hint(caller, &recipient, candidate);
+            result.expected_reply_to = self
+                .checked_reply_hint(caller, &recipient, candidate.map(api::message_ref))
+                .map(api::wire_message_ref);
             if let Some(label) = &mut result.recipient {
-                self.project_agent_label(&recipient, label)?;
+                if label.reference != api::wire_ref(&recipient) {
+                    return Err(ErrorBody::refused("the machine reported a different agent"));
+                }
+                label.address = self.agent_address(&recipient)?;
+                label.kind = if label.state == wire::AgentState::Online {
+                    wire::AgentKind::Guest
+                } else {
+                    wire::AgentKind::Managed
+                };
             }
             let message = MessageRef {
                 machine_id: recipient.machine_id,
                 message_id: result.message.message_id.clone(),
             };
             result.id = self.message_address(&message)?;
-            return Ok(value_of(result));
+            return Ok(result);
         }
         let origin = SendOrigin {
             machine: caller.machine_id(),
@@ -478,19 +511,22 @@ impl Daemon {
             machine_id: self.machine_id.clone(),
             message_id: sent.message.message_id.clone(),
         };
-        Ok(value_of(v3::SendResult {
+        Ok(wire::SendResult {
             id: self.message_address(&reference)?,
             message: self.public_message(sent.message)?,
-            recipient: label,
+            recipient: label.map(api::wire_label),
             repeated: sent.repeated,
             withdrawn: sent.withdrawn,
-            expected_reply_to,
-        }))
+            expected_reply_to: expected_reply_to.map(api::wire_message_ref),
+        })
     }
 
     pub(crate) fn message_address(&self, message: &MessageRef) -> Result<String, ErrorBody> {
         let machine = self.machine_address_part(&message.machine_id)?;
-        Ok(addresses::format_message_address(message, &machine))
+        Ok(addresses::format_message_address(
+            &message.message_id,
+            &machine,
+        ))
     }
 
     fn check_message_sender(&self, caller: &Caller) -> Result<(), ErrorBody> {
@@ -511,10 +547,17 @@ impl Daemon {
     fn original_reply(
         &self,
         caller: &Caller,
-        input: Option<&str>,
+        reply: Option<&wire::ReplyTo>,
     ) -> Result<Option<(MessageRef, AgentRef)>, ErrorBody> {
-        let Some(input) = input else {
+        let Some(reply) = reply else {
             return Ok(None);
+        };
+        let (input, exact_machine) = match reply {
+            wire::ReplyTo::Address(address) => (address.as_str(), None),
+            wire::ReplyTo::Reference(reference) => (
+                reference.message_id.as_str(),
+                Some(reference.machine_id.as_str()),
+            ),
         };
         let Caller::Agent { agent, .. } = caller else {
             return Err(ErrorBody::invalid_argument(
@@ -523,11 +566,20 @@ impl Daemon {
         };
         let parsed = addresses::parse_message_address(input)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
-        let machine_id = parsed
-            .machine
-            .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
-            .transpose()?
-            .unwrap_or_else(|| self.machine_id.clone());
+        let machine_id = if let Some(machine) = exact_machine {
+            if parsed.machine.is_some() || !crate::network::is_uuid_v4(machine) {
+                return Err(ErrorBody::invalid_argument(
+                    "reply_to requires a full machine ID",
+                ));
+            }
+            machine.to_owned()
+        } else {
+            parsed
+                .machine
+                .map(|selector| self.select_machine(selector).map(|row| row.machine_id))
+                .transpose()?
+                .unwrap_or_else(|| self.machine_id.clone())
+        };
         let reference = MessageRef {
             machine_id,
             message_id: parsed.message_id.into(),
@@ -565,9 +617,8 @@ impl Daemon {
         candidate: Option<MessageRef>,
     ) -> Option<MessageRef> {
         let candidate = candidate.filter(|reference| reference.machine_id == self.machine_id)?;
-        let (reference, original_sender) = self
-            .original_reply(caller, Some(&candidate.message_id))
-            .ok()??;
+        let reply = wire::ReplyTo::Address(candidate.message_id.clone());
+        let (reference, original_sender) = self.original_reply(caller, Some(&reply)).ok()??;
         (reference == candidate && &original_sender == recipient).then_some(candidate)
     }
 
@@ -575,11 +626,11 @@ impl Daemon {
         self: &Arc<Self>,
         caller: &Caller,
         recipient: &AgentRef,
-        args: v3::AgentSendArgs,
+        args: wire::SendArgs,
         origin: SendOrigin<'_>,
         due: Due,
         mut cancel: Cancel,
-    ) -> Result<(SendOutcome, Option<MessageRef>, Option<v3::AgentLabel>), SendFailure> {
+    ) -> Result<(SendOutcome, Option<MessageRef>, Option<AgentLabel>), SendFailure> {
         let inbox = origin.sender.from.clone();
         let machine = origin.machine;
         if let Some(request_id) = args.request_id.as_deref() {
@@ -607,13 +658,13 @@ impl Daemon {
                 allow_unsupported_receipt: args.allow_unsupported_receipt,
             },
         )?;
-        facade_base::daemon::check_message_text(&args.text).map_err(ErrorBody::invalid_argument)?;
-        let reply = match (args.reply_to, args.reply_to_machine_id) {
-            (Some(message_id), Some(machine_id)) if machine_id == machine => Some(MessageRef {
-                machine_id,
-                message_id,
-            }),
-            (None, None) => None,
+        facade_base::model::message::check_message_text(&args.text)
+            .map_err(ErrorBody::invalid_argument)?;
+        let reply = match args.reply_to {
+            Some(wire::ReplyTo::Reference(reference)) if reference.machine_id == machine => {
+                Some(api::message_ref(reference))
+            }
+            None => None,
             _ => {
                 return Err(ErrorBody::invalid_argument(
                     "a forwarded reply needs the checked message reference",
@@ -904,16 +955,16 @@ impl Daemon {
     pub(crate) async fn accept_start_result(
         self: &Arc<Self>,
         caller: &Caller,
-        forwarded: v3::AgentDeliverStartResultArgs,
+        forwarded: wire::InternalDeliverStartResultArgs,
         remaining: Option<Duration>,
     ) -> Result<(), ErrorBody> {
-        let mut args = facade_base::machine::AgentDeliverStartResultArgs {
-            recipient: forwarded.recipient,
+        let mut args = facade_base::model::message::AgentDeliverStartResultArgs {
+            recipient: api::agent_ref(forwarded.recipient),
             message: crate::service::stored_message(forwarded.message),
         };
         if !matches!(caller, Caller::Terminal { .. })
             || args.recipient.machine_id != self.machine_id
-            || args.message.from != facade_base::daemon::FACADE
+            || args.message.from != facade_base::model::message::FACADE
             || args
                 .message
                 .result
@@ -1040,23 +1091,22 @@ pub(crate) async fn deliver_results(
                     let caller = Caller::Terminal {
                         machine_id: daemon.machine_id.clone(),
                     };
+                    let message = match daemon.public_message(args.message) {
+                        Ok(message) => message,
+                        Err(error) => {
+                            log("warn", &error.message);
+                            return;
+                        }
+                    };
                     if let Err(error) = daemon
-                        .network_call(
+                        .network_call::<wire::InternalDeliverStartResult>(
                             &target,
-                            caller,
-                            AgentDeliverStartResult::NAME,
-                            value_of(v3::AgentDeliverStartResultArgs {
-                                recipient: args.recipient,
-                                message: match daemon.public_message(args.message) {
-                                    Ok(message) => message,
-                                    Err(error) => {
-                                        log("warn", &error.message);
-                                        return;
-                                    }
-                                },
-                            }),
+                            &caller,
+                            wire::InternalDeliverStartResultArgs {
+                                recipient: api::wire_ref(&args.recipient),
+                                message,
+                            },
                             Some(left),
-                            None,
                         )
                         .await
                     {
@@ -1085,7 +1135,7 @@ fn send_unconfirmed() -> ErrorBody {
         Reason::Unavailable,
         "the original send's delivery outcome is unknown",
     );
-    error.data.unavailable = Some(facade_base::machine::Unavailable {
+    error.data.unavailable = Some(facade_base::model::machine::Unavailable {
         execution: ExecutionOutcome::OutcomeUnknown,
         machine: None,
         window: None,
@@ -1104,7 +1154,7 @@ fn send_before_deadline() -> ErrorBody {
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES};
+    use facade_base::model::message::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES};
 
     #[test]
     fn accepts_a_message_at_both_public_limits() {
@@ -1118,7 +1168,7 @@ mod tests {
         assert_eq!(
             (
                 text.chars().count(),
-                facade_base::daemon::check_message_text(&text)
+                facade_base::model::message::check_message_text(&text)
             ),
             (MAX_MESSAGE_CHARS, Ok(()))
         );

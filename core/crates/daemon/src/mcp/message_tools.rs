@@ -4,12 +4,16 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use facade_base::daemon::{DeliveredVia, DeliveryFailure, DeliveryStatus, check_message_text};
-use facade_base::daemon_client::{Cut, DaemonClient, cancel_line, upgrading};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{ExecutionOutcome, Unavailable};
-use facade_base::operations::Operation;
-use facade_base::v3::{self, AgentKind};
+use facade_base::api_v1::daemon::{
+    AgentKind, AgentSend, AgentTarget, ReplyTo, SendArgs, SendResult, cancel_line,
+};
+use facade_base::api_v1::daemon_client::{Cut, DaemonClient, upgrading};
+use facade_base::api_v1::{self, Operation};
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::machine::{ExecutionOutcome, Unavailable};
+use facade_base::model::message::{
+    DeliveredVia, DeliveryFailure, DeliveryStatus, check_message_text,
+};
 use serde_json::{Map, Value, json};
 
 use super::daemon_calls::{self, CONNECT_TIMEOUT, failed};
@@ -56,7 +60,7 @@ pub(super) fn send_verified(
     arguments: &Map<String, Value>,
     call: &ToolCall,
 ) -> Option<Value> {
-    send_over::<v3::AgentSend>(
+    send_over::<AgentSend>(
         relay,
         call,
         |timeout| {
@@ -65,11 +69,10 @@ pub(super) fn send_verified(
                 timeout,
             )
         },
-        |left| v3::AgentSendArgs {
-            to: text(arguments, "to"),
+        |left| SendArgs {
+            to: AgentTarget::Selector(text(arguments, "to")),
             text: text(arguments, "text"),
-            reply_to: optional(arguments, "reply_to"),
-            reply_to_machine_id: None,
+            reply_to: optional(arguments, "reply_to").map(ReplyTo::Address),
             request_id: Some(call.request_id.clone()),
             time_left_ms: left.map(|left| left.as_millis() as u64),
             allow_unsupported_receipt: false,
@@ -163,8 +166,8 @@ fn send_unconfirmed() -> Value {
 }
 
 fn was_cancelled(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<ErrorBody>()
-        .is_some_and(|error| error.data.reason == Reason::Cancelled)
+    err.downcast_ref::<api_v1::ErrorBody>()
+        .is_some_and(|error| error.data.reason == "cancelled")
 }
 
 /// Sends a message again by its request ID and cancels it at once on the same connection: the
@@ -176,7 +179,7 @@ fn withdraw<O: Operation>(client: &mut DaemonClient, args: O::Args) -> anyhow::R
     client.result::<O>(id)
 }
 
-fn delivered_verified(sent: v3::SendResult, sender: AgentKind) -> Value {
+fn delivered_verified(sent: SendResult, sender: AgentKind) -> Value {
     let delivery = &sent.message.delivery;
     let how = match delivery_word(delivery.status, delivery.delivered_via) {
         Some(how) => how,
@@ -201,7 +204,7 @@ fn delivery_word(status: DeliveryStatus, via: Option<DeliveredVia>) -> Option<&'
     }
 }
 
-fn delivery_failed(sent: &v3::SendResult) -> Value {
+fn delivery_failed(sent: &SendResult) -> Value {
     let delivery = &sent.message.delivery;
     let to = &sent.message.to;
     let mut words = delivery.failure_words(to);

@@ -1,4 +1,4 @@
-//! Where the daemon of the relay's Facade home listens, by the rule in `core/protocol/PROTOCOL.md`,
+//! Where the daemon of the relay's Facade home listens, by the rule in `core/protocol/DAEMON.md`,
 //! "Connect to the daemon". `facade-base` follows the same rule; the scenario tests that go
 //! through the relay keep the two the same.
 

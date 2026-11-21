@@ -232,6 +232,34 @@ impl TestTerminal {
         }
     }
 
+    /// Changes the actual terminal capacity and the screen that reads its output.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.rows = usize::from(rows);
+        let mut screen = self.screen.lock().unwrap();
+        screen.resize(cols, rows);
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let size = nix::pty::Winsize {
+                ws_row: rows,
+                ws_col: cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            nix::ioctl_write_ptr_bad!(resize_terminal, libc::TIOCSWINSZ, nix::pty::Winsize);
+            // SAFETY: the master descriptor stays open while the terminal owns it.
+            unsafe { resize_terminal(self.writer.lock().unwrap().as_raw_fd(), &size) }
+                .expect("could not resize the test terminal");
+        }
+        #[cfg(windows)]
+        self._console.resize(cols, rows);
+    }
+
+    /// Visible cells before wrapped rows are joined into logical lines.
+    pub fn view(&self) -> facade_screen::ScreenView {
+        self.screen.lock().unwrap().view()
+    }
+
     /// Returns visible text with one line per screen row.
     pub fn text(&self) -> String {
         self.screen.lock().unwrap().text(self.rows).join("\n")
@@ -381,11 +409,12 @@ mod windows {
 
     type Create = unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> i32;
     type Close = unsafe extern "system" fn(HPCON);
+    type Resize = unsafe extern "system" fn(HPCON, COORD) -> i32;
 
-    /// The package's `CreatePseudoConsole` and `ClosePseudoConsole`, from the `conpty` folder the
-    /// build puts beside its programs; the package starts its `OpenConsole.exe` from there.
-    fn package() -> (Create, Close) {
-        static FUNCTIONS: std::sync::OnceLock<(Create, Close)> = std::sync::OnceLock::new();
+    /// The console functions from the `conpty` folder the build puts beside its programs.
+    /// The package starts its `OpenConsole.exe` from there.
+    fn package() -> (Create, Close, Resize) {
+        static FUNCTIONS: std::sync::OnceLock<(Create, Close, Resize)> = std::sync::OnceLock::new();
         *FUNCTIONS.get_or_init(|| {
             let dll = crate::test_binaries()
                 .facade
@@ -402,15 +431,18 @@ mod windows {
                 dll.display(),
                 io::Error::last_os_error()
             );
-            // SAFETY: both names are the package's exports, of these signatures.
+            // SAFETY: all names are the package's exports, of these signatures.
             unsafe {
                 let create = GetProcAddress(module, c"CreatePseudoConsole".as_ptr().cast())
                     .expect("the package's CreatePseudoConsole");
                 let close = GetProcAddress(module, c"ClosePseudoConsole".as_ptr().cast())
                     .expect("the package's ClosePseudoConsole");
+                let resize = GetProcAddress(module, c"ResizePseudoConsole".as_ptr().cast())
+                    .expect("the package's ResizePseudoConsole");
                 (
                     std::mem::transmute::<unsafe extern "system" fn() -> isize, Create>(create),
                     std::mem::transmute::<unsafe extern "system" fn() -> isize, Close>(close),
+                    std::mem::transmute::<unsafe extern "system" fn() -> isize, Resize>(resize),
                 )
             }
         })
@@ -418,6 +450,21 @@ mod windows {
 
     /// A pseudo console, closed when dropped.
     pub struct Console(HPCON);
+
+    impl Console {
+        pub fn resize(&self, cols: u16, rows: u16) {
+            let size = COORD {
+                X: cols.try_into().unwrap(),
+                Y: rows.try_into().unwrap(),
+            };
+            // SAFETY: the handle stays open while `self` lives.
+            let result = unsafe { (package().2)(self.0, size) };
+            assert!(
+                result >= 0,
+                "ResizePseudoConsole failed with HRESULT {result:#x}"
+            );
+        }
+    }
 
     // SAFETY: an HPCON may be closed from any thread.
     unsafe impl Send for Console {}

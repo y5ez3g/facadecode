@@ -2,11 +2,10 @@
 
 use std::collections::HashMap;
 
-use facade_base::machine::MachineIdentity;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::Store;
-use crate::SavedConnection;
+use crate::{SavedConnection, SavedSsh};
 
 pub(super) fn add_tables(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
@@ -46,7 +45,7 @@ pub(super) fn migrate_routes(connection: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-fn read_saved_ssh(row: &Row<'_>) -> rusqlite::Result<crate::network::SavedSsh> {
+fn read_saved_ssh(row: &Row<'_>) -> rusqlite::Result<SavedSsh> {
     let config = read_connection(row)?;
     let args: Option<String> = row.get(3)?;
     let argv = match args {
@@ -59,11 +58,11 @@ fn read_saved_ssh(row: &Row<'_>) -> rusqlite::Result<crate::network::SavedSsh> {
         })?,
         None => vec![config.ssh_destination.clone()],
     };
-    Ok(crate::network::SavedSsh { config, argv })
+    Ok(SavedSsh { config, argv })
 }
 
 impl Store {
-    pub(crate) fn saved_ssh(&self) -> anyhow::Result<Vec<crate::network::SavedSsh>> {
+    pub(crate) fn saved_ssh(&self) -> anyhow::Result<Vec<SavedSsh>> {
         self.with(
             || "read saved SSH connections".into(),
             |connection| {
@@ -80,17 +79,44 @@ impl Store {
 
     pub(crate) fn save_verified_ssh(
         &self,
-        saved: &crate::network::SavedSsh,
-    ) -> anyhow::Result<crate::network::SavedSsh> {
+        saved: &SavedSsh,
+        name: &str,
+        expected_machine_id: Option<&str>,
+    ) -> anyhow::Result<(SavedSsh, bool)> {
         let args = serde_json::to_string(&saved.argv)?;
         let config = &saved.config;
-        self.transaction(|| format!("save the SSH connection to {}",config.machine_id), |connection| {
-            connection.execute("INSERT INTO saved_connections (machine_id, ssh_destination, remote_home, ssh_args)
-                VALUES (?1, ?2, ?3, ?4) ON CONFLICT(machine_id) DO NOTHING",
-                params![config.machine_id,config.ssh_destination,config.remote_home,args])?;
-            connection.query_row("SELECT machine_id,ssh_destination,remote_home,ssh_args
-                FROM saved_connections WHERE machine_id = ?1", [&config.machine_id], read_saved_ssh)
-        })
+        let replace = expected_machine_id == Some(config.machine_id.as_str());
+        self.transaction(
+            || format!("save the SSH connection to {}", config.machine_id),
+            |connection| {
+                connection.execute(
+                    "INSERT INTO saved_connections (machine_id, ssh_destination, remote_home, ssh_args)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(machine_id) DO UPDATE SET
+                         ssh_destination = excluded.ssh_destination,
+                         remote_home = excluded.remote_home,
+                         ssh_args = excluded.ssh_args
+                     WHERE ?5",
+                    params![
+                        config.machine_id,
+                        config.ssh_destination,
+                        config.remote_home,
+                        args,
+                        replace
+                    ],
+                )?;
+                let kept = connection.query_row(
+                    "SELECT machine_id, ssh_destination, remote_home, ssh_args
+                     FROM saved_connections WHERE machine_id = ?1",
+                    [&config.machine_id],
+                    read_saved_ssh,
+                )?;
+                let first = kept.config == *config
+                    && kept.argv == saved.argv
+                    && remember_machine(connection, &config.machine_id, name)?;
+                Ok((kept, first))
+            },
+        )
     }
 
     pub(crate) fn remember_route(&self, id: &str, route: &[String]) -> anyhow::Result<()> {
@@ -132,23 +158,6 @@ impl Store {
         })
     }
 
-    pub(crate) fn legacy_machines(&self) -> anyhow::Result<Vec<MachineIdentity>> {
-        self.with(
-            || "read the legacy workspace source machines".to_owned(),
-            |connection| {
-                connection
-                    .prepare("SELECT machine_id, name FROM legacy_machines ORDER BY machine_id")?
-                    .query_map([], |row| {
-                        Ok(MachineIdentity {
-                            machine_id: row.get(0)?,
-                            name: row.get(1)?,
-                        })
-                    })?
-                    .collect()
-            },
-        )
-    }
-
     pub(crate) fn rename_machine(&self, name: &str) -> anyhow::Result<()> {
         self.with(
             || "save this machine's name".to_string(),
@@ -159,59 +168,16 @@ impl Store {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) fn saved_connections(&self) -> anyhow::Result<Vec<SavedConnection>> {
-        self.with(
-            || "read the saved machine connections".to_string(),
-            |connection| {
-                connection
-                    .prepare(
-                        "SELECT machine_id, ssh_destination, remote_home FROM saved_connections
-                         ORDER BY machine_id",
-                    )?
-                    .query_map([], read_connection)?
-                    .collect()
-            },
-        )
-    }
-
-    /// Saves a connection after its handshake. An existing SSH destination is kept for this ID.
-    #[cfg(test)]
-    pub(crate) fn save_connection(
-        &self,
-        saved: &SavedConnection,
-    ) -> anyhow::Result<SavedConnection> {
+    pub(crate) fn delete_connection(&self, machine_id: &str) -> anyhow::Result<Option<SavedSsh>> {
         self.transaction(
-            || format!("save the connection to {}", saved.machine_id),
-            |transaction| {
-                transaction.execute(
-                    "INSERT INTO saved_connections (machine_id, ssh_destination, remote_home)
-                     VALUES (?1, ?2, ?3) ON CONFLICT(machine_id) DO NOTHING",
-                    params![saved.machine_id, saved.ssh_destination, saved.remote_home],
-                )?;
-                transaction.query_row(
-                    "SELECT machine_id, ssh_destination, remote_home FROM saved_connections
-                     WHERE machine_id = ?1",
-                    [&saved.machine_id],
-                    read_connection,
-                )
-            },
-        )
-    }
-
-    pub(crate) fn delete_connection(
-        &self,
-        machine_id: &str,
-    ) -> anyhow::Result<Option<SavedConnection>> {
-        self.with(
             || format!("delete the saved connection to {machine_id}"),
             |connection| {
                 connection
                     .query_row(
                         "DELETE FROM saved_connections WHERE machine_id = ?1
-                         RETURNING machine_id, ssh_destination, remote_home",
+                         RETURNING machine_id, ssh_destination, remote_home, ssh_args",
                         [machine_id],
-                        read_connection,
+                        read_saved_ssh,
                     )
                     .optional()
             },
@@ -222,20 +188,7 @@ impl Store {
     pub(crate) fn remember_machine(&self, machine_id: &str, name: &str) -> anyhow::Result<bool> {
         self.transaction(
             || format!("remember the name of machine {machine_id}"),
-            |transaction| {
-                let inserted = transaction.execute(
-                    "INSERT INTO known_machines (machine_id, name, last_seen) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(machine_id) DO NOTHING",
-                    params![machine_id, name, facade_base::time::iso_now()],
-                )?;
-                if inserted == 0 {
-                    transaction.execute(
-                        "UPDATE known_machines SET name = ?2, last_seen = ?3 WHERE machine_id = ?1",
-                        params![machine_id, name, facade_base::time::iso_now()],
-                    )?;
-                }
-                Ok(inserted == 1)
-            },
+            |transaction| remember_machine(transaction, machine_id, name),
         )
     }
 
@@ -252,13 +205,33 @@ impl Store {
     }
 }
 
+fn remember_machine(
+    connection: &Connection,
+    machine_id: &str,
+    name: &str,
+) -> rusqlite::Result<bool> {
+    let last_seen = facade_base::time::iso_now();
+    let inserted = connection.execute(
+        "INSERT INTO known_machines (machine_id, name, last_seen) VALUES (?1, ?2, ?3)
+         ON CONFLICT(machine_id) DO NOTHING",
+        params![machine_id, name, last_seen],
+    )?;
+    if inserted == 0 {
+        connection.execute(
+            "UPDATE known_machines SET name = ?2, last_seen = ?3 WHERE machine_id = ?1",
+            params![machine_id, name, last_seen],
+        )?;
+    }
+    Ok(inserted == 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_folder::TestFolder;
 
     #[test]
-    fn saved_connections_keep_the_first_destination_and_home_after_reopening() {
+    fn a_saved_connection_changes_only_with_the_expected_machine_id() {
         let core = TestFolder::new("saved-connections");
         let store = Store::open(&core, &[]).unwrap().store;
         let saved = [
@@ -274,26 +247,51 @@ mod tests {
             },
         ];
         for connection in &saved {
-            assert_eq!(store.save_connection(connection).unwrap(), *connection);
+            let ssh = SavedSsh {
+                config: connection.clone(),
+                argv: vec![connection.ssh_destination.clone()],
+            };
+            let (kept, first) = store
+                .save_verified_ssh(&ssh, &connection.ssh_destination, None)
+                .unwrap();
+            assert_eq!(kept.config, *connection);
+            assert_eq!(kept.argv, ssh.argv);
+            assert!(first);
         }
-        let replacement = SavedConnection {
-            ssh_destination: "another-desk".into(),
-            remote_home: Some("/tmp/other-facade".into()),
-            ..saved[0].clone()
+        let replacement = SavedSsh {
+            config: SavedConnection {
+                ssh_destination: "another-desk".into(),
+                remote_home: Some("/tmp/other-facade".into()),
+                ..saved[0].clone()
+            },
+            argv: vec!["-p".into(), "2222".into(), "another-desk".into()],
         };
-        assert_eq!(store.save_connection(&replacement).unwrap(), saved[0]);
+        let (kept, _) = store
+            .save_verified_ssh(&replacement, "new-desk", None)
+            .unwrap();
+        assert_eq!(kept.config, saved[0]);
+        let (_, first) = store
+            .save_verified_ssh(&replacement, "new-desk", Some(&saved[0].machine_id))
+            .unwrap();
+        assert!(!first);
 
         drop(store);
         let store = Store::open(&core, &[]).unwrap().store;
-        assert_eq!(store.saved_connections().unwrap(), saved);
-        for connection in &saved {
-            let id = &connection.machine_id;
-            assert_eq!(
-                store.delete_connection(id).unwrap().as_ref(),
-                Some(connection)
-            );
-            assert_eq!(store.delete_connection(id).unwrap(), None);
+        let restored = store.saved_ssh().unwrap();
+        assert_eq!(restored[0].config, replacement.config);
+        assert_eq!(restored[0].argv, replacement.argv);
+        assert_eq!(restored[1].config, saved[1]);
+        assert_eq!(
+            store.known_machine_names().unwrap()[&saved[0].machine_id],
+            "new-desk"
+        );
+        for connection in restored {
+            let id = &connection.config.machine_id;
+            let removed = store.delete_connection(id).unwrap().unwrap();
+            assert_eq!(removed.config, connection.config);
+            assert_eq!(removed.argv, connection.argv);
+            assert!(store.delete_connection(id).unwrap().is_none());
         }
-        assert!(store.saved_connections().unwrap().is_empty());
+        assert!(store.saved_ssh().unwrap().is_empty());
     }
 }

@@ -1,16 +1,20 @@
-Delete a saved SSH machine connection.
+Remove a saved SSH connection.
 
-Removes the saved connection and closes the direct SSH link if open.
-Running agents on that machine are not stopped.
+Removes the local saved connection and revokes local Facade SSH
+authorization for the other machine. Use '--bidirectional' to remove the
+saved return connection and revoke Facade SSH authorization there.
+Agents on both machines keep running.
 
-Usage: facade machine remove <MACHINE>
+Usage: facade machine remove [--bidirectional] <MACHINE>
 
 Examples
   facade machine remove devbox
   facade machine remove 9a0d44b2
+  facade machine remove --bidirectional devbox
 
 Arguments
   <MACHINE>  Machine name or ID (from 'facade machine list')
 
 Options
-  -h, --help  Show help
+      --bidirectional  Clean up the connection on both machines
+  -h, --help           Show help

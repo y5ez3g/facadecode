@@ -1,8 +1,6 @@
 //! The Orchestrator's MCP instructions for a connection or a known managed run.
 
-use crate::protocol::daemon::{
-    AgentInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_NAME, WindowInfo, display_name,
-};
+use crate::model::terminal::display_name;
 
 const TOOLS: &str = "The Orchestrator's MCP tools start, list and stop agents, exchange messages, \
                      and read or operate managed agents' terminals. \
@@ -124,36 +122,6 @@ pub struct Place<'a> {
     pub window: Option<(&'a str, &'a str)>,
     pub location_id: &'a str,
     pub folder: &'a str,
-}
-
-/// The place of `agent`, with the name that `windows` give its sole member window.
-pub fn place_of<'a>(agent: &'a AgentInfo, windows: &'a [WindowInfo]) -> Place<'a> {
-    let window = match agent.windows.as_slice() {
-        [window] => Some((
-            window_name(&window.machine_id, &window.window_id, windows),
-            window.window_id.as_str(),
-        )),
-        _ => None,
-    };
-    Place {
-        folder: &agent.cwd,
-        location_id: &agent.location_id,
-        window,
-    }
-}
-
-/// The name of window `id` on `machine_id`, or its own ID if it is unlisted.
-fn window_name<'a>(machine_id: &str, id: &'a str, windows: &'a [WindowInfo]) -> &'a str {
-    if id == TERMINAL_WINDOW {
-        return TERMINAL_WINDOW_NAME;
-    }
-    match windows
-        .iter()
-        .find(|listed| listed.machine_id == machine_id && listed.window_id == id)
-    {
-        Some(listed) => &listed.name,
-        None => id,
-    }
 }
 
 /// The facts of an agent's run that its instructions give: its place, its creator, and its YOLO,

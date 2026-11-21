@@ -1,5 +1,6 @@
 //! Terminal attachment and restoration on detach, exit, or termination signals.
 
+use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
 
 /// The copyable address Facade gives the agent with this ID, such as `a1@host`.
@@ -443,6 +444,175 @@ fn attach_forwards_input_and_ctrl_bracket_detaches() {
         "the agent keeps running after a detach"
     );
     assert!(home.agent_from_watch("w1").expect("w1 is recorded")["process"] == "running");
+}
+
+#[test]
+fn attach_views_share_the_smallest_grid_and_resize_only_owned_watches() {
+    let home = TestHome::new("attach-grid");
+    let agent = home.start_fake_with("Viewer", &[("FAKECLI_WRAP_TRANSCRIPT", "1")]);
+    let address = agent.address.as_str();
+    let wait_for_grid = |cols, rows| {
+        assert!(
+            wait_until(LOADED_TIMEOUT, || {
+                let agent = home.inspect_agent(address)["agent"].clone();
+                agent["size"] == json!({ "cols": cols, "rows": rows })
+            }),
+            "the terminal did not become {cols}×{rows}: {}",
+            home.inspect_agent(address)
+        );
+    };
+    let mut editor = DaemonTestClient::open(&home);
+    let hello = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    let reference = home.inspect_agent(address)["agent"]["reference"].clone();
+    let opened = editor.request(
+        "watch",
+        json!({
+            "topic": "attach", "args": { "target": reference, "size": { "cols": 120, "rows": 40 } }
+        }),
+    );
+    let watch = opened["result"]["watch"].as_u64().expect("an Attach watch");
+    assert_eq!(
+        opened["result"]["snapshot"]["reference"], reference,
+        "{opened}"
+    );
+    assert_eq!(
+        opened["result"]["snapshot"]["size"],
+        json!({ "cols": 120, "rows": 40 }),
+        "{opened}"
+    );
+    wait_for_grid(120, 40);
+
+    let mut small = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", address]),
+        80,
+        24,
+    );
+    let mut large = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", address]),
+        150,
+        45,
+    );
+    for viewer in [&small, &large] {
+        assert!(
+            viewer.wait_for(LOADED_TIMEOUT, |text| text.contains("❯")),
+            "{}",
+            viewer.text()
+        );
+    }
+    wait_for_grid(80, 24);
+    let redraws = || {
+        editor
+            .changes(watch)
+            .into_iter()
+            .filter(|event| event["change"]["kind"] == "redraw")
+            .collect::<Vec<Value>>()
+    };
+    assert!(wait_until(LOADED_TIMEOUT, || redraws().iter().any(
+        |event| { event["change"]["size"] == json!({ "cols": 80, "rows": 24 }) }
+    )));
+
+    let before = large.output_len();
+    small.send(b"live echo\r");
+    assert!(
+        large.wait_for_bytes(before, b"live echo", LOADED_TIMEOUT),
+        "{}",
+        large.text()
+    );
+    assert!(
+        small.wait_for(LOADED_TIMEOUT, |text| text.contains("> live echo")),
+        "{}",
+        small.text()
+    );
+
+    // The test CLI prints a two-cell prefix before an entered line. The suffix belongs on the
+    // next row of both terminals, including the wide one, whose outer right margin stays blank.
+    let long_line = format!("{}Z\r", "v".repeat(80));
+    small.send(long_line.as_bytes());
+    let wraps_at_80 = |viewer: &TestTerminal| {
+        let view = viewer.view();
+        view.rows.windows(2).any(|rows| {
+            rows[0][0].text == ">"
+                && rows[0][2..80].iter().all(|cell| cell.text == "v")
+                && rows[0][80..].iter().all(|cell| cell.text == " ")
+                && rows[1][0].text == "v"
+                && rows[1][1].text == "v"
+                && rows[1][2].text == "Z"
+        })
+    };
+    for viewer in [&small, &large] {
+        assert!(
+            wait_until(LOADED_TIMEOUT, || wraps_at_80(viewer)),
+            "{}",
+            viewer.text()
+        );
+    }
+
+    let shared_redraws = redraws().len();
+    let before = large.output_len();
+    large.resize(155, 46);
+    assert!(large.wait_for_bytes(before, b"Facade test CLI", LOADED_TIMEOUT));
+    assert!(
+        wait_until(LOADED_TIMEOUT, || wraps_at_80(&large)),
+        "{}",
+        large.text()
+    );
+    wait_for_grid(80, 24);
+    assert_eq!(
+        redraws().len(),
+        shared_redraws,
+        "growing the largest viewer redrew the shared grid"
+    );
+
+    small.send(b"\x1d");
+    assert!(
+        small
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert_detach_receipt(&small, "Viewer", address);
+    wait_for_grid(120, 40);
+
+    let mut other = connect(&home);
+    let unowned = other.call(
+        "attach.resize",
+        json!({ "watch": watch, "size": { "cols": 10, "rows": 10 } }),
+    );
+    assert_eq!(error_reason(&unowned), "not_found", "{unowned}");
+    wait_for_grid(120, 40);
+    let opened = other.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": reference, "size": { "cols": 120, "rows": 40 } } }),
+    );
+    let other_watch = opened["result"]["watch"]
+        .as_u64()
+        .expect("a second Attach watch");
+    assert_eq!(
+        opened["result"]["snapshot"]["reference"], reference,
+        "{opened}"
+    );
+    other.write(&json!({
+        "jsonrpc": "2.0", "method": "call", "params": {
+            "op": "attach.resize",
+            "args": { "watch": other_watch, "size": { "cols": 95, "rows": 30 } },
+        },
+    }));
+    wait_for_grid(95, 30);
+    drop(other);
+    wait_for_grid(120, 40);
+
+    let closed = editor.request("unwatch", json!({ "watch": watch }));
+    assert!(closed["result"].is_object(), "{closed}");
+    wait_for_grid(155, 46);
+    large.send(b"\x1d");
+    assert!(
+        large
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert!(alive(&agent.process));
 }
 
 /// Input preceding Ctrl-] in the same read must reach the agent.

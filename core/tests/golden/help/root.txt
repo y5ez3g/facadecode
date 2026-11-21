@@ -17,9 +17,9 @@ Examples
 
 Agents
   start     Start an agent
+  stop      Stop running agents
   list      List active agents
   resume    List or resume agents and sessions
-  stop      Stop an agent
   rename    Rename an agent
 
 Interact

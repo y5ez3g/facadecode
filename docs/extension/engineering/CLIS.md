@@ -720,7 +720,7 @@ installed CLI is the runtime evidence.
 
 **The VS Code entry point obtains CLI choices, start results, titles and saved sessions from the Orchestrator.**
 
-The [product's CLI table](../../facade-code.md#各个-cli-不一样的地方) summarizes CLI-specific behavior, including
+The [product's CLI table](../../PRODUCT.md#cli-differences) summarizes CLI-specific behavior, including
 custom-program capabilities. The [rules implementation and specification](../../core/islands/rules.md) describe
 adapter details. The editor uses RULES-6.6 for settings and LIFECYCLE-5.4 for Resume.
 

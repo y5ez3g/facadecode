@@ -31,19 +31,25 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentInfo, Delivery, DeliveryStatus, Message, SendOutcome, TextWritten};
-use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine::{AgentDeliverStartResultArgs, AgentRef, MessageRef};
+use facade_base::model::error::ErrorBody;
+use facade_base::{
+    model::agent::AgentRef,
+    model::message::{AgentDeliverStartResultArgs, MessageRef},
+};
+use facade_base::{
+    model::agent::ManagedAgent,
+    model::message::{Delivery, DeliveryStatus, Message, SendOutcome, TextWritten},
+};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::Instant;
 
 use crate::store::{Kept, KeptMessage, MessageTable, RequestId};
-use crate::{Cancel, HUMAN, blocking_in_place};
+use crate::{Cancel, HUMAN, REQUEST_HOUR, blocking_in_place};
 
 pub(crate) use handle::DeliveryHandle;
 pub(crate) use human::human_result;
 pub(crate) use inbox::InboxRead;
-pub(crate) use outcome::{Due, Outcome, delivery_limit};
+pub(crate) use outcome::{Due, Outcome};
 pub(crate) use restart::{Recipient, TakeUp, decide};
 
 /// How long messages are kept (RULES-5.3).
@@ -52,12 +58,6 @@ pub(crate) const KEPT_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// How long past a deadline the typist has to say how the delivery ended, and as long again where
 /// its paste had begun.
 pub(crate) const RESPONSE_GRACE: Duration = Duration::from_millis(250);
-
-/// The longest a message may take from its call reaching the daemon to its delivery.
-const DELIVERY_TIME: Duration = Duration::from_millis(29_500);
-
-/// How long a request ID finds the message it kept (MCP-1.1).
-const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
 
 /// How many changes a slow `messages` watcher may fall behind by before it misses some.
 const CHANGES_QUEUED: usize = 1024;
@@ -116,7 +116,7 @@ pub(crate) struct OwedResult {
     /// The number reserved on the creator's machine.
     pub(crate) reference: MessageRef,
     /// The started agent as it stands; the result describes it as it is when the prompt ends.
-    pub(crate) agent: Arc<dyn Fn() -> AgentInfo + Send + Sync>,
+    pub(crate) agent: Arc<dyn Fn() -> ManagedAgent + Send + Sync>,
 }
 
 /// A result ready for the daemon to deliver before its deadline.

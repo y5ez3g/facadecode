@@ -10,19 +10,22 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
-use facade_base::daemon::AgentInfo;
+use facade_base::address::selector::AgentKey;
+use facade_base::api_v1::daemon::{self as wire, Caller};
+use facade_base::model::agent::AgentKind;
+use facade_base::model::agent::AgentLabel;
+use facade_base::model::agent::AgentRef;
+use facade_base::model::agent::AgentState;
+use facade_base::model::agent::ManagedAgent;
+use facade_base::model::error::{ErrorBody, Reason};
 #[cfg(test)]
-use facade_base::daemon::display_name;
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{AgentRef, Caller};
+use facade_base::model::terminal::display_name;
+#[cfg(test)]
 use facade_base::process::ProcessState;
-use facade_base::v3::address::AgentKey;
-use facade_base::v3::{self, AgentListEntry, AgentListRow};
-use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-use crate::HUMAN;
 use crate::store::NumberTable;
+#[cfg(test)]
+use crate::{HUMAN, agent_number};
 
 /// The agents a client reaches.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,8 +48,8 @@ impl From<&Caller> for Reach {
                 root,
                 yolo: false,
             } => Self::Tree {
-                agent: agent.clone(),
-                root: root.clone(),
+                agent: crate::api::agent_ref(agent.clone()),
+                root: crate::api::agent_ref(root.clone()),
             },
         }
     }
@@ -54,7 +57,7 @@ impl From<&Caller> for Reach {
 
 impl Reach {
     /// Whether the client reaches the agent `info` describes.
-    pub(crate) fn reaches(&self, info: &AgentInfo) -> bool {
+    pub(crate) fn reaches(&self, info: &ManagedAgent) -> bool {
         self.reaches_root(&info.root, root_machine(info))
     }
 
@@ -158,14 +161,14 @@ impl Records {
 }
 
 /// The complete reference of an agent record's tree root.
-pub(crate) fn root_of(info: &AgentInfo) -> AgentRef {
+pub(crate) fn root_of(info: &ManagedAgent) -> AgentRef {
     AgentRef {
         machine_id: root_machine(info).to_string(),
         agent_id: info.root.clone(),
     }
 }
 
-fn root_machine(info: &AgentInfo) -> &str {
+fn root_machine(info: &ManagedAgent) -> &str {
     info.root_machine_id.as_deref().unwrap_or(&info.machine_id)
 }
 
@@ -189,24 +192,23 @@ pub(crate) enum OperationTarget {
 }
 
 /// A record with the running machine's rule information for internal lookups.
-#[derive(Serialize, Deserialize)]
 pub(crate) struct LookupCandidate {
-    pub(crate) info: v3::AgentInfo,
+    pub(crate) info: wire::AgentInfo,
     pub(crate) has_rule: bool,
 }
 
 impl LookupCandidate {
     pub(crate) fn matches(&self, key: AgentKey<'_>) -> bool {
         match key {
-            AgentKey::Number(number) => self.info.agent_id == number,
+            AgentKey::Number(number) => self.info.reference.agent_id == number,
             AgentKey::Name(name) => trimmed(&self.info.name) == trimmed(name),
         }
     }
 
-    pub(crate) fn label(&self) -> v3::AgentLabel {
+    pub(crate) fn label(&self) -> AgentLabel {
         let info = &self.info;
-        v3::AgentLabel {
-            reference: info.reference(),
+        AgentLabel {
+            reference: crate::api::agent_ref(info.reference.clone()),
             address: info.address.clone(),
             name: info.name.clone(),
             cli: info.cli.clone(),
@@ -221,10 +223,10 @@ impl OperationTarget {
         use OperationTarget::*;
 
         let info = &candidate.info;
-        if info.kind == v3::AgentKind::Guest {
+        if info.kind == AgentKind::Guest {
             return match self {
                 Inspect | Rename => None,
-                Send { .. } if info.state == v3::AgentState::Online => None,
+                Send { .. } if info.state == AgentState::Online => None,
                 Send { .. } => Some((Reason::Ended, "is offline and cannot receive messages")),
                 Type | Attach { .. } | ReadScreen => {
                     Some((Reason::Unsupported, "is a Guest without a terminal"))
@@ -240,7 +242,7 @@ impl OperationTarget {
 
         match self {
             Send { .. } | Type | Attach { allow_ended: false } | Stop
-                if info.process == ProcessState::Ended =>
+                if info.process == wire::ProcessState::Ended =>
             {
                 Some((Reason::Ended, "has ended"))
             }
@@ -252,7 +254,7 @@ impl OperationTarget {
                 Reason::Unsupported,
                 "is a custom program and cannot be resumed",
             )),
-            Resume if info.process == ProcessState::Ended && info.session.is_none() => {
+            Resume if info.process == wire::ProcessState::Ended && info.session.is_none() => {
                 Some((Reason::Unavailable, "has no recorded session to resume"))
             }
             _ => None,
@@ -289,8 +291,7 @@ pub(crate) fn lookup_matches<'a>(
     let mut refused = false;
     for candidate in matches {
         let info = &candidate.info;
-        let root_machine = info.root_machine_id.as_deref().unwrap_or(&info.machine_id);
-        if !reach.reaches_root(&info.root, root_machine) {
+        if !reach.reaches_root(&info.root.agent_id, &info.root.machine_id) {
             refused = true;
             continue;
         }
@@ -303,12 +304,12 @@ pub(crate) fn lookup_matches<'a>(
                     }
                 )
             {
-                unsupported.insert(info.reference(), candidate);
+                unsupported.insert(crate::api::agent_ref(info.reference.clone()), candidate);
             } else {
                 rejected.push((candidate, reason, message));
             }
         } else {
-            usable.insert(info.reference(), candidate);
+            usable.insert(crate::api::agent_ref(info.reference.clone()), candidate);
         }
     }
 
@@ -318,9 +319,9 @@ pub(crate) fn lookup_matches<'a>(
     if matches!(key, AgentKey::Name(_))
         && usable
             .values()
-            .any(|candidate| candidate.info.process == ProcessState::Running)
+            .any(|candidate| candidate.info.process == wire::ProcessState::Running)
     {
-        usable.retain(|_, candidate| candidate.info.process == ProcessState::Running);
+        usable.retain(|_, candidate| candidate.info.process == wire::ProcessState::Running);
     }
     let (AgentKey::Number(input) | AgentKey::Name(input)) = key;
     match usable.len() {
@@ -368,30 +369,28 @@ pub(crate) fn lookup_matches<'a>(
 }
 
 /// The shared Shell, MCP and Go to Agent row for a record with its canonical address filled in.
-pub(crate) fn list_row(info: &v3::AgentInfo) -> AgentListEntry {
-    AgentListEntry {
-        reference: info.reference(),
-        row: AgentListRow {
-            id: info.address.clone(),
-            name: info.name.clone(),
-            kind: info.kind,
-            state: info.state,
-            cli: info.cli.clone(),
-            title: info.title.clone(),
-            folder: info.cwd.clone(),
-            started_at: info.started_at.clone(),
-        },
+pub(crate) fn list_row(info: &wire::AgentInfo) -> wire::AgentListEntry {
+    wire::AgentListEntry {
+        reference: info.reference.clone(),
+        address: info.address.clone(),
+        name: info.name.clone(),
+        kind: info.kind,
+        state: info.state,
+        cli: info.cli.clone(),
+        title: info.title.clone(),
+        folder: info.cwd.clone(),
+        started_at: info.started_at.clone(),
     }
 }
 
 /// The reach of the agent `caller` describes, or the person's where there is none.
 #[cfg(test)]
-pub(crate) fn reach_of(caller: Option<&AgentInfo>) -> Reach {
+pub(crate) fn reach_of(caller: Option<&ManagedAgent>) -> Reach {
     match caller {
         None => Reach::All,
         Some(info) => Reach::from(&Caller::Agent {
-            agent: info.reference(),
-            root: root_of(info),
+            agent: crate::api::wire_ref(&info.reference()),
+            root: crate::api::wire_ref(&root_of(info)),
             yolo: info.yolo,
         }),
     }
@@ -405,13 +404,13 @@ pub(crate) fn reach_of(caller: Option<&AgentInfo>) -> Reach {
 /// ended agents have fails as ended.
 #[cfg(test)]
 pub(crate) fn resolve(
-    agents: &[AgentInfo],
+    agents: &[ManagedAgent],
     reference: &str,
     reach: &Reach,
     running_only: bool,
 ) -> Result<Named, ErrorBody> {
     let text = reference.trim();
-    let in_reach: Vec<&AgentInfo> = agents.iter().filter(|info| reach.reaches(info)).collect();
+    let in_reach: Vec<&ManagedAgent> = agents.iter().filter(|info| reach.reaches(info)).collect();
     if text.eq_ignore_ascii_case("#human") {
         return Ok(Named::Person);
     }
@@ -434,7 +433,7 @@ pub(crate) fn resolve(
         return Err(no_agent(reference, &in_reach));
     }
     let name = reference.strip_prefix('@').unwrap_or(reference);
-    let (live, ended): (Vec<&AgentInfo>, Vec<&AgentInfo>) = in_reach
+    let (live, ended): (Vec<&ManagedAgent>, Vec<&ManagedAgent>) = in_reach
         .iter()
         .copied()
         .filter(|info| info.name == name)
@@ -453,12 +452,6 @@ pub(crate) fn resolve(
     }
 }
 
-/// The number of agent ID `id`, such as 3 for `a3`, to sort by; the largest for anything else.
-pub(crate) fn agent_number(id: &str) -> u64 {
-    let digits = id.strip_prefix('a').unwrap_or("");
-    digits.parse().unwrap_or(u64::MAX)
-}
-
 /// An agent ID from the ways a person writes one: `a3`, `#a3` and `3` all give `a3`. Anything else
 /// loses only a leading `#`.
 #[cfg(test)]
@@ -473,8 +466,8 @@ pub(crate) fn normalize_agent_reference(reference: &str) -> String {
 /// `human` or `@human` (`text`) names the person while no agent in reach has that name; otherwise
 /// it is ambiguous.
 #[cfg(test)]
-fn person_unless_named(text: &str, in_reach: &[&AgentInfo]) -> Result<Named, ErrorBody> {
-    let named: Vec<&AgentInfo> = in_reach
+fn person_unless_named(text: &str, in_reach: &[&ManagedAgent]) -> Result<Named, ErrorBody> {
+    let named: Vec<&ManagedAgent> = in_reach
         .iter()
         .copied()
         .filter(|info| info.name.eq_ignore_ascii_case(HUMAN))
@@ -494,7 +487,7 @@ fn person_unless_named(text: &str, in_reach: &[&AgentInfo]) -> Result<Named, Err
 /// The failure of a reference that names no agent, listing the agents in reach so the caller can
 /// correct it.
 #[cfg(test)]
-fn no_agent(reference: &str, in_reach: &[&AgentInfo]) -> ErrorBody {
+fn no_agent(reference: &str, in_reach: &[&ManagedAgent]) -> ErrorBody {
     let mut listed: Vec<(u64, String)> = in_reach
         .iter()
         .map(|info| {
@@ -516,7 +509,7 @@ fn no_agent(reference: &str, in_reach: &[&AgentInfo]) -> ErrorBody {
 
 /// The IDs of `agents` by number, joined as `a1, #a4` to follow a `#`.
 #[cfg(test)]
-fn ids(agents: &[&AgentInfo]) -> String {
+fn ids(agents: &[&ManagedAgent]) -> String {
     let mut ids: Vec<&str> = agents.iter().map(|info| info.agent_id.as_str()).collect();
     ids.sort_by_key(|id| agent_number(id));
     ids.join(", #")
@@ -584,7 +577,7 @@ const DEFAULT_NAMES: [&str; 140] = [
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{AgentState, ToolsState};
+    use facade_base::model::agent::{ManagedAgentState, ToolsState};
 
     use super::*;
 
@@ -592,8 +585,8 @@ mod tests {
     const OTHER_MACHINE: &str = "adc7bed6-e018-47ba-aa88-2040512d915b";
 
     /// Agent `id`, named `name`, started by `creator` in the tree of `root`, its run's YOLO `yolo`.
-    fn agent(id: &str, name: &str, creator: Option<&str>, root: &str, yolo: bool) -> AgentInfo {
-        AgentInfo {
+    fn agent(id: &str, name: &str, creator: Option<&str>, root: &str, yolo: bool) -> ManagedAgent {
+        ManagedAgent {
             address: None,
             label: None,
             unreachable: false,
@@ -617,7 +610,7 @@ mod tests {
             yolo,
             exit: None,
             session: None,
-            state: AgentState::Idle,
+            state: ManagedAgentState::Idle,
             state_detail: None,
             said: None,
             tools_state: ToolsState::NotInjected,
@@ -628,7 +621,7 @@ mod tests {
 
     /// Two trees: the person's Ada, her child Bea and grandchild Cy, all YOLO off; and the person's
     /// Dan, YOLO on, and his child Eve, YOLO off, named `human`.
-    fn agents() -> Vec<AgentInfo> {
+    fn agents() -> Vec<ManagedAgent> {
         vec![
             agent("a1", "Ada", None, "a1", false),
             agent("a2", "Bea", Some("a1"), "a1", false),
@@ -639,7 +632,7 @@ mod tests {
     }
 
     /// The reach of `caller` among `agents`.
-    fn reach(agents: &[AgentInfo], caller: Option<&str>) -> Reach {
+    fn reach(agents: &[ManagedAgent], caller: Option<&str>) -> Reach {
         let info = caller.map(|id| {
             agents
                 .iter()
@@ -650,7 +643,7 @@ mod tests {
     }
 
     /// The agent `reference` names, from Cy's or another reach.
-    fn agent_named(agents: &[AgentInfo], reference: &str, reach: &Reach) -> String {
+    fn agent_named(agents: &[ManagedAgent], reference: &str, reach: &Reach) -> String {
         match resolve(agents, reference, reach, false) {
             Ok(Named::Agent(id)) => id,
             other => panic!("{reference}: {other:?}"),
@@ -683,7 +676,7 @@ mod tests {
         assert_eq!(reached(None), ["a1", "a2", "a3", "a4", "a5"], "the person");
 
         let cy = reach(&agents, Some("a3"));
-        let unrelated = AgentInfo {
+        let unrelated = ManagedAgent {
             machine_id: OTHER_MACHINE.into(),
             ..agent("a1", "Fay", None, "a1", false)
         };
@@ -692,7 +685,7 @@ mod tests {
             "another machine's root with the same number names a different tree"
         );
 
-        let remote = AgentInfo {
+        let remote = ManagedAgent {
             machine_id: OTHER_MACHINE.into(),
             creator_machine_id: Some(LOCAL_MACHINE.into()),
             root_machine_id: Some(LOCAL_MACHINE.into()),
@@ -703,8 +696,8 @@ mod tests {
             "a child on another machine is in reach"
         );
         let caller = Caller::Agent {
-            agent: remote.reference(),
-            root: root_of(&remote),
+            agent: crate::api::wire_ref(&remote.reference()),
+            root: crate::api::wire_ref(&root_of(&remote)),
             yolo: remote.yolo,
         };
         assert!(

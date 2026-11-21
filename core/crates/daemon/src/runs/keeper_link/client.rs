@@ -2,17 +2,23 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::jsonrpc::{ErrorBody, Reason, Request, ServerMessage, encode_line};
-use facade_base::keeper::{
-    self, DaemonPing, KeeperAgentChange, KeeperHelloParams, KeeperHelloResult, methods,
+use anyhow::Context;
+use facade_base::api_v1::keeper::{
+    self, AgentChange, AgentStart, AgentStop, AgentSync, DaemonPing, HelloParams, HelloResult,
+    PingArgs, StartArgs, StartResult, StopArgs, SyncArgs, methods,
 };
-use facade_base::operations::{CallParams, NoArgs, Operation};
+use facade_base::api_v1::{
+    ApiVersions, CallParams, ErrorBody as WireError, Operation, Request, ResponseBody,
+    ServerMessage, encode_line, read_server_message,
+};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::paths::ClientSocket;
 use facade_base::process::ProcessIdentity;
 use facade_base::service::{self, Service};
@@ -26,11 +32,7 @@ use super::RunEvent;
 
 const RESPONSE_WAIT: Duration = Duration::from_secs(10);
 const OUTBOX_LIMIT: usize = 256;
-const PROTOCOL: [u32; 2] = [
-    keeper::MIN_KEEPER_PROTOCOL_VERSION,
-    keeper::KEEPER_PROTOCOL_VERSION,
-];
-type Response = Result<(Value, Option<PtyMaster>), CallError>;
+type Response = Result<Reply, CallError>;
 type Outgoing = (Vec<u8>, Option<PtyMaster>);
 
 pub(super) enum CallError {
@@ -42,11 +44,6 @@ pub(super) enum CallError {
 impl CallError {
     pub fn uncertain(&self) -> bool {
         matches!(self, Self::Unknown(_))
-    }
-    fn body(&self) -> &ErrorBody {
-        match self {
-            Self::Refused(e) | Self::Unsent(e) | Self::Unknown(e) => e,
-        }
     }
 }
 impl From<CallError> for ErrorBody {
@@ -66,7 +63,7 @@ pub(super) enum ConnectError {
 impl ConnectError {
     pub fn refusal(pid: u32) -> String {
         format!(
-            "keeper {pid} uses an incompatible Facade build; end that process and stop the running \
+            "keeper {pid} uses an incompatible Keeper API; end that process and stop the running \
                  Facade before switching builds"
         )
     }
@@ -81,30 +78,89 @@ impl fmt::Display for ConnectError {
 }
 impl std::error::Error for ConnectError {}
 
+enum ExpectedReply {
+    Hello(ApiVersions),
+    Start,
+    Stop,
+    SyncTakeBack,
+    SyncAdopt,
+    Ping,
+}
+
+enum Reply {
+    Hello(HelloResult),
+    Started(StartResult, PtyMaster),
+    Terminal(PtyMaster),
+    Empty,
+}
+
+impl ExpectedReply {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Hello(_) => methods::HELLO,
+            Self::Start => AgentStart::NAME,
+            Self::Stop => AgentStop::NAME,
+            Self::SyncTakeBack | Self::SyncAdopt => AgentSync::NAME,
+            Self::Ping => DaemonPing::NAME,
+        }
+    }
+
+    fn decode(&self, value: Value, terminal: Option<PtyMaster>) -> anyhow::Result<Reply> {
+        match (self, terminal) {
+            (Self::Hello(offered), None) => {
+                Ok(Reply::Hello(keeper::decode_hello_result(value, offered)?))
+            }
+            (Self::Start, Some(master)) => {
+                Ok(Reply::Started(serde_json::from_value(value)?, master))
+            }
+            (Self::SyncTakeBack, Some(master)) => Ok(Reply::Terminal(master)),
+            (Self::Stop | Self::SyncAdopt | Self::Ping, None) => Ok(Reply::Empty),
+            (_, Some(_)) => anyhow::bail!("the response carried an unexpected terminal"),
+            (_, None) => anyhow::bail!("the response did not carry the required terminal"),
+        }
+    }
+}
+
 struct Waiting {
+    expected: ExpectedReply,
     sender: oneshot::Sender<Response>,
-    expired: bool,
 }
 
 struct Transport {
+    socket: ClientSocket,
     calls: Mutex<HashMap<u64, Waiting>>,
     closed: watch::Sender<bool>,
     exits: Mutex<ExitDelivery>,
 }
 impl Transport {
-    fn disconnected(&self) {
-        self.closed.send_replace(true);
-        for (_, call) in self.calls.lock().unwrap().drain() {
-            let _ = call.sender.send(Err(CallError::Unknown(disconnected())));
+    fn disconnect(&self, failure: Option<&anyhow::Error>) {
+        let mut calls = self.calls.lock().unwrap();
+        if self.closed.send_replace(true) {
+            return;
         }
-    }
-}
-
-// Shutting down the original socket also wakes the reader and writer blocked on its clones.
-struct Socket(ClientSocket);
-impl Drop for Socket {
-    fn drop(&mut self) {
-        let _ = self.0.shutdown(std::net::Shutdown::Both);
+        let _ = self.socket.shutdown(std::net::Shutdown::Both);
+        for (number, waiting) in calls.drain() {
+            let error = failure.map_or_else(disconnected, |failure| {
+                let reason = if matches!(waiting.expected, ExpectedReply::Hello(_))
+                    && failure
+                        .downcast_ref::<WireError>()
+                        .is_some_and(|error| error.data.reason == "protocol_incompatible")
+                {
+                    Reason::IncompatibleProtocol
+                } else {
+                    Reason::Unavailable
+                };
+                ErrorBody::new(
+                    reason,
+                    format!(
+                        "keeper connection failed while awaiting {} request {number}: {failure:#}; \
+                         the outcome is unknown; check `facade list`",
+                        waiting.expected.name()
+                    ),
+                )
+            });
+            let _ = waiting.sender.send(Err(CallError::Unknown(error)));
+        }
     }
 }
 
@@ -129,12 +185,21 @@ impl ExitDelivery {
     }
 }
 
-pub(super) struct KeeperClient {
+struct Session {
     io: Arc<Transport>,
-    socket: Socket,
     outgoing: SyncSender<Outgoing>,
     sequence: AtomicU64,
-    pub hello: KeeperHelloResult,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.io.disconnect(None);
+    }
+}
+
+pub(super) struct KeeperClient {
+    session: Session,
+    pub hello: HelloResult,
     pub identity: ProcessIdentity,
 }
 
@@ -144,72 +209,114 @@ fn disconnected() -> ErrorBody {
         "the keeper disconnected before responding; the outcome is unknown; check `facade list`",
     )
 }
+
 fn connection_io(error: std::io::Error) -> ConnectError {
     ConnectError::Unreachable(format!("could not use the keeper connection: {error}"))
 }
-fn call_params<O: Operation>(args: &O::Args) -> CallParams {
-    CallParams {
-        op: O::NAME.into(),
-        args: serde_json::to_value(args).expect("protocol value must serialize"),
-    }
-}
-fn decode<O: Operation>(value: Value) -> Result<O::Result, ErrorBody> {
-    serde_json::from_value(value).map_err(|error| {
-        ErrorBody::new(
-            Reason::Internal,
-            format!("invalid keeper result for {}: {error}", O::NAME),
-        )
-    })
+
+fn refusal(error: WireError) -> ErrorBody {
+    let reason =
+        serde_json::from_value(Value::String(error.data.reason)).unwrap_or(Reason::Unknown);
+    let mut body = ErrorBody::new(reason, error.message);
+    body.code = error.code;
+    body
 }
 
-impl KeeperClient {
-    /// Calls an operation; its result comes with the terminal its response carried, if any.
-    pub async fn call<O: Operation>(
-        &self,
-        args: &O::Args,
-    ) -> Result<(O::Result, Option<PtyMaster>), CallError> {
-        let (value, terminal) = self
-            .request(methods::CALL, call_params::<O>(args), None)
-            .await?;
-        Ok((decode::<O>(value).map_err(CallError::Unknown)?, terminal))
+impl Session {
+    fn open(
+        socket: ClientSocket,
+        identity: &ProcessIdentity,
+        events: mpsc::UnboundedSender<RunEvent>,
+        wakeup: watch::Sender<u64>,
+    ) -> Result<Self, ConnectError> {
+        let writing = socket.try_clone().map_err(connection_io)?;
+        let writing = LineSender::new(writing, identity).map_err(connection_io)?;
+        let reading = LineReceiver::new(socket.try_clone().map_err(connection_io)?);
+        let io = Arc::new(Transport {
+            socket,
+            calls: Mutex::default(),
+            closed: watch::channel(false).0,
+            exits: Mutex::new(ExitDelivery {
+                ready: false,
+                pending: vec![],
+                events,
+            }),
+        });
+        let (outgoing, queued) = sync_channel::<Outgoing>(OUTBOX_LIMIT);
+        let session = Self {
+            io,
+            outgoing,
+            sequence: AtomicU64::new(1),
+        };
+        let writer_io = Arc::clone(&session.io);
+        std::thread::Builder::new()
+            .name("keeper-writer".into())
+            .spawn(move || {
+                for (line, carried) in queued {
+                    if let Err(error) = writing.send(&line, carried.as_ref()) {
+                        facade_base::log::write(
+                            "daemon",
+                            "warn",
+                            &format!("could not write to the keeper connection: {error}"),
+                        );
+                        writer_io.disconnect(None);
+                        return;
+                    }
+                    wakeup.send_modify(|n| *n += 1);
+                }
+            })
+            .map_err(connection_io)?;
+        let reader_io = Arc::clone(&session.io);
+        std::thread::Builder::new()
+            .name("keeper-reader".into())
+            .spawn(move || match read(reading, &reader_io) {
+                Ok(()) => {
+                    reader_io.disconnect(None);
+                    facade_base::log::write("daemon", "warn", "the keeper closed its connection");
+                }
+                Err(error) => {
+                    reader_io.disconnect(Some(&error));
+                    facade_base::log::write(
+                        "daemon",
+                        "warn",
+                        &format!("the keeper connection failed: {error:#}"),
+                    );
+                }
+            })
+            .map_err(connection_io)?;
+        Ok(session)
     }
 
-    /// Calls an operation whose request carries a copy of `master` as it is.
-    pub async fn send_master<O: Operation>(
+    async fn call<O: Operation>(
         &self,
+        expected: ExpectedReply,
         args: &O::Args,
-        master: &PtyMaster,
-    ) -> Result<O::Result, ErrorBody> {
-        let copy = master.try_clone().map_err(|error| {
-            ErrorBody::new(
-                Reason::Unavailable,
-                format!("could not copy the terminal for {}: {error}", O::NAME),
-            )
-        })?;
-        let (value, _) = self
-            .request(methods::CALL, call_params::<O>(args), Some(copy))
-            .await?;
-        decode::<O>(value)
+        terminal: Option<PtyMaster>,
+    ) -> Response {
+        let params = CallParams {
+            op: O::NAME.into(),
+            args: serde_json::to_value(args).expect("protocol value must serialize"),
+        };
+        self.request(expected, methods::CALL, params, terminal)
+            .await
     }
 
     async fn request(
         &self,
+        expected: ExpectedReply,
         method: &str,
         params: impl Serialize,
         terminal: Option<PtyMaster>,
     ) -> Response {
-        if *self.io.closed.borrow() {
-            return Err(CallError::Unsent(disconnected()));
-        }
         let number = self.sequence.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
-        self.io.calls.lock().unwrap().insert(
-            number,
-            Waiting {
-                sender,
-                expired: false,
-            },
-        );
+        {
+            let mut calls = self.io.calls.lock().unwrap();
+            if *self.io.closed.borrow() {
+                return Err(CallError::Unsent(disconnected()));
+            }
+            calls.insert(number, Waiting { expected, sender });
+        }
         let line = encode_line(&Request::new(Some(number), method, params));
         if let Err(error) = self.outgoing.try_send((line, terminal)) {
             self.io.calls.lock().unwrap().remove(&number);
@@ -225,29 +332,63 @@ impl KeeperClient {
         match tokio::time::timeout(RESPONSE_WAIT, receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(CallError::Unknown(disconnected())),
-            Err(_) => {
-                // A late response is still read, and the terminal it carries closed.
-                if let Some(call) = self.io.calls.lock().unwrap().get_mut(&number) {
-                    call.expired = true;
-                }
-                Err(CallError::Unknown(ErrorBody::new(
-                    Reason::Unavailable,
-                    "the keeper did not respond within 10 seconds; the outcome is unknown; check \
-                     `facade list`",
-                )))
-            }
+            // Keep the expectation until the reply arrives or the connection closes.
+            Err(_) => Err(CallError::Unknown(ErrorBody::new(
+                Reason::Unavailable,
+                "the keeper did not respond within 10 seconds; the outcome is unknown; check \
+                 `facade list`",
+            ))),
         }
+    }
+}
+
+impl KeeperClient {
+    pub async fn start(&self, args: &StartArgs) -> Result<(StartResult, PtyMaster), CallError> {
+        let reply = self
+            .session
+            .call::<AgentStart>(ExpectedReply::Start, args, None)
+            .await?;
+        let Reply::Started(process, terminal) = reply else {
+            unreachable!("start replies are decoded as Started");
+        };
+        Ok((process, terminal))
+    }
+
+    pub async fn stop(&self, args: &StopArgs) -> Result<(), ErrorBody> {
+        self.session
+            .call::<AgentStop>(ExpectedReply::Stop, args, None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn take_terminal(&self, args: &SyncArgs) -> Result<PtyMaster, ErrorBody> {
+        let reply = self
+            .session
+            .call::<AgentSync>(ExpectedReply::SyncTakeBack, args, None)
+            .await?;
+        let Reply::Terminal(master) = reply else {
+            unreachable!("sync take-back replies are decoded as Terminal");
+        };
+        Ok(master)
+    }
+
+    pub async fn give_terminal(&self, args: &SyncArgs, master: PtyMaster) -> Result<(), ErrorBody> {
+        self.session
+            .call::<AgentSync>(ExpectedReply::SyncAdopt, args, Some(master))
+            .await?;
+        Ok(())
     }
 
     pub fn fence(&self) {
-        let _ = self.socket.0.shutdown(std::net::Shutdown::Both);
-        self.io.disconnected();
+        self.session.io.disconnect(None);
     }
+
     pub fn closed(&self) -> watch::Receiver<bool> {
-        self.io.closed.subscribe()
+        self.session.io.closed.subscribe()
     }
+
     pub fn deliver_exits(&self) {
-        self.io.exits.lock().unwrap().ready();
+        self.session.io.exits.lock().unwrap().ready();
     }
 
     pub fn ping(self: &Arc<Self>) {
@@ -255,7 +396,10 @@ impl KeeperClient {
         tokio::spawn(async move {
             let mut closed = connection.closed();
             while !*closed.borrow() {
-                let _ = connection.call::<DaemonPing>(&NoArgs {}).await;
+                let _ = connection
+                    .session
+                    .call::<DaemonPing>(ExpectedReply::Ping, &PingArgs {}, None)
+                    .await;
                 let _ = tokio::time::timeout(Duration::from_secs(1), closed.changed()).await;
             }
         });
@@ -263,7 +407,7 @@ impl KeeperClient {
 
     pub async fn connect(
         core: &Path,
-        expected: Option<&ProcessIdentity>,
+        expected: &ProcessIdentity,
         events: mpsc::UnboundedSender<RunEvent>,
         wakeup: watch::Sender<u64>,
     ) -> Result<Arc<Self>, ConnectError> {
@@ -275,21 +419,18 @@ impl KeeperClient {
         let identity = service::authenticate_server(&socket, core, Service::Keeper)
             .map_err(ConnectError::NotTheKeeper)?;
         let pid = identity.pid;
-        let connection = Self::hello(socket, identity, events, wakeup).await?;
-        if keeper::shared_version(PROTOCOL, connection.hello.protocol_range).is_none() {
-            return Err(ConnectError::Incompatible { pid });
-        }
-        if expected.is_some_and(|wanted| wanted != &connection.identity) {
+        if expected != &identity {
             return Err(ConnectError::NotTheKeeper(format!(
                 "keeper {pid} is not the keeper this daemon was following"
             )));
         }
+        let connection = Self::hello(socket, identity, events, wakeup).await?;
         facade_base::log::write(
             "daemon",
             "info",
             &format!(
-                "connected to keeper {pid} (keeper protocol {:?}, build {})",
-                connection.hello.protocol_range, connection.hello.build
+                "connected to keeper {pid} (Keeper API {}, build {})",
+                connection.hello.api_version, connection.hello.build
             ),
         );
         Ok(Arc::new(connection))
@@ -303,171 +444,128 @@ impl KeeperClient {
         wakeup: watch::Sender<u64>,
     ) -> Result<Self, ConnectError> {
         let pid = identity.pid;
-        let socket = Socket(stream);
-        let writing = socket.0.try_clone().map_err(connection_io)?;
-        let writing = LineSender::new(writing, &identity).map_err(connection_io)?;
-        let reading = LineReceiver::new(socket.0.try_clone().map_err(connection_io)?);
-        let io = Arc::new(Transport {
-            calls: Mutex::default(),
-            closed: watch::channel(false).0,
-            exits: Mutex::new(ExitDelivery {
-                ready: false,
-                pending: vec![],
-                events,
-            }),
-        });
-        let (outgoing, queued) = sync_channel::<Outgoing>(OUTBOX_LIMIT);
-        let writer_io = Arc::clone(&io);
-        std::thread::Builder::new()
-            .name("keeper-writer".into())
-            .spawn(move || {
-                for (line, carried) in queued {
-                    if let Err(error) = writing.send(&line, carried.as_ref()) {
-                        facade_base::log::write(
-                            "daemon",
-                            "warn",
-                            &format!("could not write to the keeper connection: {error}"),
-                        );
-                        writer_io.disconnected();
-                        return;
-                    }
-                    wakeup.send_modify(|n| *n += 1);
-                }
-            })
-            .map_err(connection_io)?;
-        let reader_io = Arc::clone(&io);
-        std::thread::Builder::new()
-            .name("keeper-reader".into())
-            .spawn(move || {
-                if let Err(error) = read(reading, &reader_io) {
-                    facade_base::log::write(
-                        "daemon",
-                        "warn",
-                        &format!("the keeper connection failed: {error}"),
-                    );
-                }
-                reader_io.disconnected();
-            })
-            .map_err(connection_io)?;
-        let mut connection = Self {
-            io,
-            socket,
-            outgoing,
-            sequence: AtomicU64::new(1),
-            identity,
-            hello: KeeperHelloResult {
-                protocol_range: [0, 0],
-                build: String::new(),
-                held_agents: vec![],
-            },
-        };
-        let value = match connection
+        let session = Session::open(stream, &identity, events, wakeup)?;
+        let offer = ApiVersions::new(keeper::SUPPORTED_API_VERSIONS.to_vec())
+            .expect("the keeper API version set is nonempty");
+        let reply = session
             .request(
+                ExpectedReply::Hello(offer.clone()),
                 methods::HELLO,
-                KeeperHelloParams {
-                    protocol_range: PROTOCOL,
+                HelloParams {
+                    api_versions: offer,
                 },
                 None,
             )
             .await
-        {
-            Ok((value, _)) => value,
-            Err(error) if error.body().data.reason == Reason::IncompatibleProtocol => {
-                facade_base::log::write(
-                    "daemon",
-                    "warn",
-                    &format!("keeper {pid} refused this daemon: {}", error.body().message),
-                );
-                return Err(ConnectError::Incompatible { pid });
-            }
-            Err(error) => {
-                return Err(ConnectError::Unreachable(format!(
-                    "keeper {pid} did not accept this daemon: {}",
-                    error.body().message
-                )));
-            }
+            .map_err(|error| {
+                let body = ErrorBody::from(error);
+                if body.data.reason == Reason::IncompatibleProtocol {
+                    facade_base::log::write(
+                        "daemon",
+                        "warn",
+                        &format!("keeper {pid} refused this daemon: {}", body.message),
+                    );
+                    ConnectError::Incompatible { pid }
+                } else {
+                    ConnectError::Unreachable(format!(
+                        "keeper {pid} did not accept this daemon: {}",
+                        body.message
+                    ))
+                }
+            })?;
+        let Reply::Hello(hello) = reply else {
+            unreachable!("hello replies are decoded as Hello");
         };
-        connection.hello = serde_json::from_value(value).map_err(|error| {
-            facade_base::log::write(
-                "daemon",
-                "warn",
-                &format!("keeper {pid} sent a hello result this build cannot read: {error}"),
-            );
-            connection.fence();
-            ConnectError::Incompatible { pid }
-        })?;
-        Ok(connection)
+        Ok(Self {
+            session,
+            hello,
+            identity,
+        })
     }
 }
 
 fn read(mut incoming: LineReceiver, io: &Transport) -> anyhow::Result<()> {
+    let mut buffer = Vec::new();
+    let mut negotiated = false;
     while let Some((bytes, terminal)) = incoming.next_line()? {
-        let response = match serde_json::from_slice::<ServerMessage>(&bytes) {
-            Ok(ServerMessage::Response(response)) => response,
-            Ok(ServerMessage::Notification(message)) => {
-                if message.method == methods::CHANGED {
-                    match serde_json::from_value::<KeeperAgentChange>(message.params) {
-                        Ok(KeeperAgentChange::Exit { agent, exit }) => io
-                            .exits
-                            .lock()
-                            .unwrap()
-                            .receive(RunEvent::Exited { id: agent, exit }),
-                        Ok(KeeperAgentChange::Unknown) => {}
-                        Err(error) => facade_base::log::write(
+        let mut line = bytes.as_slice().chain(b"\n".as_slice());
+        match read_server_message(&mut line, &mut buffer)?
+            .context("the keeper sent an empty frame")?
+        {
+            ServerMessage::Notification(message) => {
+                anyhow::ensure!(terminal.is_none(), "keeper notification carried a terminal");
+                anyhow::ensure!(negotiated, "keeper sent a notification before hello");
+                if message.method == methods::CHANGED
+                    && let AgentChange::Exit { agent_id, exit } =
+                        serde_json::from_value(message.params).context("invalid keeper change")?
+                {
+                    io.exits
+                        .lock()
+                        .unwrap()
+                        .receive(RunEvent::Exited { id: agent_id, exit });
+                }
+            }
+            ServerMessage::Response(response) => {
+                let mut calls = io.calls.lock().unwrap();
+                let decoded = match response.body {
+                    ResponseBody::Error(error) => {
+                        anyhow::ensure!(
+                            terminal.is_none(),
+                            "keeper error response for request {:?} carried a terminal",
+                            response.id
+                        );
+                        if response.id.is_none() {
+                            facade_base::log::write(
+                                "daemon",
+                                "warn",
+                                &format!(
+                                    "the keeper refused a message without a request ID: {error}"
+                                ),
+                            );
+                            continue;
+                        }
+                        Err(CallError::Refused(refusal(error)))
+                    }
+                    ResponseBody::Result(value) => {
+                        let number = response
+                            .id
+                            .context("keeper success is missing a request ID")?;
+                        anyhow::ensure!(
+                            value.is_object(),
+                            "keeper response for request {number} must be an object"
+                        );
+                        let Some(waiting) = calls.get(&number) else {
+                            continue;
+                        };
+                        Ok(waiting.expected.decode(value, terminal).with_context(|| {
+                            format!(
+                                "invalid keeper {} response for request {number}",
+                                waiting.expected.name()
+                            )
+                        })?)
+                    }
+                };
+                if let Some(number) = response.id
+                    && let Some(waiting) = calls.remove(&number)
+                {
+                    drop(calls);
+                    if matches!(decoded, Ok(Reply::Hello(_))) {
+                        negotiated = true;
+                    }
+                    // The result owns its terminal until the waiting caller receives it.
+                    if let Err(Ok(_)) = waiting.sender.send(decoded) {
+                        facade_base::log::write(
                             "daemon",
                             "warn",
-                            &format!("invalid keeper notification: {error}"),
-                        ),
+                            &format!(
+                                "keeper request {number} succeeded after the caller stopped waiting"
+                            ),
+                        );
                     }
                 }
-                continue;
             }
-            Err(error) => {
-                facade_base::log::write(
-                    "daemon",
-                    "warn",
-                    &format!("invalid keeper message: {error}"),
-                );
-                continue;
-            }
-        };
-        let Some(number) = response.id else {
-            facade_base::log::write(
-                "daemon",
-                "warn",
-                &format!(
-                    "the keeper rejected a daemon message: {:?}",
-                    response.error.map(|error| error.message)
-                ),
-            );
-            continue;
-        };
-        let call = io.calls.lock().unwrap().remove(&number);
-        let Some(call) = call else {
-            facade_base::log::write(
-                "daemon",
-                "warn",
-                &format!("the keeper responded to unknown request {number}"),
-            );
-            continue;
-        };
-        let result = match response.error {
-            Some(error) => Err(CallError::Refused(error)),
-            None => Ok((response.result.unwrap_or(Value::Null), terminal)),
-        };
-        if call.expired {
-            if result.is_ok() {
-                facade_base::log::write(
-                    "daemon",
-                    "warn",
-                    &format!("keeper request {number} succeeded after the caller stopped waiting"),
-                );
-            }
-        } else {
-            let _ = call.sender.send(result);
         }
     }
-    facade_base::log::write("daemon", "warn", "the keeper closed its connection");
     Ok(())
 }
 

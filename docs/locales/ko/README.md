@@ -4,14 +4,14 @@
 
 # Facade Code
 
-**내 머신에서 AI 코딩 에이전트를 실행하세요.**
+**VS Code를 위한 멀티 에이전트 오케스트레이터.**
 
-Facade Code는 내 머신에서 여러 AI 코딩 CLI를 실행합니다. 에이전트는 서로를 찾고 메시지를 보내며 화면을 읽고 터미널에 입력할 수 있습니다. Shell, VS Code 또는 MCP를 지원하는 앱에서 이들을 제어할 수 있습니다. 각 머신은 자체 Orchestrator를 실행하고 SSH로 연결합니다.
+동일한 IDE 창에서 네이티브 에이전트 CLI를 실행하고 코드를 편집하며 변경 사항을 검토하세요. 본인 소유의 계정과 구독을 사용하고 에이전트가 창과 머신을 넘어 협업하도록 지원합니다.
 
 [![웹사이트: facadecode.com](https://img.shields.io/badge/%EC%9B%B9%EC%82%AC%EC%9D%B4%E3%83%88-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![VS Code Marketplace: 설치](https://img.shields.io/badge/VS%20Code%20Marketplace-%EC%84%A4%EC%B9%98-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
 [![Open VSX: 설치](https://img.shields.io/badge/Open%20VSX-%EC%84%A4%EC%B9%98-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
-[![Releases](https://img.shields.io/badge/Releases-GitHub-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Releases: IDE 다운로드](https://img.shields.io/badge/Releases-IDE%20%EB%8B%A4%EC%9A%B4%EB%A1%9C%EB%93%9C-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
 [![Issues: 버그 신고](https://img.shields.io/badge/Issues-%EB%B2%84%EA%B7%B8%20%EC%8B%A0%EA%B3%A0-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · **한국어** · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
@@ -31,71 +31,47 @@ Facade Code는 내 머신에서 여러 AI 코딩 CLI를 실행합니다. 에이�
 
 ## 설치
 
-### Shell
-
-한 줄 설치 프로그램은 독립 실행형 패키지가 포함된 첫 릴리스부터 사용할 수 있습니다.
-Shell 패키지는 macOS, Linux, Windows의 x64 및 arm64용으로 제공됩니다.
-
-macOS 또는 Linux에서는 이 명령을 실행합니다.
-
-```sh
-sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://github.com/y5ez3g/facadecode/releases/latest/download/install.sh
-```
-
-Windows에서는 PowerShell에서 이 명령을 실행합니다.
-
-```powershell
-$response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facadecode/releases/latest/download/install.ps1'; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())))
-```
-
-설치 프로그램은 `facade`와 `facade-mcp`를 PATH에 추가합니다. 새 터미널을 열어 갱신된 PATH를 사용합니다. `facade upgrade`로 업데이트하세요. 각 머신에 필요한 CLI를 설치하고 로그인합니다. 기본 제공 CLI는 Claude Code, Codex, Antigravity, Muse Code, OpenCode, Pi입니다.
-
-IDE 실행 명령도 `facade`입니다. 둘 다 설치된 경우 Shell은 PATH에서 먼저 찾은 프로그램을 실행합니다. IDE 미리 보기가 종료되면 이 이름은 Orchestrator에서 사용합니다. `facade --version`을 실행합니다. `facade <version>` 형식의 줄이 나오면 Shell 명령입니다.
-
-### VS Code
-
 ```sh
 code --install-extension facade.facadecode
 ```
 
-확장 프로그램에 Orchestrator가 포함됩니다. 활동 표시줄에서 **Facade Code**를 열고 **새 에이전트**, **Go to Agent** 또는 **Resume Agent**를 선택합니다. macOS, Linux, Windows용 x64 및 arm64 패키지를 제공합니다.
+또는 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) 나 [Open VSX](https://open-vsx.org/extension/facade/facadecode) 에서 **Facade Code**를 설치하세요. macOS(Apple silicon), Linux(x64), Windows(x64)에서 실행됩니다.
 
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) · [Open VSX](https://open-vsx.org/extension/facade/facadecode) · [VS Code](../../../extension/GUIDE.md)
+다음으로 사용하려는 지원 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, OpenCode 또는 Pi)를 설치하고 로그인하세요. Facade Code는 각 CLI의 자체 로그인 및 구독을 사용하여 실행합니다.
 
-### MCP
+> **에이전트는 기본적으로 승인 확인 없이 실행됩니다.** `yolo`가 기본적으로 활성화되어 있어 에이전트가 먼저 묻지 않고 명령을 실행하고 파일을 변경할 수 있습니다. 각 CLI의 표준 승인 프롬프트를 복원하려면 이 설정을 끄세요. 자세한 내용은 [확장 README](../../../extension/README.md#install)를 참조하세요.
 
-`facade-mcp`를 stdio MCP 서버로 추가하세요. 이 예시는 `mcpServers` 객체를 사용합니다.
+## Agent Panel
 
-```json
-{
-  "mcpServers": {
-    "facade": { "command": "facade-mcp" }
-  }
-}
-```
+**에이전트와 IDE가 같은 창에.**
 
-외부 연결은 첫 도구 호출 때 Guest로 참여합니다. 메시지를 보낸 뒤에는 `send_message`가 반환한 `read_messages` 호출로 응답을 기다립니다.
+Facade Code는 파일 옆의 편집기 터미널 탭에서 네이티브 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, OpenCode, Pi)를 직접 실행하며 각 CLI 고유의 명령, 도구, 계정 및 구독을 사용합니다. 패널의 카드를 통해 각 에이전트의 상태를 실시간으로 추적할 수 있습니다.
 
-## 여러 머신에서 작업
+- **코드 옆에서 작업.** 각 에이전트는 편집기 영역의 전용 터미널 탭에서 실행됩니다. 탭을 닫아도 뷰가 숨겨질 뿐 에이전트는 백그라운드에서 계속 실행되며, 카드를 클릭하면 다시 열립니다.
+- **에이전트 전반의 상태 추적.** 카드는 각 에이전트에 마지막으로 전송된 내용과 현재 작업 중인지, 권한이 필요한지, 오류가 발생했는지를 보여주며, 세부 정보에는 제목, 폴더, 누가 시작했는지가 표시됩니다. 에이전트는 창 다시 로드 및 확장 재시작 중에도 계속 실행됩니다.
+- **폴더 및 worktree.** 모든 작업 영역 폴더에서 에이전트를 실행하거나 Git worktree를 즉석에서 생성하여 코드 변경 사항을 분리하세요. 대화를 고정하면 작업 영역을 다시 열 때 대화가 복원되며, 기록에서 과거 세션을 다시 시작할 수도 있습니다.
 
-```sh
-facade start --name ada -d codex
-facade list
-facade attach ada
-```
+## Agent Use
 
-`facade list`에 표시된 주소를 사용합니다. 다른 머신은 평소 사용하는 SSH 대상과 옵션으로 등록합니다. 외부에서 WSL이나 Dev Container에 접속하려면 해당 환경 안에서 SSH를 설정하고 같은 방식으로 등록합니다. 그 환경에서 Facade를 직접 실행할 수도 있습니다.
+**사용자처럼 에이전트가 다른 에이전트를 직접 작동하도록 하세요.**
 
-```sh
-facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --workdir /work/app --worktree feat-x claude
-```
+MCP 및 터미널 프로토콜을 통해 에이전트는 다른 에이전트를 시작, 중지, 검색하고 메시지를 교환하며, 상대의 터미널 화면을 읽고 텍스트를 입력하거나 키를 누를 수 있습니다.
 
-필요하면 Facade가 원격 머신에 해당 버전을 설치합니다. Facade는 원격 머신에서 고정된 설치 경로를 사용합니다. 수동으로 설치할 때는 로컬 Orchestrator와 같은 버전을 사용하세요. VS Code에서 **Go to Agent**를 선택하면 실행 중인 에이전트의 터미널을 열 수 있습니다. 작업 영역은 열었던 에이전트와 그 도우미, Pin을 기억합니다. 터미널 탭을 닫아도 에이전트는 계속 실행됩니다. **Resume Agent**와 `facade resume`은 저장된 작업을 표시합니다.
+- **에이전트 시작 및 중지.** 모든 에이전트는 6개 CLI 중 하나를 사용하여 이 컴퓨터의 Facade 창에 있는 폴더나 새 worktree에서 다른 에이전트를 시작하고 첫 번째 작업을 할당할 수 있습니다. 동일한 요청 ID를 공유하는 재시도 요청은 에이전트를 중복 생성하지 않습니다.
+- **메시지 전송.** 에이전트끼리 서로 메시지를 주고받을 수 있으며 사용자에게 메시지를 보낼 수도 있습니다. Facade는 전체 메시지를 한 번에 붙여넣고 전송합니다. 전송되지 않은 텍스트나 프롬프트 질문이 입력 창을 가로막고 있는 경우 입력 창이 비워질 때까지 전송이 대기합니다.
+- **터미널 제어.** 에이전트는 다른 에이전트의 화면을 읽고 명령을 입력하며 키를 전송하여 프롬프트에 응답하거나 막힌 동료를 도울 수 있습니다. 하위 에이전트가 권한, 응답 또는 로그인을 기다린 지 20초가 지나면 이를 시작한 에이전트에게 알림이 전달됩니다.
 
-> **YOLO는 기본적으로 켜져 있습니다.** YOLO가 켜진 에이전트는 연결된 머신의 다른 에이전트에 접근할 수 있습니다. 해당 머신의 `facade.json`에서 `"yolo": false`를 설정하면 CLI 자체의 승인과 샌드박스가 유지되고 MCP 범위는 호출자의 생성 트리로 제한됩니다. 다음 시작 또는 resume부터 적용됩니다. `facade status`로 파일 위치를 확인하세요.
+## Agent Mesh
 
-[제품 문서 (중국어)](../../facade-code.md) · [용어집](../../core/GLOSSARY.md)
+**창, 머신, 위치를 넘어 에이전트를 연결하세요.**
+
+Facade Code는 이 컴퓨터에서 열려 있는 Facade 창의 에이전트들을 하나의 네트워크로 연결합니다. [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 창을 열어 협업을 다른 머신으로 확장하세요.
+
+- **창을 넘어.** `yolo`가 켜져 있으면 에이전트가 로컬 창과 Remote - SSH 창을 가리지 않고 이 컴퓨터의 모든 Facade 창에 있는 에이전트에 도달할 수 있습니다. 꺼져 있으면 자신이 속한 그룹(사용자가 시작한 에이전트 및 그 에이전트가 파생 시작한 에이전트)에만 도달합니다.
+- **SSH를 통한 확장.** [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 창에서 에이전트는 원격 머신의 도구, 파일, 계정을 사용하여 원격 호스트에서 직접 실행됩니다. 로컬 에이전트가 Remote - SSH 창에 있는 에이전트를 직접 시작하고 지시할 수 있습니다.
+- **휴대폰에서 조정.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control)을 사용하여 휴대폰의 Claude 앱을 컴퓨터의 Claude Code 세션에 연결하세요. 해당 세션이 Facade를 통해 다른 에이전트를 조정하고 진행 상황을 휴대폰으로 보고합니다.
+
+<sub>Remote Control을 사용하려면 지원되는 Claude Code 버전, 적격 구독 및 전체 범위 로그인이 필요합니다. [설정 요구 사항](https://code.claude.com/docs/en/remote-control#requirements)을 참조하세요.</sub>
 
 ## Facade Code IDE (Preview)
 
@@ -105,12 +81,11 @@ facade start --machine devbox --workdir /work/app --worktree feat-x claude
 
 IDE 미리 보기 다운로드: [macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [모든 릴리스](https://github.com/y5ez3g/facadecode/releases)
 
-IDE 미리 보기는 기존 편집기와 함께 설치되며 자체 설정과 확장 프로그램을 사용합니다. 확장 프로그램은 [Open VSX](https://open-vsx.org)에서 제공되며, Remote Development 및 C/C++ 같은 일부 Microsoft 전용 독점 확장 프로그램은 공식 Microsoft 빌드에서만 실행됩니다. 아키텍처 및 사양은 [`docs/ide/`](../../ide/)에 있습니다.
+이 IDE는 기존 편집기와 함께 별도로 설치되는 VS Code의 포크로, 설정, 확장 프로그램 및 `facade` 명령을 전혀 공유하지 않습니다. 확장 프로그램은 [Open VSX](https://open-vsx.org)에서 제공되며, Remote Development 및 C/C++ 같은 일부 Microsoft 전용 독점 확장 프로그램은 공식 Microsoft 빌드에서만 실행됩니다. 아키텍처 및 사양은 [`docs/ide/`](../../ide/)에 있습니다.
 
 ## 소스에서 빌드
 
 - **확장 프로그램:** 패키지를 빌드하려면 코딩 에이전트에게 [`extension/AGENTS.md`](../../../extension/AGENTS.md)를 제공하세요.
-- **Orchestrator / Shell.** [빌드 안내](../../../core/README.md).
 - **IDE:** 애플리케이션을 빌드하려면 코딩 에이전트에게 [`docs/ide/RELEASE.md`](../../ide/RELEASE.md)를 제공하세요.
 
 기여 가이드라인 및 브랜치 규칙에 대한 자세한 내용은 [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) 및 [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md)를 참조하세요.

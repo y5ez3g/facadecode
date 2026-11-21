@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The protocol uses the lowercase, hyphenated spelling of RFC 9562 version 4 UUIDs.
-pub(super) fn is_uuid_v4(id: &str) -> bool {
+pub(crate) fn is_uuid_v4(id: &str) -> bool {
     let bytes = id.as_bytes();
     bytes.len() == 36
         && bytes[14] == b'4'

@@ -18,10 +18,9 @@
 //! be read at all is logged, skipped and left as it is.
 
 use std::sync::Arc;
-use std::time::SystemTime;
 
-use facade_base::daemon::{Delivery, Message, WindowDelivery, WindowDeliveryOutcome};
-use facade_base::machine::{AgentRef, MessageRef};
+use facade_base::model::message::{Delivery, Message, WindowDelivery, WindowDeliveryOutcome};
+use facade_base::{model::agent::AgentRef, model::message::MessageRef};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -125,19 +124,8 @@ fn read_send_route(row: &Row<'_>) -> rusqlite::Result<SendRoute> {
     })
 }
 
-/// The origin sets a route before the receiver dates its receipt. Keep the route for the
-/// one-hour receipt window plus the maximum time a send can spend getting there.
-fn send_route_cutoff() -> String {
-    let age = crate::operations::REQUEST_HOUR.saturating_add(crate::messages::delivery_limit());
-    facade_base::time::iso_time(
-        SystemTime::now()
-            .checked_sub(age)
-            .unwrap_or(SystemTime::UNIX_EPOCH),
-    )
-}
-
-/// A send's own ID as its sender gave it, and the earliest time at which a message it kept still
-/// answers it: an hour before now.
+/// A send's own ID as its sender gave it, and the earliest time at which a kept message still
+/// answers it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RequestId<'a> {
     pub(crate) id: &'a str,
@@ -411,8 +399,11 @@ pub(super) fn result_number(reference: &MessageRef) -> anyhow::Result<i64> {
 
 /// Deletes `owner`'s inbox, in `connection`'s transaction. The messages it sent stay. Returns what
 /// it deleted.
-pub(super) fn delete_inbox(connection: &Connection, owner: &str) -> rusqlite::Result<Vec<Gone>> {
-    let since = crate::operations::an_hour_ago();
+pub(super) fn delete_inbox(
+    connection: &Connection,
+    owner: &str,
+    since: &str,
+) -> rusqlite::Result<Vec<Gone>> {
     let mut archived = {
         let mut statement = connection.prepare(
             "UPDATE messages SET private_receipt = 1, text = '', from_name = NULL,
@@ -623,11 +614,13 @@ impl MessageTable {
         )
     }
 
+    /// Reads the retained target, taking the cutoff under the connection lock.
     pub(crate) fn send_target(
         &self,
         sender: &str,
         request_id: &str,
         target: &str,
+        route_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<Option<SendRoute>> {
         use rusqlite::OptionalExtension;
         self.0.with(
@@ -637,7 +630,7 @@ impl MessageTable {
                     .query_row(
                         "SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
                 WHERE sender = ?1 AND request_id = ?2 AND target = ?3 AND at >= ?4",
-                        params![sender, request_id, target, send_route_cutoff()],
+                        params![sender, request_id, target, route_cutoff()],
                         read_send_route,
                     )
                     .optional()
@@ -646,12 +639,14 @@ impl MessageTable {
     }
 
     /// Keeps the first resolved target for retries on this machine, including after takeover.
+    /// Samples the cutoff inside the transaction after dating a new route.
     pub(crate) fn keep_send_target(
         &self,
         sender: &str,
         request_id: &str,
         target: &str,
         route: &SendRoute,
+        route_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<(SendRoute, bool)> {
         self.0.transaction(|| "save the original send recipient".into(), |connection| {
             let inserted = connection.execute("INSERT INTO send_routes
@@ -663,7 +658,7 @@ impl MessageTable {
                 params![sender, request_id, target, route.recipient.machine_id, route.recipient.agent_id,
                     route.reply.as_ref().map(|reply| &reply.message_id),
                     route.reply.as_ref().map(|reply| &reply.machine_id),
-                    facade_base::time::iso_now(), send_route_cutoff()])?;
+                    facade_base::time::iso_now(), route_cutoff()])?;
             let route = connection.query_row("SELECT machine_id, agent_id, reply_message_id, reply_machine_id FROM send_routes
                 WHERE sender = ?1 AND request_id = ?2 AND target = ?3", params![sender,request_id,target],
                 read_send_route)?;
@@ -1057,15 +1052,17 @@ impl MessageTable {
 
     /// Deletes the messages sent before `before`, a time as `facade_base::time` writes it. Returns
     /// what it deleted.
-    pub(crate) fn expire_messages(&self, before: &str) -> anyhow::Result<Vec<Gone>> {
+    pub(crate) fn expire_messages(
+        &self,
+        before: &str,
+        receipt_cutoff: impl FnOnce() -> String,
+        route_cutoff: impl FnOnce() -> String,
+    ) -> anyhow::Result<Vec<Gone>> {
         self.0.with(
             || "delete expired messages".to_string(),
             |connection| {
-                let since = crate::operations::an_hour_ago();
-                connection.execute(
-                    "DELETE FROM send_routes WHERE at < ?1",
-                    [send_route_cutoff()],
-                )?;
+                let since = receipt_cutoff();
+                connection.execute("DELETE FROM send_routes WHERE at < ?1", [route_cutoff()])?;
                 connection.execute(
                     "DELETE FROM messages WHERE (withdrawn OR private_receipt) AND at < ?1",
                     [since],
@@ -1080,7 +1077,7 @@ impl MessageTable {
 mod tests {
     use std::path::PathBuf;
 
-    use facade_base::daemon::{DeliveredVia, DeliveryFailure, DeliveryStatus, TextWritten};
+    use facade_base::model::message::{DeliveredVia, DeliveryFailure, DeliveryStatus, TextWritten};
 
     use super::*;
     use crate::messages::tests::message;
@@ -1174,14 +1171,14 @@ mod tests {
             let store = core.open();
             let (_, replay) = store
                 .message_table()
-                .keep_send_target("a1", "r1", "helper", &route)
+                .keep_send_target("a1", "r1", "helper", &route, crate::send_route_cutoff)
                 .unwrap();
             assert!(!replay);
         }
         let store = core.open();
         let retained = store
             .message_table()
-            .send_target("a1", "r1", "helper")
+            .send_target("a1", "r1", "helper", crate::send_route_cutoff)
             .unwrap()
             .unwrap();
         assert_eq!(retained.recipient, route.recipient);
@@ -1484,18 +1481,18 @@ mod tests {
             "tools_state": "available",
         }))
         .unwrap();
-        let prompt = facade_base::daemon::PromptOutcome {
+        let prompt = facade_base::model::message::PromptOutcome {
             message_id: prompt.message_id.clone(),
             delivery: delivery.clone(),
         };
-        let outcome = facade_base::daemon::StartOutcome { agent, prompt };
+        let outcome = facade_base::model::message::StartOutcome { agent, prompt };
         Message {
             message_id: reference.message_id.clone(),
             message_ref: Some(reference.clone()),
-            from: facade_base::daemon::FACADE.into(),
+            from: facade_base::model::message::FACADE.into(),
             from_name: None,
             to: "a1".into(),
-            text: facade_base::daemon::start_result_text(&outcome),
+            text: facade_base::model::message::start_result_text(&outcome),
             call_id: Some("7".into()),
             result: Some(outcome),
             ..message(0, "a1")
@@ -1668,7 +1665,7 @@ mod tests {
                 .unwrap();
             let number = super::number_of(&kept);
             match went {
-                true => drop(store.delete("a1").unwrap()),
+                true => drop(store.delete("a1", crate::an_hour_ago).unwrap()),
                 false => store.record_exit("a1", &exit).unwrap(),
             }
             let reference = owed_number.unwrap();
@@ -1693,8 +1690,8 @@ mod tests {
                 "{caller}"
             );
             assert_eq!(owed(&store, number), None, "{caller}");
-            store.delete("a1").unwrap();
-            store.delete("a2").unwrap();
+            store.delete("a1", crate::an_hour_ago).unwrap();
+            store.delete("a2", crate::an_hour_ago).unwrap();
         }
         let (kept, owed_number) = store
             .insert_with_prompt(&crate::store::tests::record("a3"), &prompt(), false, None)
@@ -1803,10 +1800,10 @@ mod tests {
             )
             .unwrap()
             .into_message();
-        store.delete("a1").unwrap();
+        store.delete("a1", crate::an_hour_ago).unwrap();
         assert!(store.message_table().inbox("a1").unwrap().is_empty());
         assert_eq!(numbers(&store.message_table().inbox("a2").unwrap()), ["m2"]);
-        store.delete_inbox("a2").unwrap();
+        store.delete_inbox("a2", crate::an_hour_ago).unwrap();
         assert!(!store.message_table().keeps_message(2).unwrap());
     }
 
@@ -1829,7 +1826,11 @@ mod tests {
         assert_eq!(
             store
                 .message_table()
-                .expire_messages("2026-10-12T00:00:00.000Z")
+                .expire_messages(
+                    "2026-10-12T00:00:00.000Z",
+                    crate::an_hour_ago,
+                    crate::send_route_cutoff
+                )
                 .unwrap(),
             [Gone {
                 number: 1,
@@ -1842,7 +1843,11 @@ mod tests {
         );
         store
             .message_table()
-            .expire_messages("2026-12-01T00:00:00.000Z")
+            .expire_messages(
+                "2026-12-01T00:00:00.000Z",
+                crate::an_hour_ago,
+                crate::send_route_cutoff,
+            )
             .unwrap();
         assert_eq!(
             store

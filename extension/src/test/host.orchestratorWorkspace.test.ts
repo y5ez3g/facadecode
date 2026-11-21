@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import type { AgentRef, V3AgentInfo } from '../base/coreProtocol';
+import type { AgentInfo, AgentRef } from '../base/coreProtocol';
 import { withLongFileLock } from '../base/lock';
 import { WINDOW_LEGACY_INSTANCE_COMMAND } from '../base/windowIdentity';
 import { windowAddress } from '../host/windowNetwork';
@@ -54,48 +54,26 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 			update: async (key: string, value: unknown) => { storage.set(key, value); },
 		} } as never, { home, log: { event: assert.fail } });
 	};
-	const noQuery = async () => assert.fail('A folderless window can query members only by a proven old instance.');
 	if (withPin) {
-		const withoutComponent = open('without-component', false);
 		const unrelated = open('unrelated', false, new Map());
 		try {
-			await assert.rejects(withoutComponent.importLegacy({ machineId: local, load: noQuery }), /Enable the Facade Code Window Component/);
-			assert.deepStrictEqual(withoutComponent.snapshot().pins, [pin]);
-			await unrelated.importLegacy({ machineId: local, load: noQuery });
+			await unrelated.loadLocalPins();
 			assert.deepStrictEqual(unrelated.snapshot(), { members: [], pins: [] });
 		} finally {
-			withoutComponent.dispose();
 			unrelated.dispose();
 		}
 	}
 	const opened = open(`new-${withPin}`);
 	try {
-		let imports = 0;
-		const load = () => opened.importLegacy({
-			machineId: local,
-			load: async args => {
-				imports++;
-				assert.deepStrictEqual(args, { machine_id: local, instance_id: instanceId });
-				return {
-					agents: [agent],
-					machines: [{
-						machine_id: local, short_id: 'local', name: 'Local', selector: 'local', state: 'online',
-						status: withPin && imports === 1 ? 'timed_out' : 'answered',
-					}],
-				};
-			},
-		});
+		// The prerelease editor persisted this member before completing its workspace import.
+		opened.show(agent);
 		const expected = {
-			members: withPin ? [{ machine_id: pin.machine_id, agent_id: pin.agent }, agent] : [agent],
+			members: withPin ? [agent, { machine_id: pin.machine_id, agent_id: pin.agent }] : [agent],
 			pins: withPin ? [pin] : [],
 		};
-		if (withPin) {
-			await assert.rejects(load(), /facade machine add/);
-			assert.deepStrictEqual(opened.snapshot(), expected);
-		}
-		await load();
-		await load();
-		assert.strictEqual(imports, withPin ? 2 : 1);
+		assert.strictEqual(await opened.loadLocalPins(), false);
+		assert.strictEqual(await opened.loadLocalPins(), false);
+		opened.reconcile([], [agent]);
 		assert.deepStrictEqual(opened.snapshot(), expected);
 		if (withPin) { opened.removePin(pin.id); }
 	} finally {
@@ -105,9 +83,9 @@ async function bringsBackFolderlessWorkspace(home: string, withPin: boolean): Pr
 		for (const session of ['reopened-empty', 'reopened-again']) {
 			const reopened = open(session, false);
 			try {
-				await reopened.importLegacy({ machineId: local, load: noQuery });
+				assert.strictEqual(await reopened.loadLocalPins(), false);
 				assert.deepStrictEqual(reopened.snapshot(), {
-					members: [{ machine_id: gpu, agent_id: 'a7' }, agent],
+					members: [agent, { machine_id: gpu, agent_id: 'a7' }],
 					pins: [],
 				});
 				assert.strictEqual(state.get('facade.workspaceKey'), previous.key);
@@ -131,10 +109,10 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 		const first = load('first');
 		const other = load('other');
 		const ref = (machine_id: string, agent_id = 'a7'): AgentRef => ({ machine_id, agent_id });
-		const info = (target: AgentRef, creator?: AgentRef): V3AgentInfo => ({
-			...target, type: 'managed', address: target.agent_id + '@' + target.machine_id, args: [],
+		const info = (target: AgentRef, creator?: AgentRef): AgentInfo => ({
+			reference: target, type: 'managed', address: target.agent_id + '@' + target.machine_id, args: [],
 			name: 'Fixture', cli: 'codex', cwd: '/work', process: 'running', created_at: at, started_at: at,
-			creator: creator?.agent_id, creator_machine_id: creator?.machine_id, root: 'a7', yolo: true, state: 'idle', tools_state: 'available',
+			creator, root: ref(target.machine_id), yolo: true, state: 'idle', tools_state: 'available',
 		});
 		const localAgent = ref(local);
 		const remote = ref(gpu);
@@ -143,8 +121,8 @@ suite('Orchestrator workspace roster (RULES-6.1)', () => {
 		const grandchild = ref(gpu, 'a9');
 		let reopened: ReturnType<typeof load> | undefined;
 		try {
-			await first.importLegacy({ machineId: local, load: async () => assert.fail('A new workspace has no prior binding.') });
-			await other.importLegacy({ machineId: local, load: async () => assert.fail('A second v3 window does not create a legacy source.') });
+			assert.strictEqual(await first.loadLocalPins(), true);
+			assert.strictEqual(await other.loadLocalPins(), true);
 			const changed = new Promise<void>(resolve => {
 				const watching = other.onDidChange(() => { watching.dispose(); resolve(); });
 			});

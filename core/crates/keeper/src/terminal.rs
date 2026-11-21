@@ -2,7 +2,7 @@
 
 use std::os::fd::{BorrowedFd, OwnedFd};
 
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::pty::{Winsize, openpty};
 use nix::sys::termios::{

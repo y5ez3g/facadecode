@@ -6,17 +6,19 @@
 
 use std::collections::{BTreeMap, hash_map::Entry};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use facade_base::daemon::{
-    AgentInfo, AgentResumeArgs, AgentStartResult, AgentState, AgentStopResult, AgentsUpdate,
-    Message, ToolsState, location_id,
-};
+use facade_base::api_v1::daemon::Caller;
 use facade_base::instructions::{self, Creator, ManagedRun};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{AgentRef, MachineQueryArgs, MessageRef};
+use facade_base::model::agent::AgentLabel;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_base::v3::{self, Caller, StartArgs};
+use facade_base::{model::agent::AgentRef, model::message::MessageRef};
+use facade_base::{
+    model::agent::{AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState},
+    model::machine::location_id,
+    model::message::Message,
+};
 use std::path::Path;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -24,19 +26,18 @@ use crate::agent::{self, ActorStart, AgentCommand, AgentHandle, Kept, ScreenStar
 use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
 use crate::messages::OwedResult;
-use crate::records;
 use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::{AgentRecord, CreationSource, InitialLaunch, RelayRunRecord, RemovalCause};
 use crate::windows::Destination;
-use crate::{Daemon, Sender, blocking, gate_for_test, log, pause_for_test};
+use crate::{
+    Daemon, Sender, StartKey, agent_number, an_hour_ago, blocking, gate_for_test, log,
+    pause_for_test,
+};
 
 /// The exit wait once the keeper took `agent.stop`, its 3 seconds before SIGKILL included.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a resume waits for the ended run's exit to be saved and its session read.
 const PREVIOUS_RUN_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a request ID answers again.
-pub(crate) const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
-
 struct RunInstructions<'a> {
     address: String,
     folder: &'a str,
@@ -93,15 +94,6 @@ impl Drop for SessionClaim<'_> {
     }
 }
 
-/// A request is scoped to its caller and the machine holding the start.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct StartKey {
-    pub(crate) machine_id: String,
-    pub(crate) agent_id: Option<String>,
-    pub(crate) window_id: Option<String>,
-    pub(crate) request_id: String,
-}
-
 pub(crate) struct StartOrigin {
     pub(crate) caller: Caller,
     pub(crate) sender: Sender,
@@ -130,7 +122,46 @@ impl StartOrigin {
     }
 }
 /// A start's answer, once it has one.
-pub(crate) type StartAnswer = Option<Result<AgentStartResult, ErrorBody>>;
+/// Launch options resolved by the daemon before reserving a run.
+pub(crate) struct StartRequest {
+    pub(crate) cli: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) folder: Option<String>,
+    pub(crate) worktree: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) prompt: Option<String>,
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    pub(crate) call_id: Option<String>,
+    pub(crate) result_message_id: Option<String>,
+    pub(crate) result_message_machine_id: Option<String>,
+    pub(crate) request_id: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Started {
+    pub(crate) agent: ManagedAgent,
+    pub(crate) prompt: Option<facade_base::model::message::Message>,
+    pub(crate) result_message_id: Option<String>,
+    pub(crate) result_message_machine_id: Option<String>,
+    pub(crate) repeated: bool,
+}
+
+pub(crate) struct StopResult {
+    pub(crate) exit: ProcessExit,
+    pub(crate) already_ended: bool,
+}
+
+pub(crate) struct RestartRequest {
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+}
+
+pub(crate) type StartAnswer = Option<Result<Started, ErrorBody>>;
 
 /// A start under way with a request ID: the calls that repeat it meanwhile get its answer. It
 /// lets go of its key once it answers, or ends without one; the record keeps the ID from then on.
@@ -141,7 +172,7 @@ struct StartUnderWay {
 }
 
 impl StartUnderWay {
-    fn answer(&self, answer: Result<AgentStartResult, ErrorBody>) {
+    fn answer(&self, answer: Result<Started, ErrorBody>) {
         self.daemon.starting.lock().unwrap().remove(&self.key);
         self.answer.send_replace(Some(answer));
     }
@@ -184,15 +215,6 @@ pub(crate) fn check_request_id(request_id: &str) -> Result<(), ErrorBody> {
     )))
 }
 
-/// The time an hour before now, as request IDs look back to.
-pub(crate) fn an_hour_ago() -> String {
-    facade_base::time::iso_time(
-        SystemTime::now()
-            .checked_sub(REQUEST_HOUR)
-            .unwrap_or(SystemTime::UNIX_EPOCH),
-    )
-}
-
 /// The error of an agent whose actor stopped.
 pub(crate) fn agent_stopped(id: &str) -> ErrorBody {
     ErrorBody::new(
@@ -205,12 +227,12 @@ impl Daemon {
     /// The listed agents, in number order.
     pub(crate) fn agents(&self) -> Vec<AgentHandle> {
         let mut agents: Vec<AgentHandle> = self.agents.lock().unwrap().values().cloned().collect();
-        agents.sort_by_key(|agent| records::agent_number(agent.id()));
+        agents.sort_by_key(|agent| agent_number(agent.id()));
         agents
     }
 
     /// The listed agents' records, in number order.
-    pub(crate) fn agent_infos(&self) -> Vec<AgentInfo> {
+    pub(crate) fn agent_infos(&self) -> Vec<ManagedAgent> {
         self.agents().iter().map(AgentHandle::info).collect()
     }
 
@@ -220,7 +242,7 @@ impl Daemon {
     }
 
     /// Tells the `agents` topic that `info` is an agent's record now.
-    pub(crate) fn publish(&self, info: AgentInfo) {
+    pub(crate) fn publish(&self, info: ManagedAgent) {
         let _ = self.changes.send(AgentsUpdate::Updated {
             agent: Box::new(info),
         });
@@ -234,14 +256,12 @@ impl Daemon {
         let caller = Caller::Terminal {
             machine_id: self.machine_id.clone(),
         };
-        let snapshot = self
-            .list_agents_v3(&caller, MachineQueryArgs { machine: None })
-            .await?;
+        let snapshot = self.list_active_agents(&caller, None).await?;
         let mut taken: Vec<String> = snapshot
             .agents
             .into_iter()
             .filter(|agent| agent.reference.machine_id != self.machine_id)
-            .map(|agent| agent.row.name)
+            .map(|agent| agent.name)
             .collect();
         let agents = self.agents.lock().unwrap();
         taken.extend(agents.values().filter_map(|agent| {
@@ -254,9 +274,9 @@ impl Daemon {
     /// Starts and installs a managed run, with the same request key on retries.
     pub(crate) async fn start(
         self: &Arc<Self>,
-        args: StartArgs,
+        args: StartRequest,
         origin: StartOrigin,
-    ) -> Result<AgentStartResult, ErrorBody> {
+    ) -> Result<Started, ErrorBody> {
         let Some(request_id) = args.request_id.clone() else {
             return self.start_once(args, origin, None).await;
         };
@@ -310,7 +330,7 @@ impl Daemon {
                 ),
             );
         }
-        answer.map(|answer| AgentStartResult {
+        answer.map(|answer| Started {
             repeated: true,
             ..answer
         })
@@ -319,7 +339,7 @@ impl Daemon {
     /// The agent `creator` (none for the person) started with `request_id` within the hour, as a
     /// repeat answers it: as it stands now, with its prompt as it stands, and the result an
     /// agent's start is owed.
-    fn started_before(&self, key: &StartKey) -> Result<Option<AgentStartResult>, ErrorBody> {
+    fn started_before(&self, key: &StartKey) -> Result<Option<Started>, ErrorBody> {
         let since = an_hour_ago();
         let found = crate::blocking_in_place(|| self.store.find_start(key, &since))
             .map_err(ErrorBody::internal)?;
@@ -329,7 +349,7 @@ impl Daemon {
         let Some(agent) = self.get_agent(&kept.agent_id) else {
             return Ok(None);
         };
-        Ok(Some(AgentStartResult {
+        Ok(Some(Started {
             agent: agent.info(),
             prompt: kept
                 .prompt
@@ -348,10 +368,10 @@ impl Daemon {
     /// its worktree says that the worktree stays.
     async fn start_once(
         self: &Arc<Self>,
-        args: StartArgs,
+        args: StartRequest,
         origin: StartOrigin,
         session: Option<String>,
-    ) -> Result<AgentStartResult, ErrorBody> {
+    ) -> Result<Started, ErrorBody> {
         gate_for_test("before-start-run");
         let (settings, mut configured, destination) =
             self.check_local_start(&args, origin.by_model).await?;
@@ -382,7 +402,7 @@ impl Daemon {
                 "; the worktree {} on branch {branch} was created and stays",
                 made.path
             ));
-            error.data.kept = Some(facade_base::daemon::Kept {
+            error.data.kept = Some(facade_base::model::machine::Kept {
                 branch: Some(branch),
                 path: Some(made.path),
             });
@@ -390,27 +410,18 @@ impl Daemon {
         })
     }
 
-    pub(crate) async fn preflight_start(
-        &self,
-        args: &StartArgs,
-        by_model: bool,
-    ) -> Result<(), ErrorBody> {
-        self.check_local_start(args, by_model).await?;
-        Ok(())
-    }
-
     pub(crate) async fn start_saved_session(
         self: &Arc<Self>,
-        args: StartArgs,
+        args: StartRequest,
         origin: StartOrigin,
         session: String,
-    ) -> Result<AgentStartResult, ErrorBody> {
+    ) -> Result<Started, ErrorBody> {
         self.start_once(args, origin, Some(session)).await
     }
 
     async fn check_local_start(
         &self,
-        args: &StartArgs,
+        args: &StartRequest,
         by_model: bool,
     ) -> Result<(facade_base::settings::Settings, Configured, Destination), ErrorBody> {
         let folder = args
@@ -421,7 +432,7 @@ impl Daemon {
         let settings = command_line::read_settings()?;
         let mut configured = command_line::configure(&settings, args, folder, by_model)?;
         if let Some(prompt) = args.prompt.as_deref() {
-            facade_base::daemon::check_message_text(prompt).map_err(|why| {
+            facade_base::model::message::check_message_text(prompt).map_err(|why| {
                 ErrorBody::invalid_argument(format!("the prompt cannot go as a message: {why}"))
             })?;
             if configured.rule.is_none() {
@@ -434,7 +445,7 @@ impl Daemon {
                 ));
             }
         }
-        crate::windows::locations::preflight(Path::new(folder), args.worktree.as_deref()).await?;
+        crate::windows::preflight(Path::new(folder), args.worktree.as_deref()).await?;
         let destination = Destination {
             cwd: folder.to_string(),
             location_id: location_id(folder),
@@ -445,13 +456,13 @@ impl Daemon {
 
     async fn start_in(
         self: &Arc<Self>,
-        args: StartArgs,
+        args: StartRequest,
         origin: StartOrigin,
         settings: &facade_base::settings::Settings,
         configured: Configured,
         destination: Destination,
         session: Option<String>,
-    ) -> Result<AgentStartResult, ErrorBody> {
+    ) -> Result<Started, ErrorBody> {
         let Some(_starting) = self.lifecycle.begin(Work::Start) else {
             return Err(ErrorBody::new(
                 Reason::Unavailable,
@@ -469,7 +480,10 @@ impl Daemon {
             .map(|(rule, session)| self.claim_session(&id, &rule.cli, session, !origin.by_model))
             .transpose()?;
         let (creator, root) = match &origin.caller {
-            Caller::Agent { agent, root, .. } => (Some(agent.clone()), root.clone()),
+            Caller::Agent { agent, root, .. } => (
+                Some(crate::api::agent_ref(agent.clone())),
+                crate::api::agent_ref(root.clone()),
+            ),
             _ => (
                 None,
                 AgentRef {
@@ -551,7 +565,7 @@ impl Daemon {
             }
         };
         pause_for_test("after-run-start");
-        let info = AgentInfo {
+        let info = ManagedAgent {
             address: None,
             label: None,
             unreachable: false,
@@ -575,7 +589,7 @@ impl Daemon {
             yolo,
             exit: None,
             session,
-            state: AgentState::Starting,
+            state: ManagedAgentState::Starting,
             state_detail: None,
             said: None,
             tools_state: ToolsState::NotInjected,
@@ -705,7 +719,7 @@ impl Daemon {
                 release_name();
                 self.runs.remove_folders(&id);
                 let (store, removed) = (self.store.clone(), id.clone());
-                let _ = blocking(move || store.delete(&removed)).await;
+                let _ = blocking(move || store.delete(&removed, an_hour_ago)).await;
                 self.runs.abandon(&id);
                 return Err(ErrorBody::internal(format!(
                     "could not read agent {id}'s terminal: {err}"
@@ -778,7 +792,7 @@ impl Daemon {
                 request_words(args.request_id.as_deref())
             ),
         );
-        Ok(AgentStartResult {
+        Ok(Started {
             agent: info,
             prompt,
             result_message_machine_id: result
@@ -827,7 +841,7 @@ impl Daemon {
     pub(crate) async fn stop(
         self: &Arc<Self>,
         agent: &AgentHandle,
-    ) -> Result<(AgentStopResult, v3::AgentLabel), ErrorBody> {
+    ) -> Result<(StopResult, AgentLabel), ErrorBody> {
         let _changing = agent.lock_run_change().await;
         gate_for_test("before-stop-run");
         let result = self.stop_run(agent).await?;
@@ -836,11 +850,11 @@ impl Daemon {
 
     /// Stops `agent`'s run while the caller holds its run change: only the keeper signals a CLI.
     /// Waits up to 10 seconds for its exit. A run that ended before is left as it was.
-    pub(crate) async fn stop_run(&self, agent: &AgentHandle) -> Result<AgentStopResult, ErrorBody> {
+    pub(crate) async fn stop_run(&self, agent: &AgentHandle) -> Result<StopResult, ErrorBody> {
         let id = agent.id().to_string();
         let mut exit = agent.exit();
         if let Some(exit) = exit.borrow().clone() {
-            return Ok(AgentStopResult {
+            return Ok(StopResult {
                 exit,
                 already_ended: true,
             });
@@ -859,7 +873,7 @@ impl Daemon {
         }
         let running = self.runs.stop(&id).await?;
         match tokio::time::timeout(STOP_TIMEOUT, exit.wait_for(Option::is_some)).await {
-            Ok(Ok(exit)) => Ok(AgentStopResult {
+            Ok(Ok(exit)) => Ok(StopResult {
                 exit: exit.clone().expect("a recorded exit"),
                 already_ended: !running,
             }),
@@ -971,7 +985,7 @@ impl Daemon {
         let id = agent.id().to_string();
         self.runs.end_session_following(&id).await;
         let (store, deleted) = (self.store.clone(), id.clone());
-        blocking(move || store.delete_listed(&deleted, cause)).await?;
+        blocking(move || store.delete_listed(&deleted, cause, an_hour_ago)).await?;
         pause_for_test("after-record-delete");
         if self.agents.lock().unwrap().remove(&id).is_some() {
             let _ = self.changes.send(AgentsUpdate::Removed {
@@ -1024,9 +1038,11 @@ impl Daemon {
                     machine_id: self.machine_id.clone(),
                 };
                 let address = self.agent_address(&reference).unwrap_or_else(|_| {
-                    facade_base::v3::address::format_agent_address(
-                        &reference,
-                        &facade_base::v3::address::exact_machine_selector(&reference.machine_id),
+                    facade_base::address::selector::format_agent_address(
+                        &reference.agent_id,
+                        &facade_base::address::selector::exact_machine_selector(
+                            &reference.machine_id,
+                        ),
                     )
                 });
                 format!("{rule} session {session} is in use by {address}; stop it before resuming")
@@ -1060,8 +1076,8 @@ impl Daemon {
     pub(crate) async fn resume(
         self: &Arc<Self>,
         agent: &AgentHandle,
-        args: AgentResumeArgs,
-    ) -> Result<AgentInfo, ErrorBody> {
+        args: RestartRequest,
+    ) -> Result<ManagedAgent, ErrorBody> {
         let id = agent.id().to_string();
         let unavailable = |message: String| ErrorBody::new(Reason::Unavailable, message);
         let busy = || unavailable(format!("agent {id} is running or already resuming"));
@@ -1279,7 +1295,7 @@ impl Daemon {
     /// Renders instructions from the verified run's installed record and original creation source.
     pub(super) fn instructions_for_current_run(
         &self,
-        info: &AgentInfo,
+        info: &ManagedAgent,
     ) -> Result<String, ErrorBody> {
         let source = crate::blocking_in_place(|| self.store.launch_details(&info.agent_id))
             .map_err(ErrorBody::internal)?
@@ -1299,7 +1315,7 @@ impl Daemon {
         ))
     }
 
-    fn recorded_creator(&self, info: &AgentInfo) -> (Option<AgentRef>, Option<String>) {
+    fn recorded_creator(&self, info: &ManagedAgent) -> (Option<AgentRef>, Option<String>) {
         let creator = info.creator.as_ref().map(|agent_id| AgentRef {
             agent_id: agent_id.clone(),
             machine_id: info
@@ -1350,7 +1366,7 @@ impl Daemon {
         self: &Arc<Self>,
         agent: &AgentHandle,
         name: &str,
-    ) -> Result<(AgentInfo, String), ErrorBody> {
+    ) -> Result<(ManagedAgent, String), ErrorBody> {
         let id = agent.id().to_string();
         let name = name.trim_matches(facade_base::settings::is_space);
         let reserved = name.is_empty();

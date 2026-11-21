@@ -4,7 +4,7 @@
 //! terminal survives a daemon crash, and supervises the daemon. Everything happens on a single
 //! thread around one wait, `poll` on Unix and an I/O completion port on Windows: no tokio, no
 //! locks. It never interprets a CLI, a screen or a message. The daemon talks to it in the keeper
-//! protocol, [`facade_base::keeper`].
+//! protocol, [`facade_base::api_v1::keeper`].
 
 #[cfg(unix)]
 mod cli;
@@ -12,6 +12,7 @@ mod cli;
 mod keeper;
 #[cfg(unix)]
 mod link;
+mod runtime;
 #[cfg(unix)]
 mod supervisor;
 #[cfg(unix)]

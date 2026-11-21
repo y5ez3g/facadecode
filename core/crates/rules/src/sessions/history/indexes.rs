@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
 use rusqlite::{Connection, Row};
 use serde_json::Value;
 

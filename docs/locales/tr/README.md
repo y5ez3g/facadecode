@@ -4,14 +4,14 @@
 
 # Facade Code
 
-**Yapay zekâ kodlama aracılarını kendi makinelerinizde çalıştırın.**
+**VS Code için çoklu aracı orkestratörü.**
 
-Facade Code, makinelerinizde birden çok yapay zekâ kodlama CLI'sı çalıştırır. Aracılar birbirini bulabilir, ileti gönderebilir, ekranları okuyabilir ve terminallere yazabilir. Onları Shell, VS Code veya MCP destekli bir uygulamadan yönetebilirsiniz. Her makine kendi Orchestrator'ını çalıştırır ve diğerlerine SSH ile bağlanır.
+Yerel aracı CLI'larını çalıştırın, kod düzenleyin ve değişiklikleri aynı IDE penceresinde inceleyin. Kendi hesaplarınızı ve aboneliklerinizi kullanın, aracıların pencereler ve makineler arasında iş birliği yapmasını sağlayın.
 
 [![Web Sitesi: facadecode.com](https://img.shields.io/badge/Web%20Sitesi-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![VS Code Marketplace: yükle](https://img.shields.io/badge/VS%20Code%20Marketplace-y%C3%BCkle-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
 [![Open VSX: yükle](https://img.shields.io/badge/Open%20VSX-y%C3%BCkle-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
-[![Releases](https://img.shields.io/badge/Releases-GitHub-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Sürümler: IDE'yi indir](https://img.shields.io/badge/S%C3%BCr%C3%BCmler-IDE'yi%20indir-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
 [![Sorunlar: hata bildir](https://img.shields.io/badge/Sorunlar-hata%20bildir-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · **Türkçe** · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
@@ -31,71 +31,47 @@ Facade Code, makinelerinizde birden çok yapay zekâ kodlama CLI'sı çalıştı
 
 ## Kurulum
 
-### Shell
-
-Tek satırlık kurucular, bağımsız paketleri içeren ilk sürümle birlikte kullanılabilir.
-Shell paketleri macOS, Linux ve Windows için x64 ve arm64 desteği sunar.
-
-Bu komutu macOS veya Linux'ta çalıştırın.
-
-```sh
-sh -c 'script=$(curl -fsSL "$1") && sh -c "$script" --' facade-install https://github.com/y5ez3g/facadecode/releases/latest/download/install.sh
-```
-
-Windows'ta bu komutu PowerShell'de çalıştırın.
-
-```powershell
-$response = Invoke-WebRequest -UseBasicParsing 'https://github.com/y5ez3g/facadecode/releases/latest/download/install.ps1'; & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())))
-```
-
-Kurucu `facade` ve `facade-mcp` komutlarını PATH'e ekler. Güncellenen PATH'i kullanmak için yeni bir terminal açın. Güncellemek için `facade upgrade` komutunu çalıştırın. Gerekli CLI'ları her makineye kurup oturum açın. Yerleşik seçenekler Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi'dir.
-
-Başlatıcısının adı da `facade`'dır. İkisi de kuruluysa Shell, PATH'te ilk bulunan programı kullanır. Önizleme kaldırıldığında komut adı Orchestrator'a kalır. `facade --version` komutunu çalıştırın. `facade <version>` biçimindeki satır Shell komutunu kullandığınızı doğrular.
-
-### VS Code
-
 ```sh
 code --install-extension facade.facadecode
 ```
 
-Uzantı, Orchestrator'ı beraberinde getirir. Etkinlik çubuğundan **Facade Code**'u açın ve **Yeni Aracı**, **Go to Agent** veya **Resume Agent**'ı seçin. macOS, Linux ve Windows için x64 ve arm64 paketleri hazırlanır.
+Veya **Facade Code**'u [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ya da [Open VSX](https://open-vsx.org/extension/facade/facadecode) üzerinden yükleyin. macOS (Apple silicon), Linux (x64) ve Windows (x64) üzerinde çalışır.
 
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) · [Open VSX](https://open-vsx.org/extension/facade/facadecode) · [VS Code](../../../extension/GUIDE.md)
+Ardından, kullanmayı planladığınız desteklenen aracı CLI'larını yükleyin ve oturum açın: Claude Code, Codex, Antigravity, Muse Code, OpenCode veya Pi. Facade Code her CLI'yı kendi oturum açma bilgilerini ve aboneliklerini kullanarak başlatır.
 
-### MCP
+> **Aracılar varsayılan olarak onay istemi olmadan çalışır.** `yolo` varsayılan olarak etkinken aracılar komutları çalıştırabilir ve dosyaları önceden sormadan değiştirebilir. Her CLI'nın standart onay istemlerini geri getirmek için bunu kapatın. [Uzantı README](../../../extension/README.md#install) dosyasına bakın.
 
-`facade-mcp` komutunu bir stdio MCP sunucusu olarak ekleyin. Bu örnek bir `mcpServers` nesnesi kullanır.
+## Agent Panel
 
-```json
-{
-  "mcpServers": {
-    "facade": { "command": "facade-mcp" }
-  }
-}
-```
+**Aracılarınız ve IDE'niz aynı pencerede.**
 
-Dış bağlantı, ilk araç çağrısında Guest olarak katılır. İleti gönderdikten sonra `send_message` sonucundaki `read_messages` çağrısıyla yanıtı bekleyin.
+Facade Code, yerel aracı CLI'larını (Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi) dosyalarınızın yanında düzenleyici terminal sekmelerinde çalıştırır; her CLI'nın kendi komutlarını, araçlarını, hesaplarını ve aboneliklerini kullanır. Paneldeki bir kart her aracının durumunu izler.
 
-## Birden çok makinede çalışma
+- **Kodunuzun yanında çalışın.** Her aracı, düzenleyici alanında kendi terminal sekmesinde çalışır. Bir sekmeyi kapatmak, aracı çalışmaya devam ederken onu gizler; kartına tıklamak sekmeyi yeniden açar.
+- **Aracıların durumunu takip edin.** Kartlar her aracıya son olarak ne gönderildiğini ve çalışıyor mu, izin mi bekliyor yoksa bir hatayla mı karşılaştı gösterir; ayrıntılar ise başlığını, klasörünü ve onu kimin başlattığını gösterir. Aracılar pencere yeniden yüklemeleri ve uzantı yeniden başlatmaları boyunca çalışmaya devam eder.
+- **Klasörler ve çalışma ağaçları.** Aracıları herhangi bir çalışma alanı klasöründe çalıştırın veya kod değişikliklerini ayrı tutmak için anında bir Git çalışma ağacı (worktree) oluşturun. Çalışma alanını tekrar açtığınızda geri yüklemek için bir konuşmayı sabitleyin (Pin) veya geçmişten önceki oturumları devam ettirin.
 
-```sh
-facade start --name ada -d codex
-facade list
-facade attach ada
-```
+## Agent Use
 
-`facade list` çıktısındaki adresi kullanın. Başka bir makineyi her zamanki SSH hedefiniz ve seçeneklerinizle kaydedin. WSL veya bir Dev Container'a dışarıdan erişmek için SSH'yi ortamın içinde kurup aynı şekilde kaydedin. Facade'i doğrudan bu ortamda da çalıştırabilirsiniz.
+**Tıpkı sizin gibi, aracıların diğer aracıları yönetmesine izin verin.**
 
-```sh
-facade machine add -p 2222 aaron@devbox.lan
-facade start --machine devbox --workdir /work/app --worktree feat-x claude
-```
+MCP ve bir terminal protokolü aracılığıyla aracılar diğer aracıları başlatabilir, durdurabilir, bulabilir, onlara mesaj gönderebilir, terminal ekranlarını okuyabilir, metin yazabilir ve tuşlara basabilir.
 
-Facade gerektiğinde uzak makineye ilgili sürümü kurar. Facade uzak makinede sabit kurulum yolunu kullanır. Elle kurmanız gerekirse yerel Orchestrator ile aynı sürümü kullanın. VS Code'daki **Go to Agent**, çalışan bir aracının terminalini açar. Çalışma alanı açılan aracıları, yardımcılarını ve Pin'leri hatırlar. Terminal sekmesi kapandığında aracı çalışmaya devam eder. **Resume Agent** ve `facade resume` kayıtlı çalışmaları gösterir.
+- **Aracıları başlatın ve durdurun.** Bir aracı, bu bilgisayardaki Facade pencerelerinizin herhangi bir klasöründe veya yeni çalışma ağacında altı CLI'dan herhangi biriyle başka aracılar başlatabilir ve onlara ilk görevlerini verebilir. Aynı istek kimliğiyle (request ID) yinelenen bir istek asla ikinci bir aracı başlatmaz.
+- **Mesaj gönderin.** Aracılar birbiriyle mesajlaşır ve size mesaj gönderebilir. Facade tüm mesajı tek seferde yapıştırır ve gönderir. Gönderilmemiş bir metin veya bir komut istemi sorusu aradaysa, teslimat girdi alanı temizlenene kadar bekler.
+- **Terminal kontrolü.** Bir aracı, istemleri yanıtlamak veya takılan bir çalışma arkadaşına yardımcı olmak için başka bir aracının ekranını okuyabilir, komutlar yazabilir ve tuşlara basabilir. Bir alt aracı izin, yanıt veya oturum açma için 20 saniye beklediğinde, onu başlatan aracıya bildirim gönderilir.
 
-> **YOLO varsayılan olarak açıktır.** YOLO açıkken bir aracı bağlı makinelerdeki diğer aracılara erişebilir. CLI'nın kendi onaylarını ve korumalı alanını korumak ve MCP erişimini çağıranın oluşturma ağacıyla sınırlamak için makinenin `facade.json` dosyasına `"yolo": false` yazın. Değişiklik bir sonraki başlatma veya resume işleminde uygulanır. `facade status` dosya yolunu gösterir.
+## Agent Mesh
 
-[Ürün belgeleri (Çince)](../../facade-code.md) · [Terimler sözlüğü](../../core/GLOSSARY.md)
+**Aracıları pencereler, makineler ve konumlar arasında bağlayın.**
+
+Facade Code, bu bilgisayardaki Facade pencerelerinizdeki aracıları tek bir ağda birleştirir. Bu iş birliğini başka bir makineye genişletmek için bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresi açın.
+
+- **Pencereler arasında.** `yolo` açıkken bir aracı, bu bilgisayardaki Facade pencerelerinizdeki yerel ve Remote - SSH dahil tüm aracılara ulaşır. Kapalıyken yalnızca kendi grubuna ulaşır: başlattığınız aracı ve ondan başlatılanlar.
+- **SSH üzerinden genişletin.** Bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresinde aracılar doğrudan uzak makinede oradaki araçlar, dosyalar ve hesaplarla çalışır. Yerel aracılar, Remote - SSH pencerelerindeki aracıları doğrudan başlatabilir ve onlara mesaj gönderebilir.
+- **Telefonunuzdan koordine edin.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) kullanarak Claude mobil uygulamasını bilgisayarınızdaki bir Claude Code oturumuna bağlayın. Bu oturum diğer aracıları Facade üzerinden koordine edebilir ve ilerlemeyi telefonunuza bildirebilir.
+
+<sub>Remote Control desteklenen bir Claude Code sürümü, uygun bir abonelik ve tam kapsamlı oturum açma gerektirir. [Kurulum gereksinimlerine](https://code.claude.com/docs/en/remote-control#requirements) bakın.</sub>
 
 ## Facade Code IDE (Preview)
 
@@ -105,12 +81,11 @@ Projeleri, özellik çalışma ağaçlarını ve aracı ekiplerini özel bir ça
 
 IDE önizlemesini indirin: [macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [Tüm sürümler](https://github.com/y5ez3g/facadecode/releases)
 
-IDE önizlemesi mevcut düzenleyicinizin yanında kurulur ve kendi ayarlarıyla uzantılarını kullanır. Uzantıları [Open VSX](https://open-vsx.org) üzerinden gelir; Remote Development ve C/C++ gibi birkaç tescilli Microsoft uzantısı yalnızca resmi Microsoft derlemelerinde çalışır. Mimari ve spesifikasyonlar [`docs/ide/`](../../ide/) altındadır.
+IDE, mevcut düzenleyicinizin yanına yüklenen ve onunla hiçbir şey paylaşmayan bir VS Code çatalıdır (fork): ayarlar, uzantılar ve `facade` komutu tamamen ayrıdır. Uzantıları [Open VSX](https://open-vsx.org) üzerinden gelir; Remote Development ve C/C++ gibi birkaç tescilli Microsoft uzantısı yalnızca resmi Microsoft derlemelerinde çalışır. Mimari ve spesifikasyonlar [`docs/ide/`](../../ide/) altındadır.
 
 ## Kaynaktan Derleme
 
 - **Uzantı:** Paketi derlemesi için kodlama aracınıza [`extension/AGENTS.md`](../../../extension/AGENTS.md) dosyasını verin.
-- **Orchestrator / Shell.** [Derleme yönergeleri](../../../core/README.md).
 - **IDE:** Uygulamayı derlemesi için kodlama aracınıza [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) dosyasını verin.
 
 Katkıda bulunma yönergeleri ve dal disiplini için [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) ve [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) dosyalarına bakın.

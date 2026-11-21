@@ -386,18 +386,38 @@ covers that island's scope; cross-entry and multi-machine behavior require integ
 | SSH and worktree | Register a remote machine. Start there in a new worktree from Shell and exercise New Worktree as part of a VS Code start on that machine. Check the target's CLI choices and open the same terminal in Shell and VS Code. A Remote-SSH editor connects to its own host's Orchestrator. |
 | Agent team | Helpers appear after a start from the workspace or Go to Agent, including earlier descendants; their cards open terminals on request. |
 | External application | A Guest joins with `facade-mcp`, sends an agent a message and picks up its reply via the returned next step; YOLO off limits its reach. |
-| Resume and Pin | Shell and VS Code receive the same scoped candidates. Stop retains the card and Pin; reopening restores the Pin. Observe one recovery per workspace and distinguish prior expiry, explicit removal and temporary unreachability under RULES-6.4. |
+| Resume and Pin | Compare Shell and VS Code with the same local and folder scope. Stop retains the card and Pin, and reopening restores the Pin. Observe one recovery per workspace and distinguish prior expiry, explicit removal and temporary unreachability under RULES-6.4. |
 
 ### 5.2 Verify upgrade and compatibility against the previous build
 
 **Check workspace list and Pin continuity using the state made by the previous build.**
 
-With a saved workspace and active agents, upgrade and open it. Verify the imported list and Pins using RULES-6.1.
-Confirm that an unavailable machine leaves the import pending with the retrieved cards and Pins intact. Restore
-access and verify the full import and Pin restoration under ARCHITECTURE-6.2. Record whether a compatible takeover
-keeps the process and screen. Open a second window of the same workspace and check the shared list. Check stale tab
-cleanup and startup without the Window Component. The supporting old-engine checks continue to use isolated
-profiles. Each result identifies the versions it exercised.
+Use the accepted prerelease editor to complete the import of a saved workspace, including its remote members and
+Pins. End the prerelease agents, stop the daemon and keeper, and switch the editor and Core together. Reopen with
+the same isolated Facade home and editor profile. Verify the retained list and Pins, including a remote machine
+whose first snapshot is unavailable. Check a new workspace and rejection of a live prerelease socket. See RULES-6.1
+and ARCHITECTURE-6.1 and 6.2. The [Core storage contract](../../core/islands/daemon.md#storage-format-and-migrations)
+describes the daemon's separate database and migration behavior.
+
+Use two compatible API v1 builds to verify takeover with a running agent and an open terminal. Check that the
+process and screen survive and the editor draws a fresh snapshot from the new connection. If a watch ID is reused,
+verify that replies, events and callbacks from the retired connection leave the new view intact. Open a second
+window of the same workspace and check the shared list. Check stale tab cleanup and startup without the Window
+Component. Use isolated profiles for the supporting old-engine checks. Record the builds exercised by each result.
+
+Run `npm run test:integration` from `extension/` with `FACADE_IT_ENGINE=rust` and the
+selector below. Give the runner absolute paths and record the two build revisions and native program hashes.
+The ordinary matrix run covers same-build integration. These paired-build checks require the extra inputs.
+Use the accepted prior editor and Core from the same QA handoff, including their compiled drivers and native
+companions. Record the source revision and hash of each staged input in the evidence for the run.
+
+| `FACADE_IT_ONLY` | Additional inputs | Paired-build proof |
+| --- | --- | --- |
+| `cold-cutover` | `FACADE_IT_PRERELEASE_BUILD` containing the earlier `extension-it/bin` and compiled drivers in `out/test/integration`, plus `FACADE_IT_FAKECLI` | Import on the earlier build, exit both old services, then recover the same workspace member and Pin on v1. |
+| `shared-attach` | `FACADE_IT_FAKECLI` and a higher compatible `FACADE_IT_ATTACH_UPGRADE` | Replace the daemon while the same Keeper, CLI and open pane survive. Check shared input and size after reconnect. |
+
+See the [runner's input checks](../../../extension/src/test/integration/run.ts#L766) and
+[Core compatibility scenarios](../../core/ENGINEERING.md#compatibility-contracts).
 
 ## Checks
 

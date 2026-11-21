@@ -1,8 +1,7 @@
 //! What Facade's programs share.
 //!
-//! - Both protocols: the daemon's and the keeper's messages, their framing and errors, and a
-//!   blocking daemon client ([`daemon`], [`keeper`], [`jsonrpc`], [`operations`],
-//!   [`daemon_client`]).
+//! - Daemon and keeper messages, framing and the blocking daemon client ([`api_v1`]).
+//! - Agent, machine, message, terminal and error data ([`model`]).
 //! - What differs between operating systems: which one this is, watching processes, terminals,
 //!   the services' sockets and start, installing programs, private files and the person's
 //!   console ([`system`], [`unix_process`], [`terminal`], [`terminal_lines`], [`sockets`],
@@ -20,6 +19,7 @@ mod whitespace;
 
 pub mod key_input;
 pub mod log;
+pub mod model;
 pub mod paths;
 pub mod process;
 pub mod settings;
@@ -31,8 +31,7 @@ pub use build::{
     version, version_of,
 };
 pub use platform::modules::*;
-pub use protocol::v3;
-pub use protocol::{address, base64, daemon, daemon_client, jsonrpc, keeper, machine, operations};
+pub use protocol::{address, api_v1, base64, jsonrpc, operations};
 pub use texts::{instructions, skill, tools};
 
 /// Eight random bytes from the operating system, for keys and names nobody may guess. Panics if

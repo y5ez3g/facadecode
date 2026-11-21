@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use super::{Relay, ToolCall, V3_DEFINITIONS, verified_tools};
+use super::{Relay, TOOLS, Tool, ToolCall, ToolEntry, verified_tools};
 
 /// The MCP versions this server speaks, newest first. It answers with the version the client asks
 /// for, or else the newest.
@@ -53,14 +53,14 @@ fn notice_message(relay: &Relay, message: &Value) -> bool {
     match message["method"].as_str() {
         Some("tools/call") => {
             let id = message.get("id").filter(|id| is_id(id));
-            if message["params"]["name"] == "send_message"
-                && let Some(id) = id
-            {
-                relay.sends.note(id.to_string());
-            } else if message["params"]["name"] == "read_messages"
-                && let Some(id) = id
-            {
-                relay.sends.note_read(id.to_string());
+            let tool = message["params"]["name"]
+                .as_str()
+                .and_then(ToolEntry::named)
+                .map(|entry| entry.action);
+            match (tool, id) {
+                (Some(Tool::SendMessage), Some(id)) => relay.sends.note(id.to_string()),
+                (Some(Tool::ReadMessages), Some(id)) => relay.sends.note_read(id.to_string()),
+                _ => {}
             }
             false
         }
@@ -163,10 +163,10 @@ fn list_tools(relay: &Relay) -> Value {
     let always_load: serde_json::Map<String, Value> = facade_rules::always_load_keys()
         .map(|key| (key.to_string(), Value::Bool(true)))
         .collect();
-    let tools: Vec<Value> = V3_DEFINITIONS
+    let tools: Vec<Value> = TOOLS
         .iter()
-        .map(|definition| {
-            let mut tool = definition.clone();
+        .map(|entry| {
+            let mut tool = entry.definition.clone();
             tool["_meta"] = Value::Object(always_load.clone());
             tool
         })
@@ -198,7 +198,9 @@ fn call_tool(
     );
     relay.sends.finish(&call.key);
     let Some(result) = result else {
-        let message = if name == "read_messages" {
+        let message = if ToolEntry::named(name)
+            .is_some_and(|entry| matches!(entry.action, Tool::ReadMessages))
+        {
             "the client cancelled this call"
         } else {
             CANCELLED_MESSAGE
@@ -213,8 +215,8 @@ fn call_tool(
 
 #[cfg(test)]
 mod tests {
-    use facade_base::machine::AgentRef;
-    use facade_base::v3::AgentKind;
+    use facade_base::api_v1::daemon::AgentKind;
+    use facade_base::model::agent::AgentRef;
 
     use super::super::ActorIdentity;
     use super::*;

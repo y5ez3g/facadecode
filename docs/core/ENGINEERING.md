@@ -66,8 +66,8 @@ The code's design is in [ARCHITECTURE](ARCHITECTURE.md) and [islands/](islands/)
    to the island that wrote the code. Its fix comes as a `fixup! <title of that island's commit>` on the root branch,
    made from the root branch's head on a branch of its own.
 9. **Squash and check.** The General TL puts the fixups on the root branch and squashes them once with
-   `git rebase --autosquash <the commit before the first island's>`. Then it runs `core/scripts/test-all.sh` and
-   `core/scripts/check-each-commit.sh` again.
+   `git rebase --autosquash <the commit before the first island's>`. Then it runs the workspace tests and
+   `scripts/check-each-commit.sh <base> <head>` from `core/` on macOS or Linux.
 10. **The owner tries it.** Build, install in an isolated home, tell the owner where it is, and wait. Problems the owner
     finds go back to the islands that wrote the code, as in step 8. Ask the owner before merging into `main`, pushing
     or releasing.
@@ -112,16 +112,83 @@ git grep -nE 'super::|crate::' -- <child folder or file>
 git grep -nE 'impl.*[ :]Daemon \{' -- core/crates/daemon/src
 # CLI names outside rules: none outside tests and the texts a model reads.
 git grep -niE '"(agy|claude|codex|muse|opencode|pi)"' -- core/crates ':!core/crates/rules' ':!*.md'
-# Branching by operating system: only in base's platform, the keeper and the relay.
-git grep -nE 'cfg!?\(.*(target_os|target_family|unix|windows)' -- core/crates ':!core/crates/base/src/platform' ':!core/crates/keeper' ':!core/crates/relay'
+# Look for platform-specific implementation outside the platform, Keeper and Relay owners.
+git grep -nE 'cfg!?\(.*(target_os|target_family|unix|windows)' -- 'core/crates/*.rs' ':!core/crates/base/src/platform' ':!core/crates/keeper' ':!core/crates/relay'
 ```
+
+For the platform check, identify tests separately. The existing Shell platform branch selects
+the text of a [repair command](../../core/crates/facade/src/errors.rs#L945). Its responsibility
+ends at formatting. Process, terminal and transport behavior follows the [island ownership rules](ARCHITECTURE.md#rules-between-islands).
+Review each new cross-island reference against the named owner and approved dependency.
+
+### Compatibility contracts
+
+[Daemon storage](islands/daemon.md#storage-format-and-migrations),
+[Daemon API](../../core/protocol/DAEMON.md) and [Keeper API](../../core/protocol/KEEPER.md) define
+current compatibility boundaries. Keep the database format, daemon API and keeper API versions
+independent. The application owns SQLite's `user_version`.
+
+A change to a persisted schema, stored encoding, ID, receipt key, or published wire field or behavior
+needs the repository owner's approval through the [interface freeze and change procedure](#from-a-spec-to-main).
+Put the proposed boundary, supported builds, migration or refusal behavior, and verification plan in
+the freeze before approval. Record actual evidence at review, including the old and new artifact
+revisions and the isolated home. Internal refactoring that preserves the contract follows the ordinary island review.
+
+- **Wire.** Compare the proposed schema and behavior with the frozen released endpoint contract.
+  Update the owning [Rust definitions](../../core/crates/base/src/protocol/api_v1/mod.rs) or
+  [daemon guide](../../core/crates/base/src/protocol/guide.md) and
+  [Keeper guide](../../core/crates/base/src/protocol/keeper-guide.md), then regenerate together.
+  Check normal calls, permissions, errors and replay as well as JSON shapes. A generation match
+  verifies parity. Real old/new calls verify interoperability within the published support window.
+- **Storage.** Reopen an isolated store written by a supported prior build. Check machine and agent
+  IDs, saved launches and routes, sessions, message receipts, and the editor's separate workspace
+  membership and Pin files. Keep old inputs independent of the proposed migration. For a format
+  change, define the unsupported-version behavior before writes, the atomic migration commit,
+  and any supported rollback and restore path.
+- **Custody.** For a daemon takeover, verify the same keeper and CLI, restored Attach and a single
+  replayed receipt. For a keeper replacement, verify the same daemon and CLI and the original
+  watch. Use the [native Keeper replacement scenario](../../core/tests/tests/keeper.rs#L422) and
+  [takeover scenarios](../../core/tests/tests/upgrade.rs#L1826).
+
+The daemon and Keeper use separate formal v1 offers. A hello that omits `api_versions`, including an
+older range-form hello, is invalid. A valid offer with no common version gets `protocol_incompatible`.
+The [refusal scenario](../../core/tests/tests/protocol.rs#L146) checks that an old hello leaves the
+keeper and live CLI alone. The [disjoint takeover scenario](../../core/tests/tests/upgrade.rs#L1757)
+checks that refusal leaves the installed build and services alone. When there is no compatible live
+path, follow the [planned restart](FEATURES.md#restarts-and-diagnostics) and keep the homes and workspace
+state. The [editor check](../extension/engineering/VERIFICATION.md#52-verify-upgrade-and-compatibility-against-the-previous-build)
+exercises a saved workspace across that boundary.
+
+Run the wire checks from `core/`.
+
+```sh
+cargo test --locked -p facade-base --test protocol_files --test guide_examples
+```
+
+The files and examples must match the registries, and the two generated TypeScript copies must
+match byte for byte. Set `FACADE_REGENERATE=1` for the `protocol_files` test only to regenerate
+approved changes. Then rerun both tests with it unset and compare the changes to the published contract.
+
+The real-build scenarios below are opt-in. Run in an isolated home from `core/` with the named
+absolute artifact path and
+`cargo test --locked -p facade-scenarios --test <target> <case> -- --ignored --exact`.
+Use the artifacts from the accepted QA handoff, including their native companions. Record their
+source revisions, SHA-256 hashes and the version negotiated by each endpoint in the review evidence.
+The normal workspace suite skips these cases.
+
+| Case | Artifact input | Expected result |
+| --- | --- | --- |
+| [`machines` · `cold_cutover_keeps_prerelease_agent_records_and_saved_transport`](../../core/tests/tests/machines.rs#L265) | `FACADE_TEST_API_V1_PRERELEASE` is the accepted pre-v1 `facade[.exe]` with the range-form daemon hello | Keep the machine ID, Agent reference, finished record and saved SSH transport through a cold open. |
+| [`machines` · `a_legacy_workspace_import_recovers_both_machines_before_cold_cutover`](../../core/tests/tests/machines.rs#L2106) | Same prerelease program selecting range protocol 3, plus the [pinned v2 fixture](../../core/tests/src/binaries.rs#L83). Use `FACADE_TEST_V2_BIN` for a prepared directory containing `facade[.exe]` and its matching `.test-build` marker. | Import both members before the switch and retain the expected records afterward. |
+| [`upgrade` · `a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover`](../../core/tests/tests/upgrade.rs#L1826) | `FACADE_TEST_API_V1_NEXT` from a separate compatible build with a higher numeric version | Replace the daemon while the Keeper, CLI, session and one delivery survive. |
 
 ### Docs and working files
 
 - The docs change with the code. An island owner whose design or interface changes updates its part of
   `docs/core/islands/<crate>.md`, and the crate's owner commits the doc with the crate's commit. The General TL keeps
-  [ARCHITECTURE](ARCHITECTURE.md), [FEATURES](FEATURES.md) and [core/README](../../core/README.md) current, and the bar
-  raiser the [glossary](GLOSSARY.md).
+  [ARCHITECTURE](ARCHITECTURE.md) and [FEATURES](FEATURES.md) current, and the bar raiser maintains the
+  [glossary](GLOSSARY.md). Changes to [core/README](../../core/README.md) require prior owner approval under the
+  [repository rules](../../AGENTS.md#readme-approval).
 - The working files, such as the spec, the freezes, the reviews and the progress files, live in a folder of the root
   worktree that is never committed: `docs/plans/<feature>/`. Once the feature's commits are on the root branch, the
   General TL packs the folder into an archive outside the repository, checks that the archive opens, and deletes the
@@ -185,15 +252,25 @@ where every commit must build.
 
 | Script | What it does |
 | --- | --- |
-| `scripts/test-all.sh [<log>]` | Runs every test of the workspace in an empty temporary folder of its own, with `HOME` there too and no `FACADE_HOME`, then lists anything a test wrote to the home folder and any process the run left behind. Writes a short log and cargo's full output; exits 1 when a test fails, writes to the home folder, or leaves a process |
+| `scripts/test-all.sh [<log>]` | Clears inherited Facade variables and runs the workspace suite with a temporary `HOME` and fallback `FACADE_HOME`. Scenarios set their own homes. Writes a summary and Cargo output, and fails on a test failure, a fallback write or a leftover process. |
 | `scripts/leftovers.sh <TMPDIR> [<core folder>]` | Lists the processes a test run left behind: those working in its `TMPDIR` or naming a Facade home inside it, and those working in `core/` that outlived their parent |
 | `scripts\test-all.ps1 [<log>]` | The same on Windows, its temporary folder in `.test-temp\` beside the checkout, outside every checkout so that no test's Git reaches the repository. It builds first with the person's own folders, as any build does, then runs the tests with `USERPROFILE`, `HOME`, `APPDATA` and `LOCALAPPDATA` in its temporary folder, and lists only the processes started after the tests began |
 | `scripts\leftovers.ps1 <temporary folder> [<core folder>] [-Since <time>]` | The same on Windows: reads each process's working folder and environment, and ends nothing. With `-Since`, a UTC file time, it counts only processes started since then |
-| `scripts/check-each-commit.sh <base> [<head>]` | Checks every commit after `<base>`: the whole workspace builds, all targets, and cargo leaves `Cargo.lock` as it is. Works in a temporary worktree it removes at the end |
+| `scripts/check-each-commit.sh <base> [<head>]` | Runs `cargo check --workspace --all-targets` for each commit after `<base>` and requires an unchanged `Cargo.lock`. Uses a temporary worktree. |
 | `scripts/ssh-check.sh [<destination>]` | On Linux, over real ssh to this machine and with the test CLI: a login starts an agent and detaches, another login drops while attached, a new login finds both agents running with their screens and types into one, and once they stop, both services exit. Needs a key login without a prompt. Exits 1 when a step fails |
 
 A pull request that changes `core/` runs the workflow `Core checks`: clippy and the tests on macOS, Linux and Windows,
 each on arm64 and x64, with `test-all.sh`, or `test-all.ps1` on Windows; `cargo fmt --check`, `ssh-check.sh` and
 `check-each-commit.sh` on Linux x64.
+
+For documentation changes, follow each changed link and anchor from the published location and verify the stated
+interface, effect order or command against its source. Run the
+[extension specification audit](../extension/audit/REPORT.md#reproducible-checks) when changing the editor specification.
+The audit checks structure and references in that specification. The Core workflow's path filters can skip changes
+under `docs/core/`, so record the documentation review on the proposed revision.
+
+Follow the [release workflow](../extension/engineering/ARCHITECTURE.md#43-packaging-and-version-support)
+for prepare, mirror and owner-approved publish. Keep the candidate, native tests and release assets tied to
+the same source tree.
 
 The stress test is `facade-stress`; [core/README](../../core/README.md) says how to run it.

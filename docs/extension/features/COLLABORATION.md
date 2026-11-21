@@ -226,7 +226,7 @@ RULES-6.6.
 
 **Agents collaborate through MCP and the person can follow their work through Attach.**
 
-The Orchestrator owns [messages and terminal operations](../../facade-code.md#3-交互). Shell sends as the command
+The Orchestrator owns [messages and terminal operations](../../PRODUCT.md#interaction). Shell sends as the command
 line. The editor presents its own operation errors and shows the agent's terminal and its state. See RULES-6.7.
 
 ## Checks

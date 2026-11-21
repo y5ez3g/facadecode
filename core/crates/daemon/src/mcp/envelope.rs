@@ -3,8 +3,9 @@
 //! whose message says what is wrong, whether anything was done and what to do next. The model reads
 //! it as JSON text and gets the same object as the call's structured content.
 
-use facade_base::daemon::WindowDeliveryOutcome;
-use facade_base::jsonrpc::{ErrorBody, SendFailure};
+use facade_base::api_v1;
+use facade_base::model::error::{ErrorBody, Reason, SendFailure};
+use facade_base::model::message::WindowDeliveryOutcome;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -37,7 +38,50 @@ pub(super) fn refusal(error: &ErrorBody) -> Value {
     refusal_with_addresses(error, &Addresses::default())
 }
 
-pub(super) fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
+pub(super) fn daemon_refusal(error: &api_v1::ErrorBody) -> Value {
+    refusal(&tool_error(error))
+}
+
+/// Restores the details used by the MCP receipt from the daemon's error.
+pub(super) fn tool_error(error: &api_v1::ErrorBody) -> ErrorBody {
+    let mut data = error.data.details.clone().unwrap_or_default();
+    for field in ["agents", "machines", "sessions", "available_clis"] {
+        data.remove(field);
+    }
+    match error.data.reason.as_str() {
+        "unavailable" if data.contains_key("execution") => {
+            let fields = ["execution", "machine", "window", "matches", "unanswered"];
+            let unavailable = fields
+                .into_iter()
+                .filter_map(|field| data.remove(field).map(|value| (field.to_string(), value)))
+                .collect();
+            data.insert("unavailable".into(), Value::Object(unavailable));
+        }
+        "machine_id_conflict" => {
+            let conflict =
+                json!({ "machine_id": data.remove("machine_id"), "paths": data.remove("paths") });
+            data.insert("machine_id_conflict".into(), conflict);
+        }
+        "ssh_interaction_required" => {
+            let interaction =
+                json!({ "reason": data.remove("message"), "command": data.remove("command") });
+            data.insert("ssh_interaction".into(), interaction);
+        }
+        _ => {}
+    }
+    data.insert("reason".into(), json!(error.data.reason));
+    let mut projected = ErrorBody::new(
+        serde_json::from_value(json!(error.data.reason)).unwrap_or(Reason::Unknown),
+        &error.message,
+    );
+    if let Ok(details) = serde_json::from_value(Value::Object(data)) {
+        projected.data = details;
+    }
+    projected.code = error.code;
+    projected
+}
+
+fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
     let SendFailure {
         error,
         window_delivery: outcomes,
@@ -108,9 +152,11 @@ pub(super) fn window_delivery(
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{TextWritten, WindowDelivery, WindowDeliveryFailure, WindowRef};
-    use facade_base::jsonrpc::Reason;
-    use facade_base::machine::{ExecutionOutcome, MessageRef, ProtocolMismatch, Unavailable};
+    use facade_base::model::error::Reason;
+    use facade_base::model::machine::{ExecutionOutcome, Unavailable, WindowRef};
+    use facade_base::model::message::{
+        MessageRef, TextWritten, WindowDelivery, WindowDeliveryFailure,
+    };
 
     use super::*;
 
@@ -207,6 +253,7 @@ mod tests {
         for (reason, name) in [
             (Reason::InvalidSettings, "invalid_settings"),
             (Reason::CallerUnavailable, "caller_unavailable"),
+            (Reason::IncompatibleProtocol, "incompatible_protocol"),
             (Reason::Refused, "refused"),
             (Reason::Upgrading, "upgrading"),
             (Reason::NotFound, "not_found"),
@@ -215,18 +262,6 @@ mod tests {
             let error = ErrorBody::new(reason, "the call could not go ahead");
             assert_eq!(refusal(&error), failure(name, error.message));
         }
-        let mut mismatch =
-            ErrorBody::new(Reason::IncompatibleProtocol, "different protocol versions");
-        mismatch.data.protocol = Some(ProtocolMismatch {
-            local_build: "here".into(),
-            local_protocol: [2, 2],
-            remote_build: "there".into(),
-            remote_protocol: [1, 1],
-        });
-        let reply = refusal(&mismatch);
-        assert_eq!(reply["reason"], "incompatible_protocol", "{reply}");
-        assert_eq!(reply["data"], json!({ "protocol": mismatch.data.protocol }));
-
         let mut partial = ErrorBody::new(Reason::PartialInput, "the run ended during input");
         partial.data.text_written = Some(TextWritten::Partial);
         partial.data.enter_written = Some(false);

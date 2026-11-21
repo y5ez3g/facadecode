@@ -9,11 +9,15 @@ use crate::{TestHome, install_script};
 /// A destination must name one of the test homes. The fixture runs the tested bootstrap and
 /// installed Facade on the original standard streams. It can also serve the actual v2 fixture.
 pub fn install_machine_ssh(machines: &[(&str, &TestHome)], facade: &Path) {
-    assert!(
-        facade.is_absolute(),
-        "the SSH fixture needs the tested program"
-    );
-    let program = shell_path(facade);
+    let programs: Vec<_> = machines
+        .iter()
+        .map(|&(destination, home)| (destination, home, facade))
+        .collect();
+    install_machine_ssh_with_programs(&programs);
+}
+
+/// As [`install_machine_ssh`], selecting the installed program independently for each machine.
+pub fn install_machine_ssh_with_programs(machines: &[(&str, &TestHome, &Path)]) {
     // The remote login shell runs the bootstrap. On Windows it is Git's own MSYS shell: Git's
     // bin\sh.exe is a Windows program, and the script would reach it through a command line that
     // MSYS reads without the script's inner quotes.
@@ -27,8 +31,20 @@ pub fn install_machine_ssh(machines: &[(&str, &TestHome)], facade: &Path) {
     #[cfg(windows)]
     let pause = crate::git_install().join("usr/bin/sleep.exe");
     let pause = shell_path(&pause);
+    #[cfg(unix)]
+    let keygen = Path::new("/usr/bin/ssh-keygen").to_path_buf();
+    #[cfg(windows)]
+    let keygen = crate::git_install().join("usr/bin/ssh-keygen.exe");
+    let keygen = shell_path(&keygen);
     let mut targets = String::new();
-    for (destination, home) in machines {
+    let mut sources = String::new();
+    for (index, &(destination, home, facade)) in machines.iter().enumerate() {
+        assert!(
+            facade.is_absolute() && facade.is_file(),
+            "the SSH fixture needs the tested program: {}",
+            facade.display()
+        );
+        let program = shell_path(facade);
         let path = home.path.to_str().expect("the test home must be UTF-8");
         let encoded_home: String = path
             .as_bytes()
@@ -36,11 +52,31 @@ pub fn install_machine_ssh(machines: &[(&str, &TestHome)], facade: &Path) {
             .map(|byte| format!("{byte:02x}"))
             .collect();
         let target = shell_literal(destination);
+        let ip = shell_literal(&format!("192.0.2.{}", index + 1));
+        let source = shell_literal(path);
+        let known_hosts = shell_path(&home.user_home().join(".ssh/known_hosts"));
+        writeln!(
+            sources,
+            "  {source}) source_ip={ip}; source_known_hosts={known_hosts} ;;"
+        )
+        .unwrap();
         let offline = shell_path(&home.folder().join("ssh-offline"));
         let login = shell_path(&home.folder().join("ssh-needs-login"));
         let password_only = shell_path(&home.folder().join("ssh-password-only"));
         let hold = shell_path(&home.folder().join("ssh-hold"));
         let attempts = shell_path(&home.folder().join("ssh-attempts"));
+        let serves = shell_path(&home.folder().join("ssh-serves"));
+        let wrong_key = shell_path(&home.folder().join("ssh-proof-other-key"));
+        let existing_key = shell_path(&home.folder().join("existing-login-key.pub"));
+        let account_keys = shell_path(&home.user_home().join(".ssh/authorized_keys"));
+        let administrator_keys = shell_path(
+            &home
+                .user_home()
+                .join("ProgramData/ssh/administrators_authorized_keys"),
+        );
+        let host_keys = shell_path(&home.folder().join("ssh-host-keys"));
+        let return_host_key =
+            shell_path(&home.folder().join("ssh-host-keys/ssh_host_ed25519_key.pub"));
         let disconnected = shell_literal(&format!(
             "ssh: connect to host {destination}: Connection refused"
         ));
@@ -61,18 +97,37 @@ pub fn install_machine_ssh(machines: &[(&str, &TestHome)], facade: &Path) {
         .unwrap();
         writeln!(
             targets,
-            "  {target})
+            "  {target}|*@{target}|{ip}|*@{ip})
+    if [ \"$effective_config\" = yes ]; then
+      if [ \"$port\" = default ]; then port=22; fi
+      test -n \"$source_known_hosts\"
+      printf 'hostname %s\\nport %s\\nuserknownhostsfile %s\\nhashknownhosts false\\n' \"${{1#*@}}\" \"$port\" \"$source_known_hosts\"
+      exit 0
+    fi
     printf '%s %s %s\\n' \"$mode\" \"$port\" \"$entrypoint\" >> {attempts}
     while [ -e {hold} ]; do {pause} 0.05; done
-    if [ -e {login} ] || {{ [ -e {password_only} ] && [ \"$mode\" = batch ]; }}; then
-      printf '%s\\n' 'Permission denied (publickey).' >&2
-      exit 255
+    [ ! -e {login} ] || denied
+    case \"$1\" in
+      {ip}|*@{ip}) if [ -f {return_host_key} ]; then
+        check_native_trust {ip} {return_host_key}
+      fi ;;
+    esac
+    if [ -n \"$identity\" ]; then
+      proof_key=\"$identity.pub\"
+      if [ -e {wrong_key} ]; then proof_key={existing_key}; fi
+      check_key \"$1\" {account_keys} {administrator_keys}
+    elif [ -e {password_only} ] && [ \"$mode\" = batch ]; then
+      denied
     fi
     if [ -e {offline} ]; then
       printf '%s\\n' {disconnected} >&2
       exit 255
     fi
-    encoded_home={encoded_home}"
+    encoded_home={encoded_home}
+    program={program}
+    serves={serves}
+    target_ip={ip}
+    export FACADE_TEST_SSH_HOST_KEYS={host_keys}"
         )
         .unwrap();
         for (name, value) in home.isolating_env() {
@@ -96,15 +151,88 @@ pub fn install_machine_ssh(machines: &[(&str, &TestHome)], facade: &Path) {
     let script = format!(
         r#"#!/bin/sh
 set -eu
+source_ip=
+source_known_hosts=
+source_home=$FACADE_HOME
+case "$source_home" in
+{sources}esac
 mode=interactive
 port=default
+effective_config=no
+identity=
+proof=
+identities_only=no
+identity_agent=default
+strict_host=no
+fresh=no
+denied() {{
+  printf '%s\n' 'Permission denied (publickey).' >&2
+  exit 255
+}}
+check_native_trust() {{
+  host=$1
+  IFS=' ' read -r key_type key_blob rest < "$2"
+  if [ -f "$source_known_hosts" ]; then
+    while IFS=' ' read -r candidate_host candidate_type candidate_blob rest; do
+      if [ "$candidate_host" = "$host" ] && [ "$candidate_type" = "$key_type" ] && [ "$candidate_blob" = "$key_blob" ]; then
+        return 0
+      fi
+    done < "$source_known_hosts"
+  fi
+  printf '%s\n' "No ED25519 host key is known for $host and you have requested strict checking." 'Host key verification failed.' >&2
+  exit 255
+}}
+check_key() {{
+  destination=$1
+  shift
+  [ "$mode" = batch ] && [ "$identities_only" = yes ] && [ "$identity_agent" = none ] && [ "$strict_host" = yes ] || exit 64
+  case "$identity" in
+    "$source_home"/*|"$source_home"\\*) ;;
+    *) printf '%s\n' 'test SSH identity must stay inside the initiating Facade home' >&2; exit 64 ;;
+  esac
+  IFS=' ' read -r key_type key_blob rest < "$identity.pub" || denied
+  accepted=no
+  for keys do
+    [ -f "$keys" ] || continue
+    while IFS=' ' read -r candidate_type candidate_blob rest; do
+      if [ "$candidate_type" = "$key_type" ] && [ "$candidate_blob" = "$key_blob" ]; then
+        accepted=yes
+      fi
+    done < "$keys"
+  done
+  [ "$accepted" = yes ] || denied
+  if [ -n "$proof" ]; then
+    [ "$fresh" = yes ] || exit 64
+    case "$proof" in
+      "$source_home"/*|"$source_home"\\*) ;;
+      *) printf '%s\n' 'test SSH proof must stay inside the initiating Facade home' >&2; exit 64 ;;
+    esac
+    fingerprint=$({keygen} -l -E sha256 -f "$proof_key")
+    fingerprint=${{fingerprint#* }}
+    fingerprint=${{fingerprint%% *}}
+    printf '%s\n' "debug3: sign_and_send_pubkey: signing using ssh-ed25519 $fingerprint" \
+      'debug3: send packet: type 50' 'debug3: receive packet: type 52' \
+      "Authenticated to $destination using \"publickey\"." > "$proof"
+  fi
+}}
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -T) shift ;;
+    -T|-v|-vv|-vvv) shift ;;
+    -G) effective_config=yes; shift ;;
     -o) [ "$#" -ge 2 ] || exit 64
-        [ "$2" != BatchMode=yes ] || mode=batch
+        case "$2" in
+          BatchMode=yes) mode=batch ;;
+          IdentitiesOnly=yes) identities_only=yes ;;
+          IdentityAgent=none) identity_agent=none ;;
+          StrictHostKeyChecking=yes) strict_host=yes ;;
+          ControlPath=none) fresh=yes ;;
+        esac
         shift 2 ;;
     -p) [ "$#" -ge 2 ] || exit 64; port=$2; shift 2 ;;
+    -i) [ "$#" -ge 2 ] || exit 64; identity=$2; shift 2 ;;
+    -E) [ "$#" -ge 2 ] || exit 64; proof=$2; shift 2 ;;
+    -S) [ "$#" -ge 2 ] || exit 64; [ "$2" != none ] || fresh=yes; shift 2 ;;
+    -b|-F) [ "$#" -ge 2 ] || exit 64; shift 2 ;;
     --) shift; break ;;
     -*) printf '%s\n' 'unexpected test SSH option' >&2; exit 64 ;;
     *) break ;;
@@ -116,9 +244,11 @@ entrypoint=command
 case "$1" in
 {targets}  *) printf '%s\n' 'SSH destination does not name a test machine' >&2; exit 64 ;;
 esac
+if [ -n "$source_ip" ]; then export SSH_CONNECTION="$source_ip 22222 $target_ip 22"; fi
 shift
 if [ "$#" -eq 5 ] && [ "$1 $2 $3 $4 $5" = "facade machine serve --home-hex $encoded_home" ]; then
-  exec {program} machine serve --home-hex "$encoded_home"
+  printf '%s\n' wake >> "$serves"
+  exec "$program" machine serve --home-hex "$encoded_home"
 fi
 # In login mode the first line is the platform probe. The next command may span lines
 # in its quoted script. Consume exactly through its verified machine-serve line so the
@@ -133,8 +263,8 @@ if [ "$#" -eq 0 ]; then
   esac
   while :; do
     case "$line" in
-      *' machine serve '*"--home-hex $encoded_home"\'*) break ;;
-      *' machine serve '*) printf '%s\n' 'SSH command did not select the isolated Facade home' >&2; exit 64 ;;
+      *' machine serve '*"--home-hex $encoded_home"\'*|*' machine ssh-admin '*"--home-hex $encoded_home"\'*) break ;;
+      *' machine serve '*|*' machine ssh-admin --home-hex '*) printf '%s\n' 'SSH command did not select the isolated Facade home' >&2; exit 64 ;;
     esac
     IFS= read -r line || exit 64
     command="$command
@@ -150,6 +280,11 @@ case "$1" in
   'sh -c '*"--home-hex $encoded_home"*) ;;
   *) printf '%s\n' 'SSH command did not select the isolated Facade home' >&2; exit 64 ;;
 esac
+case "$1" in
+  *' machine serve --no-start '*) printf '%s\n' no-start >> "$serves" ;;
+  *' machine serve '*) printf '%s\n' wake >> "$serves" ;;
+  *' machine ssh-admin '*) printf '%s\n' admin >> "$serves" ;;
+esac
 # The fixed test installation restores the program PATH. With PATH empty during bootstrap,
 # an unexpected download request fails inside the fixture.
 export QA_SSH_PROGRAM_PATH="$PATH"
@@ -157,7 +292,7 @@ export PATH=
 exec {shell} -c "exec {shell} ${{1#sh }}"
 "#
     );
-    for (_, home) in machines {
+    for (_, home, _) in machines {
         install_script(&home.fixture_bin(), "ssh", &script);
     }
 }

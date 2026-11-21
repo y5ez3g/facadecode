@@ -1,8 +1,8 @@
 // Actor behavior tests carried from the agent unit suite.
 use std::path::Path;
 
-use facade_base::daemon::{AgentState, TextWritten};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::{model::agent::ManagedAgentState, model::message::TextWritten};
 use facade_screen::TerminalColors;
 
 use super::person::{Enter, PersonKeys};
@@ -12,8 +12,8 @@ use std::io;
 use std::sync::mpsc as std_mpsc;
 
 use super::typist::TypingAnswer;
-use facade_base::daemon::{InputState, ToolsState};
 use facade_base::terminal::{PtyMaster, TestCli, test_terminal};
+use facade_base::{model::agent::ToolsState, model::terminal::InputState};
 
 /// A folder for one test's store and screens.
 fn home(test: &str) -> crate::test_folder::TestFolder {
@@ -112,8 +112,8 @@ struct Harness {
     messages: Arc<crate::messages::Messages>,
 }
 
-fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16) -> AgentInfo {
-    AgentInfo {
+fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16) -> ManagedAgent {
+    ManagedAgent {
         address: None,
         label: None,
         unreachable: false,
@@ -124,7 +124,7 @@ fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16
         machine_id: String::new(),
         windows: Vec::new(),
         location_source_window: None,
-        location_id: facade_base::daemon::location_id("/"),
+        location_id: facade_base::model::machine::location_id("/"),
         pid: Some(1),
         process,
         cols: Some(cols),
@@ -137,10 +137,10 @@ fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16
         yolo: true,
         exit,
         session: None,
-        state: AgentState::Unknown,
+        state: ManagedAgentState::Unknown,
         state_detail: None,
         said: None,
-        tools_state: facade_base::daemon::ToolsState::NotInjected,
+        tools_state: facade_base::model::agent::ToolsState::NotInjected,
         tools_reason: None,
         guest: false,
     }
@@ -148,14 +148,18 @@ fn record(process: ProcessState, exit: Option<ProcessExit>, cols: u16, rows: u16
 
 impl Harness {
     /// Starts an actor; `screen` builds its screen from the agent folder.
-    fn start(home: &Path, info: AgentInfo, screen: impl FnOnce(PathBuf) -> ScreenStart) -> Harness {
+    fn start(
+        home: &Path,
+        info: ManagedAgent,
+        screen: impl FnOnce(PathBuf) -> ScreenStart,
+    ) -> Harness {
         Harness::start_after_output(home, info, b"", screen)
     }
 
     /// Starts an actor for a CLI that wrote `output` while no daemon read its terminal.
     fn start_after_output(
         home: &Path,
-        info: AgentInfo,
+        info: ManagedAgent,
         output: &[u8],
         screen: impl FnOnce(PathBuf) -> ScreenStart,
     ) -> Harness {
@@ -166,7 +170,7 @@ impl Harness {
     /// no daemon read its terminal.
     fn start_by_rule(
         home: &Path,
-        info: AgentInfo,
+        info: ManagedAgent,
         output: &[u8],
         rule: Option<&str>,
         screen: impl FnOnce(PathBuf) -> ScreenStart,
@@ -186,7 +190,7 @@ impl Harness {
     /// started at `started`.
     fn start_kept(
         home: &Path,
-        info: AgentInfo,
+        info: ManagedAgent,
         output: &[u8],
         rule: Option<&str>,
         kept: Kept,
@@ -239,7 +243,7 @@ impl Harness {
             .await
             .ok()?;
         Some(
-            facade_base::daemon::plain(&read.await.ok()?.0.text)
+            facade_base::model::terminal::plain(&read.await.ok()?.0.text)
                 .lines()
                 .map(str::to_string)
                 .collect(),
@@ -384,7 +388,7 @@ async fn a_full_log_waiting_for_its_checkpoint_holds_output_and_input_but_answer
     harness
         .handle
         .mailbox()
-        .send(AgentCommand::Resize(100, 30))
+        .send(AgentCommand::ResizeTerminal(100, 30))
         .await
         .unwrap();
     assert!(
@@ -399,7 +403,7 @@ async fn a_full_log_waiting_for_its_checkpoint_holds_output_and_input_but_answer
     harness
         .handle
         .mailbox()
-        .send(AgentCommand::Resize(90, 28))
+        .send(AgentCommand::ResizeTerminal(90, 28))
         .await
         .unwrap();
     let refused = harness.type_bytes(b"after the resize").await;
@@ -518,11 +522,7 @@ async fn a_synchronized_update_the_actor_ends_after_its_timeout_is_in_the_log() 
     harness
         .handle
         .mailbox()
-        .send(AgentCommand::ResizeTerminal {
-            cols: 40,
-            rows: 6,
-            colors: None,
-        })
+        .send(AgentCommand::ResizeTerminal(40, 6))
         .await
         .unwrap();
     harness.cli.write_all(b"\x1b[?2026l tail").unwrap();
@@ -549,14 +549,14 @@ async fn resizes_alone_keep_the_log_within_its_cap() {
         harness
             .handle
             .mailbox()
-            .send(AgentCommand::Resize(80 + size % 2, 24))
+            .send(AgentCommand::ResizeTerminal(80 + size % 2, 24))
             .await
             .unwrap();
     }
     harness
         .handle
         .mailbox()
-        .send(AgentCommand::Resize(70, 20))
+        .send(AgentCommand::ResizeTerminal(70, 20))
         .await
         .unwrap();
     // The full log got a checkpoint before the first resize record; the records went on in the
@@ -873,13 +873,13 @@ impl Harness {
         prepared.await.unwrap();
     }
 
-    async fn install(&self, run: u64, master: PtyMaster) -> AgentInfo {
+    async fn install(&self, run: u64, master: PtyMaster) -> ManagedAgent {
         self.install_given(run, master, ToolsGiven::NotInjected)
             .await
     }
 
     /// Installs run `run` on `master`, its CLI given Facade's tools as `tools` says.
-    async fn install_given(&self, run: u64, master: PtyMaster, tools: ToolsGiven) -> AgentInfo {
+    async fn install_given(&self, run: u64, master: PtyMaster, tools: ToolsGiven) -> ManagedAgent {
         let (reply, installed) = oneshot::channel();
         self.send(AgentCommand::InstallRun {
             run,
@@ -981,10 +981,10 @@ async fn a_recovered_agent_takes_the_reports_its_cli_wrote_while_no_daemon_read_
     );
     let state = || harness.handle.info().state;
     let until = Instant::now() + Duration::from_secs(5);
-    while state() != AgentState::WaitingForYou && Instant::now() < until {
+    while state() != ManagedAgentState::WaitingForYou && Instant::now() < until {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(state(), AgentState::WaitingForYou);
+    assert_eq!(state(), ManagedAgentState::WaitingForYou);
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }
@@ -1362,10 +1362,10 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
     let _connection = handle.tools_connected();
     let tools = || handle.info().tools_state;
     let until = Instant::now() + Duration::from_secs(5);
-    while tools() != facade_base::daemon::ToolsState::Available && Instant::now() < until {
+    while tools() != facade_base::model::agent::ToolsState::Available && Instant::now() < until {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(tools(), facade_base::daemon::ToolsState::Available);
+    assert_eq!(tools(), facade_base::model::agent::ToolsState::Available);
     let (reply, removed) = oneshot::channel();
     handle
         .mailbox()
@@ -1489,20 +1489,20 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     assert_eq!(harness.cli_reads(1), b"\r");
     harness.cli.write_all("\r\x1b[K❯ ".as_bytes()).unwrap();
     let until = Instant::now() + Duration::from_secs(5);
-    while status(prompt_number) == facade_base::daemon::DeliveryStatus::Pending
+    while status(prompt_number) == facade_base::model::message::DeliveryStatus::Pending
         && Instant::now() < until
     {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(
         status(prompt_number),
-        facade_base::daemon::DeliveryStatus::Success
+        facade_base::model::message::DeliveryStatus::Success
     );
     let paste = b"\x1b[200~a message\x1b[201~";
     assert_eq!(harness.cli_reads(paste.len()), paste, "then the message");
     assert_eq!(
         status(message_number),
-        facade_base::daemon::DeliveryStatus::Pending
+        facade_base::model::message::DeliveryStatus::Pending
     );
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
@@ -1546,7 +1546,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
     let handle = spawn(start, rx, tx, broadcast::channel(16).0).unwrap();
     assert_eq!(
         handle.info().tools_state,
-        facade_base::daemon::ToolsState::Connecting
+        facade_base::model::agent::ToolsState::Connecting
     );
     let (reply, removed) = oneshot::channel();
     handle
@@ -1577,7 +1577,12 @@ fn antigravity_started(home: &Path, started: Instant) -> Harness {
 }
 
 /// The agent's state, and why its CLI cannot use Facade's tools, once the actor published them.
-fn tools_now(harness: &Harness) -> (AgentState, Option<facade_base::daemon::ToolsReason>) {
+fn tools_now(
+    harness: &Harness,
+) -> (
+    ManagedAgentState,
+    Option<facade_base::model::agent::ToolsReason>,
+) {
     let info = harness.handle.info();
     (info.state, info.tools_reason)
 }
@@ -1585,7 +1590,10 @@ fn tools_now(harness: &Harness) -> (AgentState, Option<facade_base::daemon::Tool
 /// Waits up to five seconds for the agent's state and tools' reason to read `wanted`.
 async fn tools_read(
     harness: &Harness,
-    wanted: (AgentState, Option<facade_base::daemon::ToolsReason>),
+    wanted: (
+        ManagedAgentState,
+        Option<facade_base::model::agent::ToolsReason>,
+    ),
 ) -> bool {
     tools_read_within(harness, wanted, Duration::from_secs(5)).await
 }
@@ -1593,7 +1601,10 @@ async fn tools_read(
 /// Waits up to `time` for the agent's state and tools' reason to read `wanted`.
 async fn tools_read_within(
     harness: &Harness,
-    wanted: (AgentState, Option<facade_base::daemon::ToolsReason>),
+    wanted: (
+        ManagedAgentState,
+        Option<facade_base::model::agent::ToolsReason>,
+    ),
     time: Duration,
 ) -> bool {
     let until = Instant::now() + time;
@@ -1764,8 +1775,8 @@ async fn a_start_readies_no_tools_over_other_input_or_a_turn_and_says_so() {
         "taken back, no Enter"
     );
     let not_started = (
-        AgentState::Error,
-        Some(facade_base::daemon::ToolsReason::NotStarted),
+        ManagedAgentState::Error,
+        Some(facade_base::model::agent::ToolsReason::NotStarted),
     );
     for harness in [&drafted, &working, &joined] {
         assert!(
@@ -1844,12 +1855,12 @@ async fn a_question_antigravity_asks_at_its_start_is_answered_first_and_takes_no
     let _connection = harness.handle.tools_connected();
     let tools = || harness.handle.info().tools_state;
     let until = Instant::now() + Duration::from_secs(5);
-    while tools() != facade_base::daemon::ToolsState::Available && Instant::now() < until {
+    while tools() != facade_base::model::agent::ToolsState::Available && Instant::now() < until {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(
         (tools(), tools_now(&harness).1),
-        (facade_base::daemon::ToolsState::Available, None),
+        (facade_base::model::agent::ToolsState::Available, None),
         "the tools are ready"
     );
     harness.stop().await;
@@ -1962,8 +1973,8 @@ async fn the_hold_ends_at_the_start_s_bound() {
         tools_read(
             &harness,
             (
-                AgentState::Error,
-                Some(facade_base::daemon::ToolsReason::NotStarted)
+                ManagedAgentState::Error,
+                Some(facade_base::model::agent::ToolsReason::NotStarted)
             )
         )
         .await,
@@ -1995,8 +2006,8 @@ async fn a_panel_that_shows_no_ready_tools_is_closed_at_its_wait_only_while_it_s
     // The test waits for that outcome, not for a time: on a loaded machine the actor's timer
     // and the screen reader lag.
     let not_started = (
-        AgentState::Error,
-        Some(facade_base::daemon::ToolsReason::NotStarted),
+        ManagedAgentState::Error,
+        Some(facade_base::model::agent::ToolsReason::NotStarted),
     );
     for harness in [&open, &closed] {
         assert!(
@@ -2075,8 +2086,8 @@ async fn a_resumed_run_readies_its_tools_too() {
         tools_read(
             &harness,
             (
-                AgentState::Error,
-                Some(facade_base::daemon::ToolsReason::NotStarted)
+                ManagedAgentState::Error,
+                Some(facade_base::model::agent::ToolsReason::NotStarted)
             )
         )
         .await
@@ -2096,7 +2107,7 @@ async fn a_resumed_run_readies_its_tools_too() {
 /// drawn nothing yet.
 fn claude(home: &Path, yolo: bool) -> Harness {
     let kept = Kept::new_run(None, ToolsGiven::Injected);
-    let info = AgentInfo {
+    let info = ManagedAgent {
         yolo,
         ..record(ProcessState::Running, None, 80, 24)
     };
@@ -2332,7 +2343,7 @@ async fn assert_plain_draft_held(
     };
     assert_eq!(
         message.delivery.reason,
-        Some(facade_base::daemon::DeliveryFailure::InputDraft)
+        Some(facade_base::model::message::DeliveryFailure::InputDraft)
     );
     assert!(
         harness
@@ -2366,7 +2377,7 @@ async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
     };
     assert_eq!(
         first.delivery.status,
-        facade_base::daemon::DeliveryStatus::Success
+        facade_base::model::message::DeliveryStatus::Success
     );
 
     // The person types the same text and presses Home. The CLI draws the same row and cursor.
@@ -2611,7 +2622,7 @@ async fn an_ended_run_is_in_its_record_before_its_waiting_prompt_learns_it_ended
     let ended = (
         ProcessState::Ended,
         ToolsState::Unavailable,
-        Some(facade_base::daemon::ToolsReason::Ended),
+        Some(facade_base::model::agent::ToolsReason::Ended),
     );
     assert_eq!((info.process, info.tools_state, info.tools_reason), ended);
     harness.stop().await;
@@ -2694,8 +2705,8 @@ async fn an_ended_run_is_in_its_record_before_a_message_being_typed_learns_it_en
         panic!("the message is kept")
     };
     let failed = (
-        facade_base::daemon::DeliveryStatus::Failure,
-        Some(facade_base::daemon::DeliveryFailure::Ended),
+        facade_base::model::message::DeliveryStatus::Failure,
+        Some(facade_base::model::message::DeliveryFailure::Ended),
     );
     assert_eq!((message.delivery.status, message.delivery.reason), failed);
     let info = harness.handle.info();

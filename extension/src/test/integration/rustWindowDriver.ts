@@ -10,7 +10,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentListEntry, HelloResult, V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
+import type { AgentInfo, AgentListEntry, DaemonHelloResult, InspectResult } from '../../base/coreProtocol';
 import type { RustPin } from '../../core/ports';
 import type { PanelState } from '../../webview/protocol';
 import { CoreConnectionClosed, coreCall, helloInCore, normalizeDriveLetter, until } from './editors';
@@ -85,11 +85,11 @@ export async function listed(): Promise<AgentListEntry[]> {
 	return (await coreCall(HOME, 'agent.list', {})).agents;
 }
 
-export async function inspect(id: string): Promise<V3InspectResult> {
-	return await coreCall(HOME, 'agent.inspect', { agent: id });
+export async function inspect(id: string): Promise<InspectResult> {
+	return await coreCall(HOME, 'agent.inspect', { target: id });
 }
 
-export async function recordOf(id: string): Promise<V3AgentInfo> {
+export async function recordOf(id: string): Promise<AgentInfo> {
 	return (await inspect(id)).agent;
 }
 
@@ -97,7 +97,7 @@ export async function recordOf(id: string): Promise<V3AgentInfo> {
 async function servicePids(): Promise<{ readonly daemon: number; readonly keeper: number } | undefined> {
 	let hello;
 	try {
-		hello = await helloInCore(HOME, [3, 3]);
+		hello = await helloInCore(HOME);
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
 		if (error instanceof CoreConnectionClosed || code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ECONNRESET') {
@@ -105,8 +105,8 @@ async function servicePids(): Promise<{ readonly daemon: number; readonly keeper
 		}
 		throw error;
 	}
-	assert.ok(!hello.error, JSON.stringify(hello.error));
-	const { pid, keeper } = hello.result as HelloResult;
+	assert.ok('result' in hello, JSON.stringify(hello));
+	const { pid, keeper } = hello.result as DaemonHelloResult;
 	if (keeper === undefined) { return undefined; }
 	assert.ok(Number.isSafeInteger(pid) && Number.isSafeInteger(keeper.pid), JSON.stringify(hello.result));
 	return { daemon: pid, keeper: keeper.pid };

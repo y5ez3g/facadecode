@@ -4,11 +4,49 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use tokio::process as async_process;
 
 use super::install;
+
+mod authorization;
+mod files;
+mod keys;
+#[cfg(unix)]
+#[path = "ssh/unix.rs"]
+mod os;
+#[cfg(windows)]
+#[path = "ssh/windows.rs"]
+mod os;
+
+pub use authorization::{AuthorizationChange, AuthorizationFile, authorization_file};
+pub use keys::{
+    DedicatedIdentity, HostTrust, HostTrustCleanupUnconfirmed, SshKeyProof, dedicated_identity,
+    host_public_keys, trust_host_keys,
+};
+pub use os::ssh_account_name;
+
+/// The source IP reported by the authenticated OpenSSH server for this login.
+pub fn ssh_connection_source() -> Option<std::net::IpAddr> {
+    use std::net::IpAddr;
+
+    let value = std::env::var("SSH_CONNECTION").ok()?;
+    let mut words = value.split(' ');
+    let source = words.next()?.parse::<IpAddr>().ok()?;
+    connection_port(words.next()?)?;
+    words.next()?.parse::<IpAddr>().ok()?;
+    connection_port(words.next()?)?;
+    words.next().is_none().then_some(source)
+}
+
+fn connection_port(port: &str) -> Option<u16> {
+    if !port.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    port.parse().ok().filter(|&port| port != 0)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SshMode {
@@ -140,11 +178,12 @@ fn connection_args(mode: SshMode, control_dir: Option<&Path>) -> Vec<OsString> {
                 OsString::from("-o"),
                 path,
             ]);
-            args.extend(["-o", "ControlPersist=60s"].map(OsString::from));
         }
     }
     args
 }
+
+const SSH_OPTIONS_WITH_VALUE: &[u8] = b"BDEFIJLPRSbceilmopw";
 
 /// Finds the destination in one OpenSSH login invocation. OpenSSH accepts options on either
 /// side of the destination until it sees a remote command or an explicit end of options.
@@ -158,7 +197,7 @@ pub fn parse_ssh_destination(args: &[String]) -> Result<&str, SshArgumentError> 
         } else if let Some(flags) = word.strip_prefix('-').filter(|s| options && !s.is_empty()) {
             for (at, flag) in flags.bytes().enumerate() {
                 // OpenSSH's options that take a value. The rest of a cluster can be the value.
-                if b"BDEFIJLPRSbceilmopw".contains(&flag) {
+                if SSH_OPTIONS_WITH_VALUE.contains(&flag) {
                     let attached = &flags[at + 1..];
                     let value = if attached.is_empty() {
                         args.next().ok_or(SshArgumentError::Option)?
@@ -251,12 +290,142 @@ fn ssh_args(
     remote_command: Option<&str>,
 ) -> Result<Vec<OsString>, SshArgumentError> {
     parse_ssh_destination(args)?;
+    let control_dir = control_dir.filter(|_| !args.iter().any(|arg| arg == "ControlPath=none"));
     let mut words = connection_args(mode, control_dir);
     if remote_command.is_none() {
         words.extend(["-o", "RemoteCommand=none"].map(OsString::from));
     }
     words.extend(args.iter().map(OsString::from));
     words.extend(remote_command.map(OsString::from));
+    Ok(words)
+}
+
+/// Opens a fresh administration login. Interactive enrollment uses native host checking.
+pub fn admin_login_args(args: &[String], mode: SshMode) -> Result<Vec<OsString>, SshArgumentError> {
+    let mut verified = private_login_options(mode != SshMode::Add);
+    verified.extend(protected_login_options(args, "AMS")?);
+    ssh_login_args(&verified, mode, None)
+}
+
+/// Builds a strict return login using the account's existing credentials and trust policy.
+pub fn trusted_login_args(
+    args: &[String],
+    known_hosts: Option<&Path>,
+) -> anyhow::Result<Vec<String>> {
+    let mut words = ["-o", "BatchMode=yes"].map(String::from).to_vec();
+    words.extend(strict_login_args(args, known_hosts)?);
+    Ok(words)
+}
+
+fn strict_login_args(args: &[String], known_hosts: Option<&Path>) -> anyhow::Result<Vec<String>> {
+    let mut verified = private_login_options(true);
+    if let Some(path) = known_hosts {
+        keys::check_native_known_hosts(path)?;
+    }
+    verified.extend(protected_login_options(args, "AMS")?);
+    Ok(verified)
+}
+
+fn private_login_options(strict: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    if strict {
+        args.extend(["-o", "StrictHostKeyChecking=yes"].map(String::from));
+    }
+    args.extend(
+        [
+            "-o",
+            "UpdateHostKeys=no",
+            "-o",
+            "ForwardAgent=no",
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+        ]
+        .map(String::from),
+    );
+    args
+}
+
+/// Prepares the persisted login arguments used after dedicated-key enrollment.
+pub fn dedicated_login_args(
+    args: &[String],
+    key_path: &Path,
+    known_hosts: Option<&Path>,
+) -> anyhow::Result<Vec<String>> {
+    let args = protected_login_options(args, "iIEy")?;
+    let mut words = [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "IdentityAgent=none",
+        "-o",
+        "PubkeyAuthentication=yes",
+        "-o",
+        "PreferredAuthentications=publickey",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "KbdInteractiveAuthentication=no",
+        "-i",
+    ]
+    .map(String::from)
+    .to_vec();
+    words.push(ssh_literal_path(key_path)?);
+    words.extend(strict_login_args(&args, known_hosts)?);
+    Ok(words)
+}
+
+fn ssh_literal_path(path: &Path) -> anyhow::Result<String> {
+    path.to_str()
+        .filter(|text| {
+            path.is_absolute() && !text.chars().any(char::is_control) && !text.contains("$\x7b")
+        })
+        .map(|text| text.replace('%', "%%"))
+        .ok_or_else(|| anyhow::anyhow!("cannot pass SSH path {} as a literal", path.display()))
+}
+
+fn protected_login_options(
+    args: &[String],
+    omit_flags: &str,
+) -> Result<Vec<String>, SshArgumentError> {
+    parse_ssh_destination(args)?;
+    let mut words = Vec::new();
+    let mut remaining = args.iter();
+    while let Some(word) = remaining.next() {
+        if word == "--" {
+            words.push(word.clone());
+            words.extend(remaining.cloned());
+            break;
+        }
+        let Some(flags) = word.strip_prefix('-').filter(|flags| !flags.is_empty()) else {
+            words.push(word.clone());
+            continue;
+        };
+        let mut kept = String::from("-");
+        let mut value = None;
+        for (at, flag) in flags.bytes().enumerate() {
+            let keep = !omit_flags.contains(char::from(flag));
+            if keep {
+                kept.push(char::from(flag));
+            }
+            if SSH_OPTIONS_WITH_VALUE.contains(&flag) {
+                let attached = &flags[at + 1..];
+                if attached.is_empty() {
+                    value = remaining.next().filter(|_| keep);
+                } else if keep {
+                    kept.push_str(attached);
+                }
+                break;
+            }
+        }
+        if kept.len() > 1 {
+            words.push(kept);
+        }
+        words.extend(value.cloned());
+    }
     Ok(words)
 }
 
@@ -450,13 +619,25 @@ pub enum RemoteProbe {
 pub enum BootstrapAction {
     Serve,
     Install,
-    UpgradeLocal,
     NeedsInstall,
 }
 
 pub const BOOTSTRAP_SERVE: &[u8] = b"serve\n";
 pub const BOOTSTRAP_INSTALL: &[u8] = b"install\n";
 pub const BOOTSTRAP_READY: &str = "ready";
+pub const BOOTSTRAP_UNSUPPORTED: &str = "unsupported";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshAdminMode {
+    Enroll,
+    Remove,
+}
+
+#[derive(Clone, Copy)]
+enum BootstrapTarget {
+    Serve { wake: bool },
+    Admin(SshAdminMode),
+}
 
 /// Reads the bootstrap's first line, before the caller sends its decision.
 pub fn parse_remote_probe(line: &str) -> Result<RemoteProbe, SshArgumentError> {
@@ -474,28 +655,13 @@ pub fn parse_remote_probe(line: &str) -> Result<RemoteProbe, SshArgumentError> {
     }
 }
 
-/// Chooses what can run after the probe. A passive caller leaves installation to an active one.
-pub fn bootstrap_action(
-    probe: &RemoteProbe,
-    local_build: &str,
-    wake: bool,
-) -> Result<BootstrapAction, SshArgumentError> {
-    use std::cmp::Ordering;
-
-    let local = crate::version_of(local_build).ok_or(SshArgumentError::Version)?;
-    if let RemoteProbe::Installed(version) = probe {
-        let remote = crate::version_of(version).ok_or(SshArgumentError::Version)?;
-        match remote.cmp(&local) {
-            Ordering::Equal => return Ok(BootstrapAction::Serve),
-            Ordering::Greater => return Ok(BootstrapAction::UpgradeLocal),
-            Ordering::Less => {}
-        }
+/// Chooses how to reach an installed peer. Its API hello selects compatibility.
+pub fn bootstrap_action(probe: &RemoteProbe, wake: bool) -> BootstrapAction {
+    match (probe, wake) {
+        (RemoteProbe::Installed(_), _) => BootstrapAction::Serve,
+        (RemoteProbe::Missing, true) => BootstrapAction::Install,
+        (RemoteProbe::Missing, false) => BootstrapAction::NeedsInstall,
     }
-    Ok(if wake {
-        BootstrapAction::Install
-    } else {
-        BootstrapAction::NeedsInstall
-    })
 }
 
 /// Probes, optionally installs, and hands the same SSH streams to machine serve.
@@ -505,7 +671,13 @@ pub fn remote_bootstrap_command(
     version: &str,
     wake: bool,
 ) -> Result<String, SshArgumentError> {
-    bootstrap_command(system, remote_home, version, wake, false)
+    bootstrap_command(
+        system,
+        remote_home,
+        version,
+        BootstrapTarget::Serve { wake },
+        false,
+    )
 }
 
 /// Sends the bootstrap to the selected login shell and returns serve's exit status through it.
@@ -515,23 +687,61 @@ pub fn remote_login_bootstrap_command(
     version: &str,
     wake: bool,
 ) -> Result<String, SshArgumentError> {
-    let command = bootstrap_command(shell.system(), remote_home, version, wake, true)?;
-    Ok(match shell {
+    let command = bootstrap_command(
+        shell.system(),
+        remote_home,
+        version,
+        BootstrapTarget::Serve { wake },
+        true,
+    )?;
+    Ok(login_command(shell, &command))
+}
+
+/// Probes the fixed-path administration helper on the authenticated login.
+pub fn remote_login_admin_command(
+    shell: RemoteLoginShell,
+    remote_home: Option<&str>,
+    build: &str,
+    mode: SshAdminMode,
+) -> Result<String, SshArgumentError> {
+    let command = bootstrap_command(
+        shell.system(),
+        remote_home,
+        build,
+        BootstrapTarget::Admin(mode),
+        true,
+    )?;
+    Ok(login_command(shell, &command))
+}
+
+fn login_command(shell: RemoteLoginShell, command: &str) -> String {
+    match shell {
         RemoteLoginShell::Unix => format!("exec {command}\n"),
         RemoteLoginShell::Cmd => format!("{command} & exit\n"),
         RemoteLoginShell::PowerShell => format!("{command}; exit $LASTEXITCODE\n"),
-    })
+    }
 }
 
 fn bootstrap_command(
     system: RemoteSystem,
     remote_home: Option<&str>,
     version: &str,
-    wake: bool,
+    target: BootstrapTarget,
     from_login: bool,
 ) -> Result<String, SshArgumentError> {
     let version = release_version(version)?;
-    let arguments = serve_arguments(remote_home, wake)?;
+    let (arguments, allow_install) = match target {
+        BootstrapTarget::Serve { wake } => (serve_arguments(remote_home, wake)?, wake),
+        BootstrapTarget::Admin(mode) => {
+            let mut arguments = String::from("machine ssh-admin");
+            if let Some(home) = remote_home {
+                arguments.push_str(" --home-hex ");
+                arguments.push_str(&home_hex(home)?);
+            }
+            (arguments, mode == SshAdminMode::Enroll)
+        }
+    };
+    let admin = matches!(target, BootstrapTarget::Admin(_));
     Ok(match system {
         RemoteSystem::Unix => {
             let begin = if from_login {
@@ -549,11 +759,24 @@ fn bootstrap_command(
                 ),
                 "printf '%s\\n' missing",
             );
-            let install = if wake {
+            let install = if allow_install {
                 format!("{} || exit $?", unix_install_script(remote_home))
             } else {
                 "printf '%s\\n' 'Facade installation requires an active connection' >&2; exit 1"
                     .to_owned()
+            };
+            let admin_probe = if admin {
+                format!(
+                    r#"if ! marker=$({UNIX_PROGRAM} machine ssh-admin --probe </dev/null 2>/dev/null && printf .) ||
+                    [ "$marker" != 'facade-ssh-admin
+.' ]; then
+                    printf '%s\n' {BOOTSTRAP_UNSUPPORTED}
+                    exit 1
+                fi
+                "#
+                )
+            } else {
+                String::new()
             };
             let script = format!(
                 r#"{begin}{probe}
@@ -563,10 +786,10 @@ fn bootstrap_command(
                     install) {install} ;;
                     *) printf '%s\n' 'Expected a Facade bootstrap decision' >&2; exit 1 ;;
                 esac
-                printf '%s\n' {BOOTSTRAP_READY} || exit 1
+                {admin_probe}printf '%s\n' {BOOTSTRAP_READY} || exit 1
                 exec {UNIX_PROGRAM} {arguments}"#
             );
-            if wake {
+            if allow_install {
                 unix_pinned_command(&script, version, remote_home)
             } else {
                 sh_command(&script, &[])
@@ -585,10 +808,23 @@ fn bootstrap_command(
                  }; [Console]::WriteLine('version ' + $report.Substring(7))",
                 "[Console]::WriteLine('missing')",
             );
-            let install = if wake {
+            let install = if allow_install {
                 windows_install_script(version, remote_home)
             } else {
                 "throw 'Facade installation requires an active connection'".to_owned()
+            };
+            let admin_probe = if admin {
+                format!(
+                    "$previous = $ErrorActionPreference; $ErrorActionPreference = 'SilentlyContinue'; \
+                     $marker = & $program machine ssh-admin --probe 2>$null; \
+                     $ErrorActionPreference = $previous; \
+                     if ($LASTEXITCODE -ne 0 -or $marker -isnot [string] -or \
+                         $marker -cne 'facade-ssh-admin') {{ \
+                         [Console]::WriteLine('{BOOTSTRAP_UNSUPPORTED}'); exit 1 \
+                     }}; "
+                )
+            } else {
+                String::new()
             };
             powershell_command(&format!(
                 "{begin}{probe}; \
@@ -598,7 +834,7 @@ fn bootstrap_command(
                      'install' {{ {install} }} \
                      default {{ throw 'Expected a Facade bootstrap decision' }} \
                  }}; \
-                 [Console]::WriteLine('{BOOTSTRAP_READY}'); \
+                 {admin_probe}[Console]::WriteLine('{BOOTSTRAP_READY}'); \
                  & $program {arguments}; exit $LASTEXITCODE"
             ))
         }
@@ -704,14 +940,42 @@ pub fn spawn_ssh(mut command: Command) -> io::Result<(Child, ChildStdin, ChildSt
     }
     #[cfg(unix)]
     {
-        use std::process::Stdio;
-
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()?;
         let to_ssh = child.stdin.take().expect("stdin was piped");
         let from_ssh = child.stdout.take().expect("stdout was piped");
+        Ok((child, to_ssh, from_ssh))
+    }
+}
+
+/// Starts OpenSSH for a background machine session, capturing stderr and killing it on drop.
+pub fn spawn_ssh_async(
+    mut command: async_process::Command,
+) -> io::Result<(
+    async_process::Child,
+    async_process::ChildStdin,
+    async_process::ChildStdout,
+)> {
+    command.stderr(Stdio::piped()).kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        let stdio = ssh_stdio()?;
+        command.stdin(stdio.stdin).stdout(stdio.stdout);
+        // Convert both parent ends before starting a child that would need cleanup on error.
+        let from_ssh = async_process::ChildStdout::from_std(stdio.from_ssh)?;
+        let to_ssh = async_process::ChildStdin::from_std(stdio.to_ssh)?;
+        Ok((command.spawn()?, to_ssh, from_ssh))
+    }
+    #[cfg(unix)]
+    {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let from_ssh = child.stdout.take().expect("piped SSH stdout");
+        let to_ssh = child.stdin.take().expect("piped SSH stdin");
         Ok((child, to_ssh, from_ssh))
     }
 }
@@ -723,17 +987,17 @@ pub fn spawn_ssh(mut command: Command) -> io::Result<(Child, ChildStdin, ChildSt
 /// child synchronous pipe ends, so these pipes are overlapped at both ends; Git for Windows'
 /// ssh.exe accepts either.
 #[cfg(windows)]
-pub struct SshStdio {
+struct SshStdio {
     /// OpenSSH's standard input.
-    pub stdin: std::process::Stdio,
+    stdin: Stdio,
     /// OpenSSH's standard output.
-    pub stdout: std::process::Stdio,
-    pub to_ssh: std::process::ChildStdin,
-    pub from_ssh: std::process::ChildStdout,
+    stdout: Stdio,
+    to_ssh: ChildStdin,
+    from_ssh: ChildStdout,
 }
 
 #[cfg(windows)]
-pub fn ssh_stdio() -> std::io::Result<SshStdio> {
+fn ssh_stdio() -> io::Result<SshStdio> {
     use windows_sys::Win32::Storage::FileSystem::{PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND};
 
     let (to_ssh, stdin) = ssh_pipe(PIPE_ACCESS_OUTBOUND)?;

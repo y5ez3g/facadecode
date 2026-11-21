@@ -390,8 +390,6 @@
 	"Invalid Facade workspace roster: {0}": "Некорректный список агентов Facade в этой рабочей области: {0}",
 	"Invalid Facade workspace state: {0}": "Некорректное состояние рабочей области Facade: {0}",
 	"Invalid Facade Pin recovery record: {0}": "Некорректная запись Facade для восстановления Pin: {0}",
-	"The previous Facade home has workspace data. Set FACADE_HOME to {0} on this extension host and reopen the workspace to import it.": "В прежнем домашнем каталоге Facade есть данные рабочей области. Установите FACADE_HOME на этом узле расширения в {0} и откройте рабочую область заново, чтобы импортировать данные.",
-	"Could not finish importing this workspace from {0}. Restore access with facade machine add if needed, then reopen the workspace to finish the import.": "Не удалось завершить импорт этой рабочей области из {0}. При необходимости восстановите доступ через facade machine add и снова откройте рабочую область, чтобы завершить импорт.",
 	"The old engine is active on {0}. {1} Fix the problem, set {2} to `auto`, and reload the window to try the Rust engine again.": "На {0} работает прежний движок. {1} Устраните проблему, установите для {2} значение `auto` и перезагрузите окно, чтобы снова попробовать движок Rust.",
 	"Could not open {0}: {1}": "Не удалось открыть {0}: {1}",
 	"Could not hide {0}: {1}": "Не удалось скрыть {0}: {1}",
@@ -408,6 +406,5 @@
 	"Not installed": "Не установлено",
 	"Enter Path...": "Ввести путь...",
 	"Enter a path.": "Введите путь.",
-	"Could not identify the previous empty window. Enable the Facade Code Window Component in that window and reload it to finish importing.": "Не удалось определить предыдущее пустое окно. Включите в нём оконный компонент Facade Code и перезагрузите окно, чтобы завершить импорт.",
 	"Leave blank to choose a name automatically": "Оставьте поле пустым, чтобы имя было выбрано автоматически"
 }

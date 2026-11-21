@@ -25,9 +25,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::daemon::{AgentInfo, AgentsUpdate, InputInfo};
+use facade_base::api_v1::{Size, daemon::AttachmentInfo};
+use facade_base::model::error::ErrorBody;
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::terminal::PtyMaster;
+use facade_base::{
+    model::agent::{AgentsUpdate, ManagedAgent},
+    model::terminal::InputInfo,
+};
 use facade_screen::{Screen, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
@@ -97,11 +102,11 @@ impl Input {
 /// An agent's record, its input as its rule reads the screen now, and whether its session is
 /// followed, taken at one moment.
 pub(crate) struct Inspection {
-    pub(crate) agent: AgentInfo,
+    pub(crate) agent: ManagedAgent,
     pub(crate) input: InputInfo,
     pub(crate) session_tracking: bool,
     pub(crate) viewers: Vec<String>,
-    pub(crate) attachments: Vec<facade_base::v3::AttachmentInfo>,
+    pub(crate) attachments: Vec<AttachmentInfo>,
     pub(crate) title: Option<String>,
     pub(crate) launch_command: Option<String>,
 }
@@ -128,13 +133,9 @@ pub(crate) enum AgentCommand {
         run: u64,
         reply: InputReply,
     },
-    Resize(u16, u16),
-    /// Resizes the terminal and applies colors already authorized by the service.
-    ResizeTerminal {
-        cols: u16,
-        rows: u16,
-        colors: Option<TerminalColors>,
-    },
+    /// Applies an exact size to a unit fixture's terminal and screen.
+    #[cfg(test)]
+    ResizeTerminal(u16, u16),
     /// Adds a viewer: its snapshot goes through `reply` before any change.
     #[cfg(test)]
     AddViewer {
@@ -148,21 +149,28 @@ pub(crate) enum AgentCommand {
     AttachViewer {
         viewer: u64,
         name: Option<String>,
-        attachment: Option<facade_base::v3::AttachmentInfo>,
+        attachment: Option<AttachmentInfo>,
         allow_ended: bool,
         report_activity: bool,
-        size: Option<facade_base::v3::ScreenSize>,
+        size: Option<Size>,
         tx: ViewerSender,
         keep_scrollback: bool,
         include_scrollback: bool,
         reply: oneshot::Sender<ViewerSnapshot>,
+    },
+    /// Reports a live shared viewer's capacity and any authorized colors.
+    ResizeViewer {
+        viewer: u64,
+        size: Size,
+        colors: Option<TerminalColors>,
+        reply: oneshot::Sender<Result<(), ErrorBody>>,
     },
     RemoveViewer {
         viewer: u64,
     },
     ReadScreen {
         lines: usize,
-        reply: oneshot::Sender<(facade_screen::Reading, AgentInfo)>,
+        reply: oneshot::Sender<(facade_screen::Reading, ManagedAgent)>,
     },
     /// Reads the record, the input and whether the session is followed.
     Inspect {
@@ -197,7 +205,7 @@ pub(crate) enum AgentCommand {
         /// The CLI's version as its installation names it.
         version: Option<String>,
         tools: ToolsGiven,
-        reply: oneshot::Sender<AgentInfo>,
+        reply: oneshot::Sender<ManagedAgent>,
     },
     /// Tells viewers the agent is removed, waits for a checkpoint being written, replies and ends
     /// the actor. The screen folder may go after the reply.
@@ -232,13 +240,13 @@ pub(crate) enum AgentCommand {
     /// Renames the agent, publishes the record, and replies with it.
     Rename {
         name: String,
-        reply: oneshot::Sender<AgentInfo>,
+        reply: oneshot::Sender<ManagedAgent>,
     },
 }
 
 /// What an actor starts from.
 pub(crate) struct ActorStart {
-    pub(crate) info: AgentInfo,
+    pub(crate) info: ManagedAgent,
     /// The terminal; None for an agent whose terminal closed.
     pub(crate) master: Option<PtyMaster>,
     pub(crate) screen: ScreenStart,
@@ -333,13 +341,13 @@ struct Shared {
 }
 
 struct Record {
-    info: AgentInfo,
+    info: ManagedAgent,
     installed_run: u64,
     title: Option<String>,
 }
 
 impl Shared {
-    fn new(info: AgentInfo) -> Self {
+    fn new(info: ManagedAgent) -> Self {
         Self {
             record: Mutex::new(Record {
                 info,
@@ -369,7 +377,7 @@ pub(crate) struct AgentHandle {
 impl AgentHandle {
     /// The handle of guest `info`, a session the person started in a terminal that is not
     /// Facade's. No actor answers it: whatever is sent finds the channel closed.
-    pub(crate) fn guest(info: AgentInfo) -> AgentHandle {
+    pub(crate) fn guest(info: ManagedAgent) -> AgentHandle {
         let (commands, _) = mpsc::channel(1);
         AgentHandle {
             id: info.agent_id.clone(),
@@ -390,7 +398,7 @@ impl AgentHandle {
     }
 
     /// A copy of the agent's record.
-    pub(crate) fn info(&self) -> AgentInfo {
+    pub(crate) fn info(&self) -> ManagedAgent {
         self.shared.record.lock().unwrap().info.clone()
     }
 
@@ -400,7 +408,7 @@ impl AgentHandle {
     }
 
     /// The installed run number and record as they stand under the same lock.
-    pub(crate) fn installed_record(&self) -> (u64, AgentInfo) {
+    pub(crate) fn installed_record(&self) -> (u64, ManagedAgent) {
         let record = self.shared.record.lock().unwrap();
         (record.installed_run, record.info.clone())
     }
@@ -473,7 +481,7 @@ impl AgentHandle {
     }
 
     /// Applies a guest's committed name. A guest has no actor to take the rename command.
-    pub(crate) fn rename_guest(&self, name: String) -> AgentInfo {
+    pub(crate) fn rename_guest(&self, name: String) -> ManagedAgent {
         let mut record = self.shared.record.lock().unwrap();
         record.info.name = name;
         record.info.clone()

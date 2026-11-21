@@ -22,6 +22,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use facade_base::model::terminal::InputMechanism;
 use facade_base::system::{SYSTEM, System};
 use regex::Regex;
 use serde::de::Error as _;
@@ -677,19 +678,18 @@ impl InputRule {
     }
 
     /// The mechanism's name in the protocol.
-    pub fn mechanism(&self) -> facade_base::daemon::InputMechanism {
+    pub fn mechanism(&self) -> InputMechanism {
         self.layout().0
     }
 
     /// The layout's name in the protocol, and its menus.
-    fn layout(&self) -> (facade_base::daemon::InputMechanism, &[Menu]) {
-        use facade_base::daemon::InputMechanism as Mechanism;
+    fn layout(&self) -> (InputMechanism, &[Menu]) {
         match self {
-            InputRule::Frame(Frame { menus, .. }) => (Mechanism::Frame, menus),
-            InputRule::Prompt(Prompt { menus, .. }) => (Mechanism::Prompt, menus),
-            InputRule::Editor(Editor { menus, .. }) => (Mechanism::Editor, menus),
-            InputRule::Box(BoxInput { menus, .. }) => (Mechanism::Box, menus),
-            InputRule::PromptRow { .. } => (Mechanism::PromptRow, &[]),
+            InputRule::Frame(Frame { menus, .. }) => (InputMechanism::Frame, menus),
+            InputRule::Prompt(Prompt { menus, .. }) => (InputMechanism::Prompt, menus),
+            InputRule::Editor(Editor { menus, .. }) => (InputMechanism::Editor, menus),
+            InputRule::Box(BoxInput { menus, .. }) => (InputMechanism::Box, menus),
+            InputRule::PromptRow { .. } => (InputMechanism::PromptRow, &[]),
         }
     }
 }

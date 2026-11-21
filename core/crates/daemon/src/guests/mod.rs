@@ -14,12 +14,13 @@ mod roster;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use facade_base::daemon::{
-    AgentInfo, AgentState, StateDetail, StateReason, ToolsState, location_id,
-};
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
 use facade_base::process::{ProcessIdentity, ProcessState};
 use facade_base::unix_process::{self, Presence};
+use facade_base::{
+    model::agent::{ManagedAgent, ManagedAgentState, StateDetail, StateReason, ToolsState},
+    model::machine::location_id,
+};
 
 use crate::blocking_in_place;
 use crate::store::{GuestRecord, GuestTable};
@@ -44,7 +45,7 @@ pub(crate) struct GuestJoin {
 
 impl GuestJoin {
     /// The card and row for a relay joining for the first time, with this machine's current YOLO.
-    pub(crate) fn info(&self, id: &str, name: &str) -> (AgentInfo, GuestRecord) {
+    pub(crate) fn info(&self, id: &str, name: &str) -> (ManagedAgent, GuestRecord) {
         joined(
             id,
             name,
@@ -59,7 +60,7 @@ impl GuestJoin {
 /// The kept guests a daemon started anew found.
 pub(crate) struct Restored {
     /// The records the daemon can list again.
-    pub(crate) listed: Vec<AgentInfo>,
+    pub(crate) listed: Vec<ManagedAgent>,
     /// Those that ended while no daemon ran: the daemon deletes them with their inbox.
     pub(crate) ended: Vec<GuestRecord>,
 }
@@ -153,7 +154,7 @@ impl Guests {
     pub(crate) fn restore_members(
         &self,
         records: Vec<GuestRecord>,
-    ) -> Result<Vec<AgentInfo>, ErrorBody> {
+    ) -> Result<Vec<ManagedAgent>, ErrorBody> {
         let mut listed = Vec::with_capacity(records.len());
         let mut migration_yolo = None;
         for record in records {
@@ -253,7 +254,7 @@ fn joined(
     session: &str,
     cwd: String,
     yolo: bool,
-) -> (AgentInfo, GuestRecord) {
+) -> (ManagedAgent, GuestRecord) {
     let now = facade_base::time::iso_now();
     let record = GuestRecord {
         agent_id: id.to_string(),
@@ -267,8 +268,8 @@ fn joined(
     (guest_info(&record, yolo), record)
 }
 
-fn guest_info(record: &GuestRecord, yolo: bool) -> AgentInfo {
-    AgentInfo {
+fn guest_info(record: &GuestRecord, yolo: bool) -> ManagedAgent {
+    ManagedAgent {
         address: None,
         label: None,
         unreachable: false,
@@ -292,7 +293,7 @@ fn guest_info(record: &GuestRecord, yolo: bool) -> AgentInfo {
         yolo,
         exit: None,
         session: Some(record.session.clone()),
-        state: AgentState::Unknown,
+        state: ManagedAgentState::Unknown,
         state_detail: Some(StateDetail {
             reason: Some(StateReason::NotShown),
             ..StateDetail::default()

@@ -98,7 +98,7 @@ fn has_the_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
     let runs = test
         .path
         .join("core/runs")
-        .join(run["agent_id"].as_str().unwrap());
+        .join(run["reference"]["agent_id"].as_str().unwrap());
     let folder: PathBuf = std::fs::read_dir(&runs)
         .unwrap()
         .flatten()

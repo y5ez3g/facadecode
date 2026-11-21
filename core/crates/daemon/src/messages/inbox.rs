@@ -3,14 +3,17 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use facade_base::daemon::{
-    DEFAULT_MESSAGES_LIMIT, Delivery, DeliveryStatus, MAX_MESSAGES_LIMIT, Message,
-    MessagesSnapshot, WindowRef,
-};
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::message::MessageRef;
 #[cfg(test)]
-use facade_base::daemon::{MAX_MESSAGE_IDS, MessagesWatchArgs};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::MessageRef;
+use facade_base::model::message::{MAX_MESSAGE_IDS, MessagesWatchArgs};
+use facade_base::{
+    model::machine::WindowRef,
+    model::message::{
+        DEFAULT_MESSAGES_LIMIT, Delivery, DeliveryStatus, MAX_MESSAGES_LIMIT, Message,
+        MessagesSnapshot,
+    },
+};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 
@@ -22,7 +25,7 @@ use super::{
     Deliveries, Due, GuestReplyWait, KEPT_FOR, Messages, OpenMap, Settled, number, parse_number,
 };
 use crate::store::{Gone, InboxPage};
-use crate::{Cancel, blocking_in_place, pause_for_test};
+use crate::{Cancel, an_hour_ago, blocking_in_place, pause_for_test, send_route_cutoff};
 
 /// Selection for an inbox read. Cursors name local inbox messages, replies use stable references.
 #[derive(Default)]
@@ -363,7 +366,11 @@ impl Messages {
         let before = now.checked_sub(KEPT_FOR).unwrap_or(SystemTime::UNIX_EPOCH);
         let before = facade_base::time::iso_time(before);
         let _open = self.deliveries.lock();
-        let gone = blocking_in_place(|| self.deliveries.table.expire_messages(&before))?;
+        let gone = blocking_in_place(|| {
+            self.deliveries
+                .table
+                .expire_messages(&before, an_hour_ago, send_route_cutoff)
+        })?;
         let count = gone.len();
         for message in gone {
             self.deliveries.removed(message.to);

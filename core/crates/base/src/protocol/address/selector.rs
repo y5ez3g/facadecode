@@ -2,11 +2,12 @@
 
 use std::fmt;
 
-use crate::protocol::address::is_number;
 use crate::whitespace::is_space;
 
-use super::{AgentRef, MachineIdentity, MessageRef};
-pub use crate::protocol::address::{default_machine_name, is_machine_name, short_machine_id};
+use crate::model::machine::MachineIdentity;
+
+use super::is_number;
+use super::{is_machine_name, short_machine_id};
 
 /// A spelling to match as both a name and, where applicable, an ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,12 +162,12 @@ pub fn parse_message_address(input: &str) -> Result<MessageAddress<'_>, AddressE
     })
 }
 
-pub fn format_agent_address(reference: &AgentRef, machine: &str) -> String {
-    format!("{}@{machine}", reference.agent_id)
+pub fn format_agent_address(agent_id: &str, machine: &str) -> String {
+    format!("{agent_id}@{machine}")
 }
 
-pub fn format_message_address(reference: &MessageRef, machine: &str) -> String {
-    format!("{}@{machine}", reference.message_id)
+pub fn format_message_address(message_id: &str, machine: &str) -> String {
+    format!("{message_id}@{machine}")
 }
 
 /// The full machine ID, with no address prefix. Use `display_machine_selector` for a checked

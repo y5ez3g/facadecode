@@ -3,8 +3,8 @@
 
 use std::time::{Duration, Instant};
 
-use facade_base::daemon_client::DaemonClient;
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::api_v1::{ErrorBody, daemon_client::DaemonClient};
+use facade_base::model::error::ErrorBody as RelayError;
 use serde_json::Value;
 
 use super::envelope;
@@ -33,10 +33,15 @@ pub(super) fn open_with(
                 "the Orchestrator did not respond within {} seconds; nothing was done",
                 timeout.as_secs()
             ),
-            Err(err) => match err.downcast_ref::<ErrorBody>() {
-                Some(error) => return Err(envelope::refusal(error)),
-                None => format!("cannot reach Facade: {err:#}; nothing was done"),
-            },
+            Err(err) => {
+                if let Some(error) = err.downcast_ref::<ErrorBody>() {
+                    return Err(envelope::daemon_refusal(error));
+                }
+                if let Some(error) = err.downcast_ref::<RelayError>() {
+                    return Err(envelope::refusal(error));
+                }
+                format!("cannot reach Facade: {err:#}; nothing was done")
+            }
         };
         return Err(envelope::failure("unavailable", unavailable));
     }
@@ -46,7 +51,7 @@ pub(super) fn open_with(
 /// cut off after it went out, `consequence`, which says what it may have changed.
 pub(super) fn failed(err: &anyhow::Error, consequence: &str) -> Value {
     if let Some(error) = err.downcast_ref::<ErrorBody>() {
-        return envelope::refusal(error);
+        return envelope::daemon_refusal(error);
     }
     envelope::failure(
         "unavailable",

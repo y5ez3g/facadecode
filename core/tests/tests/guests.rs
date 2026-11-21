@@ -263,16 +263,19 @@ fn a_large_roster_matches_the_protocol_and_shell_rosters_inline() {
         .collect();
 
     let roster = home.agent_list();
-    let mut rows = roster["agents"].as_array().expect("the v3 roster").clone();
+    let mut rows = roster["agents"].as_array().expect("the v1 roster").clone();
     let table = home.list_table();
     assert_eq!(
         table.column("REF"),
         rows.iter()
-            .map(|row| row["id"].as_str().unwrap())
+            .map(|row| row["address"].as_str().unwrap())
             .collect::<Vec<_>>()
     );
     for row in &mut rows {
-        row.as_object_mut().unwrap().shift_remove("reference");
+        let row = row.as_object_mut().unwrap();
+        row.shift_remove("reference");
+        let address = row.shift_remove("address").unwrap();
+        row.insert("id".into(), address);
     }
     assert_eq!(rows.len(), guests.len() + 1);
     assert!(
@@ -511,7 +514,7 @@ fn a_guest_starts_an_agent_with_its_cli_s_environment() {
     );
 }
 
-/// The Guests of the active v3 roster.
+/// The Guests of the active daemon roster.
 fn guest_rows(home: &TestHome) -> Vec<Value> {
     let listed = home.agent_list();
     listed["agents"]
@@ -546,7 +549,7 @@ fn an_mcp_client_joins_as_a_member_reads_its_messages_and_leaves_with_its_relay(
     let home = TestHome::new("member");
     let ada = home.start_named_fake("ada", &[]);
     let (mut member, record) = member(&home);
-    let address = record["id"].as_str().unwrap().to_string();
+    let address = record["address"].as_str().unwrap().to_string();
     let mut sender = McpTestClient::open(&home, &ada.id);
     let sending = sender.send(
         "tools/call",
@@ -576,7 +579,7 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
     let home = TestHome::new("memberkept");
     let ada = home.start_named_fake("ada", &[]);
     let (mut member, record) = member(&home);
-    let address = record["id"].as_str().unwrap().to_string();
+    let address = record["address"].as_str().unwrap().to_string();
     let mut sender = McpTestClient::open(&home, &ada.id);
     let sending = sender.send(
         "tools/call",
@@ -601,7 +604,7 @@ fn a_member_and_what_waits_for_it_outlast_a_daemon_restart() {
     assert_eq!(sent["status"], "success", "{sent}");
     let kept = guest_rows(&home);
     assert_eq!(
-        kept.iter().map(|row| &row["id"]).collect::<Vec<_>>(),
+        kept.iter().map(|row| &row["address"]).collect::<Vec<_>>(),
         [&json!(address)],
         "{kept:?}"
     );
@@ -615,7 +618,7 @@ fn a_read_delivers_only_what_it_returns_and_last_is_the_newest() {
     let home = TestHome::new("memberread");
     let ada = home.start_named_fake("ada", &[]);
     let (mut member, record) = member(&home);
-    let address = record["id"].as_str().unwrap().to_string();
+    let address = record["address"].as_str().unwrap().to_string();
     let id = address.split_once('@').unwrap().0.to_string();
     let mut sender = McpTestClient::open(&home, &ada.id);
     let text = |n: u32| {

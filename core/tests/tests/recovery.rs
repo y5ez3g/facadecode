@@ -11,7 +11,7 @@ use facade_scenarios::*;
 /// Opens a daemon protocol connection, without starting Facade.
 fn open(home: &TestHome) -> DaemonTestClient {
     let mut wire = DaemonTestClient::open(home);
-    assert!(wire.hello("terminal", DAEMON_RANGE, json!({}))["result"].is_object());
+    assert!(wire.hello("terminal", DAEMON_API_VERSIONS, json!({}))["result"].is_object());
     wire
 }
 
@@ -61,7 +61,7 @@ fn read_pid(home: &TestHome, file: &str) -> i32 {
 fn agent(home: &TestHome, id: &str) -> Option<Value> {
     home.agents()
         .into_iter()
-        .find(|agent| agent["agent_id"] == id)
+        .find(|agent| agent["reference"]["agent_id"] == id)
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn a_removal_interrupted_after_its_record_is_deleted_is_finished_by_the_next_dae
     let keeper_process = process_identity(keeper);
     let removing = wire.send(
         "call",
-        json!({ "op": "agent.remove", "args": { "agent": doomed } }),
+        json!({ "op": "agent.remove", "args": { "target": doomed } }),
     );
     assert!(
         wait_until(LOADED_TIMEOUT, || stopped(daemon)),
@@ -248,7 +248,7 @@ fn a_start_interrupted_before_its_record_is_undone_and_its_number_never_reused()
         "cli": home.shell_cli(),
         "args": ["-c", "echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > orphan-pid; sleep 60"],
         "name": "orphan", "folder": home.project, "env": { "PATH": SYSTEM_PATH.as_str() },
-        "cols": 80, "rows": 24,
+        "size": { "cols": 80, "rows": 24 },
     });
     wire.send("call", json!({ "op": "agent.start", "args": args }));
     assert!(
@@ -471,11 +471,19 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         "the saved screen comes back"
     );
     let mut wire = open(&home);
-    let stopped = wire.call("agent.stop", json!({ "agent": agent_id }));
-    assert_eq!(error_reason(&stopped), "ended", "{stopped}");
+    let stopped = wire.call_ok(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [agent_id] } }),
+    );
+    assert_eq!(stopped["items"][0]["status"], "failed", "{stopped}");
+    assert_eq!(
+        stopped["items"][0]["error"]["data"]["reason"], "ended",
+        "{stopped}"
+    );
+    let target = agent(&home, &agent_id).unwrap()["reference"].clone();
     let typed = wire.call(
         "agent.type",
-        json!({ "agent": agent_id, "raw": facade_base::base64::encode(b"x") }),
+        json!({ "target": target, "input": { "kind": "raw", "raw": facade_base::base64::encode(b"x") } }),
     );
     assert_eq!(error_reason(&typed), "ended", "{typed}");
     let address = ended["address"].as_str().expect("the recovered reference");
@@ -628,7 +636,7 @@ fn a_hundred_agents_are_recovered_without_a_stall_kill_and_listed_all_at_once() 
         wait_until(secs(60), || {
             let hello = home.hello_result();
             if let Some(hello) = hello.filter(|hello| hello["pid"].as_i64() != Some(old as i64)) {
-                seen = Some(hello["agents"].clone());
+                seen = Some(hello["agent_count"].clone());
             }
             seen.is_some()
         }),
@@ -840,11 +848,12 @@ fn input_queued_when_the_daemon_dies_is_lost_and_never_sent_twice() {
     let agent_id = start_script(&mut wire, &home, "deaf", script);
     assert!(wait_for_screen_text(&home, &agent_id, "READY"));
     let mut sent = Vec::new();
+    let target = home.inspect_agent(&agent_id)["agent"]["reference"].clone();
     for chunk in 0..4u8 {
         let bytes = vec![b'a' + chunk; 256 * 1024];
         let typed = wire.call(
             "agent.type",
-            json!({ "agent": agent_id, "raw": facade_base::base64::encode(&bytes) }),
+            json!({ "target": target, "input": { "kind": "raw", "raw": facade_base::base64::encode(&bytes) } }),
         );
         assert!(typed["result"].is_object(), "{typed}");
         sent.extend(bytes);
@@ -943,7 +952,7 @@ fn a_daemon_ending_inside_its_redraw_nudge_leaves_the_agent_s_size() {
         "the nudge is always one column: {:?}",
         sizes()
     );
-    assert_eq!(agent(&home, &agent_id).unwrap()["cols"], 80);
+    assert_eq!(agent(&home, &agent_id).unwrap()["size"]["cols"], 80);
 }
 
 /// Logging a resize before applying it lets recovery reproduce the size and output drawn at that
@@ -959,12 +968,16 @@ fn a_resize_survives_the_daemon_with_what_was_drawn_at_it() {
         "stty -echo; echo READY; while read line; do echo \"$line\"; done",
     );
     assert!(wait_for_screen_text(&home, &agent_id, "READY"));
-    assert!(
-        wire.call(
-            "agent.resize",
-            json!({ "agent": agent_id, "cols": 100, "rows": 30 })
-        )["result"]
-            .is_object()
+    let opened = wire.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": agent_id } }),
+    );
+    let watch = opened["result"]["watch"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{opened}"));
+    wire.call_ok(
+        "attach.resize",
+        json!({ "watch": watch, "size": { "cols": 100, "rows": 30 } }),
     );
     let wide = format!("{}END", "w".repeat(92));
     type_raw(&mut wire, &agent_id, &format!("{wide}\r"));
@@ -979,8 +992,8 @@ fn a_resize_survives_the_daemon_with_what_was_drawn_at_it() {
         .expect("a replacement daemon");
     let recovered = agent(&home, &agent_id).unwrap();
     assert_eq!(
-        (recovered["cols"].as_u64(), recovered["rows"].as_u64()),
-        (Some(100), Some(30)),
+        recovered["size"],
+        json!({ "cols": 100, "rows": 30 }),
         "{recovered}"
     );
     assert_eq!(home.screen(&agent_id), before);
@@ -1058,10 +1071,13 @@ fn attach_ends_at_once_on_a_signal_or_ctrl_bracket_while_its_input_is_blocked() 
         "stty raw -echo; printf READY; sleep 600",
     );
     assert!(wait_for_screen_text(&home, &agent_id, "READY"));
+    let target = home.inspect_agent(&agent_id)["agent"]["reference"].clone();
     let full = wire.call(
         "agent.type",
         json!({
-            "agent": agent_id, "raw": facade_base::base64::encode(&vec![b'a'; 1024 * 1024]),
+            "target": target, "input": {
+                "kind": "raw", "raw": facade_base::base64::encode(&vec![b'a'; 1024 * 1024]),
+            },
         }),
     );
     assert!(full["result"].is_object(), "{full}");
@@ -1236,7 +1252,7 @@ fn a_blocked_log_open_keeps_exit_drain_and_the_socket_pending() {
     assert!(wait_until(secs(10), || {
         asked = wire.send(
             "call",
-            json!({ "op": "agent.screen", "args": { "agent": id, "lines": 1 } }),
+            json!({ "op": "agent.screen", "args": { "target": id, "lines": 1 } }),
         );
         wire.wait_for_response(asked, Duration::from_millis(500))
             .is_none()

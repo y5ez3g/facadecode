@@ -22,8 +22,9 @@ use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
-use facade_base::daemon_client::DaemonClient;
-use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
+use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::jsonrpc::decode_arguments;
+use facade_base::model::error::{ErrorBody, Reason};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -68,7 +69,7 @@ impl RelayHelloParams {
                 "this Facade speaks relay contract {RELAY_CONTRACT}, not {}; restart the CLI",
                 hello.relay
             );
-            return Err(ErrorBody::new(Reason::ProtocolIncompatible, message));
+            return Err(ErrorBody::new(Reason::IncompatibleProtocol, message));
         }
         Ok(hello)
     }
@@ -146,13 +147,32 @@ impl Relay {
     }
 }
 
-/// The tools as `tools/list` describes them, in order, without a result schema.
-static V3_DEFINITIONS: LazyLock<Vec<Value>> = LazyLock::new(|| {
-    serde_json::from_str(facade_base::tools::V3_DEFINITIONS)
-        .expect("the v3 tool definitions are JSON")
+/// The tools in catalog order, each bound to its action by the definition's name.
+static TOOLS: LazyLock<Vec<ToolEntry>> = LazyLock::new(|| {
+    let definitions: Vec<Value> = serde_json::from_str(facade_base::tools::DEFINITIONS)
+        .expect("the tool definitions are JSON");
+    definitions
+        .into_iter()
+        .map(|definition| ToolEntry {
+            action: Tool::deserialize(&definition["name"]).expect("the tool has a known action"),
+            definition,
+        })
+        .collect()
 });
 
-#[derive(Clone, Copy)]
+struct ToolEntry {
+    action: Tool,
+    definition: Value,
+}
+
+impl ToolEntry {
+    fn named(name: &str) -> Option<&'static Self> {
+        TOOLS.iter().find(|entry| entry.definition["name"] == name)
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum Tool {
     StartAgent,
     ListAgents,
@@ -165,20 +185,6 @@ enum Tool {
 }
 
 impl Tool {
-    fn named(name: &str) -> Option<Tool> {
-        Some(match name {
-            "start_agent" => Tool::StartAgent,
-            "list_agents" => Tool::ListAgents,
-            "stop_agent" => Tool::StopAgent,
-            "send_message" => Tool::SendMessage,
-            "read_messages" => Tool::ReadMessages,
-            "read_screen" => Tool::ReadScreen,
-            "type_text" => Tool::TypeText,
-            "press_keys" => Tool::PressKeys,
-            _ => return None,
-        })
-    }
-
     /// The checks beyond the input schema, made before anything is done.
     fn check(self, arguments: &Map<String, Value>, problems: &mut Problems) {
         match self {
@@ -267,31 +273,23 @@ impl Problems {
 }
 
 /// Reads the arguments as the tool's schema describes them, then checks the tool's extra rules.
-fn validate(
-    name: &str,
-    given: &Value,
-    definitions: &[Value],
-) -> Result<(Tool, Map<String, Value>), Value> {
-    let found = Tool::named(name).zip(
-        definitions
+fn validate(name: &str, given: &Value) -> Result<(Tool, Map<String, Value>), Value> {
+    let Some(entry) = ToolEntry::named(name) else {
+        let names: Vec<&str> = TOOLS
             .iter()
-            .find(|definition| definition["name"] == name),
-    );
-    let Some((tool, definition)) = found else {
-        let names: Vec<&str> = definitions
-            .iter()
-            .filter_map(|definition| definition["name"].as_str())
+            .filter_map(|entry| entry.definition["name"].as_str())
             .collect();
         let message = format!("no tool {name}; the tools are {}", names.join(", "));
         return Err(envelope::failure("unsupported", message));
     };
     let mut problems = Problems::default();
-    let arguments = schema::read_arguments(name, &definition["inputSchema"], given, &mut problems);
-    tool.check(&arguments, &mut problems);
+    let arguments =
+        schema::read_arguments(name, &entry.definition["inputSchema"], given, &mut problems);
+    entry.action.check(&arguments, &mut problems);
     if let Some(failure) = problems.into_failure(name) {
         return Err(failure);
     }
-    Ok((tool, arguments))
+    Ok((entry.action, arguments))
 }
 
 /// The string argument `key`, which the schema checked, or an empty one where it is optional and
@@ -339,8 +337,7 @@ impl Relay {
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{ClientKind, HelloParams, methods};
-    use facade_base::jsonrpc::Request;
+    use facade_base::api_v1::daemon::{ClientKind, decode_hello};
     use serde_json::json;
 
     use super::*;
@@ -349,12 +346,14 @@ mod tests {
     fn relay_v1_frames_are_separate_from_the_mcp_client_identity() {
         let mut frames = include_str!("../../../relay/tests/fixtures/relay-hello.jsonl").lines();
         for (cwd, reconnect) in [(Some("/work folder"), false), (None, true)] {
-            let request: Request = serde_json::from_str(frames.next().unwrap()).unwrap();
-            assert_eq!(request.id, Some(1));
-            assert_eq!(request.method, methods::HELLO);
-            assert!(crate::server::is_relay_hello(&request.params));
+            let request: Value = serde_json::from_str(frames.next().unwrap()).unwrap();
+            assert_eq!(request["jsonrpc"], "2.0");
+            assert_eq!(request["id"], 1);
+            assert_eq!(request["method"], "hello");
+            let params = &request["params"];
+            assert!(crate::server::is_relay_hello(params));
 
-            let hello = RelayHelloParams::decode(request.params.clone()).unwrap();
+            let hello = RelayHelloParams::decode(params.clone()).unwrap();
             assert_eq!(hello.relay, RELAY_CONTRACT);
             assert_eq!(hello.args, ["--guest", "codex"]);
             assert_eq!(
@@ -364,7 +363,7 @@ mod tests {
             assert_eq!(hello.cwd.as_deref(), cwd);
             assert_eq!(hello.reconnect, reconnect);
 
-            let mut with_kind = request.params;
+            let mut with_kind = params.clone();
             with_kind["kind"] = json!("mcp");
             assert!(
                 RelayHelloParams::decode(with_kind)
@@ -374,18 +373,18 @@ mod tests {
         assert!(frames.next().is_none());
 
         let ordinary = json!({
-            "protocol": [2, 2], "build": "test", "kind": "mcp", "agent": "a1",
+            "api_versions": [1], "build": "test", "kind": "mcp",
         });
         assert!(!crate::server::is_relay_hello(&ordinary));
-        let hello: HelloParams = decode_arguments(ordinary).unwrap();
+        let hello = decode_hello(ordinary).unwrap();
         assert_eq!(hello.kind, ClientKind::Mcp);
     }
 
     #[test]
     fn the_tools_are_the_eight_in_their_order() {
-        let names: Vec<&str> = V3_DEFINITIONS
+        let names: Vec<&str> = TOOLS
             .iter()
-            .filter_map(|tool| tool["name"].as_str())
+            .filter_map(|entry| entry.definition["name"].as_str())
             .collect();
         assert_eq!(
             names,
@@ -404,7 +403,7 @@ mod tests {
 
     #[test]
     fn start_agent_checks_folder_and_worktree_before_dispatch() {
-        let validate = |args: &Value| super::validate("start_agent", args, &V3_DEFINITIONS);
+        let validate = |args: &Value| super::validate("start_agent", args);
         let (_, args) = validate(&json!({ "cli": "fake" })).unwrap();
         assert!(!args.contains_key("folder"));
         let (_, args) = validate(&json!({"cli": "fake", "worktree": "review"})).unwrap();
@@ -450,7 +449,7 @@ mod tests {
 
     #[test]
     fn read_screen_requires_an_agent_and_defaults_lines_to_fifty() {
-        let validate = |args: &Value| super::validate("read_screen", args, &V3_DEFINITIONS);
+        let validate = |args: &Value| super::validate("read_screen", args);
         let (_, arguments) = validate(&json!({ "agent": "a7" })).unwrap();
         assert_eq!(arguments["lines"], 50);
         for lines in [1, 2000] {

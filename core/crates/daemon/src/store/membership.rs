@@ -1,13 +1,7 @@
 //! The windows of each agent. A relation can remain while its window is disconnected.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
-
-use facade_base::daemon::WindowRef;
-use facade_base::machine::AgentRef;
+use facade_base::model::machine::WindowRef;
 use rusqlite::{Connection, params};
-
-use super::Store;
 
 pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
@@ -48,44 +42,4 @@ pub(super) fn read(connection: &Connection, agent_id: &str) -> rusqlite::Result<
         })
     })?;
     rows.collect()
-}
-
-/// Reads memberships of legacy logical windows for workspace import.
-#[derive(Clone)]
-pub(crate) struct MembershipTable(Arc<Store>);
-
-impl MembershipTable {
-    pub(super) fn new(store: Arc<Store>) -> Self {
-        Self(store)
-    }
-
-    /// Records held by this machine that belonged to one of the old logical windows.
-    pub(crate) fn legacy_agents(&self, windows: &[WindowRef]) -> anyhow::Result<Vec<AgentRef>> {
-        self.0.with(
-            || "read the legacy workspace members".to_owned(),
-            |connection| {
-                let mut statement = connection.prepare(
-                    "SELECT aw.agent_id, (SELECT machine_id FROM machine WHERE singleton = 1) \
-                     FROM agent_windows aw JOIN agents a ON a.agent_id = aw.agent_id \
-                     WHERE aw.machine_id = ?1 AND aw.window_id = ?2",
-                )?;
-                let mut agents = BTreeSet::new();
-                for window in windows {
-                    let rows = statement.query_map(
-                        params![window.machine_id, window.window_id],
-                        |row| {
-                            Ok(AgentRef {
-                                agent_id: row.get(0)?,
-                                machine_id: row.get(1)?,
-                            })
-                        },
-                    )?;
-                    for row in rows {
-                        agents.insert(row?);
-                    }
-                }
-                Ok(agents.into_iter().collect())
-            },
-        )
-    }
 }

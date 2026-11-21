@@ -5,11 +5,14 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{
-    AgentState, HowEnded, Said, StateDetail, StateReason, ToolsReason, ToolsState, WaitKind,
-    display_line, display_name,
-};
 use facade_base::process::ProcessExit;
+use facade_base::{
+    model::agent::{
+        HowEnded, ManagedAgentState, Said, StateDetail, StateReason, ToolsReason, ToolsState,
+        WaitKind,
+    },
+    model::terminal::{display_line, display_name},
+};
 use facade_rules::{Rule, ScreenState, StateRule};
 use facade_screen::{BlockKind, ReportedState, Screen, StatusEvent, StatusReport};
 use serde::{Deserialize, Serialize};
@@ -72,7 +75,7 @@ pub(crate) enum Viewing {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct StateReading {
     /// The single winning state.
-    pub(crate) state: AgentState,
+    pub(crate) state: ManagedAgentState,
     /// Evidence or reason accompanying that state.
     pub(crate) detail: Option<StateDetail>,
     /// Whether the CLI can use Facade's tools.
@@ -101,7 +104,7 @@ impl StateTracker {
     pub(crate) fn read(&mut self, now: Instant, viewing: Viewing) -> StateReading {
         let (tools, tools_reason) = self.tool_reading(now);
         let mut reading = StateReading {
-            state: AgentState::Ended,
+            state: ManagedAgentState::Ended,
             detail: None,
             tools,
             tools_reason,
@@ -136,24 +139,24 @@ impl StateTracker {
             (state, detail)
         } else if self.question.open {
             (
-                AgentState::WaitingForYou,
+                ManagedAgentState::WaitingForYou,
                 Some(StateDetail {
                     kind: Some(WaitKind::Unknown),
                     ..Default::default()
                 }),
             )
         } else if tools == ToolsState::Unavailable {
-            reasoned(AgentState::Error, StateReason::ToolsUnavailable)
+            reasoned(ManagedAgentState::Error, StateReason::ToolsUnavailable)
         } else if self.saved.just_done {
-            (AgentState::JustDone, None)
+            (ManagedAgentState::JustDone, None)
         } else if held_until.is_some() || matches!(current, Some(EvidenceState::Working)) {
-            (AgentState::Working, None)
+            (ManagedAgentState::Working, None)
         } else if starting {
-            (AgentState::Starting, None)
+            (ManagedAgentState::Starting, None)
         } else if matches!(current, Some(EvidenceState::Idle | EvidenceState::Done)) {
-            (AgentState::Idle, None)
+            (ManagedAgentState::Idle, None)
         } else if self.rule.is_some() && !self.evidence.shown {
-            reasoned(AgentState::Error, StateReason::NotReady)
+            reasoned(ManagedAgentState::Error, StateReason::NotReady)
         } else {
             let reason = match current {
                 None => StateReason::NotShown,
@@ -161,7 +164,7 @@ impl StateTracker {
                 Some(EvidenceState::Unrecognized) => StateReason::Unrecognized,
                 Some(_) => StateReason::TakenBack,
             };
-            reasoned(AgentState::Unknown, reason)
+            reasoned(ManagedAgentState::Unknown, reason)
         };
         (reading.state, reading.detail) = result;
         reading
@@ -363,7 +366,10 @@ impl StateTracker {
     }
 }
 
-fn reasoned(state: AgentState, reason: StateReason) -> (AgentState, Option<StateDetail>) {
+fn reasoned(
+    state: ManagedAgentState,
+    reason: StateReason,
+) -> (ManagedAgentState, Option<StateDetail>) {
     (
         state,
         Some(StateDetail {
@@ -373,10 +379,10 @@ fn reasoned(state: AgentState, reason: StateReason) -> (AgentState, Option<State
     )
 }
 
-fn urgent(evidence: Option<&EvidenceState>) -> Option<(AgentState, Option<StateDetail>)> {
+fn urgent(evidence: Option<&EvidenceState>) -> Option<(ManagedAgentState, Option<StateDetail>)> {
     match evidence? {
         EvidenceState::Blocked { kind, text } => Some((
-            AgentState::WaitingForYou,
+            ManagedAgentState::WaitingForYou,
             Some(StateDetail {
                 text: text.clone(),
                 kind: Some(kind.unwrap_or(WaitKind::Unknown)),
@@ -384,7 +390,7 @@ fn urgent(evidence: Option<&EvidenceState>) -> Option<(AgentState, Option<StateD
             }),
         )),
         EvidenceState::Error { text } => Some((
-            AgentState::Error,
+            ManagedAgentState::Error,
             text.as_ref().map(|words| StateDetail {
                 text: Some(words.clone()),
                 ..Default::default()
@@ -764,7 +770,7 @@ mod tests {
         )
     }
 
-    fn state(tracker: &mut StateTracker, now: Instant) -> (AgentState, Option<StateDetail>) {
+    fn state(tracker: &mut StateTracker, now: Instant) -> (ManagedAgentState, Option<StateDetail>) {
         let reading = tracker.read(now, Viewing::Unwatched);
         (reading.state, reading.detail)
     }
@@ -791,7 +797,7 @@ mod tests {
         assert_eq!(
             agent.read(now, Viewing::Unwatched),
             StateReading {
-                state: AgentState::Starting,
+                state: ManagedAgentState::Starting,
                 detail: None,
                 tools: not_given.0,
                 tools_reason: not_given.1,
@@ -799,13 +805,13 @@ mod tests {
             }
         );
         agent.take(vec![report("state=working")]);
-        assert_eq!(state(&mut agent, now), (AgentState::Working, None));
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Working, None));
         agent.take(vec![report("state=idle")]);
-        assert_eq!(state(&mut agent, now), (AgentState::Working, None));
+        assert_eq!(state(&mut agent, now), (ManagedAgentState::Working, None));
         let later = now + WORK_HOLD;
         assert_eq!(
             state(&mut agent, later),
-            (AgentState::JustDone, None),
+            (ManagedAgentState::JustDone, None),
             "a turn ended while no terminal showed the agent"
         );
         // "Allow edits?" and "No credit" in base64.
@@ -815,7 +821,7 @@ mod tests {
         assert_eq!(
             state(&mut agent, later),
             (
-                AgentState::WaitingForYou,
+                ManagedAgentState::WaitingForYou,
                 detail(Some(WaitKind::Permission), Some("Allow edits?"), None, None)
             )
         );
@@ -823,7 +829,7 @@ mod tests {
         assert_eq!(
             state(&mut agent, later),
             (
-                AgentState::WaitingForYou,
+                ManagedAgentState::WaitingForYou,
                 detail(Some(WaitKind::Unknown), None, None, None)
             ),
             "a blocker without a kind"
@@ -832,28 +838,28 @@ mod tests {
         assert_eq!(
             state(&mut agent, later),
             (
-                AgentState::Error,
+                ManagedAgentState::Error,
                 detail(None, Some("No credit"), None, None)
             )
         );
         agent.take(vec![report("state=working")]);
         assert_eq!(
             state(&mut agent, later),
-            (AgentState::JustDone, None),
+            (ManagedAgentState::JustDone, None),
             "just done comes before working"
         );
         agent.seen();
-        assert_eq!(state(&mut agent, later), (AgentState::Working, None));
+        assert_eq!(state(&mut agent, later), (ManagedAgentState::Working, None));
         agent.take(vec![report("state=done")]);
-        assert_eq!(state(&mut agent, later), (AgentState::Working, None));
+        assert_eq!(state(&mut agent, later), (ManagedAgentState::Working, None));
         assert_eq!(
             state(&mut agent, later + WORK_HOLD),
-            (AgentState::JustDone, None)
+            (ManagedAgentState::JustDone, None)
         );
         agent.seen();
         assert_eq!(
             state(&mut agent, later + WORK_HOLD),
-            (AgentState::Idle, None)
+            (ManagedAgentState::Idle, None)
         );
         agent.ended(
             &ProcessExit {
@@ -867,7 +873,7 @@ mod tests {
         assert_eq!(
             state(&mut agent, later),
             (
-                AgentState::Ended,
+                ManagedAgentState::Ended,
                 detail(None, None, Some(HowEnded::Normal), None)
             )
         );
@@ -883,7 +889,7 @@ mod tests {
         assert_eq!(
             agent.read(now, Viewing::Watched),
             StateReading {
-                state: AgentState::Working,
+                state: ManagedAgentState::Working,
                 detail: None,
                 tools: ToolsState::NotInjected,
                 tools_reason: None,
@@ -893,15 +899,15 @@ mod tests {
         agent.take(vec![report("state=working")]);
         assert_eq!(
             state(&mut agent, now + WORK_HOLD),
-            (AgentState::Working, None),
+            (ManagedAgentState::Working, None),
             "work that goes on never stopped"
         );
         agent.take(vec![report("state=idle")]);
         let stop = now + WORK_HOLD * 2;
-        assert_eq!(state(&mut agent, stop), (AgentState::Working, None));
+        assert_eq!(state(&mut agent, stop), (ManagedAgentState::Working, None));
         assert_eq!(
             agent.read(stop + WORK_HOLD, Viewing::Watched).state,
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "the turn ended while a terminal showed the agent"
         );
         agent.take(vec![
@@ -910,7 +916,7 @@ mod tests {
         ]);
         assert_eq!(
             state(&mut agent, stop + WORK_HOLD).0,
-            AgentState::WaitingForYou
+            ManagedAgentState::WaitingForYou
         );
         let later = stop + WORK_HOLD * 2;
         agent.take(vec![report("state=working")]);
@@ -918,14 +924,17 @@ mod tests {
         agent.take(vec![report("state=error")]);
         assert_eq!(
             state(&mut agent, later).0,
-            AgentState::Error,
+            ManagedAgentState::Error,
             "an error shows at once"
         );
-        assert_eq!(state(&mut agent, later + WORK_HOLD).0, AgentState::Error);
+        assert_eq!(
+            state(&mut agent, later + WORK_HOLD).0,
+            ManagedAgentState::Error
+        );
         agent.take(vec![report("state=idle")]);
         assert_eq!(
             state(&mut agent, later + WORK_HOLD).0,
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "a turn that ended in an error is not just done"
         );
     }
@@ -943,7 +952,7 @@ mod tests {
         agent.take(vec![StatusEvent::Asked]);
         assert_eq!(
             state(&mut agent, now).0,
-            AgentState::Starting,
+            ManagedAgentState::Starting,
             "a CLI that asked to report is starting until it reports"
         );
         assert_eq!(reason(&mut agent), Some(StateReason::Asked));
@@ -955,7 +964,7 @@ mod tests {
             agent.take(vec![report("state=working"), taking_back]);
             assert_eq!(
                 state(&mut agent, now).0,
-                AgentState::Unknown,
+                ManagedAgentState::Unknown,
                 "work taken back is never idle, and never starting again"
             );
             assert_eq!(reason(&mut agent), Some(StateReason::TakenBack));
@@ -963,20 +972,20 @@ mod tests {
         agent.take(vec![report("state=idle"), StatusEvent::ShellPrompt]);
         assert_eq!(
             state(&mut agent, now + START_TIMEOUT).0,
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "a new shell prompt ends only work or a wait"
         );
         agent.take(vec![StatusEvent::Asked]);
         assert_eq!(
             state(&mut agent, now + START_TIMEOUT).0,
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "asking again keeps what the CLI reported"
         );
         let mut muse = tracker(Some("muse"), now);
         muse.evidence.observe(None);
         assert_eq!(
             state(&mut muse, now).0,
-            AgentState::Starting,
+            ManagedAgentState::Starting,
             "an unrecognized screen at the start says nothing"
         );
         muse.evidence.observe(Some(ScreenState::Idle));
@@ -1013,7 +1022,7 @@ mod tests {
         agent.take(vec![report("state=idle")]);
         assert_eq!(
             tools(&mut agent, now),
-            (AgentState::Starting, ToolsState::Connecting, None),
+            (ManagedAgentState::Starting, ToolsState::Connecting, None),
             "shown, but its tools not there yet"
         );
         assert_eq!(
@@ -1024,32 +1033,32 @@ mod tests {
         agent.tools_connection(true);
         assert_eq!(
             tools(&mut agent, now),
-            (AgentState::Idle, ToolsState::Available, None)
+            (ManagedAgentState::Idle, ToolsState::Available, None)
         );
         agent.tools_connection(false);
         assert_eq!(
             tools(&mut agent, now),
             (
-                AgentState::Error,
+                ManagedAgentState::Error,
                 ToolsState::Unavailable,
                 Some(ToolsReason::Disconnected)
             )
         );
         assert_eq!(
             state(&mut agent, now),
-            (AgentState::Error, unusable.clone())
+            (ManagedAgentState::Error, unusable.clone())
         );
         agent.take(vec![report("state=blocked:kind=question")]);
         assert_eq!(
             state(&mut agent, now).0,
-            AgentState::WaitingForYou,
+            ManagedAgentState::WaitingForYou,
             "a question goes first"
         );
         agent.take(vec![report("state=idle")]);
         agent.tools_connection(true);
         assert_eq!(
             tools(&mut agent, now),
-            (AgentState::Idle, ToolsState::Available, None),
+            (ManagedAgentState::Idle, ToolsState::Available, None),
             "a server that connects again"
         );
 
@@ -1058,7 +1067,7 @@ mod tests {
         assert_eq!(
             tools(&mut silent, now + START_TIMEOUT),
             (
-                AgentState::Error,
+                ManagedAgentState::Error,
                 ToolsState::Unavailable,
                 Some(ToolsReason::NotConnected)
             )
@@ -1068,7 +1077,7 @@ mod tests {
         assert_eq!(
             tools(&mut not_given, now),
             (
-                AgentState::Error,
+                ManagedAgentState::Error,
                 ToolsState::Unavailable,
                 Some(ToolsReason::NotGiven)
             )
@@ -1077,7 +1086,7 @@ mod tests {
         plain.take(vec![report("state=idle")]);
         assert_eq!(
             tools(&mut plain, now),
-            (AgentState::Idle, ToolsState::NotInjected, None)
+            (ManagedAgentState::Idle, ToolsState::NotInjected, None)
         );
 
         // A daemon that recovers the run waits the start's bound from its recovery for the server
@@ -1103,7 +1112,7 @@ mod tests {
         assert_eq!(
             tools(&mut recovered, later),
             (
-                AgentState::Ended,
+                ManagedAgentState::Ended,
                 ToolsState::Unavailable,
                 Some(ToolsReason::Ended)
             )
@@ -1126,34 +1135,34 @@ mod tests {
             ..StateDetail::default()
         });
         let mut fake = tracker(Some("fake"), now);
-        assert_eq!(state(&mut fake, now).0, AgentState::Starting);
+        assert_eq!(state(&mut fake, now).0, ManagedAgentState::Starting);
         assert_eq!(
             state(&mut fake, late),
-            (AgentState::Error, not_started.clone())
+            (ManagedAgentState::Error, not_started.clone())
         );
         let mut asked = tracker(Some("fake"), now);
         asked.take(vec![StatusEvent::Asked]);
         assert_eq!(
             state(&mut asked, late),
-            (AgentState::Error, not_started.clone()),
+            (ManagedAgentState::Error, not_started.clone()),
             "a CLI that asked and never reported"
         );
         let mut muse = tracker(Some("muse"), now);
         muse.evidence.observe(None);
         assert_eq!(
             state(&mut muse, late),
-            (AgentState::Error, not_started),
+            (ManagedAgentState::Error, not_started),
             "Muse's screen unrecognized since its start"
         );
         assert_eq!(
             state(&mut tracker(None, now), late).0,
-            AgentState::Unknown,
+            ManagedAgentState::Unknown,
             "a program without a rule"
         );
         fake.take(vec![report("state=working"), report("state=clear")]);
         assert_eq!(
             state(&mut fake, late).0,
-            AgentState::Unknown,
+            ManagedAgentState::Unknown,
             "activity unknown later in a run is no error"
         );
     }
@@ -1168,7 +1177,7 @@ mod tests {
         assert_eq!(
             state(&mut muse, now),
             (
-                AgentState::WaitingForYou,
+                ManagedAgentState::WaitingForYou,
                 detail(Some(WaitKind::Auth), None, None, None)
             )
         );
@@ -1176,13 +1185,13 @@ mod tests {
         assert!(!muse.reads_screen());
         assert_eq!(
             state(&mut muse, now).0,
-            AgentState::Unknown,
+            ManagedAgentState::Unknown,
             "once it asks, it reports"
         );
         muse.evidence.observe(Some(ScreenState::Working));
         assert_eq!(
             state(&mut muse, now).0,
-            AgentState::Unknown,
+            ManagedAgentState::Unknown,
             "its screen no longer counts"
         );
     }
@@ -1199,7 +1208,7 @@ mod tests {
             codex.evidence.observe(Some(ScreenState::Idle));
             assert_eq!(
                 state(&mut codex, now + WORK_HOLD).0,
-                AgentState::Working,
+                ManagedAgentState::Working,
                 "{version:?}"
             );
         }
@@ -1233,7 +1242,7 @@ mod tests {
         assert_eq!(
             (reading.state, reading.detail, reading.tools, reading.wake),
             (
-                AgentState::WaitingForYou,
+                ManagedAgentState::WaitingForYou,
                 waits,
                 ToolsState::Connecting,
                 None
@@ -1244,7 +1253,7 @@ mod tests {
         assert_eq!(
             (reading.state, reading.tools, reading.wake),
             (
-                AgentState::Starting,
+                ManagedAgentState::Starting,
                 ToolsState::Connecting,
                 Some(late + START_TIMEOUT)
             )
@@ -1252,7 +1261,7 @@ mod tests {
         let reading = agent.read(late + START_TIMEOUT, Viewing::Unwatched);
         assert_eq!(
             (reading.state, reading.tools),
-            (AgentState::Error, ToolsState::Unavailable),
+            (ManagedAgentState::Error, ToolsState::Unavailable),
             "the tools' bound ran from the answer"
         );
         agent.take(vec![report("state=blocked:kind=permission")]);
@@ -1319,10 +1328,14 @@ mod tests {
             state(tracker, at + WORK_HOLD).0
         };
         let mut unasked = start();
-        assert_eq!(turn(&mut unasked, now), AgentState::Idle, "its start-up");
+        assert_eq!(
+            turn(&mut unasked, now),
+            ManagedAgentState::Idle,
+            "its start-up"
+        );
         assert_eq!(
             turn(&mut unasked, now + WORK_HOLD),
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "its start-up after its first rest"
         );
         unasked.asked();
@@ -1336,13 +1349,13 @@ mod tests {
         for tracker in [&mut unasked, &mut kept] {
             assert_eq!(
                 turn(tracker, now + WORK_HOLD * 2),
-                AgentState::JustDone,
+                ManagedAgentState::JustDone,
                 "working after an Enter"
             );
             tracker.seen();
             assert_eq!(
                 turn(tracker, now + WORK_HOLD * 3),
-                AgentState::JustDone,
+                ManagedAgentState::JustDone,
                 "and its working after that"
             );
         }
@@ -1352,13 +1365,13 @@ mod tests {
         answered.asks(false, now);
         assert_eq!(
             turn(&mut answered, now),
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "an Enter that answers the CLI's question"
         );
         answered.asked();
         assert_eq!(
             turn(&mut answered, now + WORK_HOLD),
-            AgentState::JustDone,
+            ManagedAgentState::JustDone,
             "an Enter once the question went"
         );
         let mut typed_to = start();
@@ -1372,14 +1385,14 @@ mod tests {
         state(&mut typed_to, now);
         assert_eq!(
             state(&mut typed_to, now + WORK_HOLD).0,
-            AgentState::JustDone,
+            ManagedAgentState::JustDone,
             "input with Enter while it started"
         );
         let mut resumed = tracker(Some("fake"), now);
         resumed.restarted(now, None, ToolsGiven::NotInjected);
         assert_eq!(
             turn(&mut resumed, now),
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "a resumed run starts up anew"
         );
     }
@@ -1405,11 +1418,11 @@ mod tests {
             text: Some("stand-in model: recorded, not answered".into()),
             ..StateDetail::default()
         });
-        assert_eq!(state(&mut opencode, now), (AgentState::Error, error));
+        assert_eq!(state(&mut opencode, now), (ManagedAgentState::Error, error));
         opencode.take(vec![report("state=working")]);
         assert_eq!(
             state(&mut opencode, now).0,
-            AgentState::Working,
+            ManagedAgentState::Working,
             "its next report ends the error"
         );
         opencode.take(vec![report("state=done")]);
@@ -1417,7 +1430,7 @@ mod tests {
         state(&mut opencode, now);
         assert_eq!(
             state(&mut opencode, now + WORK_HOLD).0,
-            AgentState::JustDone,
+            ManagedAgentState::JustDone,
             "a turn its screen shows no error for"
         );
     }
@@ -1434,20 +1447,26 @@ mod tests {
         codex.take(vec![report("state=working")]);
         state(&mut codex, now);
         codex.evidence.observe(Some(ScreenState::Idle));
-        assert_eq!(state(&mut codex, now).0, AgentState::Working);
-        assert_eq!(state(&mut codex, now + WORK_HOLD).0, AgentState::JustDone);
+        assert_eq!(state(&mut codex, now).0, ManagedAgentState::Working);
+        assert_eq!(
+            state(&mut codex, now + WORK_HOLD).0,
+            ManagedAgentState::JustDone
+        );
         codex.seen();
-        assert_eq!(state(&mut codex, now + WORK_HOLD).0, AgentState::Idle);
+        assert_eq!(
+            state(&mut codex, now + WORK_HOLD).0,
+            ManagedAgentState::Idle
+        );
         codex.take(vec![report("state=working")]);
         assert_eq!(
             state(&mut codex, now + WORK_HOLD).0,
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "the same report again keeps the correction"
         );
         codex.evidence.observe(None);
         assert_eq!(
             state(&mut codex, now + WORK_HOLD).0,
-            AgentState::Working,
+            ManagedAgentState::Working,
             "a new turn on the screen ends it"
         );
         assert_eq!(
@@ -1498,7 +1517,7 @@ mod tests {
         });
         agent.take(vec![report("state=idle")]);
         agent.restarted(now, None, ToolsGiven::NotInjected);
-        assert_eq!(state(&mut agent, now).0, AgentState::Starting);
+        assert_eq!(state(&mut agent, now).0, ManagedAgentState::Starting);
         let said = agent.said_line().unwrap();
         assert_eq!(
             (
@@ -1533,7 +1552,7 @@ mod tests {
         assert_eq!(
             state(&mut again, now),
             (
-                AgentState::WaitingForYou,
+                ManagedAgentState::WaitingForYou,
                 detail(Some(WaitKind::Question), Some("Which?"), None, None)
             )
         );
@@ -1541,12 +1560,12 @@ mod tests {
         agent.take(vec![report("state=done")]);
         state(&mut agent, now);
         let mut again = StateTracker::new(None, now, agent.kept(), None, None);
-        assert_eq!(state(&mut again, now).0, AgentState::JustDone);
+        assert_eq!(state(&mut again, now).0, ManagedAgentState::JustDone);
         again.seen();
         let mut once_more = StateTracker::new(None, now, again.kept(), None, None);
         assert_eq!(
             state(&mut once_more, now).0,
-            AgentState::Idle,
+            ManagedAgentState::Idle,
             "a turn seen before is not just done again"
         );
     }
