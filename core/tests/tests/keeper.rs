@@ -714,9 +714,23 @@ fn a_keeper_and_daemon_asked_to_end_take_their_sockets_with_them() {
     let keeper_process = process_identity(keeper);
     let daemon_process = process_identity(daemon);
     assert!(socket_exists(&home.keeper_socket()) && socket_exists(&home.daemon_socket()));
-    // Request normal shutdown of both processes.
+    // Let the daemon finish normal shutdown while the keeper cannot restart it.
+    pause_process(keeper);
+    assert!(
+        wait_until(secs(10), || stopped(keeper) && alive(&keeper_process)),
+        "keeper did not pause: {}",
+        home.keeper_log()
+    );
     send_signal(daemon, libc::SIGTERM);
+    assert!(
+        wait_until(secs(10), || !alive(&daemon_process)
+            && !socket_exists(&home.daemon_socket())),
+        "daemon did not exit and remove its socket: {}",
+        home.daemon_log()
+    );
+    // Queue normal shutdown before the keeper can act on the daemon's exit.
     send_signal(keeper, libc::SIGTERM);
+    resume_process(keeper);
     assert!(
         wait_until(secs(10), || !alive(&keeper_process)
             && !alive(&daemon_process)),
@@ -734,9 +748,11 @@ fn a_keeper_and_daemon_asked_to_end_take_their_sockets_with_them() {
     // The keeper restarts a daemon that ends, but not while it is shutting down: no daemon is left
     // behind.
     std::thread::sleep(secs(1));
+    let started = home.started_daemons();
+    assert_eq!(started, [daemon], "{}", home.keeper_log());
     let live = home.processes();
     assert!(
-        home.started_daemons().iter().all(|pid| !live.contains(pid)),
+        started.iter().all(|pid| !live.contains(pid)),
         "a daemon from this home outlived its keeper: {}",
         home.keeper_log()
     );
