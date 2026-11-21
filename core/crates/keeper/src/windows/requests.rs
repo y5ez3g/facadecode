@@ -10,12 +10,10 @@ use std::path::Path;
 use std::time::Instant;
 
 use facade_base::api_v1::keeper::{
-    HelloResult, KeeperCall, StartArgs, StartResult, SyncArgs, decode_call, decode_hello, methods,
-    project_error, select_version,
+    HelloResult, KeeperCall, StartArgs, StartResult, SyncArgs, project_error,
 };
 use facade_base::api_v1::{EmptyResult, ErrorBody, Request, Response, parse_request};
-use facade_base::jsonrpc::{ErrorBody as LegacyError, Reason};
-use facade_base::keeper::KeeperStartArgs;
+use facade_base::model::error::{ErrorBody as RuntimeError, Reason};
 use facade_base::process::ProcessIdentity;
 use facade_base::terminal::PtyMaster;
 
@@ -24,6 +22,7 @@ use super::cli::{Adoption, Cli};
 use super::console::ConPty;
 use super::link::Link;
 use crate::log;
+use crate::runtime::{self, AdmittedRequest, KeeperStartArgs};
 
 impl Keeper {
     /// Serves one line from the daemon. Id-less messages have no effects, and only a sync
@@ -51,18 +50,8 @@ impl Keeper {
         terminal: Option<PtyMaster>,
     ) -> Result<(), ErrorBody> {
         let greeted = self.link.as_ref().is_some_and(Link::is_greeted);
-        match request.method.as_str() {
-            methods::HELLO => {
-                if greeted {
-                    return Err(ErrorBody::invalid_argument(
-                        "hello was already received on this connection",
-                    ));
-                }
-                if terminal.is_some() {
-                    return Err(unexpected_terminal());
-                }
-                let params = decode_hello(request.params)?;
-                let api_version = select_version(&params.api_versions)?;
+        match runtime::admit(request, greeted, terminal.is_some())? {
+            AdmittedRequest::Hello(api_version) => {
                 let link = self.link.as_mut().expect("serving the daemon's request");
                 link.greet(api_version);
                 self.post(&Response::ok(
@@ -74,25 +63,19 @@ impl Keeper {
                     },
                 ));
             }
-            methods::CALL => {
-                if !greeted {
-                    return Err(ErrorBody::invalid_argument("send hello first"));
+            AdmittedRequest::Call(call) => match call {
+                KeeperCall::Sync(args) => self.sync(id, args, terminal)?,
+                KeeperCall::Start(args) => self.start(id, args)?,
+                KeeperCall::Stop(args) => {
+                    self.stop(&args.agent_id)?;
+                    self.post(&Response::ok(id, EmptyResult {}));
                 }
-                match decode_call(request.params)? {
-                    KeeperCall::Sync(args) => self.sync(id, args, terminal)?,
-                    _ if terminal.is_some() => return Err(unexpected_terminal()),
-                    KeeperCall::Start(args) => self.start(id, args)?,
-                    KeeperCall::Stop(args) => {
-                        self.stop(&args.agent_id)?;
-                        self.post(&Response::ok(id, EmptyResult {}));
-                    }
-                    KeeperCall::Ping(_) => {
-                        self.supervisor.ping(Instant::now());
-                        self.post(&Response::ok(id, EmptyResult {}));
-                    }
+                KeeperCall::Ping(_) => {
+                    self.supervisor.ping(Instant::now());
+                    self.post(&Response::ok(id, EmptyResult {}));
                 }
-            }
-            method => {
+            },
+            AdmittedRequest::Unknown(method) => {
                 return Err(ErrorBody::method_not_found(format!(
                     "unknown method {method}; keeper methods are hello and call"
                 )));
@@ -189,12 +172,8 @@ impl Keeper {
     }
 }
 
-fn unexpected_terminal() -> ErrorBody {
-    ErrorBody::invalid_argument("only agent.sync requests may carry a terminal")
-}
-
 fn not_held(agent: &str) -> ErrorBody {
-    project_error(LegacyError::new(
+    project_error(RuntimeError::new(
         Reason::NotFound,
         format!("no CLI is held for {agent}"),
     ))

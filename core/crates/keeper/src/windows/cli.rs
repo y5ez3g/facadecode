@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 
 use facade_base::api_v1::ProcessExit;
 use facade_base::api_v1::keeper::HeldAgent;
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{KeeperStartArgs, STOP_TIMEOUT};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::ProcessIdentity;
 use facade_base::terminal::PtyMaster;
 use facade_base::unix_process::{self, Observed, Presence, ProcessObservation, WaitPacket};
@@ -19,6 +18,7 @@ use windows_sys::Win32::System::Threading::{GetExitCodeProcess, TerminateProcess
 use super::console::ConPty;
 use super::port::Port;
 use crate::log;
+use crate::runtime::{KeeperStartArgs, STOP_TIMEOUT};
 
 /// Pause before a failed kill is tried again.
 const KILL_RETRY_DELAY: Duration = Duration::from_millis(100);

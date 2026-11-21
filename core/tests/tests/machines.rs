@@ -2246,6 +2246,9 @@ fn a_legacy_workspace_import_recovers_both_machines_before_cold_cutover() {
             "{live}"
         );
     }
+    // Persist distinct names so both display addresses remain stable across the cold restart.
+    call(&local, &["machine", "rename", local_id, "qa-owner"]);
+    call(&remote, &["machine", "rename", peer_id, "qa-peer"]);
     let before = [(&local, owner_ref), (&remote, peer_ref)].map(|(home, reference)| {
         let mut wire = DaemonTestClient::open(home);
         let hello = wire.hello_prerelease("terminal", [3, 3], json!({}));

@@ -21,14 +21,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
-use facade_base::daemon::WindowDescription;
-use facade_base::daemon::{Message, WindowRef};
-use facade_base::machine::MessageRef;
+use facade_base::model::machine::WindowDescription;
+use facade_base::model::message::MessageRef;
 use facade_base::process::{EndReason, ProcessExit, ProcessIdentity};
 use facade_base::{files, settings};
+use facade_base::{model::machine::WindowRef, model::message::Message};
 use facade_rules::entries::{self, LaunchOptions};
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags, Row, params};
+
+use crate::StartKey;
 
 mod guests;
 mod integrations;
@@ -417,10 +419,10 @@ impl Store {
         )
     }
 
-    /// The record and first receipt a caller got for this start in the last hour.
+    /// Finds the original start record and receipt kept at or after `since`.
     pub(crate) fn find_start(
         &self,
-        key: &crate::operations::StartKey,
+        key: &StartKey,
         since: &str,
     ) -> anyhow::Result<Option<KeptStart>> {
         self.with(
@@ -626,8 +628,12 @@ impl Store {
 
     /// Deletes an agent's record and its inbox, in one transaction. The messages it sent stay in
     /// their recipients' inboxes. Returns the messages deleted. Blocks.
-    pub(crate) fn delete(&self, agent_id: &str) -> anyhow::Result<Vec<Gone>> {
-        self.delete_record(agent_id, None)
+    pub(crate) fn delete(
+        &self,
+        agent_id: &str,
+        receipt_cutoff: impl FnOnce() -> String,
+    ) -> anyhow::Result<Vec<Gone>> {
+        self.delete_record(agent_id, None, receipt_cutoff)
     }
 
     /// Deletes a listed record and saves why it disappeared for stable Pin lookups.
@@ -635,14 +641,16 @@ impl Store {
         &self,
         agent_id: &str,
         cause: RemovalCause,
+        receipt_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<Vec<Gone>> {
-        self.delete_record(agent_id, Some(cause))
+        self.delete_record(agent_id, Some(cause), receipt_cutoff)
     }
 
     fn delete_record(
         &self,
         agent_id: &str,
         cause: Option<RemovalCause>,
+        receipt_cutoff: impl FnOnce() -> String,
     ) -> anyhow::Result<Vec<Gone>> {
         self.transaction(
             || format!("delete the record of {agent_id}"),
@@ -656,7 +664,7 @@ impl Store {
                 }
                 transaction.execute("DELETE FROM agents WHERE agent_id = ?1", [agent_id])?;
                 transaction.execute("DELETE FROM agent_windows WHERE agent_id = ?1", [agent_id])?;
-                messages::delete_inbox(transaction, agent_id)
+                messages::delete_inbox(transaction, agent_id, &receipt_cutoff())
             },
         )
     }
@@ -686,12 +694,16 @@ impl Store {
 
     /// Deletes a guest's record and its inbox, in one transaction. The messages it sent stay in
     /// their recipients' inboxes. Returns the messages deleted. Blocks.
-    pub(crate) fn delete_guest(&self, agent_id: &str) -> anyhow::Result<Vec<Gone>> {
+    pub(crate) fn delete_guest(
+        &self,
+        agent_id: &str,
+        receipt_cutoff: impl FnOnce() -> String,
+    ) -> anyhow::Result<Vec<Gone>> {
         self.transaction(
             || format!("delete the record of guest {agent_id}"),
             |transaction| {
                 transaction.execute("DELETE FROM guests WHERE agent_id = ?1", [agent_id])?;
-                messages::delete_inbox(transaction, agent_id)
+                messages::delete_inbox(transaction, agent_id, &receipt_cutoff())
             },
         )
     }
@@ -859,7 +871,7 @@ fn write_launch(
 fn initialize(connection: &mut Connection, held: &[String]) -> rusqlite::Result<()> {
     let next = held
         .iter()
-        .filter_map(|id| crate::records::agent_number(id).checked_add(1))
+        .filter_map(|id| crate::agent_number(id).checked_add(1))
         .max()
         .unwrap_or(1);
     let transaction = connection.transaction()?;
@@ -1067,14 +1079,14 @@ impl Store {
     }
     pub(crate) fn settle_messages(
         self: &Arc<Self>,
-        settled: &[(u64, &facade_base::daemon::Delivery)],
+        settled: &[(u64, &facade_base::model::message::Delivery)],
         results: &[(u64, Message)],
     ) -> anyhow::Result<Settlement> {
         self.message_table().settle_messages(settled, results)
     }
     pub(crate) fn record_reads(
         self: &Arc<Self>,
-        read: &[(u64, &facade_base::daemon::Delivery)],
+        read: &[(u64, &facade_base::model::message::Delivery)],
         results: &[(u64, Message)],
     ) -> anyhow::Result<Settlement> {
         self.message_table().record_reads(read, results)
@@ -1106,10 +1118,14 @@ impl Store {
     ) -> anyhow::Result<Vec<GuestRecord>> {
         self.guest_table().guests_heard_before(before)
     }
-    pub(crate) fn delete_inbox(&self, owner: &str) -> anyhow::Result<Vec<Gone>> {
+    pub(crate) fn delete_inbox(
+        &self,
+        owner: &str,
+        receipt_cutoff: impl FnOnce() -> String,
+    ) -> anyhow::Result<Vec<Gone>> {
         self.transaction(
             || "delete an inbox".to_string(),
-            |transaction| messages::delete_inbox(transaction, owner),
+            |transaction| messages::delete_inbox(transaction, owner, &receipt_cutoff()),
         )
     }
 }
@@ -1147,7 +1163,7 @@ pub(crate) mod tests {
             yolo: true,
             request_id: None,
             prompt: None,
-            location_id: facade_base::daemon::location_id("/work"),
+            location_id: facade_base::model::machine::location_id("/work"),
         }
     }
 
@@ -1184,7 +1200,7 @@ pub(crate) mod tests {
             3,
             "numbers continue after a reopen and skip the uncommitted start"
         );
-        opened.store.delete("a1").unwrap();
+        opened.store.delete("a1", crate::an_hour_ago).unwrap();
         opened.store.record_exit("a1", &exit).unwrap();
         assert!(
             Store::open(&core, &[]).unwrap().records.is_empty(),
@@ -1431,7 +1447,7 @@ pub(crate) mod tests {
                 effort: Some("high".into()),
             })
         );
-        opened.store.delete("a1").unwrap();
+        opened.store.delete("a1", crate::an_hour_ago).unwrap();
         opened.store.record_session("a1", None).unwrap();
         opened
             .store

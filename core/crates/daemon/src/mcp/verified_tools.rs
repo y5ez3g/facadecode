@@ -2,28 +2,55 @@
 
 use std::time::Duration;
 
+use facade_base::address::selector;
 use facade_base::api_v1::daemon::{
-    AgentInspect, AgentList, AgentListArgs, AgentRef, AgentScreen, AgentStart, AgentStop,
-    AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, MachineList, ProcessState, ScreenArgs,
-    SingleMachineScope, StartArgs, StopArgs, StopItem, StopOutcome, StopSelection, TerminalInput,
+    AgentInspect, AgentKind, AgentList, AgentListArgs, AgentRef, AgentScreen, AgentStart,
+    AgentState, AgentStop, AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, MachineList,
+    ScreenArgs, SingleMachineScope, StartArgs, StopArgs, StopItem, StopOutcome, StopSelection,
+    TerminalInput,
 };
 use facade_base::api_v1::{self, NoArgs, Size, daemon_client::DaemonClient};
-use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
-use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
-use facade_base::process::ProcessState as RuntimeProcessState;
-use facade_base::v3::{self, AgentKind, MachineIdentity, MessageRef};
+use facade_base::jsonrpc::decode_arguments;
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::machine::{MachineIdentity, MachineQueryResult};
+use facade_base::model::message::MessageRef;
+use facade_base::model::terminal::DEFAULT_TERMINAL_SIZE;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
 use super::addresses::inbox_role;
 use super::daemon_calls::{CONNECT_TIMEOUT, failed, open_with};
 use super::{
-    ActorIdentity, Relay, Tool, ToolCall, V3_DEFINITIONS, agent_tools, envelope, message_tools,
-    optional, terminal_tools, text, validate,
+    ActorIdentity, Relay, Tool, ToolCall, agent_tools, envelope, message_tools, optional,
+    terminal_tools, text, validate,
 };
 use crate::messages::InboxRead;
 
 const INBOX_WAIT: Duration = Duration::from_secs(30);
+
+#[derive(Serialize)]
+struct ListedAgent {
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    kind: AgentKind,
+    state: AgentState,
+    cli: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    folder: String,
+    started_at: String,
+}
+
+#[derive(Deserialize)]
+struct ReadMessagesArgs {
+    after: Option<String>,
+    last: Option<u16>,
+    #[serde(default)]
+    wait: bool,
+    reply_to: Option<String>,
+}
 
 pub(super) fn dispatch(
     relay: &Relay,
@@ -36,7 +63,7 @@ pub(super) fn dispatch(
         Ok(actor) => actor,
         Err(error) => return Some(envelope::refusal(&error)),
     };
-    let (tool, arguments) = match validate(name, given, &V3_DEFINITIONS) {
+    let (tool, arguments) = match validate(name, given) {
         Ok(checked) => checked,
         Err(failure) => return Some(failure),
     };
@@ -140,7 +167,7 @@ fn list(client: &mut DaemonClient) -> Value {
             let agents: Vec<_> = listed
                 .agents
                 .into_iter()
-                .map(|entry| v3::AgentListRow {
+                .map(|entry| ListedAgent {
                     id: entry.address,
                     name: entry.name,
                     kind: entry.kind,
@@ -152,7 +179,7 @@ fn list(client: &mut DaemonClient) -> Value {
                 })
                 .collect();
             // Keep the MCP machine receipt's field order.
-            let machines: Vec<v3::MachineQueryResult> =
+            let machines: Vec<MachineQueryResult> =
                 match serde_json::from_value(json!(listed.machines)) {
                     Ok(machines) => machines,
                     Err(error) => return envelope::refusal(&ErrorBody::internal(error)),
@@ -200,25 +227,17 @@ fn screen(client: &mut DaemonClient, arguments: &Map<String, Value>) -> Value {
             .and_then(|lines| u16::try_from(lines).ok()),
     };
     match client.call::<AgentScreen>(args) {
-        Ok(screen) => {
-            let screen = v3::ScreenText {
-                agent_id: screen.reference.agent_id,
-                address: screen.address,
-                name: None,
-                process: match screen.process {
-                    ProcessState::Running => RuntimeProcessState::Running,
-                    ProcessState::Ended => RuntimeProcessState::Ended,
-                    ProcessState::Unknown => RuntimeProcessState::Unknown,
-                },
-                observed_at: screen.observed_at,
-                buffer: screen.buffer,
-                text: screen.text,
-                line_count: screen.line_count,
-                older_lines: screen.older_lines,
-                trimmed: screen.trimmed,
-            };
-            envelope::encode(screen).unwrap_or_else(|error| envelope::refusal(&error))
-        }
+        Ok(screen) => envelope::success(json!({
+            "agent_id": screen.reference.agent_id,
+            "address": screen.address,
+            "process": screen.process,
+            "observed_at": screen.observed_at,
+            "buffer": screen.buffer,
+            "text": screen.text,
+            "line_count": screen.line_count,
+            "older_lines": screen.older_lines,
+            "trimmed": screen.trimmed,
+        })),
         Err(err) => failed(&err, "nothing was changed"),
     }
 }
@@ -282,7 +301,7 @@ fn read(
 
 fn inbox_read(
     client: &mut DaemonClient,
-    args: v3::ReadMessagesArgs,
+    args: ReadMessagesArgs,
     call: &ToolCall,
 ) -> Result<InboxRead, ErrorBody> {
     let local = client.hello_result.machine_id.clone();
@@ -323,7 +342,7 @@ fn message_reference(
     input: &str,
     qualified: bool,
 ) -> Result<MessageRef, ErrorBody> {
-    let address = v3::address::parse_message_address(input)
+    let address = selector::parse_message_address(input)
         .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
     let machine_id = match address.machine {
         None if qualified => {

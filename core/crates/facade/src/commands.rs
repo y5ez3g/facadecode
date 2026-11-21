@@ -5,10 +5,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::SystemTime;
 
+use facade_base::address::default_machine_name;
+use facade_base::address::selector::{exact_machine_selector, parse_machine_selector};
 use facade_base::api_v1::daemon::{
     AgentCreator, AgentInfo, AgentInspect, AgentKind, AgentList, AgentListArgs, AgentListEntry,
-    AgentRef, AgentRename, AgentResume, AgentResumeList, AgentScreen, AgentSend, AgentStart,
-    AgentState, AgentStop, AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, AttachmentKind,
+    AgentRename, AgentResume, AgentResumeList, AgentScreen, AgentSend, AgentStart, AgentState,
+    AgentStop, AgentTarget, AgentTargetArgs, AgentType, AgentTypeArgs, AttachmentKind,
     BatchStopResult, CliList, CliListArgs, DaemonStatus, FolderScope, InspectResult,
     MachineIdentity, MachineList, MachineQuery, MachineState, ProcessState, QueryStatus,
     RenameArgs, ResumeArgs, ResumeCandidate, ResumeListArgs, ResumeTarget, Scope, ScreenArgs,
@@ -17,15 +19,12 @@ use facade_base::api_v1::daemon::{
 };
 use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::api_v1::{NoArgs, Size};
-use facade_base::daemon::{DEFAULT_TERMINAL_SIZE, HowEnded, WaitKind, display_line, plain};
-use facade_base::daemon_client::made_request_id;
+use facade_base::model::agent::{HowEnded, WaitKind};
+use facade_base::model::terminal::{DEFAULT_TERMINAL_SIZE, display_line, plain};
 use facade_base::time::parse_iso_time;
-use facade_base::v3::address::{
-    default_machine_name, exact_machine_selector, format_agent_address, parse_machine_selector,
-};
 
 use crate::errors::{self, AgentCommand, Problem};
-use crate::{ExitText, Opening, Shown, StartOptions, roster_table, single_line};
+use crate::{ExitText, Opening, Shown, StartOptions, agent_address, roster_table, single_line};
 
 const ROSTER_COLUMNS: [&str; 8] = [
     "NAME",
@@ -574,17 +573,6 @@ fn stop_address(item: &StopItem) -> Cow<'_, str> {
     )
 }
 
-fn agent_address(reference: &AgentRef, machine: Option<&str>) -> String {
-    let address_ref = facade_base::machine::AgentRef {
-        agent_id: reference.agent_id.clone(),
-        machine_id: reference.machine_id.clone(),
-    };
-    match machine {
-        Some(selector) => format_agent_address(&address_ref, selector),
-        None => format_agent_address(&address_ref, &exact_machine_selector(&reference.machine_id)),
-    }
-}
-
 fn agent_selector(agent: &str) -> AgentTargetArgs {
     AgentTargetArgs {
         target: AgentTarget::Selector(agent.to_owned()),
@@ -631,9 +619,16 @@ fn current_dir() -> std::io::Result<String> {
     Ok(std::env::current_dir()?.to_string_lossy().into_owned())
 }
 
+/// A request ID of this process's own, for a send or a start a command makes:
+/// `facade-<pid>-<ms since 1970>-1`.
+fn made_request_id() -> String {
+    let since_1970 = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default();
+    format!("facade-{}-{}-1", std::process::id(), since_1970.as_millis())
+}
+
 /// Pass the shell's environment to the daemon for local launches.
 fn environment() -> BTreeMap<String, String> {
-    let (variables, left_out) = facade_base::daemon_client::environment();
+    let (variables, left_out) = crate::launch_environment();
     if !left_out.is_empty() {
         eprintln!(
             "warning: omitted non-UTF-8 environment variables: {}",

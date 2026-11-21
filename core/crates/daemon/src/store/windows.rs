@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 #[cfg(test)]
-use facade_base::daemon::WindowDescription;
+use facade_base::model::machine::WindowDescription;
 use rusqlite::Connection;
 #[cfg(test)]
 use rusqlite::params;

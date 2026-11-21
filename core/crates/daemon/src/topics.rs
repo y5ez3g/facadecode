@@ -4,20 +4,22 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::api_v1::{Size, daemon as wire};
-use facade_base::daemon::AgentsUpdate;
-use facade_base::jsonrpc::{AgentRemoval, ErrorBody, Reason, decode_arguments};
-use facade_base::machine::AgentRef;
-use facade_base::operations::Topic;
+use facade_base::api_v1::daemon::{AgentsChange, AgentsSnapshot};
+use facade_base::api_v1::{
+    Size, Topic,
+    daemon::{self as wire, AttachmentInfo, AttachmentKind, Caller},
+};
+use facade_base::model::agent::AgentRef;
+use facade_base::model::agent::AgentsUpdate;
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_base::v3::{
-    AgentTarget, AgentsChange, AgentsSnapshot, AttachmentInfo, AttachmentKind, Caller, ScreenSize,
-    ScreenWatchArgs,
+use facade_base::{
+    jsonrpc::decode_arguments,
+    model::error::{AgentRemoval, ErrorBody, Reason},
 };
 use serde_json::{Value, json};
 use tokio::sync::{broadcast::error::RecvError, mpsc, oneshot};
 
-use crate::agent::{AgentCommand, AgentHandle, ViewerChange, ViewerSizing, viewer_channel};
+use crate::agent::{AgentCommand, AgentHandle, ViewerChange, viewer_channel};
 use crate::api;
 use crate::network::WatchRoute;
 use crate::records::{OperationTarget, Reach};
@@ -37,10 +39,7 @@ pub(crate) struct ViewerBinding {
 
 #[derive(Clone)]
 enum ViewerTarget {
-    Local {
-        agent: AgentHandle,
-        sizing: ViewerSizing,
-    },
+    Local(AgentHandle),
     Remote {
         reference: AgentRef,
         attach: wire::AttachBinding,
@@ -60,29 +59,17 @@ impl Daemon {
         match topic {
             wire::DaemonWatch::Attach(args) => {
                 crate::network_operations::require_person(caller)?;
-                let args = ScreenWatchArgs {
-                    target: api::target(args.target),
-                    size: args.size.map(|size| ScreenSize {
-                        cols: size.cols,
-                        rows: size.rows,
-                    }),
-                    viewer: args.viewer,
-                    keep_scrollback: args.keep_scrollback,
-                    include_scrollback: args.include_scrollback,
-                    allow_ended: args.allow_ended,
-                    report_activity: args.report_activity,
-                };
-                if args.allow_ended && !matches!(args.target, AgentTarget::Reference { .. }) {
+                if args.allow_ended && !matches!(args.target, wire::AgentTarget::Reference(_)) {
                     return Err(ErrorBody::invalid_argument(
                         "an ended screen needs an exact agent reference",
                     ));
                 }
                 let reference = if forwarded {
                     match &args.target {
-                        AgentTarget::Reference { reference }
+                        wire::AgentTarget::Reference(reference)
                             if reference.machine_id == self.machine_id =>
                         {
-                            reference.clone()
+                            api::agent_ref(reference.clone())
                         }
                         _ => {
                             return Err(ErrorBody::invalid_argument(
@@ -101,7 +88,7 @@ impl Daemon {
                     self.watch_remote_screen(reference, caller.clone(), args, viewer)
                         .await
                 } else {
-                    self.watch_local_screen(caller, &reference, args, viewer, ViewerSizing::Shared)
+                    self.watch_local_screen(caller, &reference, args, viewer)
                         .await
                 }
             }
@@ -122,7 +109,7 @@ impl Daemon {
     pub(crate) async fn end_viewer(&self, viewer: u64) {
         let ending = self.watch_ends.lock().unwrap().remove(&viewer);
         if let Some(ViewerBinding {
-            target: ViewerTarget::Local { agent, .. },
+            target: ViewerTarget::Local(agent),
             ..
         }) = ending
         {
@@ -131,21 +118,13 @@ impl Daemon {
     }
 
     pub(crate) fn attach_binding(&self, viewer: u64) -> Option<wire::AttachBinding> {
-        let shared = self
+        let local = self
             .watch_ends
             .lock()
             .unwrap()
             .get(&viewer)
-            .is_some_and(|watched| {
-                matches!(
-                    watched.target,
-                    ViewerTarget::Local {
-                        sizing: ViewerSizing::Shared,
-                        ..
-                    }
-                )
-            });
-        shared.then(|| wire::AttachBinding {
+            .is_some_and(|watched| matches!(watched.target, ViewerTarget::Local(_)));
+        local.then(|| wire::AttachBinding {
             viewer,
             boot_id: self.network.local_hello().boot_id,
         })
@@ -165,18 +144,14 @@ impl Daemon {
         &self,
         caller: &Caller,
         viewer: u64,
-        size: ScreenSize,
+        size: Size,
         colors: Option<wire::TerminalColors>,
     ) -> Result<(), ErrorBody> {
         match self.viewer_target(caller, viewer)? {
-            ViewerTarget::Local {
-                agent,
-                sizing: ViewerSizing::Shared,
-            } => {
+            ViewerTarget::Local(agent) => {
                 self.resize_local_viewer(caller, agent, viewer, size, colors)
                     .await
             }
-            ViewerTarget::Local { .. } => Err(viewer_ended()),
             ViewerTarget::Remote {
                 reference,
                 attach,
@@ -186,14 +161,11 @@ impl Daemon {
                 check_size(size.cols, size.rows)?;
                 let result = route
                     .resize(
-                        &api::wire_caller(caller),
+                        caller,
                         wire::InternalAttachResizeArgs {
                             viewer: attach.viewer,
                             boot_id: attach.boot_id,
-                            size: facade_base::api_v1::Size {
-                                cols: size.cols,
-                                rows: size.rows,
-                            },
+                            size,
                             colors,
                         },
                         SCREEN_SNAPSHOT_TIMEOUT,
@@ -223,18 +195,10 @@ impl Daemon {
         if args.boot_id != self.network.local_hello().boot_id {
             return Err(viewer_ended());
         }
-        let ViewerTarget::Local {
-            agent,
-            sizing: ViewerSizing::Shared,
-        } = self.viewer_target(caller, args.viewer)?
-        else {
+        let ViewerTarget::Local(agent) = self.viewer_target(caller, args.viewer)? else {
             return Err(viewer_ended());
         };
-        let size = ScreenSize {
-            cols: args.size.cols,
-            rows: args.size.rows,
-        };
-        self.resize_local_viewer(caller, agent, args.viewer, size, args.colors)
+        self.resize_local_viewer(caller, agent, args.viewer, args.size, args.colors)
             .await
     }
     async fn resize_local_viewer(
@@ -242,7 +206,7 @@ impl Daemon {
         caller: &Caller,
         agent: AgentHandle,
         viewer: u64,
-        size: ScreenSize,
+        size: Size,
         colors: Option<wire::TerminalColors>,
     ) -> Result<(), ErrorBody> {
         self.local_target(caller, &agent.info().reference(), OperationTarget::Type)
@@ -271,15 +235,14 @@ impl Daemon {
         self: &Arc<Self>,
         caller: &Caller,
         reference: &AgentRef,
-        args: ScreenWatchArgs,
+        args: wire::AttachArgs,
         viewer: u64,
-        sizing: ViewerSizing,
     ) -> Result<Watch, ErrorBody> {
         let operation = OperationTarget::Attach {
             allow_ended: args.allow_ended,
         };
         let agent = self.local_target(caller, reference, operation)?;
-        self.watch_agent_screen(&agent, caller, args, viewer, sizing)
+        self.watch_agent_screen(&agent, caller, args, viewer)
             .await
             .map_err(|error| self.with_agent_error(&agent, error))
     }
@@ -288,9 +251,8 @@ impl Daemon {
         self: &Arc<Self>,
         agent: &AgentHandle,
         caller: &Caller,
-        args: ScreenWatchArgs,
+        args: wire::AttachArgs,
         viewer: u64,
-        sizing: ViewerSizing,
     ) -> Result<Watch, ErrorBody> {
         if let Some(size) = args.size {
             check_size(size.cols, size.rows)?;
@@ -307,7 +269,6 @@ impl Daemon {
         };
         let added = AgentCommand::AttachViewer {
             viewer,
-            sizing,
             name: args.viewer,
             attachment: kind.map(|kind| AttachmentInfo {
                 kind,
@@ -375,10 +336,7 @@ impl Daemon {
             viewer,
             ViewerBinding {
                 caller: caller.clone(),
-                target: ViewerTarget::Local {
-                    agent: agent.clone(),
-                    sizing,
-                },
+                target: ViewerTarget::Local(agent.clone()),
             },
         );
         let daemon = self.clone();
@@ -409,7 +367,7 @@ impl Daemon {
         self: &Arc<Self>,
         reference: AgentRef,
         caller: Caller,
-        args: ScreenWatchArgs,
+        args: wire::AttachArgs,
         viewer: u64,
     ) -> Result<Watch, ErrorBody> {
         self.ensure_machine_route(&reference.machine_id, &caller)
@@ -417,15 +375,12 @@ impl Daemon {
         let address = self.agent_address(&reference)?;
         let request = wire::ForwardParams {
             route: Vec::new(),
-            caller: api::wire_caller(&caller),
+            caller: caller.clone(),
             request: wire::ForwardRequest::Watch(wire::WatchParams {
                 topic: wire::AttachTopic::NAME.into(),
                 args: value_of(wire::AttachArgs {
                     target: wire::AgentTarget::Reference(api::wire_ref(&reference)),
-                    size: args.size.map(|size| facade_base::api_v1::Size {
-                        cols: size.cols,
-                        rows: size.rows,
-                    }),
+                    size: args.size,
                     viewer: args.viewer,
                     keep_scrollback: args.keep_scrollback,
                     include_scrollback: args.include_scrollback,
@@ -536,7 +491,7 @@ impl Daemon {
             .collect::<Result<Vec<_>, _>>()?;
         let mut listed = agents
             .iter()
-            .map(|agent| agent.agent_id.clone())
+            .map(|agent| agent.reference.agent_id.clone())
             .collect::<HashSet<_>>();
         let machines = if remote.is_some() {
             self.remote_agent_states()
@@ -556,7 +511,7 @@ impl Daemon {
                                     let _ = changes.send(WatchChange::Disconnect).await;
                                     return;
                                 };
-                                listed.insert(agent.agent_id.clone());
+                                listed.insert(agent.reference.agent_id.clone());
                                 AgentsChange::Updated { agent: Box::new(agent) }
                             }
                             Ok(AgentsUpdate::Removed { machine_id, agent_id }) if listed.remove(&agent_id) => {
@@ -578,12 +533,12 @@ impl Daemon {
                             }
                             Err(RecvError::Closed) => return,
                         };
-                        if !send(&changes, api::agents_change(value_of(update), true)).await { return; }
+                        if !send(&changes, value_of(update)).await { return; }
                     }
                     update = remote_update(&mut remote) => {
                         match update {
                             Ok(update) => {
-                                if !send(&changes, api::agents_change(value_of(update), true)).await { return; }
+                                if !send(&changes, value_of(update)).await { return; }
                             }
                             Err(_) => {
                                 let _ = changes.send(WatchChange::Disconnect).await;
@@ -596,7 +551,7 @@ impl Daemon {
             }
         });
         Ok(Watch {
-            snapshot: api::agents_snapshot(value_of(snapshot), true),
+            snapshot: value_of(snapshot),
             changes: sent,
         })
     }

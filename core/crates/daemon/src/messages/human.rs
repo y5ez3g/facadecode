@@ -1,8 +1,8 @@
 //! The answer to a repeated send of a message to the person, from its saved window receipts.
 
-use facade_base::daemon::{SendOutcome, WindowDeliveryOutcome};
-use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure};
-use facade_base::machine::{ExecutionOutcome, Unavailable};
+use facade_base::model::error::{ErrorBody, Reason, SendFailure};
+use facade_base::model::machine::{ExecutionOutcome, Unavailable};
+use facade_base::model::message::{SendOutcome, WindowDeliveryOutcome};
 
 /// Answers from the saved receipts, including when a delivery may have reached a window.
 pub(crate) fn human_result(send: SendOutcome) -> Result<SendOutcome, SendFailure> {

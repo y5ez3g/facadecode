@@ -2,23 +2,29 @@
 
 use std::sync::Arc;
 
+use facade_base::address::{
+    is_machine_name,
+    selector::{self as addresses, MachineSelector},
+};
 use facade_base::api_v1::{self, ApiVersion, daemon as wire};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{AgentRef, MachineIdentity, MachineQueryStatus, MachineRenameResult};
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::machine::MachineQueryResult;
 use facade_base::sockets::{ServerReader, ServerWriter};
 use facade_base::ssh::parse_ssh_destination;
-use facade_base::v3;
-use facade_base::v3::address::{self as addresses, MachineSelector, is_machine_name};
+use facade_base::{
+    model::agent::AgentRef,
+    model::machine::{MachineIdentity, MachineQueryStatus},
+};
 use tokio::io::BufReader;
 use tokio::sync::mpsc;
 
 use crate::api;
 use crate::lifecycle::{Work, WorkGuard};
-use crate::network::{Event, FrontConnection, MachineGreeting, SavedSsh, is_uuid_v4};
+use crate::network::{Event, FrontConnection, MachineGreeting, is_uuid_v4};
 use crate::network_operations::{machine_query_failure, machine_query_result, machine_selector};
 use crate::records::root_of;
 use crate::server::Client;
-use crate::{Daemon, SavedConnection, blocking_in_place};
+use crate::{Daemon, SavedConnection, SavedSsh, blocking_in_place};
 
 pub(crate) enum MachineStream {
     Incoming(MachineGreeting, WorkGuard),
@@ -274,11 +280,8 @@ impl Daemon {
     }
 
     /// Derives the caller from the local connection's accepted identity.
-    pub(crate) fn local_caller(
-        &self,
-        client: &Client,
-    ) -> Result<facade_base::v3::Caller, ErrorBody> {
-        use facade_base::v3::Caller;
+    pub(crate) fn local_caller(&self, client: &Client) -> Result<wire::Caller, ErrorBody> {
+        use wire::Caller;
         if let Some(agent) = client.verified_actor.as_ref() {
             let info = self
                 .get_agent(&agent.agent_id)
@@ -289,8 +292,8 @@ impl Daemon {
                     ErrorBody::new(Reason::CallerUnavailable, "this agent's run has ended")
                 })?;
             return Ok(Caller::Agent {
-                agent: api::agent_ref(agent.clone()),
-                root: root_of(&info),
+                agent: agent.clone(),
+                root: api::wire_ref(&root_of(&info)),
                 yolo: info.yolo,
             });
         }
@@ -342,10 +345,10 @@ impl Daemon {
         let _ = self.machine_views.send(());
     }
 
-    pub(crate) fn public_machines(&self) -> Result<Vec<v3::MachineInfo>, ErrorBody> {
+    pub(crate) fn public_machines(&self) -> Result<Vec<wire::MachineInfo>, ErrorBody> {
         let last_contact =
             blocking_in_place(|| self.store.machine_last_seen()).map_err(ErrorBody::internal)?;
-        let mut rows = self.network.machines_v3();
+        let mut rows = self.network.machines();
         let visible = identities(&rows);
         for row in &mut rows {
             row.selector = machine_address_part(&row.machine_id, &visible)?;
@@ -357,7 +360,7 @@ impl Daemon {
     }
 
     pub(crate) fn machine_identities(&self) -> Result<Vec<MachineIdentity>, ErrorBody> {
-        Ok(identities(&self.network.machines_v3()))
+        Ok(identities(&self.network.machines()))
     }
 
     pub(crate) fn machine_address_part(&self, machine_id: &str) -> Result<String, ErrorBody> {
@@ -367,14 +370,17 @@ impl Daemon {
 
     pub(crate) fn agent_address(&self, reference: &AgentRef) -> Result<String, ErrorBody> {
         let machine = self.machine_address_part(&reference.machine_id)?;
-        Ok(addresses::format_agent_address(reference, &machine))
+        Ok(addresses::format_agent_address(
+            &reference.agent_id,
+            &machine,
+        ))
     }
 
     pub(crate) fn select_machine(
         &self,
         selector: MachineSelector<'_>,
-    ) -> Result<v3::MachineInfo, ErrorBody> {
-        let machines = self.network.machines_v3();
+    ) -> Result<wire::MachineInfo, ErrorBody> {
+        let machines = self.network.machines();
         let mut visible = identities(&machines);
         let mut found: Vec<_> = machines
             .into_iter()
@@ -428,17 +434,17 @@ impl Daemon {
     pub(crate) async fn ensure_machine_route(
         &self,
         machine_id: &str,
-        caller: &v3::Caller,
+        caller: &wire::Caller,
     ) -> Result<(), ErrorBody> {
         self.network
-            .ensure_route(machine_id, &api::wire_caller(caller))
+            .ensure_route(machine_id, caller)
             .await
             .map_err(|error| self.machine_failure(machine_id, api::received_error(error)))
     }
 
     pub(crate) fn machine_failure(&self, machine_id: &str, mut error: ErrorBody) -> ErrorBody {
         if error.data.machines.is_empty() {
-            let machines = self.network.machines_v3();
+            let machines = self.network.machines();
             let visible = identities(&machines);
             let machine = machines
                 .into_iter()
@@ -490,7 +496,7 @@ impl Daemon {
         }
         let name = self
             .network
-            .machines_v3()
+            .machines()
             .into_iter()
             .find(|machine| machine.machine_id == *machine_id)
             .map_or(name, |machine| machine.name);
@@ -508,7 +514,7 @@ impl Daemon {
         self.network.remove_saved(machine_id);
         let route = self
             .network
-            .machines_v3()
+            .machines()
             .into_iter()
             .find(|machine| machine.machine_id == *machine_id)
             .and_then(|machine| machine.route);
@@ -533,7 +539,7 @@ impl Daemon {
     pub(crate) async fn rename_local_machine(
         &self,
         name: String,
-    ) -> Result<MachineRenameResult, ErrorBody> {
+    ) -> Result<wire::MachineRenameResult, ErrorBody> {
         if !is_machine_name(&name) {
             return Err(ErrorBody::invalid_argument(
                 "a machine name begins with a lowercase letter or digit and uses lowercase letters, digits and hyphens",
@@ -542,13 +548,13 @@ impl Daemon {
         let _changing = self.machine_changes.lock().await;
         let previous_name = self
             .network
-            .machines_v3()
+            .machines()
             .into_iter()
             .find(|machine| machine.machine_id == self.machine_id)
             .map(|machine| machine.name);
         blocking_in_place(|| self.store.rename_machine(&name)).map_err(ErrorBody::internal)?;
         self.network.rename_local(name.clone());
-        Ok(MachineRenameResult {
+        Ok(wire::MachineRenameResult {
             machine_id: self.machine_id.clone(),
             name,
             previous_name,
@@ -556,7 +562,7 @@ impl Daemon {
     }
 }
 
-pub(crate) fn project_machine_query(row: &mut v3::MachineQueryResult, visible: &[MachineIdentity]) {
+pub(crate) fn project_machine_query(row: &mut MachineQueryResult, visible: &[MachineIdentity]) {
     row.selector = machine_address_part(&row.machine_id, visible)
         .unwrap_or_else(|_| addresses::exact_machine_selector(&row.machine_id));
     row.short_id =
@@ -599,7 +605,7 @@ pub(crate) fn machine_address_part(
     })
 }
 
-fn identities(rows: &[v3::MachineInfo]) -> Vec<MachineIdentity> {
+fn identities(rows: &[wire::MachineInfo]) -> Vec<MachineIdentity> {
     rows.iter()
         .map(|row| MachineIdentity {
             machine_id: row.machine_id.clone(),
@@ -608,10 +614,11 @@ fn identities(rows: &[v3::MachineInfo]) -> Vec<MachineIdentity> {
         .collect()
 }
 
-pub(crate) fn offline_machine(identity: MachineIdentity) -> v3::MachineInfo {
-    v3::MachineInfo {
+pub(crate) fn offline_machine(identity: MachineIdentity) -> wire::MachineInfo {
+    wire::MachineInfo {
+        short_id: facade_base::address::short_machine_id(&identity.machine_id),
         selector: addresses::exact_machine_selector(&identity.machine_id),
-        state: v3::MachineState::Unreachable,
+        state: wire::MachineState::Unreachable,
         last_seen: None,
         ssh_error: None,
         machine_id: identity.machine_id,
@@ -620,6 +627,5 @@ pub(crate) fn offline_machine(identity: MachineIdentity) -> v3::MachineInfo {
         build: None,
         route: None,
         connections: Vec::new(),
-        capabilities: Vec::new(),
     }
 }

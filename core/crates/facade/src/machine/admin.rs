@@ -6,24 +6,25 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 
 use anyhow::{Context as _, ensure};
+use facade_base::address::selector::{display_machine_id, parse_machine_selector};
 use facade_base::api_v1::daemon::{
     ConnectedParams, MachineIdentity, MachineList, MachineRemove, MachineRemoveArgs,
     MachineRemoveResult,
 };
 use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::api_v1::{ErrorBody, NoArgs};
-use facade_base::daemon::display_name;
+use facade_base::model::terminal::display_name;
 use facade_base::paths;
 use facade_base::ssh::{
     self, AuthorizationChange, AuthorizationFile, DedicatedIdentity, HostTrust,
 };
-use facade_base::v3::address::{display_machine_id, parse_machine_selector};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::{
-    Bootstrap, HelperUnavailable, LoginChallenge, SshSession, batch_serve, bootstrap_ssh,
-    is_full_id, print_logout_cleanup, print_trust, protected_login, proved_serve,
-    read_bootstrap_line, reconnect_tip, roster, save_ssh, ssh_destination,
+    Bootstrap, HelperUnavailable, LoginChallenge, RevocationFailure, SshSession, batch_serve,
+    bootstrap_ssh, is_full_id, print_logout_cleanup, print_removed, print_trust, protected_login,
+    proved_serve, read_bootstrap_line, reconnect_tip, revoke_key, save_ssh, saved_ssh, ssh_args,
+    ssh_destination,
 };
 use crate::{SshTarget, single_line};
 
@@ -984,16 +985,16 @@ fn remove_exactly(
 }
 
 fn revoke(machine_id: &str) -> AuthorizationOutcome {
-    match roster::revoke_key(machine_id) {
+    match revoke_key(machine_id) {
         Ok(true) => AuthorizationOutcome::Revoked,
         Ok(false) => AuthorizationOutcome::Absent,
-        Err(roster::RevocationFailure::Elevate(path)) => AuthorizationOutcome::Failed {
+        Err(RevocationFailure::Elevate(path)) => AuthorizationOutcome::Failed {
             detail: format!(
                 "writing {} requires an elevated Administrator terminal",
                 path.display()
             ),
         },
-        Err(roster::RevocationFailure::Other(error)) => AuthorizationOutcome::Failed {
+        Err(RevocationFailure::Other(error)) => AuthorizationOutcome::Failed {
             detail: format!("{error:#}"),
         },
     }
@@ -1063,11 +1064,11 @@ pub(super) fn remove(daemon: &mut DaemonClient, machine: String) -> anyhow::Resu
     let local_name = display_name(&local.name);
 
     let remote = (|| {
-        let saved = roster::saved_ssh(&local.connections, &local_id, &target.machine_id)
+        let saved = saved_ssh(&local.connections, &local_id, &target.machine_id)
             .context("there is no saved direct SSH connection")?;
         let ssh_target = SshTarget {
             home: saved.remote_home.clone(),
-            ssh_args: roster::ssh_args(saved).to_vec(),
+            ssh_args: ssh_args(saved).to_vec(),
         };
         let mut admin =
             AdminClient::open(&ssh_target, ssh::SshMode::Saved, ssh::SshAdminMode::Remove)?;
@@ -1088,7 +1089,7 @@ pub(super) fn remove(daemon: &mut DaemonClient, machine: String) -> anyhow::Resu
     let mut failed = false;
     match local_route {
         Ok(Some(removed)) => {
-            roster::print_removed(&removed, &target.name);
+            print_removed(&removed, &target.name);
         }
         Ok(None) => println_or_end!("No saved connection to {remote_name}."),
         Err(error) => {

@@ -2,23 +2,24 @@
 
 use std::io;
 use std::path::Path;
-use std::process::{ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use facade_base::api_v1::daemon::SshInteraction;
 use facade_base::api_v1::{ErrorBody, MAX_LINE_BYTES};
-use facade_base::machine::SshInteraction;
 use facade_base::ssh::{
     BOOTSTRAP_INSTALL, BOOTSTRAP_READY, BOOTSTRAP_SERVE, BootstrapAction, REMOTE_BOOTSTRAP_BEGIN,
     REMOTE_PLATFORM_PROBE, RemoteLoginShell, RemoteProbe, SshMode, bootstrap_action,
     parse_remote_platform, parse_remote_probe, remote_install_command,
-    remote_login_bootstrap_command, ssh_login_args,
+    remote_login_bootstrap_command, spawn_ssh_async, ssh_login_args,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::task::JoinHandle;
 
-use super::{SavedSsh, wire};
+use super::wire;
+use crate::SavedSsh;
 
 const STDERR_BYTES: usize = 32 * 1024;
 const EXIT_GRACE: Duration = Duration::from_millis(250);
@@ -144,24 +145,8 @@ impl Pipes {
         }
     }
 
-    fn spawn(mut command: Command) -> io::Result<Self> {
-        #[cfg(windows)]
-        let (read, write) = {
-            let stdio = facade_base::ssh::ssh_stdio()?;
-            command.stdin(stdio.stdin).stdout(stdio.stdout);
-            (
-                ChildStdout::from_std(stdio.from_ssh)?,
-                ChildStdin::from_std(stdio.to_ssh)?,
-            )
-        };
-        #[cfg(not(windows))]
-        command.stdin(Stdio::piped()).stdout(Stdio::piped());
-        let mut child = command.stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
-        #[cfg(not(windows))]
-        let (read, write) = (
-            child.stdout.take().expect("piped SSH stdout"),
-            child.stdin.take().expect("piped SSH stdin"),
-        );
+    fn spawn(command: Command) -> io::Result<Self> {
+        let (mut child, write, read) = spawn_ssh_async(command)?;
         let read = BufReader::new(read);
         let mut stderr = child.stderr.take().expect("piped SSH stderr");
         let diagnostics = Arc::new(Mutex::new(Vec::new()));
@@ -366,11 +351,15 @@ fn ssh_failure(
         }
         command.extend(ssh.argv.iter().cloned());
         let interaction = SshInteraction {
-            reason: diagnostics.stderr,
+            message: diagnostics.stderr,
             command,
         };
         let mut error = wire::error("ssh_interaction_required", "SSH needs interaction.");
-        wire::detail(&mut error, "message", serde_json::json!(interaction.reason));
+        wire::detail(
+            &mut error,
+            "message",
+            serde_json::json!(interaction.message),
+        );
         wire::detail(
             &mut error,
             "command",

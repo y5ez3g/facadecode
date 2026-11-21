@@ -15,12 +15,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use facade_base::api_v1::daemon::{CLOSING_TIME, DRAIN_TIME, QUIET_TIME};
 use facade_base::api_v1::daemon::{DaemonUpgradeArgs, DaemonUpgradeResult, SUPPORTED_API_VERSIONS};
 use facade_base::api_v1::{
     ApiVersions, ErrorBody, ErrorData, ProtocolMismatchDetails, highest_common,
 };
-use facade_base::daemon::{CLOSING_TIME, DRAIN_TIME, QUIET_TIME};
-use facade_base::jsonrpc::Reason;
+use facade_base::model::error::Reason;
 use tokio::sync::watch;
 
 use super::{Lifecycle, LifecycleActivity};
@@ -184,7 +184,7 @@ impl Lifecycle {
             &format!(
                 "handing over to build {}; {} run on",
                 args.build,
-                facade_base::daemon::agents_word(running)
+                facade_base::model::agent::agents_word(running)
             ),
         );
         Ok(DaemonUpgradeResult {

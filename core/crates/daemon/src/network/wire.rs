@@ -12,7 +12,7 @@ use facade_base::api_v1::{
     MalformedRequest, Request, Response, ResponseBody, Topic, decode_arguments, encode_line,
     parse_request, read_machine_message,
 };
-use facade_base::machine::{ExecutionOutcome, MachineIdentity};
+use facade_base::model::machine::{ExecutionOutcome, MachineIdentity};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};

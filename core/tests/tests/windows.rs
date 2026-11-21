@@ -201,7 +201,7 @@ fn an_editor_lists_its_folders_and_the_checkouts_of_their_repositories() {
         let path = location["path"].as_str().unwrap();
         assert_eq!(
             location["location_id"],
-            facade_base::daemon::location_id(path)
+            facade_base::model::machine::location_id(path)
         );
         if location["kind"] == "worktree" {
             assert_eq!(

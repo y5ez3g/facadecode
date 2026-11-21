@@ -1,5 +1,6 @@
 use facade_base::api_v1::Request;
 use facade_base::api_v1::daemon::{AdvertiseParams, MachineInfo, MachineState, WatchResult};
+use facade_base::model::machine::MachineResponseState;
 use serde_json::json;
 use tokio::io::{BufReader, duplex, split};
 
@@ -261,23 +262,18 @@ async fn an_error_reply_has_a_receipt_but_a_local_deadline_does_not() {
     assert_eq!(returned, error);
     assert_eq!(
         RequestFailure::from_reply(returned, received_at).observation(),
-        (
-            facade_base::machine::MachineResponseState::Failed,
-            Some(received_at)
-        )
+        (MachineResponseState::Failed, Some(received_at))
     );
     let timeout = unanswered.answer(deadline).await.err().expect("no reply");
     assert!(matches!(timeout, RequestFailure::TimedOut(_)));
     assert_eq!(
         timeout.observation(),
-        (facade_base::machine::MachineResponseState::TimedOut, None)
+        (MachineResponseState::TimedOut, None)
     );
 }
 
 #[test]
 fn relayed_deadlines_stay_distinct_from_a_lost_route() {
-    use facade_base::machine::MachineResponseState;
-
     let machine = MachineIdentity {
         machine_id: "target".into(),
         name: "target".into(),
@@ -302,8 +298,6 @@ fn relayed_deadlines_stay_distinct_from_a_lost_route() {
 
 #[tokio::test]
 async fn watch_receipts_keep_the_frame_time_when_consumption_is_delayed() {
-    use facade_base::machine::MachineResponseState;
-
     let (peer, _output) = Peer::new(None);
     let machine = MachineIdentity {
         machine_id: "peer".into(),

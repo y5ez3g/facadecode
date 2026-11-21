@@ -1,10 +1,13 @@
 //! Restores and retires Guests, and validates an editor's terminal colors.
 
-use facade_base::daemon::{AgentInfo, AgentsUpdate, TerminalColors};
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
+use facade_base::{
+    model::agent::{AgentsUpdate, ManagedAgent},
+    model::terminal::TerminalColors,
+};
 
 use crate::agent::AgentHandle;
-use crate::{Daemon, blocking_in_place, gate_for_test, log};
+use crate::{Daemon, an_hour_ago, blocking_in_place, gate_for_test, log};
 
 impl Daemon {
     /// Ends the guest of `cli`'s `session`, as its session-end hook or its process's end says.
@@ -23,7 +26,7 @@ impl Daemon {
         guest.mark_ended();
         // Its record and inbox go before anything else can settle: a result its start's prompt
         // owes it is then never written.
-        let gone = match blocking_in_place(|| self.store.delete_guest(id)) {
+        let gone = match blocking_in_place(|| self.store.delete_guest(id, an_hour_ago)) {
             Ok(gone) => gone,
             Err(err) => {
                 log("warn", &format!("{err:#}"));
@@ -50,7 +53,7 @@ impl Daemon {
         );
         let restored = self.guests.restore(&kept_since)?;
         for record in restored.ended {
-            blocking_in_place(|| self.store.delete_guest(&record.agent_id))?;
+            blocking_in_place(|| self.store.delete_guest(&record.agent_id, an_hour_ago))?;
         }
         let mut agents = self.agents.lock().unwrap();
         for info in restored.listed {
@@ -63,7 +66,7 @@ impl Daemon {
     }
 
     /// Gives a recovered guest its stable running machine.
-    pub(crate) fn project_guest(&self, mut info: AgentInfo) -> AgentInfo {
+    pub(crate) fn project_guest(&self, mut info: ManagedAgent) -> ManagedAgent {
         info.machine_id = self.machine_id.clone();
         info.windows.clear();
         info

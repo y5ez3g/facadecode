@@ -18,7 +18,7 @@ use facade_base::api_v1::{
     ApiVersions, CallParams, ErrorBody as WireError, Operation, Request, ResponseBody,
     ServerMessage, encode_line, read_server_message,
 };
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::paths::ClientSocket;
 use facade_base::process::ProcessIdentity;
 use facade_base::service::{self, Service};

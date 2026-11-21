@@ -4,9 +4,10 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use tokio::process as async_process;
 
 use super::install;
 
@@ -939,14 +940,42 @@ pub fn spawn_ssh(mut command: Command) -> io::Result<(Child, ChildStdin, ChildSt
     }
     #[cfg(unix)]
     {
-        use std::process::Stdio;
-
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()?;
         let to_ssh = child.stdin.take().expect("stdin was piped");
         let from_ssh = child.stdout.take().expect("stdout was piped");
+        Ok((child, to_ssh, from_ssh))
+    }
+}
+
+/// Starts OpenSSH for a background machine session, capturing stderr and killing it on drop.
+pub fn spawn_ssh_async(
+    mut command: async_process::Command,
+) -> io::Result<(
+    async_process::Child,
+    async_process::ChildStdin,
+    async_process::ChildStdout,
+)> {
+    command.stderr(Stdio::piped()).kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        let stdio = ssh_stdio()?;
+        command.stdin(stdio.stdin).stdout(stdio.stdout);
+        // Convert both parent ends before starting a child that would need cleanup on error.
+        let from_ssh = async_process::ChildStdout::from_std(stdio.from_ssh)?;
+        let to_ssh = async_process::ChildStdin::from_std(stdio.to_ssh)?;
+        Ok((command.spawn()?, to_ssh, from_ssh))
+    }
+    #[cfg(unix)]
+    {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let from_ssh = child.stdout.take().expect("piped SSH stdout");
+        let to_ssh = child.stdin.take().expect("piped SSH stdin");
         Ok((child, to_ssh, from_ssh))
     }
 }
@@ -958,17 +987,17 @@ pub fn spawn_ssh(mut command: Command) -> io::Result<(Child, ChildStdin, ChildSt
 /// child synchronous pipe ends, so these pipes are overlapped at both ends; Git for Windows'
 /// ssh.exe accepts either.
 #[cfg(windows)]
-pub struct SshStdio {
+struct SshStdio {
     /// OpenSSH's standard input.
-    pub stdin: std::process::Stdio,
+    stdin: Stdio,
     /// OpenSSH's standard output.
-    pub stdout: std::process::Stdio,
-    pub to_ssh: std::process::ChildStdin,
-    pub from_ssh: std::process::ChildStdout,
+    stdout: Stdio,
+    to_ssh: ChildStdin,
+    from_ssh: ChildStdout,
 }
 
 #[cfg(windows)]
-pub fn ssh_stdio() -> std::io::Result<SshStdio> {
+fn ssh_stdio() -> io::Result<SshStdio> {
     use windows_sys::Win32::Storage::FileSystem::{PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND};
 
     let (to_ssh, stdin) = ssh_pipe(PIPE_ACCESS_OUTBOUND)?;

@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use facade_base::daemon::InputState;
+use facade_base::model::terminal::InputState;
 use facade_rules::{
     BoxReading, InputLine, LineCell, ProbeVerdict, restored, shape_of, space_taken, verdict_of,
 };

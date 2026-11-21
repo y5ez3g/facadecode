@@ -18,6 +18,18 @@ pub use windows::ClientSocket;
 #[cfg(unix)]
 pub type ClientSocket = std::os::unix::net::UnixStream;
 
+/// Signals EOF to the peer on Unix while keeping the read side open.
+/// Windows named pipes have no half-close, so their readers stay connected.
+pub fn shutdown_write_if_supported(socket: &ClientSocket) -> io::Result<()> {
+    #[cfg(unix)]
+    return socket.shutdown(std::net::Shutdown::Write);
+    #[cfg(windows)]
+    {
+        let _ = socket;
+        Ok(())
+    }
+}
+
 /// The keeper socket of this process's home.
 pub fn keeper_socket() -> anyhow::Result<PathBuf> {
     keeper_socket_for(&facade_home()?)

@@ -21,11 +21,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-#[cfg(test)]
-use facade_base::daemon::Worktree;
-use facade_base::daemon::{Kept, LocationInfo, LocationKind, location_id};
 use facade_base::files::{folder_key, real_path};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
+#[cfg(test)]
+use facade_base::model::machine::Worktree;
+use facade_base::model::machine::{Kept, LocationKind, WorkingLocation, location_id};
 
 /// The longest a question to Git may take.
 const READ_LIMIT: Duration = Duration::from_secs(10);
@@ -53,7 +53,7 @@ const NOT_IN_FOLDER_NAMES: &str = "/\\<>:\"|?*";
 /// A window's locations, and what of them could not be read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Catalog {
-    locations: Vec<LocationInfo>,
+    locations: Vec<WorkingLocation>,
     /// Beside each location, the window folder whose read brought it.
     sources: Vec<String>,
     problems: Vec<String>,
@@ -61,7 +61,7 @@ pub(crate) struct Catalog {
 
 impl Catalog {
     /// The main checkout first, then the folder itself, then the other worktrees.
-    pub(crate) fn locations(&self) -> &[LocationInfo] {
+    pub(crate) fn locations(&self) -> &[WorkingLocation] {
         &self.locations
     }
 
@@ -71,20 +71,20 @@ impl Catalog {
     }
 
     /// The location at `path`, a path with its links resolved.
-    pub(crate) fn location(&self, path: &str) -> Option<&LocationInfo> {
+    pub(crate) fn location(&self, path: &str) -> Option<&WorkingLocation> {
         self.locations
             .iter()
             .find(|place| same_folder(&place.path, path))
     }
 
-    fn with_sources(&self) -> impl Iterator<Item = (&LocationInfo, &str)> {
+    fn with_sources(&self) -> impl Iterator<Item = (&WorkingLocation, &str)> {
         self.locations
             .iter()
             .zip(self.sources.iter().map(String::as_str))
     }
 
     /// Lists `place` as brought by `source`, unless a location at its path is listed already.
-    fn insert(&mut self, place: LocationInfo, source: &str) {
+    fn insert(&mut self, place: WorkingLocation, source: &str) {
         if self.location(&place.path).is_some() {
             return;
         }
@@ -99,7 +99,7 @@ pub(crate) async fn read(folders: &[String], before: &Catalog) -> Catalog {
     let mut catalog = Catalog::default();
     for folder in folders {
         let (found, problem) = look_at(folder).await;
-        let carried: Vec<LocationInfo> = if problem.is_some() {
+        let carried: Vec<WorkingLocation> = if problem.is_some() {
             before
                 .with_sources()
                 .filter(|(_, source)| *source == folder.as_str())
@@ -117,7 +117,7 @@ pub(crate) async fn read(folders: &[String], before: &Catalog) -> Catalog {
 }
 
 /// The locations one window folder brings, and why that folder's read failed where it did.
-async fn look_at(folder: &str) -> (Vec<LocationInfo>, Option<String>) {
+async fn look_at(folder: &str) -> (Vec<WorkingLocation>, Option<String>) {
     let opened = resolve(folder);
     if !Path::new(&opened).is_dir() {
         return (
@@ -141,7 +141,7 @@ async fn look_at(folder: &str) -> (Vec<LocationInfo>, Option<String>) {
 /// The places a repository's checkouts give a window that opened the folder `opened`: the main
 /// checkout, then `opened` as whatever it is, then the other worktrees by branch and path. A
 /// checkout Git may prune whose folder is gone is no place.
-fn repository_places(opened: &str, listed: Vec<Checkout>) -> Vec<LocationInfo> {
+fn repository_places(opened: &str, listed: Vec<Checkout>) -> Vec<WorkingLocation> {
     let checkouts: Vec<Checkout> = listed
         .into_iter()
         .map(|checkout| Checkout {
@@ -181,12 +181,12 @@ fn repository_places(opened: &str, listed: Vec<Checkout>) -> Vec<LocationInfo> {
 }
 
 /// A folder as a location of its own, named by its last part.
-fn plain_folder(path: &str) -> LocationInfo {
+fn plain_folder(path: &str) -> WorkingLocation {
     place_at(path.to_owned(), last_part(path), LocationKind::Folder)
 }
 
-fn place_at(path: String, label: String, kind: LocationKind) -> LocationInfo {
-    LocationInfo {
+fn place_at(path: String, label: String, kind: LocationKind) -> WorkingLocation {
+    WorkingLocation {
         location_id: location_id(&path),
         label,
         path,
@@ -231,7 +231,7 @@ impl Checkout {
         self.branch.clone().unwrap_or_else(|| last_part(&self.path))
     }
 
-    fn place(&self, kind: LocationKind) -> LocationInfo {
+    fn place(&self, kind: LocationKind) -> WorkingLocation {
         place_at(self.path.clone(), self.label(), kind)
     }
 }
@@ -426,7 +426,7 @@ pub(crate) async fn create_worktree(
     source: &Path,
     branch: &str,
     creations: &Creations,
-) -> Result<LocationInfo, ErrorBody> {
+) -> Result<WorkingLocation, ErrorBody> {
     check_source_folder(source).await?;
     let repository = Repository::read(source).await?;
     let destination = repository.destination(branch).await?;
@@ -575,7 +575,7 @@ pub(crate) async fn create(
     worktree: &Worktree,
     branch_prefix: Option<&str>,
     creations: &Creations,
-) -> Result<LocationInfo, ErrorBody> {
+) -> Result<WorkingLocation, ErrorBody> {
     let creation = Creation::check(source, worktree, branch_prefix).await?;
     let _turn = creations.wait_turn(&creation.repository.parent).await?;
     // Whoever had the turn before may have made this branch.
@@ -628,7 +628,7 @@ impl<'a> Creation<'a> {
     }
 
     /// Runs `git worktree add` into the first free folder, and says what stayed when it fails.
-    async fn make(self) -> Result<LocationInfo, ErrorBody> {
+    async fn make(self) -> Result<WorkingLocation, ErrorBody> {
         let destination = free_destination(
             &self.repository.parent,
             &self.folder,
@@ -643,7 +643,7 @@ async fn add_worktree(
     branch: &str,
     destination: &Path,
     base: &str,
-) -> Result<LocationInfo, ErrorBody> {
+) -> Result<WorkingLocation, ErrorBody> {
     let path = destination.to_string_lossy();
     let added = git
         .run(&["worktree", "add", "-b", branch, &path, base], ADD_LIMIT)
@@ -936,7 +936,7 @@ mod tests {
         let path = resolve(&root.join("app.worktrees/review-api").to_string_lossy());
         assert_eq!(
             made,
-            LocationInfo {
+            WorkingLocation {
                 location_id: location_id(&path),
                 label: "aaron/review-api".into(),
                 path,

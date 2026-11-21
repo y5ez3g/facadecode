@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
 use facade_base::system::{SYSTEM, System, env_var};
 use serde_json::Value;
 

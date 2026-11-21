@@ -272,7 +272,7 @@ fn a_long_screen_is_complete_and_inline() {
     assert!(data.get("file").is_none() && data.get("next_cursor").is_none());
     let text = data["text"].as_str().expect("inline screen text");
     assert!(
-        facade_base::daemon::plain(text).contains(&expected),
+        facade_base::model::terminal::plain(text).contains(&expected),
         "the screen must include all 120 output lines in order"
     );
 
@@ -290,7 +290,8 @@ fn a_long_screen_is_complete_and_inline() {
     let after = reader.call("read_screen", json!({ "agent": "long", "lines": 200 }));
     assert_eq!(after["status"], "success", "{after}");
     assert!(
-        facade_base::daemon::plain(after["data"]["text"].as_str().unwrap()).contains(&expected),
+        facade_base::model::terminal::plain(after["data"]["text"].as_str().unwrap())
+            .contains(&expected),
         "the stopped agent retains the output"
     );
     let screen = connect(&home).call_ok("agent.screen", json!({ "target": "long", "lines": 200 }));
@@ -298,7 +299,7 @@ fn a_long_screen_is_complete_and_inline() {
     let shell = home.run_facade_ok(&["screen", "long", "--lines", "200"]);
     assert_eq!(
         shell,
-        facade_base::daemon::plain(screen["text"].as_str().unwrap())
+        facade_base::model::terminal::plain(screen["text"].as_str().unwrap())
     );
 
     let address = after["data"]["address"].as_str().expect("an agent address");

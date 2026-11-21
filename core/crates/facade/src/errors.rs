@@ -14,8 +14,9 @@ use facade_base::api_v1::daemon::{
     AgentKind, AgentLabel, AgentState, MachineIdentity, MachineQuery, MachineState, QueryStatus,
     SendResult, SessionMatch,
 };
-use facade_base::daemon::{DeliveryFailure, DeliveryStatus, display_line};
-use facade_base::machine::ExecutionOutcome;
+use facade_base::model::machine::ExecutionOutcome;
+use facade_base::model::message::{DeliveryFailure, DeliveryStatus};
+use facade_base::model::terminal::display_line;
 use serde::de::DeserializeOwned;
 
 use crate::single_line;

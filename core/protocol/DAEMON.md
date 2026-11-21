@@ -463,7 +463,7 @@ The source of an agent's start, as displayed to the caller.
 | `yolo` | `boolean` | yes |  |
 | `exit` | `ProcessExit` | no |  |
 | `session` | `string` | no |  |
-| `state` | `V3AgentState` | yes |  |
+| `state` | `AgentState` | yes |  |
 | `state_detail` | `StateDetail` | no |  |
 | `said` | `Said` | no |  |
 | `tools_state` | `ToolsState` | yes |  |
@@ -482,7 +482,7 @@ The source of an agent's start, as displayed to the caller.
 | `type` | `AgentKind` | yes |  |
 | `name` | `string` | yes |  |
 | `cli` | `string` | yes |  |
-| `state` | `V3AgentState` | yes |  |
+| `state` | `AgentState` | yes |  |
 | `resumable` | `boolean` | yes |  |
 
 ### AgentListArgs
@@ -499,7 +499,7 @@ The source of an agent's start, as displayed to the caller.
 | `address` | `string` | yes |  |
 | `name` | `string` | yes |  |
 | `type` | `AgentKind` | yes |  |
-| `state` | `V3AgentState` | yes |  |
+| `state` | `AgentState` | yes |  |
 | `cli` | `string` | yes |  |
 | `folder` | `string` | yes |  |
 | `started_at` | `string` | yes |  |
@@ -542,7 +542,9 @@ The recorded cause of an agent record's removal.
 
 ### AgentState
 
-`V3AgentState`
+The agent's current state.
+
+`'starting' \| 'working' \| 'waiting_for_you' \| 'just_done' \| 'idle' \| 'error' \| 'ended' \| 'unknown' \| 'online'`
 
 ### AgentSyncState
 
@@ -913,7 +915,7 @@ How an agent's message input reads on its screen. A reading never means input ma
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `recipient` | `{ readonly machine_id: string; readonly agent_id: string }` | yes |  |
-| `message` | `{ readonly message_id: string; readonly message_ref?: { readonly machine_id: string; readonly message_id: string }; readonly from: string; readonly from_machine_id?: string; readonly from_name?: string; readonly to: string; readonly text: string; readonly reply_to?: string; readonly reply_to_machine_id?: string; readonly call_id?: string; readonly result?: { readonly agent: { readonly reference: { readonly machine_id: string; readonly agent_id: string }; readonly address: string; readonly type: AgentKind; readonly label?: string; readonly unreachable?: boolean; readonly name: string; readonly cli: string; readonly args: string[]; readonly model?: string; readonly effort?: string; readonly title?: string; readonly cwd: string; readonly pid?: number; readonly process: ProcessState; readonly size?: { readonly cols: number; readonly rows: number }; readonly created_at: string; readonly started_at: string; readonly creator_kind?: CreatorKind; readonly creator?: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean; readonly exit?: ProcessExit; readonly session?: string; readonly state: V3AgentState; readonly state_detail?: StateDetail; readonly said?: Said; readonly tools_state: ToolsState; readonly tools_reason?: ToolsReason }; readonly prompt: PromptOutcome }; readonly at: string; readonly delivery: Delivery }` | yes |  |
+| `message` | `{ readonly message_id: string; readonly message_ref?: { readonly machine_id: string; readonly message_id: string }; readonly from: string; readonly from_machine_id?: string; readonly from_name?: string; readonly to: string; readonly text: string; readonly reply_to?: string; readonly reply_to_machine_id?: string; readonly call_id?: string; readonly result?: { readonly agent: { readonly reference: { readonly machine_id: string; readonly agent_id: string }; readonly address: string; readonly type: AgentKind; readonly label?: string; readonly unreachable?: boolean; readonly name: string; readonly cli: string; readonly args: string[]; readonly model?: string; readonly effort?: string; readonly title?: string; readonly cwd: string; readonly pid?: number; readonly process: ProcessState; readonly size?: { readonly cols: number; readonly rows: number }; readonly created_at: string; readonly started_at: string; readonly creator_kind?: CreatorKind; readonly creator?: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean; readonly exit?: ProcessExit; readonly session?: string; readonly state: AgentState; readonly state_detail?: StateDetail; readonly said?: Said; readonly tools_state: ToolsState; readonly tools_reason?: ToolsReason }; readonly prompt: PromptOutcome }; readonly at: string; readonly delivery: Delivery }` | yes |  |
 
 ### InternalDeliverWaitNoticeArgs
 
@@ -941,6 +943,16 @@ How an agent's message input reads on its screen. A reading never means input ma
 | `pid` | `number` | yes |  |
 | `build` | `string` | yes |  |
 
+### LocationInfo
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `location_id` | `string` | yes | `loc-` followed by 16 hexadecimal digits of the SHA-256 of the location's path: the same in every window that lists it. |
+| `label` | `string` | yes | The checkout's branch, or else the folder's name. |
+| `path` | `string` | yes | The absolute path, with symbolic links resolved. |
+| `kind` | `LocationKind` | yes | What the location is: a folder, a repository's main checkout, or a linked worktree. |
+| `source_folder` | `string` | no | The requested workspace folder that produced this local result. |
+
 ### LocationKind
 
 What a location is.
@@ -958,7 +970,7 @@ What a location is.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `locations` | `V3LocationInfo[]` | yes |  |
+| `locations` | `LocationInfo[]` | yes |  |
 
 ### LogArgs
 
@@ -1518,22 +1530,6 @@ Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `watch` | `number` | yes |  |
-
-### V3AgentState
-
-The agent's current state.
-
-`'starting' \| 'working' \| 'waiting_for_you' \| 'just_done' \| 'idle' \| 'error' \| 'ended' \| 'unknown' \| 'online'`
-
-### V3LocationInfo
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `location_id` | `string` | yes | `loc-` followed by 16 hexadecimal digits of the SHA-256 of the location's path: the same in every window that lists it. |
-| `label` | `string` | yes | The checkout's branch, or else the folder's name. |
-| `path` | `string` | yes | The absolute path, with symbolic links resolved. |
-| `kind` | `LocationKind` | yes | What the location is: a folder, a repository's main checkout, or a linked worktree. |
-| `source_folder` | `string` | no | The requested workspace folder that produced this local result. |
 
 ### WaitKind
 

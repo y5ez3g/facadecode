@@ -2,18 +2,23 @@
 
 use std::time::SystemTime;
 
+use facade_base::address::selector::exact_machine_selector;
+use facade_base::address::short_machine_id;
 use facade_base::api_v1::ErrorBody;
-use facade_base::api_v1::daemon::ConnectedMachine;
-use facade_base::machine::{ExecutionOutcome, SshInteraction};
+use facade_base::api_v1::daemon::{
+    ConnectedMachine, MachineConnection, MachineInfo, MachineQuery, MachineState, QueryStatus,
+    SshInteraction,
+};
+use facade_base::model::machine::{ExecutionOutcome, MachineIdentity};
 use facade_base::time::iso_time;
-use facade_base::v3::{self, MachineConnection, MachineInfo, MachineState};
 use tokio::sync::{oneshot, watch};
 
 use super::ssh::{FailedAttempt, Pipes};
 use super::topology::{Origin, Saved, Topology, ssh_source};
 use super::wake::RouteAttempt;
 use super::wire::Reader;
-use super::{Event, Network, SavedSsh, SessionId, expected, wire};
+use super::{Event, Network, SessionId, expected, wire};
+use crate::SavedSsh;
 
 type Waiter = oneshot::Sender<Result<ConnectedMachine, ErrorBody>>;
 
@@ -265,7 +270,7 @@ impl Network {
             );
         }
         if failure.error.data.reason == "unavailable" {
-            let identity = facade_base::machine::MachineIdentity {
+            let identity = MachineIdentity {
                 machine_id: config.machine_id.clone(),
                 name: saved.name.clone().unwrap_or_else(|| saved.selector()),
             };
@@ -325,18 +330,18 @@ impl Saved {
     }
 
     fn selector(&self) -> String {
-        v3::address::exact_machine_selector(&self.config.machine_id)
+        exact_machine_selector(&self.config.machine_id)
     }
 
-    fn sleeping_row(&self, ssh_error: &Option<String>) -> v3::MachineQueryResult {
-        v3::MachineQueryResult {
+    fn sleeping_row(&self, ssh_error: &Option<String>) -> MachineQuery {
+        MachineQuery {
             machine_id: self.config.machine_id.clone(),
-            short_id: v3::address::short_machine_id(&self.config.machine_id),
+            short_id: short_machine_id(&self.config.machine_id),
             name: self.name.clone().unwrap_or_else(|| self.selector()),
             selector: self.selector(),
             build: None,
             state: MachineState::Sleeping,
-            status: v3::MachineQueryStatus::Unavailable,
+            status: QueryStatus::Unavailable,
             last_seen: self.last_seen.map(iso_time),
             ssh_error: ssh_error.clone(),
             error: None,
@@ -357,6 +362,7 @@ impl Saved {
         };
         MachineInfo {
             machine_id: self.config.machine_id.clone(),
+            short_id: short_machine_id(&self.config.machine_id),
             boot_id: None,
             name: self.name.clone().unwrap_or_else(|| self.selector()),
             selector: self.selector(),
@@ -369,7 +375,6 @@ impl Saved {
             build: None,
             route: None,
             connections: vec![connection],
-            capabilities: Vec::new(),
         }
     }
 }

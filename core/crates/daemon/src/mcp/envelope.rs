@@ -4,8 +4,8 @@
 //! it as JSON text and gets the same object as the call's structured content.
 
 use facade_base::api_v1;
-use facade_base::daemon::WindowDeliveryOutcome;
-use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure};
+use facade_base::model::error::{ErrorBody, Reason, SendFailure};
+use facade_base::model::message::WindowDeliveryOutcome;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -152,9 +152,11 @@ pub(super) fn window_delivery(
 
 #[cfg(test)]
 mod tests {
-    use facade_base::daemon::{TextWritten, WindowDelivery, WindowDeliveryFailure, WindowRef};
-    use facade_base::jsonrpc::Reason;
-    use facade_base::machine::{ExecutionOutcome, MessageRef, ProtocolMismatch, Unavailable};
+    use facade_base::model::error::Reason;
+    use facade_base::model::machine::{ExecutionOutcome, Unavailable, WindowRef};
+    use facade_base::model::message::{
+        MessageRef, TextWritten, WindowDelivery, WindowDeliveryFailure,
+    };
 
     use super::*;
 
@@ -251,6 +253,7 @@ mod tests {
         for (reason, name) in [
             (Reason::InvalidSettings, "invalid_settings"),
             (Reason::CallerUnavailable, "caller_unavailable"),
+            (Reason::IncompatibleProtocol, "incompatible_protocol"),
             (Reason::Refused, "refused"),
             (Reason::Upgrading, "upgrading"),
             (Reason::NotFound, "not_found"),
@@ -259,18 +262,6 @@ mod tests {
             let error = ErrorBody::new(reason, "the call could not go ahead");
             assert_eq!(refusal(&error), failure(name, error.message));
         }
-        let mut mismatch =
-            ErrorBody::new(Reason::IncompatibleProtocol, "different protocol versions");
-        mismatch.data.protocol = Some(ProtocolMismatch {
-            local_build: "here".into(),
-            local_protocol: [2, 2],
-            remote_build: "there".into(),
-            remote_protocol: [1, 1],
-        });
-        let reply = refusal(&mismatch);
-        assert_eq!(reply["reason"], "incompatible_protocol", "{reply}");
-        assert_eq!(reply["data"], json!({ "protocol": mismatch.data.protocol }));
-
         let mut partial = ErrorBody::new(Reason::PartialInput, "the run ended during input");
         partial.data.text_written = Some(TextWritten::Partial);
         partial.data.enter_written = Some(false);

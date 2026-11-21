@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use facade_base::daemon::InputState;
+use facade_base::model::terminal::InputState;
 use facade_rules::{Pattern, ReadyTools, Rule, TrustQuestion};
 use facade_screen::Screen;
 use tokio::time::Instant;

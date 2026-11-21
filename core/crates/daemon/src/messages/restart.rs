@@ -2,10 +2,11 @@
 
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{DeliveryFailure, Message, TextWritten};
+use facade_base::model::message::{DeliveryFailure, Message, TextWritten};
 use tokio::sync::watch;
 
-use super::{Deliveries, Messages, Outcome, OwedResult, Settled, delivery_limit};
+use super::{Deliveries, Messages, Outcome, OwedResult, Settled};
+use crate::delivery_limit;
 use crate::store::KeptMessage;
 use crate::{HUMAN, blocking_in_place};
 

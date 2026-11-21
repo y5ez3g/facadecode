@@ -5,11 +5,11 @@ use std::sync::OnceLock;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use facade_base::daemon::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES, check_message_text};
+use facade_base::address::{is_machine_name, selector::parse_machine_selector};
 use facade_base::key_input::{KeyProblem, MAX_KEYS, NAMED_KEYS, key_problems};
+use facade_base::model::message::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES, check_message_text};
 use facade_base::settings::is_space;
 use facade_base::ssh::{SshArgumentError, parse_ssh_destination};
-use facade_base::v3::address::{is_machine_name, parse_machine_selector};
 
 use crate::help::{self, Page};
 use crate::hooks::HookEvent;

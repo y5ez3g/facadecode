@@ -6,7 +6,7 @@
 
 mod recorded;
 
-use facade_base::daemon::{HiddenRows, InputState};
+use facade_base::model::terminal::{HiddenRows, InputState};
 use facade_rules::{
     ProbeVerdict, find, is_own_draft, read_box, read_box_for_typing, read_draft, read_input,
     restored, space_taken, verdict_of,

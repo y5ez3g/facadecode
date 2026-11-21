@@ -56,13 +56,13 @@ mod waits;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use facade_base::api_v1::{ApiVersion, daemon as wire};
-use facade_base::daemon::AgentsUpdate;
-use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine::new_boot_id;
+use facade_base::model::agent::AgentsUpdate;
+use facade_base::model::error::ErrorBody;
+use facade_base::model::machine::new_boot_id;
 use facade_base::process::ProcessState;
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
@@ -74,7 +74,7 @@ use guests::Guests;
 use lifecycle::{Lifecycle, LifecycleActivity, Work};
 use messages::Messages;
 use network::Network;
-use operations::{SessionKey, StartAnswer, StartKey};
+use operations::{SessionKey, StartAnswer};
 use records::Records;
 use runs::{FoundKeeper, RunEvent, Runs};
 use store::Store;
@@ -89,8 +89,65 @@ const MAX_QUEUED_AGENT_CHANGES: usize = 1024;
 /// can use.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+/// How long a request ID answers again.
+const REQUEST_HOUR: Duration = Duration::from_secs(60 * 60);
+
+/// The longest a message may take from its call reaching the daemon to its delivery.
+const DELIVERY_TIME: Duration = Duration::from_millis(29_500);
+
+/// The time an hour before now, as request IDs look back to.
+fn an_hour_ago() -> String {
+    facade_base::time::iso_time(
+        SystemTime::now()
+            .checked_sub(REQUEST_HOUR)
+            .unwrap_or(SystemTime::UNIX_EPOCH),
+    )
+}
+
+/// The origin sets a route before the receiver dates its receipt. Keep the route for the
+/// one-hour receipt window plus the maximum time a send can spend getting there.
+fn send_route_cutoff() -> String {
+    let age = REQUEST_HOUR.saturating_add(delivery_limit());
+    facade_base::time::iso_time(
+        SystemTime::now()
+            .checked_sub(age)
+            .unwrap_or(SystemTime::UNIX_EPOCH),
+    )
+}
+
+/// The longest a message may take from its call reaching the daemon to its delivery. A debug build
+/// reads a longer one from `FACADE_TEST_DELIVERY_MS`, once.
+fn delivery_limit() -> Duration {
+    static LIMIT: OnceLock<Duration> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        #[cfg(debug_assertions)]
+        if let Some(ms) = std::env::var("FACADE_TEST_DELIVERY_MS")
+            .ok()
+            .and_then(|ms| ms.parse::<u64>().ok())
+        {
+            return Duration::from_millis(ms);
+        }
+        DELIVERY_TIME
+    })
+}
+
+/// The number of agent ID `id`, such as 3 for `a3`, to sort by; the largest for anything else.
+fn agent_number(id: &str) -> u64 {
+    let digits = id.strip_prefix('a').unwrap_or("");
+    digits.parse().unwrap_or(u64::MAX)
+}
+
 /// The person, as a message's sender or recipient names it.
 pub(crate) const HUMAN: &str = "human";
+
+/// A request is scoped to its caller and the machine holding the start.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct StartKey {
+    pub(crate) machine_id: String,
+    pub(crate) agent_id: Option<String>,
+    pub(crate) window_id: Option<String>,
+    pub(crate) request_id: String,
+}
 
 /// The SSH destination and optional Facade home saved for a machine.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -98,6 +155,12 @@ pub(crate) struct SavedConnection {
     pub(crate) machine_id: String,
     pub(crate) ssh_destination: String,
     pub(crate) remote_home: Option<String>,
+}
+
+/// A saved SSH connection and its normalized login arguments.
+pub(crate) struct SavedSsh {
+    pub(crate) config: SavedConnection,
+    pub(crate) argv: Vec<String>,
 }
 
 /// Who said something to an agent: an agent, by ID and its name then, or the person.
@@ -212,7 +275,7 @@ pub(crate) struct Daemon {
     machine_changes: tokio::sync::Mutex<()>,
     machine_views: broadcast::Sender<()>,
     remote_agents: Mutex<remote_agents::RemoteAgents>,
-    remote_changes: broadcast::Sender<facade_base::v3::AgentsChange>,
+    remote_changes: broadcast::Sender<facade_base::api_v1::daemon::AgentsChange>,
     /// Changes for clients following the `agents` topic.
     changes: broadcast::Sender<AgentsUpdate>,
     lifecycle: Arc<Lifecycle>,
@@ -267,8 +330,8 @@ impl LifecycleActivity for Daemon {
                 }
                 let reference = info.reference();
                 let address = self.agent_address(&reference).unwrap_or_else(|_| {
-                    facade_base::v3::address::format_agent_address(
-                        &reference,
+                    facade_base::address::selector::format_agent_address(
+                        &reference.agent_id,
                         &reference.machine_id,
                     )
                 });
@@ -402,7 +465,10 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     let progress = recovery::RecoveryProgress::start();
     let opened = {
         let core = core.clone();
-        let ids: Vec<String> = held_agents.iter().map(|agent| agent.id.clone()).collect();
+        let ids: Vec<String> = held_agents
+            .iter()
+            .map(|agent| agent.agent_id.clone())
+            .collect();
         tokio::task::spawn_blocking(move || Store::open(&core, &ids)).await??
     };
     progress.advance();

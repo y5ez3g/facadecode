@@ -4,12 +4,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use facade_base::api_v1::{self, daemon as wire};
-use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
-use facade_base::machine::{MachineResponseState, MachineStateRow};
-use facade_base::operations::Topic;
-use facade_base::v3::{
-    self, AgentInfo, AgentMachineState, AgentSyncState, AgentsChange, AgentsSnapshot,
+use facade_base::api_v1::{
+    self, Topic,
+    daemon::{
+        self as wire, AgentInfo, AgentMachineState, AgentSyncState, AgentsChange, AgentsSnapshot,
+    },
+};
+use facade_base::model::machine::{MachineResponseState, MachineStateRow};
+use facade_base::{
+    jsonrpc::decode_arguments,
+    model::error::{ErrorBody, Reason},
 };
 use tokio::task::AbortHandle;
 
@@ -67,7 +71,7 @@ impl Daemon {
     }
 
     /// Replaces a subscription when its route changes. An unavailable machine contributes state.
-    pub(crate) fn follow_remote_agents(self: &Arc<Self>, machines: &[v3::MachineInfo]) {
+    pub(crate) fn follow_remote_agents(self: &Arc<Self>, machines: &[wire::MachineInfo]) {
         let mut view = self.remote_agents.lock().unwrap();
         for (id, source) in view.0.iter_mut() {
             if !source.row.unreachable
@@ -167,7 +171,7 @@ impl Daemon {
     fn retry_remote_agent_watch(self: &Arc<Self>, id: &str, disconnected_generation: u64) {
         let machine = self
             .network
-            .machines_v3()
+            .machines()
             .into_iter()
             .find(|row| row.machine_id == id);
         let Some(machine) = machine else { return };
@@ -209,18 +213,17 @@ impl Daemon {
             .watch_with_receipt(machine_id, watch, None)
             .await?;
         let received_at = subscription.received_at;
-        let snapshot: AgentsSnapshot = decode_arguments(api::agents_snapshot(
-            std::mem::take(&mut subscription.snapshot),
-            false,
-        ))
-        .map_err(|error| RequestFailure::Failed(api::project_error(error), Some(received_at)))?;
+        let snapshot: AgentsSnapshot = decode_arguments(std::mem::take(&mut subscription.snapshot))
+            .map_err(|error| {
+                RequestFailure::Failed(api::project_error(error), Some(received_at))
+            })?;
         let agents = snapshot
             .agents
             .into_iter()
-            .filter(|agent| agent.machine_id == machine_id)
+            .filter(|agent| agent.reference.machine_id == machine_id)
             .map(|mut agent| {
-                agent.address = self.agent_address(&agent.reference())?;
-                Ok((agent.agent_id.clone(), agent))
+                agent.address = self.agent_address(&api::agent_ref(agent.reference.clone()))?;
+                Ok((agent.reference.agent_id.clone(), agent))
             })
             .collect::<Result<BTreeMap<_, _>, ErrorBody>>()
             .map_err(|error| {
@@ -246,14 +249,15 @@ impl Daemon {
         while let Some(change) = subscription.next_with_receipt().await {
             let change = change?;
             let received_at = change.received_at;
-            let mut change: AgentsChange =
-                decode_arguments(api::agents_change(change.value, false)).map_err(|error| {
-                    RequestFailure::Failed(api::project_error(error), Some(received_at))
-                })?;
+            let mut change: AgentsChange = decode_arguments(change.value).map_err(|error| {
+                RequestFailure::Failed(api::project_error(error), Some(received_at))
+            })?;
             if let AgentsChange::Updated { agent } = &mut change {
-                agent.address = self.agent_address(&agent.reference()).map_err(|error| {
-                    RequestFailure::Failed(api::project_error(error), Some(received_at))
-                })?;
+                agent.address = self
+                    .agent_address(&api::agent_ref(agent.reference.clone()))
+                    .map_err(|error| {
+                        RequestFailure::Failed(api::project_error(error), Some(received_at))
+                    })?;
             }
             let mut view = self.remote_agents.lock().unwrap();
             let Some(source) = view
@@ -264,8 +268,10 @@ impl Daemon {
                 return Ok(());
             };
             match &change {
-                AgentsChange::Updated { agent } if agent.machine_id == machine_id => {
-                    source.agents.insert(agent.agent_id.clone(), *agent.clone());
+                AgentsChange::Updated { agent } if agent.reference.machine_id == machine_id => {
+                    source
+                        .agents
+                        .insert(agent.reference.agent_id.clone(), *agent.clone());
                 }
                 AgentsChange::Removed {
                     machine_id: source_id,

@@ -20,12 +20,11 @@ use std::time::SystemTime;
 use facade_base::api_v1::daemon::{
     self, AdvertiseParams, AgentRef, AgentTarget, AttachBinding, Caller, ClientKind,
     ConnectFailedParams, ConnectedMachine, ConnectedParams, ConnectionKind, DaemonCall,
-    DaemonWatch, ForwardParams, ForwardRequest, MachineSleepingParams, MachineTransport,
-    ResumeTarget, StopSelection, methods,
+    DaemonWatch, ForwardParams, ForwardRequest, MachineInfo, MachineSleepingParams,
+    MachineTransport, ResumeTarget, StopSelection, methods,
 };
 use facade_base::api_v1::{ApiVersion, EmptyResult, ErrorBody, Notification, decode_arguments};
-use facade_base::machine::{ExecutionOutcome, MachineResponseState};
-use facade_base::v3;
+use facade_base::model::machine::{ExecutionOutcome, MachineIdentity, MachineResponseState};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -33,7 +32,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use self::session::{Deadline, Delivery, Output, Peer, Pending, Reply, SessionHandler, remaining};
 use self::topology::{Link, Origin, Topology};
 use self::wire::Reader;
-use crate::SavedConnection;
+use crate::{SavedConnection, SavedSsh};
 
 pub(crate) use self::routes::is_uuid_v4;
 pub(crate) use self::session::{Subscription, WatchRoute};
@@ -118,11 +117,6 @@ pub(crate) struct MachineGreeting {
     pub(crate) foreground: bool,
 }
 
-pub(crate) struct SavedSsh {
-    pub(crate) config: SavedConnection,
-    pub(crate) argv: Vec<String>,
-}
-
 pub(crate) enum Event {
     SessionOpened {
         session: SessionId,
@@ -137,7 +131,7 @@ pub(crate) enum Event {
         error: ErrorBody,
     },
     RoutesChanged {
-        machines: Vec<v3::MachineInfo>,
+        machines: Vec<MachineInfo>,
     },
 }
 
@@ -198,8 +192,8 @@ impl Network {
             .check_peer(remote, &Origin::Incoming)
     }
 
-    /// The live table, including configured connections on the local row.
-    pub(crate) fn machines_v3(&self) -> Vec<v3::MachineInfo> {
+    /// The live table with local SSH details for caller-specific filtering.
+    pub(crate) fn machines(&self) -> Vec<MachineInfo> {
         self.0.state.lock().unwrap().machines()
     }
 
@@ -546,7 +540,7 @@ impl Network {
         state.check_peer(&remote, &origin)?;
         let api_version = remote.api_version;
         let remote = remote.machine;
-        let table = state.validate_table(None, &remote, &origin, advertise::decode(table))?;
+        let table = state.validate_table(None, &remote, &origin, table)?;
         let id = SessionId(state.number());
         let (peer, output) = Peer::new(self.0.session_work.get().cloned());
         state.pending_links.insert(
@@ -578,7 +572,7 @@ impl Network {
             Some(session),
             &link.remote,
             &link.origin,
-            advertise::decode(decode_arguments(table)?),
+            decode_arguments(table)?,
         )?;
         state.links.get_mut(&session).expect("live session").table = table;
         state.publish(&self.0.events, None);
@@ -674,7 +668,7 @@ impl SessionHandler for SessionHandle {
             .observe_sleeping(self.source);
     }
 
-    fn identity(&self, machine_id: &str) -> v3::MachineIdentity {
+    fn identity(&self, machine_id: &str) -> MachineIdentity {
         self.network.0.state.lock().unwrap().identity(machine_id)
     }
 

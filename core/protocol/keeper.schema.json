@@ -79,7 +79,7 @@
           "type": "string"
         },
         "state": {
-          "$ref": "#/$defs/V3AgentState"
+          "$ref": "#/$defs/AgentState"
         },
         "resumable": {
           "type": "boolean"
@@ -109,6 +109,56 @@
         "machine_id",
         "agent_id"
       ]
+    },
+    "AgentState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "starting",
+          "description": "The CLI has not shown what it is doing yet, within 60 seconds of its start or resume."
+        },
+        {
+          "type": "string",
+          "const": "working",
+          "description": "The CLI is working, or stopped working less than a second ago."
+        },
+        {
+          "type": "string",
+          "const": "waiting_for_you",
+          "description": "The CLI waits for the person; `state_detail.kind` says for what. A menu or question it draws\nin place of its input counts, with `kind` `unknown` where it did not say, also while it\nstarts."
+        },
+        {
+          "type": "string",
+          "const": "just_done",
+          "description": "A turn ended while no terminal showed the agent. It stays so until one does. Work before the\nCLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a\nquestion the CLI shows. Words after the CLI's name at its start are the CLI's own and ask\nnothing."
+        },
+        {
+          "type": "string",
+          "const": "idle",
+          "description": "The CLI is not working and waits for nothing."
+        },
+        {
+          "type": "string",
+          "const": "error",
+          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 60 seconds of its\nstart or resume."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The CLI's process ended; `state_detail.how` says how, where that is known."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "Nothing shows what the CLI is doing; `state_detail.reason` says why."
+        },
+        {
+          "type": "string",
+          "const": "online",
+          "description": "A Guest is connected and can take messages."
+        }
+      ],
+      "description": "The agent's current state."
     },
     "ApiVersions": {
       "type": "array",
@@ -595,56 +645,6 @@
         "pid",
         "birth"
       ]
-    },
-    "V3AgentState": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "starting",
-          "description": "The CLI has not shown what it is doing yet, within 60 seconds of its start or resume."
-        },
-        {
-          "type": "string",
-          "const": "working",
-          "description": "The CLI is working, or stopped working less than a second ago."
-        },
-        {
-          "type": "string",
-          "const": "waiting_for_you",
-          "description": "The CLI waits for the person; `state_detail.kind` says for what. A menu or question it draws\nin place of its input counts, with `kind` `unknown` where it did not say, also while it\nstarts."
-        },
-        {
-          "type": "string",
-          "const": "just_done",
-          "description": "A turn ended while no terminal showed the agent. It stays so until one does. Work before the\nCLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a\nquestion the CLI shows. Words after the CLI's name at its start are the CLI's own and ask\nnothing."
-        },
-        {
-          "type": "string",
-          "const": "idle",
-          "description": "The CLI is not working and waits for nothing."
-        },
-        {
-          "type": "string",
-          "const": "error",
-          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 60 seconds of its\nstart or resume."
-        },
-        {
-          "type": "string",
-          "const": "ended",
-          "description": "The CLI's process ended; `state_detail.how` says how, where that is known."
-        },
-        {
-          "type": "string",
-          "const": "unknown",
-          "description": "Nothing shows what the CLI is doing; `state_detail.reason` says why."
-        },
-        {
-          "type": "string",
-          "const": "online",
-          "description": "A Guest is connected and can take messages."
-        }
-      ],
-      "description": "The agent's current state."
     },
     "WindowsStartResponse": {
       "type": "object",

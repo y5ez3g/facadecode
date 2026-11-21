@@ -22,11 +22,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::api_v1::{ApiVersion, Size, keeper::StartArgs};
-use facade_base::daemon::KeeperInfo;
+use facade_base::api_v1::{
+    ApiVersion, Size,
+    daemon::KeeperInfo,
+    keeper::{HeldAgent, StartArgs},
+};
 use facade_base::instructions::{self, ManagedRun};
-use facade_base::jsonrpc::ErrorBody;
-use facade_base::keeper::KeeperHeldAgent;
+use facade_base::model::error::ErrorBody;
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::programs::Held;
 use facade_base::start::StartCommand;
@@ -176,7 +178,7 @@ pub(crate) enum FoundKeeper {
     /// A keeper accepted this daemon: its build and the runs it holds.
     Connected {
         build: String,
-        held: Vec<KeeperHeldAgent>,
+        held: Vec<HeldAgent>,
     },
 }
 
@@ -450,7 +452,7 @@ impl Runs {
     }
 
     /// Recovery: takes back from the startup keeper the terminal of a run it holds.
-    pub(crate) async fn take_back(&self, held: &KeeperHeldAgent) -> Result<PtyMaster, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
         self.link.take_back(held).await
     }
 
@@ -459,7 +461,7 @@ impl Runs {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn register_recovered(
         &self,
-        held: &KeeperHeldAgent,
+        held: &HeldAgent,
         master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
@@ -471,7 +473,7 @@ impl Runs {
         self.link
             .register_recovered(held, master, exit, number, exits)?;
         if running {
-            self.preparation.plugin_used(&held.id, rule, cwd);
+            self.preparation.plugin_used(&held.agent_id, rule, cwd);
         }
         Ok(())
     }
@@ -479,7 +481,7 @@ impl Runs {
     /// Restores the saved verifier only for the active run recovered from this keeper entry.
     pub(crate) fn restore_credential(
         &self,
-        held: &KeeperHeldAgent,
+        held: &HeldAgent,
         number: u64,
         credential: RunCredentialRecord,
     ) -> bool {
@@ -490,7 +492,7 @@ impl Runs {
     /// stopped where it has none.
     pub(crate) async fn take_keeper_only(
         &self,
-        held: KeeperHeldAgent,
+        held: HeldAgent,
         record: KeeperOnly,
     ) -> Result<(), ErrorBody> {
         self.link.take_keeper_only(held, record).await

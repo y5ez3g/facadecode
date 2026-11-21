@@ -11,6 +11,8 @@ mod machine;
 mod peer;
 mod registry;
 
+use std::time::Duration;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,18 +22,15 @@ use super::versions::{ApiVersion, ApiVersions, decode_hello_offer, highest_commo
 
 pub use super::frame::CallParams;
 pub use super::frame::NoArgs;
-pub use crate::daemon::{
-    CliInfo, Delivery, InputInfo, Said, ScreenBuffer, StateDetail, ToolsReason, ToolsState,
-    WaitKind,
+pub use crate::model::agent::{
+    AgentCreator, AgentKind, AgentState, AttachmentInfo, AttachmentKind, CliInfo, CreatorKind,
+    Said, SessionMatch, StateDetail, ToolsReason, ToolsState, WaitKind,
 };
-pub use crate::daemon::{LocationKind, PromptOutcome};
-pub use crate::jsonrpc::AgentRemoval;
-pub use crate::machine::{CliListResult, MachineIdentity};
+pub use crate::model::error::AgentRemoval;
+pub use crate::model::machine::{CliListResult, LocationKind, MachineIdentity};
+pub use crate::model::message::{Delivery, PromptOutcome};
+pub use crate::model::terminal::{InputInfo, ScreenBuffer};
 pub use crate::operations::EmptyResult;
-pub use crate::v3::{
-    AgentCreator, AgentKind, AgentState, AttachmentInfo, AttachmentKind, CreatorKind, LocationInfo,
-    SessionMatch,
-};
 
 pub use agents::*;
 pub use attach::*;
@@ -40,13 +39,37 @@ pub use peer::*;
 pub use registry::*;
 
 pub mod methods {
-    pub use crate::daemon::methods::{
-        ADVERTISE, CALL, CANCEL, CHANGED, CLOSING, CONNECT_FAILED, CONNECTED, FORWARD, HELLO,
-        UNWATCH, WATCH, WATCH_ENDED,
-    };
-
+    pub const HELLO: &str = "hello";
+    pub const CALL: &str = "call";
+    pub const WATCH: &str = "watch";
+    pub const UNWATCH: &str = "unwatch";
+    pub const CANCEL: &str = "cancel";
+    pub const CHANGED: &str = "changed";
+    pub const CLOSING: &str = "closing";
+    pub const WATCH_ENDED: &str = "watch_ended";
+    pub const ADVERTISE: &str = "advertise";
+    pub const FORWARD: &str = "forward";
+    pub const CONNECTED: &str = "connected";
+    pub const CONNECT_FAILED: &str = "connect_failed";
     pub const MACHINE_SLEEPING: &str = "machine.sleeping";
 }
+
+/// How long the calls under way have to finish once a daemon hands over to a newer build,
+/// `daemon.upgrade`.
+pub const DRAIN_TIME: Duration = Duration::from_secs(3);
+/// How long the agents of a daemon handing over have to stop reading their terminals, writing what
+/// is queued for them first.
+pub const QUIET_TIME: Duration = Duration::from_millis(500);
+/// How long the connections of a daemon handing over have to answer `closing` before it ends.
+pub const CLOSING_TIME: Duration = Duration::from_millis(300);
+/// The longest a daemon takes to hand over once it answers `daemon.upgrade`, before the keeper
+/// starts the new daemon: its drain, its agents going quiet, its connections' `closing`, and the
+/// keys attached terminals sent until they answered.
+pub(super) const HANDOVER_TIME: Duration = DRAIN_TIME
+    .saturating_add(QUIET_TIME)
+    .saturating_add(CLOSING_TIME)
+    .saturating_add(QUIET_TIME)
+    .saturating_add(QUIET_TIME);
 
 pub const SUPPORTED_API_VERSIONS: &[ApiVersion] = &[ApiVersion::MIN];
 
@@ -174,4 +197,55 @@ pub fn decode_hello_result(
         ));
     }
     Ok(hello)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::api_v1::{MAX_LINE_BYTES, RequestRead, ResponseBody, ServerMessage, read_request};
+
+    #[test]
+    fn server_messages_distinguish_notifications_and_responses() {
+        let notification: ServerMessage =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"changed","params":{"watch":1}}"#)
+                .unwrap();
+        assert!(matches!(notification, ServerMessage::Notification(n) if n.method == "changed"));
+        let response: ServerMessage =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":3,"result":{}}"#).unwrap();
+        assert!(matches!(response, ServerMessage::Response(r) if r.id == Some(3)));
+        let unread: ServerMessage = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"m","data":{"reason":"invalid_argument"}}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(unread, ServerMessage::Response(r) if r.id.is_none() && matches!(r.body, ResponseBody::Error(_)))
+        );
+    }
+
+    #[test]
+    fn request_reader_reports_parse_errors_and_bounds_line_length() {
+        let mut buffer = Vec::new();
+        let code = |input: &[u8]| match read_request(&mut &input[..], &mut Vec::new()).unwrap() {
+            RequestRead::Malformed(malformed) => malformed.error.code,
+            RequestRead::LineTooLong(error) => error.code,
+            RequestRead::Request(_) => 0,
+            RequestRead::Eof => 1,
+        };
+        assert_eq!(code(b"{nope\n"), -32700);
+        assert_eq!(code(b"[1,2]\n"), -32600);
+        assert_eq!(
+            code(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hello\",\"params\":{}}\n"),
+            0
+        );
+        assert_eq!(code(b""), 1);
+        let long = vec![b'x'; MAX_LINE_BYTES + 10];
+        assert!(matches!(
+            read_request(&mut &long[..], &mut buffer).unwrap(),
+            RequestRead::LineTooLong(_)
+        ));
+        assert!(
+            buffer.len() <= MAX_LINE_BYTES + 1,
+            "buffered {} bytes of an unterminated line",
+            buffer.len()
+        );
+    }
 }

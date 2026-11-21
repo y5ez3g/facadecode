@@ -12,12 +12,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use facade_base::daemon::{
-    AgentInfo, AgentState, AgentsUpdate, DEFAULT_TERMINAL_SIZE, InputInfo, InputState, ToolsState,
-};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::api_v1::Size;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_base::v3::ScreenSize;
+use facade_base::{
+    model::agent::{AgentsUpdate, ManagedAgent, ManagedAgentState, ToolsState},
+    model::terminal::{DEFAULT_TERMINAL_SIZE, InputInfo, InputState},
+};
 use facade_rules::{BoxReading, InputRule, Rule};
 use facade_screen::{ParsedOutput, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
@@ -33,7 +34,7 @@ use super::typist::{Modes, Typing, Typist};
 use super::viewers::{ViewKind, ViewerRequest, Viewers};
 use super::{
     ActorStart, AgentCommand, FIRST_RUN, Input, InputRejection, Inspection, MAX_INPUT_BYTES,
-    ScreenStart, Shared, Submission, ViewerSizing,
+    ScreenStart, Shared, Submission,
 };
 use crate::{Sender, gate_for_test, pause_for_test};
 
@@ -263,10 +264,11 @@ struct Actor {
     holds_input_for_probe: bool,
 }
 
-/// An exact resize or a size determined from the live shared viewers.
+/// A size determined from the live viewers, or an exact size in a unit fixture.
 enum SizeRequest {
-    Legacy(ScreenSize),
-    Shared { mixed: Option<ScreenSize> },
+    Shared,
+    #[cfg(test)]
+    Direct(Size),
 }
 
 async fn sleep_until(at: Option<Instant>) {
@@ -299,7 +301,7 @@ impl Actor {
         self.publish_record(agent);
     }
 
-    fn publish_record(&self, agent: AgentInfo) {
+    fn publish_record(&self, agent: ManagedAgent) {
         let _ = self.links.changes.send(AgentsUpdate::Updated {
             agent: Box::new(agent),
         });
@@ -402,8 +404,8 @@ impl Actor {
                 None => {}
             }
         }
-        if self.viewers.take_removed() && !self.viewers.has_sizing(ViewerSizing::Legacy) {
-            self.take_size(SizeRequest::Shared { mixed: None });
+        if self.viewers.take_removed() {
+            self.take_size(SizeRequest::Shared);
         }
         if self.prompt_ready.is_some()
             && self.links.shared.record.lock().unwrap().info.tools_state != ToolsState::Connecting
@@ -511,12 +513,8 @@ impl Actor {
                 let _ = reply.send(self.take_input(input, run));
             }
             #[cfg(test)]
-            AgentCommand::Resize(cols, rows) => self.resize_legacy(cols, rows, None),
-            #[cfg(test)]
-            AgentCommand::ResizeTerminal { cols, rows, colors } => {
-                if !self.ended() {
-                    self.resize_legacy(cols, rows, colors);
-                }
+            AgentCommand::ResizeTerminal(cols, rows) => {
+                self.take_size(SizeRequest::Direct(Size { cols, rows }));
             }
             #[cfg(test)]
             AgentCommand::AddViewer {
@@ -529,7 +527,6 @@ impl Actor {
                 self.add_viewer(ViewerRequest {
                     viewer,
                     kind: ViewKind::Test,
-                    sizing: ViewerSizing::Legacy,
                     size: None,
                     tx,
                     keep_scrollback,
@@ -540,7 +537,6 @@ impl Actor {
             }
             AgentCommand::AttachViewer {
                 viewer,
-                sizing,
                 name,
                 attachment,
                 allow_ended,
@@ -551,12 +547,6 @@ impl Actor {
                 include_scrollback,
                 reply,
             } => {
-                if sizing == ViewerSizing::Legacy
-                    && let Some(size) = size
-                    && (self.pending_size.is_some() || self.size() != (size.cols, size.rows))
-                {
-                    self.take_size(SizeRequest::Legacy(size));
-                }
                 self.add_viewer(ViewerRequest {
                     viewer,
                     kind: ViewKind::Attach {
@@ -565,7 +555,6 @@ impl Actor {
                         allow_ended,
                         report_activity,
                     },
-                    sizing,
                     size,
                     tx,
                     keep_scrollback,
@@ -836,26 +825,10 @@ impl Actor {
         self.process == ProcessState::Running && self.terminal.is_open()
     }
 
-    /// The published resize applies while a legacy viewer is present or no shared viewer is live.
-    #[cfg(test)]
-    fn resize_legacy(&mut self, cols: u16, rows: u16, colors: Option<TerminalColors>) {
-        if !self.can_resize() {
-            return;
-        }
-        if let Some(colors) = colors {
-            self.screen_mut().set_colors(colors);
-        }
-        if self.viewers.has_sizing(ViewerSizing::Legacy)
-            || !self.viewers.has_sizing(ViewerSizing::Shared)
-        {
-            self.take_size(SizeRequest::Legacy(ScreenSize { cols, rows }));
-        }
-    }
-
     fn resize_viewer(
         &mut self,
         viewer: u64,
-        size: ScreenSize,
+        size: Size,
         colors: Option<TerminalColors>,
     ) -> Result<(), ErrorBody> {
         if !self.can_resize() || !self.viewers.update_capacity(viewer, size) {
@@ -867,11 +840,7 @@ impl Actor {
         if let Some(colors) = colors {
             self.screen_mut().set_colors(colors);
         }
-        let mixed = self
-            .viewers
-            .has_sizing(ViewerSizing::Legacy)
-            .then_some(size);
-        self.take_size(SizeRequest::Shared { mixed });
+        self.take_size(SizeRequest::Shared);
         Ok(())
     }
 
@@ -881,19 +850,18 @@ impl Actor {
             return;
         }
         let size = match request {
-            SizeRequest::Legacy(size) => Some(size),
-            SizeRequest::Shared { mixed } => mixed
-                .filter(|_| self.viewers.has_sizing(ViewerSizing::Legacy))
-                .or_else(|| self.viewers.shared_size(None)),
+            SizeRequest::Shared => self.viewers.shared_size(None),
+            #[cfg(test)]
+            SizeRequest::Direct(size) => Some(size),
         };
-        let Some(ScreenSize { cols, rows }) = size else {
-            if matches!(self.pending_size, Some(SizeRequest::Shared { .. })) {
+        let Some(Size { cols, rows }) = size else {
+            if matches!(self.pending_size, Some(SizeRequest::Shared)) {
                 self.pending_size = None;
                 self.links.room.notify_waiters();
             }
             return;
         };
-        if matches!(request, SizeRequest::Shared { .. }) && self.size() == (cols, rows) {
+        if matches!(request, SizeRequest::Shared) && self.size() == (cols, rows) {
             if self.pending_size.take().is_some() {
                 self.links.room.notify_waiters();
             }
@@ -1075,7 +1043,7 @@ impl Actor {
                 record.info.name.clone(),
                 matches!(
                     record.info.state,
-                    AgentState::Starting | AgentState::Working
+                    ManagedAgentState::Starting | ManagedAgentState::Working
                 ),
             )
         };
@@ -1084,28 +1052,21 @@ impl Actor {
             if request.is_closed() {
                 continue;
             }
-            let shared = request.sizing == ViewerSizing::Shared;
             if (draining && request.kind.waits_for_exit())
-                || (self.process == ProcessState::Running
-                    && self.pending_size.is_some()
-                    && (shared || request.size.is_some()))
+                || (self.process == ProcessState::Running && self.pending_size.is_some())
             {
                 self.viewers.request(request);
                 continue;
             }
-            if shared && self.can_resize() {
-                let size = if self.viewers.has_sizing(ViewerSizing::Legacy) {
-                    request.size
-                } else {
-                    self.viewers.shared_size(request.size)
-                };
-                if let Some(size) = size.filter(|size| self.size() != (size.cols, size.rows)) {
-                    if self.screen().is_full() {
-                        self.viewers.request(request);
-                        continue;
-                    }
-                    self.apply_requested_size(size.cols, size.rows);
+            if self.can_resize()
+                && let Some(size) = self.viewers.shared_size(request.size)
+                && self.size() != (size.cols, size.rows)
+            {
+                if self.screen().is_full() {
+                    self.viewers.request(request);
+                    continue;
                 }
+                self.apply_requested_size(size.cols, size.rows);
             }
             let screen = self
                 .screen
@@ -1661,7 +1622,7 @@ impl Actor {
         let reading = self.state.read(Instant::now(), viewing);
         self.viewers.set_working(matches!(
             reading.state,
-            AgentState::Starting | AgentState::Working
+            ManagedAgentState::Starting | ManagedAgentState::Working
         ));
         self.state_at = reading.wake;
         if let Some(kept) = self.kept.as_ref() {
@@ -1687,7 +1648,7 @@ impl Actor {
         (info.tools_state, info.tools_reason) = (reading.tools, reading.tools_reason);
         Some(matches!(
             info.state,
-            AgentState::WaitingForYou | AgentState::Error
+            ManagedAgentState::WaitingForYou | ManagedAgentState::Error
         ))
     }
 }

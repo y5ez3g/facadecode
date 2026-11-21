@@ -6,7 +6,7 @@ use facade_base::api_v1::daemon::{
     Caller, ForwardParams, ForwardRequest, InternalEnsureRoute, InternalEnsureRouteArgs,
 };
 use facade_base::api_v1::{CallParams, EmptyResult, ErrorBody, Operation, decode_arguments};
-use facade_base::machine::ExecutionOutcome;
+use facade_base::model::machine::ExecutionOutcome;
 use serde_json::json;
 
 use super::Network;

@@ -6,9 +6,6 @@ use std::os::fd::BorrowedFd;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use facade_base::keeper::{
-    MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET,
-};
 use facade_base::process::ProcessIdentity;
 use facade_base::service::{self, Service};
 use facade_base::unix_process::{self, Observed, ProcessObservation};
@@ -16,6 +13,7 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 
 use crate::log;
+use crate::runtime::{MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET};
 
 pub(super) struct Supervisor {
     phase: Phase,

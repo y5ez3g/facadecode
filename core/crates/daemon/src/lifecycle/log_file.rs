@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
 
 /// The most lines `daemon.log` gives.
 pub(crate) const MAX_LOG_LINES: u32 = 200;

@@ -8,12 +8,11 @@ use std::time::{Duration, Instant};
 use facade_base::api_v1::daemon::{
     self, AgentLabel, DaemonUpgrade, DaemonUpgradeArgs, DaemonUpgradeResult,
 };
-use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::api_v1::daemon_client::{DaemonClient, takeover_timeout, transient_transport};
 use facade_base::api_v1::{
     ApiVersion, ApiVersions, ErrorBody, NoArgs, Request, ServerMessage, encode_line, keeper,
     read_server_message,
 };
-use facade_base::daemon_client::{takeover_timeout, transient_transport};
 use facade_base::paths::ClientSocket;
 use facade_base::service::{self, Candidate, Report, Service};
 
@@ -92,7 +91,7 @@ fn unreachable(failure: ConnectFailure) -> anyhow::Error {
 pub(super) fn probe() -> anyhow::Result<Option<DaemonClient>> {
     let socket = facade_base::paths::daemon_socket().map_err(explicit)?;
     let until = Instant::now() + RUNNING_TIMEOUT;
-    let client = open_terminal(&socket, until, &mut |_| true).map_err(explicit)?;
+    let client = DaemonClient::connect(&socket, until, &mut |_| true).map_err(explicit)?;
     if client.is_none() && services_running(&facade_base::paths::core_dir()?)? {
         return Err(explicit(anyhow::anyhow!(errors::daemon_slow(
             true,
@@ -169,7 +168,7 @@ fn connect_with_takeover(
         cancelled,
         DAEMON_CONNECT_TIMEOUT,
         purpose.deadline(),
-        |socket, until| open_terminal(socket, until, opening),
+        |socket, until| DaemonClient::connect(socket, until, opening),
     )?;
     let running = &client.hello_result.build;
     if running == &ours || purpose != Purpose::Install && !facade_base::takes_over(&ours, running) {
@@ -186,7 +185,7 @@ fn connect_with_takeover(
     let replacement = wait_for_closing(client, until, cancelled)
         .and_then(|()| {
             reach_daemon(false, cancelled, timeout, Some(until), |socket, until| {
-                Ok(open_terminal(socket, until, opening)?
+                Ok(DaemonClient::connect(socket, until, opening)?
                     .filter(|client| client.hello_result.build == ours))
             })
         })
@@ -210,24 +209,6 @@ fn connect_with_takeover(
         );
     }
     Ok(replacement)
-}
-
-/// The old daemon can refuse new hellos until its replacement is ready.
-fn open_terminal(
-    socket: &Path,
-    until: Instant,
-    opening: &mut dyn FnMut(&ClientSocket) -> bool,
-) -> anyhow::Result<Option<DaemonClient>> {
-    match DaemonClient::connect(socket, until, opening) {
-        Err(error)
-            if error
-                .downcast_ref::<ErrorBody>()
-                .is_some_and(|body| body.data.reason == "upgrading") =>
-        {
-            Ok(None)
-        }
-        result => result,
-    }
 }
 
 /// The existing diagnostic and the agents that blocked a keeper takeover, when known.

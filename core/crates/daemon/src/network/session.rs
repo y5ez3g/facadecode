@@ -20,7 +20,7 @@ use facade_base::api_v1::{
     CallParams, EmptyResult, ErrorBody, MAX_LINE_BYTES, MachineMessage, MalformedRequest,
     Notification, Operation, Response, ResponseBody, decode_arguments,
 };
-use facade_base::machine::{ExecutionOutcome, MachineIdentity};
+use facade_base::model::machine::{ExecutionOutcome, MachineIdentity};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};

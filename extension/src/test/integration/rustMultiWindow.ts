@@ -362,7 +362,7 @@ export async function sharedAttachJourney(open: OpenWindow, folder: string, faca
 		const keeper = lock('keeper');
 		assert.strictEqual((await accepted()).build.split('+')[0], old);
 		const retained = 'input after v1 daemon takeover';
-		run(replacement, 'type', address, retained);
+		run(replacement, 'type', address, retained, '--enter');
 		assert.strictEqual((await accepted()).build.split('+')[0], next);
 		const changed = lock('daemon');
 		assert.notStrictEqual(changed.pid, daemon.pid);

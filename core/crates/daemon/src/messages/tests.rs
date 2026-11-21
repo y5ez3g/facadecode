@@ -1,17 +1,21 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::daemon::{
-    AgentInfo, DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, MAX_MESSAGES_LIMIT,
-    Message, MessagesSnapshot, MessagesWatchArgs, TextWritten,
+use facade_base::model::error::Reason;
+use facade_base::{
+    model::agent::ManagedAgent,
+    model::message::{
+        DeliveredVia, Delivery, DeliveryFailure, DeliveryStatus, MAX_MESSAGES_LIMIT, Message,
+        MessagesSnapshot, MessagesWatchArgs, TextWritten,
+    },
 };
-use facade_base::jsonrpc::Reason;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::*;
 use crate::store::{AgentRecord, Store};
 use crate::testing::test_folder::TestFolder;
+use crate::{DELIVERY_TIME, delivery_limit};
 
 /// Posts `message` with no request ID, as a new message: its numbered self and the receiver its
 /// settlement reaches.
@@ -579,7 +583,7 @@ fn a_removed_inbox_takes_its_messages_and_tells_their_sends() {
     let waiting = self::post(&post, 1, "a2");
     self::post(&post, 2, "a3");
     let mut changes = post.subscribe();
-    post.drop_inbox("a2", store.delete("a2").unwrap());
+    post.drop_inbox("a2", store.delete("a2", crate::an_hour_ago).unwrap());
     assert!(post.message("m1").is_none() && post.message("m2").is_some());
     assert!(matches!(
         changes.try_recv(),
@@ -714,7 +718,7 @@ async fn a_send_whose_inbox_went_returns_at_once() {
     let (post, store) = messages();
     let mut settled = self::post(&post, 1, "a2");
     let started = Instant::now();
-    post.drop_inbox("a2", store.delete("a2").unwrap());
+    post.drop_inbox("a2", store.delete("a2", crate::an_hour_ago).unwrap());
     post.settle_by_deadline(1, &mut settled, started + Duration::from_secs(29))
         .await;
     assert_eq!(Instant::now(), started);
@@ -722,7 +726,7 @@ async fn a_send_whose_inbox_went_returns_at_once() {
 }
 
 /// Agent `id`'s record, as a result gives it.
-fn agent(id: &str) -> AgentInfo {
+fn agent(id: &str) -> ManagedAgent {
     serde_json::from_value(serde_json::json!({
         "agent_id": id, "name": "Nova", "cli": "claude", "cwd": "/w",
         "machine_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
@@ -748,7 +752,7 @@ fn record(id: &str) -> AgentRecord {
         exit: None,
         rule: None,
         session: None,
-        windows: vec![facade_base::daemon::WindowRef {
+        windows: vec![facade_base::model::machine::WindowRef {
             machine_id: "test-machine".into(),
             window_id: "terminal".into(),
         }],
@@ -762,7 +766,7 @@ fn record(id: &str) -> AgentRecord {
         yolo: false,
         request_id: None,
         prompt: None,
-        location_id: facade_base::daemon::location_id("/w"),
+        location_id: facade_base::model::machine::location_id("/w"),
     }
 }
 

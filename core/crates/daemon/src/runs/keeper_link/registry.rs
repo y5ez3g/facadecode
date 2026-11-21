@@ -5,8 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::api_v1::keeper::{HeldAgent, SyncArgs};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::KeeperHeldAgent;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::terminal::PtyMaster;
 use tokio::sync::Notify;
@@ -183,7 +182,7 @@ impl RunRegistry {
 
     pub fn restore_credential(
         &self,
-        held: &KeeperHeldAgent,
+        held: &HeldAgent,
         number: u64,
         credential: RunCredentialRecord,
     ) -> bool {
@@ -191,7 +190,7 @@ impl RunRegistry {
             return false;
         }
         let mut runs = self.runs.lock().unwrap();
-        let Some(run) = runs.get_mut(&held.id).filter(|run| {
+        let Some(run) = runs.get_mut(&held.agent_id).filter(|run| {
             run.role == RunRole::Agent
                 && run.installed
                 && run.exit.is_none()

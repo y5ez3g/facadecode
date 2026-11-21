@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use facade_base::api_v1::keeper::{AgentChange, methods, project_error};
 use facade_base::api_v1::{ErrorBody, Notification, ProcessExit, Response};
-use facade_base::jsonrpc::{ErrorBody as LegacyError, Reason};
+use facade_base::model::error::{ErrorBody as RuntimeError, Reason};
 use facade_base::terminal_lines::InvalidTerminalEnvelope;
 use serde::Serialize;
 
@@ -201,7 +201,7 @@ impl Keeper {
         let link = self.link.as_ref().expect("serving the daemon's request");
         let terminal = self.clis[agent].master();
         let prepared = link.prepare_terminal(response, terminal).map_err(|error| {
-            project_error(LegacyError::new(
+            project_error(RuntimeError::new(
                 Reason::Unavailable,
                 format!("could not copy {agent}'s terminal: {error}"),
             ))

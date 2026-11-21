@@ -10,8 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use facade_base::api_v1::keeper::HeldAgent;
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::{KeeperStartArgs, STOP_TIMEOUT};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::programs;
 use facade_base::unix_process::{self, Observed, ProcessObservation};
@@ -19,6 +18,7 @@ use nix::sys::signal::Signal;
 use nix::sys::wait::waitpid;
 use nix::unistd::Pid;
 
+use crate::runtime::{KeeperStartArgs, STOP_TIMEOUT};
 use crate::{log, terminal};
 
 /// Pause before a failed SIGKILL is tried again.

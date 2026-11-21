@@ -2,7 +2,7 @@
 //! either: what the space did to the row, and whether Backspace put it back. Compared from
 //! readings alone, never logged as text.
 
-use facade_base::daemon::InputState;
+use facade_base::model::terminal::InputState;
 
 use super::{BoxReading, InputLine, LineCell};
 

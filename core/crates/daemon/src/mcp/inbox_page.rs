@@ -1,9 +1,9 @@
 //! The inline part of an inbox snapshot, selected before Post settles its delivery.
 
-use facade_base::daemon::{FACADE, Message, MessagesSnapshot};
-use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine::MachineIdentity;
-use facade_base::v3::{InboxMessage, ReadMessagesResult};
+use facade_base::model::error::ErrorBody;
+use facade_base::model::machine::MachineIdentity;
+use facade_base::model::message::{FACADE, Message, MessagesSnapshot};
+use serde::Serialize;
 use serde_json::Value;
 
 use super::{
@@ -13,6 +13,23 @@ use super::{
 use crate::HUMAN;
 
 const PAGE_TARGET: usize = 8000;
+
+#[derive(Serialize)]
+struct InboxMessage {
+    id: String,
+    from: String,
+    at: String,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_to: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ReadMessagesResult {
+    messages: Vec<InboxMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<String>,
+}
 
 /// Return the complete inline envelope and the number of candidate messages it contains.
 pub(crate) fn project_inbox(

@@ -5,12 +5,13 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use facade_base::api_v1::{
+    Size,
+    daemon::{AttachmentInfo, AttachmentKind},
+};
 use facade_base::process::{ProcessExit, ProcessState};
-use facade_base::v3::{AttachmentInfo, AttachmentKind, ScreenSize};
 use facade_screen::{ParsedOutput, Screen};
 use tokio::sync::{mpsc, oneshot, watch};
-
-use super::ViewerSizing;
 
 /// Incremental output allowed in each queue; a complete redraw may be larger.
 const MAX_VIEWER_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -50,8 +51,7 @@ pub(crate) struct ViewerSnapshot {
 pub(crate) struct ViewerRequest {
     pub(crate) viewer: u64,
     pub(crate) kind: ViewKind,
-    pub(crate) sizing: ViewerSizing,
-    pub(crate) size: Option<ScreenSize>,
+    pub(crate) size: Option<Size>,
     pub(crate) tx: ViewerSender,
     pub(crate) keep_scrollback: bool,
     pub(crate) include_scrollback: bool,
@@ -142,8 +142,7 @@ enum Drawing {
 struct Viewer {
     id: u64,
     kind: ViewKind,
-    sizing: ViewerSizing,
-    size: Option<ScreenSize>,
+    size: Option<Size>,
     tx: ViewerSender,
     keep_scrollback: bool,
     drawing: Drawing,
@@ -195,16 +194,8 @@ impl Viewers {
         std::mem::take(&mut self.removed)
     }
 
-    pub(crate) fn has_sizing(&self, sizing: ViewerSizing) -> bool {
-        self.active.iter().any(|v| v.sizing == sizing && v.live())
-    }
-
-    pub(crate) fn update_capacity(&mut self, viewer: u64, size: ScreenSize) -> bool {
-        let Some(viewer) = self
-            .active
-            .iter_mut()
-            .find(|v| v.id == viewer && v.sizing == ViewerSizing::Shared && v.live())
-        else {
+    pub(crate) fn update_capacity(&mut self, viewer: u64, size: Size) -> bool {
+        let Some(viewer) = self.active.iter_mut().find(|v| v.id == viewer && v.live()) else {
             return false;
         };
         viewer.size = Some(size);
@@ -212,13 +203,13 @@ impl Viewers {
     }
 
     /// Each dimension is limited independently by the live shared viewers' reports.
-    pub(crate) fn shared_size(&self, joining: Option<ScreenSize>) -> Option<ScreenSize> {
+    pub(crate) fn shared_size(&self, joining: Option<Size>) -> Option<Size> {
         self.active
             .iter()
-            .filter(|v| v.sizing == ViewerSizing::Shared && v.live())
+            .filter(|v| v.live())
             .filter_map(|v| v.size)
             .chain(joining)
-            .reduce(|a, b| ScreenSize {
+            .reduce(|a, b| Size {
                 cols: a.cols.min(b.cols),
                 rows: a.rows.min(b.rows),
             })
@@ -271,7 +262,7 @@ impl Viewers {
             working: request.kind.reports_activity().then_some(self.working),
         };
         if request.reply.send(snapshot).is_err() || request.tx.queue.is_closed() {
-            self.removed |= request.sizing == ViewerSizing::Shared;
+            self.removed = true;
             return;
         }
         if process != ProcessState::Running && !request.kind.outlives_exit() {
@@ -280,7 +271,6 @@ impl Viewers {
         self.active.push(Viewer {
             id: request.viewer,
             kind: request.kind,
-            sizing: request.sizing,
             size: request.size,
             tx: request.tx,
             keep_scrollback: request.keep_scrollback,

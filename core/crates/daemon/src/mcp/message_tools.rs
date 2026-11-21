@@ -5,14 +5,15 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use facade_base::api_v1::daemon::{
-    AgentSend, AgentTarget, ReplyTo, SendArgs, SendResult, cancel_line,
+    AgentKind, AgentSend, AgentTarget, ReplyTo, SendArgs, SendResult, cancel_line,
 };
 use facade_base::api_v1::daemon_client::{Cut, DaemonClient, upgrading};
 use facade_base::api_v1::{self, Operation};
-use facade_base::daemon::{DeliveredVia, DeliveryFailure, DeliveryStatus, check_message_text};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::{ExecutionOutcome, Unavailable};
-use facade_base::v3::AgentKind;
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::machine::{ExecutionOutcome, Unavailable};
+use facade_base::model::message::{
+    DeliveredVia, DeliveryFailure, DeliveryStatus, check_message_text,
+};
 use serde_json::{Map, Value, json};
 
 use super::daemon_calls::{self, CONNECT_TIMEOUT, failed};

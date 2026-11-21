@@ -15,9 +15,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use facade_base::daemon::display_line;
 use facade_base::files::{folder_key, real_path};
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
+use facade_base::model::terminal::display_line;
 use facade_base::system::{env_var, home_folder_in};
 
 use super::parse_session_id;

@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::programs::{Held, display_command};
 use facade_base::start::StartCommand;
 use facade_base::system::env_var;

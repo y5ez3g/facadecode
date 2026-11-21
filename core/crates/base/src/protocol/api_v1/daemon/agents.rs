@@ -741,16 +741,6 @@ pub enum AgentSyncState {
     Unknown,
 }
 
-impl From<crate::daemon::AgentSyncState> for AgentSyncState {
-    fn from(state: crate::daemon::AgentSyncState) -> Self {
-        match state {
-            crate::daemon::AgentSyncState::Synced => Self::Synced,
-            crate::daemon::AgentSyncState::Pending => Self::Pending,
-            crate::daemon::AgentSyncState::Unreachable => Self::Unreachable,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentMachineState {
     pub machine_id: String,
@@ -783,4 +773,36 @@ pub enum AgentsChange {
     #[serde(other)]
     #[schemars(skip)]
     Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_change_of_a_kind_this_build_does_not_know_is_skipped_and_the_next_one_still_reads() {
+        let changes = json!([
+            { "kind": "removed", "agent_id": "a1", "machine_id": "fixture", "cause": "removed" },
+            { "kind": "renamed", "agent_id": "a2", "name": "x" },
+            { "kind": "removed", "agent_id": "a3", "machine_id": "fixture", "cause": "removed" },
+        ]);
+        let read: Vec<AgentsChange> = serde_json::from_value(changes).unwrap();
+        assert_eq!(
+            read,
+            vec![
+                AgentsChange::Removed {
+                    machine_id: "fixture".into(),
+                    agent_id: "a1".into(),
+                    cause: AgentRemoval::Removed,
+                },
+                AgentsChange::Unknown,
+                AgentsChange::Removed {
+                    machine_id: "fixture".into(),
+                    agent_id: "a3".into(),
+                    cause: AgentRemoval::Removed,
+                }
+            ]
+        );
+    }
 }

@@ -36,7 +36,7 @@ export interface AgentInfo {
 	readonly yolo: boolean;
 	readonly exit?: ProcessExit;
 	readonly session?: string;
-	readonly state: V3AgentState;
+	readonly state: AgentState;
 	readonly state_detail?: StateDetail;
 	readonly said?: Said;
 	readonly tools_state: ToolsState;
@@ -51,7 +51,7 @@ export interface AgentLabel {
 	readonly type: AgentKind;
 	readonly name: string;
 	readonly cli: string;
-	readonly state: V3AgentState;
+	readonly state: AgentState;
 	readonly resumable: boolean;
 }
 
@@ -64,7 +64,7 @@ export interface AgentListEntry {
 	readonly address: string;
 	readonly name: string;
 	readonly type: AgentKind;
-	readonly state: V3AgentState;
+	readonly state: AgentState;
 	readonly cli: string;
 	readonly folder: string;
 	readonly started_at: string;
@@ -95,7 +95,8 @@ export interface AgentRef {
 /** The recorded cause of an agent record's removal. */
 export type AgentRemoval = 'expired' | 'removed';
 
-export type AgentState = V3AgentState;
+/** The agent's current state. */
+export type AgentState = 'starting' | 'working' | 'waiting_for_you' | 'just_done' | 'idle' | 'error' | 'ended' | 'unknown' | 'online';
 
 export type AgentSyncState = 'synced' | 'pending' | 'unreachable';
 
@@ -345,7 +346,7 @@ export interface InternalAttachResizeArgs {
 
 export interface InternalDeliverStartResultArgs {
 	readonly recipient: { readonly machine_id: string; readonly agent_id: string };
-	readonly message: { readonly message_id: string; readonly message_ref?: { readonly machine_id: string; readonly message_id: string }; readonly from: string; readonly from_machine_id?: string; readonly from_name?: string; readonly to: string; readonly text: string; readonly reply_to?: string; readonly reply_to_machine_id?: string; readonly call_id?: string; readonly result?: { readonly agent: { readonly reference: { readonly machine_id: string; readonly agent_id: string }; readonly address: string; readonly type: AgentKind; readonly label?: string; readonly unreachable?: boolean; readonly name: string; readonly cli: string; readonly args: string[]; readonly model?: string; readonly effort?: string; readonly title?: string; readonly cwd: string; readonly pid?: number; readonly process: ProcessState; readonly size?: { readonly cols: number; readonly rows: number }; readonly created_at: string; readonly started_at: string; readonly creator_kind?: CreatorKind; readonly creator?: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean; readonly exit?: ProcessExit; readonly session?: string; readonly state: V3AgentState; readonly state_detail?: StateDetail; readonly said?: Said; readonly tools_state: ToolsState; readonly tools_reason?: ToolsReason }; readonly prompt: PromptOutcome }; readonly at: string; readonly delivery: Delivery };
+	readonly message: { readonly message_id: string; readonly message_ref?: { readonly machine_id: string; readonly message_id: string }; readonly from: string; readonly from_machine_id?: string; readonly from_name?: string; readonly to: string; readonly text: string; readonly reply_to?: string; readonly reply_to_machine_id?: string; readonly call_id?: string; readonly result?: { readonly agent: { readonly reference: { readonly machine_id: string; readonly agent_id: string }; readonly address: string; readonly type: AgentKind; readonly label?: string; readonly unreachable?: boolean; readonly name: string; readonly cli: string; readonly args: string[]; readonly model?: string; readonly effort?: string; readonly title?: string; readonly cwd: string; readonly pid?: number; readonly process: ProcessState; readonly size?: { readonly cols: number; readonly rows: number }; readonly created_at: string; readonly started_at: string; readonly creator_kind?: CreatorKind; readonly creator?: { readonly machine_id: string; readonly agent_id: string }; readonly root: { readonly machine_id: string; readonly agent_id: string }; readonly yolo: boolean; readonly exit?: ProcessExit; readonly session?: string; readonly state: AgentState; readonly state_detail?: StateDetail; readonly said?: Said; readonly tools_state: ToolsState; readonly tools_reason?: ToolsReason }; readonly prompt: PromptOutcome }; readonly at: string; readonly delivery: Delivery };
 }
 
 export interface InternalDeliverWaitNoticeArgs {
@@ -366,6 +367,14 @@ export interface KeeperInfo {
 	readonly build: string;
 }
 
+export interface LocationInfo {
+	readonly location_id: string;
+	readonly label: string;
+	readonly path: string;
+	readonly kind: LocationKind;
+	readonly source_folder?: string;
+}
+
 /** What a location is. */
 export type LocationKind = 'folder' | 'main' | 'worktree';
 
@@ -375,7 +384,7 @@ export interface LocationListArgs {
 }
 
 export interface LocationListResult {
-	readonly locations: V3LocationInfo[];
+	readonly locations: LocationInfo[];
 }
 
 export interface LogArgs {
@@ -783,17 +792,6 @@ export interface TypeResult {
 
 export interface UnwatchParams {
 	readonly watch: number;
-}
-
-/** The agent's current state. */
-export type V3AgentState = 'starting' | 'working' | 'waiting_for_you' | 'just_done' | 'idle' | 'error' | 'ended' | 'unknown' | 'online';
-
-export interface V3LocationInfo {
-	readonly location_id: string;
-	readonly label: string;
-	readonly path: string;
-	readonly kind: LocationKind;
-	readonly source_folder?: string;
 }
 
 /** What a CLI waits for. */

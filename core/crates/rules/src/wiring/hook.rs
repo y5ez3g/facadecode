@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use facade_base::daemon::is_session_id;
+use facade_base::model::agent::is_session_id;
 use facade_base::system::{SYSTEM, System, env_var};
 use serde_json::{Value, json};
 

@@ -155,7 +155,7 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `type` | `AgentKind` | yes |  |
 | `name` | `string` | yes |  |
 | `cli` | `string` | yes |  |
-| `state` | `V3AgentState` | yes |  |
+| `state` | `AgentState` | yes |  |
 | `resumable` | `boolean` | yes |  |
 
 ### AgentRef
@@ -164,6 +164,12 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 |---|---|---|---|
 | `machine_id` | `string` | yes |  |
 | `agent_id` | `string` | yes |  |
+
+### AgentState
+
+The agent's current state.
+
+`'starting' \| 'working' \| 'waiting_for_you' \| 'just_done' \| 'idle' \| 'error' \| 'ended' \| 'unknown' \| 'online'`
 
 ### ApiVersions
 
@@ -272,12 +278,6 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 | `agent_id` | `string` | yes |  |
 | `pid` | `number` | yes |  |
 | `birth` | `string` | yes |  |
-
-### V3AgentState
-
-The agent's current state.
-
-`'starting' \| 'working' \| 'waiting_for_you' \| 'just_done' \| 'idle' \| 'error' \| 'ended' \| 'unknown' \| 'online'`
 
 ### WindowsTerminal
 

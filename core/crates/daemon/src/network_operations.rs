@@ -4,14 +4,21 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use facade_base::api_v1::daemon as wire;
-use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
-use facade_base::machine::{AgentRef, MachineIdentity, MachineQueryArgs, MachineQueryStatus};
-use facade_base::operations::CallParams;
-use facade_base::v3::address::{
+use facade_base::address::selector::{
     AgentAddress, AgentKey, parse_agent_address, parse_machine_selector,
 };
-use facade_base::v3::{self, AgentTarget, Caller, ForwardCall, MachineState};
+use facade_base::api_v1::daemon::Caller;
+use facade_base::api_v1::{Operation, daemon as wire};
+use facade_base::model::machine::MachineQueryResult;
+use facade_base::model::machine::MachineState;
+use facade_base::{
+    jsonrpc::decode_arguments,
+    model::error::{ErrorBody, Reason},
+};
+use facade_base::{
+    model::agent::AgentRef,
+    model::machine::{MachineIdentity, MachineQueryStatus},
+};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -21,22 +28,20 @@ use crate::machine_service::{machine_address_part, offline_machine, project_mach
 use crate::network::{RequestFailure, TargetReply, TargetRequest};
 use crate::records::{self, LookupCandidate, OperationTarget, Reach};
 use crate::server::{Watch, WatchChange, WhenFull};
-use crate::service::value_of;
 use crate::{Cancel, Daemon, blocking_in_place};
 
 const LIST_DEADLINE: Duration = Duration::from_secs(3);
-pub(crate) const AGENT_RECORDS: &str = "internal.agent_records";
 
 impl Daemon {
     pub(crate) async fn addressed_agent(
         self: &Arc<Self>,
         caller: &Caller,
-        target: v3::AgentTarget,
+        target: wire::AgentTarget,
         operation: OperationTarget,
     ) -> Result<AgentRef, ErrorBody> {
         let input = match target {
-            AgentTarget::Reference { reference } => return Ok(reference),
-            AgentTarget::Address { agent } => agent,
+            wire::AgentTarget::Reference(reference) => return Ok(api::agent_ref(reference)),
+            wire::AgentTarget::Selector(agent) => agent,
         };
         let parsed = parse_agent_address(&input)
             .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
@@ -119,7 +124,7 @@ impl Daemon {
         caller: &Caller,
         machine: Option<&str>,
         active: bool,
-    ) -> Result<(Vec<LookupCandidate>, Vec<v3::MachineQueryResult>), ErrorBody> {
+    ) -> Result<(Vec<LookupCandidate>, Vec<MachineQueryResult>), ErrorBody> {
         if let Some(machine) = machine
             && machine != self.machine_id
         {
@@ -148,12 +153,12 @@ impl Daemon {
     pub(crate) async fn query_scoped_agents(
         self: &Arc<Self>,
         caller: &Caller,
-        scope: v3::Scope,
-    ) -> Result<(Vec<LookupCandidate>, Vec<v3::MachineQueryResult>), ErrorBody> {
+        scope: wire::Scope,
+    ) -> Result<(Vec<LookupCandidate>, Vec<MachineQueryResult>), ErrorBody> {
         let machine = match scope {
-            v3::Scope::Reachable => None,
-            v3::Scope::Local => Some(self.machine_id.clone()),
-            v3::Scope::Machine { machine } => self.machine_for(Some(&machine))?,
+            wire::Scope::Reachable => None,
+            wire::Scope::Local => Some(self.machine_id.clone()),
+            wire::Scope::Machine { machine } => self.machine_for(Some(&machine))?,
         };
         if machine.as_deref() == Some(self.machine_id.as_str()) {
             return self
@@ -171,13 +176,13 @@ impl Daemon {
         &self,
         machine: Option<&str>,
         caller: &Caller,
-    ) -> Result<Vec<v3::MachineQueryResult>, ErrorBody> {
+    ) -> Result<Vec<MachineQueryResult>, ErrorBody> {
         let candidates =
             machine.map_or_else(|| self.network.query_machines(), |id| vec![id.to_owned()]);
         let mut jobs = JoinSet::new();
         for id in candidates.into_iter().filter(|id| *id != self.machine_id) {
             let network = self.network.clone();
-            let caller = api::wire_caller(caller);
+            let caller = caller.clone();
             jobs.spawn(async move {
                 let result = network
                     .probe_route(&id, &caller)
@@ -198,7 +203,7 @@ impl Daemon {
         rows.retain(|row| {
             machine.is_none_or(|id| row.machine_id == id)
                 && (row.machine_id == self.machine_id
-                    || row.state == MachineState::Online
+                    || row.state == wire::MachineState::Online
                     || probes.contains_key(&row.machine_id))
         });
         let missing: Vec<_> = probes
@@ -239,10 +244,10 @@ impl Daemon {
     async fn read_agent_records(
         self: &Arc<Self>,
         caller: &Caller,
-        rows: Vec<v3::MachineQueryResult>,
+        rows: Vec<MachineQueryResult>,
         active: bool,
         strict: bool,
-    ) -> Result<(Vec<LookupCandidate>, Vec<v3::MachineQueryResult>), ErrorBody> {
+    ) -> Result<(Vec<LookupCandidate>, Vec<MachineQueryResult>), ErrorBody> {
         let visible = self.machine_identities()?;
         let mut jobs = JoinSet::new();
         let deadline = tokio::time::Instant::now() + LIST_DEADLINE;
@@ -265,11 +270,10 @@ impl Daemon {
                 let id = result.machine_id.clone();
                 let request = wire::ForwardParams {
                     route: Vec::new(),
-                    caller: api::wire_caller(caller),
-                    request: wire::ForwardRequest::Call(wire::CallParams {
-                        op: AGENT_RECORDS.into(),
-                        args: value_of(wire::InternalAgentRecordsArgs { active }),
-                    }),
+                    caller: caller.clone(),
+                    request: wire::ForwardRequest::Call(api::call::<wire::InternalAgentRecords>(
+                        wire::InternalAgentRecordsArgs { active },
+                    )),
                     time_left_ms: None,
                     from_name: None,
                     start_result: None,
@@ -288,11 +292,9 @@ impl Daemon {
             let (id, reply) = task.map_err(ErrorBody::internal)?;
             let row = machines.get_mut(&id).expect("each active query has a row");
             match reply {
-                Ok((value, received_at)) => match api::receive_call_result(AGENT_RECORDS, value)
-                    .and_then(|value| observe_agent_reply(row, value, received_at))
-                {
+                Ok((value, received_at)) => match observe_agent_reply(row, value, received_at) {
                     Ok(mut records) => {
-                        records.retain(|record| record.info.machine_id == id);
+                        records.retain(|record| record.info.reference.machine_id == id);
                         agents.extend(records);
                     }
                     Err(error) if strict => return Err(self.machine_failure(&id, error)),
@@ -314,9 +316,11 @@ impl Daemon {
         }
         for candidate in &mut agents {
             let agent = &mut candidate.info;
-            let machine = machine_address_part(&agent.machine_id, &visible)?;
-            agent.address =
-                facade_base::v3::address::format_agent_address(&agent.reference(), &machine);
+            let machine = machine_address_part(&agent.reference.machine_id, &visible)?;
+            agent.address = facade_base::address::selector::format_agent_address(
+                &agent.reference.agent_id,
+                &machine,
+            );
         }
         Ok((agents, machines.into_values().collect()))
     }
@@ -338,12 +342,12 @@ impl Daemon {
             .collect()
     }
 
-    pub(crate) async fn list_agents_v3(
+    pub(crate) async fn list_active_agents(
         self: &Arc<Self>,
         caller: &Caller,
-        args: MachineQueryArgs,
-    ) -> Result<v3::AgentListResult, ErrorBody> {
-        let machine = self.machine_for(args.machine.as_deref())?;
+        machine: Option<&str>,
+    ) -> Result<wire::AgentListResult, ErrorBody> {
+        let machine = self.machine_for(machine)?;
         let (agents, machines) = self.query_agents(caller, machine.as_deref(), true).await?;
         Ok(agent_list_result(agents, machines))
     }
@@ -351,17 +355,10 @@ impl Daemon {
     pub(crate) async fn list_scoped_agents(
         self: &Arc<Self>,
         caller: &Caller,
-        scope: v3::Scope,
-    ) -> Result<v3::AgentListResult, ErrorBody> {
-        if let v3::Scope::Machine { machine } = scope {
-            return self
-                .list_agents_v3(
-                    caller,
-                    MachineQueryArgs {
-                        machine: Some(machine),
-                    },
-                )
-                .await;
+        scope: wire::Scope,
+    ) -> Result<wire::AgentListResult, ErrorBody> {
+        if let wire::Scope::Machine { machine } = scope {
+            return self.list_active_agents(caller, Some(&machine)).await;
         }
         let (agents, machines) = self.query_scoped_agents(caller, scope).await?;
         Ok(agent_list_result(agents, machines))
@@ -376,60 +373,36 @@ impl Daemon {
             .transpose()
     }
 
-    pub(crate) async fn network_call(
+    pub(crate) async fn network_call<O: Operation>(
         &self,
         target: &str,
-        caller: Caller,
-        operation: &str,
-        args: Value,
+        caller: &Caller,
+        args: O::Args,
         time_left: Option<Duration>,
-        request_id: Option<String>,
     ) -> Result<Value, ErrorBody> {
-        self.forward_call(
-            target,
-            caller,
-            ForwardCall {
-                call: CallParams {
-                    op: operation.into(),
-                    args,
-                },
-                by_model: false,
-                from_name: None,
-                recipient: None,
-            },
-            time_left,
-            request_id,
-        )
-        .await
+        self.forward_call(target, caller, api::call::<O>(args), None, None, time_left)
+            .await
     }
 
     pub(crate) async fn forward_call(
         &self,
         target: &str,
-        caller: Caller,
-        forwarded: ForwardCall,
+        caller: &Caller,
+        call: wire::CallParams,
+        from_name: Option<String>,
+        start_result: Option<wire::MessageRef>,
         time_left: Option<Duration>,
-        request_id: Option<String>,
     ) -> Result<Value, ErrorBody> {
-        let operation = forwarded.call.op;
-        let (call, start_result) = api::forward_arguments(
-            &operation,
-            forwarded.call.args,
-            forwarded.recipient,
-            request_id,
-        )?;
         let request = wire::ForwardParams {
             route: Vec::new(),
-            caller: api::wire_caller(&caller),
+            caller: caller.clone(),
             request: wire::ForwardRequest::Call(call),
             time_left_ms: None,
-            from_name: forwarded.from_name,
+            from_name,
             start_result,
         };
         let deadline = time_left.map(|left| tokio::time::Instant::now() + left);
-        self.call_peer(target, request, deadline)
-            .await
-            .and_then(|value| api::receive_call_result(&operation, value))
+        self.call_peer(target, request, deadline).await
     }
 
     pub(crate) async fn call_peer(
@@ -459,7 +432,7 @@ impl Daemon {
             reply,
         } = request;
         let mut cancel = Cancel::of(cancelled);
-        let caller = api::caller(forward.caller);
+        let caller = forward.caller;
         match forward.request {
             wire::ForwardRequest::Watch(params) => {
                 let watch = match wire::decode_watch(params, wire::ClientKind::Machine) {
@@ -522,7 +495,6 @@ impl Daemon {
                             WhenFull::Refuse,
                             cancel,
                             Some(crate::service::Forwarded {
-                                recipient: None,
                                 from_name: forward.from_name,
                                 start_result: forward.start_result,
                                 remaining: forward.time_left_ms.map(Duration::from_millis),
@@ -540,22 +512,24 @@ impl Daemon {
 
 fn agent_list_result(
     agents: Vec<LookupCandidate>,
-    machines: Vec<v3::MachineQueryResult>,
-) -> v3::AgentListResult {
+    machines: Vec<MachineQueryResult>,
+) -> wire::AgentListResult {
     let mut agents: Vec<_> = agents
         .iter()
         .map(|agent| records::list_row(&agent.info))
         .collect();
     agents.sort_by(|a, b| {
-        b.row
-            .started_at
-            .cmp(&a.row.started_at)
+        b.started_at
+            .cmp(&a.started_at)
             .then_with(|| a.reference.cmp(&b.reference))
     });
-    v3::AgentListResult { agents, machines }
+    wire::AgentListResult {
+        agents,
+        machines: machines.into_iter().map(api::machine_query).collect(),
+    }
 }
 
-fn observe_probe_failure(row: &mut v3::MachineQueryResult, error: &ErrorBody) {
+fn observe_probe_failure(row: &mut MachineQueryResult, error: &ErrorBody) {
     let sleeping = error
         .data
         .machines
@@ -581,7 +555,7 @@ fn observe_probe_failure(row: &mut v3::MachineQueryResult, error: &ErrorBody) {
     });
 }
 
-fn unanswered_lookup(machines: &[v3::MachineQueryResult]) -> Option<ErrorBody> {
+fn unanswered_lookup(machines: &[MachineQueryResult]) -> Option<ErrorBody> {
     let unanswered: Vec<_> = machines
         .iter()
         .filter(|machine| {
@@ -606,8 +580,8 @@ fn unanswered_lookup(machines: &[v3::MachineQueryResult]) -> Option<ErrorBody> {
                 .join(", ")
         ),
     );
-    error.data.unavailable = Some(facade_base::machine::Unavailable {
-        execution: facade_base::machine::ExecutionOutcome::NotExecuted,
+    error.data.unavailable = Some(facade_base::model::machine::Unavailable {
+        execution: facade_base::model::machine::ExecutionOutcome::NotExecuted,
         machine: None,
         window: None,
         matches: Vec::new(),
@@ -622,12 +596,20 @@ fn unanswered_lookup(machines: &[v3::MachineQueryResult]) -> Option<ErrorBody> {
 }
 
 fn observe_agent_reply(
-    row: &mut v3::MachineQueryResult,
+    row: &mut MachineQueryResult,
     value: Value,
     received_at: SystemTime,
 ) -> Result<Vec<LookupCandidate>, ErrorBody> {
     row.last_seen = Some(facade_base::time::iso_time(received_at));
-    let records = decode_arguments(value);
+    let records = decode_arguments::<Vec<wire::AgentLookupCandidate>>(value).map(|records| {
+        records
+            .into_iter()
+            .map(|record| LookupCandidate {
+                info: record.agent,
+                has_rule: record.has_rule,
+            })
+            .collect()
+    });
     row.status = if records.is_ok() {
         MachineQueryStatus::Answered
     } else {
@@ -636,21 +618,32 @@ fn observe_agent_reply(
     records
 }
 
-pub(crate) fn machine_selector(text: &str) -> Result<v3::address::MachineSelector<'_>, ErrorBody> {
+pub(crate) fn machine_selector(
+    text: &str,
+) -> Result<facade_base::address::selector::MachineSelector<'_>, ErrorBody> {
     parse_machine_selector(text).map_err(|error| ErrorBody::invalid_argument(error.to_string()))
 }
 
 pub(crate) fn machine_query_result(
-    machine: v3::MachineInfo,
+    machine: wire::MachineInfo,
     status: MachineQueryStatus,
-) -> v3::MachineQueryResult {
-    v3::MachineQueryResult {
-        short_id: v3::address::short_machine_id(&machine.machine_id),
+) -> MachineQueryResult {
+    MachineQueryResult {
+        short_id: machine.short_id,
         machine_id: machine.machine_id,
         name: machine.name,
         selector: machine.selector,
         build: machine.build,
-        state: machine.state,
+        state: match machine.state {
+            wire::MachineState::Online => MachineState::Online,
+            wire::MachineState::Connecting => MachineState::Connecting,
+            wire::MachineState::Disconnected => MachineState::Disconnected,
+            wire::MachineState::Sleeping => MachineState::Sleeping,
+            wire::MachineState::Unreachable | wire::MachineState::Unknown => {
+                MachineState::Unreachable
+            }
+            wire::MachineState::SshInteractionRequired => MachineState::SshInteractionRequired,
+        },
         status,
         last_seen: machine.last_seen,
         ssh_error: machine.ssh_error,
@@ -688,7 +681,7 @@ mod tests {
             (json!([]), MachineQueryStatus::Answered),
             (json!({}), MachineQueryStatus::Error),
         ] {
-            let mut row = v3::MachineQueryResult {
+            let mut row = MachineQueryResult {
                 machine_id: "peer".into(),
                 short_id: "peer".into(),
                 name: "gpu".into(),

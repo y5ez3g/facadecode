@@ -1,6 +1,6 @@
 //! The windows of each agent. A relation can remain while its window is disconnected.
 
-use facade_base::daemon::WindowRef;
+use facade_base::model::machine::WindowRef;
 use rusqlite::{Connection, params};
 
 pub(super) fn add_table(connection: &Connection) -> rusqlite::Result<()> {

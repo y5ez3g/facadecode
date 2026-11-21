@@ -5,7 +5,23 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::json;
 
 use super::super::frame::{empty_variant, present};
-use super::{Environment, LocationInfo, SingleMachineScope};
+use super::{Environment, LocationKind, SingleMachineScope};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LocationInfo {
+    /// `loc-` followed by 16 hexadecimal digits of the SHA-256 of the location's path: the same in
+    /// every window that lists it.
+    pub location_id: String,
+    /// The checkout's branch, or else the folder's name.
+    pub label: String,
+    /// The absolute path, with symbolic links resolved.
+    pub path: String,
+    /// What the location is: a folder, a repository's main checkout, or a linked worktree.
+    pub kind: LocationKind,
+    /// The requested workspace folder that produced this local result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_folder: Option<String>,
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

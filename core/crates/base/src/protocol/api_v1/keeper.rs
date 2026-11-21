@@ -17,12 +17,15 @@ use super::{
     ApiVersion, ApiVersions, CallParams, EmptyResult, ErrorBody, ErrorData, Operation, ProcessExit,
     ProtocolMismatchDetails, Size, decode_arguments, highest_common,
 };
-use crate::keeper::{self as legacy, KeeperStartArgs};
 use crate::operations::OperationVisitor;
-use crate::start::StartCommand;
 
 pub const SUPPORTED_API_VERSIONS: &[ApiVersion] = &[ApiVersion::MIN];
-pub use legacy::methods;
+
+pub mod methods {
+    pub const HELLO: &str = "hello";
+    pub const CALL: &str = "call";
+    pub const CHANGED: &str = "changed";
+}
 
 pub const METHODS: &[(&str, &str)] = &[
     (
@@ -88,18 +91,6 @@ fn nonempty_command<'de, D: serde::Deserializer<'de>>(
         return Err(serde::de::Error::custom("command must contain a program"));
     }
     Ok(command)
-}
-
-impl From<StartArgs> for KeeperStartArgs {
-    fn from(args: StartArgs) -> Self {
-        Self {
-            agent: args.agent_id,
-            launch: StartCommand::from_words(args.command, args.cwd),
-            env: args.env,
-            cols: args.size.cols,
-            rows: args.size.rows,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -179,7 +170,7 @@ fn supported_versions() -> ApiVersions {
         .expect("keeper supports at least one API version")
 }
 
-pub fn project_error(error: crate::jsonrpc::ErrorBody) -> ErrorBody {
+pub fn project_error(error: crate::model::error::ErrorBody) -> ErrorBody {
     ErrorBody {
         code: error.code,
         message: error.message,
@@ -191,13 +182,13 @@ pub fn project_error(error: crate::jsonrpc::ErrorBody) -> ErrorBody {
 }
 
 macro_rules! keeper_operations {
-    ($($marker:ident => $variant:ident($args:ty) -> $result:ty),+ $(,)?) => {
+    ($($marker:ident: $name:literal, $doc:literal, $variant:ident($args:ty) -> $result:ty;)+) => {
         $(
             pub struct $marker;
 
             impl Operation for $marker {
-                const NAME: &'static str = legacy::$marker::NAME;
-                const DOC: &'static str = legacy::$marker::DOC;
+                const NAME: &'static str = $name;
+                const DOC: &'static str = $doc;
                 type Args = $args;
                 type Result = $result;
             }
@@ -223,8 +214,37 @@ macro_rules! keeper_operations {
 }
 
 keeper_operations! {
-    AgentStart => Start(StartArgs) -> StartResult,
-    AgentStop => Stop(StopArgs) -> EmptyResult,
-    AgentSync => Sync(SyncArgs) -> EmptyResult,
-    DaemonPing => Ping(PingArgs) -> EmptyResult,
+    AgentStart: "agent.start",
+        "Starts the agent's CLI in a new terminal, as its parent: on Unix a \
+         PTY, in a session and process group of its own; on Windows a \
+         pseudo console, in a job of its own. Answers once the program \
+         runs, with the terminal. Fails with `invalid_argument` for an \
+         empty command or an agent it holds, and `unavailable` where the \
+         terminal, the program, the folder or the CLI's birth cannot be \
+         had.",
+        Start(StartArgs) -> StartResult;
+    AgentStop: "agent.stop",
+        "Hangs up and answers, then kills once the CLI ends or 3 seconds \
+         pass, whichever comes first; a repeated stop keeps the first \
+         deadline. On Unix it sends SIGHUP, then SIGKILL, to the CLI's \
+         process group; a group whose leader cannot be proved gets no \
+         signal, and the stop still answers. On Windows it closes the \
+         keeper's copy of the signal pipe, after the daemon let go of its \
+         own, then calls `TerminateJobObject` on the CLI's job. Fails with \
+         `not_found` for an agent it does not hold.",
+        Stop(StopArgs) -> EmptyResult;
+    AgentSync: "agent.sync",
+        "Gives the terminal to the side that lacks it. A request without \
+         one is answered with the keeper's; one with a terminal for a CLI \
+         the keeper lacks is held, and watched until it ends: without its \
+         exit code on Unix, with it on Windows. A CLI that has already ended is answered as held and \
+         reported ended at once. Both sides holding one, the process ID and \
+         birth must match (`invalid_argument` otherwise); neither, \
+         `not_found`.",
+        Sync(SyncArgs) -> EmptyResult;
+    DaemonPing: "daemon.ping",
+        "Tells the keeper the daemon is alive; send it once a second from \
+         hello on. After 15 seconds without one, the keeper kills the \
+         daemon: SIGKILL on Unix, `TerminateProcess` on Windows.",
+        Ping(PingArgs) -> EmptyResult;
 }

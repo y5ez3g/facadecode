@@ -9,14 +9,11 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::daemon::methods;
-pub use crate::daemon_client::Cut;
-use crate::daemon_client::{connect_transport, takeover_timeout, transient_transport};
-use crate::paths::ClientSocket;
+use crate::paths::{ClientSocket, is_connection_lost};
 
 use super::daemon::{
-    self, AgentSend, AgentStart, ChangedParams, ClientKind, ClosingParams, HelloParams,
-    HelloResult, UnwatchParams, WatchEndedParams, WatchParams, WatchResult,
+    self, AgentSend, AgentStart, ChangedParams, ClientKind, ClosingParams, HANDOVER_TIME,
+    HelloParams, HelloResult, UnwatchParams, WatchEndedParams, WatchParams, WatchResult, methods,
 };
 use super::{
     ApiVersions, CallParams, EmptyResult, ErrorBody, NoArgs, Notification, Operation, Request,
@@ -25,6 +22,27 @@ use super::{
 
 const HELLO_ID: u64 = 1;
 const TAKEOVER_POLL: Duration = Duration::from_millis(100);
+
+/// The time a client gives a newer build to answer once it takes over: the old daemon hands over,
+/// then the keeper gets 10 seconds to start the new one.
+pub fn takeover_timeout() -> Duration {
+    HANDOVER_TIME + Duration::from_secs(10)
+}
+
+/// A call the daemon's end cut off before its answer: what it did is not known.
+#[derive(Debug)]
+pub struct Cut;
+
+impl std::fmt::Display for Cut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "the daemon disconnected before responding; the outcome is unknown; check \
+             `facade list`",
+        )
+    }
+}
+
+impl std::error::Error for Cut {}
 
 /// A local connection that completed the daemon API v1 hello.
 pub struct DaemonClient {
@@ -76,7 +94,7 @@ impl DaemonClient {
     }
 
     /// Completes the terminal hello on an already connected socket.
-    pub fn hello(writer: ClientSocket) -> anyhow::Result<Self> {
+    fn hello(writer: ClientSocket) -> anyhow::Result<Self> {
         Self::hello_as(writer, ClientKind::Terminal)
     }
 
@@ -183,12 +201,6 @@ impl DaemonClient {
         Ok((started.watch, serde_json::from_value(started.snapshot)?))
     }
 
-    pub fn snapshot<T: Topic>(&mut self, args: T::Args) -> anyhow::Result<T::Snapshot> {
-        let (watch, snapshot) = self.watch::<T>(args)?;
-        self.unwatch(watch)?;
-        Ok(snapshot)
-    }
-
     /// Ends this connection's watch and waits for its acknowledgment.
     pub fn unwatch(&mut self, watch: u64) -> anyhow::Result<()> {
         let id = self.ask(methods::UNWATCH, &UnwatchParams { watch })?;
@@ -236,7 +248,7 @@ impl DaemonClient {
         self.origin = None;
     }
 
-    pub fn connect_again(&mut self) -> anyhow::Result<()> {
+    fn connect_again(&mut self) -> anyhow::Result<()> {
         let socket = self
             .origin
             .clone()
@@ -353,4 +365,36 @@ pub fn upgrading(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<ErrorBody>()
         .is_some_and(|error| error.data.reason == "upgrading")
+}
+
+/// The transport failures worth another try: the daemon is not there yet, or went away.
+const RETRIED_KINDS: [ErrorKind; 9] = [
+    ErrorKind::NotFound,
+    ErrorKind::ConnectionRefused,
+    ErrorKind::ConnectionReset,
+    ErrorKind::ConnectionAborted,
+    ErrorKind::BrokenPipe,
+    ErrorKind::UnexpectedEof,
+    ErrorKind::TimedOut,
+    ErrorKind::WouldBlock,
+    ErrorKind::Interrupted,
+];
+
+/// Whether a transport failure before a decoded hello can be retried. Decoded errors and invalid
+/// data are permanent.
+pub fn transient_transport(err: &io::Error) -> bool {
+    RETRIED_KINDS.contains(&err.kind()) || is_connection_lost(err)
+}
+
+/// Opens a local transport and lets its caller inspect it before hello.
+fn connect_transport(
+    socket: &Path,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
+) -> anyhow::Result<Option<ClientSocket>> {
+    let stream = match ClientSocket::connect(socket) {
+        Err(error) if transient_transport(&error) => return Ok(None),
+        Err(error) => anyhow::bail!("cannot connect to {}: {error}", socket.display()),
+        Ok(stream) => stream,
+    };
+    Ok(opening(&stream).then_some(stream))
 }

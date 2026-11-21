@@ -215,3 +215,34 @@ fn validate_watch(watch: &DaemonWatch) -> Result<(), ErrorBody> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_operation_is_a_thing_and_a_verb_and_every_name_is_there_once() {
+        for kind in [
+            ClientKind::Terminal,
+            ClientKind::Ide,
+            ClientKind::Mcp,
+            ClientKind::Machine,
+        ] {
+            let mut names: Vec<String> = operation_names(kind)
+                .into_iter()
+                .chain(topic_names(kind))
+                .collect();
+            let count = names.len();
+            names.sort();
+            names.dedup();
+            assert_eq!(names.len(), count);
+            assert!(
+                operation_names(kind)
+                    .iter()
+                    .all(|op| op.split('.').count() == 2),
+                "{:?}",
+                operation_names(kind)
+            );
+        }
+    }
+}

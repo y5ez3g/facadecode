@@ -2,8 +2,8 @@
 //! in without draft protection: they can edit a draft or answer a menu.
 
 use facade_base::api_v1::ErrorBody;
-use facade_base::daemon::{CUT_MARK, first_control};
 use facade_base::key_input::{KeyProblem, NAMED_KEYS, key_problems};
+use facade_base::model::terminal::{CUT_MARK, first_control};
 use serde_json::{Map, Value, json};
 
 use super::{Problems, envelope};

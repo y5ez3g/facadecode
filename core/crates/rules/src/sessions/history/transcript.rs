@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::SystemTime;
 
-use facade_base::jsonrpc::ErrorBody;
+use facade_base::model::error::ErrorBody;
 use serde_json::Value;
 
 use super::{if_present, metadata, store_error};

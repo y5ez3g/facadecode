@@ -16,28 +16,30 @@ use facade_base::api_v1::daemon::{
     AttachTopic, MachineQuery, ProcessState, ScreenChange, ScreenSnapshot, attach_resize_line,
     raw_input_line,
 };
-use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::api_v1::daemon_client::{
+    Cut, DaemonClient, takeover_timeout, transient_transport,
+};
 use facade_base::api_v1::{ErrorBody, ProcessExit, Size};
 use facade_base::console::{
     ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes, visible_content_end,
 };
-use facade_base::daemon_client::{Cut, RECONNECT_DELAY, takeover_timeout, transient_transport};
 use facade_base::paths::ClientSocket;
 use facade_base::unix_process::signal_number;
-use facade_base::v3::address::exact_machine_selector;
 use facade_base::{base64, service, system};
 use facade_screen::{REDRAW_SCROLLBACK_ROWS, Screen};
 use unicode_width::UnicodeWidthChar;
 
 use crate::daemon_client::{ConnectFailure, Reconnect};
 use crate::errors::{AgentCommand, agent_failed, agent_label, cause, machine_query_detail};
-use crate::{ExitText, Opening, single_line};
+use crate::{ExitText, Opening, agent_address, single_line};
 
 /// Ctrl-], as plain input and in the kitty keyboard encoding. In win32-input-mode it comes as a
 /// key-down record of its character, which [`is_detach_record`] recognizes.
 const DETACH_KEYS: [&[u8]; 2] = [b"\x1d", b"\x1b[93;5u"];
 /// The longest Ctrl-] waits for the keys typed before it to be sent.
 const DETACH_SEND_TIMEOUT: Duration = Duration::from_secs(1);
+/// The wait between attempts to reconnect an attached terminal.
+const RECONNECT_DELAY: Duration = Duration::from_millis(500);
 const RECONNECT_TIMED_OUT: &str = "the terminal did not reconnect in time";
 /// The most typed bytes that wait while a connected writer is busy.
 const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
@@ -74,11 +76,7 @@ pub(crate) fn attach(
     let viewer = format!("Terminal on {hostname}");
     let address = match &target {
         AgentTarget::Selector(agent) => agent.clone(),
-        AgentTarget::Reference(reference) => format!(
-            "{}@{}",
-            reference.agent_id,
-            exact_machine_selector(&reference.machine_id)
-        ),
+        AgentTarget::Reference(reference) => agent_address(reference, None),
     };
     let allow_ended =
         !matches!(opening, Opening::Attached) && matches!(target, AgentTarget::Reference(_));

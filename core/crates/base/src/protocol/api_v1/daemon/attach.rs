@@ -10,7 +10,6 @@ use super::{
     AgentRef, AgentTarget, AgentType, AgentTypeArgs, AttachResize, CallParams, ScreenBuffer,
     TerminalInput, methods,
 };
-use crate::daemon::include_scrollback_by_default;
 use crate::operations::Operation;
 use crate::process::ProcessExit;
 
@@ -59,6 +58,10 @@ pub struct AttachArgs {
     pub allow_ended: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub report_activity: bool,
+}
+
+fn include_scrollback_by_default() -> bool {
+    true
 }
 
 fn optional_size_input<'de, D: Deserializer<'de>>(
@@ -192,4 +195,56 @@ fn call_line<O: Operation>(args: O::Args) -> Vec<u8> {
             args: serde_json::to_value(args).expect("operation arguments must serialize"),
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_unknown_screen_change_does_not_hide_the_next_change() {
+        let screen: Vec<ScreenChange> = serde_json::from_value(
+            json!([{ "kind": "resized", "cols": 80 }, { "kind": "removed" }]),
+        )
+        .unwrap();
+        assert_eq!(screen, vec![ScreenChange::Unknown, ScreenChange::Removed]);
+    }
+
+    #[test]
+    fn a_screen_watch_includes_scrollback_unless_asked_not_to() {
+        let args: AttachArgs = serde_json::from_value(json!({ "target": "a1" })).unwrap();
+        assert!(args.include_scrollback && !args.keep_scrollback);
+        let args: AttachArgs = serde_json::from_value(
+            json!({ "target": "a1", "keep_scrollback": true, "include_scrollback": false }),
+        )
+        .unwrap();
+        assert!(!args.include_scrollback && args.keep_scrollback);
+    }
+
+    #[test]
+    fn screen_changes_omit_absent_exit_details_and_carry_their_kind() {
+        let exit = ProcessExit {
+            code: Some(0),
+            signal: None,
+            reason: None,
+            at: "2026-11-09T17:22:05.123Z".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(ScreenChange::Exit {
+                exit,
+                exit_status: None,
+                resume_hint: None,
+            })
+            .unwrap(),
+            json!({ "kind": "exit", "exit": { "code": 0, "at": "2026-11-09T17:22:05.123Z" } })
+        );
+        assert_eq!(
+            serde_json::to_value(ScreenChange::Output {
+                data: "aGk=".into()
+            })
+            .unwrap(),
+            json!({ "kind": "output", "data": "aGk=" })
+        );
+    }
 }

@@ -4,15 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use facade_base::address::is_machine_name;
+use facade_base::address::selector::exact_machine_selector;
+use facade_base::address::{is_machine_name, short_machine_id};
 use facade_base::api_v1::daemon::{
-    ConnectedMachine, ConnectionKind as ApiConnectionKind, MachineTransport, methods,
+    AdvertiseParams, ConnectedMachine, ConnectionKind, ConnectionState, MachineConnection,
+    MachineInfo, MachineState, MachineTransport, SshTransport, methods,
 };
 use facade_base::api_v1::{ApiVersion, ErrorBody, Notification};
-use facade_base::v3::{
-    AdvertiseParams, ConnectionKind, ConnectionState, MachineConnection, MachineIdentity,
-    MachineInfo, MachineState,
-};
+use facade_base::model::machine::MachineIdentity;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::routes::{self, Conflict, LiveIdentities, is_uuid_v4};
@@ -171,7 +170,6 @@ impl Topology {
             row.boot_id = None;
             row.build = None;
             row.route = None;
-            row.capabilities.clear();
             row.connections.clear();
             self.sleeping.insert(id.clone(), row);
         }
@@ -269,6 +267,7 @@ impl Topology {
         let mut offline = Vec::new();
         let mut seen = BTreeSet::new();
         for mut row in table.machines {
+            advertise::normalize_incoming(&mut row);
             if !is_uuid_v4(&row.machine_id)
                 || !is_machine_name(&row.name)
                 || row.connections.iter().any(|connection| {
@@ -425,16 +424,16 @@ impl Topology {
     fn select(&self) -> BTreeMap<String, Selected> {
         let own = MachineInfo {
             machine_id: self.local.machine_id.clone(),
+            short_id: short_machine_id(&self.local.machine_id),
             boot_id: Some(self.local.boot_id.clone()),
             name: self.local.name.clone(),
-            selector: facade_base::v3::address::exact_machine_selector(&self.local.machine_id),
+            selector: exact_machine_selector(&self.local.machine_id),
             state: MachineState::Online,
             last_seen: None,
             ssh_error: None,
             build: Some(self.local.build.clone()),
             route: Some(Vec::new()),
             connections: self.connections(),
-            capabilities: Vec::new(),
         };
         let mut selected = BTreeMap::from([(
             own.machine_id.clone(),
@@ -511,9 +510,15 @@ impl Topology {
                 machine_id: saved.config.machine_id.clone(),
                 initiator_machine_id: local.clone(),
                 kind: ConnectionKind::Saved,
-                ssh_destination: Some(saved.config.ssh_destination.clone()),
-                ssh_args: saved.argv.clone(),
-                remote_home: saved.config.remote_home.clone(),
+                transport: Some(SshTransport {
+                    ssh_destination: saved.config.ssh_destination.clone(),
+                    ssh_args: if saved.argv.is_empty() {
+                        vec![saved.config.ssh_destination.clone()]
+                    } else {
+                        saved.argv.clone()
+                    },
+                    remote_home: saved.config.remote_home.clone(),
+                }),
                 state: match (saved.interaction(), saved.active) {
                     (_, Some(_)) => ConnectionState::Connected,
                     (Some(_), None) => ConnectionState::SshInteractionRequired,
@@ -525,26 +530,17 @@ impl Topology {
         for link in self.links.values() {
             match &link.origin {
                 Origin::Front(front) => {
-                    let (ssh_destination, ssh_args, remote_home) = match &front.transport {
-                        MachineTransport::Ssh(ssh) => (
-                            Some(ssh.ssh_destination.clone()),
-                            ssh.ssh_args.clone(),
-                            ssh.remote_home.clone(),
-                        ),
-                        MachineTransport::Bridge => (None, Vec::new(), None),
+                    let transport = match &front.transport {
+                        MachineTransport::Ssh(ssh) => Some(ssh.clone()),
+                        MachineTransport::Bridge => None,
                     };
                     merge_connection(
                         &mut connections,
                         MachineConnection {
                             machine_id: link.remote.machine_id.clone(),
                             initiator_machine_id: local.clone(),
-                            kind: match front.kind {
-                                ApiConnectionKind::Saved => ConnectionKind::Saved,
-                                ApiConnectionKind::Temporary => ConnectionKind::Temporary,
-                            },
-                            ssh_destination,
-                            ssh_args,
-                            remote_home,
+                            kind: front.kind,
+                            transport,
                             state: ConnectionState::Connected,
                             ssh_interaction: None,
                         },
@@ -581,12 +577,13 @@ fn row_has_saved(row: &MachineInfo, machine: &str) -> bool {
 }
 
 fn connection_key(connection: &MachineConnection) -> (&str, &str, u8, Option<&str>, Option<&str>) {
+    let transport = connection.transport.as_ref();
     (
         &connection.machine_id,
         &connection.initiator_machine_id,
         connection.kind as u8,
-        connection.ssh_destination.as_deref(),
-        connection.remote_home.as_deref(),
+        transport.map(|ssh| ssh.ssh_destination.as_str()),
+        transport.and_then(|ssh| ssh.remote_home.as_deref()),
     )
 }
 

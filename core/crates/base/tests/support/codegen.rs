@@ -812,7 +812,6 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
     let sleeping = types.add::<daemon::MachineSleepingParams>();
     let connected = types.add::<daemon::ConnectedParams>();
     let connect_failed = types.add::<daemon::ConnectFailedParams>();
-    let agent_state = types.add::<daemon::AgentState>();
     let _ = types.add::<api_v1::ProtocolMismatchDetails>();
     let _ = types.add::<api_v1::Request>();
     let _ = types.add::<api_v1::Notification>();
@@ -828,7 +827,6 @@ pub fn generate_daemon_files() -> Vec<(&'static str, String)> {
     let mut definitions = types.definitions();
     alias(&mut definitions, "DaemonHelloParams", &hello);
     alias(&mut definitions, "DaemonHelloResult", &hello_result);
-    alias(&mut definitions, "AgentState", &agent_state);
     definitions.insert("CallParams".into(), call_schema(&ops));
     definitions.insert("WatchParams".into(), watch_schema(&topics));
     specialize_member(

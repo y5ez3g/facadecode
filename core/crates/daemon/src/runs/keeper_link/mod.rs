@@ -10,10 +10,9 @@ use std::time::{Duration, Instant as ClockInstant};
 
 use anyhow::Context;
 use facade_base::api_v1::ApiVersion;
-use facade_base::api_v1::keeper::{StartArgs, StopArgs, SyncArgs};
-use facade_base::daemon::KeeperInfo;
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::KeeperHeldAgent;
+use facade_base::api_v1::daemon::KeeperInfo;
+use facade_base::api_v1::keeper::{HeldAgent, StartArgs, StopArgs, SyncArgs};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::service::{self, Report, RestartBackoff, Service};
 use facade_base::terminal::PtyMaster;
@@ -318,7 +317,7 @@ impl KeeperLink {
     }
 
     /// Recovery: obtains a held run's terminal from the startup connection, before readiness.
-    pub(crate) async fn take_back(&self, held: &KeeperHeldAgent) -> Result<PtyMaster, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
         let keeper = self.recovery_keeper()?;
         Self::terminal(&keeper, held).await
     }
@@ -326,7 +325,7 @@ impl KeeperLink {
     /// Recovery: keeps a second terminal copy and the run's exit sink. Blocking, no I/O waits.
     pub(crate) fn register_recovered(
         &self,
-        held: &KeeperHeldAgent,
+        held: &HeldAgent,
         master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
@@ -334,7 +333,7 @@ impl KeeperLink {
     ) -> std::io::Result<()> {
         let copy = master.try_clone()?;
         self.runs.recovered(
-            &held.id,
+            &held.agent_id,
             Run {
                 master: copy,
                 identity: ProcessIdentity {
@@ -356,7 +355,7 @@ impl KeeperLink {
 
     pub(crate) fn restore_credential(
         &self,
-        held: &KeeperHeldAgent,
+        held: &HeldAgent,
         number: u64,
         credential: RunCredentialRecord,
     ) -> bool {
@@ -366,16 +365,16 @@ impl KeeperLink {
     /// Recovery: retains unreadable runs untouched; asks the keeper to stop unrecorded ones.
     pub(crate) async fn take_keeper_only(
         &self,
-        held: KeeperHeldAgent,
+        held: HeldAgent,
         record: KeeperOnly,
     ) -> Result<(), ErrorBody> {
         let keeper = self.recovery_keeper()?;
         match record {
-            KeeperOnly::NoRecord => Self::stop_unrecorded(&keeper, &held.id).await,
+            KeeperOnly::NoRecord => Self::stop_unrecorded(&keeper, &held.agent_id).await,
             KeeperOnly::Unreadable => {
                 let master = Self::terminal(&keeper, &held).await?;
                 self.runs.recovered(
-                    &held.id,
+                    &held.agent_id,
                     Run {
                         master,
                         identity: ProcessIdentity {
@@ -397,7 +396,7 @@ impl KeeperLink {
                     "warn",
                     &format!(
                         "leaving {}'s CLI alone: this build cannot read its agent record",
-                        held.id
+                        held.agent_id
                     ),
                 );
                 Ok(())
@@ -447,17 +446,7 @@ impl KeeperLink {
                 Ok(keeper) => {
                     let found = FoundKeeper::Connected {
                         build: keeper.hello.build.clone(),
-                        held: keeper
-                            .hello
-                            .agents
-                            .iter()
-                            .map(|agent| KeeperHeldAgent {
-                                id: agent.agent_id.clone(),
-                                pid: agent.pid,
-                                birth: agent.birth.clone(),
-                                stopping: agent.stopping,
-                            })
-                            .collect(),
+                        held: keeper.hello.agents.clone(),
                     };
                     let mut state = self.connection.lock().unwrap();
                     state.first = Some(keeper);
@@ -539,12 +528,9 @@ impl KeeperLink {
             .ok_or_else(|| ErrorBody::new(Reason::Unavailable, "the keeper is not connected"))
     }
 
-    async fn terminal(
-        keeper: &KeeperClient,
-        held: &KeeperHeldAgent,
-    ) -> Result<PtyMaster, ErrorBody> {
+    async fn terminal(keeper: &KeeperClient, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
         let args = SyncArgs {
-            agent_id: held.id.clone(),
+            agent_id: held.agent_id.clone(),
             pid: held.pid,
             birth: held.birth.clone(),
         };

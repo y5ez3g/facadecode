@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use facade_base::api_v1::{ErrorBody, daemon_client::DaemonClient};
-use facade_base::jsonrpc::ErrorBody as RelayError;
+use facade_base::model::error::ErrorBody as RelayError;
 use serde_json::Value;
 
 use super::envelope;

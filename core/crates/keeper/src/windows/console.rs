@@ -13,8 +13,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::ptr;
 
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::KeeperStartArgs;
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::programs::{self, CONPTY_FOLDER};
 use facade_base::terminal::PtyMaster;
 use windows_sys::Win32::Foundation::{
@@ -45,6 +44,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::log;
+use crate::runtime::KeeperStartArgs;
 
 /// What each pipe of a console holds while nobody reads it, as node-pty makes them.
 const PIPE_BYTES: u32 = 128 * 1024;

@@ -1,23 +1,22 @@
 //! The machine roster and the receipts for changes to it.
 
-use std::path::PathBuf;
 use std::time::SystemTime;
 
+use facade_base::address::selector::display_machine_id;
 use facade_base::api_v1::daemon::{
-    ConnectionKind, MachineConnection, MachineIdentity, MachineInfo, MachineList, MachineQuery,
-    MachineRemove, MachineRemoveArgs, MachineRemoveResult, MachineRename, MachineRenameArgs,
-    MachineState, SshTransport,
+    MachineIdentity, MachineInfo, MachineList, MachineQuery, MachineRemove, MachineRemoveArgs,
+    MachineRemoveResult, MachineRename, MachineRenameArgs, MachineState, SshTransport,
 };
 use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::api_v1::{ErrorBody, NoArgs};
-use facade_base::daemon::display_name;
-use facade_base::ssh;
+use facade_base::model::terminal::display_name;
 use facade_base::time::parse_iso_time;
-use facade_base::v3::address::display_machine_id;
 use serde::Deserialize;
 
 use crate::errors::{about_machine, repair_command};
 use crate::{single_line, table};
+
+use super::{RevocationFailure, print_removed, revoke_key, saved_ssh, ssh_args};
 
 pub(super) fn list(daemon: &mut DaemonClient) -> anyhow::Result<()> {
     let listed = daemon.call::<MachineList>(NoArgs {})?;
@@ -86,29 +85,6 @@ pub(super) fn list(daemon: &mut DaemonClient) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(super) fn saved_ssh<'a>(
-    connections: &'a [MachineConnection],
-    local_id: &str,
-    machine_id: &str,
-) -> Option<&'a SshTransport> {
-    connections
-        .iter()
-        .filter(|connection| {
-            connection.kind == ConnectionKind::Saved
-                && connection.initiator_machine_id == local_id
-                && connection.machine_id == machine_id
-        })
-        .find_map(|connection| connection.transport.as_ref())
-}
-
-pub(super) fn ssh_args(transport: &SshTransport) -> &[String] {
-    if transport.ssh_args.is_empty() {
-        std::slice::from_ref(&transport.ssh_destination)
-    } else {
-        &transport.ssh_args
-    }
-}
-
 pub(super) fn remove(daemon: &mut DaemonClient, machine: String) -> anyhow::Result<i32> {
     let removed = remove_route(daemon, &machine)
         .map_err(|error| edit_error(daemon, &machine, None, error))?;
@@ -134,35 +110,6 @@ fn remove_route(daemon: &mut DaemonClient, machine: &str) -> anyhow::Result<Mach
     daemon.call::<MachineRemove>(MachineRemoveArgs {
         machine: machine.to_owned(),
         expected_machine_id: None,
-    })
-}
-
-pub(super) fn print_removed(removed: &MachineRemoveResult, given: &str) -> String {
-    let name = display_name(removed.name.as_deref().unwrap_or(given));
-    println_or_end!("Removed the saved connection to {name}.");
-    if let Some(via) = &removed.via {
-        println_or_end!("{name} is still reachable via {}.", display_name(via));
-    }
-    name
-}
-
-pub(super) enum RevocationFailure {
-    Elevate(PathBuf),
-    Other(anyhow::Error),
-}
-
-pub(super) fn revoke_key(machine_id: &str) -> Result<bool, RevocationFailure> {
-    let file = ssh::authorization_file().map_err(RevocationFailure::Other)?;
-    file.revoke_peer(machine_id).map_err(|error| {
-        let elevation = format!(
-            "writing {} requires an elevated Administrator terminal",
-            file.path().display()
-        );
-        if file.administrators() && error.to_string() == elevation {
-            RevocationFailure::Elevate(file.path().to_owned())
-        } else {
-            RevocationFailure::Other(error)
-        }
     })
 }
 

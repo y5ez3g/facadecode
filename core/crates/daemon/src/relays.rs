@@ -4,12 +4,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+use facade_base::api_v1::daemon::AgentKind;
 use facade_base::api_v1::daemon_client::{DaemonClient, upgrading};
-use facade_base::daemon::{AgentsUpdate, is_session_id};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::AgentRef;
+use facade_base::model::agent::{AgentRef, AgentsUpdate, is_session_id};
+use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::process::ProcessState;
-use facade_base::v3::AgentKind;
 use facade_base::{system, unix_process};
 use serde_json::{Value, json};
 

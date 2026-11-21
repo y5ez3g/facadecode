@@ -28,15 +28,17 @@ mod tests;
 mod upgrade;
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use facade_base::address::default_machine_name;
+use facade_base::address::selector::{exact_machine_selector, format_agent_address};
 use facade_base::api_v1::NoArgs;
-use facade_base::api_v1::daemon::{AgentTarget, MachineList, Scope, StopSelection};
+use facade_base::api_v1::daemon::{AgentRef, AgentTarget, MachineList, Scope, StopSelection};
 use facade_base::api_v1::daemon_client::DaemonClient;
-use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
+use facade_base::model::terminal::DEFAULT_TERMINAL_SIZE;
 use facade_base::process::{EndReason, ProcessExit};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -148,6 +150,29 @@ fn write_or_end(text: fmt::Arguments<'_>) {
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
         Err(error) => panic!("failed printing to stdout: {error}"),
     }
+}
+
+/// Captures the UTF-8 environment and reports names of entries that could not be represented.
+fn launch_environment() -> (BTreeMap<String, String>, Vec<String>) {
+    let mut carried = BTreeMap::new();
+    let mut left_out = Vec::new();
+    for (name, value) in std::env::vars_os() {
+        match (name.to_str(), value.to_str()) {
+            (Some(name), Some(value)) => {
+                carried.insert(name.to_owned(), value.to_owned());
+            }
+            _ => left_out.push(name.to_string_lossy().into_owned()),
+        }
+    }
+    (carried, left_out)
+}
+
+fn agent_address(reference: &AgentRef, machine: Option<&str>) -> String {
+    let selector = machine.map_or_else(
+        || Cow::Owned(exact_machine_selector(&reference.machine_id)),
+        Cow::Borrowed,
+    );
+    format_agent_address(&reference.agent_id, &selector)
 }
 
 fn single_line(text: &str) -> String {

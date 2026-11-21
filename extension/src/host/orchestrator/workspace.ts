@@ -16,8 +16,6 @@ import type { Disposable, Event, LogPort, RustPin } from '../../core/ports';
 import { keepWorkspaceUri, workspaceRecord } from '../../record/workspace';
 import { legacyWindowInstance } from '../windowComponent';
 
-export type { RustPin } from '../../core/ports';
-
 export interface WorkspaceRoster {
 	readonly members: readonly AgentRef[];
 	readonly pins: readonly RustPin[];

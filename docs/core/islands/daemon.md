@@ -92,11 +92,11 @@ public `run()` entry point.
 | File | Responsibility |
 |---|---|
 | `api.rs` | Projects typed API v1 values around the daemon's existing records and errors. |
-| `lib.rs` | Starts and serves this home and schedules the hourly sweep. |
-| `store/` | Owns SQLite schema, migrations, table handles and cross-table transactions. |
+| `lib.rs` | Starts and serves this home, schedules the hourly sweep and owns shared saved-connection, numbering and receipt policy. |
+| `store/` | Owns SQLite schema, migrations, table handles and transactions. The daemon publishes saved connections after the store commits. |
 | `operations.rs` | Starts, stops, resumes, renames and removes runs and records their exits. |
 | `resume.rs` | Finds stopped Agents and saved sessions and routes a chosen resume target. A local listing reads this machine and the supplied folder. A named Shell listing reads managed Agents on the selected machine. |
-| `delivery.rs` | Delivers typed input, messages, initial prompts and results. Replays receipts by request ID. |
+| `delivery.rs` | Delivers typed input, messages, initial prompts and results. A send keeps its typed target and reply reference through routing and replays receipts by request ID. |
 | `presence.rs` | Recovers Guests, retires their inboxes and validates editor terminal colors. |
 | `topics.rs`, `remote_agents.rs` | Maintain subscriptions, terminal viewers and each reachable peer's roster contribution. |
 | `machine_service.rs`, `network_operations.rs` | Authorize and register machine streams, track routes and resolve requests to stable targets. |

@@ -10,11 +10,12 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::time::Instant;
 
 use facade_base::api_v1::keeper::{
-    self, HelloResult, KeeperCall, StartArgs, StartResult, StopArgs, SyncArgs, methods,
-    project_error,
+    HelloResult, KeeperCall, StartArgs, StartResult, StopArgs, SyncArgs, project_error,
 };
-use facade_base::api_v1::{EmptyResult, ErrorBody, ProcessExit, Request, Response, parse_request};
-use facade_base::jsonrpc::{self, Reason};
+use facade_base::api_v1::{
+    ApiVersion, EmptyResult, ErrorBody, ProcessExit, Request, Response, parse_request,
+};
+use facade_base::model::error::{ErrorBody as RuntimeError, Reason};
 use facade_base::process::ProcessIdentity;
 use serde::Serialize;
 use serde_json::Value;
@@ -23,6 +24,7 @@ use super::Keeper;
 use crate::cli::{Cli, exit_unknown};
 use crate::link::Link;
 use crate::log;
+use crate::runtime::{self, AdmittedRequest};
 
 /// A successful request: the `result`, the master the response carries if any, and a CLI end
 /// to report right after the response.
@@ -90,41 +92,34 @@ impl Keeper {
                 "a keeper request carries at most one descriptor; received {count} or more"
             ))
         })?;
-        match request.method.as_str() {
-            methods::HELLO if greeted => Err(ErrorBody::invalid_argument(
-                "hello was already received on this connection",
-            )),
-            methods::HELLO if attached.is_some() => Err(unexpected_terminal()),
-            methods::HELLO => self.hello(request.params),
-            methods::CALL if !greeted => Err(ErrorBody::invalid_argument("send hello first")),
-            methods::CALL => match (keeper::decode_call(request.params)?, attached) {
-                (KeeperCall::Sync(args), master) => self.sync(args, master),
-                (_, Some(_)) => Err(unexpected_terminal()),
-                (KeeperCall::Start(args), None) => self.start(args),
-                (KeeperCall::Stop(args), None) => self.stop(args),
-                (KeeperCall::Ping(_), None) => {
+        let has_terminal = attached.is_some();
+        match runtime::admit(request, greeted, has_terminal)? {
+            AdmittedRequest::Hello(api_version) => Ok(self.hello(api_version)),
+            AdmittedRequest::Call(call) => match call {
+                KeeperCall::Sync(args) => self.sync(args, attached),
+                KeeperCall::Start(args) => self.start(args),
+                KeeperCall::Stop(args) => self.stop(args),
+                KeeperCall::Ping(_) => {
                     self.supervisor.ping(Instant::now());
                     Ok(Handled::nothing())
                 }
             },
-            _ if attached.is_some() => Err(unexpected_terminal()),
-            method => Err(ErrorBody::method_not_found(format!(
+            AdmittedRequest::Unknown(_) if has_terminal => Err(runtime::unexpected_terminal()),
+            AdmittedRequest::Unknown(method) => Err(ErrorBody::method_not_found(format!(
                 "unknown method {method}; keeper protocol methods are hello and call"
             ))),
         }
     }
 
-    fn hello(&mut self, params: Value) -> Result<Handled, ErrorBody> {
-        let params = keeper::decode_hello(params)?;
-        let api_version = keeper::select_version(&params.api_versions)?;
+    fn hello(&mut self, api_version: ApiVersion) -> Handled {
         if let Some(link) = &mut self.link {
             link.set_api_version(api_version);
         }
-        Ok(Handled::result(HelloResult {
+        Handled::result(HelloResult {
             api_version,
             build: facade_base::build_id(),
             agents: self.clis.values().map(Cli::as_held).collect(),
-        }))
+        })
     }
 
     fn start(&mut self, args: StartArgs) -> Result<Handled, ErrorBody> {
@@ -192,12 +187,8 @@ impl Keeper {
     }
 }
 
-fn unexpected_terminal() -> ErrorBody {
-    ErrorBody::invalid_argument("only agent.sync requests may carry a terminal")
-}
-
 fn not_held(agent: &str) -> ErrorBody {
-    project_error(jsonrpc::ErrorBody::new(
+    project_error(RuntimeError::new(
         Reason::NotFound,
         format!("no CLI is held for {agent}"),
     ))

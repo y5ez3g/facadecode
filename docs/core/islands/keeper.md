@@ -100,8 +100,8 @@ runs as `facade keeper`.
 ## Depends on
 
 - **`facade-base`:**
-  - protocol uses `api_v1` for JSON-RPC and errors, `api_v1::keeper` for version negotiation and typed
-    operations, and `keeper` for resolved launches and supervision timeouts;
+  - protocol uses `api_v1` for JSON-RPC and errors and `api_v1::keeper` for version negotiation and typed
+    operations;
   - platform:
     - `service` (locks, peer proof, `launch`, `StartupChannel`, inherited descriptors, private
       home);
@@ -172,9 +172,10 @@ stopped, its SIGKILL deadline. The `Tie` says how the keeper learns of the CLI's
 
 ### Requests
 
-The link reads complete lines and takes ownership of their resources. The shared JSON-RPC and
-keeper decoders check the request before the platform handler runs it. The handler writes the
-response and attaches its terminal copy when the operation calls for one. When an input line exceeds
+The link reads complete lines and takes ownership of their resources. Both platform handlers use
+`runtime::admit` for hello order, API selection and operation decoding. It also checks which operations
+can carry a terminal. Each platform handler owns the native effects, writes the response and attaches
+its terminal copy when the operation calls for one. When an input line exceeds
 64 MiB including its newline, the keeper sends `capacity_exceeded` with a null ID and closes the link.
 
 - **`agent.start`:** opens the PTY (`terminal.rs`), spawns the CLI and reads its birth. A CLI
@@ -281,7 +282,8 @@ The same keeper, in `src/windows/`; the Unix modules are not built there.
 1. `src/lib.rs`: `serve`, from startup to `Keeper::run`.
 2. `src/keeper.rs`: `Keeper::turn`, the loop, then `collect_children`, `cli_ended` and
    `on_deadlines`.
-3. `src/keeper/requests.rs`: `serve_line` and `decode`, then `start`, `stop` and `sync`.
+3. `src/runtime.rs` owns admission, resolved launch arguments and supervision timeouts.
+   On Unix, `src/keeper/requests.rs` reads lines and handles start, stop and sync.
 4. `src/cli.rs`: `Cli::spawn`, `own_terminal`, `begin_stop` and `kill_group`.
 5. `src/supervisor.rs`: `Supervisor::due`, `launch`, `kill` and `ended`.
 6. `src/link.rs` and `src/wake.rs`: the connection and the `poll`.

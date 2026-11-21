@@ -62,7 +62,7 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 **The command line and Rust MCP**
 
 - `key_input` defines the public key names and batch limit. `key_problems` checks a batch and gives the current
-  spelling for a v2 alias.
+  spelling for a recognized alias.
 
 **Every program**
 - Build and version helpers include `build_id()`, `version()`, `VERSION`, `build_version(build)`,
@@ -110,11 +110,11 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   daemon's side of its socket; `server_pipe` on Windows, for the keeper.
 - `limits::raise_open_files()`, which does nothing on Windows.
 - `api_v1::keeper` supplies hello, the typed operation decoder, launch DTOs and exit notifications.
-  The existing keeper types still describe resolved launches. [Keeper reference](../../../core/protocol/KEEPER.md)
+  [Keeper reference](../../../core/protocol/KEEPER.md)
 
 **The daemon**
-- `machine` defines machine introductions, caller identity, forwarded requests and machine
-  operations and topics. `address` parses selectors and formats machine-qualified references.
+- `address::selector` parses CLI selectors and formats machine-qualified references.
+  `address::mcp` handles the MCP address spelling.
   `ssh` extracts the destination from the supplied OpenSSH login arguments and keeps the original
   arguments in their order. When the remote platform is unknown, Route and Travel identify its
   login shell over the authenticated stream. The bootstrap probes the fixed installation path,
@@ -125,18 +125,10 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   On Windows, the foreground command keeps its output capture pipes private before starting the
   process that holds the saved SSH link.
   `system::hostname` and `system::login_environment` supply the host name and login environment.
-- `daemon` holds existing runtime and prerelease-adapter types. Its shared checks and text
-  helpers include `check_message_text`, `display_name`, `typed_text`, `typed_text_with_machines`,
-  `start_result_text` and `start_result_text_at`, `is_session_id`, `location_id`, `agents_word`,
-  `plain`. The start result formatter takes the agent and prompt addresses from the caller.
-  `WindowDescription` carries optional `colors: TerminalColors` and `env`: the terminal colors
-  its agents reply to OSC 10, 11 and 12 with, and the environment whose `PATH` gives an `ide`
-  client each window's `WindowInfo.clis` and `settings_problem`. A missing color gets no reply;
-  without `env`, those window fields are omitted for an `ide` client. `CliInfo.not_installed`
-  marks a built-in CLI whose program is not found, so a client may leave it out of its list.
-  The environment stays in memory alone. `StartArgs.session` continues a CLI session as a new agent, with its own number;
-  a resume keeps the agent's ID. `HelloParams.numbers_given: NumbersGiven` lets an `ide` client
-  report the highest agent and message numbers its editor gave, so future numbers exceed them.
+- `model` groups shared runtime and stored data for agents, machines, messages, terminals and
+  errors. `model::agent` provides shared agent identity and session validation.
+  `model::message` validates message text and formats delivery receipts. The daemon keeps the
+  required projections at the API and MCP boundaries.
 - `api_v1::daemon` supplies typed operation and topic markers, request and response DTOs, and
   audience-aware decoders. The registry records forwarding eligibility. Forwarded calls carry
   exact targets where required. A forwarded Attach watch carries the holder's viewer and daemon
@@ -144,9 +136,8 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   [Daemon reference](../../../core/protocol/DAEMON.md)
 - `api_v1` supplies shared bounded line framing, `Size`, and the JSON-RPC error envelope.
   A stable reason and optional object details carry information for callers, such as the settings
-  entry behind a refusal or an endpoint's supported API versions. The existing `daemon`,
-  `machine`, `jsonrpc` and `v3` types serve in-process behavior and adapters.
-- `operations::{Operation, Topic, NoArgs, EmptyResult}`.
+  entry behind a refusal or an endpoint's supported API versions.
+- `operations::{Operation, Topic, EmptyResult}` and `api_v1::NoArgs`.
 - `programs`: `install`, `install_running`, `point_launchers_at(build, running)`, `launcher`,
   `Held` (`open`, `restore`, `facade_mcp`, `facade_launcher`), and path lookup:
   `program_of(command, env, cwd)`, `on_path(program, path, folder)`, `runnable(file)`,
@@ -160,14 +151,14 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 - `settings::{read, settings_file, shown, is_space, Settings, SourceLocation}`. The settings path
   is available before the file exists.
 - `instructions::{for_connection, for_managed, ManagedRun, Creator}`, `skill::text_v3()` and
-  `tools::V3_DEFINITIONS` describe the Orchestrator and its eight MCP tools.
+  `tools::DEFINITIONS` describe the Orchestrator and its eight MCP tools.
 
 **The `facade` program**
 - `api_v1::daemon_client::DaemonClient` is the blocking terminal client for authenticated local
   hello, typed calls and watches, and reconnect after takeover. It preserves the reader buffer
   when handing the stream over after machine authorization. The terminal can manage its own
-  reconnection through `disable_auto_reconnect`. `daemon_client` supplies environment capture
-  and shared timeout and transport helpers.
+  reconnection through `disable_auto_reconnect`. The client supplies shared timeout and
+  transport helpers. Shell captures its launch environment.
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.
@@ -193,8 +184,8 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
 
 **Rules**
 - `settings::{Settings, Member, Json, is_space}`: rules reads the CLI entries of `clis`.
-- `skill::text()`, which rules writes into a run's tools, and a few protocol types
-  (`daemon::InputMechanism`, `InputInfo`, `InputState`, `HiddenRows`, `is_session_id`).
+- `skill::text()` and the shared input types in `model::terminal`. Rules uses
+  `model::agent::is_session_id` for session identifiers.
 
 **The relay** uses nothing of base; see [relay.md](relay.md).
 
@@ -308,14 +299,13 @@ What Facade asks of the operating system. `core/crates/base/src/platform/`.
 What a model reads. `core/crates/base/src/texts/`.
 - **Owns:** the instructions Facade's MCP server responds to `initialize` with (`instructions.rs`),
   Facade's skill (`skill.rs`), and the eight tools' definitions as `tools/list` lists them
-  (`tools.v3.json`, exposed as `tools::V3_DEFINITIONS`).
+  (`tools.v3.json`, exposed as `tools::DEFINITIONS`).
 - **Keeps:** `for_connection` describes the tools before a new connection is associated with an
   actor. `for_managed` adds the run's machine, folder, creator and saved YOLO. The skill explains
-  the workflow and ends with the version that wrote it. The v2 helpers and definitions remain
-  available to the legacy callers.
+  the workflow and ends with the version that wrote it.
 - **Input:** the daemon's MCP server supplies `ManagedRun` from the agent's authenticated run.
 - **Interface:** `instructions::{for_connection, for_managed, Creator, ManagedRun}`,
-  `skill::{text_v3, DESCRIPTION, DESCRIPTION_PREFIX, REPEATED_MESSAGE}`, `tools::V3_DEFINITIONS`.
+  `skill::{text_v3, DESCRIPTION, DESCRIPTION_PREFIX, REPEATED_MESSAGE}`, `tools::DEFINITIONS`.
   The tools themselves are described in [MCP.md](../../extension/engineering/MCP.md).
 
 ## Reading the code

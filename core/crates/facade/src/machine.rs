@@ -11,17 +11,17 @@ use std::time::Duration;
 use anyhow::Context as _;
 use facade_base::api_v1::daemon::{
     ClientKind, ConnectFailedParams, ConnectedMachine, ConnectedParams, ConnectionKind,
-    MachineConnect, MachineConnectArgs, MachineTransport, MachineTransportInput, decode_hello,
-    decode_hello_result, methods, select_version,
+    MachineConnect, MachineConnectArgs, MachineConnection, MachineRemoveResult, MachineTransport,
+    MachineTransportInput, SshTransport, decode_hello, decode_hello_result, methods,
+    select_version,
 };
-use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::api_v1::daemon_client::{DaemonClient, transient_transport};
 use facade_base::api_v1::{
     ApiVersions, ErrorBody, MAX_LINE_BYTES, MachineMessage, RequestRead, Response, ResponseBody,
     decode_arguments, encode_line, read_machine_message, read_request,
 };
-use facade_base::daemon::display_name;
-use facade_base::daemon_client::transient_transport;
-use facade_base::paths::ClientSocket;
+use facade_base::model::terminal::display_name;
+use facade_base::paths::{ClientSocket, shutdown_write_if_supported};
 use facade_base::ssh::{self, BootstrapAction, RemoteLoginShell, SshMode};
 
 use crate::errors::{self, Problem, ServeFailure, about_connection, repair_command};
@@ -127,6 +127,58 @@ pub(crate) fn run(
 #[cfg(test)]
 fn machine_list_json(listed: &MachineListResult) -> serde_json::Result<serde_json::Value> {
     serde_json::to_value(listed)
+}
+
+fn saved_ssh<'a>(
+    connections: &'a [MachineConnection],
+    local_id: &str,
+    machine_id: &str,
+) -> Option<&'a SshTransport> {
+    connections
+        .iter()
+        .filter(|connection| {
+            connection.kind == ConnectionKind::Saved
+                && connection.initiator_machine_id == local_id
+                && connection.machine_id == machine_id
+        })
+        .find_map(|connection| connection.transport.as_ref())
+}
+
+fn ssh_args(transport: &SshTransport) -> &[String] {
+    if transport.ssh_args.is_empty() {
+        std::slice::from_ref(&transport.ssh_destination)
+    } else {
+        &transport.ssh_args
+    }
+}
+
+fn print_removed(removed: &MachineRemoveResult, given: &str) -> String {
+    let name = display_name(removed.name.as_deref().unwrap_or(given));
+    println_or_end!("Removed the saved connection to {name}.");
+    if let Some(via) = &removed.via {
+        println_or_end!("{name} is still reachable via {}.", display_name(via));
+    }
+    name
+}
+
+enum RevocationFailure {
+    Elevate(PathBuf),
+    Other(anyhow::Error),
+}
+
+fn revoke_key(machine_id: &str) -> Result<bool, RevocationFailure> {
+    let file = ssh::authorization_file().map_err(RevocationFailure::Other)?;
+    file.revoke_peer(machine_id).map_err(|error| {
+        let elevation = format!(
+            "writing {} requires an elevated Administrator terminal",
+            file.path().display()
+        );
+        if file.administrators() && error.to_string() == elevation {
+            RevocationFailure::Elevate(file.path().to_owned())
+        } else {
+            RevocationFailure::Other(error)
+        }
+    })
 }
 
 struct MachinePrelude {
@@ -269,10 +321,8 @@ fn copy_to_daemon(
         let result = copy(&mut to_daemon);
         let _ = input_done.send(result);
         if let Some(handshake_end) = handshake_end {
-            // A Unix socket can signal EOF without closing reads. A Windows named pipe
-            // has no half-close, so its handshake is bounded by the daemon's deadline.
-            #[cfg(unix)]
-            let _ = to_daemon.shutdown(Shutdown::Write);
+            // The daemon's handshake deadline also bounds the wait on Windows.
+            let _ = shutdown_write_if_supported(&to_daemon);
             let _ = handshake_end.recv();
         }
         let _ = to_daemon.shutdown(Shutdown::Both);

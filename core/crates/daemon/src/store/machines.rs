@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::Store;
-use crate::SavedConnection;
+use crate::{SavedConnection, SavedSsh};
 
 pub(super) fn add_tables(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
@@ -45,7 +45,7 @@ pub(super) fn migrate_routes(connection: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-fn read_saved_ssh(row: &Row<'_>) -> rusqlite::Result<crate::network::SavedSsh> {
+fn read_saved_ssh(row: &Row<'_>) -> rusqlite::Result<SavedSsh> {
     let config = read_connection(row)?;
     let args: Option<String> = row.get(3)?;
     let argv = match args {
@@ -58,11 +58,11 @@ fn read_saved_ssh(row: &Row<'_>) -> rusqlite::Result<crate::network::SavedSsh> {
         })?,
         None => vec![config.ssh_destination.clone()],
     };
-    Ok(crate::network::SavedSsh { config, argv })
+    Ok(SavedSsh { config, argv })
 }
 
 impl Store {
-    pub(crate) fn saved_ssh(&self) -> anyhow::Result<Vec<crate::network::SavedSsh>> {
+    pub(crate) fn saved_ssh(&self) -> anyhow::Result<Vec<SavedSsh>> {
         self.with(
             || "read saved SSH connections".into(),
             |connection| {
@@ -79,10 +79,10 @@ impl Store {
 
     pub(crate) fn save_verified_ssh(
         &self,
-        saved: &crate::network::SavedSsh,
+        saved: &SavedSsh,
         name: &str,
         expected_machine_id: Option<&str>,
-    ) -> anyhow::Result<(crate::network::SavedSsh, bool)> {
+    ) -> anyhow::Result<(SavedSsh, bool)> {
         let args = serde_json::to_string(&saved.argv)?;
         let config = &saved.config;
         let replace = expected_machine_id == Some(config.machine_id.as_str());
@@ -168,10 +168,7 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn delete_connection(
-        &self,
-        machine_id: &str,
-    ) -> anyhow::Result<Option<crate::network::SavedSsh>> {
+    pub(crate) fn delete_connection(&self, machine_id: &str) -> anyhow::Result<Option<SavedSsh>> {
         self.transaction(
             || format!("delete the saved connection to {machine_id}"),
             |connection| {
@@ -231,7 +228,6 @@ fn remember_machine(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::SavedSsh;
     use crate::test_folder::TestFolder;
 
     #[test]

@@ -8,9 +8,6 @@ use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use facade_base::keeper::{
-    MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET,
-};
 use facade_base::process::ProcessIdentity;
 use facade_base::service::{self, Service};
 use facade_base::unix_process::{self, Observed, ProcessObservation, WaitPacket};
@@ -20,6 +17,7 @@ use windows_sys::Win32::System::Threading::{
 
 use super::port::Port;
 use crate::log;
+use crate::runtime::{MAX_RESTART_DELAY, MIN_RESTART_DELAY, PING_TIMEOUT, RESTART_DELAY_RESET};
 
 /// The exit code of a daemon ended for its silence.
 const KILLED_CODE: u32 = 1;

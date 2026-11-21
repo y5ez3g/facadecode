@@ -39,7 +39,6 @@ Other programs and protocols keep their own words: the standard library's `spawn
 | launch command | The program, arguments and environment the Orchestrator uses to start or resume a CLI | command line (for this) |
 | launch options | The CLI arguments, model and effort a start used, `LaunchOptions`. The agent's record keeps them, and a resume uses them again | — |
 | record | An agent's record: its ID, name, CLI, folder and reach, kept in the store | — |
-| numbers given | The highest agent and message numbers an editor gave before it used core, `NumbersGiven`; core's next numbers are above them | — |
 
 The first tool call fixes the identity of a `facade-mcp` connection. A connection acts for a managed agent when it proves
 the identity of that run or matches the agent's own CLI session. Each other connection joins as a Guest.
