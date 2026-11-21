@@ -36,9 +36,18 @@ before replacing services in a home that already has agents.
 
 ### Build matching packages from source
 
-Use Node 24 and the pinned Rust toolchain on the intended host. The [packaging requirements](../extension/engineering/ARCHITECTURE.md#43-packaging-and-version-support)
-describe the native targets. Run the following from `extension/`, substituting the host target and the
-workspace VSIX filename printed by packaging. This example uses Windows x64.
+Use Node 24, the pinned Rust toolchain and the target's native C toolchain. The
+[packaging requirements](../extension/engineering/ARCHITECTURE.md#43-packaging-and-version-support)
+describe the native targets. On Linux, install `musl-tools` and run these commands from `core/` so
+the target is added to the pinned toolchain. Keep the compiler setting in the shell you use for packaging.
+
+```sh
+rustup target add "$(uname -m)-unknown-linux-musl"
+export "CC_$(uname -m)_unknown_linux_musl=musl-gcc"
+```
+
+Run the following from `extension/`, substituting the host target and the workspace VSIX filename
+printed by packaging. This example uses Windows x64.
 
 ```sh
 npm ci
