@@ -20,6 +20,7 @@ import { agentTab, facade, hasAgentTab, inspect, keepConversation, newCard, pin,
 type Action =
 	| { readonly kind: 'snapshot' | 'filter' | 'window-component' }
 	| { readonly kind: 'open-shell-agent'; readonly name: string; readonly address: string; readonly text: string }
+	| { readonly kind: 'shell-attach-view'; readonly grid?: vscode.TerminalDimensions; readonly text?: string; readonly resize?: boolean }
 	| { readonly kind: 'settings-path'; readonly file: string }
 	| { readonly kind: 'shell-pin'; readonly name: string; readonly set?: boolean }
 	| { readonly kind: 'hide-shell-agent'; readonly name: string }
@@ -54,10 +55,22 @@ export interface WindowView {
 	readonly filter?: PanelState['filter'];
 }
 
+export interface AttachView {
+	readonly capacity: vscode.TerminalDimensions;
+	readonly grid: vscode.TerminalDimensions;
+}
+
 export type WindowAnswer = { readonly result: unknown } | { readonly error: string };
 
 const control = process.env.FACADE_IT_WINDOW_CONTROL!;
 let closing: string | undefined;
+let attached: {
+	readonly terminal: vscode.Terminal;
+	readonly pty: vscode.Pseudoterminal & { readonly dimensions?: vscode.TerminalDimensions };
+	readonly watching: vscode.Disposable;
+	override?: vscode.TerminalDimensions;
+	text: string;
+} | undefined;
 
 function answer(file: string, value: WindowAnswer): void {
 	const temporary = `${file}.new`;
@@ -164,10 +177,36 @@ async function perform(action: Action): Promise<unknown> {
 				return vscode.window.terminals.find(each =>
 					'pty' in each.creationOptions && each.creationOptions.name === card.name);
 			});
+			const pty = (terminal.creationOptions as vscode.ExtensionTerminalOptions).pty as NonNullable<typeof attached>['pty'];
+			attached?.watching.dispose();
+			const output = pty.onDidWrite(text => { if (attached?.terminal === terminal) { attached.text += text; } });
+			const grid = pty.onDidOverrideDimensions?.(dimensions => {
+				if (attached?.terminal === terminal) { attached.override = dimensions; }
+			});
+			attached = {
+				terminal, pty, text: '', watching: vscode.Disposable.from(output, ...(grid ? [grid] : []))
+			};
 			terminal.sendText(action.text, true);
 			await until('the editor input on the agent screen', () =>
 				facade('screen', action.address, '--lines', '120').includes(action.text) || undefined);
 			return action.address;
+		}
+		case 'shell-attach-view': {
+			const view = attached;
+			assert.ok(view, 'Go to Agent opened a terminal');
+			const previous = view.pty.dimensions;
+			if (action.resize) {
+				await vscode.commands.executeCommand('workbench.action.toggleAuxiliaryBar');
+			}
+			return await until('the terminal capacity and shared grid', () => {
+				const capacity = view.pty.dimensions;
+				const grid = view.override ?? capacity;
+				if (!capacity || !grid) { return undefined; }
+				if (action.resize && capacity.columns === previous?.columns && capacity.rows === previous?.rows) { return undefined; }
+				if (action.grid && (grid.columns !== action.grid.columns || grid.rows !== action.grid.rows)) { return undefined; }
+				if (action.text && !view.text.includes(action.text)) { return undefined; }
+				return { capacity, grid } satisfies AttachView;
+			});
 		}
 		case 'shell-pin': {
 			const find = async () => (await state()).cards.find(card => card.name === action.name);

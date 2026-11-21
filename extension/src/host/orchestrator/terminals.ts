@@ -5,11 +5,11 @@
 import { StringDecoder } from 'node:string_decoder';
 import * as vscode from 'vscode';
 import { timeout } from '../../base/async';
-import type { AgentRef, ScreenChange, V3ScreenSnapshot, V3ScreenWatchArgs } from '../../base/coreProtocol';
+import type { AgentRef, ScreenChange, ScreenSize, V3ScreenSnapshot } from '../../base/coreProtocol';
 import type { Disposable, PairFacts, RunId } from '../../core/ports';
 import type { ScreenBinding } from '../execution/agentPty';
 import { AgentTerminals, type AgentTerminal } from '../execution/agentTerminals';
-import { encodeTerminalInput, type OrchestratorLink } from './types';
+import { encodeTerminalInput, type OrchestratorLink, type ResizeAttach } from './types';
 
 type TerminalOptions = ConstructorParameters<typeof AgentTerminals>[0];
 type Options = Pick<TerminalOptions, 'media' | 'icon' | 'log' | 'colours' | 'terminalOwner'> & { readonly viewer: string };
@@ -37,7 +37,7 @@ interface View {
 	retry?: ReturnType<typeof setTimeout>;
 	decoder: StringDecoder;
 	seq: number;
-	dimensions?: vscode.TerminalDimensions;
+	resizeAttach?: ResizeAttach;
 	ready: boolean;
 	ended?: boolean;
 	disconnected: boolean;
@@ -197,12 +197,16 @@ export class OrchestratorTerminals implements vscode.Disposable {
 	}
 
 	private watchScreen(pair: Pair, view: View): void {
-		const args: V3ScreenWatchArgs = { reference: view.target.ref, viewer: this.options.viewer, keep_scrollback: true };
 		const watch: NonNullable<View['watch']> = {};
 		view.watch = watch;
 		const current = () => pair.view === view && view.watch === watch;
-		const handle = this.link.watch<V3ScreenSnapshot, ScreenChange>('screen', args, {
-			snapshot: screen => { if (current()) { this.snapshot(pair, view, screen); } },
+		const handle = this.link.watchAttach(() => ({
+			reference: view.target.ref,
+			viewer: this.options.viewer,
+			keep_scrollback: true,
+			size: screenSize(pair.terminal.pty.dimensions)
+		}), {
+			snapshot: (screen, resize) => { if (current()) { this.snapshot(pair, view, screen, resize); } },
 			change: change => { if (current()) { this.change(pair, view, change); } },
 			disconnected: () => { if (current()) { this.suspend(pair, view); } },
 			ended: error => {
@@ -224,11 +228,10 @@ export class OrchestratorTerminals implements vscode.Disposable {
 		if (current()) { watch.handle = handle; } else { handle.dispose(); }
 	}
 
-	private snapshot(pair: Pair, view: View, snapshot: V3ScreenSnapshot): void {
+	private snapshot(pair: Pair, view: View, snapshot: V3ScreenSnapshot, resize: ResizeAttach | undefined): void {
 		if (!sameRef(view.target.ref, snapshot)) { return; }
-		view.decoder = new StringDecoder('utf8');
-		view.dimensions = { columns: snapshot.cols, rows: snapshot.rows };
-		view.draw({ screen: decode(snapshot.redraw, view.decoder), seq: ++view.seq });
+		view.resizeAttach = resize;
+		this.redraw(pair, view, snapshot.cols, snapshot.rows, snapshot.redraw);
 		view.ended = snapshot.process === 'ended';
 		if (view.ended) {
 			this.failAttach(pair, new Error(vscode.l10n.t('{0} has ended. Use Resume Agent to continue it.', view.target.address)));
@@ -256,13 +259,18 @@ export class OrchestratorTerminals implements vscode.Disposable {
 		}
 		if (!view.ready) { return; }
 		if (change.kind === 'redraw') {
-			view.decoder = new StringDecoder('utf8');
-			view.draw({ screen: decode(change.data, view.decoder), seq: ++view.seq });
+			this.redraw(pair, view, change.cols, change.rows, change.data);
 		} else if (change.kind === 'output') {
 			pair.terminal.pty.output(++view.seq, decode(change.data, view.decoder));
 		} else if (change.kind === 'exit') {
 			view.ended = true;
 		}
+	}
+
+	private redraw(pair: Pair, view: View, cols: number, rows: number, data: string): void {
+		view.decoder = new StringDecoder('utf8');
+		pair.terminal.pty.setGrid({ columns: cols, rows });
+		view.draw({ screen: decode(data, view.decoder), seq: ++view.seq });
 	}
 
 	private input(pair: Pair, data: string): void {
@@ -276,10 +284,17 @@ export class OrchestratorTerminals implements vscode.Disposable {
 	private resize(pair: Pair): void {
 		const view = pair.view;
 		if (!view?.ready || view.ended) { return; }
-		const size = pair.terminal.pty.dimensions ?? view.dimensions;
+		const pty = pair.terminal.pty;
+		const dimensions = pty.dimensions ?? (view.resizeAttach ? undefined : pty.confirmedGrid);
+		const size = screenSize(dimensions);
 		if (!size) { return; }
 		const colors = this.options.colours?.currentHex();
-		this.link.notify('agent.resize', { reference: view.target.ref, cols: size.columns, rows: size.rows, ...colors && { colors } });
+		const args = { ...size, ...colors && { colors } };
+		if (view.resizeAttach) {
+			view.resizeAttach(args);
+		} else {
+			this.link.notify('agent.resize', { reference: view.target.ref, ...args });
+		}
 	}
 
 	private suspend(pair: Pair, view: View): void {
@@ -323,6 +338,13 @@ export class OrchestratorTerminals implements vscode.Disposable {
 
 function sameRef(left: AgentRef, right: AgentRef): boolean {
 	return left.machine_id === right.machine_id && left.agent_id === right.agent_id;
+}
+
+function screenSize(dimensions: vscode.TerminalDimensions | undefined): ScreenSize | undefined {
+	if (dimensions && dimensions.columns >= 2 && dimensions.rows >= 1) {
+		return { cols: dimensions.columns, rows: dimensions.rows };
+	}
+	return undefined;
 }
 
 function decode(data: string, decoder: StringDecoder): string {

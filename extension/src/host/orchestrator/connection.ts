@@ -3,11 +3,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { timeout } from '../../base/async';
-import type { ChangedParams, HelloResult, ScreenChange, UpgradeArgs, V2AgentListResult, V3HelloParams, V3Operation, V3Topic, WatchEndedParams, WatchResult } from '../../base/coreProtocol';
+import type {
+	AttachResizeArgs, ChangedParams, HelloResult, ScreenChange, UpgradeArgs, V2AgentListResult, V3HelloParams,
+	V3Operation, V3ScreenWatchArgs, V3Topic, WatchEndedParams, WatchResult
+} from '../../base/coreProtocol';
 import { messageOf } from '../../base/errors';
 import type { Disposable, Event } from '../../core/ports';
 import { Connection, connectDaemonSocket, errorOf, startDaemon, unavailable, type DaemonOptions } from '../rust/rpc';
-import { DaemonError, type OrchestratorLink, type TerminalNotificationArgs, type WatchListener } from './types';
+import { DaemonError, type AttachListener, type OrchestratorLink, type ResizeAttach, type TerminalNotificationArgs, type WatchListener } from './types';
 
 const PROTOCOL = 3;
 const LEGACY_PROTOCOL = 2;
@@ -58,9 +61,10 @@ type Attempt =
 
 /** A watch the window holds: it is asked again after each reconnection, until its disposable is disposed. */
 interface Watching {
-	readonly topic: V3Topic;
-	readonly args: object;
-	readonly on: WatchListener<never, never>;
+	readonly request: () => { topic: V3Topic; args: object };
+	readonly on: Omit<WatchListener<never, never>, 'snapshot'> & {
+		snapshot(snapshot: never, resize?: ResizeAttach): void;
+	};
 	/** The number core gave it on the current connection. */
 	number?: number;
 	disposed: boolean;
@@ -84,6 +88,7 @@ export async function connectOrchestrator(options: DaemonOptions): Promise<Orche
 class Link implements OrchestratorLink {
 	private machine!: string;
 	private connection: Connection | undefined;
+	private supportsAttach = false;
 	/** Counts installed connections: a call refused as `upgrading` waits for a later one. */
 	private generation = 0;
 	private publishingConnection = false;
@@ -146,7 +151,20 @@ class Link implements OrchestratorLink {
 	}
 
 	watch<S, C>(topic: V3Topic, args: object, on: WatchListener<S, C>): Disposable {
-		const watching: Watching = { topic, args, on: on as Watching['on'], disposed: false };
+		return this.addWatch(() => ({ topic, args }), on as Watching['on']);
+	}
+
+	watchAttach(args: () => V3ScreenWatchArgs, on: AttachListener): Disposable {
+		return this.addWatch(() => {
+			const { size, ...screen } = args();
+			return this.supportsAttach
+				? { topic: 'attach', args: { ...screen, ...size && { size } } }
+				: { topic: 'screen', args: screen };
+		}, on);
+	}
+
+	private addWatch(request: Watching['request'], on: Watching['on']): Disposable {
+		const watching: Watching = { request, on, disposed: false };
 		this.watching.add(watching);
 		if (this.connection && !this.publishingConnection) {
 			this.startWatch(this.connection, watching);
@@ -297,12 +315,13 @@ class Link implements OrchestratorLink {
 	}
 
 	private async hello(connection: Connection, deadline: number, kind: 'ide' | 'terminal', protocol: [number, number]): Promise<unknown> {
-		const params: V3HelloParams = { protocol, build: this.options.build, kind };
+		const params: V3HelloParams = { protocol, build: this.options.build, kind, ...kind === 'ide' && { capabilities: ['attach'] } };
 		return connection.ask('hello', params, Math.min(HELLO_WAIT_MS, Math.max(0, deadline - Date.now())));
 	}
 
 	private install(connection: Connection, hello: HelloResult): void {
 		this.connection = connection;
+		this.supportsAttach = hello.topics?.includes('attach') === true && hello.ops?.includes('attach.resize') === true;
 		this.afterClosing = false;
 		this.generation++;
 		this.machine = hello.machine_id;
@@ -322,12 +341,13 @@ class Link implements OrchestratorLink {
 		if (connection !== this.connection || !connection.active) {
 			return;
 		}
-		connection.send('watch', { topic: watching.topic, args: watching.args }, outcome => {
+		const request = watching.request();
+		connection.send('watch', request, outcome => {
 			if (connection !== this.connection || !connection.active) {
 				return;
 			}
 			if (outcome.error) {
-				this.watchRefused(watching, outcome.error);
+				this.watchRefused(watching, request.topic, outcome.error);
 				return;
 			}
 			const { watch, snapshot } = outcome.result as WatchResult;
@@ -337,20 +357,26 @@ class Link implements OrchestratorLink {
 			}
 			watching.number = watch;
 			this.byNumber.set(watch, watching);
-			this.tell(() => watching.on.snapshot(snapshot as never));
+			const resize: ResizeAttach | undefined = request.topic === 'attach' ? capacity => {
+				if (connection === this.connection && this.byNumber.get(watch) === watching) {
+					const args: AttachResizeArgs = { ...capacity, watch };
+					connection.notify('call', { op: 'attach.resize' satisfies V3Operation, args });
+				}
+			} : undefined;
+			this.tell(() => watching.on.snapshot(snapshot as never, resize));
 		});
 	}
 
-	private watchRefused(watching: Watching, err: DaemonError): void {
+	private watchRefused(watching: Watching, topic: V3Topic, err: DaemonError): void {
 		if (watching.disposed || err.reason === 'upgrading') {
 			// The next connection asks again
 			return;
 		}
-		this.options.log(`Facade core refused to watch ${watching.topic}: ${err.message}`);
+		this.options.log(`Facade core refused to watch ${topic}: ${err.message}`);
 		this.watching.delete(watching);
 		if (watching.on.ended) {
 			this.tell(() => watching.on.ended?.(err));
-		} else if (watching.topic === 'screen' && err.reason === 'not_found') {
+		} else if (topic === 'screen' && err.reason === 'not_found') {
 			// The agent went while the window was disconnected: its screen's last change
 			const gone: ScreenChange = { kind: 'removed' };
 			this.tell(() => watching.on.change(gone as never));

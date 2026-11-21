@@ -1744,7 +1744,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		port.openPair(facts('run-hid'), { reveal: false, hidden: true });
 		const { pid } = await port.spawn('run-hid', plan(`process.stdout.write('size ' + process.stdout.columns + 'x' + process.stdout.rows + '\\n'); ${ECHO}`), meta('run-hid'));
 		assert.ok(pid > 0);
-		await new Promise(resolve => setTimeout(resolve, 300));
+		await until('the hidden terminal at its initial size', async () => (await port.readScreen('run-hid', 5)).text.includes('size 120x30'));
 		assert.strictEqual(terminals.length, 0, 'no tab opened');
 		assert.strictEqual(await port.reveal('run-hid', { preserveFocus: false }), true);
 		assert.strictEqual(terminals.length, 1);

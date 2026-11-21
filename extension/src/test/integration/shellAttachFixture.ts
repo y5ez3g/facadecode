@@ -3,14 +3,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { writeSync } from 'fs';
+import { existsSync, writeFileSync, writeSync } from 'fs';
 import { spawn } from 'node-pty';
 import { until } from './editors';
 
 /** Prove the isolated Shell Attach took the editor's input and detached with Ctrl+]. */
 async function attach(): Promise<void> {
-	const [facade, address, marker] = process.argv.slice(2);
-	const terminal = spawn(facade, ['attach', address], { cwd: process.cwd(), env: process.env, cols: 90, rows: 24, name: 'xterm-256color' });
+	const [facade, address, marker, control, cols = '90', rows = '24', shellText] = process.argv.slice(2);
+	const terminal = spawn(facade, ['attach', address], {
+		cwd: process.cwd(), env: process.env, cols: Number(cols), rows: Number(rows), name: 'xterm-256color'
+	});
 	let output = '';
 	let exitCode: number | undefined;
 	const data = terminal.onData(chunk => { output += chunk; });
@@ -20,6 +22,18 @@ async function attach(): Promise<void> {
 			assert.strictEqual(exitCode, undefined, output);
 			return output.includes(marker) || undefined;
 		});
+		if (control) {
+			terminal.write(`${shellText}\r`);
+			await until('Shell Attach to show its input', () => {
+				assert.strictEqual(exitCode, undefined, output);
+				return output.includes(shellText) || undefined;
+			});
+			writeFileSync(`${control}.ready`, '1');
+			await until('the viewer check to finish', () => {
+				assert.strictEqual(exitCode, undefined, output);
+				return existsSync(`${control}.detach`) || undefined;
+			}, 60_000);
+		}
 		terminal.write('\x1d');
 		assert.strictEqual(await until('Ctrl+] to detach from the terminal', () => exitCode), 0, output);
 	} finally {

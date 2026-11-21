@@ -508,11 +508,15 @@ in use. The Panel shows the CLI's TITLE and the same state as the list; details 
 
 ### 6.3 Attach and card actions
 
-**Attach shows the running agent's terminal; closing a tab detaches that view.**
+**Attach shows the running agent's shared terminal grid. Closing a tab detaches that view.**
 
-Other views and the process keep running. Input entered during a disconnect is dropped, and the reconnected view
-reports the number of input bytes dropped after displaying the current screen. Use the last Attach or resize for terminal size and
-VS Code for terminal colors. Hide removes the card from this workspace and clears its Pin. Stop ends the agent's run
+Each open view reports the rows and columns its pane can fit. The Orchestrator takes the smallest capacity in each
+dimension across live Attach viewers that have reported it. Each view draws at the confirmed grid size. Closing a tab
+recalculates the grid for the remaining views and leaves the agent running. While a legacy screen watch is active,
+the last Attach or resize controls the terminal size. Use VS Code for terminal colors.
+
+Input entered during a disconnect is dropped. The reconnected view reports the number of input bytes dropped after
+displaying the current screen. Hide removes the card from this workspace and clears its Pin. Stop ends the agent's run
 and leaves its card and Pin. Remove stops the agent if it is running and removes its record. On a successful
 Remove, clear this workspace's card and Pin and close its terminal view. Rename keeps the address. The card menu
 offers Open Terminal, Hide, Stop, Remove, Pin or Unpin, and Rename. Copy Agent Reference, Filter,
@@ -582,6 +586,6 @@ to read previous workspace visibility.
 | 3.1–3.4 | Work green, errors red, no dot otherwise, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
-| 6.1–6.8 | Shared workspace list and upgrade; Orchestrator agent list and Resume; Attach and card actions; Pin recovery; SSH locations; settings and transition cleanup |
+| 6.1–6.8 | Shared workspace list and upgrade, Orchestrator agent list and Resume, shared Attach grid and card actions, Pin recovery, SSH locations, settings and transition cleanup |
 
 [Verification](engineering/VERIFICATION.md) owns actual evidence.

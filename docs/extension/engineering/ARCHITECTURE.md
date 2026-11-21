@@ -824,9 +824,16 @@ records without window membership.
 
 **An open terminal is an Attach to the agent's terminal session.**
 
-Use RULES-6.3 for input on reconnect, size and colors. Terminal creation and display remain workspace presentation.
-The Window Component can clean up stale terminal tabs under RULES-6.8. A missing component leaves the
-Orchestrator-backed editor usable and skips that cleanup.
+Use RULES-6.3 for input on reconnect, size and colors. Each view chooses `watch attach` when the current connection's
+hello advertises both the `attach` topic and `attach.resize`. The initial watch includes any known pane capacity.
+Later capacity and color reports use `attach.resize` with the watch ID issued on that connection. Reconnecting
+checks the new hello and takes a fresh snapshot. An older daemon uses `watch screen` and `agent.resize`. The connected
+Orchestrator handles fallback on routes to older daemons.
+
+The editor reads pane capacity from `Pseudoterminal.setDimensions`. Before drawing a snapshot or full redraw, it
+sets the renderer grid to the frame's dimensions through `Pseudoterminal.onDidOverrideDimensions`. Terminal
+creation and display remain workspace presentation. The Window Component can clean up stale terminal tabs under
+RULES-6.8. A missing component leaves the Orchestrator-backed editor usable and skips that cleanup.
 
 ### 6.4 Distribution
 

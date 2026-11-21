@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { execFileSync, type ChildProcess } from 'child_process';
+import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isDeepStrictEqual } from 'util';
@@ -12,7 +12,7 @@ import { isProcessRunning } from '../../base/system';
 import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
 import { callInCore, coreCall, detachedStartReference, endEditors, normalizeDriveLetter, until } from './editors';
-import type { SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
+import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
 /** The workspace driver and its helpers beside either copy of the extension. */
@@ -244,6 +244,57 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	assert.deepStrictEqual(starts().slice(priorStarts), [restored.pid], 'an explicit removal cannot reopen the saved session');
 	await afterRemove.close();
 	console.log('  ✔ Explicit removal cleared the saved member and Pin on reopen');
+}
+
+/** Exercise simultaneous product viewers on the same native fake CLI. */
+export async function sharedAttachJourney(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv): Promise<void> {
+	const run = (...args: string[]) => execFileSync(facade, args, { cwd: folder, env, encoding: 'utf8', timeout: 20_000 });
+	const name = 'shell-attach';
+	const address = detachedStartReference(run('start', '-d', '--name', name, 'qa-fake'), name);
+	const inspect = async () => (await coreCall(env.FACADE_HOME!, 'agent.inspect', { agent: address })).agent;
+	const before = await inspect();
+	assert.ok(before.pid && before.process === 'running', JSON.stringify(before));
+	const window = await open(folder, 'attach');
+	const marker = 'typed in the editor';
+	await window.act({ kind: 'open-shell-agent', name, address, text: marker });
+	await sharedShellAttach(window, folder, facade, env, address, marker);
+	await window.close();
+	const after = await inspect();
+	assert.strictEqual(after.pid, before.pid);
+	assert.strictEqual(after.process, 'running');
+	run('stop', address);
+}
+
+/** RULES-6.3. Real Shell and VS Code views apply a shared grid and keep their own capacity. */
+async function sharedShellAttach(window: DrivenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv, address: string, editorText: string): Promise<void> {
+	const initial = await window.act<AttachView>({ kind: 'shell-attach-view' });
+	assert.deepStrictEqual(initial.grid, initial.capacity);
+	const small = { columns: Math.floor(initial.capacity.columns / 2), rows: Math.floor(initial.capacity.rows / 2) };
+	assert.ok(small.columns >= 10 && small.rows >= 6, JSON.stringify(initial));
+	const control = `${env.FACADE_IT_RECORD}.attach`;
+	const shellText = 'typed in the Shell';
+	const shell = new Promise<Error | undefined>(resolve => {
+		execFile(process.execPath, [
+			path.join(__dirname, 'shellAttachFixture.js'), facade, address, editorText,
+			control, String(small.columns), String(small.rows), shellText
+		], { cwd: folder, env, timeout: 120_000 }, (error, _out, stderr) =>
+			resolve(error ? new Error(`${error.message}\n${stderr}`) : undefined));
+	});
+	let resized: AttachView;
+	try {
+		await until('the smaller Shell Attach to echo its input', () => fs.existsSync(`${control}.ready`) || undefined);
+		const shared = await window.act<AttachView>({ kind: 'shell-attach-view', grid: small, text: shellText });
+		assert.deepStrictEqual(shared.capacity, initial.capacity);
+		resized = await window.act<AttachView>({ kind: 'shell-attach-view', grid: small, resize: true });
+		assert.ok(resized.capacity.columns > small.columns && resized.capacity.rows > small.rows, JSON.stringify(resized));
+	} finally {
+		fs.writeFileSync(`${control}.detach`, '1');
+		const failure = await shell;
+		if (failure) { throw failure; }
+	}
+	const grown = await window.act<AttachView>({ kind: 'shell-attach-view', grid: resized.capacity });
+	assert.deepStrictEqual(grown.grid, grown.capacity);
+	console.log('  ✔ Shell and VS Code shared a grid, echoed live input and grew after detach');
 }
 
 interface WindowJourney {

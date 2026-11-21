@@ -67,7 +67,7 @@ async function refusedUpgrade(refusal: ErrorBody, listingFails = false): Promise
 			return true;
 		});
 		assert.deepStrictEqual(requests.map(({ method, params }) => [method, params]), [
-			['hello', { protocol: [3, 3], kind: 'ide', build }],
+			['hello', { protocol: [3, 3], kind: 'ide', build, capabilities: ['attach'] }],
 			['hello', { protocol: [2, 3], kind: 'terminal', build }],
 			['call', { op: 'daemon.upgrade', args: { program, build, daemon_protocol: [2, 3], keeper_protocol: [1, 1] } }],
 			...(needsList ? [['call', { op: 'agent.list', args: { machine: selector } }]] : []),
