@@ -39,19 +39,47 @@ impl Screen {
     /// `include_scrollback` up to [`REDRAW_SCROLLBACK_ROWS`] rows of the agent's scrollback come
     /// before the screen.
     pub fn redraw(&self, keep_scrollback: bool, include_scrollback: bool) -> Vec<u8> {
-        let replayed = match include_scrollback {
-            true => REDRAW_SCROLLBACK_ROWS,
-            false => 0,
-        };
-        Redraw::build(self, keep_scrollback, replayed)
+        Redraw::build(
+            self,
+            keep_scrollback,
+            replayed_scrollback(include_scrollback),
+            Layout::SameSize,
+        )
+    }
+
+    /// Draws the grid in the top left of a terminal with at least as many rows and columns.
+    /// The outer margins are cleared and scrollback follows the same options as [`Self::redraw`].
+    /// Feed later output to the canonical screen and draw from it again to keep its wrapping
+    /// and scrolling geometry.
+    pub fn redraw_in_viewport(&self, keep_scrollback: bool, include_scrollback: bool) -> Vec<u8> {
+        Redraw::build(
+            self,
+            keep_scrollback,
+            replayed_scrollback(include_scrollback),
+            Layout::Viewport,
+        )
     }
 
     /// A redraw with the whole scrollback, for a checkpoint. Taken at a clean point
     /// ([`Screen::at_clean_point`]), it rebuilds the rows, cursor, pen, charsets and modes on an
     /// empty screen of the same size and scrollback.
     pub fn redraw_with_all_scrollback(&self) -> Vec<u8> {
-        Redraw::build(self, false, usize::MAX)
+        Redraw::build(self, false, usize::MAX, Layout::SameSize)
     }
+}
+
+fn replayed_scrollback(include_scrollback: bool) -> usize {
+    if include_scrollback {
+        REDRAW_SCROLLBACK_ROWS
+    } else {
+        0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    SameSize,
+    Viewport,
 }
 
 /// A redraw being written.
@@ -61,7 +89,7 @@ struct Redraw<'a> {
 }
 
 impl Redraw<'_> {
-    fn build(screen: &Screen, keep_scrollback: bool, replayed: usize) -> Vec<u8> {
+    fn build(screen: &Screen, keep_scrollback: bool, replayed: usize, layout: Layout) -> Vec<u8> {
         let grid = screen.terminal.grid();
         let capacity = 2 * grid.columns() * grid.screen_lines();
         let mut redraw = Redraw {
@@ -71,10 +99,13 @@ impl Redraw<'_> {
         redraw.start(keep_scrollback);
         let mut rows = screen.all_rows();
         rows.keep_newest_scrollback(replayed);
-        write_rows(&mut redraw.out, &rows);
+        match layout {
+            Layout::SameSize => write_rows(&mut redraw.out, &rows),
+            Layout::Viewport => write_viewport_rows(&mut redraw.out, &rows),
+        }
         drop(rows);
         redraw.saved_cursor();
-        redraw.cursor();
+        redraw.cursor(layout);
         redraw.modes();
         redraw.out
     }
@@ -109,11 +140,14 @@ impl Redraw<'_> {
     }
 
     /// The scrolling region and origin mode, then the cursor, relative to the region when origin
-    /// mode is on. A pending wrap comes back by writing the margin's cell again.
-    fn cursor(&mut self) {
+    /// mode is on. A same-size redraw restores a pending wrap by writing the margin's cell again.
+    fn cursor(&mut self, layout: Layout) {
         let screen = self.screen;
         let grid = screen.terminal.grid();
-        let region = screen.modes.scroll_region;
+        let region = screen.modes.scroll_region.or_else(|| {
+            let rows = grid.screen_lines();
+            (layout == Layout::Viewport && rows > 1).then_some((1, rows as u16))
+        });
         if let Some((top, bottom)) = region {
             write!(self.out, "\x1b[{top};{bottom}r").unwrap();
         }
@@ -128,7 +162,7 @@ impl Redraw<'_> {
             1
         };
         let line = cursor.point.line.0.max(0) + 2 - top;
-        if !cursor.input_needs_wrap {
+        if layout == Layout::Viewport || !cursor.input_needs_wrap {
             write!(self.out, "\x1b[{line};{}H", cursor.point.column.0 + 1).unwrap();
             return;
         }
@@ -200,6 +234,24 @@ fn write_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
             out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\\r\n");
         }
         wrapped_into = wraps;
+    }
+    out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\");
+}
+
+/// Place each visible row explicitly so the larger terminal's line endings never decide where
+/// the grid wraps. Write scrollback rows at the top and scroll them out from the physical bottom.
+fn write_viewport_rows(out: &mut Vec<u8>, rows: &AllRows<'_>) {
+    let cols = rows.grid.columns();
+    let scrollback = rows.scrollback();
+    for y in 0..scrollback {
+        out.extend_from_slice(b"\x1b[H");
+        rows.with_row(y, |row| write_row(out, row, cols, false));
+        // CUP clamps the row to the physical bottom, where Index scrolls the full screen.
+        out.extend_from_slice(b"\x1b[0m\x1b[65535;1H\x1bD");
+    }
+    for y in scrollback..rows.len() {
+        write!(out, "\x1b[{};1H", y - scrollback + 1).unwrap();
+        rows.with_row(y, |row| write_row(out, row, cols, false));
     }
     out.extend_from_slice(b"\x1b[0m\x1b]8;;\x1b\\");
 }

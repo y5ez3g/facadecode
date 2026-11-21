@@ -85,6 +85,11 @@ It owns no files, processes, sockets, threads or locks shared with anyone.
 which replays at most `REDRAW_SCROLLBACK_ROWS` (1,000) scrollback rows. A redraw waits while
 `synchronized_update_deadline()` is set.
 
+**Shell, Attach** (`facade/src/attach.rs`): `redraw_in_viewport(keep_scrollback, include_scrollback)`
+places the grid at the top left of a console with at least as many rows and columns. It shares
+`redraw`'s scrollback options. Shell feeds subsequent output to its screen of the shared size and
+draws the new frame from that screen while the console is larger.
+
 **Daemon, state and readiness** (`daemon/src/agent/state.rs`, `readiness.rs`):
 
 - `StatusEvent { Asked, Report(StatusReport), Reset, ShellPrompt }`,
@@ -185,6 +190,10 @@ no terminal moves into its scrollback, and clears tab stops), the tab stops, the
 styles and links (a wrapped row is written to the margin so the viewer wraps too), the saved
 cursor, the scrolling region and cursor (writing the margin cell again to restore a pending wrap),
 then modes, keyboard flags, modifyOtherKeys, charsets and pen.
+
+For a viewport redraw, each row starts at an explicit position and the cleared space to the right
+and below stays blank. Scrollback replays one canonical row per console row. The redraw puts the
+cursor at its grid position and applies the screen's scrolling region within the shared height.
 
 ### The store
 
