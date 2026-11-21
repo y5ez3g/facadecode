@@ -65,9 +65,12 @@ fn keeper_v1_handshake_and_native_terminal_ownership() {
     let output = driver.output().unwrap();
     assert!(
         output.status.success(),
-        "{}\n{}",
+        "keeper fixture exited {}\n{}\n{}\nkeeper stderr:\n{}\nkeeper log:\n{}",
+        output.status,
         stdout(&output),
-        stderr(&output)
+        stderr(&output),
+        std::fs::read_to_string(home.folder().join("keeper-stderr.log")).unwrap_or_default(),
+        home.keeper_log()
     );
     assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
     print!("{}", stdout(&output));
@@ -98,13 +101,25 @@ fn keeper_v1_native_fixture() {
     assert_eq!(daemon.0, std::process::id() as i32);
     assert_eq!(daemon.1, process_identity(daemon.0).birth);
 
+    let started = Instant::now();
+    let stage = |name| {
+        eprintln!(
+            "native keeper fixture after {:?}: {name}",
+            started.elapsed()
+        )
+    };
     let start_keeper = || {
+        let keeper_stderr = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.folder().join("keeper-stderr.log"))
+            .unwrap();
         let keeper = home
             .command(&installed)
             .arg("keeper")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(keeper_stderr)
             .spawn()
             .unwrap();
         assert!(
@@ -118,8 +133,10 @@ fn keeper_v1_native_fixture() {
         );
         keeper
     };
+    stage("starting the first keeper");
     let mut keeper = start_keeper();
     let before = home.lock_record("keeper").unwrap();
+    stage("checking first keeper hello");
     let mut wire = KeeperTestClient::open(&home);
     let (early, resource) = wire.call("daemon.ping", json!({}), None);
     assert_eq!(error_reason(&early), "invalid_argument", "{early}");
@@ -176,9 +193,15 @@ fn keeper_v1_native_fixture() {
             resource.expect("start carries a native terminal copy"),
         )
     };
+    stage("starting the two CLIs");
     let (agent, sync, terminal) = start(&mut wire, "a1");
+    #[cfg(unix)]
+    let running_output = drain_unix_master(&terminal);
     let (_, exited_sync, exited_terminal) = start(&mut wire, "a2");
+    #[cfg(unix)]
+    let exiting_output = drain_unix_master(&exited_terminal);
 
+    stage("queueing the ordinary ping and native sync");
     // Queue an ordinary request before a native resource request without reading a reply.
     #[cfg(unix)]
     pause_process(keeper.id() as i32);
@@ -190,6 +213,7 @@ fn keeper_v1_native_fixture() {
     );
     #[cfg(unix)]
     resume_process(keeper.id() as i32);
+    stage("reading the ping and native sync replies");
     for id in [ping, extra] {
         let (reply, resource) = wire.receive();
         assert_eq!(reply["id"], id, "{reply}");
@@ -204,6 +228,7 @@ fn keeper_v1_native_fixture() {
     let (mismatch, resource) = wire.call("agent.sync", wrong_birth, Some(&terminal));
     assert_eq!(error_reason(&mismatch), "invalid_argument", "{mismatch}");
     assert!(resource.is_none() && alive(&agent));
+    stage("stopping the second CLI and waiting for changed");
     let (stop, resource) = wire.call("agent.stop", json!({ "agent_id": "a2" }), None);
     assert_eq!(stop["result"], json!({}), "{stop}");
     assert!(resource.is_none());
@@ -219,14 +244,17 @@ fn keeper_v1_native_fixture() {
     keeper.kill().unwrap();
     keeper.wait().unwrap();
     drop(wire);
+    stage("starting the replacement keeper");
     let mut keeper = start_keeper();
     let after = home.lock_record("keeper").unwrap();
     assert_ne!(after.0, before.0);
     assert_ne!(after.1, before.1);
+    stage("checking the replacement keeper hello");
     let mut wire = KeeperTestClient::open(&home);
     let (hello, resource) = wire.request("hello", json!({ "api_versions": [1] }), None);
     assert_eq!(hello["result"]["agents"], json!([]), "{hello}");
     assert!(resource.is_none());
+    stage("syncing the running and exited CLIs after replacement");
     let (missing, resource) = wire.call("agent.sync", sync.clone(), None);
     assert_eq!(error_reason(&missing), "not_found", "{missing}");
     assert!(resource.is_none());
@@ -244,6 +272,7 @@ fn keeper_v1_native_fixture() {
         changed["params"]["exit"]["at"].is_string() && resource.is_none(),
         "{changed}"
     );
+    stage("stopping the adopted CLI and waiting for changed");
     let (stop, resource) = wire.call("agent.stop", json!({ "agent_id": "a1" }), None);
     assert_eq!(stop["result"], json!({}), "{stop}");
     assert!(resource.is_none());
@@ -254,6 +283,26 @@ fn keeper_v1_native_fixture() {
     println!("proved daemon {daemon:?}, keeper {before:?} -> {after:?}, adopted CLI {agent:?}");
     keeper.kill().unwrap();
     keeper.wait().unwrap();
+    #[cfg(unix)]
+    for output in [running_output, exiting_output] {
+        output.join().unwrap().unwrap();
+    }
+}
+
+/// Drain the CLI's output as the real daemon does, while retaining the master for sync.
+/// On Darwin unread output can keep the CLI in kernel exit even after it has stopped.
+#[cfg(unix)]
+fn drain_unix_master(
+    master: &facade_base::terminal::PtyMaster,
+) -> std::thread::JoinHandle<std::io::Result<()>> {
+    let descriptor = std::os::fd::OwnedFd::from(master.try_clone().unwrap());
+    std::thread::spawn(move || {
+        let mut reader = std::fs::File::from(descriptor);
+        match std::io::copy(&mut reader, &mut std::io::sink()) {
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(()),
+            copied => copied.map(|_| ()),
+        }
+    })
 }
 
 /// A second daemon loses the daemon lock and exits without touching the running daemon's socket,

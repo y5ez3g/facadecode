@@ -272,6 +272,12 @@ fn the_person_s_key_during_a_probe_stops_it_before_its_backspace() {
     let file = keys_file(&home, "muse");
     let id = start(&home, "muse", &[("FAKECLI_DRAFT_AT_START", DRAFT)], DRAFT);
     let mut wire = connect(&home);
+    // Resolve the exact Agent before the probe gives us a short window to type.
+    let inspected = wire.call_ok("agent.inspect", json!({ "target": id }));
+    let key = json!({
+        "target": inspected["agent"]["reference"],
+        "input": { "kind": "raw", "raw": facade_base::base64::encode(b"x") }
+    });
     let mut sending = home
         .command(&test_binaries().facade)
         .args(["send", "muse", "a message"])
@@ -285,10 +291,16 @@ fn the_person_s_key_during_a_probe_stops_it_before_its_backspace() {
         "the probe's space: {:?}",
         pressed(&file)
     );
-    type_raw(&mut wire, &id, "x");
+    let typed = wire.call("agent.type", key);
+    assert!(typed["result"].is_object(), "{typed}");
     let status = sending.wait().unwrap();
     assert!(!status.success(), "the draft holds the message");
     assert_eq!(pressed(&file), b" x", "no Backspace after the person's key");
+    let log = home.daemon_log();
+    assert!(
+        log.contains("the person typed after its space"),
+        "the person must type while the probe is active: {log}"
+    );
     assert!(
         home.screen("muse").contains(&format!("❯  x{DRAFT}")),
         "{}",
