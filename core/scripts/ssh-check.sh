@@ -6,8 +6,9 @@
 #   4. once both are stopped, the daemon and the keeper exit by themselves.
 # Usage: scripts/ssh-check.sh [<ssh destination>]   (localhost by default)
 # Run it on a Linux machine whose sshd lets this user in by key, without a prompt. The local side needs no terminal:
-# `ssh -tt` gives each login one. It builds the programs with debug assertions, which have the test CLI's rule, and
-# uses a new Facade home in a temporary folder. Prints one line for each step and exits 1 if one fails; the temporary
+# `ssh -tt` gives each login one. It builds the programs with debug assertions, which have the test CLI's rule.
+# An isolated SSH lab can set FACADE_SSH_CHECK_BIN to the absolute path of these prebuilt programs.
+# It uses a new Facade home in a temporary folder. Prints one line for each step and exits 1 if one fails; the temporary
 # folder, with each login's output, then stays for a look.
 set -u
 # A login that ends early makes a write to its keys fail, not end this script.
@@ -15,12 +16,19 @@ trap '' PIPE
 dest=${1:-localhost}
 core=$(cd "$(dirname "$0")/.." && pwd -P) || exit 2
 unset FACADE_AGENT FACADE_CODE_SESSION_FILE FACADE_HOME
-# rustup puts cargo here; a non-interactive shell may not have it on its PATH.
-[ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"
-cd "$core" || exit 2
-cargo build --quiet -p facade -p facade-relay -p facade-scenarios \
-	--bin facade --bin facade-mcp --bin facade-fakecli || exit 2
-bin=${CARGO_TARGET_DIR:-$core/target}/debug
+if [ -n "${FACADE_SSH_CHECK_BIN:-}" ]; then
+	case "$FACADE_SSH_CHECK_BIN" in /*) bin=$FACADE_SSH_CHECK_BIN ;; *) exit 2 ;; esac
+	for program in facade facade-mcp facade-fakecli; do
+		[ -x "$bin/$program" ] || { echo "no test program $bin/$program" >&2; exit 2; }
+	done
+else
+	# rustup puts cargo here; a non-interactive shell may not have it on its PATH.
+	[ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"
+	cd "$core" || exit 2
+	cargo build --quiet -p facade -p facade-relay -p facade-scenarios \
+		--bin facade --bin facade-mcp --bin facade-fakecli || exit 2
+	bin=${CARGO_TARGET_DIR:-$core/target}/debug
+fi
 if ! out=$(ssh -o BatchMode=yes "$dest" true 2>&1); then
 	echo "cannot log in to $dest by key without a prompt: $out" >&2
 	exit 2
@@ -131,19 +139,19 @@ else
 	login_ends
 fi
 
-# 4. Stop both; the daemon exits 5 seconds after its last agent and client, and the keeper with it.
+# 4. Stop both; the daemon exits 30 seconds after its last agent and client, and the keeper with it.
 ssh -o BatchMode=yes "$dest" "$login facade stop one && facade stop two" > "$tmp/stop.out" 2>&1 ||
 	fail "4 stopping one and two failed: see $tmp/stop.out"
 i=0
-while [ "$i" -lt 50 ]; do
+while [ "$i" -lt 225 ]; do
 	[ ! -e "$socket" ] && "$core/scripts/leftovers.sh" "$tmp" > "$tmp/left.out" 2>&1 && break
 	sleep 0.2
 	i=$((i + 1))
 done
 if [ ! -e "$socket" ] && "$core/scripts/leftovers.sh" "$tmp" > "$tmp/left.out" 2>&1; then
-	ok "4 after the stops, the daemon and the keeper exited within 10 seconds"
+	ok "4 after the stops, the daemon and the keeper exited within 45 seconds"
 else
-	fail "4 the daemon or the keeper still runs 10 seconds after the stops: see $tmp/left.out"
+	fail "4 the daemon or the keeper still runs 45 seconds after the stops: see $tmp/left.out"
 fi
 
 if [ "$failed" -eq 0 ]; then
