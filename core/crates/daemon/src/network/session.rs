@@ -11,19 +11,23 @@ use std::sync::{Arc, Mutex};
 use std::task::{Poll, ready};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{CancelParams, ChangedParams, UnwatchParams, WatchEndedParams, methods};
-use facade_base::jsonrpc::{
-    ErrorBody, MAX_LINE_BYTES, Notification, Reason, Response, decode_arguments,
+use facade_base::api_v1::daemon::{
+    AttachBinding, Caller, CancelParams, ChangedParams, ForwardParams, ForwardRequest,
+    ForwardWatchResult, InternalAttachResize, InternalAttachResizeArgs, MachineSleepingParams,
+    UnwatchParams, WatchEndedParams, methods,
+};
+use facade_base::api_v1::{
+    CallParams, EmptyResult, ErrorBody, MAX_LINE_BYTES, MachineMessage, MalformedRequest,
+    Notification, Operation, Response, ResponseBody, decode_arguments,
 };
 use facade_base::machine::{ExecutionOutcome, MachineIdentity};
-use facade_base::v3::{self, AttachBinding, ForwardWatchResult, MachineState};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use super::activity::{Activity, SessionActivity};
-use super::wire::{self, Forward, Frame, Reader};
+use super::wire::{self, Reader};
 use super::{BeginSessionWork, RequestFailure, SessionWork, TargetReply};
 
 type Change = Result<Value, ErrorBody>;
@@ -49,16 +53,17 @@ pub(super) trait SessionHandler: Clone + Send + Sync + 'static {
 
     fn receive(
         &self,
-        forward: Forward,
+        forward: ForwardParams,
         deadline: Deadline,
         cancelled: watch::Receiver<bool>,
+        resize_route: Option<&WatchRoute>,
     ) -> impl Future<Output = Result<Delivery, ErrorBody>> + Send;
 }
 
 pub(crate) struct Subscription {
     pub(crate) snapshot: Value,
     pub(crate) received_at: SystemTime,
-    pub(crate) attach: Option<AttachBinding>,
+    pub(crate) view: Option<AttachBinding>,
     changes: mpsc::UnboundedReceiver<WatchUpdate>,
     _request: Pending,
 }
@@ -74,12 +79,7 @@ impl Subscription {
     }
 
     pub(crate) fn route(&self) -> WatchRoute {
-        WatchRoute {
-            peer: self._request.peer.clone(),
-            request: self._request.id,
-            machine: self._request.machine.clone(),
-            route: self._request.route.clone(),
-        }
+        self._request.watch_route()
     }
 }
 
@@ -93,38 +93,54 @@ pub(crate) struct WatchRoute {
 }
 
 impl WatchRoute {
-    pub(crate) async fn call(
+    pub(crate) async fn resize(
         &self,
-        caller: facade_base::v3::Caller,
-        method: &str,
-        params: Value,
+        caller: &Caller,
+        args: InternalAttachResizeArgs,
         timeout: Duration,
-    ) -> Result<Value, ErrorBody> {
-        if !matches!(
-            self.peer.state.lock().unwrap().outgoing.get(&self.request),
-            Some(Outgoing::Watching {
-                activity: Some(_),
-                ..
-            })
-        ) {
-            return Err(ErrorBody::new(
-                Reason::NotFound,
-                "the remote terminal watch ended",
-            ));
-        }
-        let mut forward = Forward::from_origin(caller, method.to_owned(), params, None);
-        forward.route = self.route.clone();
+    ) -> Result<(), ErrorBody> {
+        let forward = ForwardParams {
+            route: self.route.clone(),
+            caller: caller.clone(),
+            request: ForwardRequest::Call(CallParams {
+                op: InternalAttachResize::NAME.to_owned(),
+                args: json!(args),
+            }),
+            time_left_ms: None,
+            from_name: None,
+            start_result: None,
+        };
         let deadline = deadline_after(Some(timeout));
-        match self
-            .peer
-            .request(forward, deadline, self.machine.clone())?
-            .answer(deadline)
-            .await?
-        {
-            Reply::Call { result, .. } => result,
+        let Delivery::Relayed(_, reply) = self.relay_resize(forward, deadline).await? else {
+            unreachable!("resize on a remote route");
+        };
+        match reply {
+            Reply::Call { result, .. } => decode_arguments::<EmptyResult>(result?).map(|_| ()),
             Reply::Watch { .. } => Err(ErrorBody::invalid_argument("Expected a resize response.")),
         }
     }
+
+    pub(super) async fn relay_resize(
+        &self,
+        forward: ForwardParams,
+        deadline: Deadline,
+    ) -> Result<Delivery, ErrorBody> {
+        if forward.route != self.route {
+            return Err(view_ended());
+        }
+        let mut pending = self.peer.request_on_watch(
+            forward,
+            deadline,
+            self.machine.clone(),
+            Some(self.request),
+        )?;
+        let response = pending.answer(deadline).await?;
+        Ok(Delivery::Relayed(pending, response))
+    }
+}
+
+fn view_ended() -> ErrorBody {
+    wire::error("not_found", "The remote terminal watch ended.")
 }
 
 pub(super) enum Reply {
@@ -136,7 +152,7 @@ pub(super) enum Reply {
         snapshot: Value,
         changes: mpsc::UnboundedReceiver<WatchUpdate>,
         received_at: SystemTime,
-        attach: Option<AttachBinding>,
+        view: Option<AttachBinding>,
     },
 }
 
@@ -149,11 +165,29 @@ enum Changes {
     Local(mpsc::Receiver<Change>),
     Relayed {
         changes: mpsc::UnboundedReceiver<WatchUpdate>,
-        _pending: Pending,
+        pending: Pending,
     },
 }
 
+struct WatchSource {
+    caller: Caller,
+    route: Vec<String>,
+}
+
+struct WatchStream {
+    snapshot: Value,
+    changes: Changes,
+    view: Option<AttachBinding>,
+}
+
 impl Changes {
+    fn downstream(&self) -> Option<WatchRoute> {
+        match self {
+            Self::Local(_) => None,
+            Self::Relayed { pending, .. } => Some(pending.watch_route()),
+        }
+    }
+
     async fn next(&mut self) -> Option<Change> {
         match self {
             Self::Local(changes) => changes.recv().await,
@@ -196,17 +230,26 @@ impl Pending {
         }
     }
 
+    fn watch_route(&self) -> WatchRoute {
+        WatchRoute {
+            peer: self.peer.clone(),
+            request: self.id,
+            machine: self.machine.clone(),
+            route: self.route.clone(),
+        }
+    }
+
     pub(super) fn watch(
         self,
         snapshot: Value,
         changes: mpsc::UnboundedReceiver<WatchUpdate>,
         received_at: SystemTime,
-        attach: Option<AttachBinding>,
+        view: Option<AttachBinding>,
     ) -> Subscription {
         Subscription {
             snapshot,
             received_at,
-            attach,
+            view,
             changes,
             _request: self,
         }
@@ -249,7 +292,6 @@ pub(super) struct Peer {
     state: Mutex<State>,
     outbox: mpsc::UnboundedSender<Output>,
     stopped: watch::Sender<bool>,
-    capabilities: Vec<String>,
     activity: Arc<Activity>,
     begin_work: Option<Arc<BeginSessionWork>>,
 }
@@ -259,7 +301,7 @@ struct State {
     next: u64,
     outgoing: HashMap<u64, Outgoing>,
     watches: HashMap<u64, u64>,
-    incoming: HashMap<u64, watch::Sender<bool>>,
+    incoming: HashMap<u64, Inbound>,
     foreground: Option<SessionActivity>,
 }
 
@@ -267,12 +309,14 @@ enum Outgoing {
     Waiting {
         machine: MachineIdentity,
         sent: bool,
+        wants_watch: bool,
         reply: oneshot::Sender<Answer>,
         activity: Option<SessionActivity>,
     },
     Watching {
         machine: MachineIdentity,
         watch: u64,
+        view: Option<AttachBinding>,
         changes: mpsc::UnboundedSender<WatchUpdate>,
         activity: Option<SessionActivity>,
     },
@@ -281,7 +325,7 @@ enum Outgoing {
 pub(super) enum Output {
     Forward {
         id: u64,
-        forward: Forward,
+        forward: ForwardParams,
         deadline: Deadline,
     },
     Response(Response),
@@ -290,12 +334,11 @@ pub(super) enum Output {
 
 enum ReadEnd {
     Closed,
-    Rejected(ErrorBody),
+    Rejected(MalformedRequest),
 }
 
 impl Peer {
     pub(super) fn new(
-        capabilities: Vec<String>,
         begin_work: Option<Arc<BeginSessionWork>>,
     ) -> (Arc<Self>, mpsc::UnboundedReceiver<Output>) {
         let (outbox, output) = mpsc::unbounded_channel();
@@ -310,7 +353,6 @@ impl Peer {
             }),
             outbox,
             stopped: watch::channel(false).0,
-            capabilities,
             activity: Arc::default(),
             begin_work,
         });
@@ -327,14 +369,6 @@ impl Peer {
             .outbox
             .send(Output::Notification(notification, Some(flushed)));
         receipt
-    }
-
-    pub(super) fn capabilities(&self) -> &[String] {
-        &self.capabilities
-    }
-
-    pub(super) fn supports(&self, capability: &str) -> bool {
-        self.capabilities.iter().any(|cap| cap == capability)
     }
 
     pub(super) fn start_idle(&self) {
@@ -354,20 +388,9 @@ impl Peer {
     pub(super) fn begin_foreground(&self) -> Result<(), ErrorBody> {
         let activity = self
             .hold(SessionWork::Foreground)
-            .map_err(|detail| ErrorBody::new(Reason::Unavailable, detail))?;
+            .map_err(|detail| wire::error("unavailable", detail))?;
         self.state.lock().unwrap().foreground = Some(activity);
         Ok(())
-    }
-
-    fn project_error(&self, mut error: ErrorBody) -> ErrorBody {
-        if !self.supports(v3::CAP_MACHINE_DISCONNECTED) {
-            for row in &mut error.data.machines {
-                if row.state == MachineState::Disconnected {
-                    row.state = MachineState::Unreachable;
-                }
-            }
-        }
-        error
     }
 
     fn reply(&self, response: Response) {
@@ -376,9 +399,19 @@ impl Peer {
 
     pub(super) fn request(
         self: &Arc<Self>,
-        forward: Forward,
+        forward: ForwardParams,
         deadline: Deadline,
         machine: MachineIdentity,
+    ) -> Result<Pending, ErrorBody> {
+        self.request_on_watch(forward, deadline, machine, None)
+    }
+
+    fn request_on_watch(
+        self: &Arc<Self>,
+        forward: ForwardParams,
+        deadline: Deadline,
+        machine: MachineIdentity,
+        resize_watch: Option<u64>,
     ) -> Result<Pending, ErrorBody> {
         let unavailable = || {
             wire::unavailable(
@@ -387,8 +420,7 @@ impl Peer {
                 "The machine session closed.",
             )
         };
-        let activity = forward
-            .work()
+        let activity = wire::work(&forward)
             .map(|kind| {
                 self.hold(kind).map_err(|detail| {
                     wire::unavailable(machine.clone(), ExecutionOutcome::NotExecuted, detail)
@@ -399,10 +431,20 @@ impl Peer {
         if !state.open || *self.stopped.borrow() {
             return Err(unavailable());
         }
+        if let Some(watch) = resize_watch {
+            let binding = resize_arguments(&forward)?.expect("resize request");
+            if !matches!(
+                state.outgoing.get(&watch),
+                Some(Outgoing::Watching { view: Some(view), .. }) if matches_view(view, &binding)
+            ) {
+                return Err(view_ended());
+            }
+        }
         let id = state.next;
         state.next += 1;
         let (reply, receiver) = oneshot::channel();
-        let route = if forward.method() == methods::WATCH {
+        let wants_watch = matches!(&forward.request, ForwardRequest::Watch(_));
+        let route = if wants_watch {
             forward.route.clone()
         } else {
             Vec::new()
@@ -419,6 +461,7 @@ impl Peer {
             Outgoing::Waiting {
                 machine: machine.clone(),
                 sent: false,
+                wants_watch,
                 reply,
                 activity,
             },
@@ -471,8 +514,8 @@ impl Peer {
             )
         };
         drop(foreground);
-        for (_, cancellation) in incoming {
-            cancellation.send_replace(true);
+        for (_, inbound) in incoming {
+            inbound.cancel.send_replace(true);
         }
         for (_, outgoing) in outgoing {
             match outgoing {
@@ -503,10 +546,9 @@ impl Peer {
 
     fn response(&self, response: Response) -> Result<(), ErrorBody> {
         let received_at = SystemTime::now();
-        let result = match (response.error, response.result) {
-            (Some(error), None) => Err(error),
-            (None, Some(value)) => Ok(value),
-            _ => return Err(ErrorBody::invalid_argument("Invalid machine response.")),
+        let result = match response.body {
+            ResponseBody::Error(error) => Err(error),
+            ResponseBody::Result(value) => Ok(value),
         };
         let Some(id) = response.id else {
             return Err(result.err().unwrap_or_else(|| {
@@ -514,11 +556,12 @@ impl Peer {
             }));
         };
         let mut state = self.state.lock().unwrap();
-        let Some(Outgoing::Waiting { .. }) = state.outgoing.get(&id) else {
+        let Some(Outgoing::Waiting { wants_watch, .. }) = state.outgoing.get(&id) else {
             // A dropped waiter may race with a successful watch response already on the wire.
             if !state.outgoing.contains_key(&id)
                 && let Ok(value) = result
                 && let Some(watch) = watch_number(&value)
+                && !state.watches.contains_key(&watch)
             {
                 self.notify(Notification::new(methods::UNWATCH, UnwatchParams { watch }));
             }
@@ -526,19 +569,18 @@ impl Peer {
         };
         // Validate the watch metadata before removing the waiter, so a protocol error on this
         // connection still wakes it through the normal close path.
-        let watch = result.as_ref().ok().and_then(watch_number);
-        if watch.is_some_and(|watch| state.watches.contains_key(&watch)) {
+        let watch = match (&result, wants_watch) {
+            (Ok(value), true) => Some(decode_arguments::<ForwardWatchResult>(value.clone())?),
+            _ => None,
+        };
+        if watch
+            .as_ref()
+            .is_some_and(|result| state.watches.contains_key(&result.watch))
+        {
             return Err(ErrorBody::invalid_argument(
                 "The peer reused an active watch number.",
             ));
         }
-        let watch = watch
-            .map(|_| {
-                decode_arguments::<ForwardWatchResult>(
-                    result.as_ref().expect("watch result").clone(),
-                )
-            })
-            .transpose()?;
         let Some(Outgoing::Waiting {
             machine,
             reply,
@@ -551,12 +593,13 @@ impl Peer {
         if let Some(ForwardWatchResult {
             watch,
             snapshot,
-            attach,
+            view,
         }) = watch
         {
             if ended_snapshot(&snapshot) {
                 let _ = activity.take();
             }
+            let view = view.filter(|_| activity.is_some());
             let (changes, receiver) = mpsc::unbounded_channel();
             state.watches.insert(watch, id);
             state.outgoing.insert(
@@ -564,6 +607,7 @@ impl Peer {
                 Outgoing::Watching {
                     machine,
                     watch,
+                    view: view.clone(),
                     changes,
                     activity,
                 },
@@ -572,7 +616,7 @@ impl Peer {
                 snapshot,
                 changes: receiver,
                 received_at,
-                attach: attach.filter(|_| self.supports(v3::CAP_ATTACH)),
+                view,
             }));
         } else {
             let _ = reply.send(Ok(Reply::Call {
@@ -589,10 +633,14 @@ impl Peer {
         let mut ended = None;
         if let Some(id) = state.watches.get(&watch).copied()
             && let Some(Outgoing::Watching {
-                changes, activity, ..
+                changes,
+                activity,
+                view,
+                ..
             }) = state.outgoing.get_mut(&id)
         {
-            if activity.is_some() && ended_change(&change) {
+            if ended_change(&change) {
+                *view = None;
                 ended = activity.take();
             }
             let _ = changes.send(Ok(ReceivedChange {
@@ -615,8 +663,9 @@ impl Peer {
     }
 
     fn cancel_incoming(&self, id: u64) {
-        if let Some(cancellation) = self.state.lock().unwrap().incoming.get(&id) {
-            cancellation.send_replace(true);
+        if let Some(inbound) = self.state.lock().unwrap().incoming.get_mut(&id) {
+            inbound.view = None;
+            inbound.cancel.send_replace(true);
         }
     }
 
@@ -625,10 +674,7 @@ impl Peer {
 
         let mut state = self.state.lock().unwrap();
         if !state.open {
-            return Err(ErrorBody::new(
-                Reason::Unavailable,
-                "The machine session closed.",
-            ));
+            return Err(wire::error("unavailable", "The machine session closed."));
         }
         let Entry::Vacant(entry) = state.incoming.entry(id) else {
             return Err(ErrorBody::invalid_argument(
@@ -636,7 +682,7 @@ impl Peer {
             ));
         };
         let (cancel, cancelled) = watch::channel(false);
-        entry.insert(cancel);
+        entry.insert(Inbound { cancel, view: None });
         Ok(Incoming {
             id,
             peer: self.clone(),
@@ -667,11 +713,11 @@ impl Peer {
             _ = stopped.wait_for(|stopped| *stopped) => ReadEnd::Closed,
             () = self.activity.reap() => ReadEnd::Closed,
         };
-        if let ReadEnd::Rejected(error) = ended {
+        if let ReadEnd::Rejected(MalformedRequest { id, error }) = ended {
             self.close();
             // If dropping the write left a partial line, another line would corrupt the diagnostic.
             if !writing_frame {
-                wire::reject(&mut write, None, &error).await;
+                wire::reject(&mut write, id, &error).await;
             }
             return Err(error);
         }
@@ -683,61 +729,91 @@ impl Peer {
         handler: &impl SessionHandler,
         read: &mut Reader<impl AsyncBufRead + Unpin>,
     ) -> Result<ReadEnd, ErrorBody> {
-        while let Some(frame) = read.next().await? {
+        loop {
+            let frame = match read.next().await {
+                Ok(Some(frame)) => frame,
+                Ok(None) => return Ok(ReadEnd::Closed),
+                Err(rejection) => return Ok(ReadEnd::Rejected(rejection)),
+            };
             match frame {
-                Frame::Response(response) if response.jsonrpc == "2.0" => {
-                    self.response(response)?;
-                }
-                Frame::Request(request) if request.jsonrpc == "2.0" => {
-                    match (request.method.as_str(), request.id) {
-                        (methods::FORWARD, Some(id)) => {
-                            let forward = Forward::decode(request.params)?;
-                            let deadline =
-                                deadline_after(forward.time_left_ms.map(Duration::from_millis));
-                            let incoming = self.begin(id)?;
-                            tokio::spawn(incoming.serve(handler.clone(), forward, deadline));
-                        }
-                        (methods::ADVERTISE, None) => {
-                            if let Err(error) = handler.replace_table(request.params) {
-                                return Ok(ReadEnd::Rejected(error));
-                            }
-                        }
-                        (v3::MACHINE_SLEEPING, None)
-                            if self.supports(v3::CAP_MACHINE_DISCONNECTED) =>
-                        {
-                            if !request
-                                .params
-                                .as_object()
-                                .is_some_and(|args| args.is_empty())
-                            {
-                                return Err(ErrorBody::invalid_argument(
-                                    "Expected an empty sleep notice.",
-                                ));
-                            }
-                            handler.sleeping();
-                            return Ok(ReadEnd::Closed);
-                        }
-                        (methods::CANCEL, None) => {
-                            let CancelParams { id } = decode_arguments(request.params)?;
-                            self.cancel_incoming(id);
-                        }
-                        (methods::UNWATCH, None) => {
-                            let UnwatchParams { watch } = decode_arguments(request.params)?;
-                            self.cancel_incoming(watch);
-                        }
-                        (methods::CHANGED, None) => self.changed(decode_arguments(request.params)?),
-                        (methods::WATCH_ENDED, None) => {
-                            self.watch_ended(decode_arguments(request.params)?);
-                        }
-                        _ => {
-                            return Err(ErrorBody::invalid_argument("Unexpected machine request."));
+                MachineMessage::Response(response) => self.response(response)?,
+                MachineMessage::Request(request) => match (request.method.as_str(), request.id) {
+                    (methods::FORWARD, Some(id)) => {
+                        let incoming = self.begin(id)?;
+                        if let Err(error) = self.accept_forward(handler, incoming, request.params) {
+                            self.reply(Response::failed(Some(id), error));
                         }
                     }
-                }
-                _ => return Err(ErrorBody::invalid_argument("Expected JSON-RPC 2.0.")),
+                    (methods::ADVERTISE, None) => {
+                        if let Err(error) = handler.replace_table(request.params) {
+                            return Ok(ReadEnd::Rejected(MalformedRequest { id: None, error }));
+                        }
+                    }
+                    (methods::MACHINE_SLEEPING, None) => {
+                        let MachineSleepingParams {} = decode_arguments(request.params)?;
+                        handler.sleeping();
+                        return Ok(ReadEnd::Closed);
+                    }
+                    (methods::CANCEL, None) => {
+                        let CancelParams { id } = decode_arguments(request.params)?;
+                        self.cancel_incoming(id);
+                    }
+                    (methods::UNWATCH, None) => {
+                        let UnwatchParams { watch } = decode_arguments(request.params)?;
+                        self.cancel_incoming(watch);
+                    }
+                    (methods::CHANGED, None) => self.changed(decode_arguments(request.params)?),
+                    (methods::WATCH_ENDED, None) => {
+                        self.watch_ended(decode_arguments(request.params)?);
+                    }
+                    (_, Some(id)) => self.reply(Response::failed(
+                        Some(id),
+                        ErrorBody::method_not_found("Unexpected machine request."),
+                    )),
+                    (_, None) => {
+                        return Err(ErrorBody::invalid_argument(
+                            "Unexpected machine notification.",
+                        ));
+                    }
+                },
             }
         }
-        Ok(ReadEnd::Closed)
+    }
+
+    fn accept_forward(
+        self: &Arc<Self>,
+        handler: &impl SessionHandler,
+        incoming: Incoming,
+        params: Value,
+    ) -> Result<(), ErrorBody> {
+        let forward: ForwardParams = decode_arguments(params)?;
+        let deadline = deadline_after(forward.time_left_ms.map(Duration::from_millis));
+        let binding = resize_arguments(&forward)?;
+        if let Some(binding) = binding {
+            let send = self
+                .state
+                .lock()
+                .unwrap()
+                .incoming
+                .values()
+                .find_map(|inbound| {
+                    let view = inbound.view.as_ref()?;
+                    (matches_view(&view.binding, &binding)
+                        && view.source.caller == forward.caller
+                        && view.source.route == forward.route)
+                        .then(|| view.resize.clone())
+                });
+            send.ok_or_else(view_ended)?
+                .send(Resize {
+                    incoming,
+                    forward,
+                    deadline,
+                })
+                .map_err(|_| view_ended())?;
+        } else {
+            tokio::spawn(incoming.serve(handler.clone(), forward, deadline));
+        }
+        Ok(())
     }
 
     async fn write(
@@ -773,7 +849,7 @@ impl Peer {
         &self,
         writer: &mut (impl AsyncWrite + Unpin),
         id: u64,
-        forward: Forward,
+        forward: ForwardParams,
         deadline: Deadline,
     ) -> Result<(), ErrorBody> {
         let left = remaining(deadline);
@@ -881,15 +957,24 @@ fn write_timeout(machine: MachineIdentity) -> RequestFailure {
     ))
 }
 
-/// A watch response has session metadata alongside its unchanged application snapshot.
 fn watch_number(result: &Value) -> Option<u64> {
-    let object = result.as_object()?;
-    if object.contains_key("snapshot")
-        && (object.len() == 2 || object.len() == 3 && object.contains_key("attach"))
-    {
-        return object.get("watch")?.as_u64();
+    result.get("snapshot")?;
+    result.get("watch")?.as_u64()
+}
+
+fn resize_arguments(
+    forward: &ForwardParams,
+) -> Result<Option<InternalAttachResizeArgs>, ErrorBody> {
+    match &forward.request {
+        ForwardRequest::Call(call) if call.op == InternalAttachResize::NAME => {
+            decode_arguments(call.args.clone()).map(Some)
+        }
+        _ => Ok(None),
     }
-    None
+}
+
+fn matches_view(view: &AttachBinding, args: &InternalAttachResizeArgs) -> bool {
+    view.viewer == args.viewer && view.boot_id == args.boot_id
 }
 
 fn ended_snapshot(snapshot: &Value) -> bool {
@@ -904,6 +989,43 @@ fn ended_change(change: &Value) -> bool {
     )
 }
 
+struct Inbound {
+    cancel: watch::Sender<bool>,
+    view: Option<InboundView>,
+}
+
+struct InboundView {
+    binding: AttachBinding,
+    source: WatchSource,
+    resize: mpsc::UnboundedSender<Resize>,
+}
+
+struct Resize {
+    incoming: Incoming,
+    forward: ForwardParams,
+    deadline: Deadline,
+}
+
+impl Resize {
+    async fn serve(self, handler: &impl SessionHandler, route: Option<&WatchRoute>) {
+        let mut cancelled = self.incoming.cancelled.clone();
+        let result = tokio::select! {
+            biased;
+            _ = cancelled.wait_for(|cancelled| *cancelled) => return,
+            result = handler.receive(self.forward, self.deadline, self.incoming.cancelled.clone(), route) => result,
+        };
+        let result = match result {
+            Err(error) => Err(error),
+            Ok(
+                Delivery::Local(TargetReply::Call(result))
+                | Delivery::Relayed(_, Reply::Call { result, .. }),
+            ) => result,
+            Ok(_) => Err(ErrorBody::invalid_argument("Expected a resize response.")),
+        };
+        self.incoming.respond(result);
+    }
+}
+
 struct Incoming {
     id: u64,
     peer: Arc<Peer>,
@@ -911,8 +1033,16 @@ struct Incoming {
 }
 
 impl Incoming {
-    async fn serve(mut self, handler: impl SessionHandler, forward: Forward, deadline: Deadline) {
-        let activity = match forward.work().map(|kind| self.peer.hold(kind)).transpose() {
+    async fn serve(
+        mut self,
+        handler: impl SessionHandler,
+        forward: ForwardParams,
+        deadline: Deadline,
+    ) {
+        let activity = match wire::work(&forward)
+            .map(|kind| self.peer.hold(kind))
+            .transpose()
+        {
             Ok(activity) => activity,
             Err(detail) => {
                 let machine = handler.identity(forward.route.last().map_or("", String::as_str));
@@ -921,11 +1051,15 @@ impl Incoming {
                 return;
             }
         };
+        let source = WatchSource {
+            caller: forward.caller.clone(),
+            route: forward.route.clone(),
+        };
         let mut cancelled = self.cancelled.clone();
         let result = tokio::select! {
             biased;
             _ = cancelled.wait_for(|cancelled| *cancelled) => return,
-            result = handler.receive(forward, deadline, self.cancelled.clone()) => result,
+            result = handler.receive(forward, deadline, self.cancelled.clone(), None) => result,
         };
         let result = match result {
             Err(error) => Err(error),
@@ -933,10 +1067,19 @@ impl Incoming {
             Ok(Delivery::Local(TargetReply::Watch {
                 snapshot,
                 changes,
-                attach,
+                view,
             })) => {
                 return self
-                    .watch(snapshot, Changes::Local(changes), attach, activity)
+                    .watch(
+                        &handler,
+                        source,
+                        WatchStream {
+                            snapshot,
+                            changes: Changes::Local(changes),
+                            view,
+                        },
+                        activity,
+                    )
                     .await;
             }
             Ok(Delivery::Relayed(_, Reply::Call { result, .. })) => result,
@@ -945,92 +1088,116 @@ impl Incoming {
                 Reply::Watch {
                     snapshot,
                     changes,
-                    attach,
+                    view,
                     ..
                 },
             )) => {
                 return self
                     .watch(
-                        snapshot,
-                        Changes::Relayed {
-                            changes,
-                            _pending: pending,
+                        &handler,
+                        source,
+                        WatchStream {
+                            snapshot,
+                            changes: Changes::Relayed { changes, pending },
+                            view,
                         },
-                        attach,
                         activity,
                     )
                     .await;
             }
         };
-        match result {
-            Ok(value) => self.peer.reply(Response::ok(self.id, value)),
-            Err(error) => self.peer.reply(Response::failed(
-                Some(self.id),
-                self.peer.project_error(error),
-            )),
-        }
+        self.respond(result);
+    }
+
+    fn respond(&self, result: Result<Value, ErrorBody>) {
+        self.peer.reply(match result {
+            Ok(value) => Response::ok(self.id, value),
+            Err(error) => Response::failed(Some(self.id), error),
+        });
     }
 
     async fn watch(
         &mut self,
-        snapshot: Value,
-        mut changes: Changes,
-        mut attach: Option<AttachBinding>,
+        handler: &impl SessionHandler,
+        source: WatchSource,
+        mut stream: WatchStream,
         mut activity: Option<SessionActivity>,
     ) {
-        if ended_snapshot(&snapshot) {
+        if ended_snapshot(&stream.snapshot) {
             let _ = activity.take();
-            attach = None;
+            stream.view = None;
+        }
+        let (send_resize, mut resize) = mpsc::unbounded_channel();
+        let downstream = stream.changes.downstream();
+        if let Some(binding) = &stream.view {
+            let mut state = self.peer.state.lock().unwrap();
+            let Some(inbound) = state.incoming.get_mut(&self.id) else {
+                return;
+            };
+            if *inbound.cancel.borrow() {
+                return;
+            }
+            inbound.view = Some(InboundView {
+                binding: binding.clone(),
+                source,
+                resize: send_resize,
+            });
         }
         self.peer.reply(Response::ok(
             self.id,
             ForwardWatchResult {
                 watch: self.id,
-                snapshot,
-                attach: attach.filter(|_| self.peer.supports(v3::CAP_ATTACH)),
+                snapshot: stream.snapshot,
+                view: stream.view,
             },
         ));
+        let mut watch_cancelled = self.cancelled.clone();
         loop {
-            let change = tokio::select! {
+            tokio::select! {
                 biased;
-                _ = self.cancelled.wait_for(|cancelled| *cancelled) => return,
-                change = changes.next() => change,
-            };
-            match change {
-                Some(Ok(change)) => {
-                    if activity.is_some() && ended_change(&change) {
-                        let _ = activity.take();
+                () = async {
+                    let _ = self.cancelled.wait_for(|cancelled| *cancelled).await;
+                } => return,
+                Some(request) = resize.recv() => {
+                    // The watch owns its resize order while the session keeps reading replies.
+                    tokio::select! {
+                        biased;
+                        _ = watch_cancelled.wait_for(|cancelled| *cancelled) => return,
+                        () = request.serve(handler, downstream.as_ref()) => {}
                     }
-                    self.peer.notify(Notification::new(
-                        methods::CHANGED,
-                        ChangedParams {
-                            watch: self.id,
-                            change,
-                        },
-                    ));
                 }
-                ended => {
-                    let error = ended.and_then(Result::err).unwrap_or_else(|| {
-                        ErrorBody::new(Reason::Unavailable, "The subscription ended.")
-                    });
-                    self.peer.notify(Notification::new(
-                        methods::WATCH_ENDED,
-                        WatchEndedParams {
-                            watch: self.id,
-                            error: self.peer.project_error(error),
-                        },
-                    ));
-                    return;
+                change = stream.changes.next() => match change {
+                    Some(Ok(change)) => {
+                        if ended_change(&change) {
+                            let _ = activity.take();
+                            if let Some(inbound) = self.peer.state.lock().unwrap().incoming.get_mut(&self.id) {
+                                inbound.view = None;
+                            }
+                        }
+                        self.peer.notify(Notification::new(
+                            methods::CHANGED,
+                            ChangedParams { watch: self.id, change },
+                        ));
+                    }
+                    ended => {
+                        let error = ended.and_then(Result::err).unwrap_or_else(|| {
+                            wire::error("unavailable", "The subscription ended.")
+                        });
+                        self.peer.notify(Notification::new(
+                            methods::WATCH_ENDED,
+                            WatchEndedParams { watch: self.id, error },
+                        ));
+                        return;
+                    }
                 }
             }
         }
     }
 }
-
 impl Drop for Incoming {
     fn drop(&mut self) {
-        if let Some(cancel) = self.peer.state.lock().unwrap().incoming.remove(&self.id) {
-            cancel.send_replace(true);
+        if let Some(inbound) = self.peer.state.lock().unwrap().incoming.remove(&self.id) {
+            inbound.cancel.send_replace(true);
         }
     }
 }

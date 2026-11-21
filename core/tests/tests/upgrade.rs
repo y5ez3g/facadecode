@@ -596,7 +596,7 @@ fn restart_with_changed_bytes(hard_link: bool) {
     ));
     {
         let mut wire = connect(&home);
-        let removed = wire.call("agent.remove", json!({ "agent": first.id }));
+        let removed = wire.call("agent.remove", json!({ "target": first.id }));
         assert!(removed.get("error").is_none(), "{removed}");
     }
     assert!(
@@ -738,50 +738,42 @@ fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathB
     }
 }
 
-/// A disconnected v2 editor's workspace imports the same running agent after v3 takes over.
+/// An IDE reconnects after a v1 takeover and finds its running agent under the same reference.
 #[test]
-fn an_editor_recovers_its_running_agent_after_v2_takeover() {
+fn an_editor_refinds_its_running_agent_after_v1_takeover() {
     let home = TestHome::new("windowupgrade");
-    let old = v2_facade(&home);
-    let launched = home
-        .command(&old)
-        .args(["daemon", "--detach"])
-        .output()
-        .unwrap();
-    assert!(launched.status.success(), "{}", stderr(&launched));
-    let workspace = "13300abc00000002";
+    home.start_facade_with(&[]);
     let mut editor = DaemonTestClient::open(&home);
-    let hello = editor.hello(
-        "ide",
-        [2, 2],
-        json!({ "window": {
-        "id": "win-1", "label": "Editor", "environment": "local", "workspace": workspace,
-        "folders": [home.project],
-    } }),
+    let hello = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    assert!(
+        hello["result"]["ops"]
+            .as_array()
+            .is_some_and(|ops| ops.contains(&json!("agent.start"))
+                && !ops.contains(&json!("daemon.upgrade"))),
+        "{hello}"
     );
-    assert_eq!(hello["result"]["protocol"], 2, "{hello}");
-    assert_eq!(hello["result"]["build"], V2_TEST_BUILD, "{hello}");
-    let machine = &hello["result"]["machine_id"];
-    let window = &hello["result"]["window"];
-    assert_eq!(window["machine_id"], *machine, "{hello}");
-    let started = editor.call(
+    let started = editor.call_ok(
         "agent.start",
         json!({
-            "command": [shell(), "-c", "echo BEFORE-UPGRADE; sleep 600"], "name": "kept",
-            "cwd": home.project, "location_source_window": window, "cols": 80, "rows": 24,
-            "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
+            "cli": "fake", "name": "kept", "folder": home.project,
+            "size": { "cols": 80, "rows": 24 },
+            "env": { "PATH": home.path_with_test_programs() },
         }),
     );
-    let before = &started["result"]["agent"];
-    let id = before["agent_id"]
-        .as_str()
-        .expect("an editor agent started");
-    assert_eq!(before["windows"], json!([window]), "{started}");
+    let before = &started["agent"];
+    let reference = &before["reference"];
+    assert_eq!(reference["machine_id"], hello["result"]["machine_id"]);
     let process = process_identity(before["pid"].as_i64().expect("the agent has a PID") as i32);
+    home.run_facade_ok(&[
+        "type",
+        before["address"].as_str().unwrap(),
+        "BEFORE-UPGRADE",
+    ]);
     let mut screen = Value::Null;
     assert!(
         wait_until(secs(10), || {
-            screen = editor.call("agent.screen", json!({ "agent": id }))["result"]["text"].clone();
+            screen = editor.call_ok("agent.screen", json!({ "target": reference }))["text"].clone();
             screen
                 .as_str()
                 .is_some_and(|text| text.contains("BEFORE-UPGRADE"))
@@ -790,38 +782,38 @@ fn an_editor_recovers_its_running_agent_after_v2_takeover() {
     );
     drop(editor);
 
-    home.run_facade_ok(&["daemon", "--takeover"]);
+    let program = program_of_build(&home, &newer());
+    let listed = home
+        .command(&program)
+        .args(["list", "--local"])
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "{}", stderr(&listed));
     let mut editor = DaemonTestClient::open(&home);
-    let upgraded = editor.hello("ide", DAEMON_RANGE, json!({}));
-    assert_eq!(upgraded["result"]["protocol"], 3, "{upgraded}");
-    assert_eq!(upgraded["result"]["build"], CURRENT, "{upgraded}");
+    let upgraded = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(upgraded["result"]["api_version"], 1, "{upgraded}");
+    assert_eq!(upgraded["result"]["ops"], hello["result"]["ops"]);
+    assert_eq!(upgraded["result"]["build"], newer(), "{upgraded}");
     assert_ne!(upgraded["result"]["pid"], hello["result"]["pid"]);
     assert_eq!(
         upgraded["result"]["keeper"]["pid"],
         hello["result"]["keeper"]["pid"]
     );
-    let reference = json!({ "machine_id": machine, "agent_id": id });
-    let import = editor.call(
-        "workspace.import_legacy",
-        json!({ "machine_id": machine, "workspace_key": workspace }),
-    );
-    assert_eq!(import["result"]["agents"], json!([reference]), "{import}");
-    let inspected = editor.call("agent.inspect", json!({ "reference": reference }));
-    let after = &inspected["result"]["agent"];
-    assert_eq!(after["agent_id"], id, "{inspected}");
+    let inspected = editor.call_ok("agent.inspect", json!({ "target": reference }));
+    let after = &inspected["agent"];
+    assert_eq!(&after["reference"], reference, "{inspected}");
     assert_eq!(after["process"], "running", "{after}");
     assert_eq!(after["pid"], before["pid"]);
     assert!(alive(&process), "the original process is still alive");
-    let after = editor.call("agent.screen", json!({ "agent": after["address"] }));
-    assert_eq!(after["result"]["text"], screen, "{after}");
-    let watch = editor.request("watch", json!({ "topic": "agents" }));
+    let after = editor.call_ok("agent.screen", json!({ "target": reference }));
+    assert_eq!(after["text"], screen, "{after}");
+    let watch = editor.request("watch", json!({ "topic": "agents", "args": {} }));
     let rows = watch["result"]["snapshot"]["agents"]
         .as_array()
         .expect("the editor's roster");
     assert!(
-        rows.iter().any(|row| row["agent_id"] == id
-            && row["machine_id"] == *machine
-            && row["pid"] == before["pid"]),
+        rows.iter()
+            .any(|row| &row["reference"] == reference && row["pid"] == before["pid"]),
         "{watch}"
     );
 }
@@ -1062,7 +1054,7 @@ fn a_call_made_while_the_daemon_before_drains_is_refused_and_repeated_at_the_nex
         .spawn()
         .unwrap();
     home.wait_for_gate("upgrade-draining");
-    let refused = wire.call("agent.rename", json!({ "agent": "w1", "name": "renamed" }));
+    let refused = wire.call("agent.rename", json!({ "target": "w1", "name": "renamed" }));
     assert_eq!(refused["error"]["data"]["reason"], "upgrading", "{refused}");
     home.release_gate("command-connected");
     // The send's call reaches the daemon before, which refuses it.
@@ -1414,8 +1406,8 @@ fn an_agent_that_goes_quiet_too_late_leaves_no_clean_end() {
 fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_places_the_new_build_s()
  {
     let home = TestHome::new("takeoverplugin");
-    let old = v2_facade(&home);
-    let old_version = facade_base::build_version(V2_TEST_BUILD);
+    let old = &test_binaries().facade;
+    let old_version = CURRENT;
     let programs = home.folder().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
     install_program(&programs, "agy", &test_binaries().fakecli);
@@ -1454,7 +1446,7 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
     };
     let plugin = home.project.join(".agents/plugins/facade");
     let version = || std::fs::read_to_string(plugin.join("plugin.json")).unwrap_or_default();
-    start(&old, "ada");
+    start(old, "ada");
     assert!(
         version().contains(&format!("Facade core {old_version}")),
         "{}",
@@ -1630,9 +1622,9 @@ fn a_pre_release_that_runs_is_taken_over_by_no_build() {
     );
 }
 
-/// The machine table shows the version and v3 keeps the build suffix.
+/// The machine table shows the version and the API keeps the build suffix.
 #[test]
-fn machine_list_shows_the_version_and_v3_keeps_the_build() {
+fn machine_list_shows_the_version_and_the_api_keeps_the_build() {
     let home = TestHome::new("machineversion");
     let version = pre_release();
     let build = format!("{version}+4f2a");
@@ -1679,8 +1671,8 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
         ),
     ] {
         let args = json!({
-            "program": program, "build": build, "daemon_protocol": DAEMON_RANGE,
-            "keeper_protocol": [1, 1],
+            "program": program, "build": build, "daemon_api_versions": DAEMON_API_VERSIONS,
+            "keeper_api_versions": [1],
         });
         let asked = wire.send("call", json!({ "op": "daemon.upgrade", "args": args }));
         let answer = wire
@@ -1699,6 +1691,162 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
     assert_eq!(
         launcher_build(&home.path).expect("the launchers point at a build"),
         launcher
+    );
+}
+
+#[test]
+fn v1_takeover_refuses_disjoint_daemon_and_keeper_sets_before_installing() {
+    let home = TestHome::new("v1-takeover-refused");
+    let agent = home.start_fake("held-by-the-keeper");
+    let daemon = home.lock_record("daemon").expect("the daemon lock");
+    let keeper = home.lock_record("keeper").expect("the keeper lock");
+    let launcher = launcher_build(&home.path).expect("the launcher");
+    let home_bin = home.path.join("core/bin");
+    let builds = || {
+        let mut entries: Vec<_> = std::fs::read_dir(&home_bin)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        entries.sort();
+        entries
+    };
+    let before = builds();
+    let mut wire = connect(&home);
+    let reference =
+        wire.call_ok("agent.inspect", json!({ "target": agent.address }))["agent"]["reference"]
+            .clone();
+    let build = newer();
+    for (daemon_versions, keeper_versions, keeper_failure) in [([2], [1], false), ([1], [2], true)]
+    {
+        let reply = wire.call(
+            "daemon.upgrade",
+            json!({
+                "program": test_binaries().facade,
+                "build": build,
+                "daemon_api_versions": daemon_versions,
+                "keeper_api_versions": keeper_versions,
+            }),
+        );
+        assert_eq!(reply["error"]["code"], -32000, "{reply}");
+        assert_eq!(error_reason(&reply), "protocol_incompatible", "{reply}");
+        let details = &reply["error"]["data"]["details"];
+        assert_eq!(details["offered_api_versions"], json!([2]), "{reply}");
+        assert_eq!(details["supported_api_versions"], json!([1]), "{reply}");
+        if keeper_failure {
+            let agents = details["agents"].as_array().expect("the affected agents");
+            assert_eq!(agents.len(), 1, "{reply}");
+            assert_eq!(agents[0]["reference"], reference, "{reply}");
+            assert_eq!(agents[0]["address"], agent.address, "{reply}");
+        } else {
+            assert!(details.get("agents").is_none(), "{reply}");
+        }
+        assert_eq!(home.lock_record("daemon"), Some(daemon.clone()));
+        assert_eq!(home.lock_record("keeper"), Some(keeper.clone()));
+        assert_eq!(
+            launcher_build(&home.path).as_deref(),
+            Some(launcher.as_str())
+        );
+        assert_eq!(builds(), before);
+        assert!(!home_bin.join(&build).exists());
+        assert!(alive(&agent.process));
+    }
+    type_raw(&mut wire, &agent.address, "kept after refusal");
+    assert!(wait_for_screen_text(
+        &home,
+        &agent.address,
+        "kept after refusal"
+    ));
+    println!(
+        "refusals preserved daemon {daemon:?}, keeper {keeper:?}, CLI {:?}",
+        agent.process
+    );
+}
+
+#[test]
+#[ignore = "requires the genuinely compiled higher API v1 executable in FACADE_TEST_API_V1_NEXT"]
+fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
+    let next = PathBuf::from(
+        std::env::var_os("FACADE_TEST_API_V1_NEXT").expect("the higher API v1 binary"),
+    );
+    assert!(next.is_absolute() && next.is_file(), "{}", next.display());
+    let home = TestHome::new("v1-warm-takeover");
+    let version = home.command(&next).arg("--version").output().unwrap();
+    assert!(version.status.success(), "{}", stderr(&version));
+    let version_line = stdout(&version);
+    let next_build = version_line.trim().strip_prefix("facade ").unwrap();
+    assert!(
+        facade_base::takes_over(next_build, CURRENT),
+        "{version_line}"
+    );
+    let session = "065e033f-12fe-4bac-9870-dc4e3d4971af";
+    let agent = home.start_fake_with("held", &[("FAKECLI_SESSION", session)]);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .inspect_agent(&agent.address)["agent"]["session"]
+        == session));
+    let daemon = home.lock_record("daemon").unwrap();
+    let keeper_before = keeper(&home);
+    let mut wire = connect(&home);
+    let reference = home.inspect_agent(&agent.address)["agent"]["reference"].clone();
+    let before = wire.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": reference, "size": { "cols": 80, "rows": 24 } } }),
+    );
+    assert_eq!(
+        before["result"]["snapshot"]["reference"], reference,
+        "{before}"
+    );
+    let send = json!({
+        "to": reference, "text": "receipt before the live takeover", "request_id": "qa-v1-takeover-receipt",
+    });
+    let receipt = wire.call_ok("agent.send", send.clone());
+    assert!(receipt["id"].is_string(), "{receipt}");
+    let handed = wire.call_ok(
+        "daemon.upgrade",
+        json!({
+            "program": next, "build": next_build, "daemon_api_versions": [1], "keeper_api_versions": [1],
+        }),
+    );
+    assert_eq!(handed["agent_count"], 1, "{handed}");
+    assert_eq!(handed["from"], CURRENT, "{handed}");
+    drop(wire);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .hello_result()
+        .is_some_and(|hello| hello["build"] == next_build)));
+    let mut reconnected = connect(&home);
+    let current = home.lock_record("daemon").unwrap();
+    assert_ne!(current.0, daemon.0);
+    assert_ne!(current.1, daemon.1);
+    assert_eq!(keeper(&home), keeper_before);
+    assert_eq!(process_identity(agent.pid), agent.process);
+    let inspected = reconnected.call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(inspected["agent"]["reference"], reference);
+    assert_eq!(inspected["agent"]["session"], session);
+    let restored = reconnected.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": reference, "size": { "cols": 80, "rows": 24 }, "include_scrollback": true } }),
+    );
+    assert_eq!(
+        restored["result"]["snapshot"]["reference"], reference,
+        "{restored}"
+    );
+    let redraw = restored["result"]["snapshot"]["redraw"].as_str().unwrap();
+    assert!(
+        String::from_utf8_lossy(&facade_base::base64::decode(redraw).unwrap())
+            .contains("receipt before the live takeover")
+    );
+    let repeated = reconnected.call_ok("agent.send", send);
+    assert_eq!(repeated["id"], receipt["id"], "{repeated}");
+    assert_eq!(repeated["repeated"], true, "{repeated}");
+    let message_id = receipt["message"]["message_id"].as_str().unwrap();
+    assert_eq!(
+        home.submitted_messages(),
+        [format!(
+            "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
+        )]
+    );
+    println!(
+        "daemon {daemon:?} -> {current:?}, keeper {keeper_before:?}, CLI {:?}, receipt {}",
+        agent.process, receipt["id"]
     );
 }
 
@@ -2148,7 +2296,7 @@ fn a_start_a_stop_and_a_type_under_way_finish_before_the_takeover_ends() {
     );
 }
 
-/// The test CLI under each of the six CLIs' names, through a v2 takeover: each keeps its process and
+/// The test CLI under each of the six CLIs' names, through a v1 takeover: each keeps its process and
 /// its tools reconnect. Nothing its run was given names a build's folder, so once the new build
 /// proves healthy, the hook lines its CLI runs, which name the launcher, run the new build; what
 /// they give the model is the run's own, the skill and instructions of the build that started it,
@@ -2160,19 +2308,19 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     const CLIS: [&str; 6] = ["claude", "codex", "agy", "muse", "opencode", "pi"];
     const SESSION: &str = "96da4482-2bae-4a45-b193-a5664c19826c";
     let home = TestHome::new("takeoversix");
-    let old = v2_facade(&home);
+    let old = &test_binaries().facade;
     let launched = home
-        .command(&old)
+        .command(old)
         .args(["daemon", "--detach"])
         .env("FACADE_TEST_TRIAL_MS", "2000")
         .output()
         .unwrap();
     assert!(launched.status.success(), "{}", stderr(&launched));
-    let mut legacy = DaemonTestClient::open(&home);
-    let before = legacy.hello("terminal", [2, 2], json!({}));
-    assert_eq!(before["result"]["protocol"], 2, "{before}");
-    assert_eq!(before["result"]["build"], V2_TEST_BUILD, "{before}");
-    let old_version = facade_base::build_version(V2_TEST_BUILD);
+    let mut previous = DaemonTestClient::open(&home);
+    let before = previous.hello("terminal", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(before["result"]["api_version"], 1, "{before}");
+    assert_eq!(before["result"]["build"], CURRENT, "{before}");
+    let old_version = CURRENT;
     let programs = home.folder().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
     let path = format!(
@@ -2185,7 +2333,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     let mut runs = Vec::new();
     for cli in CLIS {
         install_program(&programs, cli, &test_binaries().fakecli);
-        let mut start = home.command(&old);
+        let mut start = home.command(old);
         start.env("PATH", &path);
         // Antigravity starts its plugin's server from its `/mcp` panel, which Facade's start opens;
         // the test CLI runs the others' from the launcher their settings name, as each CLI does.
@@ -2201,9 +2349,9 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             .unwrap();
         assert!(started.status.success(), "{cli}: {}", stderr(&started));
         let mut old_run = || {
-            let result = legacy.call("agent.inspect", json!({ "agent": name }));
-            assert!(result["result"]["agent"].is_object(), "{result}");
-            result["result"]["agent"].clone()
+            let result = previous.call_ok("agent.inspect", json!({ "target": name }));
+            assert!(result["agent"].is_object(), "{result}");
+            result["agent"].clone()
         };
         assert!(
             wait_until(secs(30), || old_run()["tools_state"] == "available"),
@@ -2213,7 +2361,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         let pid = old_run()["pid"].as_i64().unwrap() as i32;
         runs.push((cli, name, process_identity(pid)));
     }
-    drop(legacy);
+    drop(previous);
     let program = program_of_build(&home, &newer());
     let listed = home
         .command(&program)
@@ -2239,7 +2387,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         );
     }
     let after = home.hello_result().unwrap();
-    assert_eq!(after["protocol"], 3, "{after}");
+    assert_eq!(after["api_version"], 1, "{after}");
     assert_eq!(after["build"], newer());
     assert_eq!(after["keeper"]["pid"], before["result"]["keeper"]["pid"]);
     assert_ne!(after["pid"], before["result"]["pid"]);
@@ -2247,7 +2395,10 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     // programs by their launchers only.
     let mut hooks = Vec::new();
     for (cli, name, process) in &runs {
-        let id = run(name)["agent_id"].as_str().unwrap().to_string();
+        let id = run(name)["reference"]["agent_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         // On Windows a command line, which quotes each argument by the C runtime's rules, read back
         // as its arguments, one a line.
         #[cfg(unix)]
@@ -2276,7 +2427,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         }
         let files = given.len() - before_files;
         for text in &given {
-            for build in [V2_TEST_BUILD.to_string(), newer()] {
+            for build in [CURRENT.to_string(), newer()] {
                 assert!(
                     !text.contains(&bin.join(&build).display().to_string()),
                     "{cli}'s run names build {build}'s folder: {text}"
@@ -2312,7 +2463,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     // The person deletes the build before; the servers that started from it run on, and the hooks
     // run the new build. Windows deletes no program while it runs, so there the build stays.
     #[cfg(unix)]
-    std::fs::remove_dir_all(bin.join(V2_TEST_BUILD)).unwrap();
+    std::fs::remove_dir_all(bin.join(CURRENT)).unwrap();
     assert!(!hooks.is_empty(), "no run's hook runs Facade's launcher");
     let ran = home.folder().join(format!("build-{}/ran.log", newer()));
     let hooks_ran = || {
@@ -2324,7 +2475,10 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     };
     for (cli, name, hook) in hooks {
         let before = hooks_ran();
-        let id = run(&name)["agent_id"].as_str().unwrap().to_string();
+        let id = run(&name)["reference"]["agent_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         // The variables its CLI gives it: Antigravity's hooks get the run's agent, and Muse Code's
         // run its own session's.
         // Each CLI runs its hooks with its own shell. On Windows Codex's session uses PowerShell;

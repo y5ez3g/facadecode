@@ -1,8 +1,8 @@
 //! A newer Facade taking over while every agent runs on (`daemon.upgrade`): a command of a newer
 //! build that finds this daemon asks it to hand over.
 //!
-//! 1. Check: the build must be newer and speak this daemon's protocol, and where the keeper holds
-//!    CLIs, the running keeper's protocol too, since that keeper stays while it holds any.
+//! 1. Check: the build must be newer and share a daemon API version. While the keeper holds CLIs,
+//!    the build must also support that keeper's negotiated API version.
 //! 2. Install the new build and point the launchers at it.
 //! 3. Drain: new calls answer `upgrading`; an attached terminal's keys go on; calls under way get
 //!    up to [`DRAIN_TIME`], but sends do not wait, as the store keeps their messages for the next
@@ -15,12 +15,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use facade_base::daemon::{
-    CLOSING_TIME, DRAIN_TIME, DaemonUpgradeArgs, DaemonUpgradeResult, QUIET_TIME,
+use facade_base::api_v1::daemon::{DaemonUpgradeArgs, DaemonUpgradeResult, SUPPORTED_API_VERSIONS};
+use facade_base::api_v1::{
+    ApiVersions, ErrorBody, ErrorData, ProtocolMismatchDetails, highest_common,
 };
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::keeper::shared_version;
-use facade_base::v3::DAEMON_PROTOCOL_RANGE;
+use facade_base::daemon::{CLOSING_TIME, DRAIN_TIME, QUIET_TIME};
+use facade_base::jsonrpc::Reason;
 use tokio::sync::watch;
 
 use super::{Lifecycle, LifecycleActivity};
@@ -47,11 +47,22 @@ pub(crate) fn handed_over_cleanly() -> bool {
 
 /// The refusal of a call that comes while a newer Facade takes over: nothing was done.
 fn upgrading() -> ErrorBody {
-    ErrorBody::new(
+    operation_error(
         Reason::Upgrading,
         "a newer Facade is taking over; nothing was done; repeat the call once Facade \
          answers again",
     )
+}
+
+fn operation_error(reason: Reason, message: impl Into<String>) -> ErrorBody {
+    ErrorBody {
+        code: -32000,
+        message: message.into(),
+        data: ErrorData {
+            reason: reason.as_str().into(),
+            details: None,
+        },
+    }
 }
 
 impl Lifecycle {
@@ -101,46 +112,56 @@ impl Lifecycle {
             } else {
                 format!("{} is not newer than this Facade, {ours}", args.build)
             };
-            return Err(ErrorBody::refused(why));
+            return Err(operation_error(Reason::Refused, why));
         }
-        if shared_version(args.daemon_protocol_range, DAEMON_PROTOCOL_RANGE).is_none() {
-            let [low, high] = args.daemon_protocol_range;
-            let [ours_low, ours_high] = DAEMON_PROTOCOL_RANGE;
-            return Err(ErrorBody::new(
-                Reason::IncompatibleProtocol,
+        if highest_common(&args.daemon_api_versions, SUPPORTED_API_VERSIONS).is_none() {
+            return Err(ErrorBody::protocol_incompatible(
                 format!(
-                    "{} can take over daemon protocols {low} to {high}, and this Facade, {ours}, \
-                     serves {ours_low} to {ours_high}. Stop the running Facade before switching builds.",
-                    args.build
+                    "{} supports daemon API versions {:?}, and the running build, {ours}, \
+                     supports {SUPPORTED_API_VERSIONS:?}. Stop the running Facade before switching builds",
+                    args.build,
+                    args.daemon_api_versions.as_slice()
                 ),
+                ProtocolMismatchDetails {
+                    offered_api_versions: Some(args.daemon_api_versions.clone()),
+                    supported_api_versions: ApiVersions::new(SUPPORTED_API_VERSIONS.to_vec())
+                        .expect("daemon supports at least one API version"),
+                    agents: None,
+                },
             ));
         }
+        let running = activity.running_count();
         // The keeper stays while it holds CLIs, so the new build must speak its protocol.
-        if let Some(keeper) = activity.keeper_protocol_range()
-            && shared_version(args.keeper_protocol_range, keeper).is_none()
-        {
-            let agents = activity.running_managed_agents();
-            if !agents.is_empty() {
-                let [low, high] = args.keeper_protocol_range;
-                let [keeper_low, keeper_high] = keeper;
+        if running > 0 {
+            let keeper_version = activity.keeper_api_version().ok_or_else(|| {
+                operation_error(
+                    Reason::Unavailable,
+                    "the running keeper's API version is unconfirmed. Try again after the keeper reconnects",
+                )
+            })?;
+            if !args.keeper_api_versions.contains(keeper_version) {
+                let agents = activity.running_managed_agents();
                 let addresses = agents
                     .iter()
                     .map(|agent| agent.address.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                let mut error = ErrorBody::new(
-                    Reason::IncompatibleProtocol,
+                return Err(ErrorBody::protocol_incompatible(
                     format!(
-                        "{} speaks keeper protocol {low} to {high}, and the running keeper speaks \
-                         {keeper_low} to {keeper_high}. Stop the running agents {addresses} and try again.",
-                        args.build
+                        "{} supports keeper API versions {:?}, and the running keeper negotiated \
+                         version {keeper_version}. Stop the running agents {addresses} and try again",
+                        args.build,
+                        args.keeper_api_versions.as_slice()
                     ),
-                );
-                error.data.agents = agents;
-                return Err(error);
+                    ProtocolMismatchDetails {
+                        offered_api_versions: Some(args.keeper_api_versions.clone()),
+                        supported_api_versions: ApiVersions::new(vec![keeper_version])
+                            .expect("a negotiated keeper API version is present"),
+                        agents: Some(agents),
+                    },
+                ));
             }
         }
-        let running = activity.running_count();
         let builds: Vec<String> = activity
             .keeper_build()
             .into_iter()
@@ -153,7 +174,7 @@ impl Lifecycle {
         })
         .await
         .map_err(|error| {
-            ErrorBody::new(
+            operation_error(
                 Reason::Unavailable,
                 format!("could not install {}: {}", args.program, error.message),
             )
@@ -168,7 +189,7 @@ impl Lifecycle {
         );
         Ok(DaemonUpgradeResult {
             from: ours,
-            agent_count: running,
+            agent_count: running as u64,
         })
     }
 

@@ -27,7 +27,7 @@ const HOME = process.env.FACADE_HOME!;
 
 /** The active agents in the Orchestrator's roster, by address. */
 async function coreAgents(): Promise<string[]> {
-	return (await coreCall(HOME, 'agent.list', {})).agents.map(agent => agent.id);
+	return (await coreCall(HOME, 'agent.list', {})).agents.map(agent => agent.address);
 }
 
 /** Read the native session from the old run file or the Orchestrator's Inspect response. */
@@ -38,7 +38,7 @@ async function sessionOf(runId: string, alias: string): Promise<string | undefin
 			return typeof id === 'string' && id ? id : undefined;
 		} catch { return undefined; }
 	}
-	return (await coreCall(HOME, 'agent.inspect', { agent: alias })).agent.session || undefined;
+	return (await coreCall(HOME, 'agent.inspect', { target: alias })).agent.session || undefined;
 }
 /** Agents started beside the journey's own before it reloads, so that each reload's claim is timed in a busy window (VERIFICATION G2). */
 const LOAD = Number(process.env.FACADE_IT_LOAD ?? 0);
@@ -237,7 +237,7 @@ export async function activate(): Promise<void> {
 		await until('one live terminal of the agent', async () => terminals().filter(name => name === card?.name).length === 1 || undefined);
 		if (RUST && card) {
 			await until('one Orchestrator view of the original agent', async () =>
-				(await coreCall(HOME, 'agent.inspect', { agent: card.alias })).viewers.length === 1 || undefined);
+				(await coreCall(HOME, 'agent.inspect', { target: card.alias })).viewers.length === 1 || undefined);
 		}
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length,
 			card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: terminals() });

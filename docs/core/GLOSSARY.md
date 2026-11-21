@@ -187,7 +187,7 @@ have full reach for the actions they offer.
 | plugin, extension | A CLI's own way to extend it, by that CLI's own name | — |
 | skill | How to use Facade, written for each CLI's model | — |
 | instructions | What the MCP server or a hook tells a model about Facade | — |
-| guide | The protocol's description for client authors, `PROTOCOL.md` | — |
+| guide | The protocol's description for client authors, `DAEMON.md` | — |
 
 ## Services, builds and takeover
 
@@ -202,6 +202,7 @@ have full reach for the actions they offer.
 | build | The programs of one build, in `core/bin/<build>/`, with its ConPTY folder on Windows | — |
 | install | Copy a build's programs, and on Windows its ConPTY folder, into `core/bin/<build>/` | — |
 | version | A three-part version number | — |
+| API version | The positive integer selected independently by the daemon or keeper for one connection | build version |
 | sync | The daemon giving a keeper the terminals it lacks, with `agent.sync` | hand over |
 | takeover, take over | Switching the running Orchestrator to a newer build | hand over, upgrade (for the service switch) |
 | drain | The daemon letting calls under way finish before a newer build takes over | — |
@@ -336,7 +337,7 @@ code that mirrors them keeps it too.
 | `process` in an agent's record | The state of the run's operating system process |
 | the rule file keys `launch` and `status` | The rule's launch command and state sections |
 | `BlockKind` and the value `blocked` of the Program Status Protocol | What a CLI reports it waits for; Facade's word is waiting, `WaitKind` |
-| `answer` in `PROTOCOL.md`'s prose | response |
+| `answer` in `DAEMON.md`'s prose | response |
 | `AgentCreator`, the type of `started_by` | What started an agent: started by. Only its `Agent` value is a creator |
 
 ## Names from elsewhere

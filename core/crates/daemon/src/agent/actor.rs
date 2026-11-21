@@ -510,7 +510,9 @@ impl Actor {
             AgentCommand::WriteInput { input, run, reply } => {
                 let _ = reply.send(self.take_input(input, run));
             }
+            #[cfg(test)]
             AgentCommand::Resize(cols, rows) => self.resize_legacy(cols, rows, None),
+            #[cfg(test)]
             AgentCommand::ResizeTerminal { cols, rows, colors } => {
                 if !self.ended() {
                     self.resize_legacy(cols, rows, colors);
@@ -835,6 +837,7 @@ impl Actor {
     }
 
     /// The published resize applies while a legacy viewer is present or no shared viewer is live.
+    #[cfg(test)]
     fn resize_legacy(&mut self, cols: u16, rows: u16, colors: Option<TerminalColors>) {
         if !self.can_resize() {
             return;

@@ -447,7 +447,7 @@ fn attach_forwards_input_and_ctrl_bracket_detaches() {
 }
 
 #[test]
-fn attach_views_share_the_smallest_grid_and_keep_legacy_viewers_working() {
+fn attach_views_share_the_smallest_grid_and_resize_only_owned_watches() {
     let home = TestHome::new("attach-grid");
     let agent = home.start_fake_with("Viewer", &[("FAKECLI_WRAP_TRANSCRIPT", "1")]);
     let address = agent.address.as_str();
@@ -455,24 +455,32 @@ fn attach_views_share_the_smallest_grid_and_keep_legacy_viewers_working() {
         assert!(
             wait_until(LOADED_TIMEOUT, || {
                 let agent = home.inspect_agent(address)["agent"].clone();
-                agent["cols"] == cols && agent["rows"] == rows
+                agent["size"] == json!({ "cols": cols, "rows": rows })
             }),
             "the terminal did not become {cols}×{rows}: {}",
             home.inspect_agent(address)
         );
     };
     let mut editor = DaemonTestClient::open(&home);
-    let hello = editor.hello("ide", DAEMON_RANGE, json!({ "capabilities": ["attach"] }));
-    assert!(hello["result"].is_object(), "{hello}");
+    let hello = editor.hello("ide", DAEMON_API_VERSIONS, json!({}));
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    let reference = home.inspect_agent(address)["agent"]["reference"].clone();
     let opened = editor.request(
         "watch",
         json!({
-            "topic": "attach", "args": { "agent": address, "size": { "cols": 120, "rows": 40 } }
+            "topic": "attach", "args": { "target": reference, "size": { "cols": 120, "rows": 40 } }
         }),
     );
     let watch = opened["result"]["watch"].as_u64().expect("an Attach watch");
-    assert_eq!(opened["result"]["snapshot"]["cols"], 120, "{opened}");
-    assert_eq!(opened["result"]["snapshot"]["rows"], 40, "{opened}");
+    assert_eq!(
+        opened["result"]["snapshot"]["reference"], reference,
+        "{opened}"
+    );
+    assert_eq!(
+        opened["result"]["snapshot"]["size"],
+        json!({ "cols": 120, "rows": 40 }),
+        "{opened}"
+    );
     wait_for_grid(120, 40);
 
     let mut small = TestTerminal::spawn(
@@ -503,7 +511,7 @@ fn attach_views_share_the_smallest_grid_and_keep_legacy_viewers_working() {
             .collect::<Vec<Value>>()
     };
     assert!(wait_until(LOADED_TIMEOUT, || redraws().iter().any(
-        |event| { event["change"]["cols"] == 80 && event["change"]["rows"] == 24 }
+        |event| { event["change"]["size"] == json!({ "cols": 80, "rows": 24 }) }
     )));
 
     let before = large.output_len();
@@ -567,24 +575,32 @@ fn attach_views_share_the_smallest_grid_and_keep_legacy_viewers_working() {
     assert_detach_receipt(&small, "Viewer", address);
     wait_for_grid(120, 40);
 
-    let mut old = connect(&home);
-    let opened = old.request(
-        "watch",
-        json!({ "topic": "screen", "args": { "agent": address } }),
-    );
-    assert!(opened["result"]["snapshot"].is_object(), "{opened}");
-    let unowned = old.call(
+    let mut other = connect(&home);
+    let unowned = other.call(
         "attach.resize",
-        json!({ "watch": watch, "cols": 10, "rows": 10 }),
+        json!({ "watch": watch, "size": { "cols": 10, "rows": 10 } }),
     );
-    assert!(unowned.get("error").is_some(), "{unowned}");
+    assert_eq!(error_reason(&unowned), "not_found", "{unowned}");
     wait_for_grid(120, 40);
-    old.call_ok(
-        "agent.resize",
-        json!({ "agent": address, "cols": 95, "rows": 30 }),
+    let opened = other.request(
+        "watch",
+        json!({ "topic": "attach", "args": { "target": reference, "size": { "cols": 120, "rows": 40 } } }),
     );
+    let other_watch = opened["result"]["watch"]
+        .as_u64()
+        .expect("a second Attach watch");
+    assert_eq!(
+        opened["result"]["snapshot"]["reference"], reference,
+        "{opened}"
+    );
+    other.write(&json!({
+        "jsonrpc": "2.0", "method": "call", "params": {
+            "op": "attach.resize",
+            "args": { "watch": other_watch, "size": { "cols": 95, "rows": 30 } },
+        },
+    }));
     wait_for_grid(95, 30);
-    drop(old);
+    drop(other);
     wait_for_grid(120, 40);
 
     let closed = editor.request("unwatch", json!({ "watch": watch }));

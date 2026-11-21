@@ -9,12 +9,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use facade_base::address::{default_machine_name, short_machine_id};
-use facade_base::daemon::{DeliveryFailure, DeliveryStatus, display_line};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::machine::ExecutionOutcome;
-use facade_base::v3::{
-    AgentLabel, AgentState, MachineQueryResult, MachineQueryStatus, MachineState, SendResult,
+use facade_base::api_v1::ErrorBody;
+use facade_base::api_v1::daemon::{
+    AgentKind, AgentLabel, AgentState, MachineIdentity, MachineQuery, MachineState, QueryStatus,
+    SendResult, SessionMatch,
 };
+use facade_base::daemon::{DeliveryFailure, DeliveryStatus, display_line};
+use facade_base::machine::ExecutionOutcome;
+use serde::de::DeserializeOwned;
 
 use crate::single_line;
 
@@ -55,12 +57,6 @@ pub(crate) enum Problem {
     NoFacade { destination: String },
     /// The other machine's shell startup files printed text into the connection.
     StartupPrints { destination: String },
-    /// The two machines' builds share no protocol version.
-    Version {
-        machine: String,
-        theirs: String,
-        ours: String,
-    },
     /// Two running machines share a machine ID: a copied Facade home.
     SameMachineId { short: String, paths: [String; 2] },
     /// A saved connection's SSH needs a person: the command that repairs it.
@@ -144,18 +140,6 @@ impl Problem {
                 ),
                 Some("make them print nothing when SSH runs a command, then try again".into()),
             ),
-            Problem::Version {
-                machine,
-                theirs,
-                ours,
-            } => (
-                format!("{machine} runs Orchestrator {theirs}, which cannot connect to {ours}"),
-                Some(if facade_base::takes_over(theirs, ours) {
-                    "run 'facade upgrade' here and try again".into()
-                } else {
-                    format!("install Facade Code {ours} on {machine}")
-                }),
-            ),
             Problem::SameMachineId { short, paths } => (
                 format!(
                     "two running machines have the same ID {short}: {} and {}",
@@ -195,16 +179,14 @@ fn service_error(error: &anyhow::Error) -> Option<&ErrorBody> {
         .find_map(|cause| cause.downcast_ref::<ErrorBody>())
 }
 
+fn detail<T: DeserializeOwned>(error: &ErrorBody, key: &str) -> Option<T> {
+    T::deserialize(error.data.details.as_ref()?.get(key)?).ok()
+}
+
 pub(crate) const CHECK_MACHINES: &str = "Run 'facade machine list' to check machine status.";
 const FIND_AGENT: &str = "Run 'facade list' to find an agent.";
 const FIND_MACHINE: &str = "Run 'facade machine list' to find a machine.";
 const STOP_GUEST: &str = "Stop it from the application running it.";
-
-pub(crate) fn unsupported_command(command: &str) -> Problem {
-    Problem::Operation(format!(
-        "The running Orchestrator does not support {command}.\nRun 'facade upgrade' and try again."
-    ))
-}
 
 pub(crate) fn quoted(text: &str) -> String {
     format!("\"{}\"", single_line(text).replace('"', "\\\""))
@@ -241,14 +223,14 @@ fn available_clis(clis: &[String]) -> String {
     format!("Available CLIs: {}", clis.join(", "))
 }
 
-pub(crate) fn machine_query_detail(machine: &MachineQueryResult) -> String {
+pub(crate) fn machine_query_detail(machine: &MachineQuery) -> String {
     let fallback = match machine.state {
         MachineState::Connecting => "The connection is still being established.",
         MachineState::Sleeping => "The remote service is sleeping.",
         MachineState::SshInteractionRequired => "SSH needs interaction.",
         _ => match machine.status {
-            MachineQueryStatus::TimedOut => "The query timed out.",
-            MachineQueryStatus::Error => "The query failed.",
+            QueryStatus::TimedOut => "The query timed out.",
+            QueryStatus::Error => "The query failed.",
             _ => "The machine did not answer the query.",
         },
     };
@@ -261,15 +243,15 @@ pub(crate) fn machine_query_detail(machine: &MachineQueryResult) -> String {
     )
 }
 
-pub(crate) fn machine_query_unanswered(machine: &MachineQueryResult) -> bool {
+pub(crate) fn machine_query_unanswered(machine: &MachineQuery) -> bool {
     match machine.status {
-        MachineQueryStatus::Answered => false,
-        MachineQueryStatus::Unavailable => machine.state != MachineState::Sleeping,
-        MachineQueryStatus::TimedOut | MachineQueryStatus::Error => true,
+        QueryStatus::Answered => false,
+        QueryStatus::Unavailable => machine.state != MachineState::Sleeping,
+        QueryStatus::TimedOut | QueryStatus::Error | QueryStatus::Unknown => true,
     }
 }
 
-pub(crate) fn machine_query_failed(machine: &MachineQueryResult) -> Problem {
+pub(crate) fn machine_query_failed(machine: &MachineQuery) -> Problem {
     connection_failed(&machine.name, &machine_query_detail(machine))
 }
 
@@ -295,12 +277,12 @@ fn candidate_rows(rows: &[Vec<String>]) -> String {
 }
 
 fn machine_failure(command: &str, selector: &str, error: &ErrorBody) -> Option<Problem> {
-    let data = &error.data;
     let diagnostic = service_words(&error.message);
-    match data.reason {
-        Reason::AmbiguousReference if !data.machines.is_empty() => {
-            let rows: Vec<_> = data
-                .machines
+    match error.data.reason.as_str() {
+        "ambiguous_reference" => {
+            let machines = detail::<Vec<MachineQuery>>(error, "machines")?;
+            let example = &machines.first()?.selector;
+            let rows: Vec<_> = machines
                 .iter()
                 .map(|machine| {
                     let state = match machine.state {
@@ -310,12 +292,12 @@ fn machine_failure(command: &str, selector: &str, error: &ErrorBody) -> Option<P
                         MachineState::Sleeping => "Sleeping",
                         MachineState::Unreachable => "Unreachable",
                         MachineState::SshInteractionRequired => "Needs SSH login",
+                        MachineState::Unknown => "Unknown",
                     };
                     vec![machine.selector.clone(), state.into(), String::new()]
                 })
                 .collect();
-            let example = &data.machines[0].selector;
-            let selection = if data.machines.iter().all(|machine| machine.name == selector) {
+            let selection = if machines.iter().all(|machine| machine.name == selector) {
                 "is named"
             } else {
                 "matches"
@@ -335,12 +317,13 @@ fn machine_failure(command: &str, selector: &str, error: &ErrorBody) -> Option<P
                 candidate_rows(&rows)
             )))
         }
-        Reason::NotFound if error.message == NO_MACHINE => Some(Problem::OperationWithFollowUp {
+        "not_found" if error.message == NO_MACHINE => Some(Problem::OperationWithFollowUp {
             message: format!("No machine matches {}.", quoted(selector)),
             follow_up: FIND_MACHINE,
         }),
-        Reason::Unavailable | Reason::SshInteractionRequired => {
-            if let Some(machine) = data.machines.first() {
+        "unavailable" | "ssh_interaction_required" => {
+            let machines = detail::<Vec<MachineQuery>>(error, "machines").unwrap_or_default();
+            if let Some(machine) = machines.first() {
                 let detail = machine
                     .error
                     .as_deref()
@@ -348,13 +331,14 @@ fn machine_failure(command: &str, selector: &str, error: &ErrorBody) -> Option<P
                     .unwrap_or(&diagnostic);
                 return Some(connection_failed(&machine.name, detail));
             }
-            let unavailable = data.unavailable.as_ref()?;
-            if unavailable.execution != ExecutionOutcome::NotExecuted
-                || !unavailable.unanswered.is_empty()
+            if detail(error, "execution") != Some(ExecutionOutcome::NotExecuted)
+                || !detail::<Vec<MachineIdentity>>(error, "unanswered")
+                    .unwrap_or_default()
+                    .is_empty()
             {
                 return None;
             }
-            let machine = unavailable.machine.as_ref()?;
+            let machine = detail::<MachineIdentity>(error, "machine")?;
             Some(connection_failed(&machine.name, &diagnostic))
         }
         _ => None,
@@ -373,8 +357,8 @@ pub(crate) fn query_failed(
             return problem.into();
         }
         if matches!(
-            body.data.reason,
-            Reason::Unavailable | Reason::SshInteractionRequired
+            body.data.reason.as_str(),
+            "unavailable" | "ssh_interaction_required"
         ) {
             return connection_failed(machine, &service_words(&body.message)).into();
         }
@@ -395,24 +379,21 @@ pub(crate) fn start_failed(
         {
             return problem.into();
         }
-        if body.data.reason == Reason::ConfigurationInvalid {
+        if body.data.reason == "configuration_invalid" {
             return settings(error);
         }
-        if body.data.reason == Reason::NotFound
-            && body.data.entry.is_none()
-            && body.message.starts_with("No CLI ")
-        {
+        if body.data.reason == "invalid_argument" && body.message.starts_with("No CLI ") {
+            let choices = detail::<Vec<String>>(body, "available_clis").unwrap_or_default();
             let on = machine.map_or_else(String::new, |name| format!(" on {}", single_line(name)));
             let help = if machine.is_some() {
                 format!("Add custom CLIs in facade.json{on} (default: ~/.facade/facade.json).")
             } else {
                 "Add custom CLIs in facade.json (run 'facade status' to locate it).".into()
             };
-            let choices = &body.data.available_clis;
             let choices = if choices.is_empty() {
                 String::new()
             } else {
-                format!("\n{}", available_clis(choices))
+                format!("\n{}", available_clis(&choices))
             };
             return Problem::Operation(format!(
                 "CLI {} is not configured{on}.{choices}\n{help}",
@@ -424,14 +405,12 @@ pub(crate) fn start_failed(
 
     let local = || default_machine_name(&facade_base::system::hostname().unwrap_or_default());
     let name = machine.map_or_else(local, single_line);
-    let diagnostic = if let Some(body) =
-        body.filter(|body| body.data.reason == Reason::NotFound && body.data.entry.is_some())
-    {
+    let diagnostic = if let Some(body) = body.filter(|body| body.data.reason == "not_found") {
         single_line(body.message.lines().next().unwrap_or_default())
     } else {
         single_line(&cause(&error))
     };
-    let reason = body.map(|body| body.data.reason);
+    let reason = body.map(|body| body.data.reason.as_str());
     let (operation, detail) = match (branch, reason) {
         (Some(branch), Some(reason)) if is_worktree_failure(branch, reason, &diagnostic) => {
             let detail = if diagnostic == format!("a branch named {branch} already exists") {
@@ -454,9 +433,9 @@ pub(crate) fn start_failed(
     Problem::Operation(format!("{operation} on {name}. {detail}")).into()
 }
 
-fn is_worktree_failure(branch: &str, reason: Reason, diagnostic: &str) -> bool {
-    reason == Reason::WorktreeFailed
-        || (reason == Reason::InvalidArgument
+fn is_worktree_failure(branch: &str, reason: &str, diagnostic: &str) -> bool {
+    reason == "worktree_failed"
+        || (reason == "invalid_argument"
             && (diagnostic == format!("a branch named {branch} already exists")
                 || diagnostic.ends_with(" is not in a Git repository")
                 || diagnostic.ends_with(" has no commits yet")
@@ -549,16 +528,29 @@ pub(crate) fn agent_failed(
     input: &str,
     error: anyhow::Error,
 ) -> anyhow::Error {
+    agent_failure(command, input, error, None)
+}
+
+fn agent_failure(
+    command: AgentCommand,
+    input: &str,
+    error: anyhow::Error,
+    resolved: Option<&AgentLabel>,
+) -> anyhow::Error {
     let Some(body) = service_error(&error) else {
         return error;
     };
-    let data = &body.data;
-    let agents = data.agents.as_slice();
-    let reason = data.reason;
+    let agents = detail::<Vec<AgentLabel>>(body, "agents").unwrap_or_default();
+    let agents = if agents.is_empty() {
+        resolved.map_or(&[][..], std::slice::from_ref)
+    } else {
+        agents.as_slice()
+    };
+    let reason = body.data.reason.as_str();
     let diagnostic = service_words(&body.message);
-    if reason == Reason::AmbiguousReference && !data.sessions.is_empty() && agents.is_empty() {
-        let rows: Vec<_> = data
-            .sessions
+    let sessions = detail::<Vec<SessionMatch>>(body, "sessions").unwrap_or_default();
+    if reason == "ambiguous_reference" && !sessions.is_empty() && agents.is_empty() {
+        let rows: Vec<_> = sessions
             .iter()
             .map(|session| {
                 let title = session
@@ -579,11 +571,11 @@ pub(crate) fn agent_failed(
              Use a full session ID.\n{}",
             quoted(input),
             candidate_rows(&rows),
-            command.example(&data.sessions[0].id),
+            command.example(&sessions[0].id),
         ))
         .into();
     }
-    if reason == Reason::AmbiguousReference && agents.len() > 1 && data.sessions.is_empty() {
+    if reason == "ambiguous_reference" && agents.len() > 1 && sessions.is_empty() {
         let rows: Vec<_> = agents
             .iter()
             .map(|agent| {
@@ -615,9 +607,7 @@ pub(crate) fn agent_failed(
     }
     if let [agent] = agents {
         if matches!(command, AgentCommand::Stop)
-            && data.unavailable.as_ref().is_some_and(|unavailable| {
-                unavailable.execution == ExecutionOutcome::OutcomeUnknown
-            })
+            && detail(body, "execution") == Some(ExecutionOutcome::OutcomeUnknown)
         {
             return stop_unconfirmed(agent).into();
         }
@@ -628,7 +618,7 @@ pub(crate) fn agent_failed(
     if let Some(problem) = machine_failure(command.name(), machine_of(input), body) {
         return problem.into();
     }
-    if reason == Reason::NotFound && agents.is_empty() {
+    if reason == "not_found" && agents.is_empty() {
         let scope = match command {
             AgentCommand::Attach | AgentCommand::Stop | AgentCommand::Send | AgentCommand::Type => {
                 "active "
@@ -647,47 +637,47 @@ pub(crate) fn agent_failed(
 fn agent_refusal(
     command: AgentCommand,
     agent: &AgentLabel,
-    reason: Reason,
+    reason: &str,
     diagnostic: &str,
 ) -> Option<Problem> {
     let target = label(agent);
     let address = &agent.address;
     let message = match (command, reason) {
-        (AgentCommand::Attach, Reason::Ended) => {
+        (AgentCommand::Attach, "ended") => {
             format!(
                 "{target} has stopped.\nRead its final screen with 'facade screen {address}'.{}",
                 resume_tip(address, agent.resumable)
             )
         }
-        (AgentCommand::Stop, Reason::Ended) => {
+        (AgentCommand::Stop, "ended") => {
             return Some(already_stopped(&target, address, agent.resumable));
         }
-        (AgentCommand::Send, Reason::Ended) if agent.state == AgentState::Ended => {
+        (AgentCommand::Send, "ended") if agent.state == AgentState::Ended => {
             return Some(stopped_send(&target, address, agent.resumable));
         }
-        (AgentCommand::Type, Reason::Ended) => {
+        (AgentCommand::Type, "ended") => {
             format!("{target} has stopped and cannot accept input.")
         }
-        (AgentCommand::Stop, Reason::Unsupported) if agent.state == AgentState::Online => {
+        (AgentCommand::Stop, "unsupported") if agent.kind == AgentKind::Guest => {
             return Some(Problem::OperationWithFollowUp {
                 message: format!("{target} is a guest and cannot be stopped by Facade."),
                 follow_up: STOP_GUEST,
             });
         }
-        (AgentCommand::Screen, Reason::Unsupported) if agent.state == AgentState::Online => {
+        (AgentCommand::Screen, "unsupported") if agent.kind == AgentKind::Guest => {
             format!("{target} is a guest and has no terminal screen.")
         }
-        (AgentCommand::Type, Reason::Unsupported) if agent.state == AgentState::Online => {
+        (AgentCommand::Type, "unsupported") if agent.kind == AgentKind::Guest => {
             format!(
                 "{target} is a guest and has no terminal.\nUse 'facade send {address} ...' instead."
             )
         }
-        (AgentCommand::Attach, Reason::Unsupported) if agent.state == AgentState::Online => {
+        (AgentCommand::Attach, "unsupported") if agent.kind == AgentKind::Guest => {
             format!(
                 "{target} is a guest and has no terminal.\nUse 'facade send {address} ...' to exchange messages with it."
             )
         }
-        (AgentCommand::Resume, Reason::Unsupported) if agent.state == AgentState::Online => {
+        (AgentCommand::Resume, "unsupported") if agent.kind == AgentKind::Guest => {
             format!("{target} is a guest and cannot be resumed by Facade.")
         }
         (AgentCommand::Resume, _)
@@ -699,13 +689,13 @@ fn agent_refusal(
                 "This session is already open in {target}.\nOpen it with 'facade attach {address}'."
             )
         }
-        (AgentCommand::Resume, Reason::Unavailable | Reason::Refused)
+        (AgentCommand::Resume, "unavailable" | "refused")
             if diagnostic.contains("is running or already resuming")
                 || diagnostic.contains("is already running") =>
         {
             format!("{target} is already running.\nOpen it with 'facade attach {address}'.")
         }
-        (AgentCommand::Resume, Reason::Unavailable | Reason::Unsupported)
+        (AgentCommand::Resume, "unavailable" | "unsupported")
             if !agent.resumable
                 && (diagnostic.contains("no recorded session")
                     || diagnostic.contains("no session to resume")
@@ -715,7 +705,7 @@ fn agent_refusal(
         {
             format!("{target} has no saved session to resume.")
         }
-        (AgentCommand::Stop, Reason::Unavailable)
+        (AgentCommand::Stop, "unavailable")
             if diagnostic.contains("stop wait") || diagnostic.contains("stopped responding") =>
         {
             return Some(stop_unconfirmed(agent));
@@ -723,6 +713,15 @@ fn agent_refusal(
         _ => return None,
     };
     Some(Problem::Operation(message))
+}
+
+/// A stop item can identify its resolved agent separately from the error.
+pub(crate) fn stop_failed(
+    input: &str,
+    agent: Option<&AgentLabel>,
+    error: ErrorBody,
+) -> anyhow::Error {
+    agent_failure(AgentCommand::Stop, input, error.into(), agent)
 }
 
 /// The batch prints shared guidance after reporting the failed targets and machines.
@@ -753,7 +752,7 @@ fn stop_unconfirmed(agent: &AgentLabel) -> Problem {
     ))
 }
 
-pub(crate) fn already_stopped(agent: &str, address: &str, resumable: bool) -> Problem {
+fn already_stopped(agent: &str, address: &str, resumable: bool) -> Problem {
     Problem::Operation(format!(
         "{agent} is already stopped.{}",
         resume_tip(address, resumable)
@@ -815,7 +814,7 @@ pub(crate) fn delivery_receipt(result: &SendResult, given: &str) -> Result<Strin
             quoted(recipient.expect("resolved recipient").cli.as_str()),
         ),
         Some(DeliveryFailure::Timeout)
-            if recipient.is_some_and(|agent| agent.state == AgentState::Online) =>
+            if recipient.is_some_and(|agent| agent.kind == AgentKind::Guest) =>
         {
             "The guest did not read its inbox within 30 seconds.".into()
         }
@@ -836,17 +835,15 @@ pub(crate) fn about_agent(given: &str, error: anyhow::Error) -> anyhow::Error {
     let Some(body) = service_error(&error) else {
         return error;
     };
-    match body.data.reason {
-        Reason::Ended => Problem::Ended {
+    match body.data.reason.as_str() {
+        "ended" => Problem::Ended {
             diagnostic: body.message.clone(),
-            agent: body
-                .data
-                .candidates
-                .first()
-                .map_or_else(|| given.to_owned(), String::clone),
+            agent: detail::<Vec<AgentLabel>>(body, "agents")
+                .and_then(|agents| agents.into_iter().next())
+                .map_or_else(|| given.to_owned(), |agent| agent.address),
         }
         .into(),
-        Reason::ConfigurationInvalid => settings(error),
+        "configuration_invalid" => settings(error),
         _ => about_machine(machine_of(given), error),
     }
 }
@@ -857,44 +854,48 @@ pub(crate) fn about_machine(machine: &str, error: anyhow::Error) -> anyhow::Erro
     let Some(body) = service_error(&error) else {
         return error;
     };
-    let data = &body.data;
-    let problem = match data.reason {
-        Reason::NotFound if body.message == NO_MACHINE => Problem::NoMachine {
+    let problem = match body.data.reason.as_str() {
+        "not_found" if body.message == NO_MACHINE => Problem::NoMachine {
             given: machine.to_string(),
         },
-        Reason::Unavailable => {
-            let Some(unavailable) = &data.unavailable else {
+        "unavailable" => {
+            // A search can report which machines did not answer.
+            if detail::<Vec<MachineIdentity>>(body, "unanswered")
+                .is_some_and(|rows| !rows.is_empty())
+            {
                 return error;
-            };
-            let name = unavailable
-                .machine
-                .as_ref()
-                .map_or(machine.to_string(), |machine| machine.name.clone());
-            match (unavailable.execution, unavailable.unanswered.is_empty()) {
-                // A search can report which machines did not answer.
-                (_, false) => return error,
-                (ExecutionOutcome::NotExecuted, true) => Problem::MachineUnreachable {
+            }
+            match detail(body, "execution") {
+                Some(ExecutionOutcome::NotExecuted) => Problem::MachineUnreachable {
                     diagnostic: body.message.clone(),
                 },
-                (ExecutionOutcome::OutcomeUnknown, true) => {
-                    Problem::MachineStoppedResponding { machine: name }
-                }
+                Some(ExecutionOutcome::OutcomeUnknown) => Problem::MachineStoppedResponding {
+                    machine: detail::<MachineIdentity>(body, "machine")
+                        .map_or_else(|| machine.to_owned(), |identity| identity.name),
+                },
+                None => return error,
             }
         }
-        Reason::SshInteractionRequired => match &data.ssh_interaction {
-            Some(interaction) => Problem::SshLogin {
-                machine: machine.to_string(),
-                repair: interaction.command.clone(),
-            },
-            None => return error,
-        },
-        Reason::MachineIdConflict => match &data.machine_id_conflict {
-            Some(conflict) => Problem::SameMachineId {
-                short: short_machine_id(&conflict.machine_id),
-                paths: conflict.paths.clone(),
-            },
-            None => return error,
-        },
+        "ssh_interaction_required" => {
+            let Some(repair) = detail(body, "command") else {
+                return error;
+            };
+            Problem::SshLogin {
+                machine: machine.to_owned(),
+                repair,
+            }
+        }
+        "machine_id_conflict" => {
+            let (Some(machine_id), Some(paths)) =
+                (detail::<String>(body, "machine_id"), detail(body, "paths"))
+            else {
+                return error;
+            };
+            Problem::SameMachineId {
+                short: short_machine_id(&machine_id),
+                paths,
+            }
+        }
         _ => return error,
     };
     problem.into()
@@ -907,26 +908,11 @@ pub(crate) fn about_connection(destination: &str, error: anyhow::Error) -> anyho
         return error;
     };
     let destination = destination.to_string();
-    let problem = match body.data.reason {
-        Reason::NotFound if body.message.starts_with(NO_FACADE) => {
-            Problem::NoFacade { destination }
-        }
-        Reason::InvalidArgument if body.message.starts_with(STARTUP_PRINTS) => {
+    let problem = match body.data.reason.as_str() {
+        "not_found" if body.message.starts_with(NO_FACADE) => Problem::NoFacade { destination },
+        "invalid_argument" if body.message.starts_with(STARTUP_PRINTS) => {
             Problem::StartupPrints { destination }
         }
-        Reason::ProtocolIncompatible => match &body.data.protocol {
-            // The service names the other machine only in its words: `… but gpu is running …`.
-            Some(protocol) => Problem::Version {
-                machine: body
-                    .message
-                    .split_once(" but ")
-                    .and_then(|(_, rest)| rest.split_once(" is running Facade "))
-                    .map_or(destination, |(name, _)| name.to_string()),
-                theirs: protocol.remote_build.clone(),
-                ours: protocol.local_build.clone(),
-            },
-            None => return error,
-        },
         _ => return about_machine(&destination, error),
     };
     problem.into()
@@ -1021,23 +1007,19 @@ pub(crate) fn words(error: &anyhow::Error) -> String {
         return problem.to_string();
     }
     match service_error(error) {
-        Some(body) if body.data.reason == Reason::ConfigurationInvalid => Problem::Settings {
+        Some(body) if body.data.reason == "configuration_invalid" => Problem::Settings {
             diagnostic: service_words(&body.message),
         }
         .to_string(),
         Some(body) => {
             let message = service_words(&body.message);
-            if body.data.reason == Reason::AmbiguousReference
-                && body
-                    .data
-                    .candidates
+            if body.data.reason == "ambiguous_reference"
+                && let Some(candidates) = detail::<Vec<String>>(body, "candidates")
+                && candidates
                     .iter()
                     .any(|candidate| !message.contains(candidate))
             {
-                format!(
-                    "error: {message}\n  tip: choose {}",
-                    body.data.candidates.join(", ")
-                )
+                format!("error: {message}\n  tip: choose {}", candidates.join(", "))
             } else {
                 format!("error: {message}")
             }
@@ -1056,8 +1038,8 @@ pub(crate) fn exit_code(error: &anyhow::Error) -> i32 {
     if let Some(problem) = error.downcast_ref::<Problem>() {
         return problem.exit_code();
     }
-    match service_error(error).map(|body| body.data.reason) {
-        Some(Reason::InvalidArgument) => 2,
+    match service_error(error).map(|body| body.data.reason.as_str()) {
+        Some("invalid_argument") => 2,
         _ => 1,
     }
 }

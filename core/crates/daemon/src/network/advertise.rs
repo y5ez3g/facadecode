@@ -1,95 +1,110 @@
-//! Encodes machine tables using the negotiated machine protocol.
+//! Projects the machine table onto the topology shared with authenticated neighbours.
 
-use facade_base::jsonrpc::{ErrorBody, decode_arguments};
-use facade_base::{machine, v3};
-use serde_json::Value;
+use facade_base::api_v1::daemon as api;
+use facade_base::v3;
 
-pub(super) fn encode(
-    protocol: u32,
-    capabilities: &[String],
-    mut machines: Vec<v3::MachineInfo>,
-) -> Value {
-    if protocol >= v3::DAEMON_PROTOCOL_RANGE[0] {
-        let supports_disconnected = capabilities
-            .iter()
-            .any(|cap| cap == v3::CAP_MACHINE_DISCONNECTED);
-        for machine in &mut machines {
-            if !supports_disconnected && machine.state == v3::MachineState::Disconnected {
-                machine.state = v3::MachineState::Unreachable;
-            }
-            if capabilities.is_empty() {
-                machine.capabilities.clear();
-            }
-        }
-        serde_json::to_value(v3::AdvertiseParams { machines })
-    } else {
-        let machines = machines
-            .iter()
-            .filter(|machine| machine.route.is_some())
-            .map(legacy_row)
-            .collect();
-        serde_json::to_value(machine::AdvertiseParams { machines })
-    }
-    .expect("machine tables serialize")
-}
-
-pub(super) fn decode(protocol: u32, params: Value) -> Result<v3::AdvertiseParams, ErrorBody> {
-    if protocol >= v3::DAEMON_PROTOCOL_RANGE[0] {
-        return decode_arguments(params);
-    }
-    let legacy: machine::AdvertiseParams = decode_arguments(params)?;
-    Ok(v3::AdvertiseParams {
-        machines: legacy.machines.into_iter().map(current_row).collect(),
-    })
-}
-
-pub(super) fn legacy_row(row: &v3::MachineInfo) -> machine::MachineInfo {
-    machine::MachineInfo {
-        machine_id: row.machine_id.clone(),
-        boot_id: row.boot_id.clone(),
-        name: row.name.clone(),
-        build: row.build.clone(),
-        route: row.route.clone(),
-        connections: row
-            .connections
-            .iter()
-            .map(|connection| machine::MachineConnection {
-                machine_id: connection.machine_id.clone(),
-                initiator_machine_id: connection.initiator_machine_id.clone(),
-                kind: connection.kind,
-                ssh_destination: connection.ssh_destination.clone(),
-                remote_home: connection.remote_home.clone(),
-                state: connection.state,
-                ssh_interaction: connection.ssh_interaction.clone(),
+pub(super) fn encode(machines: Vec<v3::MachineInfo>) -> api::AdvertiseParams {
+    api::AdvertiseParams {
+        machines: machines
+            .into_iter()
+            .map(|row| api::MachineInfo {
+                short_id: v3::address::short_machine_id(&row.machine_id),
+                machine_id: row.machine_id,
+                boot_id: row.boot_id,
+                name: row.name,
+                selector: row.selector,
+                state: match row.state {
+                    v3::MachineState::Online => api::MachineState::Online,
+                    v3::MachineState::Connecting => api::MachineState::Connecting,
+                    v3::MachineState::Disconnected => api::MachineState::Disconnected,
+                    v3::MachineState::Sleeping => api::MachineState::Sleeping,
+                    v3::MachineState::Unreachable => api::MachineState::Unreachable,
+                    v3::MachineState::SshInteractionRequired => {
+                        api::MachineState::SshInteractionRequired
+                    }
+                },
+                last_seen: row.last_seen,
+                ssh_error: None,
+                build: row.build,
+                route: row.route,
+                connections: row
+                    .connections
+                    .into_iter()
+                    .map(|connection| api::MachineConnection {
+                        machine_id: connection.machine_id,
+                        initiator_machine_id: connection.initiator_machine_id,
+                        kind: match connection.kind {
+                            v3::ConnectionKind::Saved => api::ConnectionKind::Saved,
+                            v3::ConnectionKind::Temporary => api::ConnectionKind::Temporary,
+                        },
+                        state: match connection.state {
+                            v3::ConnectionState::Connected => api::ConnectionState::Connected,
+                            v3::ConnectionState::Disconnected => api::ConnectionState::Disconnected,
+                            v3::ConnectionState::SshInteractionRequired => {
+                                api::ConnectionState::SshInteractionRequired
+                            }
+                        },
+                        transport: None,
+                        ssh_interaction: None,
+                    })
+                    .collect(),
             })
             .collect(),
     }
 }
 
-fn current_row(row: machine::MachineInfo) -> v3::MachineInfo {
-    v3::MachineInfo {
-        selector: v3::address::exact_machine_selector(&row.machine_id),
-        machine_id: row.machine_id,
-        boot_id: row.boot_id,
-        name: row.name,
-        build: row.build,
-        route: row.route,
-        state: v3::MachineState::Online,
-        last_seen: None,
-        ssh_error: None,
-        capabilities: Vec::new(),
-        connections: row
-            .connections
+pub(super) fn decode(table: api::AdvertiseParams) -> v3::AdvertiseParams {
+    v3::AdvertiseParams {
+        machines: table
+            .machines
             .into_iter()
-            .map(|connection| v3::MachineConnection {
-                machine_id: connection.machine_id,
-                initiator_machine_id: connection.initiator_machine_id,
-                kind: connection.kind,
-                ssh_destination: connection.ssh_destination,
-                ssh_args: Vec::new(),
-                remote_home: connection.remote_home,
-                state: connection.state,
-                ssh_interaction: connection.ssh_interaction,
+            .map(|row| v3::MachineInfo {
+                selector: v3::address::exact_machine_selector(&row.machine_id),
+                machine_id: row.machine_id,
+                boot_id: row.boot_id,
+                name: row.name,
+                state: match row.state {
+                    api::MachineState::Online => v3::MachineState::Online,
+                    api::MachineState::Connecting => v3::MachineState::Connecting,
+                    api::MachineState::Disconnected => v3::MachineState::Disconnected,
+                    api::MachineState::Sleeping => v3::MachineState::Sleeping,
+                    api::MachineState::Unreachable | api::MachineState::Unknown => {
+                        v3::MachineState::Unreachable
+                    }
+                    api::MachineState::SshInteractionRequired => {
+                        v3::MachineState::SshInteractionRequired
+                    }
+                },
+                last_seen: row.last_seen,
+                ssh_error: None,
+                build: row.build,
+                route: row.route,
+                capabilities: Vec::new(),
+                connections: row
+                    .connections
+                    .into_iter()
+                    .map(|connection| v3::MachineConnection {
+                        machine_id: connection.machine_id,
+                        initiator_machine_id: connection.initiator_machine_id,
+                        kind: match connection.kind {
+                            api::ConnectionKind::Saved => v3::ConnectionKind::Saved,
+                            api::ConnectionKind::Temporary => v3::ConnectionKind::Temporary,
+                        },
+                        state: match connection.state {
+                            api::ConnectionState::Connected => v3::ConnectionState::Connected,
+                            api::ConnectionState::Disconnected | api::ConnectionState::Unknown => {
+                                v3::ConnectionState::Disconnected
+                            }
+                            api::ConnectionState::SshInteractionRequired => {
+                                v3::ConnectionState::SshInteractionRequired
+                            }
+                        },
+                        ssh_destination: None,
+                        ssh_args: Vec::new(),
+                        remote_home: None,
+                        ssh_interaction: None,
+                    })
+                    .collect(),
             })
             .collect(),
     }

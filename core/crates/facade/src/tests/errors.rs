@@ -3,13 +3,14 @@
 
 use std::path::PathBuf;
 
-use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_base::api_v1::daemon::AgentLabel;
+use facade_base::api_v1::{ErrorBody, ErrorData};
+use serde_json::{Value, json};
 
-use facade_base::machine::{ExecutionOutcome, MachineIdentity, Unavailable};
-use facade_base::v3::AgentLabel;
-use serde_json::json;
-
-use crate::errors::{AgentCommand, Problem, agent_failed, exit_code, stop_diagnostic, words};
+use crate::errors::{
+    AgentCommand, Problem, about_connection, agent_failed, exit_code, stop_diagnostic, stop_failed,
+    words,
+};
 
 fn given(text: &str) -> String {
     text.to_string()
@@ -82,8 +83,19 @@ fn an_unreachable_orchestrator_names_the_log_to_check() {
 }
 
 /// A service failure, as the command's call returns it.
-fn refused(reason: Reason, message: &str) -> anyhow::Error {
-    anyhow::Error::new(ErrorBody::new(reason, message))
+fn refused(reason: &str, message: &str) -> anyhow::Error {
+    refusal(reason, message, Value::Null).into()
+}
+
+fn refusal(reason: &str, message: &str, details: Value) -> ErrorBody {
+    ErrorBody {
+        code: -32000,
+        message: given(message),
+        data: ErrorData {
+            reason: given(reason),
+            details: details.as_object().cloned(),
+        },
+    }
 }
 
 fn agent_label(
@@ -96,6 +108,7 @@ fn agent_label(
     serde_json::from_value(json!({
         "reference": { "agent_id": agent_id, "machine_id": machine },
         "address": format!("{agent_id}@{machine}"), "name": name, "cli": "fake",
+        "type": if state == "online" { "guest" } else { "managed" },
         "state": state, "resumable": resumable,
     }))
     .expect("a public agent label")
@@ -103,7 +116,7 @@ fn agent_label(
 
 #[test]
 fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
-    let row = |given: &str, reason: Reason, message: &str| {
+    let row = |given: &str, reason: &str, message: &str| {
         words(&agent_failed(
             AgentCommand::Screen,
             given,
@@ -111,13 +124,13 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
         ))
     };
     assert_eq!(
-        row("a9", Reason::NotFound, "no agent a9"),
+        row("a9", "not_found", "no agent a9"),
         "error: No agent or guest matches \"a9\".\nRun 'facade list' to find an agent."
     );
     let missing = agent_failed(
         AgentCommand::Stop,
         "nobody",
-        refused(Reason::NotFound, "no agent nobody"),
+        refused("not_found", "no agent nobody"),
     );
     assert_eq!(
         stop_diagnostic(&missing, true),
@@ -126,9 +139,11 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
             Some("Run 'facade list' to check active agents."),
         )
     );
-    let mut guest = ErrorBody::new(Reason::Unsupported, "a5@laptop is a guest");
-    guest.data.agents = vec![agent_label("a5", "laptop", "Cursor", "online", false)];
-    let guest = agent_failed(AgentCommand::Stop, "a5@laptop", guest.into());
+    let guest = stop_failed(
+        "a5@laptop",
+        Some(&agent_label("a5", "laptop", "Cursor", "online", false)),
+        refusal("unsupported", "a5@laptop is a guest", Value::Null),
+    );
     let guest_line = "error: Cursor (a5@laptop) is a guest and cannot be stopped by Facade.";
     assert_eq!(
         stop_diagnostic(&guest, false),
@@ -139,24 +154,27 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
     );
     assert_eq!(stop_diagnostic(&guest, true), (given(guest_line), None));
 
-    let mut multiple = ErrorBody::new(
-        Reason::AmbiguousReference,
+    let candidates = json!({ "candidates": ["a1@laptop", "a2@gpu"] });
+    let multiple = refusal(
+        "ambiguous_reference",
         "more than one agent matches Ada",
+        candidates.clone(),
     );
-    multiple.data.candidates = ["a1@laptop", "a2@gpu"].map(given).to_vec();
     assert_eq!(
-        words(&agent_failed(
-            AgentCommand::Screen,
-            "Ada",
-            multiple.clone().into()
-        )),
+        words(&agent_failed(AgentCommand::Screen, "Ada", multiple.into())),
         "error: more than one agent matches Ada\n  tip: choose a1@laptop, a2@gpu"
     );
 
-    multiple.data.agents = vec![
+    let mut details = candidates;
+    details["agents"] = json!([
         agent_label("a1", "laptop", "Ada", "idle", false),
         agent_label("a2", "gpu", "Ada", "working", false),
-    ];
+    ]);
+    let multiple = refusal(
+        "ambiguous_reference",
+        "more than one agent matches Ada",
+        details,
+    );
     let error = agent_failed(AgentCommand::Screen, "Ada", multiple.into());
     let text = words(&error);
     assert!(text.starts_with("error: More than one active agent or guest is named \"Ada\"."));
@@ -169,25 +187,24 @@ fn a_service_refusal_keeps_its_diagnostic_and_lists_its_candidates() {
     assert_eq!(
         row(
             "a1",
-            Reason::PartialInput,
+            "partial_input",
             "a1@laptop ended after 3 of 9 characters were typed"
         ),
         "error: a1@laptop ended after 3 of 9 characters were typed"
     );
     assert_eq!(
-        row(
-            "a1",
-            Reason::Unavailable,
-            "a1@laptop has no recorded session"
-        ),
+        row("a1", "unavailable", "a1@laptop has no recorded session"),
         "error: a1@laptop has no recorded session"
     );
 }
 
 #[test]
 fn a_send_to_an_ended_agent_names_the_agent_the_service_gives() {
-    let mut ended = ErrorBody::new(Reason::Ended, "a2@gpu has ended");
-    ended.data.agents = vec![agent_label("a2", "gpu", "Bob", "ended", true)];
+    let ended = refusal(
+        "ended",
+        "a2@gpu has ended",
+        json!({ "agents": [agent_label("a2", "gpu", "Bob", "ended", true)] }),
+    );
     let error = agent_failed(AgentCommand::Send, "bob", ended.into());
     assert_eq!(
         words(&error),
@@ -200,7 +217,7 @@ fn a_send_to_an_ended_agent_names_the_agent_the_service_gives() {
 #[test]
 fn a_settings_file_that_cannot_be_used_gets_the_fix_tip() {
     let said = words(&refused(
-        Reason::ConfigurationInvalid,
+        "configuration_invalid",
         "/home/you/.facade/facade.json:3:7: expected a string; nothing was done",
     ));
     assert_eq!(
@@ -221,15 +238,6 @@ fn machine_rows_print_their_error_and_tip() {
             "error: could not find facade on gpu\n  tip: run the Facade Code installer on gpu and try again",
         ),
         (
-            Problem::Version {
-                machine: given("gpu"),
-                theirs: given("0.1.5"),
-                ours: given("0.1.7"),
-            },
-            "error: gpu runs Orchestrator 0.1.5, which cannot connect to 0.1.7\n  tip: install \
-             Facade Code 0.1.7 on gpu",
-        ),
-        (
             Problem::SshLogin {
                 machine: given("gpu"),
                 repair: ["facade", "machine", "add", "gpu"].map(given).to_vec(),
@@ -247,24 +255,30 @@ fn machine_rows_print_their_error_and_tip() {
         assert_eq!(problem.to_string(), printed);
         assert_eq!(problem.exit_code(), 1);
     }
+    let message = "No offered API version is supported.";
+    let incompatible = refusal(
+        "protocol_incompatible",
+        message,
+        json!({ "supported_api_versions": [1] }),
+    );
+    let error = about_connection("gpu", incompatible.into());
+    assert_eq!(words(&error), format!("error: {message}"));
+    assert_eq!(exit_code(&error), 1);
 }
 
 /// A stop of a resolved agent whose machine stopped responding reports an unconfirmed exit.
 #[test]
 fn an_unconfirmed_remote_stop_names_the_resolved_agent() {
-    let mut body = ErrorBody::new(Reason::Unavailable, "gpu stopped responding");
-    body.data.agents = vec![agent_label("a17", "gpu", "Pixel", "idle", false)];
-    body.data.unavailable = Some(Unavailable {
-        execution: ExecutionOutcome::OutcomeUnknown,
-        machine: Some(MachineIdentity {
-            machine_id: given("3f9a2c1d-0000-4000-8000-000000000000"),
-            name: given("gpu"),
+    let body = refusal(
+        "unavailable",
+        "gpu stopped responding",
+        json!({
+            "execution": "outcome_unknown",
+            "machine": { "machine_id": "3f9a2c1d-0000-4000-8000-000000000000", "name": "gpu" },
         }),
-        window: None,
-        matches: Vec::new(),
-        unanswered: Vec::new(),
-    });
-    let error = agent_failed(AgentCommand::Stop, "a17@gpu", body.into());
+    );
+    let agent = agent_label("a17", "gpu", "Pixel", "idle", false);
+    let error = stop_failed("a17@gpu", Some(&agent), body);
     assert_eq!(
         words(&error),
         "error: Could not confirm that Pixel (a17@gpu) stopped. Check it with 'facade status a17@gpu'."
@@ -274,20 +288,14 @@ fn an_unconfirmed_remote_stop_names_the_resolved_agent() {
 /// `stop` of a name that some machines did not answer says which, as any command does.
 #[test]
 fn a_name_search_some_machines_did_not_answer_names_them_for_stop() {
-    let mut body = ErrorBody::new(
-        Reason::Unavailable,
+    let body = refusal(
+        "unavailable",
         "not every machine answered the search for Pixel",
+        json!({
+            "execution": "not_executed",
+            "unanswered": [{ "machine_id": "3f9a2c1d-0000-4000-8000-000000000000", "name": "gpu" }],
+        }),
     );
-    body.data.unavailable = Some(Unavailable {
-        execution: ExecutionOutcome::NotExecuted,
-        machine: None,
-        window: None,
-        matches: Vec::new(),
-        unanswered: vec![MachineIdentity {
-            machine_id: given("3f9a2c1d-0000-4000-8000-000000000000"),
-            name: given("gpu"),
-        }],
-    });
     let error = agent_failed(AgentCommand::Stop, "Pixel", body.into());
     assert_eq!(
         words(&error),

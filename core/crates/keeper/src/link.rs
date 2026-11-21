@@ -8,8 +8,8 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use facade_base::api_v1::{ApiVersion, MAX_LINE_BYTES, encode_line};
 use facade_base::descriptors::{DescriptorLines, send_line};
-use facade_base::jsonrpc::encode_line;
 use facade_base::process::ProcessIdentity;
 use facade_base::service::{self, Service};
 use serde::Serialize;
@@ -24,7 +24,7 @@ pub(super) struct Link {
     socket: UnixStream,
     inbox: DescriptorLines,
     daemon: ProcessIdentity,
-    greeted: bool,
+    api_version: Option<ApiVersion>,
 }
 
 /// One thing read from the link.
@@ -54,7 +54,7 @@ impl Link {
                 socket,
                 inbox,
                 daemon,
-                greeted: false,
+                api_version: None,
             }),
             Err(err) => {
                 log("warn", &format!("turned away a connection: {err}"));
@@ -73,13 +73,13 @@ impl Link {
         self.socket.as_fd()
     }
 
-    /// Whether `hello` has succeeded on this link.
-    pub(super) fn is_greeted(&self) -> bool {
-        self.greeted
+    /// The version selected by `hello` on this proved link.
+    pub(super) fn api_version(&self) -> Option<ApiVersion> {
+        self.api_version
     }
 
-    pub(super) fn mark_greeted(&mut self) {
-        self.greeted = true;
+    pub(super) fn set_api_version(&mut self, version: ApiVersion) {
+        self.api_version = Some(version);
     }
 
     /// Everything that has arrived so far, without blocking. A `Closed` or `Overlong` entry is
@@ -88,11 +88,16 @@ impl Link {
         let mut got = Vec::new();
         loop {
             match self.inbox.next_line() {
-                Ok(Some((offset, text))) => {
-                    let attached = self.inbox.take(offset, 1).map(|mut fds| fds.pop());
-                    let attached = match attached {
-                        Err(0) => Ok(None),
-                        other => other,
+                Ok(Some((_, text))) if text.len() >= MAX_LINE_BYTES => {
+                    got.push(Inbound::Overlong);
+                    return got;
+                }
+                Ok(Some((begin, text))) => {
+                    let end = begin + text.len() as u64 + 1;
+                    let attached = match self.inbox.take_carried(begin, end) {
+                        Ok(mut fds) if fds.len() <= 1 => Ok(fds.pop()),
+                        Ok(fds) => Err(fds.len()),
+                        Err(count) => Err(count),
                     };
                     got.push(Inbound::Line(text, attached));
                 }

@@ -58,7 +58,7 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
             "agent.start",
             json!({
                 "cli": cli, "folder": folder, "env": { "PATH": path, "FACADE_HOME": home.path },
-                "cols": 80, "rows": 24,
+                "size": { "cols": 80, "rows": 24 },
             }),
         )
     };
@@ -79,15 +79,19 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
                 )),
         "{missing}"
     );
-    assert_eq!(
-        error_reason(&start(
-            &mut wire,
-            "/no/such/program",
-            &project,
-            SYSTEM_PATH.as_str()
-        )),
-        "not_found",
-        "a program that is no CLI of the settings file"
+    let unknown = start(
+        &mut wire,
+        "/no/such/program",
+        &project,
+        SYSTEM_PATH.as_str(),
+    );
+    assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
+    assert_eq!(error_reason(&unknown), "invalid_argument", "{unknown}");
+    assert!(
+        unknown["error"]["data"]["details"]["available_clis"]
+            .as_array()
+            .is_some_and(|clis| clis.contains(&json!(shell))),
+        "{unknown}"
     );
     let program = start(&mut wire, shell, no_folder.as_str(), SYSTEM_PATH.as_str());
     let named = start(
@@ -230,7 +234,11 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
         "{record}"
     );
     assert_eq!(inspection["viewers"], json!([]));
-    wire.call("agent.stop", json!({ "agent": agent.id }));
+    let stopped = wire.call_ok(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [agent.id] } }),
+    );
+    assert_eq!(stopped["items"][0]["status"], "stopped", "{stopped}");
     let ended = inspect(&home, "reader");
     assert_eq!(
         (

@@ -7,10 +7,9 @@ to speak of, so every other crate can depend on it and it depends on none of the
 
 ## Owns
 
-- The daemon protocol and the keeper protocol: their types, operation and topic names, line
-  framing and error envelope. `core/protocol/` (`PROTOCOL.md`, `protocol.schema.json`,
-  `protocol.ts`, `KEEPER.md`) and the extension's `src/base/coreProtocol.ts` are generated from
-  them. The generator writes the two TypeScript copies together.
+- The daemon and keeper protocol types, operations, framing and error envelope. `core/protocol/`
+  contains the two generated guides and endpoint schemas. The generator writes `protocol.ts` and
+  the extension's `src/base/coreProtocol.ts` together from the daemon registrations.
 - The Facade home's location (`FACADE_HOME`, else `~/.facade`) and the key that names its sockets.
 - The services' sockets: on macOS and Linux the socket folder `/tmp/facade-core-<uid>/` and
   `keeper-<key>.sock` and `daemon-<key>.sock` in it; on Windows the named pipes
@@ -37,10 +36,11 @@ to speak of, so every other crate can depend on it and it depends on none of the
   and for lines that carry descriptors.
 - A build takes over from a running one only when both versions are three numbers and its own are
   higher (`takes_over`). The command that asks and the daemon that is asked both decide by it.
-- Ordinary daemon and machine connections use protocol 3. Their hello advertises operations,
-  topics and capabilities. Missing capabilities select the published protocol 3 behavior.
-  The takeover client can negotiate protocols 2 and 3. The keeper and MCP relay continue at
-  protocol 1.
+- An authenticated connection selects the highest common version offered in hello. The daemon
+  and keeper support sets each begin at `[1]`. Daemon hello lists operations and topics available
+  to that caller. The external MCP relay keeps its own `relay:1` boundary. Its authenticated
+  in-process actor uses daemon API v1.
+- Each endpoint follows its own formal compatibility window. See [Daemon takeover](../../../core/protocol/DAEMON.md#daemon-takeover).
 - The files in `core/protocol/` are exactly what the types generate; the `protocol_files` test
   fails on any difference.
 - Each public path has one place: a module moved inside the crate is re-exported at the root, never
@@ -99,15 +99,18 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   pseudo console's input, output and signal pipe ends and the CLI's job); `PtyIo`, how the daemon
   reads and writes one, with `stop_reading` and `let_go_before_stop`; `PASTE_BYTES_PER_MS`;
   `key_down_records`; `test_terminal`.
-- `terminal_lines::{LineSender, LineReceiver}`: keeper lines that may carry a terminal; on Unix
-  over `descriptors::{send_line, DescriptorLines}` (Unix only), on Windows as the line's
-  `terminal` member, with `PeerProcess`, `add_terminal` and `take_terminal` for the keeper.
+- `terminal_lines::{LineSender, LineReceiver}` carry keeper lines and their optional terminal.
+  Unix uses `descriptors::{send_line, DescriptorLines}` to associate a descriptor with its frame.
+  On Windows the authenticated link carries the resource in the `terminal` member.
+  `take_terminal` extracts one owned resource and passes the stripped bytes to the protocol
+  decoder. `InvalidTerminalEnvelope::request_id()` exposes a proved request ID if available.
+  `add_terminal` prepares target-process copies. Its guard transfers ownership after delivery of
+  the full line and reclaims the copies when dropped before commit.
 - `sockets::{DaemonListener, ServerSocket, ServerReader, ServerWriter, ServerPeer, pair}`: the
   daemon's side of its socket; `server_pipe` on Windows, for the keeper.
 - `limits::raise_open_files()`, which does nothing on Windows.
-- `keeper`: the keeper protocol's types and operations; see
-  [KEEPER.md](../../../core/protocol/KEEPER.md).
-- `jsonrpc`: the framing and errors both protocols share (below).
+- `api_v1::keeper` supplies hello, the typed operation decoder, launch DTOs and exit notifications.
+  The existing keeper types still describe resolved launches. [Keeper reference](../../../core/protocol/KEEPER.md)
 
 **The daemon**
 - `machine` defines machine introductions, caller identity, forwarded requests and machine
@@ -116,13 +119,14 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   arguments in their order. When the remote platform is unknown, Route and Travel identify its
   login shell over the authenticated stream. The bootstrap probes the fixed installation path,
   reads the client's install or serve decision, and writes `ready` before running machine serve
-  on the same streams. The caller waits for the machine hello before registering the connection.
+  on the same streams. It serves any installed build and uses the authenticated machine hello
+  to establish compatibility before registration. Only a waking attempt may install a missing
+  peer. A passive attempt uses `--no-start` and recognizes exit 3 as sleeping.
   On Windows, the foreground command keeps its output capture pipes private before starting the
   process that holds the saved SSH link.
   `system::hostname` and `system::login_environment` supply the host name and login environment.
-- `daemon`: the daemon protocol's common values and legacy operations and topics; see
-  [PROTOCOL.md](../../../core/protocol/PROTOCOL.md). Also the shared checks and texts the protocol
-  defines: `check_message_text`, `display_name`, `typed_text`, `typed_text_with_machines`,
+- `daemon` holds existing runtime and prerelease-adapter types. Its shared checks and text
+  helpers include `check_message_text`, `display_name`, `typed_text`, `typed_text_with_machines`,
   `start_result_text` and `start_result_text_at`, `is_session_id`, `location_id`, `agents_word`,
   `plain`. The start result formatter takes the agent and prompt addresses from the caller.
   `WindowDescription` carries optional `colors: TerminalColors` and `env`: the terminal colors
@@ -133,24 +137,15 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   The environment stays in memory alone. `StartArgs.session` continues a CLI session as a new agent, with its own number;
   a resume keeps the agent's ID. `HelloParams.numbers_given: NumbersGiven` lets an `ide` client
   report the highest agent and message numbers its editor gave, so future numbers exceed them.
-- `v3` supplies the ordinary daemon operations and topics. `AgentListEntry` combines a stable
-  `AgentRef` with the public roster row, and `ResumeCandidate` carries its complete `ResumeTarget`.
-  `v3::address` parses the number or name and optional machine selector at the entrance.
-  The daemon uses its view of the machines to check that each displayed address selects one machine.
-  `AgentTarget::Reference` gives the daemon an exact target for an existing Attach or Pin. The
-  machine-to-machine `ForwardCall` carries the resolved recipient so a retry uses the same record.
-  `MachineQueryResult` gives the connection state and the outcome of that particular query.
-  `List` and `Stop` use `Scope` to select this machine, a named machine or reachable machines.
-  `BatchStopResult` carries each target's outcome with any machine query failures.
-  `AttachTopic` uses the same terminal frames as `ScreenTopic`. `AttachResize` refers to the
-  client's watch. An authenticated forwarded watch carries the holder's viewer and daemon
-  start ID for resize forwarding. A capable daemon supports exact saved-connection removal by
-  full machine ID. See the [protocol guide](../../../core/protocol/PROTOCOL.md).
-- `jsonrpc`: `Request`, `Response`, `Notification`, `ErrorBody` with one constructor per reason
-  (`invalid_argument`, `refused`, `internal`, …), `Reason`, `read_request`, `encode_line`,
-  `decode_arguments`, `MAX_LINE_BYTES`.
-  `ErrorData.entry` names the settings entry behind a refused start or resume, so an editor can
-  offer to open the settings file; a model or effort the start chose itself sets no entry.
+- `api_v1::daemon` supplies typed operation and topic markers, request and response DTOs, and
+  audience-aware decoders. The registry records forwarding eligibility. Forwarded calls carry
+  exact targets where required. A forwarded Attach watch carries the holder's viewer and daemon
+  start ID, scoped to that watch. Saved-connection removal accepts an expected full machine ID.
+  [Daemon reference](../../../core/protocol/DAEMON.md)
+- `api_v1` supplies shared bounded line framing, `Size`, and the JSON-RPC error envelope.
+  A stable reason and optional object details carry information for callers, such as the settings
+  entry behind a refusal or an endpoint's supported API versions. The existing `daemon`,
+  `machine`, `jsonrpc` and `v3` types serve in-process behavior and adapters.
 - `operations::{Operation, Topic, NoArgs, EmptyResult}`.
 - `programs`: `install`, `install_running`, `point_launchers_at(build, running)`, `launcher`,
   `Held` (`open`, `restore`, `facade_mcp`, `facade_launcher`), and path lookup:
@@ -168,11 +163,11 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   `tools::V3_DEFINITIONS` describe the Orchestrator and its eight MCP tools.
 
 **The `facade` program**
-- `daemon_client::{DaemonClient, Identity, environment, takeover_timeout}`: a blocking client
-  that connects, says hello, calls, watches, and reconnects to a daemon that took over.
-  Ordinary v3 calls use `DaemonClient::connect_v3` or `hello_v3`. `UpgradeClient` negotiates the
-  takeover and can read the v2 running list for a refusal diagnostic.
-  A caller that manages reconnection can call `DaemonClient::disable_auto_reconnect`.
+- `api_v1::daemon_client::DaemonClient` is the blocking terminal client for authenticated local
+  hello, typed calls and watches, and reconnect after takeover. It preserves the reader buffer
+  when handing the stream over after machine authorization. The terminal can manage its own
+  reconnection through `disable_auto_reconnect`. `daemon_client` supplies environment capture
+  and shared timeout and transport helpers.
 - `programs::{install_running, current_build, point_launchers_at, launcher}`;
   `service::{create_private_home, launch, live_holder}` to start the keeper;
   `unix_process::calling_program()` for a hook's CLI.
@@ -243,18 +238,18 @@ Windows.
 
 The daemon and keeper types and framing, and a blocking daemon client.
 `core/crates/base/src/protocol/` and the tests in `core/crates/base/tests/`.
-- **Owns:** the daemon protocol (`v3/` and legacy `daemon.rs`), the keeper protocol (`keeper.rs`),
-  JSON-RPC lines and errors (`jsonrpc.rs`), typed operations and topics (`operations.rs`),
-  terminal bytes as base64 (`base64.rs`), and `guide.md`, the prose of `PROTOCOL.md`.
+- **Owns** the current wire DTOs, endpoint support sets, registered operations and topics, framing
+  and blocking client in `api_v1/`. It also owns shared operation traits in `operations.rs`,
+  terminal byte encoding in `base64.rs`, and the source for the generated guides.
 - **Keeps:** each convention is defined once; one message per line, never longer than
   `MAX_LINE_BYTES`; `core/protocol/` matches the types byte for byte. A client keeps its socket
   and identity, so it can reach the daemon that takes over; a call whose request ID makes it safe
   to repeat, such as a send or a start, goes again to the daemon that responds next.
 - **Never does:** touches processes, locks, the socket folder or file permissions; uses platform
   but `paths::{ClientSocket, is_connection_lost}`, settings or texts.
-- **Interface:** the `v3`, `daemon`, `keeper`, `jsonrpc`, `operations`, `base64` and `daemon_client`
-  modules above. The tests generate `core/protocol/` (`FACADE_REGENERATE=1 cargo test -p
-  facade-base --test protocol_files`) and check the guide's examples.
+- **Interface** `api_v1` exports the current wire boundary. The generator verifies both endpoint
+  schemas and guide examples. Run `FACADE_REGENERATE=1 cargo test -p facade-base --test protocol_files`
+  to refresh the checked-in output.
 
 ### platform
 
@@ -326,8 +321,9 @@ What a model reads. `core/crates/base/src/texts/`.
 ## Reading the code
 
 1. `core/crates/base/src/lib.rs`: the parts and the public modules.
-2. `src/protocol/v3/mod.rs`: `visit_operations` and `visit_topics`, then the types each names.
-3. `src/protocol/jsonrpc.rs`: `ErrorBody`, `Reason`, `read_request`, `encode_line`.
+2. `src/protocol/api_v1/daemon/registry.rs` and `src/protocol/api_v1/keeper.rs` show each
+   endpoint's typed registration and the operations it visits.
+3. `src/protocol/api_v1/frame.rs` defines the shared error envelope and bounded framing.
 4. `src/platform/service.rs`: `lock_home`, `launch`, `StartupChannel`; then `programs.rs`:
    `point_launchers_at`, `Held`.
 5. `src/platform/unix_process.rs`: `ProcessObservation`, `signal_group`.

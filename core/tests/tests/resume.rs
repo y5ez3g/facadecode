@@ -200,7 +200,7 @@ fn a_session_the_cli_reports_is_recorded_and_follows_the_cli() {
         home.listed_agent("worker")
     );
     let mut wire = connect(&home);
-    let inspected = wire.call("agent.inspect", json!({ "agent": agent.address }));
+    let inspected = wire.call("agent.inspect", json!({ "target": agent.address }));
     assert_eq!(inspected["result"]["session_tracking"], true, "{inspected}");
     type_raw(&mut wire, &agent.id, &format!("/session {SECOND}\r"));
     assert!(records_session(&home, "worker", Some(SECOND)));
@@ -527,7 +527,10 @@ fn a_resumed_agent_keeps_its_id_name_record_and_screen_and_continues_its_session
     type_raw(&mut wire, &first.id, "before the resume\r");
     assert!(wait_for_screen_text(&home, "worker", "> before the resume"));
     let before = home.agent_record(&first.id).unwrap();
-    wire.call("agent.stop", json!({ "agent": first.id }));
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [first.id] } }),
+    );
     let resumed = resume(&home, "worker");
     assert!(
         resumed.status.success(),
@@ -591,7 +594,7 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
             "name": "ada", "cli": "fake", "folder": home.project,
             "model": "qa-original", "effort": "low",
             "args": ["qa-saved-argument"],
-            "cols": 80, "rows": 24,
+            "size": { "cols": 80, "rows": 24 },
             "env": env,
         }),
     );
@@ -699,9 +702,9 @@ fn resume_lists_a_stopped_agent_and_reuses_its_launch_choices() {
     check_resume(&attached);
 }
 
-/// An actual v2 run lacks a launch snapshot. Takeover must choose it before any Resume.
+/// A finished v2 run lacks a launch snapshot. The cold cutover chooses it before any Resume.
 #[test]
-fn a_resume_after_v2_takeover_uses_the_launch_choices_from_migration() {
+fn a_resume_after_v2_cold_cutover_uses_the_launch_choices_from_migration() {
     let home = TestHome::new("v2resume");
     let old = v2_facade(&home);
     let set_choices = |model: &str, effort: &str| {
@@ -731,7 +734,7 @@ fn a_resume_after_v2_takeover_uses_the_launch_choices_from_migration() {
     );
 
     let mut legacy = DaemonTestClient::open(&home);
-    let old_hello = legacy.hello("terminal", [2, 2], json!({}));
+    let old_hello = legacy.hello_prerelease("terminal", [2, 2], json!({}));
     assert_eq!(old_hello["result"]["protocol"], 2, "{old_hello}");
     assert_eq!(old_hello["result"]["build"], V2_TEST_BUILD, "{old_hello}");
     assert!(
@@ -742,19 +745,32 @@ fn a_resume_after_v2_takeover_uses_the_launch_choices_from_migration() {
         "the v2 fake CLI did not report its session"
     );
     let before = legacy.call("agent.inspect", json!({ "agent": id }))["result"]["agent"].clone();
+    let stopped = home.command(&old).args(["stop", id]).output().unwrap();
+    assert!(stopped.status.success(), "{}", stderr(&stopped));
+    assert_eq!(
+        legacy.call_ok("agent.inspect", json!({ "agent": id }))["agent"]["process"],
+        "ended"
+    );
     drop(legacy);
 
     set_choices("qa-at-migration", "low");
-    home.run_facade_ok(&["daemon", "--takeover"]);
-    assert!(wait_until(LOADED_TIMEOUT, || home.hello_result().is_some()));
+    home.kill_home_processes();
+    home.run_facade_ok(&["list", "--local"]);
     let hello = home.hello_result().unwrap();
-    assert_eq!(hello["protocol"], 3, "{hello}");
+    assert_eq!(hello["api_version"], 1, "{hello}");
     assert_ne!(hello["pid"], old_hello["result"]["pid"]);
-    assert_eq!(hello["keeper"]["pid"], old_hello["result"]["keeper"]["pid"]);
+    assert_ne!(hello["keeper"]["pid"], old_hello["result"]["keeper"]["pid"]);
     let migrated = inspected_agent(&home, id);
-    for key in ["agent_id", "machine_id", "cwd", "session", "pid"] {
-        assert_eq!(migrated[key], before[key], "takeover keeps {key}");
+    for key in ["agent_id", "machine_id"] {
+        assert_eq!(
+            migrated["reference"][key], before[key],
+            "cutover keeps {key}"
+        );
     }
+    for key in ["cwd", "session"] {
+        assert_eq!(migrated[key], before[key], "cutover keeps {key}");
+    }
+    assert_eq!(migrated["process"], "ended");
     let address = migrated["address"].as_str().unwrap();
     assert!(address.starts_with("a1@"), "{migrated}");
     assert_eq!(migrated["model"], "qa-at-migration");
@@ -762,7 +778,6 @@ fn a_resume_after_v2_takeover_uses_the_launch_choices_from_migration() {
     assert_eq!(migrated["args"], json!([]));
 
     set_choices("qa-after-upgrade", "high");
-    home.run_facade_ok(&["stop", address]);
     let after_args = home.folder().join("resumed-legacy-argv.json");
     let resumed = home
         .command(&test_binaries().facade)
@@ -825,11 +840,14 @@ fn resume_refuses_a_running_agent_one_without_a_rule_and_one_without_a_session()
             running.address
         )
     );
-    let stopped = wire.call("agent.stop", json!({ "agent": raw }));
+    let stopped = wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [raw] } }),
+    );
     assert!(stopped["result"].is_object(), "{stopped}");
     let reply = wire.call(
         "agent.resume",
-        json!({ "reference": "raw", "cols": 80, "rows": 24 }),
+        json!({ "target": { "kind": "selector", "selector": "raw" }, "size": { "cols": 80, "rows": 24 } }),
     );
     assert!(reply["error"].is_object(), "{reply}");
     let custom = reply["error"]["message"].as_str().unwrap();
@@ -837,7 +855,10 @@ fn resume_refuses_a_running_agent_one_without_a_rule_and_one_without_a_session()
         custom.contains("is a custom program and cannot be resumed"),
         "{custom}"
     );
-    wire.call("agent.stop", json!({ "agent": silent.id }));
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [silent.id] } }),
+    );
     let said = refused(&home, "silent");
     assert!(
         said.starts_with("error: ")
@@ -859,7 +880,10 @@ fn a_hook_from_an_earlier_run_cannot_reach_the_resumed_run() {
     assert!(records_session(&home, "worker", Some(FIRST)));
     let earlier = session_file(&home, &agent.id);
     let mut wire = connect(&home);
-    wire.call("agent.stop", json!({ "agent": agent.id }));
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [agent.id] } }),
+    );
     assert!(resume(&home, "worker").status.success());
     assert_ne!(
         session_file(&home, &agent.id),
@@ -892,8 +916,14 @@ fn recovery_commits_a_resume_the_interrupted_daemon_could_not_save() {
             && records_session(&home, "other", Some(SECOND))
     );
     let mut wire = connect(&home);
-    wire.call("agent.stop", json!({ "agent": held.id }));
-    wire.call("agent.stop", json!({ "agent": other.id }));
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [held.id] } }),
+    );
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [other.id] } }),
+    );
     let resuming = {
         let mut command = home.command(&test_binaries().facade);
         command
@@ -954,8 +984,8 @@ fn two_editor_connections_resume_one_stopped_process() {
     let folder = facade_base::files::real_path(&home.project).unwrap();
     let editor = || {
         let mut wire = DaemonTestClient::open(&home);
-        let hello = wire.hello("ide", DAEMON_RANGE, json!({}));
-        assert_eq!(hello["result"]["protocol"], 3, "{hello}");
+        let hello = wire.hello("ide", DAEMON_API_VERSIONS, json!({}));
+        assert_eq!(hello["result"]["api_version"], 1, "{hello}");
         wire
     };
     let mut first = editor();
@@ -975,12 +1005,13 @@ fn two_editor_connections_resume_one_stopped_process() {
         "agent.start",
         json!({
             "cli": "fake", "name": "worker", "folder": folder,
-            "env": env, "cols": 80, "rows": 24,
+            "env": env, "size": { "cols": 80, "rows": 24 },
         }),
     );
     let record = &started["result"]["agent"];
     let address = record["address"].as_str().expect("the copyable address");
-    let id = record["agent_id"]
+    let reference = &record["reference"];
+    let id = reference["agent_id"]
         .as_str()
         .unwrap_or_else(|| panic!("{started}"));
     let pid = record["pid"].as_i64().expect("the original PID") as i32;
@@ -988,13 +1019,16 @@ fn two_editor_connections_resume_one_stopped_process() {
     assert!(records_session(&home, "worker", Some(FIRST)));
 
     let watch = |wire: &mut DaemonTestClient| {
-        let reply = wire.request("watch", json!({ "topic": "agents" }));
+        let reply = wire.request("watch", json!({ "topic": "agents", "args": {} }));
         reply["result"]["watch"]
             .as_u64()
             .unwrap_or_else(|| panic!("{reply}"))
     };
     let (a, b) = (watch(&mut first), watch(&mut second));
-    let stopped = first.call("agent.stop", json!({ "agent": address }));
+    let stopped = first.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [address] } }),
+    );
     assert!(stopped["result"].is_object(), "{stopped}");
     assert!(
         wait_until(secs(15), || !alive(&original)),
@@ -1004,7 +1038,7 @@ fn two_editor_connections_resume_one_stopped_process() {
         assert!(
             wait_until(secs(10), || wire.changes(watch).iter().any(|event| {
                 let agent = &event["change"]["agent"];
-                agent["agent_id"] == id
+                agent["reference"] == *reference
                     && agent["process"] == "ended"
                     && agent["address"] == address
             })),
@@ -1015,7 +1049,7 @@ fn two_editor_connections_resume_one_stopped_process() {
 
     let resume = json!({
         "op": "agent.resume",
-        "args": { "reference": address, "env": env, "cols": 80, "rows": 24 }
+        "args": { "target": { "kind": "agent", "reference": reference }, "env": env, "size": { "cols": 80, "rows": 24 } }
     });
     let pending = first.send("call", resume.clone());
     home.wait_for_gate("before-restart-commit");
@@ -1038,7 +1072,7 @@ fn two_editor_connections_resume_one_stopped_process() {
     assert_ne!(next_pid, i64::from(pid));
     for reply in [a_result, b_result] {
         let resumed = &reply["result"]["agent"];
-        assert_eq!(resumed["agent_id"], id, "{reply}");
+        assert_eq!(resumed["reference"], *reference, "{reply}");
         assert_eq!(resumed["pid"], next_pid, "{reply}");
         assert_eq!(resumed["address"], address, "{reply}");
         assert_eq!(resumed["session"], FIRST, "{reply}");
@@ -1051,7 +1085,7 @@ fn two_editor_connections_resume_one_stopped_process() {
         [json!(next_pid)]
     );
 
-    let removed = second.call("agent.remove", json!({ "agent": address }));
+    let removed = second.call("agent.remove", json!({ "target": reference }));
     assert!(removed["result"].is_object(), "{removed}");
     for (wire, watch) in [(&mut first, a), (&mut second, b)] {
         assert!(
@@ -1063,13 +1097,13 @@ fn two_editor_connections_resume_one_stopped_process() {
             "{:?}",
             wire.changes(watch)
         );
-        let snapshot = wire.request("watch", json!({ "topic": "agents" }));
+        let snapshot = wire.request("watch", json!({ "topic": "agents", "args": {} }));
         assert_eq!(
             snapshot["result"]["snapshot"]["agents"],
             json!([]),
             "{snapshot}"
         );
-        let refused = wire.call("agent.inspect", json!({ "agent": address }));
+        let refused = wire.call("agent.inspect", json!({ "target": reference }));
         assert_eq!(error_reason(&refused), "not_found", "{refused}");
     }
 }
@@ -1097,7 +1131,10 @@ fn an_agent_whose_terminal_closed_resumes_and_keeps_logging_its_screen() {
     assert!(wait_for_screen_text(&home, "worker", "> after the resume"));
     // End the resumed run, so no CLI can draw the screen again: what the next daemon shows comes
     // from the screen log alone.
-    wire.call("agent.stop", json!({ "agent": agent.id }));
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [agent.id] } }),
+    );
     drop(wire);
     home.kill_daemon();
     // The fake CLI's first frame moves the earlier run's rows up into the scrollback.
@@ -1117,7 +1154,7 @@ fn a_screen_viewer_reattaches_to_the_same_agent_after_resume() {
     let watch_screen = |wire: &mut DaemonTestClient| {
         let watched = wire.request(
             "watch",
-            json!({ "topic": "screen", "args": { "agent": agent.address } }),
+            json!({ "topic": "attach", "args": { "target": agent.address } }),
         );
         assert_eq!(
             watched["result"]["snapshot"]["address"], agent.address,
@@ -1133,7 +1170,10 @@ fn a_screen_viewer_reattaches_to_the_same_agent_after_resume() {
     };
     let first = watch_screen(&mut watcher);
     let mut wire = connect(&home);
-    let stopped = wire.call("agent.stop", json!({ "agent": agent.address }));
+    let stopped = wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [agent.address] } }),
+    );
     assert!(stopped["result"].is_object(), "{stopped}");
     assert!(
         wait_until(secs(10), || watcher
@@ -1179,11 +1219,14 @@ fn input_waiting_when_its_run_ends_never_reaches_the_resumed_run() {
     );
     assert!(records_session(&home, "worker", Some(FIRST)));
     let mut waiting = connect(&home);
+    let target = home.inspect_agent(&agent.address)["agent"]["reference"].clone();
     // Fill the agent's waiting input: the CLI reads none of it.
     let filled = waiting.call(
         "agent.type",
         json!({
-            "agent": agent.id, "raw": facade_base::base64::encode(&vec![b'x'; 1024 * 1024]),
+            "target": target, "input": {
+                "kind": "raw", "raw": facade_base::base64::encode(&vec![b'x'; 1024 * 1024]),
+            },
         }),
     );
     assert!(filled["result"].is_object(), "{filled}");
@@ -1192,7 +1235,9 @@ fn input_waiting_when_its_run_ends_never_reaches_the_resumed_run() {
         "params": {
             "op": "agent.type",
             "args": {
-                "agent": agent.id, "raw": facade_base::base64::encode(&vec![b'O'; 512 * 1024]),
+                "target": target, "input": {
+                    "kind": "raw", "raw": facade_base::base64::encode(&vec![b'O'; 512 * 1024]),
+                },
             },
         },
     }));
@@ -1200,7 +1245,10 @@ fn input_waiting_when_its_run_ends_never_reaches_the_resumed_run() {
     // and never waits.
     home.wait_for_gate("input-without-room");
     let mut wire = connect(&home);
-    wire.call("agent.stop", json!({ "agent": agent.id }));
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [agent.id] } }),
+    );
     home.wait_for_gate("before-input-retry");
     let resumed = resume(&home, "worker");
     assert!(resumed.status.success(), "{}", stderr(&resumed));
@@ -1288,10 +1336,10 @@ fn a_codex_run_keeps_the_version_its_installation_names_and_a_resume_reads_it_ag
     let mut wire = connect(&home);
     let args = json!({
         "cli": "codex", "name": "codex", "folder": home.project,
-        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+        "env": { "PATH": path, "FACADE_HOME": home.path }, "size": { "cols": 80, "rows": 24 },
     });
     let started = wire.call("agent.start", args);
-    let id = started["result"]["agent"]["agent_id"]
+    let id = started["result"]["agent"]["reference"]["agent_id"]
         .as_str()
         .unwrap_or_else(|| panic!("{started}"))
         .to_string();
@@ -1312,7 +1360,10 @@ fn a_codex_run_keeps_the_version_its_installation_names_and_a_resume_reads_it_ag
     );
     assert!(reported.status.success());
     assert!(records_session(&home, "codex", Some(FIRST)));
-    wire.call("agent.stop", json!({ "agent": id }));
+    wire.call(
+        "agent.stop",
+        json!({ "selection": { "kind": "targets", "targets": [id] } }),
+    );
     install("0.167.0");
     let resumed = home
         .command(&test_binaries().facade)
@@ -1360,20 +1411,54 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         .unwrap();
     }
     let file = home.folder().join("after.args");
-    let mut wire = connect(&home);
-    let mut args = json!({
-        "reference": format!("claude:{FIRST}"), "folder": home.project,
+    home.run_facade_ok(&["daemon", "--detach"]);
+    let mut wire = DaemonTestClient::open(&home);
+    let hello = wire.request(
+        "hello",
+        json!({ "api_versions": [1], "build": "test", "kind": "terminal" }),
+    );
+    assert_eq!(hello["result"]["api_version"], 1, "{hello}");
+    let local = &hello["result"]["machine_id"];
+    let args = json!({
+        "target": { "kind": "selector", "selector": format!("claude:{FIRST}"), "folder": home.project },
         "env": { "PATH": path },
-        "cols": 80, "rows": 24,
+        "size": { "cols": 80, "rows": 24 },
     });
-    let first = wire.call("agent.resume", args.clone());
+    let first = wire.call("agent.resume", args);
     let before = first["result"]["agent"]["address"]
         .as_str()
         .unwrap_or_else(|| panic!("{first}"));
     assert_eq!(first["result"]["agent"]["session"], FIRST);
+    assert_eq!(first["result"]["from_saved_session"], true, "{first}");
     home.run_facade_ok(&["stop", before]);
-    home.remove_agent(before);
+    let removed = wire.call_ok(
+        "agent.remove",
+        json!({ "target": first["result"]["agent"]["reference"] }),
+    );
+    assert_eq!(removed["reference"], first["result"]["agent"]["reference"]);
+    let mut target = None;
     for (folder, session) in [(&home.project, FIRST), (&other, SECOND)] {
+        let candidates = wire.call_ok(
+            "agent.resume_list",
+            json!({
+                "scope": { "kind": "local" }, "folder": folder, "folder_scope": "all",
+            }),
+        );
+        let machines = candidates["machines"].as_array().unwrap();
+        assert_eq!(machines.len(), 1, "{candidates}");
+        assert_eq!(&machines[0]["machine_id"], local, "{candidates}");
+        let items = candidates["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "{candidates}");
+        let saved = &items[0]["target"];
+        assert_eq!(
+            saved,
+            &json!({
+                "kind": "session", "machine_id": local, "cli": "claude", "session": session, "folder": folder,
+            })
+        );
+        if session == FIRST {
+            target = Some(saved.clone());
+        }
         let listed = home
             .command(&test_binaries().facade)
             .current_dir(folder)
@@ -1390,8 +1475,14 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         assert_eq!(table.column("TYPE"), ["Session"]);
         assert_eq!(table.column("REF"), [&session[..8]]);
     }
-    args["env"]["FAKECLI_ARGS"] = json!(file);
-    let started = wire.call("agent.resume", args);
+    let started = wire.call(
+        "agent.resume",
+        json!({
+            "target": target.expect("the exact target returned for the first folder"),
+            "env": { "PATH": path, "FAKECLI_ARGS": file },
+            "size": { "cols": 80, "rows": 24 },
+        }),
+    );
     let address = started["result"]["agent"]["address"]
         .as_str()
         .unwrap_or_else(|| panic!("{started}"));
@@ -1410,7 +1501,9 @@ fn resuming_a_saved_session_after_removal_creates_a_new_agent() {
         "the CLI continued the session"
     );
     let record = &started["result"]["agent"];
-    let id = record["agent_id"].as_str().expect("the new agent ID");
+    let id = record["reference"]["agent_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the new agent ID: {record}"));
     let name = record["name"].as_str().expect("the new agent's name");
     let event = format!(r#"{{"hook_event_name":"SessionStart","session_id":"{FIRST}"}}"#);
     let reported = run_hook(&home, &session_file(&home, id), event.as_bytes(), &[]);

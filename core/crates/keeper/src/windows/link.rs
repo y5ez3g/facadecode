@@ -9,12 +9,12 @@ use std::path::Path;
 use std::ptr;
 use std::time::{Duration, Instant};
 
-use facade_base::jsonrpc::{MAX_LINE_BYTES, encode_line};
+use facade_base::api_v1::{ApiVersion, MAX_LINE_BYTES, Response, encode_line};
 use facade_base::process::ProcessIdentity;
 use facade_base::service::{self, Service};
 use facade_base::sockets;
 use facade_base::terminal::PtyMaster;
-use facade_base::terminal_lines::{self, PeerProcess};
+use facade_base::terminal_lines::{self, PeerProcess, PreparedTerminal};
 use serde::Serialize;
 use windows_sys::Win32::Foundation::{
     ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, HANDLE, WAIT_TIMEOUT,
@@ -88,7 +88,7 @@ pub(super) struct Link {
     daemon: ProcessIdentity,
     /// The daemon's process, which terminals are duplicated into.
     peer: PeerProcess,
-    greeted: bool,
+    api_version: Option<ApiVersion>,
     /// The read under way, if any, and where it reads into; both stay in place until it ends.
     read: Box<OVERLAPPED>,
     buffer: Vec<u8>,
@@ -101,9 +101,10 @@ pub(super) struct Link {
 
 /// One thing read from the link.
 pub(super) enum Inbound {
-    /// A message line, newline stripped. A terminal it carries is in it, as handles of this
-    /// process.
-    Line(Vec<u8>),
+    /// A message line with its terminal, if any, owned separately.
+    Line(Vec<u8>, Option<PtyMaster>),
+    /// A malformed terminal member, with any acquired copies already closed.
+    InvalidTerminal(io::Error),
     /// The daemon sent a line over the protocol's size limit.
     Overlong,
     /// End of stream, or a read error.
@@ -128,7 +129,7 @@ impl Link {
                 key,
                 daemon,
                 peer,
-                greeted: false,
+                api_version: None,
                 read: overlapped(),
                 buffer: vec![0; READ_BYTES],
                 reading: false,
@@ -159,15 +160,15 @@ impl Link {
 
     /// Whether `hello` has succeeded on this link.
     pub(super) fn is_greeted(&self) -> bool {
-        self.greeted
+        self.api_version.is_some()
     }
 
-    pub(super) fn mark_greeted(&mut self) {
-        self.greeted = true;
+    pub(super) fn greet(&mut self, version: ApiVersion) {
+        self.api_version = Some(version);
     }
 
-    /// After the link's key completed: what the read brought, as lines, then the next read. A
-    /// `Closed` or `Overlong` entry is always last.
+    /// After the link's key completed: what the read brought, then the next read. Extract the
+    /// terminals from every complete line so dropping any undispatched lines closes their copies.
     pub(super) fn drain(&mut self) -> Vec<Inbound> {
         self.reading = false;
         let mut got = Vec::new();
@@ -182,7 +183,16 @@ impl Link {
         self.inbox.extend_from_slice(&self.buffer[..read as usize]);
         let mut taken = 0;
         while let Some(newline) = self.inbox[taken..].iter().position(|&byte| byte == b'\n') {
-            got.push(Inbound::Line(self.inbox[taken..taken + newline].to_vec()));
+            let frame = terminal_lines::take_terminal(&self.inbox[taken..taken + newline]);
+            let inbound = if newline >= MAX_LINE_BYTES {
+                Inbound::Overlong
+            } else {
+                match frame {
+                    Ok((line, terminal)) => Inbound::Line(line.into_owned(), terminal),
+                    Err(error) => Inbound::InvalidTerminal(error),
+                }
+            };
+            got.push(inbound);
             taken += newline + 1;
         }
         self.inbox.drain(..taken);
@@ -222,18 +232,25 @@ impl Link {
         Ok(())
     }
 
-    /// Serializes `message` as one line and writes it, with `terminal` duplicated into the daemon
-    /// if given. Gives up after [`SEND_TIMEOUT`]; any error means the link should be dropped.
-    pub(super) fn write(
+    /// Serializes and writes a message with no terminal.
+    pub(super) fn write(&self, message: &impl Serialize) -> io::Result<()> {
+        self.write_all(&encode_line(message), Instant::now() + SEND_TIMEOUT)
+    }
+
+    /// Duplicates the terminal into the proved daemon before writing any bytes.
+    pub(super) fn prepare_terminal(
         &self,
-        message: &impl Serialize,
-        terminal: Option<&PtyMaster>,
-    ) -> io::Result<()> {
-        let mut line = encode_line(message);
-        if let Some(terminal) = terminal {
-            line = terminal_lines::add_terminal(&line, terminal, &self.peer)?;
-        }
-        self.write_all(&line, Instant::now() + SEND_TIMEOUT)
+        response: &Response,
+        terminal: &PtyMaster,
+    ) -> io::Result<PreparedTerminal<'_>> {
+        terminal_lines::add_terminal(&encode_line(response), terminal, &self.peer)
+    }
+
+    /// The receiver takes ownership only after the whole line, including its newline, was written.
+    pub(super) fn write_terminal(&self, prepared: PreparedTerminal<'_>) -> io::Result<()> {
+        self.write_all(prepared.bytes(), Instant::now() + SEND_TIMEOUT)?;
+        prepared.commit();
+        Ok(())
     }
 
     /// Writes all of `bytes`, waiting until `deadline` at most, then cancelling the write.
@@ -270,9 +287,13 @@ impl Link {
                     return Err(error);
                 }
                 // SAFETY: cancels this write alone, then waits for it to end.
-                unsafe {
+                let ok = unsafe {
                     CancelIoEx(pipe, &write);
-                    GetOverlappedResult(pipe, &write, &mut moved, 1);
+                    GetOverlappedResult(pipe, &write, &mut moved, 1)
+                };
+                // The write can finish while cancellation is being requested.
+                if ok != 0 && written + moved as usize == bytes.len() {
+                    return Ok(());
                 }
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -286,15 +307,27 @@ impl Link {
 }
 
 impl Drop for Link {
-    /// Cancels the read under way and waits for it, so that nothing writes into the link's buffer
-    /// once it is gone. Its completion still comes to the port, under a key nothing holds.
+    /// Finishes the outstanding read before releasing its buffer. Its completion can still reach
+    /// the port under the retired link's key.
     fn drop(&mut self) {
-        if self.reading {
-            let mut read = 0u32;
-            // SAFETY: cancels this link's read alone, then waits for it to end.
-            unsafe {
-                CancelIoEx(self.pipe.as_raw_handle(), &*self.read);
-                GetOverlappedResult(self.pipe.as_raw_handle(), &*self.read, &mut read, 1);
+        if !self.reading {
+            return;
+        }
+        let mut read = 0u32;
+        // SAFETY: cancels this link's read alone, then waits for it to end.
+        let completed = unsafe {
+            CancelIoEx(self.pipe.as_raw_handle(), &*self.read);
+            GetOverlappedResult(self.pipe.as_raw_handle(), &*self.read, &mut read, 1)
+        };
+        if completed == 0 {
+            return;
+        }
+        self.inbox.extend_from_slice(&self.buffer[..read as usize]);
+        // A read can succeed during cancellation. The receiver owns copies in complete frames.
+        // The sender still owns copies in an unfinished frame.
+        for frame in self.inbox.split_inclusive(|&byte| byte == b'\n') {
+            if frame.ends_with(b"\n") {
+                drop(terminal_lines::take_terminal(frame));
             }
         }
     }

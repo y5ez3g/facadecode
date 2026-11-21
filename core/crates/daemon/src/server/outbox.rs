@@ -3,8 +3,8 @@
 use std::io;
 use std::sync::Arc;
 
-use facade_base::daemon::{ChangedParams, methods};
-use facade_base::jsonrpc::{ErrorBody, Notification, Response, encode_line};
+use facade_base::api_v1::daemon::{ChangedParams, methods};
+use facade_base::api_v1::{ErrorBody, Notification, Response, encode_line};
 use facade_base::sockets::ServerWriter;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
@@ -67,9 +67,9 @@ impl Outbox {
         self.send(encode_line(&response)).await;
     }
 
-    /// Sends an error that answers no request, such as for a line that is not one.
-    pub(super) async fn fail(&self, error: ErrorBody) {
-        self.send(encode_line(&Response::failed(None, error))).await;
+    /// Answers a malformed frame, echoing its ID if the decoder could identify it.
+    pub(super) async fn fail(&self, id: Option<u64>, error: ErrorBody) {
+        self.send(encode_line(&Response::failed(id, error))).await;
     }
 
     /// Sends a change of watch `watch`. False once the connection closed.

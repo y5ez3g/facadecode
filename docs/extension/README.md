@@ -21,7 +21,7 @@ points. These specifications describe the editor's part. The old engine remains 
 | [MCP](engineering/MCP.md) | Tool boundary and old-engine MCP contract |
 | [Verification](engineering/VERIFICATION.md) | Required journeys, checks and evidence |
 
-[Core protocol](../../core/protocol/PROTOCOL.md) owns the Orchestrator wire contract. The product's
+[Daemon API](../../core/protocol/DAEMON.md) owns the Orchestrator wire contract. The product's
 [CLI table](../PRODUCT.md#cli-differences) summarizes CLI differences. Detailed rules belong with the
 corresponding adapters.
 

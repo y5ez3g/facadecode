@@ -3,8 +3,9 @@
 //! whose message says what is wrong, whether anything was done and what to do next. The model reads
 //! it as JSON text and gets the same object as the call's structured content.
 
+use facade_base::api_v1;
 use facade_base::daemon::WindowDeliveryOutcome;
-use facade_base::jsonrpc::{ErrorBody, SendFailure};
+use facade_base::jsonrpc::{ErrorBody, Reason, SendFailure};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -37,7 +38,50 @@ pub(super) fn refusal(error: &ErrorBody) -> Value {
     refusal_with_addresses(error, &Addresses::default())
 }
 
-pub(super) fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
+pub(super) fn daemon_refusal(error: &api_v1::ErrorBody) -> Value {
+    refusal(&tool_error(error))
+}
+
+/// Restores the details used by the MCP receipt from the daemon's error.
+pub(super) fn tool_error(error: &api_v1::ErrorBody) -> ErrorBody {
+    let mut data = error.data.details.clone().unwrap_or_default();
+    for field in ["agents", "machines", "sessions", "available_clis"] {
+        data.remove(field);
+    }
+    match error.data.reason.as_str() {
+        "unavailable" if data.contains_key("execution") => {
+            let fields = ["execution", "machine", "window", "matches", "unanswered"];
+            let unavailable = fields
+                .into_iter()
+                .filter_map(|field| data.remove(field).map(|value| (field.to_string(), value)))
+                .collect();
+            data.insert("unavailable".into(), Value::Object(unavailable));
+        }
+        "machine_id_conflict" => {
+            let conflict =
+                json!({ "machine_id": data.remove("machine_id"), "paths": data.remove("paths") });
+            data.insert("machine_id_conflict".into(), conflict);
+        }
+        "ssh_interaction_required" => {
+            let interaction =
+                json!({ "reason": data.remove("message"), "command": data.remove("command") });
+            data.insert("ssh_interaction".into(), interaction);
+        }
+        _ => {}
+    }
+    data.insert("reason".into(), json!(error.data.reason));
+    let mut projected = ErrorBody::new(
+        serde_json::from_value(json!(error.data.reason)).unwrap_or(Reason::Unknown),
+        &error.message,
+    );
+    if let Ok(details) = serde_json::from_value(Value::Object(data)) {
+        projected.data = details;
+    }
+    projected.code = error.code;
+    projected
+}
+
+fn refusal_with_addresses(error: &ErrorBody, addresses: &Addresses<'_>) -> Value {
     let SendFailure {
         error,
         window_delivery: outcomes,

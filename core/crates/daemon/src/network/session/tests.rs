@@ -1,6 +1,5 @@
-use facade_base::daemon::WatchResult;
-use facade_base::jsonrpc::Request;
-use facade_base::machine::{AdvertiseParams, MachineInfo};
+use facade_base::api_v1::Request;
+use facade_base::api_v1::daemon::{AdvertiseParams, MachineInfo, MachineState, WatchResult};
 use serde_json::json;
 use tokio::io::{BufReader, duplex, split};
 
@@ -13,7 +12,7 @@ struct Handler {
 }
 
 struct Forwarded {
-    forward: Forward,
+    forward: ForwardParams,
     deadline: Deadline,
     cancelled: watch::Receiver<bool>,
     answer: oneshot::Sender<Result<Delivery, ErrorBody>>,
@@ -38,9 +37,10 @@ impl SessionHandler for Handler {
 
     async fn receive(
         &self,
-        forward: Forward,
+        forward: ForwardParams,
         deadline: Deadline,
         cancelled: watch::Receiver<bool>,
+        _resize_route: Option<&WatchRoute>,
     ) -> Result<Delivery, ErrorBody> {
         let (answer, result) = oneshot::channel();
         assert!(
@@ -58,18 +58,21 @@ impl SessionHandler for Handler {
 }
 
 async fn watch_snapshot(from_peer: &mut Reader<impl AsyncBufRead + Unpin>, id: u64) -> Value {
-    let Some(Frame::Response(response)) = from_peer.next().await.unwrap() else {
+    let Some(MachineMessage::Response(response)) = from_peer.next().await.unwrap() else {
         panic!("expected a watch response");
     };
     assert_eq!(response.id, Some(id));
-    let result: WatchResult = decode_arguments(response.result.expect("the watch result")).unwrap();
+    let ResponseBody::Result(result) = response.body else {
+        panic!("expected a successful watch");
+    };
+    let result: WatchResult = decode_arguments(result).unwrap();
     assert_eq!(result.watch, id);
     result.snapshot
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
-    let (peer, output) = Peer::new(Vec::new(), None);
+    let (peer, output) = Peer::new(None);
     let (peer_stream, client_stream) = duplex(4096);
     let (read, write) = split(peer_stream);
     let (client_read, mut to_peer) = split(client_stream);
@@ -90,6 +93,11 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
         let table = AdvertiseParams {
             machines: vec![MachineInfo {
                 machine_id: "origin".into(),
+                short_id: "origin".into(),
+                selector: "@origin".into(),
+                state: MachineState::Online,
+                last_seen: None,
+                ssh_error: None,
                 name: "Origin".into(),
                 boot_id: Some("origin-start".into()),
                 build: Some("test-build".into()),
@@ -100,13 +108,12 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
         wire::send(&mut to_peer, &Notification::new(methods::ADVERTISE, &table))
             .await
             .unwrap();
-        assert_eq!(advertised.recv().await.unwrap().machines, table.machines);
+        assert_eq!(json!(advertised.recv().await.unwrap()), json!(table));
 
         let params = json!({
             "route": ["receiver", "destination"], "time_left_ms": 1_000,
             "caller": { "kind": "terminal", "machine_id": "origin" },
-            "method": methods::WATCH, "params": { "topic": "agents" },
-            "extra": { "opaque": "kept" },
+            "method": methods::WATCH, "params": { "topic": "agents", "args": {} },
         });
         let id = wire::FIRST_REQUEST_ID;
         let sent = Instant::now();
@@ -117,7 +124,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
         .await
         .unwrap();
         let mut received = requests.recv().await.unwrap();
-        assert_eq!(received.forward.encode(), params);
+        assert_eq!(json!(received.forward), params);
         assert_eq!(received.deadline, Some(sent + Duration::from_secs(1)));
         assert!(!*received.cancelled.borrow());
 
@@ -125,10 +132,10 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
             machine_id: "destination".into(),
             name: "Destination".into(),
         };
-        let (downstream, mut downstream_output) = Peer::new(Vec::new(), None);
+        let (downstream, mut downstream_output) = Peer::new(None);
         let mut pending = downstream
             .request(
-                Forward::decode(params.clone()).unwrap(),
+                decode_arguments(params.clone()).unwrap(),
                 received.deadline,
                 destination.clone(),
             )
@@ -191,15 +198,15 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
                 .send(Ok(Delivery::Local(TargetReply::Watch {
                     snapshot: snapshot.clone(),
                     changes,
-                    attach: None,
+                    view: None,
                 })))
                 .is_ok()
         );
         assert_eq!(watch_snapshot(&mut from_peer, next_id).await, snapshot);
-        let error = ErrorBody::new(Reason::Unavailable, "The provider ended the watch.");
+        let error = wire::error("unavailable", "The provider ended the watch.");
         let expected = json!({ "watch": next_id, "error": &error });
         send.send(Err(error)).await.unwrap();
-        let Some(Frame::Request(ended)) = from_peer.next().await.unwrap() else {
+        let Some(MachineMessage::Request(ended)) = from_peer.next().await.unwrap() else {
             panic!("expected a watch-ended notification");
         };
         assert_eq!(ended.id, None);
@@ -207,7 +214,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
         assert_eq!(ended.params, expected);
 
         let mut waiting = peer
-            .request(Forward::decode(params).unwrap(), None, destination)
+            .request(decode_arguments(params).unwrap(), None, destination)
             .unwrap();
         to_peer.shutdown().await.unwrap();
         running.await.unwrap().unwrap();
@@ -217,7 +224,7 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
             .err()
             .expect("the closed session ends the wait");
         assert!(matches!(error, RequestFailure::Unreachable(_)));
-        assert_eq!(ErrorBody::from(error).data.reason, Reason::Unavailable);
+        assert_eq!(ErrorBody::from(error).data.reason, "unavailable");
     })
     .await
     .expect("the session exchanges its frames");
@@ -225,16 +232,23 @@ async fn a_session_hands_its_frames_to_the_handler_and_settles_its_watches() {
 
 #[tokio::test(start_paused = true)]
 async fn an_error_reply_has_a_receipt_but_a_local_deadline_does_not() {
-    let (peer, _output) = Peer::new(Vec::new(), None);
+    let (peer, _output) = Peer::new(None);
     let machine = MachineIdentity {
         machine_id: "peer".into(),
         name: "peer".into(),
     };
-    let forward = || Forward::decode(json!({ "route": ["peer"] })).unwrap();
+    let forward = || {
+        decode_arguments(json!({
+            "route": ["peer"],
+            "caller": { "kind": "terminal", "machine_id": "origin" },
+            "method": methods::CALL, "params": { "op": "daemon.status", "args": {} },
+        }))
+        .unwrap()
+    };
     let deadline = Some(Instant::now() + Duration::from_secs(3));
     let mut answered = peer.request(forward(), deadline, machine.clone()).unwrap();
     let mut unanswered = peer.request(forward(), deadline, machine).unwrap();
-    let error = ErrorBody::new(Reason::Unavailable, "the peer refused this operation");
+    let error = wire::error("unavailable", "the peer refused this operation");
     peer.response(Response::failed(Some(answered.id), error.clone()))
         .unwrap();
     let Ok(Reply::Call {
@@ -261,7 +275,7 @@ async fn an_error_reply_has_a_receipt_but_a_local_deadline_does_not() {
 }
 
 #[test]
-fn v2_relay_deadlines_stay_distinct_from_a_lost_route() {
+fn relayed_deadlines_stay_distinct_from_a_lost_route() {
     use facade_base::machine::MachineResponseState;
 
     let machine = MachineIdentity {
@@ -290,12 +304,17 @@ fn v2_relay_deadlines_stay_distinct_from_a_lost_route() {
 async fn watch_receipts_keep_the_frame_time_when_consumption_is_delayed() {
     use facade_base::machine::MachineResponseState;
 
-    let (peer, _output) = Peer::new(Vec::new(), None);
+    let (peer, _output) = Peer::new(None);
     let machine = MachineIdentity {
         machine_id: "peer".into(),
         name: "peer".into(),
     };
-    let forward = Forward::decode(json!({ "route": ["peer"] })).unwrap();
+    let forward = decode_arguments(json!({
+        "route": ["peer"],
+        "caller": { "kind": "terminal", "machine_id": "origin" },
+        "method": methods::WATCH, "params": { "topic": "agents", "args": {} },
+    }))
+    .unwrap();
     let mut pending = peer.request(forward, None, machine).unwrap();
     let watch = 9;
     peer.response(Response::ok(
@@ -310,12 +329,12 @@ async fn watch_receipts_keep_the_frame_time_when_consumption_is_delayed() {
         snapshot,
         changes,
         received_at,
-        attach,
+        view,
     } = pending.answer(None).await.unwrap()
     else {
         panic!("the peer answered with a watch");
     };
-    let mut subscription = pending.watch(snapshot, changes, received_at, attach);
+    let mut subscription = pending.watch(snapshot, changes, received_at, view);
 
     let before = SystemTime::now();
     let change = json!({ "kind": "updated" });
@@ -323,7 +342,7 @@ async fn watch_receipts_keep_the_frame_time_when_consumption_is_delayed() {
         watch,
         change: change.clone(),
     });
-    let error = ErrorBody::new(Reason::Refused, "the peer ended the watch");
+    let error = wire::error("refused", "the peer ended the watch");
     peer.watch_ended(WatchEndedParams {
         watch,
         error: error.clone(),

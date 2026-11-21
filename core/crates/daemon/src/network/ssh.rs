@@ -6,7 +6,7 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::jsonrpc::{ErrorBody, MAX_LINE_BYTES, Reason};
+use facade_base::api_v1::{ErrorBody, MAX_LINE_BYTES};
 use facade_base::machine::SshInteraction;
 use facade_base::ssh::{
     BOOTSTRAP_INSTALL, BOOTSTRAP_READY, BOOTSTRAP_SERVE, BootstrapAction, REMOTE_BOOTSTRAP_BEGIN,
@@ -27,6 +27,7 @@ pub(super) struct FailedAttempt {
     pub(super) error: ErrorBody,
     pub(super) sleeping: bool,
     pub(super) ssh_error: Option<String>,
+    pub(super) interaction: Option<SshInteraction>,
 }
 
 impl From<ErrorBody> for FailedAttempt {
@@ -35,6 +36,7 @@ impl From<ErrorBody> for FailedAttempt {
             error,
             sleeping: false,
             ssh_error: None,
+            interaction: None,
         }
     }
 }
@@ -42,9 +44,10 @@ impl From<ErrorBody> for FailedAttempt {
 impl FailedAttempt {
     pub(super) fn sleeping() -> Self {
         Self {
-            error: ErrorBody::new(Reason::Unavailable, "The machine is sleeping."),
+            error: wire::error("unavailable", "The machine is sleeping."),
             sleeping: true,
             ssh_error: None,
+            interaction: None,
         }
     }
 
@@ -61,8 +64,10 @@ impl FailedAttempt {
                 ..Self::sleeping()
             };
         }
+        let (error, interaction) = ssh_failure(ssh, diagnostics, error);
         Self {
-            error: ssh_failure(ssh, diagnostics, error),
+            error,
+            interaction,
             sleeping: false,
             ssh_error,
         }
@@ -90,11 +95,11 @@ impl Pipes {
         command.args(args).env("LC_ALL", "C");
         let mut pipes = Self::spawn(command).map_err(|error| {
             let reason = if error.kind() == io::ErrorKind::NotFound {
-                Reason::NotFound
+                "not_found"
             } else {
-                Reason::Unavailable
+                "unavailable"
             };
-            ErrorBody::new(reason, format!("Could not start SSH: {error}"))
+            wire::error(reason, format!("Could not start SSH: {error}"))
         })?;
         let (shell, probe) = match wire::in_time(pipes.probe(home, build, wake)).await {
             Ok(probed) => probed,
@@ -107,19 +112,25 @@ impl Pipes {
                 ));
             }
         };
-        let action = bootstrap_action(&probe, build, wake)
-            .map_err(|error| ErrorBody::invalid_argument(error.to_string()))?;
+        let action = bootstrap_action(&probe, wake);
         let ready = match action {
             BootstrapAction::Serve => wire::in_time(pipes.serve(BOOTSTRAP_SERVE)).await,
             BootstrapAction::Install => pipes.serve(BOOTSTRAP_INSTALL).await,
-            BootstrapAction::NeedsInstall | BootstrapAction::UpgradeLocal => {
-                return Err(version_error(probe, action).into());
+            BootstrapAction::NeedsInstall => {
+                return Err(wire::error(
+                    "not_found",
+                    "Facade is not installed on the remote machine. Connect to it explicitly to install Facade.",
+                ).into());
             }
         };
         match ready {
             Ok(()) => Ok(pipes),
             Err(error) => {
-                let mut failure = FailedAttempt::from_ssh(ssh, pipes.finish().await, error, false);
+                let diagnostics = pipes.finish().await;
+                let sleeping = !wake
+                    && error.data.reason == "unavailable"
+                    && diagnostics.exit_code() == Some(3);
+                let mut failure = FailedAttempt::from_ssh(ssh, diagnostics, error, sleeping);
                 if action == BootstrapAction::Install
                     && let Ok(command) = remote_install_command(shell.system(), build, home)
                 {
@@ -201,8 +212,8 @@ impl Pipes {
         )
         .await?;
         let line = read_control(&mut self.read).await?.ok_or_else(|| {
-            ErrorBody::new(
-                Reason::Unavailable,
+            wire::error(
+                "unavailable",
                 "SSH closed before reporting the remote Facade version.",
             )
         })?;
@@ -225,8 +236,8 @@ impl Pipes {
             Some(_) => Err(ErrorBody::invalid_argument(
                 "Expected the remote Facade bootstrap to report ready.",
             )),
-            None => Err(ErrorBody::new(
-                Reason::Unavailable,
+            None => Err(wire::error(
+                "unavailable",
                 "SSH closed before the remote Facade bootstrap was ready.",
             )),
         }
@@ -253,7 +264,7 @@ async fn find_login_line<T>(
             return Ok(value);
         }
     }
-    Err(ErrorBody::new(Reason::Unavailable, closed))
+    Err(wire::error("unavailable", closed))
 }
 
 async fn read_control(read: &mut BufReader<ChildStdout>) -> Result<Option<Vec<u8>>, ErrorBody> {
@@ -336,33 +347,17 @@ impl Diagnostics {
     }
 }
 
-fn version_error(probe: RemoteProbe, action: BootstrapAction) -> ErrorBody {
-    match (probe, action) {
-        (RemoteProbe::Missing, _) => ErrorBody::new(
-            Reason::NotFound,
-            "Facade is not installed on the remote machine. Connect to it explicitly to install Facade.",
-        ),
-        (RemoteProbe::Installed(version), action) => {
-            let resolution = if action == BootstrapAction::UpgradeLocal {
-                "Upgrade Facade on this machine first."
-            } else {
-                "Connect to the remote machine explicitly to upgrade Facade."
-            };
-            ErrorBody::new(
-                Reason::IncompatibleProtocol,
-                format!("The remote machine runs Facade {version}. {resolution}"),
-            )
-        }
-    }
-}
-
-fn ssh_failure(ssh: &SavedSsh, diagnostics: Diagnostics, mut error: ErrorBody) -> ErrorBody {
+fn ssh_failure(
+    ssh: &SavedSsh,
+    diagnostics: Diagnostics,
+    mut error: ErrorBody,
+) -> (ErrorBody, Option<SshInteraction>) {
     let config = &ssh.config;
     if !matches!(
-        error.data.reason,
-        Reason::Unavailable | Reason::InvalidArgument
+        error.data.reason.as_str(),
+        "unavailable" | "invalid_argument"
     ) {
-        return error;
+        return (error, None);
     }
     if diagnostics.needs_interaction() {
         let mut command = vec!["facade".to_owned(), "machine".to_owned(), "add".to_owned()];
@@ -370,15 +365,21 @@ fn ssh_failure(ssh: &SavedSsh, diagnostics: Diagnostics, mut error: ErrorBody) -
             command.extend(["--home".to_owned(), home.clone()]);
         }
         command.extend(ssh.argv.iter().cloned());
-        let mut error = ErrorBody::new(Reason::SshInteractionRequired, "SSH needs interaction.");
-        error.data.ssh_interaction = Some(SshInteraction {
+        let interaction = SshInteraction {
             reason: diagnostics.stderr,
             command,
-        });
-        return error;
+        };
+        let mut error = wire::error("ssh_interaction_required", "SSH needs interaction.");
+        wire::detail(&mut error, "message", serde_json::json!(interaction.reason));
+        wire::detail(
+            &mut error,
+            "command",
+            serde_json::json!(interaction.command),
+        );
+        return (error, Some(interaction));
     }
     if !diagnostics.stderr.trim().is_empty() {
-        if error.data.reason == Reason::Unavailable
+        if error.data.reason == "unavailable"
             && diagnostics.status.is_some_and(|status| !status.success())
         {
             error.message = diagnostics.stderr;
@@ -387,5 +388,5 @@ fn ssh_failure(ssh: &SavedSsh, diagnostics: Diagnostics, mut error: ErrorBody) -
             error.message.push_str(&diagnostics.stderr);
         }
     }
-    error
+    (error, None)
 }

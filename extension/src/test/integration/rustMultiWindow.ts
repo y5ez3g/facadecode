@@ -7,17 +7,17 @@ import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isDeepStrictEqual } from 'util';
-import type { V3AgentInfo, V3InspectResult } from '../../base/coreProtocol';
+import type { AgentInfo, DaemonHelloResult, InspectResult } from '../../base/coreProtocol';
 import { isProcessRunning } from '../../base/system';
 import type { RustPin } from '../../core/ports';
 import { freePort, Workbench } from './cdpInput';
-import { callInCore, coreCall, detachedStartReference, endEditors, normalizeDriveLetter, until } from './editors';
+import { callInCore, coreCall, detachedStartReference, endEditors, helloInCore, normalizeDriveLetter, until } from './editors';
 import type { AttachView, SavedPin, WindowAction, WindowAnswer, WindowReady, WindowView } from './rustMultiWindowDriver';
 import type { RunningAgent } from './rustWindowDriver';
 
 /** The workspace driver and its helpers beside either copy of the extension. */
-export function multiWindowDriverFiles(): Readonly<Record<string, string>> {
-	const source = (file: string) => fs.readFileSync(path.join(__dirname, file), 'utf8');
+export function multiWindowDriverFiles(directory = __dirname): Readonly<Record<string, string>> {
+	const source = (file: string) => fs.readFileSync(path.join(directory, file), 'utf8');
 	return {
 		'package.json': JSON.stringify({
 			name: 'rust-multi-window-driver', publisher: 'facade-it', version: '0.0.0',
@@ -140,11 +140,11 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const name = 'shell-ada';
 	const prompt = 'Review the isolated Shell handoff';
 	const address = detachedStartReference(run('start', '-d', '--name', name, 'codex', '--', prompt), name);
-	const inspect = async () => (await coreCall(home, 'agent.inspect', { agent: address })).agent;
+	const inspect = async () => (await coreCall(home, 'agent.inspect', { target: address })).agent;
 	const before = await inspect();
 	assert.ok(before.pid && before.process === 'running');
 	assert.strictEqual(before.address, address);
-	const launchFile = `${env.FACADE_IT_RECORD}.args.#${before.agent_id}`;
+	const launchFile = `${env.FACADE_IT_RECORD}.args.#${before.reference.agent_id}`;
 	const launch = await until('the Shell start argv at the fake CLI', () => fs.existsSync(launchFile)
 		? JSON.parse(fs.readFileSync(launchFile, 'utf8')) as { readonly args: string[] }
 		: undefined);
@@ -172,7 +172,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	console.log('  ✔ Shell start, Go to Agent and Shell Attach used the same terminal after closing VS Code');
 
 	const session = await until('the fake CLI to report its session', async () => (await inspect()).session);
-	const startLog = `${env.FACADE_IT_RECORD}.starts.#${before.agent_id}`;
+	const startLog = `${env.FACADE_IT_RECORD}.starts.#${before.reference.agent_id}`;
 	const starts = () => fs.readFileSync(startLog, 'utf8').trim().split(/\r?\n/u).map(Number);
 	const priorStarts = starts().length;
 	const pinWindow = await open(folder, 'sh');
@@ -196,7 +196,7 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	const restoredPins = await Promise.allSettled([restoredWindow, restoredPeer].map(window => window.act({ kind: 'shell-pin', name })));
 	const failure = restoredPins.find(each => each.status === 'rejected');
 	if (failure) {
-		const core = await callInCore(env.FACADE_HOME!, 'agent.inspect', { agent: address }, [3, 3]).catch(error => String(error));
+		const core = await callInCore(env.FACADE_HOME!, 'agent.inspect', { target: address }).catch(error => String(error));
 		const directory = path.dirname(files[0]);
 		const recovery = fs.readdirSync(directory).filter(file => file.startsWith('orchestrator-pin-restore')).map(file => {
 			try { return [file, fs.readFileSync(path.join(directory, file), 'utf8')]; }
@@ -211,10 +211,10 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	};
 	const checkSavedPin = () => {
 		const saved = roster();
-		assert.deepStrictEqual(saved.members, [{ machine_id: before.machine_id, agent_id: before.agent_id }]);
+		assert.deepStrictEqual(saved.members, [before.reference]);
 		assert.strictEqual(saved.pins.length, 1, 'the workspace saves one Pin');
-		assert.strictEqual(saved.pins[0].machine_id, before.machine_id);
-		assert.strictEqual(saved.pins[0].agent, before.agent_id);
+		assert.strictEqual(saved.pins[0].machine_id, before.reference.machine_id);
+		assert.strictEqual(saved.pins[0].agent, before.reference.agent_id);
 	};
 	checkSavedPin();
 	const restored = await inspect();
@@ -233,8 +233,8 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	await Promise.all([restoredWindow.close(), restoredPeer.close()]);
 	console.log('  ✔ Both windows shared the Pin, reopened one original session, and hid the card while it kept running');
 
-	const reference = { machine_id: before.machine_id, agent_id: before.agent_id };
-	assert.deepStrictEqual(await coreCall(home, 'agent.remove', { reference }), { reference, address });
+	const reference = before.reference;
+	assert.deepStrictEqual(await coreCall(home, 'agent.remove', { target: reference }), { reference, address });
 	const afterRemove = await open(folder, 'sh');
 	await until('explicit removal to clear the saved workspace member and Pin', () => {
 		const saved = roster();
@@ -246,23 +246,128 @@ export async function shellHandoff(open: OpenWindow, folder: string, facade: str
 	console.log('  ✔ Explicit removal cleared the saved member and Pin on reopen');
 }
 
+/** Complete the prerelease editor's import and reopen its workspace storage on API v1. */
+export async function coldCutoverJourney(
+	open: OpenWindow, folder: string, env: NodeJS.ProcessEnv,
+	prerelease: string, current: string, selectV1: () => void
+): Promise<void> {
+	const run = (program: string, ...args: string[]) =>
+		execFileSync(program, args, { cwd: folder, env, encoding: 'utf8', timeout: 30_000 });
+	const home = env.FACADE_HOME!;
+	const name = 'cold-cutover';
+	const marker = 'typed before API v1 cold cutover';
+	const address = detachedStartReference(run(prerelease, 'start', '-d', '--name', name, 'qa-fake'), name);
+	const initial = await open(folder, 'cold');
+	assert.ok(initial.ready.machineId);
+	const agent = address.split('@')[0];
+	await initial.act({ kind: 'open-shell-agent', name, address, text: marker });
+	await initial.act({ kind: 'shell-pin', name, set: true });
+	const { file, pin } = await initial.act<SavedPin>({ kind: 'saved-pin', agent });
+	assert.strictEqual(pin.machine_id, initial.ready.machineId);
+	const reference = { machine_id: pin.machine_id, agent_id: pin.agent };
+	const roster = () => JSON.parse(fs.readFileSync(file, 'utf8')) as {
+		readonly imported: boolean; readonly importedPins: boolean; readonly legacyWorkspaceKey?: string;
+		readonly members: readonly typeof reference[]; readonly pins: readonly RustPin[];
+	};
+	assert.deepStrictEqual(roster().members, [reference]);
+	await initial.close();
+
+	// Seed the old Pin file from the actual Pin. The editor's existing URI ledger binds its key.
+	const legacy = path.join(path.dirname(file), 'workspace-state.json');
+	assert.ok(!fs.existsSync(legacy), legacy);
+	fs.renameSync(file, `${file}.fixture-preimage`);
+	fs.writeFileSync(legacy, JSON.stringify({ 'facade.pins': [pin] }));
+	const imported = await open(folder, 'cold');
+	const ready = await until('the prerelease editor to finish import', () => {
+		if (!fs.existsSync(file)) { return undefined; }
+		const saved = roster();
+		return saved.imported && saved.importedPins ? saved : undefined;
+	});
+	assert.strictEqual(ready.legacyWorkspaceKey, path.basename(path.dirname(file)));
+	assert.deepStrictEqual(ready.members, [reference]);
+	assert.deepStrictEqual(ready.pins, [pin]);
+	await imported.close();
+	const lock = (service: string) =>
+		JSON.parse(fs.readFileSync(path.join(home, 'core', `${service}.lock`), 'utf8')) as { pid: number; birth: string };
+	const old = { daemon: lock('daemon'), keeper: lock('keeper') };
+	run(prerelease, 'stop', address);
+	await until('both prerelease services to exit', () =>
+		Object.values(old).every(service => !isProcessRunning(service.pid)) || undefined, 55_000);
+
+	run(current, 'list', '--local');
+	assert.notDeepStrictEqual(lock('daemon'), old.daemon);
+	assert.notDeepStrictEqual(lock('keeper'), old.keeper);
+	const { agent: finished } = await coreCall(home, 'agent.inspect', { target: reference });
+	assert.deepStrictEqual(finished.reference, reference);
+	assert.strictEqual(finished.process, 'ended');
+	const history = run(current, 'screen', address, '--lines', '120');
+	assert.ok(history.includes(marker), history);
+	selectV1();
+	const reopened = await open(folder, 'cold');
+	assert.strictEqual(reopened.ready.machineId, pin.machine_id);
+	await reopened.act({ kind: 'shell-pin', name });
+	const saved = await reopened.act<SavedPin>({ kind: 'saved-pin', agent });
+	assert.strictEqual(saved.file, file);
+	assert.deepStrictEqual(roster().members, [reference]);
+	assert.deepStrictEqual(saved.pin, pin);
+	await reopened.close();
+	console.log(`  ✔ Prerelease import and API v1 cold cutover kept the workspace member, finished transcript and Pin ${pin.id}. Daemon ${JSON.stringify(old.daemon)} and keeper ${JSON.stringify(old.keeper)} exited before restart.`);
+}
+
 /** Exercise simultaneous product viewers on the same native fake CLI. */
-export async function sharedAttachJourney(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv): Promise<void> {
-	const run = (...args: string[]) => execFileSync(facade, args, { cwd: folder, env, encoding: 'utf8', timeout: 20_000 });
+export async function sharedAttachJourney(open: OpenWindow, folder: string, facade: string, env: NodeJS.ProcessEnv, replacement?: string): Promise<void> {
+	const run = (program: string, ...args: string[]) =>
+		execFileSync(program, args, { cwd: folder, env, encoding: 'utf8', timeout: 30_000 });
+	const home = env.FACADE_HOME!;
 	const name = 'shell-attach';
-	const address = detachedStartReference(run('start', '-d', '--name', name, 'qa-fake'), name);
-	const inspect = async () => (await coreCall(env.FACADE_HOME!, 'agent.inspect', { agent: address })).agent;
+	const address = detachedStartReference(run(facade, 'start', '-d', '--name', name, 'qa-fake'), name);
+	const inspect = async () => (await coreCall(home, 'agent.inspect', { target: address })).agent;
 	const before = await inspect();
 	assert.ok(before.pid && before.process === 'running', JSON.stringify(before));
 	const window = await open(folder, 'attach');
 	const marker = 'typed in the editor';
 	await window.act({ kind: 'open-shell-agent', name, address, text: marker });
-	await sharedShellAttach(window, folder, facade, env, address, marker);
+	if (replacement) {
+		const version = (program: string) => /^facade (\d+\.\d+\.\d+)$/u.exec(run(program, '--version').trim())?.[1];
+		const old = version(facade);
+		const next = version(replacement);
+		assert.ok(old && next && old !== next, 'Select two different numeric package versions.');
+		const lock = (service: 'daemon' | 'keeper') =>
+			JSON.parse(fs.readFileSync(path.join(home, 'core', `${service}.lock`), 'utf8')) as { pid: number; birth: string };
+		const accepted = async () => {
+			const hello = await helloInCore(home);
+			assert.ok('result' in hello, JSON.stringify(hello));
+			const ready = hello.result as DaemonHelloResult;
+			assert.ok(ready.api_version === 1 && ready.topics.includes('attach') && ready.ops.includes('attach.resize'), JSON.stringify(hello));
+			return ready;
+		};
+		const daemon = lock('daemon');
+		const keeper = lock('keeper');
+		assert.strictEqual((await accepted()).build.split('+')[0], old);
+		const retained = 'input after v1 daemon takeover';
+		run(replacement, 'type', address, retained);
+		assert.strictEqual((await accepted()).build.split('+')[0], next);
+		const changed = lock('daemon');
+		assert.notStrictEqual(changed.pid, daemon.pid);
+		assert.notStrictEqual(changed.birth, daemon.birth);
+		assert.deepStrictEqual(lock('keeper'), keeper);
+		assert.strictEqual((await inspect()).pid, before.pid);
+		await window.act<AttachView>({ kind: 'shell-attach-view', text: retained });
+		console.log(`  ✔ The existing VS Code Attach recovered across v1 builds ${old} → ${next}. Daemon ${JSON.stringify(daemon)} → ${JSON.stringify(changed)}, keeper ${JSON.stringify(keeper)}, CLI PID ${before.pid}`);
+	}
+	await sharedShellAttach(window, folder, replacement ?? facade, env, address, marker);
+	const old = await open(folder, 'old-engine');
+	assert.strictEqual(old.ready.machineId, null);
+	const view = await old.act<WindowView>({ kind: 'snapshot' });
+	assert.ok(!view.cards.some(card => card.name === name), JSON.stringify(view));
+	assert.strictEqual(view.terminals, 0);
+	await old.close();
+	console.log('  ✔ The separately profiled old engine left the Core agent and terminal alone');
 	await window.close();
 	const after = await inspect();
 	assert.strictEqual(after.pid, before.pid);
 	assert.strictEqual(after.process, 'running');
-	run('stop', address);
+	run(replacement ?? facade, 'stop', address);
 }
 
 /** RULES-6.3. Real Shell and VS Code views apply a shared grid and keep their own capacity. */
@@ -316,7 +421,7 @@ function assertSameRun(actual: RunningAgent, expected: RunningAgent, message?: s
 
 async function expectViews(window: DrivenWindow, agent: string, count: number): Promise<void> {
 	await until(`${agent} to have ${count} terminal views`, async () =>
-		(await window.act<V3InspectResult>({ kind: 'inspect', agent })).viewers.length === count || undefined);
+		(await window.act<InspectResult>({ kind: 'inspect', agent })).viewers.length === count || undefined);
 }
 
 /** Go to Agent shares the same run. Both workspaces keep their Pin when it stops and restore one process. */
@@ -325,6 +430,7 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 	let machineId: string | undefined;
 	const start = async (place: string, profile: string) => {
 		const window = await open(place, profile);
+		assert.ok(window.ready.machineId);
 		machineId ??= window.ready.machineId;
 		assert.deepStrictEqual({
 			folder: normalizeDriveLetter(window.ready.folder), home: normalizeDriveLetter(window.ready.home),
@@ -382,20 +488,20 @@ export async function rustMultiWindow(open: OpenWindow, journey: WindowJourney):
 
 async function worktreeLifetime(source: DrivenWindow, peer: DrivenWindow): Promise<void> {
 	const branch = 'agent-in-worktree';
-	const agent = await source.act<V3AgentInfo>({ kind: 'worktree', branch });
+	const agent = await source.act<AgentInfo>({ kind: 'worktree', branch });
 	const parts = agent.cwd.split(/[\\/]/u);
 	assert.deepStrictEqual(parts.slice(-2), [source.ready.folder.split(/[\\/]/u).at(-1) + '.worktrees', branch]);
 	assert.deepStrictEqual((await source.act<WindowView>({ kind: 'snapshot' })).cards, [], 'a Shell start leaves the workspace unchanged');
 
-	const adopted = await peer.act<RunningAgent>({ kind: 'adopt', agent: agent.agent_id });
+	const adopted = await peer.act<RunningAgent>({ kind: 'adopt', agent: agent.reference.agent_id });
 	assert.strictEqual(adopted.pid, agent.pid);
 	assert.strictEqual(normalizeDriveLetter(adopted.cwd), normalizeDriveLetter(agent.cwd));
 	// Windows holds the worktree directory open until the process using it exits.
 	const cwdLocksWorktree = source.ready.platform === 'win32';
 	if (!cwdLocksWorktree) { await source.act({ kind: 'delete-worktree', folder: agent.cwd }); }
-	const kept = await peer.act<RunningAgent>({ kind: 'running', agent: agent.agent_id });
+	const kept = await peer.act<RunningAgent>({ kind: 'running', agent: agent.reference.agent_id });
 	assertSameRun(kept, adopted, 'the peer holds the original worktree agent');
-	await peer.act({ kind: 'remove', agent: agent.agent_id });
+	await peer.act({ kind: 'remove', agent: agent.reference.agent_id });
 	await peer.act({ kind: 'wait-for-exit', pid: adopted.pid });
 	if (cwdLocksWorktree) { await source.act({ kind: 'delete-worktree', folder: agent.cwd }); }
 	console.log('  ✔ The peer attaches to the original worktree process, and Git removes its directory');

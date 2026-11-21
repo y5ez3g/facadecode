@@ -7,16 +7,23 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { disposeAll } from '../../base/lifecycle';
-import type {
-	AgentListEntry, AgentRef, LegacyWorkspaceArgs, LegacyWorkspaceResult, ResumeResult, ResumeTarget,
-	V3AgentInfo, V3AgentMachineState, V3AgentsChange, V3AgentsSnapshot, V3InspectResult, V3ResumeArgs, V3StartArgs, V3StartResult
-} from '../../base/coreProtocol';
+import type { AgentRef, DaemonOperations, DaemonTopics } from '../../base/coreProtocol';
 import type { LocationPort, LogPort, RunChange, RunError, RunFacts, RunId, RustPin } from '../../core/ports';
+import { errorOf, unavailable } from '../rust/rpc';
 import { agentFacts, agentKey, failedPinFacts, referenceOf, referenceOfPin } from './agentFacts';
 import { restoreRustPins } from './pinRestore';
 import type { OrchestratorTerminals } from './terminals';
 import { DaemonError, type OrchestratorLink } from './types';
 import type { RustWorkspace, WorkspacePinFailure } from './workspace';
+
+type AgentInfo = DaemonOperations['agent.inspect']['result']['agent'];
+type AgentListEntry = DaemonOperations['agent.list']['result']['agents'][number];
+type ResumeCandidate = DaemonOperations['agent.resume_list']['result']['items'][number];
+type ResumeTarget = DaemonOperations['agent.resume']['args']['target'];
+type StartArgs = DaemonOperations['agent.start']['args'];
+type AgentsSnapshot = DaemonTopics['agents']['snapshot'];
+type AgentsChange = DaemonTopics['agents']['change'];
+type AgentMachineState = AgentsSnapshot['machines'][number];
 
 const INITIAL_TERMINAL_SIZE = { cols: 80, rows: 24 };
 declare const FACADE_TEST_MODE: boolean;
@@ -35,14 +42,13 @@ interface AgentDeps {
 	readonly onDidChangeMachineNames: vscode.Event<void>;
 	readonly machineName: (machineId: string) => string | undefined;
 	readonly environment: (folder: string | undefined) => Record<string, string>;
-	readonly isHost: (machine: string | undefined) => boolean;
 	readonly notifyError: (error: unknown) => void;
 	readonly log: LogPort;
 }
 
 /** Joins the Orchestrator's records with the workspace's presentation (RULES-6.1). */
 export class OrchestratorAgents implements vscode.Disposable {
-	private readonly records = new Map<RunId, V3AgentInfo>();
+	private readonly records = new Map<RunId, AgentInfo>();
 	private readonly watchReferences = new Map<RunId, AgentRef>();
 	private readonly absent = new Map<RunId, AgentRef>();
 	private readonly changed = new vscode.EventEmitter<RunChange>();
@@ -67,7 +73,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 			deps.locations.onDidChange(() => this.render()),
 			deps.onDidChangeMachineNames(() => this.render()),
 			deps.link.onDidConnect(() => this.captureWorkspaceMembers()),
-			deps.link.watch<V3AgentsSnapshot, V3AgentsChange>('agents', {}, {
+			deps.link.watch('agents', {}, {
 				snapshot: view => this.snapshot(view),
 				change: change => this.change(change),
 				disconnected: () => {
@@ -83,20 +89,16 @@ export class OrchestratorAgents implements vscode.Disposable {
 	}
 
 	async loadWorkspace(): Promise<boolean> {
-		const [imported] = await Promise.all([this.importLegacy(), this.first.promise]);
+		const [imported] = await Promise.all([this.loadLocalPins(), this.first.promise]);
 		if (this.disposed) { return false; }
 		this.pruning = imported;
 		this.reconcile();
 		return imported;
 	}
 
-	private async importLegacy(): Promise<boolean> {
+	private async loadLocalPins(): Promise<boolean> {
 		try {
-			await this.deps.workspace.importLegacy({
-				machineId: this.deps.link.machineId,
-				load: (args: LegacyWorkspaceArgs) => this.deps.link.call<LegacyWorkspaceResult>('workspace.import_legacy', args)
-			});
-			return true;
+			return await this.deps.workspace.loadLocalPins();
 		} catch (error) {
 			if (!this.disposed) { this.deps.notifyError(error); }
 			return false;
@@ -115,14 +117,13 @@ export class OrchestratorAgents implements vscode.Disposable {
 		return this.deps.workspace.snapshot().pins;
 	}
 
-	async start(input: V3StartArgs): Promise<RunId> {
-		const args: V3StartArgs = {
+	async start(input: StartArgs): Promise<RunId> {
+		const args: StartArgs = {
 			...input,
-			env: this.deps.isHost(input.machine) ? this.deps.environment(input.folder) : {},
+			env: input.scope?.kind === 'machine' ? undefined : this.deps.environment(input.folder),
 			request_id: `start-${randomBytes(16).toString('hex')}`
 		};
-		await this.deps.link.call('agent.start_preflight', args);
-		const result = await this.deps.link.call<V3StartResult>('agent.start', args);
+		const result = await this.deps.link.call('agent.start', args);
 		return this.show(result.agent);
 	}
 
@@ -134,14 +135,9 @@ export class OrchestratorAgents implements vscode.Disposable {
 		return this.show(record);
 	}
 
-	async resume(target: ResumeTarget): Promise<RunId> {
-		const args: V3ResumeArgs = {
-			...target,
-			...INITIAL_TERMINAL_SIZE,
-			...(this.deps.isHost(target.machine) ? { env: this.deps.environment(target.folder) } : {})
-		};
-		const { agent } = await this.deps.link.call<ResumeResult>('agent.resume', args);
-		return this.show(agent);
+	async resume({ target, machine_id }: ResumeCandidate): Promise<RunId> {
+		const folder = target.kind === 'session' ? target.folder : undefined;
+		return this.show(await this.resumeOn(machine_id, target, folder));
 	}
 
 	async open(run: RunId): Promise<boolean> {
@@ -163,13 +159,15 @@ export class OrchestratorAgents implements vscode.Disposable {
 	async stop(run: RunId): Promise<void> {
 		const reference = this.cards.get(run)?.orchestrator?.reference;
 		if (!reference) { return; }
-		await this.deps.link.call('agent.stop', { reference });
+		const { items: [item] } = await this.deps.link.call('agent.stop', { selection: { kind: 'targets', targets: [reference] } });
+		if (item?.status === 'failed') { throw errorOf(item.error); }
+		if (item?.status !== 'stopped') { throw unavailable('Facade core did not confirm that the agent stopped.'); }
 	}
 
 	async remove(run: RunId): Promise<void> {
 		const reference = this.cards.get(run)?.orchestrator?.reference;
 		if (!reference) { return; }
-		await this.deps.link.call('agent.remove', { reference });
+		await this.deps.link.call('agent.remove', { target: reference });
 		this.records.delete(run);
 		this.deps.workspace.forget(reference);
 		this.closeView(run);
@@ -178,7 +176,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 	async rename(run: RunId, name: string): Promise<void> {
 		const reference = this.cards.get(run)?.orchestrator?.reference;
 		if (!reference) { return; }
-		await this.deps.link.call('agent.rename', { reference, name });
+		await this.deps.link.call('agent.rename', { target: reference, name });
 	}
 
 	async setPinned(run: RunId, pinned: boolean): Promise<void> {
@@ -207,27 +205,27 @@ export class OrchestratorAgents implements vscode.Disposable {
 		return this.recoveringHere ? this.pinRecovery : undefined;
 	}
 
-	private async show(record: V3AgentInfo): Promise<RunId> {
-		const run = agentKey(record);
+	private async show(record: AgentInfo): Promise<RunId> {
+		const run = agentKey(record.reference);
 		this.remember(record);
-		this.deps.workspace.show(referenceOf(record));
+		this.deps.workspace.show(record.reference);
 		this.reconcile();
 		await this.attach(record);
 		return run;
 	}
 
-	private async inspect(reference: AgentRef): Promise<V3AgentInfo> {
-		const { agent } = await this.deps.link.call<V3InspectResult>('agent.inspect', { reference });
+	private async inspect(reference: AgentRef): Promise<AgentInfo> {
+		const { agent } = await this.deps.link.call('agent.inspect', { target: reference });
 		this.remember(agent);
 		return agent;
 	}
 
-	private async attach(record: V3AgentInfo, pinned = false): Promise<void> {
+	private async attach(record: AgentInfo, pinned = false): Promise<void> {
 		if (this.disposed) { return; }
 		if (record.process !== 'running') {
 			throw new Error(vscode.l10n.t('{0} has ended. Use Resume Agent to continue it.', record.address));
 		}
-		const run = agentKey(record);
+		const run = agentKey(record.reference);
 		const terminals = this.deps.terminals;
 		if (this.attached.get(run) !== record.started_at) { this.closeView(run); }
 		if (!this.attached.has(run)) {
@@ -238,7 +236,7 @@ export class OrchestratorAgents implements vscode.Disposable {
 				command: record.cli, cwd: record.cwd,
 				...(pinned || this.cards.get(run)?.pin ? { pinned: true as const } : {})
 			}, { reveal: false, hidden: true });
-			terminals.bind(run, { ref: referenceOf(record), address: record.address }, !this.unreachable(record));
+			terminals.bind(run, { ref: record.reference, address: record.address }, !this.unreachable(record));
 		}
 		if (pinned) {
 			await terminals.openPinned(run);
@@ -309,20 +307,21 @@ export class OrchestratorAgents implements vscode.Disposable {
 				const reference = referenceOfPin(pin);
 				try { return { agent: await this.inspect(reference) }; }
 				catch (error) {
-					if (error instanceof DaemonError && error.reason === 'not_found' && error.data.record_removal !== undefined) {
+					const removal = error instanceof DaemonError && error.reason === 'not_found' && error.data.details?.record_removal;
+					if (removal === 'expired' || removal === 'removed') {
 						this.records.delete(agentKey(reference));
-						return { removal: error.data.record_removal };
+						return { removal };
 					}
 					throw error;
 				}
 			},
 			resumeExisting: async agent => {
 				try {
-					return await this.restoreOn(agent.machine_id, { reference: agent.agent_id }, agent.cwd);
+					return await this.resumeOn(agent.reference.machine_id, { kind: 'agent', reference: agent.reference }, agent.cwd);
 				} catch (error) {
 					if (!(error instanceof DaemonError) || error.reason !== 'unavailable') { throw error; }
 					// A different workspace can resume this Agent between our lookup and resume.
-					const current = await this.inspect(referenceOf(agent)).catch(() => undefined);
+					const current = await this.inspect(agent.reference).catch(() => undefined);
 					if (current?.process === 'running') { return current; }
 					throw error;
 				}
@@ -331,7 +330,9 @@ export class OrchestratorAgents implements vscode.Disposable {
 				if (!pin.conversation.sessionId) {
 					throw new Error(vscode.l10n.t('This Pin has no saved session.'));
 				}
-				return this.restoreOn(pin.machine_id, { reference: `${pin.conversation.cli}:${pin.conversation.sessionId}`, folder: pin.cwd }, pin.cwd);
+				return this.resumeOn(pin.machine_id, {
+					kind: 'session', machine_id: pin.machine_id, cli: pin.conversation.cli, session: pin.conversation.sessionId, folder: pin.cwd
+				}, pin.cwd);
 			},
 			opened: async (pin, agent) => {
 				if (!this.currentPin(pin)) { return; }
@@ -362,53 +363,54 @@ export class OrchestratorAgents implements vscode.Disposable {
 		return failed;
 	}
 
-	private async restoreOn(machineId: string, target: Pick<ResumeTarget, 'reference' | 'folder'>, folder: string): Promise<V3AgentInfo> {
-		const args: V3ResumeArgs = {
-			...target, machine_id: machineId, ...INITIAL_TERMINAL_SIZE,
+	private async resumeOn(machineId: string, target: ResumeTarget, folder?: string): Promise<AgentInfo> {
+		const { agent } = await this.deps.link.call('agent.resume', {
+			target, size: INITIAL_TERMINAL_SIZE,
 			...(machineId === this.deps.link.machineId ? { env: this.deps.environment(folder) } : {})
-		};
-		return (await this.deps.link.call<ResumeResult>('agent.resume', args)).agent;
+		});
+		return agent;
 	}
 
 	private currentPin(pin: RustPin): boolean {
 		return this.pins().some(current => current.id === pin.id && current.machine_id === pin.machine_id && current.agent === pin.agent);
 	}
 
-	private pinFor(record: V3AgentInfo, previous?: RustPin): RustPin {
+	private pinFor(record: AgentInfo, previous?: RustPin): RustPin {
+		const { machine_id, agent_id } = record.reference;
 		return {
 			id: previous?.id ?? `pin-${randomBytes(16).toString('hex')}`,
-			machine_id: record.machine_id,
-			agent: record.agent_id,
-			location: this.cards.get(agentKey(record))?.location ?? previous?.location ?? record.cwd,
+			machine_id,
+			agent: agent_id,
+			location: this.cards.get(agentKey(record.reference))?.location ?? previous?.location ?? record.cwd,
 			cwd: record.cwd,
 			name: record.name,
 			conversation: {
 				...previous?.conversation,
-				environment: `machine:${record.machine_id}`,
+				environment: `machine:${machine_id}`,
 				cli: record.cli,
 				...(record.session ? { sessionId: record.session } : {})
 			}
 		};
 	}
 
-	private snapshot(view: V3AgentsSnapshot): void {
+	private snapshot(view: AgentsSnapshot): void {
 		this.disconnected = false;
 		for (const [run, record] of this.records) {
-			if (record.machine_id !== this.deps.link.machineId) {
+			if (record.reference.machine_id !== this.deps.link.machineId) {
 				this.records.set(run, { ...record, unreachable: true });
 			}
 		}
 		const local = this.deps.link.machineId;
-		this.replaceRecords(local, view.agents.filter(record => record.machine_id === local));
+		this.replaceRecords(local, view.agents.filter(record => record.reference.machine_id === local));
 		for (const record of view.agents) {
-			if (record.machine_id !== local) { this.watchRecord(record); }
+			if (record.reference.machine_id !== local) { this.watchRecord(record); }
 		}
 		for (const machine of view.machines) { this.machineState(machine); }
 		this.first.resolve();
 		this.reconcile();
 	}
 
-	private change(change: V3AgentsChange): void {
+	private change(change: AgentsChange): void {
 		switch (change.kind) {
 			case 'updated':
 				this.watchRecord(change.agent);
@@ -433,20 +435,20 @@ export class OrchestratorAgents implements vscode.Disposable {
 		this.reconcile();
 	}
 
-	private machineState(machine: V3AgentMachineState): void {
+	private machineState(machine: AgentMachineState): void {
 		if (machine.state === 'synced' && machine.agents) {
 			this.replaceRecords(machine.machine_id, machine.agents);
 		} else if (machine.state !== 'synced') {
 			for (const [run, record] of this.records) {
-				if (record.machine_id === machine.machine_id) {
+				if (record.reference.machine_id === machine.machine_id) {
 					this.records.set(run, { ...record, unreachable: true });
 				}
 			}
 		}
 	}
 
-	private replaceRecords(machineId: string, records: readonly V3AgentInfo[]): void {
-		const present = new Set(records.map(agentKey));
+	private replaceRecords(machineId: string, records: readonly AgentInfo[]): void {
+		const present = new Set(records.map(record => agentKey(record.reference)));
 		for (const [run, reference] of this.watchReferences) {
 			if (reference.machine_id === machineId && !present.has(run)) {
 				this.watchReferences.delete(run);
@@ -468,18 +470,18 @@ export class OrchestratorAgents implements vscode.Disposable {
 		}
 	}
 
-	private watchRecord(record: V3AgentInfo): void {
-		this.watchReferences.set(agentKey(record), referenceOf(record));
+	private watchRecord(record: AgentInfo): void {
+		this.watchReferences.set(agentKey(record.reference), record.reference);
 		this.remember(record);
 	}
 
-	private remember(record: V3AgentInfo): void {
-		const run = agentKey(record);
+	private remember(record: AgentInfo): void {
+		const run = agentKey(record.reference);
 		this.absent.delete(run);
 		this.records.set(run, record);
 	}
 
-	private unreachable(record: V3AgentInfo): boolean {
+	private unreachable(record: AgentInfo): boolean {
 		return this.disconnected || record.unreachable === true;
 	}
 

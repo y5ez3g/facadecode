@@ -11,8 +11,8 @@ fn agents_watch_delivers_snapshot_and_changes_until_unwatch() {
     let home = TestHome::new("watchagents");
     home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
-    let watching = wire.request("watch", json!({ "topic": "agents" }));
+    wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
+    let watching = wire.request("watch", json!({ "topic": "agents", "args": {} }));
     let watch = watching["result"]["watch"]
         .as_u64()
         .expect("expected a watch ID");
@@ -40,7 +40,8 @@ fn agents_watch_delivers_snapshot_and_changes_until_unwatch() {
         wait_until(secs(10), || wire
             .changes(watch)
             .iter()
-            .any(|c| c["change"]["agent"]["agent_id"] == second.id.as_str()
+            .any(|c| c["change"]["agent"]["reference"]["agent_id"]
+                == second.id.as_str()
                 && c["change"]["agent"]["process"] == "ended")),
         "{:?}",
         wire.changes(watch)
@@ -62,8 +63,8 @@ fn agents_watch_observes_immediate_start_then_remove() {
     let home = TestHome::new("quickwatch");
     home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
-    let watch = wire.request("watch", json!({ "topic": "agents" }))["result"]["watch"]
+    wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
+    let watch = wire.request("watch", json!({ "topic": "agents", "args": {} }))["result"]["watch"]
         .as_u64()
         .expect("expected a watch ID");
     // Publish both a start and immediate removal; polling could miss the agent entirely.
@@ -72,22 +73,24 @@ fn agents_watch_observes_immediate_start_then_remove() {
         "agent.start",
         json!({
             "cli": home.shell_cli(), "args": ["-c", "sleep 60"], "name": "brief", "folder": cwd,
-            "cols": 80, "rows": 24,
+            "size": { "cols": 80, "rows": 24 },
         }),
     );
-    let id = started["result"]["agent"]["agent_id"]
+    let reference = &started["result"]["agent"]["reference"];
+    let id = reference["agent_id"]
         .as_str()
-        .expect("expected an agent ID")
-        .to_string();
-    assert!(wire.call("agent.remove", json!({ "agent": id }))["error"].is_null());
+        .expect("expected an agent ID");
+    wire.call_ok("agent.remove", json!({ "target": reference }));
     assert!(
         wait_until(secs(5), || {
             let changes = wire.changes(watch);
             let came = changes.iter().position(|c| {
-                c["change"]["kind"] == "updated" && c["change"]["agent"]["agent_id"] == id.as_str()
+                c["change"]["kind"] == "updated" && c["change"]["agent"]["reference"] == *reference
             });
             let went = changes.iter().position(|c| {
-                c["change"]["kind"] == "removed" && c["change"]["agent_id"] == id.as_str()
+                c["change"]["kind"] == "removed"
+                    && c["change"]["agent_id"] == id
+                    && c["change"]["machine_id"] == reference["machine_id"]
             });
             matches!((came, went), (Some(came), Some(went)) if came < went)
         }),
@@ -101,10 +104,10 @@ fn screen_watch_delivers_snapshot_then_output() {
     let home = TestHome::new("watchscreen");
     let worker = home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
+    wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
     let watching = wire.request(
         "watch",
-        json!({ "topic": "screen", "args": { "agent": "w1" } }),
+        json!({ "topic": "attach", "args": { "target": "w1" } }),
     );
     let watch = watching["result"]["watch"]
         .as_u64()
@@ -114,18 +117,19 @@ fn screen_watch_delivers_snapshot_then_output() {
         "{watching}"
     );
     assert!(
-        watching["result"]["snapshot"]["cols"].is_number(),
+        watching["result"]["snapshot"]["size"]["cols"].is_number(),
         "{watching}"
     );
     assert_eq!(
-        watching["result"]["snapshot"]["agent_id"],
+        watching["result"]["snapshot"]["reference"]["agent_id"],
         worker.id.as_str(),
         "{watching}"
     );
+    let reference = &watching["result"]["snapshot"]["reference"];
     let data = facade_base::base64::encode(b"seen by a viewer");
     wire.write(&json!({
         "jsonrpc": "2.0", "method": "call",
-        "params": { "op": "agent.type", "args": { "agent": worker.id, "raw": data } },
+        "params": { "op": "agent.type", "args": { "target": reference, "input": { "kind": "raw", "raw": data } } },
     }));
     assert!(
         wait_until(secs(5), || wire
@@ -140,7 +144,7 @@ fn screen_watch_delivers_snapshot_then_output() {
     assert_eq!(
         error_reason(&wire.request(
             "watch",
-            json!({ "topic": "screen", "args": { "agent": "nobody" } })
+            json!({ "topic": "attach", "args": { "target": "nobody" } })
         )),
         "not_found"
     );
@@ -153,8 +157,8 @@ fn a_screen_read_marks_the_screen_s_styles() {
     let home = TestHome::new("read");
     let worker = home.start_fake("w1");
     let mut wire = DaemonTestClient::open(&home);
-    wire.hello("terminal", DAEMON_RANGE, json!({}));
-    let read = wire.call("agent.screen", json!({ "agent": worker.id, "lines": 40 }));
+    wire.hello("terminal", DAEMON_API_VERSIONS, json!({}));
+    let read = wire.call("agent.screen", json!({ "target": worker.id, "lines": 40 }));
     let screen = &read["result"];
     assert!(
         screen["text"]
@@ -163,7 +167,11 @@ fn a_screen_read_marks_the_screen_s_styles() {
         "{read}"
     );
     assert_eq!(
-        (&screen["agent_id"], &screen["process"], &screen["buffer"]),
+        (
+            &screen["reference"]["agent_id"],
+            &screen["process"],
+            &screen["buffer"]
+        ),
         (&json!("a1"), &json!("running"), &json!("normal")),
         "{read}"
     );
@@ -175,7 +183,7 @@ fn a_screen_read_marks_the_screen_s_styles() {
         "{read}"
     );
     assert_eq!(
-        error_reason(&wire.call("agent.screen", json!({ "agent": "nobody" }))),
+        error_reason(&wire.call("agent.screen", json!({ "target": "nobody" }))),
         "not_found"
     );
 }
@@ -196,7 +204,7 @@ fn a_viewer_behind_gets_a_redraw_before_the_exit() {
     slow.send(
         1,
         "watch",
-        json!({ "topic": "screen", "args": { "agent": agent } }),
+        json!({ "topic": "attach", "args": { "target": agent } }),
     );
     type_raw(&mut wire, &agent, "go\r");
     // Twenty megabytes through the debug build's terminal take 10 to 25 seconds on a loaded Mac,
@@ -256,7 +264,7 @@ fn watch_response_precedes_changes() {
         raw.send(
             id,
             "watch",
-            json!({ "topic": "screen", "args": { "agent": agent } }),
+            json!({ "topic": "attach", "args": { "target": agent } }),
         );
         loop {
             let line = raw.read_message().expect("expected a daemon response");
@@ -304,7 +312,7 @@ fn remove_delivers_final_redraw_then_exit_then_removed() {
     slow.send(
         1,
         "watch",
-        json!({ "topic": "screen", "args": { "agent": agent } }),
+        json!({ "topic": "attach", "args": { "target": agent } }),
     );
     type_raw(&mut wire, &agent, "go\r");
     // Twenty megabytes through the debug build's terminal take 10 to 25 seconds on a loaded Mac,
@@ -379,16 +387,16 @@ fn screen_redraw_after_resize_carries_the_new_size() {
     let mut wire = connect(&home);
     let watching = wire.request(
         "watch",
-        json!({ "topic": "screen", "args": { "agent": agent.id } }),
+        json!({ "topic": "attach", "args": { "target": agent.id } }),
     );
     let watch = watching["result"]["watch"].as_u64().expect("a watch");
     let resized = wire.call(
-        "agent.resize",
-        json!({ "agent": agent.id, "cols": 70, "rows": 20 }),
+        "attach.resize",
+        json!({ "watch": watch, "size": { "cols": 70, "rows": 20 } }),
     );
     assert!(resized["result"].is_object(), "{resized}");
     let carries_size = |c: &Value| {
-        c["change"]["kind"] == "redraw" && c["change"]["cols"] == 70 && c["change"]["rows"] == 20
+        c["change"]["kind"] == "redraw" && c["change"]["size"] == json!({ "cols": 70, "rows": 20 })
     };
     assert!(
         wait_until(secs(5), || wire.changes(watch).iter().any(carries_size)),

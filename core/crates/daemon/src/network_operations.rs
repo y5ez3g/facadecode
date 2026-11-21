@@ -4,46 +4,28 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{WatchParams, WindowRef};
+use facade_base::api_v1::daemon as wire;
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{AgentRef, MachineIdentity, MachineQueryArgs, MachineQueryStatus};
-use facade_base::operations::{CallParams, Operation, Topic};
+use facade_base::operations::CallParams;
 use facade_base::v3::address::{
     AgentAddress, AgentKey, parse_agent_address, parse_machine_selector,
 };
 use facade_base::v3::{self, AgentTarget, Caller, ForwardCall, MachineState};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
-use crate::lifecycle::Work;
+use crate::api;
 use crate::machine_service::{machine_address_part, offline_machine, project_machine_query};
-use crate::network::{RequestFailure, TargetReply, TargetRequest, V3TargetRequest};
+use crate::network::{RequestFailure, TargetReply, TargetRequest};
 use crate::records::{self, LookupCandidate, OperationTarget, Reach};
-use crate::resume::ResumeListOrigin;
 use crate::server::{Watch, WatchChange, WhenFull};
-use crate::service::{decode_or_default, value_of};
-use crate::store::LegacyWindow;
+use crate::service::value_of;
 use crate::{Cancel, Daemon, blocking_in_place};
 
-#[derive(Serialize, Deserialize)]
-struct LegacyWindowSet {
-    windows: Vec<WindowRef>,
-    sources: Vec<MachineIdentity>,
-}
-
 const LIST_DEADLINE: Duration = Duration::from_secs(3);
-const AGENT_RECORDS: &str = "machine.agent_records";
-const LEGACY_WINDOWS: &str = "machine.legacy_windows";
-const LEGACY_MEMBERS: &str = "machine.legacy_members";
-
-/// Which parts of the running machine's records a lookup asks for.
-#[derive(Clone, Copy, Serialize, Deserialize)]
-struct RecordsQuery {
-    #[serde(default)]
-    active: bool,
-}
+pub(crate) const AGENT_RECORDS: &str = "internal.agent_records";
 
 impl Daemon {
     pub(crate) async fn addressed_agent(
@@ -132,7 +114,7 @@ impl Daemon {
         }
     }
 
-    async fn query_agents(
+    pub(crate) async fn query_agents(
         self: &Arc<Self>,
         caller: &Caller,
         machine: Option<&str>,
@@ -141,7 +123,7 @@ impl Daemon {
         if let Some(machine) = machine
             && machine != self.machine_id
         {
-            self.ensure_machine_route(machine).await?;
+            self.ensure_machine_route(machine, caller).await?;
         }
         let rows: Vec<_> = self
             .public_machines()?
@@ -178,7 +160,9 @@ impl Daemon {
                 .query_agents(caller, Some(&self.machine_id), true)
                 .await;
         }
-        let rows = self.probe_machine_queries(machine.as_deref()).await?;
+        let rows = self
+            .probe_machine_queries(machine.as_deref(), caller)
+            .await?;
         self.read_agent_records(caller, rows, true, false).await
     }
 
@@ -186,14 +170,19 @@ impl Daemon {
     pub(crate) async fn probe_machine_queries(
         &self,
         machine: Option<&str>,
+        caller: &Caller,
     ) -> Result<Vec<v3::MachineQueryResult>, ErrorBody> {
         let candidates =
             machine.map_or_else(|| self.network.query_machines(), |id| vec![id.to_owned()]);
         let mut jobs = JoinSet::new();
         for id in candidates.into_iter().filter(|id| *id != self.machine_id) {
             let network = self.network.clone();
+            let caller = api::wire_caller(caller);
             jobs.spawn(async move {
-                let result = network.probe_route(&id).await;
+                let result = network
+                    .probe_route(&id, &caller)
+                    .await
+                    .map_err(api::received_error);
                 (id, result)
             });
         }
@@ -259,35 +248,36 @@ impl Daemon {
         let deadline = tokio::time::Instant::now() + LIST_DEADLINE;
         let mut agents = Vec::new();
         let mut machines = BTreeMap::new();
-        let query = RecordsQuery { active };
         for mut result in rows {
             if result.machine_id == self.machine_id {
                 result.status = MachineQueryStatus::Answered;
-                agents = self.local_agent_records(caller, query)?;
+                agents = if active {
+                    self.local_agent_records(caller, true)?
+                } else {
+                    // The selector checks reach and reports refusals without target details.
+                    self.agents()
+                        .iter()
+                        .map(|agent| self.lookup_candidate(agent))
+                        .collect::<Result<_, _>>()?
+                };
             } else if result.state == MachineState::Online || strict {
                 let daemon = self.clone();
                 let id = result.machine_id.clone();
-                let caller = caller.clone();
-                let call = ForwardCall {
-                    call: CallParams {
+                let request = wire::ForwardParams {
+                    route: Vec::new(),
+                    caller: api::wire_caller(caller),
+                    request: wire::ForwardRequest::Call(wire::CallParams {
                         op: AGENT_RECORDS.into(),
-                        args: value_of(query),
-                    },
-                    by_model: false,
+                        args: value_of(wire::InternalAgentRecordsArgs { active }),
+                    }),
+                    time_left_ms: None,
                     from_name: None,
-                    recipient: None,
+                    start_result: None,
                 };
                 jobs.spawn(async move {
                     let result = daemon
                         .network
-                        .call_with_receipt(
-                            &id,
-                            caller,
-                            "call".into(),
-                            value_of(call),
-                            Some(deadline),
-                            None,
-                        )
+                        .call_with_receipt(&id, request, Some(deadline))
                         .await;
                     (id, result)
                 });
@@ -298,7 +288,9 @@ impl Daemon {
             let (id, reply) = task.map_err(ErrorBody::internal)?;
             let row = machines.get_mut(&id).expect("each active query has a row");
             match reply {
-                Ok((value, received_at)) => match observe_agent_reply(row, value, received_at) {
+                Ok((value, received_at)) => match api::receive_call_result(AGENT_RECORDS, value)
+                    .and_then(|value| observe_agent_reply(row, value, received_at))
+                {
                     Ok(mut records) => {
                         records.retain(|record| record.info.machine_id == id);
                         agents.extend(records);
@@ -307,7 +299,7 @@ impl Daemon {
                     Err(error) => row.error = Some(error.message),
                 },
                 Err(error) if strict => {
-                    return Err(self.machine_failure(&id, error.into()));
+                    return Err(self.machine_failure(&id, api::received_error(error.into())));
                 }
                 Err(error) => {
                     row.status = match &error {
@@ -315,7 +307,8 @@ impl Daemon {
                         RequestFailure::Unreachable(_) => MachineQueryStatus::Unavailable,
                         RequestFailure::Failed(_, _) => MachineQueryStatus::Error,
                     };
-                    row.error = Some(ErrorBody::from(error).message);
+                    let error: facade_base::api_v1::ErrorBody = error.into();
+                    row.error = Some(error.message);
                 }
             }
         }
@@ -328,19 +321,18 @@ impl Daemon {
         Ok((agents, machines.into_values().collect()))
     }
 
-    fn local_agent_records(
+    pub(crate) fn local_agent_records(
         &self,
         caller: &Caller,
-        query: RecordsQuery,
+        active: bool,
     ) -> Result<Vec<LookupCandidate>, ErrorBody> {
         let reach = Reach::from(caller);
         self.agents()
             .iter()
             .filter(|agent| {
                 let info = agent.info();
-                !query.active
-                    || (info.process == facade_base::process::ProcessState::Running
-                        && reach.reaches(&info))
+                reach.reaches(&info)
+                    && (!active || info.process == facade_base::process::ProcessState::Running)
             })
             .map(|agent| self.lookup_candidate(agent))
             .collect()
@@ -419,18 +411,39 @@ impl Daemon {
         time_left: Option<Duration>,
         request_id: Option<String>,
     ) -> Result<Value, ErrorBody> {
-        self.network
-            .call(
-                target,
-                caller,
-                "call".into(),
-                value_of(forwarded),
-                time_left,
-                request_id,
-            )
+        let operation = forwarded.call.op;
+        let (call, start_result) = api::forward_arguments(
+            &operation,
+            forwarded.call.args,
+            forwarded.recipient,
+            request_id,
+        )?;
+        let request = wire::ForwardParams {
+            route: Vec::new(),
+            caller: api::wire_caller(&caller),
+            request: wire::ForwardRequest::Call(call),
+            time_left_ms: None,
+            from_name: forwarded.from_name,
+            start_result,
+        };
+        let deadline = time_left.map(|left| tokio::time::Instant::now() + left);
+        self.call_peer(target, request, deadline)
             .await
-            .map_err(|error| {
-                let error = self.project_remote_error(error);
+            .and_then(|value| api::receive_call_result(&operation, value))
+    }
+
+    pub(crate) async fn call_peer(
+        &self,
+        target: &str,
+        request: wire::ForwardParams,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<Value, ErrorBody> {
+        self.network
+            .call_with_receipt(target, request, deadline)
+            .await
+            .map(|(value, _)| value)
+            .map_err(|failure| {
+                let error = self.project_remote_error(api::received_error(failure.into()));
                 if error.data.unavailable.is_some() || error.data.ssh_interaction.is_some() {
                     self.machine_failure(target, error)
                 } else {
@@ -439,306 +452,89 @@ impl Daemon {
             })
     }
 
-    pub(crate) async fn import_legacy_workspace(
-        self: &Arc<Self>,
-        caller: &Caller,
-        selection: v3::LegacyWorkspaceArgs,
-    ) -> Result<v3::LegacyWorkspaceResult, ErrorBody> {
-        if !matches!(caller, Caller::Ide { .. }) {
-            return Err(ErrorBody::refused(
-                "only an editor can import a legacy workspace",
-            ));
-        }
-        let owner = selection.machine_id.clone();
-        let local = owner == self.machine_id;
-        let imported: LegacyWindowSet = if local {
-            self.legacy_workspace_windows(selection)?
-        } else {
-            self.network.ensure_route(&owner).await?;
-            decode_arguments(
-                self.network_call(
-                    &owner,
-                    caller.clone(),
-                    LEGACY_WINDOWS,
-                    value_of(selection),
-                    None,
-                    None,
-                )
-                .await?,
-            )?
-        };
-        let mut agents = self.legacy_workspace_members(&imported.windows)?;
-        let mut machines = Vec::new();
-        let visible = self.machine_identities()?;
-        let mut jobs = JoinSet::new();
-        for MachineIdentity { machine_id, name } in imported.sources {
-            if machine_id == self.machine_id {
-                continue;
-            }
-            let (daemon, caller, windows) =
-                (self.clone(), caller.clone(), imported.windows.clone());
-            jobs.spawn(async move {
-                let result = async {
-                    daemon.network.ensure_route(&machine_id).await?;
-                    decode_arguments::<Vec<AgentRef>>(
-                        daemon
-                            .network_call(
-                                &machine_id,
-                                caller,
-                                LEGACY_MEMBERS,
-                                value_of(windows),
-                                None,
-                                None,
-                            )
-                            .await?,
-                    )
-                }
-                .await;
-                (machine_id, name, result)
-            });
-        }
-        let now = self.public_machines()?;
-        while let Some(task) = jobs.join_next().await {
-            let (id, name, reply) = task.map_err(ErrorBody::internal)?;
-            let mut row = match now.iter().find(|row| row.machine_id == id) {
-                Some(row) => row.clone(),
-                None => v3::MachineInfo {
-                    selector: machine_address_part(&id, &visible)?,
-                    machine_id: id.clone(),
-                    name,
-                    boot_id: None,
-                    build: None,
-                    route: None,
-                    state: MachineState::Unreachable,
-                    last_seen: None,
-                    ssh_error: None,
-                    connections: Vec::new(),
-                    capabilities: Vec::new(),
-                },
-            };
-            let status = match reply {
-                Ok(members) => {
-                    agents.extend(members.into_iter().filter(|agent| agent.machine_id == id));
-                    row.state = MachineState::Online;
-                    MachineQueryStatus::Answered
-                }
-                Err(error) => machine_query_failure(&error),
-            };
-            machines.push(machine_query_result(row, status));
-        }
-        agents.sort();
-        agents.dedup();
-        machines.sort_by(|a, b| a.machine_id.cmp(&b.machine_id));
-        Ok(v3::LegacyWorkspaceResult { agents, machines })
-    }
-
-    fn legacy_workspace_windows(
-        &self,
-        args: v3::LegacyWorkspaceArgs,
-    ) -> Result<LegacyWindowSet, ErrorBody> {
-        if args.machine_id != self.machine_id {
-            return Err(ErrorBody::invalid_argument(
-                "the workspace selector belongs to a different machine",
-            ));
-        }
-        let selector = match (
-            args.workspace_key.as_deref(),
-            args.window_id.as_deref(),
-            args.instance_id.as_deref(),
-        ) {
-            (Some(key), None, None) => LegacyWindow::Workspace(key),
-            (None, Some(id), None) => LegacyWindow::Logical(id),
-            (None, None, Some(id)) => LegacyWindow::Instance(id),
-            _ => {
-                return Err(ErrorBody::invalid_argument(
-                    "give one legacy workspace selector",
-                ));
-            }
-        };
-        blocking_in_place(|| {
-            let ids = self.store.window_table().legacy_ids(selector)?;
-            let sources = if ids.is_empty() {
-                Vec::new()
-            } else {
-                self.store.legacy_machines()?
-            };
-            let windows = ids.into_iter().map(|id| self.local_window(id)).collect();
-            Ok::<_, anyhow::Error>(LegacyWindowSet { windows, sources })
-        })
-        .map_err(ErrorBody::internal)
-    }
-
-    fn legacy_workspace_members(&self, windows: &[WindowRef]) -> Result<Vec<AgentRef>, ErrorBody> {
-        blocking_in_place(|| self.store.membership_table().legacy_agents(windows))
-            .map_err(ErrorBody::internal)
-    }
-
-    async fn accept_machine_call(
-        self: &Arc<Self>,
-        caller: Caller,
-        call: ForwardCall,
-        request_id: Option<String>,
-        remaining: Option<Duration>,
-        cancel: Cancel,
-    ) -> Result<Value, ErrorBody> {
-        let operation = call.call.op.as_str();
-        let args = call.call.args;
-        match operation {
-            v3::AgentResumeList::NAME => Ok(value_of(
-                self.resume_candidates(
-                    &caller,
-                    decode_or_default(args)?,
-                    ResumeListOrigin::Forwarded,
-                )
-                .await?,
-            )),
-            crate::resume::RESUME_RECORDS => {
-                require_person(&caller)?;
-                Ok(value_of(
-                    self.local_resume_candidates(&decode_arguments(args)?, false)
-                        .await?,
-                ))
-            }
-            AGENT_RECORDS => Ok(value_of(
-                self.local_agent_records(&caller, decode_arguments(args)?)?,
-            )),
-            LEGACY_WINDOWS if matches!(caller, Caller::Ide { .. }) => Ok(value_of(
-                self.legacy_workspace_windows(decode_arguments(args)?)?,
-            )),
-            LEGACY_MEMBERS if matches!(caller, Caller::Ide { .. }) => {
-                let windows: Vec<WindowRef> = decode_arguments(args)?;
-                Ok(value_of(self.legacy_workspace_members(&windows)?))
-            }
-            crate::waits::DELIVER_WAIT_NOTICE => {
-                self.deliver_wait_notice(&caller, decode_arguments(args)?, remaining)
-                    .await?;
-                Ok(value_of(v3::EmptyResult {}))
-            }
-            _ => {
-                self.run_operation(
-                    &caller,
-                    operation,
-                    args,
-                    WhenFull::Refuse,
-                    cancel,
-                    Some(crate::service::Forwarded {
-                        recipient: call.recipient,
-                        from_name: call.from_name,
-                        request_id,
-                        remaining,
-                    }),
-                )
-                .await
-            }
-        }
-    }
-
-    pub(crate) async fn serve_target(self: &Arc<Self>, request: V3TargetRequest) {
+    pub(crate) async fn serve_target(self: &Arc<Self>, request: TargetRequest) {
         let TargetRequest {
             forward,
             cancelled,
             reply,
         } = request;
         let mut cancel = Cancel::of(cancelled);
-        if forward.method == "watch" {
-            let params = match decode_arguments::<WatchParams>(forward.params) {
-                Ok(params) => params,
-                Err(error) => {
-                    let _ = reply.send(TargetReply::Call(Err(error)));
-                    return;
-                }
-            };
-            let shared = params.topic == v3::AttachTopic::NAME;
-            let viewer = crate::server::next_viewer();
-            let Watch {
-                snapshot,
-                mut changes,
-            } = match self
-                .start_forwarded_watch(&forward.caller, params, viewer)
-                .await
-            {
-                Ok(watch) => watch,
-                Err(error) => {
-                    let _ = reply.send(TargetReply::Call(Err(error)));
-                    return;
-                }
-            };
-            let attach = if shared {
-                self.attach_binding(viewer)
-            } else {
-                None
-            };
-            let (send, receive) = mpsc::channel(64);
-            if reply
-                .send(TargetReply::Watch {
-                    snapshot,
-                    changes: receive,
-                    attach,
-                })
-                .is_ok()
-            {
-                let copy = async {
-                    while let Some(change) = changes.recv().await {
-                        let change = match change {
-                            WatchChange::Change(value) => Ok(value),
-                            WatchChange::Ended(error) => Err(error),
-                            WatchChange::Disconnect => {
-                                Err(ErrorBody::new(Reason::Unavailable, "the watch fell behind"))
-                            }
-                        };
-                        let ended = change.is_err();
-                        if send.send(change).await.is_err() || ended {
-                            break;
-                        }
+        let caller = api::caller(forward.caller);
+        match forward.request {
+            wire::ForwardRequest::Watch(params) => {
+                let watch = match wire::decode_watch(params, wire::ClientKind::Machine) {
+                    Ok(watch) => watch,
+                    Err(error) => {
+                        let _ = reply.send(TargetReply::Call(Err(error)));
+                        return;
                     }
                 };
-                tokio::select! {
-                    () = copy => {},
-                    () = cancel.requested() => {},
-                    () = send.closed() => {},
-                }
-            }
-            self.end_viewer(viewer).await;
-            return;
-        }
-        let outcome = async {
-            if forward.method == v3::AttachResize::NAME {
-                let Some(_active) = self.lifecycle.begin(Work::Call) else {
-                    return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
+                let viewer = crate::server::next_viewer();
+                let Watch {
+                    snapshot,
+                    mut changes,
+                } = match self.start_watch(&caller, watch, viewer, true).await {
+                    Ok(watch) => watch,
+                    Err(error) => {
+                        let _ = reply.send(TargetReply::Call(Err(api::project_error(error))));
+                        return;
+                    }
                 };
-                if cancel.is_requested() {
-                    return Err(ErrorBody::new(
-                        Reason::Cancelled,
-                        "the resize was cancelled",
-                    ));
+                let view = self.attach_binding(viewer);
+                let (send, receive) = mpsc::channel(64);
+                if reply
+                    .send(TargetReply::Watch {
+                        snapshot,
+                        changes: receive,
+                        view,
+                    })
+                    .is_ok()
+                {
+                    let copy = async {
+                        while let Some(change) = changes.recv().await {
+                            let change = match change {
+                                WatchChange::Change(value) => Ok(value),
+                                WatchChange::Ended(error) => Err(error),
+                                WatchChange::Disconnect => {
+                                    Err(api::error("unavailable", "the watch fell behind"))
+                                }
+                            };
+                            let ended = change.is_err();
+                            if send.send(change).await.is_err() || ended {
+                                break;
+                            }
+                        }
+                    };
+                    tokio::select! {
+                        () = copy => {},
+                        () = cancel.requested() => {},
+                        () = send.closed() => {},
+                    }
                 }
-                self.resize_forwarded_viewer(&forward.caller, decode_arguments(forward.params)?)
-                    .await?;
-                return Ok(value_of(v3::EmptyResult {}));
+                self.end_viewer(viewer).await;
             }
-            if forward.method != "call" {
-                return Err(ErrorBody::invalid_argument("unknown forwarded method"));
+            wire::ForwardRequest::Call(params) => {
+                let outcome = match wire::decode_call(params, wire::ClientKind::Machine) {
+                    Ok(call) => {
+                        self.run_api_call(
+                            &caller,
+                            call,
+                            WhenFull::Refuse,
+                            cancel,
+                            Some(crate::service::Forwarded {
+                                recipient: None,
+                                from_name: forward.from_name,
+                                start_result: forward.start_result,
+                                remaining: forward.time_left_ms.map(Duration::from_millis),
+                            }),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(TargetReply::Call(outcome));
             }
-            let call: ForwardCall = decode_arguments(forward.params)?;
-            let work = if call.call.op == v3::AgentSend::NAME {
-                Work::Send
-            } else {
-                Work::Call
-            };
-            let Some(_active) = self.lifecycle.begin(work) else {
-                return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
-            };
-            self.accept_machine_call(
-                forward.caller,
-                call,
-                forward.request_id,
-                forward.time_left_ms.map(Duration::from_millis),
-                cancel,
-            )
-            .await
         }
-        .await;
-        let _ = reply.send(TargetReply::Call(outcome));
     }
 }
 

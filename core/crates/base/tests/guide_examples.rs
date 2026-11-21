@@ -1,365 +1,618 @@
-//! The protocol guide's examples are messages of this build's protocol. Each line reads as the type
-//! its method, operation or topic gives it, which writes back all the line says: no example has a
-//! field the types lack or leaves out one they need, and it may leave out one they default. The
-//! example `hello` lists this build's topics and operations. A failure names the line to fix in
-//! `src/protocol/guide.md`.
+//! Validates each reference example against its endpoint schema, tracking the request or watch
+//! that selects the concrete result or change type. No services or operating-system handles are opened.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use facade_base::daemon::{
-    self, CancelParams, ChangedParams, ClosingParams, HelloParams, HelloResult, UnwatchParams,
-    WatchParams, WatchResult,
-};
-use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_base::operations::{
-    CallParams, EmptyResult, Operation, OperationVisitor, Topic, TopicVisitor,
-};
-use facade_base::{machine, v3};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::Value;
+use facade_base::api_v1::{self, Notification, Response, daemon, keeper};
+use serde_json::{Value, json};
 
-const GUIDE: &str = include_str!("../src/protocol/guide.md");
+const DAEMON_GUIDE: &str = include_str!("../../../protocol/DAEMON.md");
+const KEEPER_GUIDE: &str = include_str!("../../../protocol/KEEPER.md");
 
-/// Reads `value` as `T` and writes it back: all `value` says, or why not.
-fn reads_as<T: Serialize + DeserializeOwned>(value: &Value) -> Result<(), String> {
-    let name = std::any::type_name::<T>()
-        .rsplit("::")
-        .next()
-        .unwrap_or_default();
-    let read: T = serde_json::from_value(value.clone())
-        .map_err(|err| format!("{value} does not read as {name}: {err}"))?;
-    let written = serde_json::to_value(&read).map_err(|err| err.to_string())?;
-    if says_all(&written, value) {
-        Ok(())
-    } else {
-        Err(format!(
-            "{value} reads as {name}, which writes it back as {written}"
-        ))
+struct Schema(Value);
+
+impl Schema {
+    fn named(&self, name: &str, value: &Value) -> Result<(), String> {
+        self.check(&json!({"$ref": format!("#/$defs/{name}")}), value)
+            .map_err(|error| format!("{name}: {error}"))
     }
-}
 
-/// Whether `written` says all `example` says: the same values, and each field of an object, beside
-/// which it may have fields the example left to their defaults.
-fn says_all(written: &Value, example: &Value) -> bool {
-    match (written, example) {
-        (Value::Object(written), Value::Object(example)) => example.iter().all(|(key, said)| {
-            written
-                .get(key)
-                .is_some_and(|written| says_all(written, said))
-        }),
-        (Value::Array(written), Value::Array(example)) => {
-            written.len() == example.len()
-                && written
-                    .iter()
-                    .zip(example)
-                    .all(|(written, said)| says_all(written, said))
+    /// Enforces the shape keywords emitted by the protocol generator. Fails on an unsupported
+    /// constraint so adding a new keyword cannot silently weaken the example checks.
+    fn check(&self, schema: &Value, value: &Value) -> Result<(), String> {
+        self.evaluate(schema, value).map(|_| ())
+    }
+
+    /// Collect the names evaluated at this object location for `unevaluatedProperties`.
+    fn evaluate<'a>(&self, schema: &Value, value: &'a Value) -> Result<HashSet<&'a str>, String> {
+        let fields = match schema {
+            Value::Bool(true) => return Ok(HashSet::new()),
+            Value::Bool(false) => return Err(format!("{value} is forbidden")),
+            Value::Object(fields) => fields,
+            _ => panic!("invalid schema: {schema}"),
+        };
+        let mut evaluated = HashSet::new();
+        for (key, constraint) in fields {
+            match key.as_str() {
+                "$schema"
+                | "$defs"
+                | "title"
+                | "description"
+                | "default"
+                | "format"
+                | "api_versions"
+                | "x-facade"
+                | "unevaluatedProperties" => {}
+                "$ref" => {
+                    let path = constraint.as_str().unwrap().strip_prefix('#').unwrap();
+                    evaluated.extend(self.evaluate(
+                        self.0.pointer(path).expect("missing schema reference"),
+                        value,
+                    )?);
+                }
+                "type" => {
+                    let matches = |kind: &Value| match kind.as_str().unwrap() {
+                        "object" => value.is_object(),
+                        "array" => value.is_array(),
+                        "string" => value.is_string(),
+                        "integer" => value.is_i64() || value.is_u64(),
+                        "number" => value.is_number(),
+                        "boolean" => value.is_boolean(),
+                        "null" => value.is_null(),
+                        kind => panic!("unsupported type {kind}"),
+                    };
+                    let valid = constraint
+                        .as_array()
+                        .map_or_else(|| matches(constraint), |kinds| kinds.iter().any(matches));
+                    if !valid {
+                        return Err(format!("expected {constraint}, got {value}"));
+                    }
+                }
+                "const" if value != constraint => {
+                    return Err(format!("expected {constraint}, got {value}"));
+                }
+                "enum" if !constraint.as_array().unwrap().contains(value) => {
+                    return Err(format!("{value} is outside {constraint}"));
+                }
+                "const" | "enum" => {}
+                "allOf" => {
+                    for part in constraint.as_array().unwrap() {
+                        evaluated.extend(self.evaluate(part, value)?);
+                    }
+                }
+                "anyOf" | "oneOf" => {
+                    let options = constraint.as_array().unwrap();
+                    let results: Vec<_> = options
+                        .iter()
+                        .map(|part| self.evaluate(part, value))
+                        .collect();
+                    let matches = results.iter().filter(|part| part.is_ok()).count();
+                    if matches == 0 || key == "oneOf" && matches != 1 {
+                        let errors = results
+                            .into_iter()
+                            .filter_map(Result::err)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        return Err(format!("{matches} matches for {key} on {value} ({errors})"));
+                    }
+                    evaluated.extend(results.into_iter().filter_map(Result::ok).flatten());
+                }
+                "not" if self.check(constraint, value).is_ok() => {
+                    return Err(format!(
+                        "{value} also matches forbidden schema {constraint}"
+                    ));
+                }
+                "not" => {}
+                "required" => {
+                    if let Some(object) = value.as_object() {
+                        for name in constraint.as_array().unwrap() {
+                            let name = name.as_str().unwrap();
+                            if !object.contains_key(name) {
+                                return Err(format!("missing {name} in {value}"));
+                            }
+                        }
+                    }
+                }
+                "properties" => {
+                    if let Some(object) = value.as_object() {
+                        for (name, property) in constraint.as_object().unwrap() {
+                            if let Some((member_name, member)) = object.get_key_value(name) {
+                                self.check(property, member)
+                                    .map_err(|error| format!("{name}: {error}"))?;
+                                evaluated.insert(member_name.as_str());
+                            }
+                        }
+                    }
+                }
+                "additionalProperties" => {
+                    if let Some(object) = value.as_object() {
+                        for (name, member) in object {
+                            if schema["properties"].get(name).is_none() {
+                                self.check(constraint, member)
+                                    .map_err(|error| format!("{name}: {error}"))?;
+                                evaluated.insert(name.as_str());
+                            }
+                        }
+                    }
+                }
+                "items" => {
+                    if let Some(items) = value.as_array() {
+                        for (index, item) in items.iter().enumerate() {
+                            self.check(constraint, item)
+                                .map_err(|error| format!("item {index}: {error}"))?;
+                        }
+                    }
+                }
+                "minItems" | "maxItems" | "minLength" | "maxLength" | "minimum" | "maximum" => {
+                    // Keep integer comparisons exact, including both endpoints' u64 IDs.
+                    let number = match key.as_str() {
+                        "minItems" | "maxItems" => {
+                            value.as_array().map(|items| items.len() as i128)
+                        }
+                        "minLength" | "maxLength" => {
+                            value.as_str().map(|s| s.chars().count() as i128)
+                        }
+                        _ => integer(value),
+                    };
+                    let bound = integer(constraint).expect("expected integer bound");
+                    if number.is_some_and(|n| {
+                        if key.starts_with("min") {
+                            n < bound
+                        } else {
+                            n > bound
+                        }
+                    }) {
+                        return Err(format!("{value} violates {key} {constraint}"));
+                    }
+                }
+                unsupported => panic!("unhandled schema constraint {unsupported}"),
+            }
         }
-        _ => written == example,
+        if let (Some(constraint), Some(object)) =
+            (fields.get("unevaluatedProperties"), value.as_object())
+        {
+            for (name, member) in object {
+                if evaluated.insert(name.as_str()) {
+                    self.check(constraint, member)
+                        .map_err(|error| format!("{name}: {error}"))?;
+                }
+            }
+        }
+        Ok(evaluated)
     }
 }
 
-/// An operation's arguments, or its result, by the operation's name.
-struct OperationPart<'a> {
-    name: &'a str,
-    value: &'a Value,
-    result: bool,
-    read: Option<Result<(), String>>,
+fn integer(value: &Value) -> Option<i128> {
+    value
+        .as_u64()
+        .map(i128::from)
+        .or_else(|| value.as_i64().map(i128::from))
 }
 
-impl OperationVisitor for OperationPart<'_> {
-    fn operation<O: Operation>(&mut self) {
-        if O::NAME == self.name {
-            self.read = Some(if self.result {
-                reads_as::<O::Result>(self.value)
-            } else {
-                reads_as::<O::Args>(self.value)
-            });
+#[derive(Clone, Copy)]
+enum Lane {
+    Local,
+    Machine,
+    Relay,
+    Keeper,
+    WindowsKeeper,
+}
+
+impl Lane {
+    fn is_keeper(self) -> bool {
+        matches!(self, Self::Keeper | Self::WindowsKeeper)
+    }
+
+    fn read(name: &str) -> Self {
+        match name {
+            "daemon-local" => Self::Local,
+            "daemon-machine" => Self::Machine,
+            "relay" => Self::Relay,
+            "keeper" => Self::Keeper,
+            "keeper-windows" => Self::WindowsKeeper,
+            _ => panic!("unknown example lane {name}"),
         }
     }
 }
 
-fn operation(name: &str, value: &Value, result: bool, legacy: bool) -> Result<(), String> {
-    let mut part = OperationPart {
-        name,
-        value,
-        result,
-        read: None,
-    };
-    if legacy {
-        part.operation::<daemon::DaemonUpgrade>();
-        part.operation::<machine::AgentList>();
-    } else {
-        v3::visit_operations(&mut part);
-    }
-    part.read
-        .unwrap_or_else(|| Err(format!("{name} is no operation of this build")))
-}
-
-/// What of a topic a message carries.
-enum Of {
-    Args,
-    Snapshot,
-    Change,
-}
-
-/// A topic's arguments, snapshot or change, by the topic's name.
-struct TopicPart<'a> {
-    name: &'a str,
-    value: &'a Value,
-    of: Of,
-    read: Option<Result<(), String>>,
-}
-
-impl TopicVisitor for TopicPart<'_> {
-    fn topic<T: Topic>(&mut self) {
-        if T::NAME == self.name {
-            self.read = Some(match self.of {
-                Of::Args => reads_as::<T::Args>(self.value),
-                Of::Snapshot => reads_as::<T::Snapshot>(self.value),
-                Of::Change => reads_as::<T::Change>(self.value),
-            });
-        }
-    }
-}
-
-fn topic(name: &str, value: &Value, of: Of) -> Result<(), String> {
-    let mut part = TopicPart {
-        name,
-        value,
-        of,
-        read: None,
-    };
-    v3::visit_topics(&mut part);
-    part.read
-        .unwrap_or_else(|| Err(format!("{name} is no topic of this build")))
-}
-
-/// What the example's earlier lines asked and watched, which later lines answer and change.
 #[derive(Default)]
 struct Exchange {
-    legacy: bool,
-    legacy_keeper_refused: bool,
-    /// Each request's method, and the operation or topic it names.
-    asked: HashMap<u64, (String, String)>,
-    /// Each watch's topic.
-    watched: HashMap<u64, String>,
+    requests: HashMap<u64, Value>,
+    watches: HashMap<u64, String>,
 }
 
 impl Exchange {
-    /// Reads a message the client sends.
-    fn client_sends(&mut self, message: &Value) -> Result<(), String> {
-        let params = &message["params"];
-        let (method, named) = match message["method"].as_str() {
-            Some("hello") => {
-                if self.legacy {
-                    reads_as::<HelloParams>(params)?;
-                    if params["protocol"] != serde_json::json!(v3::TAKEOVER_DAEMON_PROTOCOL_RANGE)
-                        || params["kind"] != "terminal"
-                    {
-                        return Err(
-                            "the takeover example must use a terminal hello with [2,3]".into()
-                        );
-                    }
-                } else {
-                    reads_as::<v3::HelloParams>(params)?;
-                    if params["protocol"] != serde_json::json!(v3::DAEMON_PROTOCOL_RANGE) {
-                        return Err("the normal example must offer only v3".into());
-                    }
-                }
-                ("hello", String::new())
-            }
-            Some("call") => {
-                reads_as::<CallParams>(params)?;
-                let op = params["op"].as_str().unwrap_or_default();
-                if self.legacy && op == "agent.list" && !self.legacy_keeper_refused {
-                    return Err(
-                        "the old agent list is only read after a keeper protocol refusal".into(),
-                    );
-                }
-                (
-                    "call",
-                    operation(op, &params["args"], false, self.legacy).map(|()| op.to_string())?,
-                )
-            }
-            Some("watch") if !self.legacy => {
-                reads_as::<WatchParams>(params)?;
-                let name = params["topic"].as_str().unwrap_or_default();
-                let args = if params["args"].is_null() {
-                    Value::Object(Default::default())
-                } else {
-                    params["args"].clone()
+    fn frame(&mut self, schema: &Schema, lane: Lane, line: &Value) -> Result<(), String> {
+        if line.get("terminal").is_some() && !matches!(lane, Lane::WindowsKeeper) {
+            return Err("the terminal member requires an authenticated Windows keeper link".into());
+        }
+        schema.check(&schema.0, line)?;
+        if !matches!(lane, Lane::Relay) {
+            check_wire_codec(line)?;
+        }
+        if let Some(method) = line["method"].as_str() {
+            if let Some(id) = line["id"].as_u64() {
+                let definition = match lane {
+                    Lane::Local => "LocalClientRequest",
+                    Lane::Machine => "MachineRequest",
+                    Lane::Relay => "RelayHelloRequest",
+                    Lane::WindowsKeeper if line.get("terminal").is_some() => "WindowsSyncRequest",
+                    Lane::Keeper | Lane::WindowsKeeper => "KeeperRequest",
                 };
-                (
-                    "watch",
-                    topic(name, &args, Of::Args).map(|()| name.to_string())?,
-                )
+                schema.named(definition, line)?;
+                if self.requests.insert(id, line.clone()).is_some() {
+                    return Err(format!("request ID {id} is already in flight"));
+                }
+            } else {
+                self.notification(schema, lane, method, line)?;
             }
-            Some("unwatch") => (
-                "unwatch",
-                reads_as::<UnwatchParams>(params).map(|()| String::new())?,
-            ),
-            Some("cancel") => (
-                "cancel",
-                reads_as::<CancelParams>(params).map(|()| String::new())?,
-            ),
-            other => return Err(format!("{other:?} is no method a client sends")),
-        };
-        if let Some(id) = message.get("id") {
-            let id = id
-                .as_u64()
-                .ok_or_else(|| format!("its ID {id} is not a non-negative integer"))?;
-            self.asked.insert(id, (method.to_string(), named));
+        } else if let Some(id) = line["id"].as_u64() {
+            let request = self
+                .requests
+                .remove(&id)
+                .ok_or_else(|| format!("response has no request with ID {id}"))?;
+            if line.get("error").is_some() {
+                if request["method"] == "hello"
+                    && !matches!(lane, Lane::Relay)
+                    && line["error"]["data"]["reason"] == "protocol_incompatible"
+                {
+                    let supported = &line["error"]["data"]["details"]["supported_api_versions"];
+                    schema.named("ProtocolMismatchDetails", &line["error"]["data"]["details"])?;
+                    if line["error"]["code"] != -32000 {
+                        return Err("a disjoint offer must use the Facade error code".into());
+                    }
+                    if supported != &schema.0["api_versions"] {
+                        return Err(format!("version refusal advertises {supported}"));
+                    }
+                    if request["params"]["api_versions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|version| supported.as_array().unwrap().contains(version))
+                    {
+                        return Err("version refusal follows an offer with a common version".into());
+                    }
+                }
+                schema.named("ErrorResponse", line)?;
+            } else {
+                self.result(schema, lane, &request, line)?;
+            }
+        } else {
+            schema.named("ErrorResponse", line)?;
         }
         Ok(())
     }
 
-    /// Reads a message the daemon sends: an answer to a request of an earlier line, or a
-    /// notification.
-    fn daemon_sends(&mut self, message: &Value) -> Result<(), String> {
-        if let Some(id) = message.get("id").and_then(Value::as_u64) {
-            let (method, named) = self
-                .asked
-                .get(&id)
-                .ok_or_else(|| format!("it answers request {id}, which no earlier line asked"))?;
-            if let Some(error) = message.get("error") {
-                reads_as::<ErrorBody>(error)?;
-                if self.legacy && method == "call" && named == "daemon.upgrade" {
-                    let error = serde_json::from_value::<ErrorBody>(error.clone())
-                        .map_err(|error| error.to_string())?;
-                    self.legacy_keeper_refused = error.data.reason == Reason::IncompatibleProtocol
-                        && error.message.contains("the running keeper speaks");
-                }
-                return Ok(());
+    fn notification(
+        &mut self,
+        schema: &Schema,
+        lane: Lane,
+        method: &str,
+        line: &Value,
+    ) -> Result<(), String> {
+        let definition = match lane {
+            Lane::Local
+                if matches!(method, "call" | "cancel")
+                    || method == "closing" && line["params"].get("build").is_none() =>
+            {
+                "LocalClientNotification"
             }
-            let result = &message["result"];
-            return match method.as_str() {
-                "hello" => {
-                    reads_as::<HelloResult>(result)?;
-                    let names = |key: &str| {
-                        result[key].as_array().map(|names| {
-                            names
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_string)
-                                .collect::<Vec<_>>()
-                        })
-                    };
-                    let (protocol, topics, ops) = if self.legacy {
-                        let mut topics = daemon::topic_names();
-                        topics.extend(machine::topic_names());
-                        let mut ops = daemon::operation_names();
-                        ops.extend(machine::operation_names());
-                        (v3::TAKEOVER_DAEMON_PROTOCOL_RANGE[0], topics, ops)
-                    } else {
-                        if result.get("agent").is_some() || result.get("window").is_some() {
-                            return Err("normal v3 hello does not carry legacy identity".into());
-                        }
-                        (
-                            v3::DAEMON_PROTOCOL_RANGE[1],
-                            v3::topic_names(),
-                            v3::operation_names(),
-                        )
-                    };
-                    if result["protocol"] != protocol {
-                        return Err(format!("hello selected a protocol other than {protocol}"));
-                    }
-                    if names("topics").as_ref() != Some(&topics) {
-                        return Err(format!("its topics are not this build's, {topics:?}"));
-                    }
-                    if names("ops").as_ref() != Some(&ops) {
-                        return Err(format!("its ops are not this build's, {ops:?}"));
-                    }
-                    Ok(())
-                }
-                "call" => operation(named, result, true, self.legacy),
-                "watch" => {
-                    reads_as::<WatchResult>(result)?;
-                    self.watched
-                        .insert(result["watch"].as_u64().unwrap_or_default(), named.clone());
-                    topic(named, &result["snapshot"], Of::Snapshot)
-                }
-                _ => reads_as::<EmptyResult>(result),
-            };
-        }
-        let params = &message["params"];
-        match message["method"].as_str() {
-            Some("changed") => {
-                reads_as::<ChangedParams>(params)?;
-                let watch = params["watch"].as_u64().unwrap_or_default();
-                let name = self.watched.get(&watch).ok_or_else(|| {
-                    format!("it changes watch {watch}, which no earlier line made")
-                })?;
-                topic(name, &params["change"], Of::Change)
+            Lane::Local => "DaemonNotification",
+            Lane::Machine => "MachineNotification",
+            Lane::Keeper | Lane::WindowsKeeper => "KeeperNotification",
+            Lane::Relay if method == "closing" && line["params"].get("build").is_some() => {
+                "DaemonNotification"
             }
-            Some("closing") => reads_as::<ClosingParams>(params),
-            other => Err(format!("{other:?} is no notification the daemon sends")),
+            Lane::Relay if method == "closing" => "LocalClientNotification",
+            Lane::Relay => return Err("unexpected relay notification".into()),
+        };
+        schema.named(definition, line)?;
+        if !lane.is_keeper() && matches!(method, "changed" | "watch_ended") {
+            let params = &line["params"];
+            let watch = params["watch"].as_u64().unwrap();
+            let topic = self
+                .watches
+                .get(&watch)
+                .ok_or_else(|| format!("unrecognized watch {watch}"))?;
+            if method == "changed" {
+                let change = &schema.0["x-facade"]["topics"][topic]["change"];
+                schema.check(change, &params["change"])?;
+            } else {
+                self.watches.remove(&watch);
+            }
         }
+        Ok(())
+    }
+
+    fn result(
+        &mut self,
+        schema: &Schema,
+        lane: Lane,
+        request: &Value,
+        line: &Value,
+    ) -> Result<(), String> {
+        if matches!(lane, Lane::Relay) {
+            return schema.named("RelayHelloResponse", line);
+        }
+        let method = request["method"].as_str().unwrap();
+        let params = &request["params"];
+        let result = &line["result"];
+        let operation = if method == "call" {
+            params["op"].as_str()
+        } else {
+            None
+        };
+        let definition = if line.get("terminal").is_some() {
+            match operation {
+                Some("agent.start") => "WindowsStartResponse",
+                Some("agent.sync") if request.get("terminal").is_none() => "WindowsSyncResponse",
+                _ => {
+                    return Err(format!(
+                        "a terminal cannot accompany the response to {request}"
+                    ));
+                }
+            }
+        } else {
+            "SuccessResponse"
+        };
+        schema.named(definition, line)?;
+        match method {
+            "hello" => {
+                if lane.is_keeper() {
+                    schema.named("HelloResult", result)?;
+                } else {
+                    schema.named("DaemonHelloResult", result)?;
+                    let kind = serde_json::from_value(params["kind"].clone()).unwrap();
+                    if result["ops"] != json!(daemon::operation_names(kind))
+                        || result["topics"] != json!(daemon::topic_names(kind))
+                    {
+                        return Err("the hello catalog differs from the typed registry".into());
+                    }
+                    if matches!(lane, Lane::Machine) != result.get("machine").is_some() {
+                        return Err(
+                            "hello result has the wrong machine projection for the lane".into()
+                        );
+                    }
+                }
+                let supported = schema.0["api_versions"].as_array().unwrap();
+                let selected = params["api_versions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|offered| supported.contains(offered))
+                    .max_by_key(|offered| offered.as_u64().unwrap());
+                if selected != Some(&result["api_version"]) {
+                    return Err("hello result differs from the highest common version".into());
+                }
+            }
+            "call" => self.call_result(schema, operation.unwrap(), result)?,
+            "forward" if params["method"] == "call" => {
+                self.call_result(schema, params["params"]["op"].as_str().unwrap(), result)?;
+            }
+            "watch" | "forward" => {
+                let (topic, envelope) = if method == "forward" {
+                    (&params["params"]["topic"], "ForwardWatchResult")
+                } else {
+                    (&params["topic"], "WatchResult")
+                };
+                schema.named(envelope, result)?;
+                if method == "watch" && result.get("view").is_some() {
+                    return Err("a public watch result cannot carry the holder view".into());
+                }
+                let topic = topic.as_str().unwrap();
+                let snapshot = &schema.0["x-facade"]["topics"][topic]["snapshot"];
+                schema.check(snapshot, &result["snapshot"])?;
+                let watch = result["watch"].as_u64().unwrap();
+                if self.watches.insert(watch, topic.into()).is_some() {
+                    return Err(format!("watch ID {watch} is already subscribed"));
+                }
+            }
+            "unwatch" => {
+                let watch = params["watch"].as_u64().unwrap();
+                self.watches
+                    .remove(&watch)
+                    .ok_or_else(|| format!("unrecognized watch {watch}"))?;
+                schema.named("EmptyResult", result)?;
+            }
+            "advertise" | "cancel" => schema.named("EmptyResult", result)?,
+            _ => return Err(format!("unknown example method {method}")),
+        }
+        Ok(())
+    }
+
+    fn call_result(&self, schema: &Schema, op: &str, value: &Value) -> Result<(), String> {
+        let result = &schema.0["x-facade"]["operations"][op]["result"];
+        schema
+            .check(result, value)
+            .map_err(|error| format!("result for {op}: {error}"))
     }
 }
 
-/// The message an example line holds: an arrow's line in a fenced example, `→` from the client and
-/// `←` from the daemon, or an inline message in backticks, whose method says who sends it.
-fn messages() -> Vec<(usize, bool, bool, &'static str)> {
-    let mut found = Vec::new();
-    let mut legacy = false;
-    for (at, line) in GUIDE.lines().enumerate() {
-        if line == "## Version 2 takeover and old data" {
-            legacy = true;
-        } else if let Some(message) = line.strip_prefix("→ ") {
-            found.push((at + 1, legacy, true, message));
-        } else if let Some(message) = line.strip_prefix("← ") {
-            found.push((at + 1, legacy, false, message));
-        } else {
-            for inline in line
-                .split('`')
-                .skip(1)
-                .step_by(2)
-                .filter(|inline| inline.starts_with("{\"jsonrpc\""))
-            {
-                let from_client = !(inline.contains("\"method\":\"changed\"")
-                    || inline.contains("\"method\":\"closing\""));
-                found.push((at + 1, legacy, from_client, inline));
+fn check_wire_codec(line: &Value) -> Result<(), String> {
+    let mut frame = line.clone();
+    // The Windows schema has already checked the authenticated transport member before this
+    // point. The codec in production sees only the frame after resource extraction.
+    frame.as_object_mut().unwrap().remove("terminal");
+    if frame.get("method").is_none() {
+        serde_json::from_value::<Response>(frame).map_err(|error| error.to_string())?;
+    } else if frame.get("id").is_none() {
+        serde_json::from_value::<Notification>(frame).map_err(|error| error.to_string())?;
+    } else {
+        api_v1::parse_request(frame.to_string().as_bytes())
+            .map_err(|error| error.error.to_string())?;
+    }
+    Ok(())
+}
+
+fn check_examples(schema: &Schema, guide: &str) -> usize {
+    let mut example = None;
+    let mut count = 0;
+    let mut windows_resources = 0;
+    for (index, line) in guide.lines().enumerate() {
+        if let Some(name) = line.strip_prefix("```jsonl ") {
+            assert!(example.is_none(), "nested example at line {}", index + 1);
+            example = Some((Lane::read(name), Exchange::default()));
+        } else if line == "```" {
+            if let Some((_, exchange)) = example.take() {
+                assert!(
+                    exchange.requests.is_empty(),
+                    "unanswered request at line {}",
+                    index + 1
+                );
+            }
+        } else if let Some((lane, exchange)) = &mut example {
+            let parsed = serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("line {} is invalid JSON: {error}", index + 1));
+            exchange
+                .frame(schema, *lane, &parsed)
+                .unwrap_or_else(|error| panic!("line {}: {error}\n{line}", index + 1));
+            count += 1;
+            if parsed.get("terminal").is_some() {
+                windows_resources += 1;
             }
         }
     }
-    found
+    assert!(example.is_none(), "unterminated example");
+    assert!(count > 0, "no examples checked");
+    windows_resources
 }
 
 #[test]
-fn every_example_message_of_the_guide_is_one_of_this_protocol() {
-    let mut exchange = Exchange::default();
-    let mut legacy_exchange = Exchange {
-        legacy: true,
-        ..Exchange::default()
-    };
-    let found = messages();
-    assert!(
-        found.iter().filter(|(_, legacy, ..)| !legacy).count() >= 16
-            && found.iter().filter(|(_, legacy, ..)| *legacy).count() >= 6,
-        "the guide must keep the normal example and the v2 diagnostic exchange",
+fn daemon_examples_match_the_published_schema() {
+    let schema = Schema(
+        serde_json::from_str(include_str!("../../../protocol/protocol.schema.json")).unwrap(),
     );
-    for (at, legacy, from_client, line) in found {
-        let exchange = if legacy {
-            &mut legacy_exchange
-        } else {
-            &mut exchange
-        };
-        let message: Value = serde_json::from_str(line)
-            .unwrap_or_else(|err| panic!("guide.md:{at}: not JSON ({err}): {line}"));
-        let read = if message["jsonrpc"] != "2.0" {
-            Err("its jsonrpc is not \"2.0\"".to_string())
-        } else if from_client {
-            exchange.client_sends(&message)
-        } else {
-            exchange.daemon_sends(&message)
-        };
-        if let Err(why) = read {
-            panic!(
-                "guide.md:{at}: {why}\nEdit the example in crates/base/src/protocol/guide.md, then \
-                 write the protocol files again: FACADE_REGENERATE=1 cargo test -p facade-base \
-                 --test protocol_files"
-            );
+    assert_eq!(
+        schema.0["api_versions"],
+        json!(daemon::SUPPORTED_API_VERSIONS)
+    );
+    check_examples(&schema, DAEMON_GUIDE);
+}
+
+#[test]
+fn flattened_forward_rejects_unevaluated_fields() {
+    let schema = Schema(
+        serde_json::from_str(include_str!("../../../protocol/protocol.schema.json")).unwrap(),
+    );
+    let mut frame: Value = serde_json::from_str(
+        DAEMON_GUIDE
+            .lines()
+            .find(|line| line.contains(r#""method":"forward""#))
+            .unwrap(),
+    )
+    .unwrap();
+    schema.named("MachineRequest", &frame).unwrap();
+    frame["params"]["unexpected"] = json!(true);
+    assert!(
+        schema
+            .named("MachineRequest", &frame)
+            .unwrap_err()
+            .contains("unexpected: true is forbidden")
+    );
+}
+
+#[test]
+fn advertise_is_limited_to_machine_requests_and_notifications() {
+    let schema = Schema(
+        serde_json::from_str(include_str!("../../../protocol/protocol.schema.json")).unwrap(),
+    );
+    let mut advertise = json!({"jsonrpc":"2.0","method":"advertise","params":{"machines":[]}});
+    schema.named("MachineNotification", &advertise).unwrap();
+    assert!(schema.named("LocalClientNotification", &advertise).is_err());
+    assert!(schema.named("DaemonNotification", &advertise).is_err());
+    advertise["id"] = json!(2);
+    schema.named("MachineRequest", &advertise).unwrap();
+    assert!(schema.named("LocalClientRequest", &advertise).is_err());
+    assert!(schema.named("MachineNotification", &advertise).is_err());
+}
+
+#[test]
+fn forwarded_start_receipt_has_strict_references_and_size() {
+    let schema = Schema(
+        serde_json::from_str(include_str!("../../../protocol/protocol.schema.json")).unwrap(),
+    );
+    let op = "internal.deliver_start_result";
+    let args_schema = &schema.0["x-facade"]["operations"][op]["args"];
+    let at = "2026-11-20T17:00:00.000Z";
+    let machine = "11111111-1111-4111-8111-111111111111";
+    let recipient = json!({"machine_id": machine, "agent_id": "a1"});
+    let agent = json!({"machine_id": machine, "agent_id": "a2"});
+    let delivery = json!({"status":"success", "text_written":"full"});
+    let canonical = json!({
+        "recipient": recipient,
+        "message": {
+            "message_id":"m4", "message_ref":{"machine_id":machine, "message_id":"m4"},
+            "from":"facade", "to":"a1", "text":"Nova started.", "at":at, "delivery":delivery,
+            "result": {
+                "agent": {
+                    "reference":agent, "address":"a2@devbox", "type":"managed", "name":"Nova",
+                    "cli":"fake", "args":[], "cwd":"/work", "process":"running",
+                    "size":{"cols":80, "rows":24}, "created_at":at, "started_at":at,
+                    "creator":recipient, "root":recipient, "yolo":false, "state":"starting",
+                    "tools_state":"connecting"
+                },
+                "prompt":{"message_id":"m3", "delivery":delivery}
+            }
         }
+    });
+    schema.check(args_schema, &canonical).unwrap();
+    let mut call = api_v1::CallParams {
+        op: op.into(),
+        args: canonical.clone(),
+    };
+    daemon::decode_call(call.clone(), daemon::ClientKind::Machine).unwrap();
+    call.args["message"]
+        .as_object_mut()
+        .unwrap()
+        .remove("result");
+    schema.check(args_schema, &call.args).unwrap();
+    daemon::decode_call(call.clone(), daemon::ClientKind::Machine).unwrap();
+
+    for path in [
+        "/message_ref",
+        "/result/agent/reference",
+        "/result/agent/creator",
+        "/result/agent/root",
+        "/result/agent/size",
+    ] {
+        call.args = canonical.clone();
+        call.args["message"].pointer_mut(path).unwrap()["future_field"] = json!(true);
+        assert!(schema.check(args_schema, &call.args).is_err(), "{path}");
+        let error = daemon::decode_call(call.clone(), daemon::ClientKind::Machine).unwrap_err();
+        assert_eq!(
+            (error.code, error.data.reason.as_str()),
+            (-32602, "invalid_argument"),
+            "{path}"
+        );
+        schema.named("Message", &call.args["message"]).unwrap();
+        serde_json::from_value::<daemon::Message>(call.args["message"].clone()).unwrap();
     }
+
+    let outcome = &canonical["message"]["result"];
+    let mut agent = outcome["agent"].clone();
+    agent["size"]["future_field"] = json!(true);
+    for invalid in [json!([agent, outcome["prompt"]]), Value::Null] {
+        call.args = canonical.clone();
+        call.args["message"]["result"] = invalid;
+        assert!(schema.check(args_schema, &call.args).is_err());
+        let error = daemon::decode_call(call.clone(), daemon::ClientKind::Machine).unwrap_err();
+        assert_eq!(
+            (error.code, error.data.reason.as_str()),
+            (-32602, "invalid_argument")
+        );
+    }
+}
+
+#[test]
+fn keeper_examples_match_the_published_schema() {
+    let schema =
+        Schema(serde_json::from_str(include_str!("../../../protocol/keeper.schema.json")).unwrap());
+    assert_eq!(
+        schema.0["api_versions"],
+        json!(keeper::SUPPORTED_API_VERSIONS)
+    );
+    assert!(
+        check_examples(&schema, KEEPER_GUIDE) > 0,
+        "missing authenticated Windows terminal fixture"
+    );
 }

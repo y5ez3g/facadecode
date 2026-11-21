@@ -2,7 +2,7 @@
 
 Facade core supplies the Orchestrator and its Shell and MCP entry points. The VS Code extension's Rust engine uses
 the same Orchestrator. The [product description](../PRODUCT.md) defines the user experience. The
-[daemon protocol](../../core/protocol/PROTOCOL.md) and [MCP contract](../extension/engineering/MCP.md) define the
+[daemon API](../../core/protocol/DAEMON.md) and [MCP contract](../extension/engineering/MCP.md) define the
 operations and their results.
 
 Core supports macOS and Linux on x64 and arm64, Windows 11 and Windows Server 2022 or later on x64, and Windows 11 on
@@ -47,8 +47,7 @@ wake it when needed.
 - `facade type <agent> "<text>" [--enter]` types text. Use `--key Esc --key Enter` to press keys in order.
   `facade type --help` lists the key names.
 - Attach viewers share the smallest open terminal width and height. A larger Shell displays the shared grid in its
-  top-left corner. The shared grid changes as viewers resize or leave. An older screen viewer keeps the previous
-  resize rule in effect for the duration of its watch. VS Code can provide terminal colors.
+  top-left corner. The shared grid changes as viewers resize or leave. VS Code can provide terminal colors.
 - After reconnecting, Attach redraws the current screen. It reports discarded input in bytes when any was lost.
 
 ## Messages and tools
@@ -111,8 +110,12 @@ handles tool approval, trust and sandbox settings. See the [product description]
   runs. SSH prompts appear in the command's terminal.
 - Saved connections are opened on demand. A saved machine without running work can sleep. Explicit operations
   such as a named agent start can wake it through a saved route, including any needed intermediate machines.
-- The SSH connection uses the installed program at its fixed path. It installs or upgrades an older remote copy
-  as needed to match the local version. If a newer remote version is already installed, upgrade the local copy.
+- The SSH connection first uses the remote program at its installed path. The daemon API handshake decides
+  compatibility, so the builds can have different software versions. A permitted explicit connection can install
+  a program on an uninstalled peer through the regular installer. A passive connection uses the installed
+  `machine serve --no-start`. It leaves sleeping services idle and reports a missing installation without installing.
+- To prepare an SSH machine offline, keep its release archive and `SHA256SUMS` together. Run the installer with
+  `--package <ARCHIVE>` on macOS or Linux or `-Package <ARCHIVE>` on Windows before connecting.
 - `facade machine list` reads the local machine table with zero SSH. It distinguishes a disconnected saved
   connection, a confirmed sleeping machine, a connection failure and a machine that needs SSH login. Login
   guidance gives the saved `add` command. `facade machine rename` gives a machine a new name.
@@ -127,19 +130,18 @@ handles tool approval, trust and sandbox settings. See the [product description]
 
 On Linux, systemd settings that end a login's processes can end the services with the SSH login. The connection warns
 when `KillUserProcesses` or `KillOnlyUsers` applies. An administrator can configure `KillExcludeUsers` for that user.
-See [Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions).
+See [Machine sessions](../../core/protocol/DAEMON.md#machine-sessions).
 
 ## Restarts and diagnostics
 
 - The Orchestrator starts on demand and exits after 30 idle seconds. Saved SSH sessions also close after 30 idle
   seconds. A foreground machine connection, an active Attach or a call in progress keeps its session active.
 - The keeper holds the CLI terminals during a daemon restart. The daemon keeps the terminals during a keeper restart.
-  A newer build uses the same takeover to keep running CLIs and reconnect clients. For an agent already running
-  before an upgrade, the Orchestrator keeps recognizing its MCP connection the old way until that run ends. Later
-  starts and resumes use the new way.
+  An API-compatible takeover replaces the daemon. The live keeper retains its CLIs and terminals while clients
+  reconnect. See [Daemon takeover](../../core/protocol/DAEMON.md#daemon-takeover) for the compatibility checks.
 - `facade upgrade` checks the stable version before downloading the installer. It skips installation when
-  already up to date. `facade upgrade --version X.Y.Z` runs the installer for that release. The installed build
-  takes over a running Orchestrator when its compatibility checks pass, keeping agents running.
+  already up to date. `facade upgrade --version X.Y.Z` runs the regular installer for the `extension/X.Y.Z` release.
+  The installed build takes over a running Orchestrator when its compatibility checks pass, keeping agents running.
 - `facade status` reports the local home, settings file, versions, daemon and keeper process IDs, active agent count,
   connected machines and Guest MCP launcher. When the local Orchestrator is sleeping, status says so without
   starting it.

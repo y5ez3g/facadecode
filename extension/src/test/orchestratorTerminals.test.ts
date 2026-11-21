@@ -3,11 +3,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { V3AgentInfo, V3ScreenWatchArgs } from '../base/coreProtocol';
+import type { AgentInfo } from '../base/coreProtocol';
 import type { RustPin } from '../core/ports';
 import type { AgentPty } from '../host/execution/agentPty';
 import { restoreRustPins } from '../host/orchestrator/pinRestore';
-import { DaemonError, type AttachListener, type OrchestratorLink, type ResizeAttach, type TerminalNotificationArgs } from '../host/orchestrator/types';
+import { DaemonError, type AttachListener, type AttachWatchArgs, type OrchestratorLink, type ResizeAttach } from '../host/orchestrator/types';
 import { TestEmitter, withModules } from './withModules';
 
 const local = '00000000-0000-4000-8000-000000000001';
@@ -17,10 +17,9 @@ const none = { dispose() { } };
 
 suite('Orchestrator terminals', () => {
 	test('Attach redraws after a refused watch or lost connection, ignores old watches and drops only unsent bytes (RULES-6.3)', async () => {
-		const watches: { args: () => V3ScreenWatchArgs; listener: AttachListener; disposed: boolean }[] = [];
+		const watches: { args: () => AttachWatchArgs; listener: AttachListener; disposed: boolean }[] = [];
 		const retries = new Set<() => void>();
 		const sent: string[] = [];
-		const resize: TerminalNotificationArgs['agent.resize'][] = [];
 		const attachResize: Parameters<ResizeAttach>[0][] = [];
 		const writes: string[] = [];
 		const renderer: (string | { columns: number; rows: number })[] = [];
@@ -51,7 +50,7 @@ suite('Orchestrator terminals', () => {
 			dispose() { pty.dispose(); }
 		}
 		const timers = {
-			setTimeout: (callback: () => void) => { retries.add(callback); return { callback, unref() { } }; },
+			setTimeout: (callback: () => void) => { retries.add(callback); return { callback, unref() { return this; } }; },
 			clearTimeout: (timer?: { callback: () => void }) => { if (timer) { retries.delete(timer.callback); } }
 		};
 		const retry = () => {
@@ -74,11 +73,12 @@ suite('Orchestrator terminals', () => {
 				watches.push(watch);
 				return { dispose: () => { watch.disposed = true; } };
 			},
-			notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]) {
-				assert.deepStrictEqual(args.reference, ref);
+			notify(op, args) {
+				assert.strictEqual(op, 'agent.type');
+				assert.deepStrictEqual(args.target, ref);
+				assert.strictEqual(args.input.kind, 'raw');
 				if (!canSend) { return false; }
-				if ('cols' in args) { resize.push(args); }
-				else { assert.strictEqual(op, 'agent.type'); sent.push(Buffer.from(args.raw!, 'base64').toString()); }
+				sent.push(Buffer.from(args.input.raw, 'base64').toString());
 				return true;
 			},
 			dispose() { }
@@ -91,8 +91,8 @@ suite('Orchestrator terminals', () => {
 		terminals.bind(run, { ref, address: 'a7@gpu' }, true);
 		assert.strictEqual(watches.length, 0);
 		await terminals.reveal(run, { preserveFocus: false });
-		const draw = (listener: AttachListener, text: string, machine_id = gpu, resize?: ResizeAttach) => listener.snapshot({
-			...ref, machine_id, address: 'a7@gpu', redraw: Buffer.from(text).toString('base64'), cols: 80, rows: 24
+		const draw = (listener: AttachListener, text: string, machine_id = gpu, resize: ResizeAttach = () => undefined) => listener.snapshot({
+			reference: { ...ref, machine_id }, address: 'a7@gpu', redraw: Buffer.from(text).toString('base64'), size: { cols: 80, rows: 24 }
 		}, resize);
 		const unavailable = new DaemonError('Lost route', 'unavailable', { reason: 'unavailable' });
 		const refused = watches[0].listener;
@@ -112,8 +112,8 @@ suite('Orchestrator terminals', () => {
 		const dropped = (bytes: number) => notice(`Keys not sent: ${bytes} bytes.`);
 		assert.deepStrictEqual(writes, [lost, 'first screen', dropped(2)]);
 		assert.deepStrictEqual(renderer.slice(-3), [{ columns: 80, rows: 24 }, 'first screen', dropped(2)]);
-		assert.deepStrictEqual(attachResize, [{ cols: 87, rows: 31, colors: { foreground: '#cccccc', background: '#1f1f1f', cursor: '#cccccc' } }]);
-		old.change({ kind: 'redraw', data: Buffer.from('resized screen').toString('base64'), cols: 83, rows: 26 });
+		assert.deepStrictEqual(attachResize, [{ size: { cols: 87, rows: 31 }, colors: { foreground: '#cccccc', background: '#1f1f1f', cursor: '#cccccc' } }]);
+		old.change({ kind: 'redraw', data: Buffer.from('resized screen').toString('base64'), size: { cols: 83, rows: 26 } });
 		assert.deepStrictEqual(renderer.slice(-2), [{ columns: 83, rows: 26 }, 'resized screen']);
 		assert.deepStrictEqual(pty.dimensions, { columns: 87, rows: 31 });
 		pty.handleInput('while connected');
@@ -126,15 +126,15 @@ suite('Orchestrator terminals', () => {
 		pty.handleInput('\x1b]11;rgb:1919/1a1a/1b1b\x1b\\');
 		assert.deepStrictEqual(watches[1].args().size, { cols: 101, rows: 39 });
 		assert.strictEqual(attachResize.length, 1);
-		assert.strictEqual(resize.length, 0);
-		draw(old, 'reconnected screen');
+		const reconnectedResize: Parameters<ResizeAttach>[0][] = [];
+		draw(old, 'reconnected screen', gpu, args => reconnectedResize.push(args));
 		assert.deepStrictEqual(writes.slice(-3), [lost, 'reconnected screen', dropped(7)]);
-		assert.deepStrictEqual(resize[0], { reference: ref, cols: 101, rows: 39, colors: { foreground: '#cccccc', background: '#191a1b', cursor: '#cccccc' } });
+		assert.deepStrictEqual(reconnectedResize[0], { size: { cols: 101, rows: 39 }, colors: { foreground: '#cccccc', background: '#191a1b', cursor: '#cccccc' } });
 		vscode.window.activeColorTheme.kind = 1;
 		themeChanges.fire();
-		assert.deepStrictEqual(resize[1].colors, { foreground: '#3b3b3b', background: '#ffffff', cursor: '#3b3b3b' });
+		assert.deepStrictEqual(reconnectedResize[1].colors, { foreground: '#3b3b3b', background: '#ffffff', cursor: '#3b3b3b' });
 		pty.handleInput('\x1b]12;rgb:abcd/88/f\x07');
-		assert.strictEqual(resize[2].colors?.cursor, '#ab88ff');
+		assert.strictEqual(reconnectedResize[2].colors?.cursor, '#ab88ff');
 		// The agents' sync arrives while the old watch still looks current, with no later agent update to prompt a retry.
 		terminals.setReachable(run, true);
 		assert.strictEqual(watches.length, 2);
@@ -148,7 +148,7 @@ suite('Orchestrator terminals', () => {
 		draw(old, 'stale screen');
 		pty.handleInput('after the redraw');
 		assert.deepStrictEqual(watches.map(watch => watch.args()), Array(3).fill({
-			reference: ref, viewer: 'VS Code: Fixture', keep_scrollback: true, size: { cols: 101, rows: 39 }
+			target: ref, viewer: 'VS Code: Fixture', keep_scrollback: true, size: { cols: 101, rows: 39 }
 		}));
 		assert.deepStrictEqual(writes, [lost, 'first screen', dropped(2), 'resized screen', lost, 'reconnected screen', dropped(7), lost, 'second']);
 		assert.deepStrictEqual(sent, ['while connected', 'after the redraw']);
@@ -173,28 +173,29 @@ suite('Orchestrator terminals', () => {
 
 	test('Pin recovery opens running agents, tries Resume once and distinguishes removal, expiry and failure (RULES-6.4)', async () => {
 		const at = '2026-11-17T00:00:00.000Z';
-		const running: V3AgentInfo = {
-			machine_id: gpu, agent_id: 'a7', address: 'a7@gpu', type: 'managed', name: 'Fixture', cli: 'work', args: [], cwd: '/work',
-			process: 'running', created_at: at, started_at: at, root: 'a7', yolo: true, state: 'idle', tools_state: 'available', session: 'gpu-session'
+		const root = { machine_id: gpu, agent_id: 'a7' };
+		const running: AgentInfo = {
+			reference: root, address: 'a7@gpu', type: 'managed', name: 'Fixture', cli: 'work', args: [], cwd: '/work',
+			process: 'running', created_at: at, started_at: at, root, yolo: true, state: 'idle', tools_state: 'available', session: 'gpu-session'
 		};
-		const crashed: V3AgentInfo = { ...running, agent_id: 'a8', address: 'a8@gpu', process: 'ended', state: 'ended', exit: { code: 1, at } };
-		const refused: V3AgentInfo = { ...crashed, machine_id: server, address: 'a8@server', session: 'server-session' };
-		const restored: V3AgentInfo = { ...running, agent_id: 'a9', address: 'a9@gpu' };
-		const restoredCrash: V3AgentInfo = { ...running, agent_id: crashed.agent_id, address: crashed.address };
-		const pin = (id: string, agent: V3AgentInfo): RustPin => ({
+		const crashed: AgentInfo = { ...running, reference: { machine_id: gpu, agent_id: 'a8' }, address: 'a8@gpu', process: 'ended', state: 'ended', exit: { code: 1, at } };
+		const refused: AgentInfo = { ...crashed, reference: { machine_id: server, agent_id: 'a8' }, address: 'a8@server', session: 'server-session' };
+		const restored: AgentInfo = { ...running, reference: { machine_id: gpu, agent_id: 'a9' }, address: 'a9@gpu' };
+		const restoredCrash: AgentInfo = { ...running, reference: crashed.reference, address: crashed.address };
+		const pin = (id: string, agent: AgentInfo): RustPin => ({
 			id, conversation: { environment: 'local', cli: agent.cli, sessionId: agent.session },
-			location: 'folder', cwd: agent.cwd, name: agent.name, machine_id: agent.machine_id, agent: agent.agent_id
+			location: 'folder', cwd: agent.cwd, name: agent.name, machine_id: agent.reference.machine_id, agent: agent.reference.agent_id
 		});
 		const refusedPin = pin('refused', refused);
 		const runningPin = pin('running', running);
 		const crashedPin = pin('crashed', crashed);
-		const expiredRecord = pin('expired-record', { ...running, agent_id: 'a1' });
-		const missingSession = pin('missing-session', { ...running, agent_id: 'a2', session: 'gone' });
-		const deleted = pin('deleted', { ...running, agent_id: 'a3' });
-		const missingRecord = pin('missing-record', { ...running, agent_id: 'a4' });
-		const offline = pin('offline', { ...running, machine_id: server, session: 'remote' });
+		const expiredRecord = pin('expired-record', { ...running, reference: { machine_id: gpu, agent_id: 'a1' } });
+		const missingSession = pin('missing-session', { ...running, reference: { machine_id: gpu, agent_id: 'a2' }, session: 'gone' });
+		const deleted = pin('deleted', { ...running, reference: { machine_id: gpu, agent_id: 'a3' } });
+		const missingRecord = pin('missing-record', { ...running, reference: { machine_id: gpu, agent_id: 'a4' } });
+		const offline = pin('offline', { ...running, reference: { machine_id: server, agent_id: 'a7' }, session: 'remote' });
 		const refusal = new DaemonError("clis.work runs Codex now, but this conversation is Claude Code's; it cannot be resumed with it",
-			'unsupported', { reason: 'unsupported', entry: 'work' });
+			'unsupported', { reason: 'unsupported', details: { entry: 'work' } });
 		const unavailable = new DaemonError('Lost route', 'unavailable', { reason: 'unavailable' });
 		const gone = new DaemonError('Session is gone', 'session_not_found', { reason: 'session_not_found' });
 		const unknown = new DaemonError('Agent is unknown', 'not_found', { reason: 'not_found' });

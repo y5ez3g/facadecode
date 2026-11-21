@@ -137,8 +137,10 @@ pub(crate) enum AgentCommand {
         run: u64,
         reply: InputReply,
     },
+    #[cfg(test)]
     Resize(u16, u16),
-    /// Resizes the terminal and applies colors already authorized by the service.
+    /// Sets the test terminal's size and colors outside the shared viewer path.
+    #[cfg(test)]
     ResizeTerminal {
         cols: u16,
         rows: u16,

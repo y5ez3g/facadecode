@@ -1,518 +1,333 @@
 ## Connect to the daemon
 
-The Facade home is the absolute path in `FACADE_HOME`. If unset, use `HOME/.facade`, or `USERPROFILE/.facade` if `HOME` is
-unset. On macOS and Linux the daemon socket is `/tmp/facade-core-<uid>/daemon-<key>.sock`, where `uid` is the process's real
-user ID. Only that user can access the socket folder. On Windows the daemon listens on the named pipe
-`\\.\pipe\facade-core-daemon-<key>`, and the keeper on `\\.\pipe\facade-core-keeper-<key>`. The pipes let in their owner
-alone (DACL `D:P(A;;GA;;;OW)`). Before its `hello`, a Windows client checks that the server process runs as its own user
-(`GetNamedPipeServerProcessId`, then that process's token's user SID), and closes the connection otherwise. An `ide`
-client is the exception: Node.js, which runs the editor's extension, has no API for that check, so it relies on the
-daemon pipe's DACL alone. Lines, framing and every operation are the same on every system.
+`api_versions` offers @DAEMON_API_VERSIONS@ in this build. The daemon selects the highest
+offered positive integer it supports and returns it as `api_version`. Send a nonempty array of
+enabled versions. The receiver treats repeated values as one version. An invalid offer returns
+`-32602 invalid_argument`. A valid offer with no common version returns
+`-32000 protocol_incompatible` and includes the endpoint's `details.supported_api_versions`.
+The client checks the selection against its offer and uses the selected contract for the entire
+connection. The software build and keeper API have independent versioning.
+See [the keeper reference](KEEPER.md).
 
-To compute `key`, encode the home's path string as UTF-8. Replace invalid path bytes with U+FFFD, as Rust's
-`Path::to_string_lossy` does. Take the first five bytes of its SHA-256 digest and write them as ten lowercase hexadecimal
-digits. Use the path exactly as it was used to start Facade; do not resolve symlinks or normalize it before hashing.
+`FACADE_HOME` selects the home. By default it is `.facade` in `HOME`, or `USERPROFILE`
+when `HOME` is unset. On macOS and Linux the socket is
+`/tmp/facade-core-<uid>/daemon-<key>.sock`. On Windows use
+`\\.\pipe\facade-core-daemon-<key>`. The endpoints admit the owning user. Core's Windows
+clients also look up the server PID and check its user SID. The editor relies on the pipe DACL.
 
-If the socket does not answer, run `facade daemon --detach` with the same `FACADE_HOME`. It starts the keeper, which starts the
-daemon, and returns code 0 when the daemon starts or another daemon holds the daemon lock. If the daemon is still starting after 10 seconds, it prints
-`facade: Facade is still starting; see {home}/core/logs` and also returns 0. Startup failure returns code 1 with the reason.
-Connect to the socket and retry `hello` for up to 10 seconds. A successful `hello` proves readiness; the `--detach` result
-alone does not.
+To calculate `key`, use the home path exactly as passed to Facade. Encode it as UTF-8, replacing
+invalid path bytes with U+FFFD. Write the first five bytes of its SHA-256 digest as ten lowercase
+hexadecimal digits.
 
-The daemon accepts connections after recovering its agents and screens. Recovery can take longer than one connection
-attempt. A client can retry temporary transport failures. Report a decoded refusal, invalid response, permission error,
-or settings problem.
-
-Nothing runs at login. A command starts the keeper, and the keeper starts the daemon; `hello.keeper` is absent while no keeper
-runs. The daemon exits after 30 seconds with no running agent, connected client, or unfinished work, and the keeper, holding no
-CLI, exits with it. Ended records and screens stay in the home. The next command starts them again and reads them. Linux needs
-kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed.
+When the daemon is asleep, a local client that intends to wake it can run
+`facade daemon --detach` with the same home. The daemon accepts connections after recovering
+its agents and screens. Wait for a successful `hello` and report a decoded refusal or
+permission failure. With no agents, clients or unfinished work the daemon exits after 30 seconds.
 
 ### Messages
 
-Send one UTF-8 JSON-RPC 2.0 object per newline. The 64 MiB line limit includes the newline.
-An oversized request receives `capacity_exceeded` with a null ID and closes the connection.
-Give outstanding requests distinct non-negative integer IDs. JavaScript clients use exactly
-representable integers. A notification omits the ID and receives no response.
+Send one UTF-8 JSON-RPC 2.0 object per line, at most 64 MiB including the newline. Give outstanding
+requests distinct IDs from 0 through the maximum unsigned 64-bit integer, using exactly
+representable integers in JavaScript. Each response echoes the ID and has one of `result` or
+`error`. Notifications omit the ID and receive no reply. An oversized request produces
+`capacity_exceeded` with a null ID and closes the stream.
 
-Ordinary terminal, editor and machine sessions offer `[3,3]`. Wait for a successful `hello`.
-Its `ops` and `topics` list the operations and watches available to the client. Shell and IDE
-introduce their client kind and build. The daemon supplies verified actor identity on its private
-MCP connection. The machine introduction carries a stable machine ID and a daemon start ID.
+A terminal or editor supplies its own kind and build. An internal MCP session acts with verified
+actor identity. `hello.result.ops` and `topics` list the supported operations and subscriptions
+for that session. Send arguments as an object every time, using `{}` for an empty set. Unknown
+input fields and discriminants fail before the operation runs. An API consumer can ignore newly
+added optional output and notification fields and skip unknown event kinds.
 
-An optional `capabilities` array in the hello parameters and result advertises additions to
-protocol 3. A missing array has the same meaning as an empty array. Use `ops` and `topics` to
-discover `list`, `stop`, `attach.resize` and the `attach` topic. The daemon advertises
-`agent.resume_list.local` for local-only resume queries, `machine.connect.expected_machine_id`
-for a saved connection guarded by the expected machine ID, and `machine.remove.expected_machine_id`
-for exact removal. A terminal that declares the resume capability opts into passive queries for an
-`all: true` resume listing. A terminal that declares the connect capability allows a saved connection
-to update the settings for the machine authenticated on that stream. A client that advertises
-`machine.disconnected` can receive the `disconnected` machine state. Older clients receive
-`unreachable` for that state. Machine sessions also use `attach` and `machine.probe_route` to
-discover support for shared Attach and passive route probes.
-
-A watch gives its number and first snapshot before its ordered changes. End it with `unwatch`.
-Use the watch number to interpret each change in the type for that topic. Ignore unrecognized
-fields and skip unknown change kinds. The Rust types supply `Unknown` or `Unrecognized`.
-
-To request cancellation on the same connection, send
-`{"jsonrpc":"2.0","method":"cancel","params":{"id":7}}`. The named call reports what happened.
-An `agent.send` can be withdrawn before its text starts entering the terminal.
-
-In this exchange `→` marks a client message and `←` marks a daemon message. The redraw
-contains only a short example terminal sequence.
-
-```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[3,3],"build":"0.1.6","kind":"terminal","capabilities":["machine.disconnected","attach","machine.connect.expected_machine_id","agent.resume_list.local"]}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":3,"build":"0.1.6","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":0,"topics":["agents","screen","attach","machines"],"ops":["list","agent.list","agent.inspect","agent.start","agent.start_preflight","agent.resume_list","agent.resume","location.list","cli.list","agent.stop","stop","agent.remove","agent.rename","agent.type","agent.send","agent.resize","attach.resize","agent.screen","daemon.status","workspace.import_legacy","machine.list","machine.add","machine.connect","machine.remove","machine.rename","daemon.log","daemon.upgrade"],"capabilities":["agent.resume_list.local","machine.disconnected","machine.connect.expected_machine_id","machine.remove.expected_machine_id","machine.probe_route","attach"]}}
-→ {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"cli":"claude","folder":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
-← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","address":"a1@devbox","type":"managed","name":"Pixel","cli":"claude","args":[],"cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":1234,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:25:00.000Z","started_at":"2026-11-09T17:25:00.000Z","root":"a1","yolo":true,"state":"starting","tools_state":"connecting"}}}
-→ {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"}}}}
-← {"jsonrpc":"2.0","id":3,"result":{"watch":1,"snapshot":{"agent_id":"a1","address":"a1@devbox","name":"Pixel","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":120,"rows":30,"redraw":"G1s/MjAyNmw=","process":"running"}}}
-← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"output","data":"aGVsbG8="}}}
-→ {"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"raw":"aGk="}}}
-→ {"jsonrpc":"2.0","id":4,"method":"call","params":{"op":"agent.type","args":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"text":"run the tests","enter":true}}}
-← {"jsonrpc":"2.0","id":4,"result":{"agent":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","name":"Pixel","cli":"claude","state":"idle","resumable":false}}}
-→ {"jsonrpc":"2.0","id":5,"method":"call","params":{"op":"agent.stop","args":{"agent":"a1@devbox"}}}
-← {"jsonrpc":"2.0","method":"changed","params":{"watch":1,"change":{"kind":"exit","exit":{"signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}}}
-← {"jsonrpc":"2.0","id":5,"result":{"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a1"},"address":"a1@devbox","signal":"SIGHUP","at":"2026-11-09T17:25:40.017Z"}}
-→ {"jsonrpc":"2.0","id":6,"method":"unwatch","params":{"watch":1}}
-← {"jsonrpc":"2.0","id":6,"result":{}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":@DAEMON_API_VERSIONS@,"build":"1.0.0+example","kind":"terminal"}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.0+example","machine_id":"11111111-1111-4111-8111-111111111111","pid":4321,"agent_count":1,"ops":@TERMINAL_OPS@,"topics":@TERMINAL_TOPICS@,"keeper":{"pid":4320,"build":"1.0.0+example"}}}
+{"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.list","args":{"scope":{"kind":"local"}}}}
+{"jsonrpc":"2.0","id":2,"result":{"agents":[],"machines":[{"machine_id":"11111111-1111-4111-8111-111111111111","short_id":"11111111","name":"laptop","selector":"laptop","state":"online","status":"answered"}]}}
 ```
-
-An exact screen watch may set `allow_ended` to read the final redraw of a managed run. The
-snapshot includes the process state and the exit if known. The ended snapshot and the exit
-change can also include `exit_status`: the original exit code, or 128 plus the running machine's
-number for the recorded signal. An ended snapshot admits no viewer.
-Ordinary watches require a running managed agent. Inspection lists the verified client kind and
-origin of each shell or editor attachment alongside the viewer names supplied by earlier clients.
 
 ### Agent and machine addresses
 
-The daemon presents copyable addresses such as `a1@devbox`. A bare `a1` is an agent number.
-An agent can also be found by name. `Pixel@devbox` can be both a qualified name and a literal
-name. A machine selector matches both its spelling as a name and as an eight-digit ID or full
-UUID. A selector that matches two different machines is ambiguous. The daemon presents a machine
-name, short ID, or full ID only after checking it can locate the intended machine uniquely.
-When no public spelling is unique, the daemon reports `ambiguous_reference` with a rename hint.
-
-An `AgentRef` contains the full `machine_id` and `agent_id`. Clients retain it for stored
-workspace membership and to reconnect a terminal to the same agent. Calls taking `AgentTarget`
-supply exactly one of `agent` or `reference`. The same target's permissions and capabilities
-apply on both paths. A specified machine can be woken for the requested operation. An unspecified
-machine uses the routes already available to the caller.
-
-For a name, lookup prefers live records among the matches that support the operation. An ambiguous
-number can still match several machines. Receipts and error labels carry a stable reference and
-the copyable address in the requesting daemon's view. Agent error labels are limited to records
-within the caller's reach. Machine queries can report the current query failure separately from
-the last known SSH error.
+A target is a nonempty selector string or an exact `{machine_id,agent_id}` pair. A selector can
+be a local name or ID, or an address such as `a2@devbox`. Keep the full exact reference for a Pin,
+a terminal reconnect, and forwarded requests against an already resolved agent. Display
+the returned address. Ambiguous references return candidates in the error details. The
+entry daemon derives caller identity and the holder checks permissions before acting.
 
 ### Listing and inspecting
 
-`list` and `agent.list` return active agents and Guests in the permitted view, newest start first. Each
-entry contains a stable `reference` and the public row including its copyable `id`, `type`,
-`state`, CLI, working folder and start time. The `agents` watch also includes ended records
-and the synchronization state of remote contributors. A synced contribution can be an empty
-list. A removal change carries the machine, agent ID and confirmed cause. Inspect returns the
-agent record, input information, current terminal viewers, and recorded startup source when known.
+`agent.list` defaults to `reachable`. The local scope performs zero SSH, including on cold start.
+The machine scope selects one machine and can wake it. Reachable reuses active connections,
+probes saved routes concurrently without waking them, waits for the query and returns the local
+and answered records. `machines[].status` is the outcome of this query and `state` is the
+observed connection state. A failure against a named machine is an outer error. In a reachable
+query the failed machine appears alongside the records obtained.
 
-The `list` scope defaults to `{"kind":"reachable"}`. It queries the local machine and can probe
-saved connections without waking sleeping daemons. A scope of `{"kind":"local"}` queries only the
-local machine and opens no SSH connection. A scope of `{"kind":"machine","machine":"devbox"}`
-queries the named machine and can wake it. An online machine can still fail or time out in a
-query. Read each machine's query `status` separately from its connection `state`.
-
-Here the local query has no active agents. The reachable query also reports a timed-out machine.
-
-```text
-→ {"jsonrpc":"2.0","id":8,"method":"call","params":{"op":"list","args":{"scope":{"kind":"local"}}}}
-← {"jsonrpc":"2.0","id":8,"result":{"agents":[],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","selector":"devbox","state":"online","status":"answered"}]}}
-→ {"jsonrpc":"2.0","id":9,"method":"call","params":{"op":"list","args":{}}}
-← {"jsonrpc":"2.0","id":9,"result":{"agents":[],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","selector":"devbox","state":"online","status":"answered"},{"machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","short_id":"ea9b4046","name":"lab","selector":"lab","state":"unreachable","status":"timed_out","error":"SSH connection timed out."}]}}
-```
-
-`agent.list` keeps its existing query behavior. A bare `agent.list` can return the currently
-available records while a connection is `connecting`.
+`agent.inspect` returns the agent, current input observation, session tracking and viewers.
+For a managed run it can include the recorded launch command with Facade's run credential
+redacted. `agent.screen` returns the tail of the logical screen and scrollback. Its default
+is 50 lines, and it accepts 1–2,000. Ended records can still be inspected and their final
+screens read.
 
 ### States
 
-`state` in an agent record says what the agent is doing: the first that holds of `waiting_for_you`, `error`, `just_done`,
-`working`, `starting`, `idle`, and `unknown`, or `ended` once its process ended. A connected Guest reports `online`.
-`state_detail` says more:
+An active managed agent reports `starting`, `working`, `waiting_for_you`, `just_done`,
+`idle`, `error` or `unknown`. A finished process reports `ended`. A connected Guest
+reports `online`. State can reflect a CLI's own Program Status Protocol reports (OSC 7501)
+or recognized screens. A wait's detail can identify permission, questions or authentication.
+`said` records the latest observed submission with its sender. Changes to wait and error
+states are published immediately and other state changes are coalesced.
 
-- `waiting_for_you`: `kind` is `permission`, `question`, `auth`, or `unknown` where the CLI did not say, and `text` holds the
-  CLI's own words, if any. A menu or question the CLI draws in place of its input counts, also while it starts, and the bounds
-  on its start and its tools run again once it is answered.
-- `error`: the CLI reported an error, or its screen shows that the turn it reported ended failed, and `text` holds its own
-  words, if any; its CLI cannot use the Facade tools it was
-  given, and `reason` is `tools_unavailable`; or a CLI that runs by a built-in's rule showed nothing of what it does within 60
-  seconds of its start or resume, and `reason` is `not_ready`. A program without a rule is `unknown` instead: nothing
-  promises it reports.
-- `just_done`: a turn ended while no `screen` or `attach` watch showed the agent. It stays until one does; `agent.screen` does not count.
-  Work before the CLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a question the CLI
-  shows. Words after the CLI's name at its start are the CLI's own and ask nothing.
-- `working`: the CLI works, or stopped working less than a second ago.
-- `starting`: the CLI has shown nothing of what it does yet, or its Facade tools have not connected yet, within 60 seconds of
-  the start or resume of its process.
-- `unknown`: nothing shows what the CLI does now, though it did before, or a program without a rule has shown nothing yet.
-  `reason` says why: `not_shown`, `asked` (to report, without reporting since), `taken_back`, or `unrecognized` (a screen
-  its rule does not recognize).
-- `ended`: `how` is `stopped` where Facade stopped the agent, otherwise `normal` for exit code 0 and `crashed` for another
-  code or a signal. It is omitted where neither is known; `exit.reason` says what is known.
+`watch agents` sends a snapshot and ordered changes. A `machine_state` event describes sync
+state and may include v1 agent records. A `removed` event contains `machine_id`, `agent_id`
+and `cause`. When checking a pinned record, also accept `not_found.details.record_removal`
+when its value is `expired` or `removed`.
 
-States come from what the CLI reports of itself, the Program Status Protocol (OSC 7501, revision 0.4): a CLI that asks whether
-the terminal takes reports is answered that it does, and viewers see neither the question nor the reports. A full reset takes
-a report back, and so does a shell's new prompt (OSC 133 A) after work or a wait. Reports about a part of the CLI (`id=`) and
-report titles are not read. Where a CLI's rule reads its screen, the screen speaks for the CLI too: Muse Code's, until the CLI
-asks or reports, and Codex 0.166.0's and 0.167.0's, whose finished turn narrows a `working` report to idle while commands it
-left running continue. Codex's version is read from the `codex-package.json` its installation keeps above its program; other
-versions keep their own reports.
-
-`said` is the last text that went into the agent's input with Enter, on one line, and who said it, as messages name their
-sender: what the person submits in an attached terminal, once the CLI takes it, with each paste the CLI shows as a
-placeholder said as the text pasted; `agent.type` text with `enter`, from the agent
-the verified actor, or from the command line; and a message delivered through the terminal, from its sender. An Enter the person
-types reaches the CLI once the CLI has drawn the keys before it and the daemon has read the draft they make, at most 150 ms
-later, and keys sent meanwhile follow it; if the CLI drew nothing of them by then, the Enter goes and nothing is said.
-`waiting_for_you` and `error` are published on the `agents` topic at once; other state changes and `said` follow within
-200 ms. The facts states rest on and `said` are kept beside the agent's screen, so a daemon that starts again shows the same
-states before it serves clients.
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":15,"method":"watch","params":{"topic":"agents","args":{}}}
+{"jsonrpc":"2.0","id":15,"result":{"watch":2,"snapshot":{"agents":[],"machines":[]}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":2,"change":{"kind":"machine_state","machine":{"machine_id":"22222222-2222-4222-8222-222222222222","state":"synced","agents":[]}}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":2,"change":{"kind":"removed","machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2","cause":"removed"}}}
+```
 
 ### Starts, stops, and removal
 
-The start and preflight operations take `StartArgs`. The selected machine checks its CLI
-entries, availability, working folder and permissions. Set `folder_is_default` only for
-the entry's implicit folder so a remote start can use the running machine's default. A
-`worktree` names the new branch made from the current HEAD. Preflight checks without creating
-a worktree or starting a process. A Git error can describe what was kept in `data.kept`.
+`agent.start` validates launch settings, permissions, CLI availability and the folder before
+creating a worktree or starting a process. A `worktree` names the new branch created from
+HEAD. Set `folder_is_default` for an implicit folder so that a remote start can use the
+executing machine's default. The executing machine uses its own environment and default folder
+for a forwarded start. The result returns the agent and any applicable prompt receipt.
+A worktree error can identify a surviving branch or path under `details.kept`.
 
-A start can include an initial prompt. A start result gives the agent record and prompt
-information. An automatic retry uses the same request ID and returns the original outcome.
+`agent.stop` accepts a nonempty list of targets or a scope. It resolves and deduplicates by
+exact reference and preserves the order of the first occurrence. Scope stops never wake
+remote daemons from query through dispatch. The result contains per-target settlements,
+plus machine outcomes for a scoped stop. Explicit Guests receive an `unsupported` error.
+Guests found by scope are skipped. A stopped managed agent keeps its record and final screen.
+`agent.remove` stops a running managed agent before removing its record. If the stop fails,
+the record remains.
 
-`agent.stop` returns the stable reference, current public address, recorded process exit and
-agent label. A stop of an already ended process returns `ended`. A typed input receipt gives the
-agent label after its terminal accepts the input. Rename returns the renamed record's fields and
-the name it replaced. `agent.remove` returns the removed record's stable reference and address.
-A confirmed expiry or explicit removal also appears as
-`record_removal` in a precise missing-record error.
-
-`stop` accepts a nonempty list of targets in a `targets` selection or a machine scope in an
-`all` selection. It resolves explicit targets in order and stops each resolved agent once.
-An `all` selection skips connected Guests. For remote scopes it probes saved connections
-without waking sleeping daemons and uses that same policy through the stop. Both selections
-continue after individual failures. Each item reports `stopped` with its `exit`, `failed`
-with its error, or `skipped`. The optional `machines` array reports the scope's machine outcomes.
-
-```text
-→ {"jsonrpc":"2.0","id":10,"method":"call","params":{"op":"stop","args":{"selection":{"kind":"targets","targets":[{"agent":"a4@devbox"},{"agent":"missing@devbox"}]}}}}
-← {"jsonrpc":"2.0","id":10,"result":{"items":[{"target":{"agent":"a4@devbox"},"reference":{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","agent_id":"a4"},"address":"a4@devbox","status":"stopped","exit":{"code":0,"at":"2026-11-09T17:27:00.000Z"}},{"target":{"agent":"missing@devbox"},"status":"failed","error":{"code":-32000,"message":"No agent matches missing@devbox.","data":{"reason":"not_found"}}}]}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":50,"method":"call","params":{"op":"agent.stop","args":{"selection":{"kind":"targets","targets":["a2@devbox","missing"]}}}}
+{"jsonrpc":"2.0","id":50,"result":{"items":[{"target":"a2@devbox","agent":{"reference":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"address":"a2@devbox","type":"managed","name":"Nova","cli":"codex","state":"ended","resumable":true},"status":"stopped","exit":{"signal":"SIGHUP","at":"2026-11-20T17:03:00.000Z"}},{"target":"missing","status":"failed","error":{"code":-32000,"message":"No active agent matches missing.","data":{"reason":"not_found"}}}]}}
 ```
-
-To stop this machine's managed agents, use `{"selection":{"kind":"all","scope":{"kind":"local"}}}`
-as the arguments to `stop`.
 
 ### Resume, locations and status
 
-`agent.resume_list` gives resumable agent records and CLI sessions in the requested scope. Use
-the returned `ResumeTarget` unchanged with `agent.resume`, adding `env`, `cols` and `rows`.
-For a remote CLI session the target includes its machine and actual folder. A client using a
-saved Pin may instead provide the exact `machine_id`, mutually exclusive with `machine`.
-`at` records when a managed run ended or when a saved session file changed. A saved session can
-also be selected by its full ID or eight-character prefix in the requested directory. The resume
-receipt indicates when it created a new agent from a saved session.
-`session_not_found` means the selected running machine confirmed the session is absent.
+`agent.resume_list` defaults to local. Reachable waits for passive queries as in `agent.list`.
+A named machine can be woken. `folder_scope` chooses the current directory or all managed
+record folders and does not broaden the saved session directory. Pass the returned
+`target` unchanged to `agent.resume` with its runtime `size` and optional environment.
+A full saved-session target includes the machine, CLI, session ID and absolute folder.
 
-With the `agent.resume_list.local` capability, set `local: true` to list this machine's
-resumable managed agents and, when `folder` is supplied, its saved CLI sessions in that
-folder. This scope opens no SSH connections. `local: true` and `machine` are mutually
-exclusive. For a named-machine lookup of managed agents, omit `folder`.
-
-`location.list` returns the working locations and Git kinds known on the selected machine.
-Local results can identify their requested workspace roots as `source_folder`. `cli.list`
-uses the selected machine's working folder and launch environment. `daemon.status` returns the
-home, settings path, version, process IDs, active count and machine results of the live service.
-A local Shell observation that the service is sleeping is reported locally without starting it.
-`agent.inspect` includes the current or last managed run's recorded display command when
-available. The running machine formats the executable and arguments and redacts Facade's
-injected run credential before saving the command. The environment is excluded.
+`location.list`, `cli.list` and `daemon.status` select one machine and default to local.
+Locations describe known work folders. CLI discovery uses the specified folder and
+environment. Daemon status gives the home, settings path, build, PIDs and local agent count.
 
 ### Agent messages
 
-`agent.send` delivers to an eligible managed agent or Guest. A public receipt's `id` contains the
-assigning machine, such as `m42@devbox`. The recipient's inbox uses the local `m42`. A reply to a
-message stored on another machine can carry that machine. Agent senders have copyable addresses.
-The command line and Orchestrator use `command_line` and `facade`, respectively.
+`agent.send` delivers to an eligible managed agent or Guest.
+The public receipt identifies the assigning machine in a message address such as
+`m42@devbox`. Replies can carry an address or a full message reference. Each reply target
+is verified at entry. A managed agent's delivery is confirmed when its terminal takes
+the submission. A Guest can read complete messages inline.
 
-The request ID, verified sender and resolved target identify automatic retries. The daemon
-can return the original settlement after withdrawal from a private receipt. The withdrawn
-message is absent from the inbox and history. A managed agent's delivery is confirmed when its
-terminal takes the submission. A Guest reads complete messages inline. The `next_cursor` of an
-inbox page is passed as `after` to continue reading with the same reply filter.
-
-A terminal can set `allow_unsupported_receipt` to receive a numbered delivery failure if the
-selected managed program has no input rule. That outcome confirms no input was sent. By default
-such requests fail before the message receives a number.
-
-A send without `reply_to` that times out and is withdrawn may carry `expected_reply_to`, the
-message the Guest was waiting for the sender to answer. The sender can use the original message's
-local ID as `reply_to` when sending the reply again.
+Automatic retries of `agent.start` and `agent.send` use the original business
+`request_id`, arguments and destination. Its 1–200 Unicode code points identify the
+request for one hour from its first execution. An expired or different ID may execute again.
+`cancel {id}` addresses the original transport request on the same connection. Only an
+`agent.send` that has yet to start pasting can be cancelled. Once the original request
+finishes it reports its actual outcome.
 
 ### YOLO and creation trees
 
-A managed agent reads YOLO from its running machine's settings on each start or resume. A Guest
-keeps the value recorded when it joined. A managed agent keeps its original creator and the root
-of its creation tree. The verified actor can reach agents in the same tree with YOLO off.
-With YOLO on it can reach other agents too. Local Shell and editor clients act with their own
-client kind. The daemon checks reach and the operation's capability before exposing an address.
+A managed agent reads YOLO from the executing machine's settings on start or resume. A Guest
+keeps the value recorded when it joined. With YOLO off, an actor's reach is its creation tree.
+With YOLO on it can reach other agents, subject to the target's supported operations. The daemon
+verifies callers before reading their records or delivering their operations.
 
 ### The relay
 
-The relay contract remains 1. The initial `hello` carries `relay: 1`, `args`, `env`, `cwd` and
-`reconnect`. Once accepted, the connection carries MCP requests and responses. MCP's date
-versions are independent of both daemon and relay versions. The daemon binds the relay actor
-using verified run or session information. The keeper speaks its separate version 1 protocol.
+The shared local socket accepts a separate relay handshake before daemon API admission.
+It identifies the verified local process using relay contract 1. Once accepted, the stream
+carries MCP JSON-RPC. A verified internal `kind:"mcp"` actor negotiates the daemon API
+independently. Direct external `kind:"mcp"` hello is refused.
+
+```jsonl relay
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"relay":1,"args":["--guest","codex"],"env":{},"cwd":null,"reconnect":false}}
+{"jsonrpc":"2.0","id":1,"result":{"relay":1}}
+{"jsonrpc":"2.0","method":"closing","params":{"build":"1.0.1+example"}}
+{"jsonrpc":"2.0","method":"closing","params":{}}
+```
 
 ### Text and keys
 
-`agent.type` takes one of `raw`, `text`, or `keys`. `facade attach` sends `raw`: the bytes a person types, queued as they come.
-Programs send `text` or `keys`. The agent's typist types them one call at a time, each call whole:
+`agent.type` uses `input.kind` to select text, named keys or raw bytes. A text call can set
+`enter:true`, and empty text with `enter:true` presses Enter alone. Text uses the terminal's
+bracketed paste mode when enabled. Keys use the active terminal modes. A successful text or
+keys receipt means the input reached the terminal. If only part was written, `partial_input`
+reports `details.text_written` with optional `enter_written`, or `details.keys_sent`.
 
-- Text goes in as one paste. When the CLI turned on bracketed paste, the text goes between the paste brackets with each line
-  break as a carriage return; otherwise it goes as given. Text takes printable characters, tabs, and line breaks; send Escape
-  and other control keys as `keys`.
-- With `enter`, Enter goes in a write of its own after the text. Empty text with `enter` presses Enter alone.
-- Keys go as a terminal sends them in the CLI's modes, including application cursor keys.
-- The typist pauses before its next stroke, even when that stroke belongs to the next call: after a paste reached the
-  terminal, 0.1 seconds and the settle time the CLI's rule gives the paste, because a CLI that reads a paste's end and an Enter
-  together may drop the Enter or take it as a line break; after an Escape, 50 ms, so the CLI does not read the two as Alt with
-  that key.
-
-A text or keys call is answered once its input reached the terminal. If the agent ends first, the call fails with `ended`
-when nothing of it was typed. Otherwise it fails with `partial_input` and says what was typed, for example `a3@devbox ended; the
-text was typed but not its Enter`; the error's data has `text_written` and `enter_written` for text, or `keys_sent` for keys.
-Raw bytes can go in between a text and its Enter.
+Raw bytes use standard Base64 with padding and require a full agent reference. They can be
+sent without an ID. A raw call with an ID acknowledges entry into the daemon's memory queue.
 
 ### Screen text
 
-`agent.screen` returns the last logical lines of the screen and scrollback, each wrapped row joined into its line, with
-`line_count`, `older_lines` when output lies above them, and `trimmed` when the scrollback let go of its oldest lines. In
-`text`, inverse text is between `[[` and `]]` and dim text between `{{` and `}}`, inverse outside dim, and each backslash,
-bracket, and brace of the screen's own text is escaped with a backslash: removing the marks and the escapes gives the text
-exactly, as `facade screen` prints it. An ended agent's screen is the one it left; `process` says it ended, and
-`observed_at` is when it ended. Text and keys have no draft protection: they can edit or submit a draft the person is typing.
+`agent.screen` joins wrapped rows into logical lines. `older_lines` tells whether additional
+lines precede the requested tail and `trimmed` reports discarded scrollback. In `text`,
+`[[…]]` marks inverse text and `{{…}}` marks dim text. A backslash escapes the brackets,
+braces and backslashes that occur literally on the screen.
 
 ### Viewers and queue limits
 
-`snapshot.redraw`, `output.data`, and `redraw.data` contain standard base64 with padding. Decode them to bytes and feed those
-bytes to the viewer's terminal parser. Process changes for each watch in arrival order. Apply `output` as continuation bytes;
-`redraw` supplies a terminal sequence that replaces the visible screen. Preserve parser state between messages. Do not treat
-the decoded bytes as plain text; use `agent.screen` when you want plain text.
+`watch attach` returns a connection-local `watch` number and snapshot. Apply its actual
+`size` before decoding `redraw` into terminal bytes. Feed subsequent `output` and `redraw`
+bytes to the same parser in arrival order. A `redraw` replaces the visible screen and may
+supply a new size. `report_activity` requests the `working` flag and activity changes.
+`allow_ended` with an exact reference reads a final terminal snapshot without an active view.
 
-A `screen` or `attach` watch can set `report_activity`. Its snapshot then includes `working`, which is true while the agent is
-starting or working. The watch receives an `activity` change each time that answer changes.
+Report initial capacity in the watch and subsequent changes via `attach.resize`. The shared
+grid takes the smallest columns and smallest rows of the active views. `unwatch` releases
+the view and acknowledges the request. A lost remote subscription sends `watch_ended`.
+Start a new watch to get a new snapshot. The last active view leaves the grid at its current size.
 
-Use the `attach` topic and `attach.resize` operation when the daemon advertises both. An
-`attach` watch reports its initial terminal capacity in `size`. Report later sizes through
-`attach.resize` with the watch ID on the same connection. When the active viewers all use
-`attach`, the agent uses the smallest reported column count and the smallest reported row
-count. Closing or ending a watch removes its viewer from the shared layout.
-
-The snapshot and each `redraw` give the actual layout in `cols` and `rows`. Set the viewer
-to those dimensions before applying the terminal bytes. A viewer with more room draws the
-shared grid in the upper left. It redraws locally when its own terminal grows and the
-shared layout stays the same. When the shared layout changes, the daemon sends a `redraw`.
-
-In this exchange a viewer starts at 80 columns and 24 rows, then raises its capacity.
-
-```text
-→ {"jsonrpc":"2.0","id":11,"method":"watch","params":{"topic":"attach","args":{"agent":"a2@devbox","size":{"cols":80,"rows":24}}}}
-← {"jsonrpc":"2.0","id":11,"result":{"watch":2,"snapshot":{"agent_id":"a2","address":"a2@devbox","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","cols":80,"rows":24,"redraw":"G1s/MjAyNmw=","process":"running"}}}
-→ {"jsonrpc":"2.0","id":12,"method":"call","params":{"op":"attach.resize","args":{"watch":2,"cols":120,"rows":40}}}
-← {"jsonrpc":"2.0","id":12,"result":{}}
-← {"jsonrpc":"2.0","method":"changed","params":{"watch":2,"change":{"kind":"redraw","cols":120,"rows":40,"data":"G1s/MjAyNmw="}}}
-→ {"jsonrpc":"2.0","id":13,"method":"unwatch","params":{"watch":2}}
-← {"jsonrpc":"2.0","id":13,"result":{}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":40,"method":"watch","params":{"topic":"attach","args":{"target":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"viewer":"editor","size":{"cols":120,"rows":40}}}}
+{"jsonrpc":"2.0","id":40,"result":{"watch":7,"snapshot":{"reference":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"address":"a2@devbox","name":"Nova","size":{"cols":80,"rows":24},"redraw":"G1sySg==","process":"running"}}}
+{"jsonrpc":"2.0","method":"call","params":{"op":"agent.type","args":{"target":{"machine_id":"22222222-2222-4222-8222-222222222222","agent_id":"a2"},"input":{"kind":"raw","raw":"aGk="}}}}
+{"jsonrpc":"2.0","method":"call","params":{"op":"attach.resize","args":{"watch":7,"size":{"cols":100,"rows":30}}}}
+{"jsonrpc":"2.0","method":"changed","params":{"watch":7,"change":{"kind":"redraw","size":{"cols":100,"rows":30},"data":"G1sySmhp"}}}
+{"jsonrpc":"2.0","id":42,"method":"unwatch","params":{"watch":7}}
+{"jsonrpc":"2.0","id":42,"result":{}}
 ```
 
-For older daemons, use the `screen` topic with `agent.resize`. A `screen` watch can specify
-`size` before its initial snapshot and waits if that resize is waiting for a checkpoint.
-While a live `screen` watch exists for an agent, the last resize wins. The daemon returns to
-the shared Attach layout after the last `screen` watch leaves.
-
-A successful `agent.resize` response accepts the request. If the screen log is full while its checkpoint is being written,
-only the latest requested size is kept. It takes effect when the checkpoint writer finishes, whether publication succeeded
-or failed. Input sent to that agent afterward, on any connection, waits for the size: calls with IDs fail with
-`capacity_exceeded`, while notifications wait. Snapshots and agent records show the applied size. A daemon failure before
-application loses the request.
-
-Each viewer queues up to 1 MiB of incremental screen output. Output beyond that is dropped for that viewer. When the viewer
-has room, it receives a full `redraw`, which may exceed the output budget. The agent does not wait for a viewer. Returning
-from the alternate screen also causes a redraw. If an agent is removed while a viewer is behind, the viewer receives the
-last screen, any exit it missed, and then `removed`.
-
-A connection's outbox holds up to 8 MiB of responses and changes. When it is full, the daemon waits for the client to read.
-A line larger than 8 MiB is sent alone once the outbox is empty. Up to 16 calls can run at once on a connection, with or without
-an ID. If another call has to wait for one to finish, the daemon stops reading further requests from that connection, keys
-included. `agent.type` and `agent.resize` do not count toward the 16.
-
-Each agent's waiting input holds up to 1 MiB: queued bytes, including terminal-query replies, and text and keys waiting in its
-typist. Kernel PTY buffers are separate. A connection holds up to 1 MiB more for each agent: input waiting behind that agent's
-earlier input from the connection. One `agent.type` message carries at most 1 MiB as written, a paste counted with its
-brackets and Enter. A call with an ID fails with `capacity_exceeded` if its input does not fit or a resize is waiting to take
-effect. A notification waits; while its connection holds 1 MiB for its agent, the daemon reads no further requests from that
-connection. If the connection closes while input waits, the input is dropped and nothing else from that connection runs.
-Terminal-query replies that do not fit are dropped.
-
-A successful `agent.type` result means that raw bytes entered the daemon's memory queue, or that text and keys reached the
-terminal. It does not confirm that the CLI processed them. Daemon failure can lose input not yet written. Notifications
-provide no response.
+The daemon permits up to 16 ordinary concurrent calls per connection. It allows an 8 MiB
+outbox, sending a larger frame alone after the queue drains. Each view can queue 1 MiB of
+incremental output. A view that fell behind receives a full redraw when available. Terminal
+input has a 1 MiB per-agent waiting budget. Calls with IDs can receive `capacity_exceeded`
+when input cannot fit, while notifications can wait behind the agent's pending input.
 
 ### Terminal queries and redraws
 
-A screen snapshot has the stable reference fields and current address. Reconnect and draw the
-new snapshot before sending input again. Keys typed while disconnected are discarded. A v3
-`agent.resize` or `attach.resize` can supply foreground, background and cursor colors for a verified IDE client.
-The applied colors answer OSC 10, 11 and 12. `agent.screen` reads the requested tail of the
-logical screen and scrollback as text, including for an ended agent.
-
-### Disconnections and recovery
-
-A lost response can leave the call's outcome unknown. Do not replay terminal input. A call
-refused as `upgrading` can be repeated on the new daemon. When a start or send is retried after
-a cut, reuse its original request ID. A watch is connection-scoped and starts with a new snapshot
-after reconnecting. A keeper preserves running agents and terminals during daemon replacement.
-
-A daemon that a newer build takes over drains accepted work, sends `closing`, and ends after clients have had a
-chance to answer it and stop sending keys. A replacement daemon recovers records and screens.
-A newer build joins normal operations only after a v3 hello from that build. A build unable to
-speak the running keeper's protocol receives a refusal before taking over.
-
-#### Keeper replacement
-
-If the keeper ends, the daemon keeps its clients, watches, screens, input queues, sizes, and terminal descriptors. It starts
-a replacement keeper and gives it the runs with `agent.sync`. Screens and input continue throughout. Stops keep their original SIGKILL time.
-Keeper replacement uses the same 0.5-to-30-second delay, reset after 60 healthy seconds.
-
-For the separate waits on starts and stops, see [Starts, stops, and removal](#starts-stops-and-removal). A keeper that
-disconnects before replying leaves the request's outcome unknown; Facade returns `unavailable`.
-An unresponsive keeper that is still alive is never ended by the daemon. The daemon logs how to end that keeper process so
-Facade can replace it; screens, input, and resizes continue. A broken connection to a living keeper is reconnected.
-
-Only the keeper that started a CLI can report its exit code or signal. After that keeper ends, the keeper that the daemon
-starts next holds the CLI and watches it through Linux process descriptors or macOS kqueue. When it ends, the agent is `ended`
-with an exit that has neither `code` nor `signal`. Show `exit status is unavailable`. End of terminal output does not prove
-exit.
-
-On SIGTERM or SIGINT, the keeper sends SIGKILL to the groups it is stopping, and exits. A daemon that holds runs starts
-another.
-
-#### Both services ending
-
-If both services end, the terminals close and most CLIs exit on SIGHUP. The next daemon recovers the screens and lists agents
-without a recorded exit as `ended`. Their exit has `reason: "terminal_closed"`, no `code` or `signal`, and `at` set to the time
-recovery found them. Show `the terminal closed; the CLI may still be running`.
-
-A CLI that ignores hangup can keep running outside Facade. Facade never signals a process ID read from a saved agent record.
-`agent.stop` returns the recorded exit; `agent.type` fails with `ended`; `agent.resize` succeeds without changing
-anything; `agent.remove` removes the record; `agent.resume` starts its CLI again if it has a recorded session.
-
-An exit without `code` or `signal` is not a zero exit code. Show its reason if recognized; otherwise show that its status is
-unavailable.
+A verified IDE client can report foreground, background and cursor colors on `attach.resize`.
+The applied colors answer OSC 10, 11 and 12. Reconnect and render the new snapshot before
+sending new terminal input. Discard keys typed while disconnected.
 
 ### Machine sessions
 
-A machine session is a bidirectional daemon v3 connection over SSH. Each direction numbers
-requests independently. After the machine hello, each daemon verifies the other and completes
-its first `advertise` exchange before the route is ready. Later advertisements replace the
-sending machine's table. The daemon start ID (`boot_id`) distinguishes concurrent uses of the
-same saved machine ID. An authenticated machine hello with `foreground: true` holds the session
-active until the connection closes. Omission has the same meaning as `false`.
-On Linux, `ssh_cleans_processes` records a known login cleanup policy.
+An authenticated machine session is a bidirectional daemon API connection over SSH. Each
+direction numbers its requests independently. Machine introductions supply the stable
+machine ID and the current daemon boot ID. `foreground:true` registers a foreground
+connection while it stays open. Peers acknowledge the initial `advertise` request before
+using the advertised routes. Later route updates can arrive as an id-less `advertise`
+notification. An id-less `machine.sleeping` comes from the verified peer whose daemon is
+going idle.
 
-`machine.list` reads the known roster without opening SSH connections. A saved connection with
-no live session and no observed failure appears as `disconnected` to clients that advertise
-`machine.disconnected`. `sleeping` records a confirmed idle daemon. `unreachable` records a
-transport or protocol failure, and `ssh_interaction_required` asks for a foreground login.
-Machine rows can carry a machine's `capabilities`. Missing capabilities give no assurance
-that the corresponding operation is supported.
-
-The `forward` route lists remaining machine IDs through the destination. Each hop removes its
-own receiver ID and preserves the verified originating `Caller`. A forwarded `call` uses
-`V3ForwardCall`. A send carries the resolved recipient's `AgentRef` so retries keep the same
-target. Internal `agent.deliver_start_result` is for authenticated machine sessions.
-An unsent call can be reported as `not_executed`. A sent call that loses its reply can report
-`outcome_unknown`. A watch that loses its route ends with `watch_ended`.
-
-Authenticated machine sessions use `machine.probe_route` to open saved connections passively.
-Like `machine.ensure_route`, this control request carries `route` and `method` in the
-`forward` envelope, with no application arguments and a null success result. An older hop
-can be used over live connections. If that is unavailable, the probe fails without trying a
-waking call. A saved session can close after 30 seconds idle. In-flight operations and live
-Attach watches keep the participating sessions active. Before exiting idle, a daemon sends
-`machine.sleeping` with empty parameters to machines that advertised `machine.disconnected`.
-The receiver records sleep for the authenticated sender.
-
-A forwarded watch on an authenticated machine session returns `ForwardWatchResult`.
-Only the machine holding a live shared Attach adds `attach: { viewer, boot_id }`. Each hop
-can replace `watch` for its own session and preserves the holder's binding. Legacy `screen`
-watches and ended snapshots omit the binding. The local client receives its own `watch` and
-the snapshot.
-
-For a shared Attach, the source forwards `method: "attach.resize"` with its route and verified
-caller. The forwarded `params` carry `ForwardAttachResizeArgs` with `viewer`, `boot_id`,
-`cols`, `rows` and optional `colors`. The holder checks the viewer, originating caller and
-daemon start ID. The binding expires when the watch closes or ends. For a legacy holder the
-source uses `screen` and translates a validated resize into `agent.resize` for the watch's
-exact agent over its established route.
-
-The local `machine.connect` response authorizes the foreground stream before the machine
-handshake. Its result is followed by `connected` or `connect_failed`. With the
-`machine.connect.expected_machine_id` capability, a saved connection can specify the ID it
-expects to authenticate. The daemon confirms that ID before changing the saved connection.
-An invalid ID fails validation. On mismatch the existing connection stays saved. The
-`machine.add` operation remains available to save a verified SSH destination and its raw
-SSH arguments. `machine.remove` deletes a saved connection locally and returns its machine ID.
-When the daemon advertises `machine.remove.expected_machine_id`, pass that full ID in
-`expected_machine_id` to require its exact saved connection. An invalid ID fails validation.
-If that saved connection is absent, the daemon returns `not_found`, even when another
-machine's name spells the ID. The original selector applies when the guard is omitted.
-
-```text
-→ {"jsonrpc":"2.0","id":14,"method":"call","params":{"op":"machine.connect","args":{"transport":{"kind":"ssh","ssh_destination":"alice@lab"},"kind":"saved","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}}
-← {"jsonrpc":"2.0","id":14,"result":{"ssh_destination":"alice@lab","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}
-→ {"jsonrpc":"2.0","id":15,"method":"call","params":{"op":"machine.remove","args":{"machine":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","expected_machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360"}}}
-← {"jsonrpc":"2.0","id":15,"result":{"machine_id":"ea9b4046-77ad-4f4f-b8a9-84bfe619f360","name":"lab","ssh_destination":"alice@lab","reachable":false}}
+```jsonl daemon-machine
+{"jsonrpc":"2.0","id":1,"method":"hello","params":{"api_versions":@DAEMON_API_VERSIONS@,"build":"1.0.0+example","kind":"machine","machine":{"machine_id":"11111111-1111-4111-8111-111111111111","boot_id":"33333333-3333-4333-8333-333333333333","name":"laptop"}}}
+{"jsonrpc":"2.0","id":1,"result":{"api_version":1,"build":"1.0.1+example","machine_id":"22222222-2222-4222-8222-222222222222","pid":4322,"agent_count":1,"ops":@MACHINE_OPS@,"topics":@MACHINE_TOPICS@,"machine":{"boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","ssh_cleans_processes":true}}}
+{"jsonrpc":"2.0","id":2,"method":"advertise","params":{"machines":[]}}
+{"jsonrpc":"2.0","id":2,"result":{}}
+{"jsonrpc":"2.0","method":"advertise","params":{"machines":[]}}
+{"jsonrpc":"2.0","id":73,"method":"forward","params":{"route":["22222222-2222-4222-8222-222222222222"],"caller":{"kind":"ide","machine_id":"11111111-1111-4111-8111-111111111111"},"method":"call","params":{"op":"internal.attach_resize","args":{"viewer":81,"boot_id":"55555555-5555-4555-8555-555555555555","size":{"cols":100,"rows":30}}}}}
+{"jsonrpc":"2.0","id":73,"result":{}}
+{"jsonrpc":"2.0","method":"machine.sleeping","params":{}}
 ```
 
-## Version 2 takeover and old data
+`forward` carries a remaining route, verified caller and an inner call or watch. Each hop
+checks the next machine and the remaining time budget. Use exact references for resolved
+agent targets. An authenticated forwarded Attach can return `view:{viewer,boot_id}` for
+the holder's live view. The entry daemon uses that binding and the original caller for
+`internal.attach_resize`. The public watch response carries `watch` and `snapshot`.
 
-A dedicated takeover client offers `[2,3]` as a terminal. It sends `daemon.upgrade` with daemon
-range `[2,3]` and normally uses keeper range `[1,1]`. If the v2 daemon replies with
-`protocol_incompatible` and a message containing `the running keeper speaks`, the client may
-make one local `agent.list` call to report the addresses of running managed agents. Other
-refusals end the attempt immediately. The keeper diagnostic still ends in a failed takeover and
-the client closes the connection. After a successful takeover the client also closes the old
-connection and waits for the target build over v3 before sending ordinary calls.
+An installed remote executable tries its existing serve command and negotiates API
+compatibility. Passive queries use `--no-start`. Authenticated exit 3 reports that the
+remote daemon is sleeping. A missing executable can be installed only with explicit
+permission. Saved or temporary `machine.connect` authorizes the terminal stream and then
+hands it over for the machine handshake. The expected machine ID, if explicit or inferred
+from an existing matching configuration, is checked against that authenticated stream.
+Saved mode commits its normalized SSH arguments before emitting `connected`. With neither
+expected ID, the saved connection uses the verified peer ID on that same stream.
 
-This isolated example uses a debug candidate build advertising keeper range `[2,2]` to show
-the refusal from a running version 1 keeper and the optional read. The advertised operations
-describe the old daemon.
+A confirmed `connected.machine.ssh_cleans_processes` is the peer's observed logout cleanup
+setting and can be omitted when unknown. Shell can use `true` to display the logout warning.
 
-```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[2,3],"build":"1.4.3","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":2,"build":"1.4.2","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","pid":4321,"agents":1,"topics":["agents","screen","messages","windows","machines"],"ops":["agent.start","agent.resume","agent.adopt","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log","machine.connect","machine.add","machine.list","machine.remove","machine.rename","agent.list","cli.list","location.list","agent.start_preflight"]}}
-→ {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"daemon.upgrade","args":{"program":"/opt/facade/bin/facade","build":"1.4.3","daemon_protocol":[2,3],"keeper_protocol":[2,2]}}}
-← {"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"1.4.3 speaks keeper protocol 2 to 2, and the running keeper speaks 1 to 1: this new build needs every agent closed first; close them and try again","data":{"reason":"protocol_incompatible"}}}
-→ {"jsonrpc":"2.0","id":3,"method":"call","params":{"op":"agent.list","args":{"machine":"id:3f2504e04f8941d39a0c0305e82c3301"}}}
-← {"jsonrpc":"2.0","id":3,"result":{"agents":[{"agent_id":"a1","address":"a1@devbox","name":"Pixel","cli":"claude","cwd":"/Users/me/project","machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","windows":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","window_id":"terminal"}],"location_id":"loc-8779b387e6b0f90a","pid":1234,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:25:00.000Z","root":"a1","yolo":true,"state":"idle","tools_state":"available"}],"machines":[{"machine_id":"3f2504e0-4f89-41d3-9a0c-0305e82c3301","short_id":"3f2504e0","name":"devbox","build":"1.4.2","status":"answered","answered_at":"2026-11-09T17:25:49.008Z"}]}}
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":30,"method":"call","params":{"op":"machine.connect","args":{"transport":{"kind":"ssh","ssh_destination":"alice@devbox","ssh_args":["alice@devbox"],"remote_home":"/home/alice/.facade"},"kind":"saved","expected_machine_id":"22222222-2222-4222-8222-222222222222"}}}
+{"jsonrpc":"2.0","id":30,"result":{"transport":{"kind":"ssh","ssh_destination":"alice@devbox","ssh_args":["alice@devbox"],"remote_home":"/home/alice/.facade"},"expected_machine_id":"22222222-2222-4222-8222-222222222222"}}
+{"jsonrpc":"2.0","method":"connected","params":{"machine":{"machine_id":"22222222-2222-4222-8222-222222222222","boot_id":"55555555-5555-4555-8555-555555555555","name":"devbox","build":"1.0.1+example","ssh_cleans_processes":true},"first_connection":true}}
 ```
 
-The compatibility hello and diagnostic types have `V2` names, including `V2HelloParams`,
-`V2HelloResult` and `V2AgentListResult`. The isolated legacy editor fixtures also use named
-v2 start, window-watch and machine records. A restored v3 workspace uses `workspace.import_legacy`
-to read verified members from existing records. It gives exactly one of `workspace_key`,
-`window_id` or `instance_id` for the specified source machine. An answered source can contribute
-zero agents. A failed or unavailable source leaves the import incomplete. Mark the import
-complete after all required contributions have answered and the workspace has saved the result.
+`machine.list` reads the local roster without SSH. Saved SSH transport data is available
+only to local people. `machine.remove` removes the local saved route without SSH and can
+return the full saved configuration. With `expected_machine_id` it removes only that exact
+record, returning `not_found` for a missing record. Reciprocal removal supplies the
+authenticated peer ID on each leg.
+
+An SSH entry that needs an interactive login gives a diagnostic in `ssh_interaction.message`
+and the corresponding command as an argument array.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":32,"method":"call","params":{"op":"machine.list","args":{}}}
+{"jsonrpc":"2.0","id":32,"result":{"machines":[{"machine_id":"22222222-2222-4222-8222-222222222222","short_id":"22222222","name":"devbox","selector":"devbox","state":"ssh_interaction_required","connections":[{"machine_id":"22222222-2222-4222-8222-222222222222","initiator_machine_id":"11111111-1111-4111-8111-111111111111","kind":"saved","state":"ssh_interaction_required","ssh_interaction":{"message":"Host key verification failed.","command":["facade","machine","add","alice@devbox"]}}]}]}}
+```
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":31,"method":"call","params":{"op":"machine.remove","args":{"machine":"devbox"}}}
+{"jsonrpc":"2.0","id":31,"result":{"machine_id":"22222222-2222-4222-8222-222222222222","name":"devbox","reachable":false,"transport":{"kind":"ssh","ssh_destination":"alice@devbox","ssh_args":["alice@devbox"],"remote_home":"/home/alice/.facade"}}}
+```
+
+### Errors and recovery
+
+Outer responses, per-target outcomes and failure notifications share
+`{code,message,data:{reason,details?}}`. The codes `-32700`, `-32600`, `-32601`, `-32602`
+and `-32000` cover parse errors, invalid requests, unknown methods, invalid arguments or
+unknown operations, and Facade failures, respectively. Branch on the reason you recognize
+and preserve the message and details for an unknown reason.
+
+A failed route can report `unavailable.details.execution`. With `not_executed` the client
+can retry subject to the original permissions and wake policy. With `outcome_unknown` it
+should read the current state. Retry a start or send with the original business ID within
+its receipt window. Retry only batch items that are known to have remained unexecuted.
+Terminal input has no replay guarantee.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":3,"method":"hello","params":{"api_versions":[2],"build":"example","kind":"terminal"}}
+{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"No common daemon API version.","data":{"reason":"protocol_incompatible","details":{"supported_api_versions":@DAEMON_API_VERSIONS@}}}}
+```
+
+A request too long to parse can lose its correlatable ID.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"The request exceeds the 64 MiB line limit.","data":{"reason":"capacity_exceeded"}}}
+```
+
+## Daemon takeover
+
+The daemon and keeper APIs evolve independently. A formal replacement retains interoperable
+supported operations for at least three months from that endpoint's replacement release.
+Changes to existing operations, topics, fields, defaults, permissions or effects that break
+the published contract take effect in a new version of the affected endpoint. Within a
+version, additions to existing replies or notifications are optional and omission keeps the
+original meaning.
+
+For live daemon takeover, `daemon.upgrade` separately declares the target daemon and keeper
+API sets. The current daemon checks daemon overlap and, if a keeper holds active agents,
+checks its authenticated selected version against the target keeper set. A refusal leaves
+the running services and agents in place. On success the same keeper preserves its CLIs and
+terminal handles. The client acknowledges `closing` with an id-less notification and
+reconnects to start its watches with new snapshots.
+
+```jsonl daemon-local
+{"jsonrpc":"2.0","id":70,"method":"call","params":{"op":"daemon.upgrade","args":{"program":"/opt/facade/1.0.1/facade","build":"1.0.1+example","daemon_api_versions":@DAEMON_API_VERSIONS@,"keeper_api_versions":@KEEPER_API_VERSIONS@}}}
+{"jsonrpc":"2.0","id":70,"result":{"from":"1.0.0+example","agent_count":1}}
+{"jsonrpc":"2.0","method":"closing","params":{"build":"1.0.1+example"}}
+{"jsonrpc":"2.0","method":"closing","params":{}}
+```
+
+### Disconnections and recovery
+
+If the keeper ends, the daemon keeps its clients, watches, grids and terminal handles. It
+starts a replacement keeper and returns the held terminals with `agent.sync`. On Unix the
+replacement may observe an exit without a code or signal. On Windows it can read the exit
+code from the process handle. If both services end, the next daemon can recover screens
+with an exit reason of `terminal_closed`. This leaves the CLI's exit status unavailable.

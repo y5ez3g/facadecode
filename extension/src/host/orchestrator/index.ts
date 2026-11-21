@@ -4,10 +4,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type {
-	CliListResult, DaemonLogResult, StatusResult, V3AgentListResult, V3LocationListResult, V3MachineInfo,
-	V3MachinesChange, ResumeListResult
-} from '../../base/coreProtocol';
+import type { DaemonTopics } from '../../base/coreProtocol';
 import { messageOf } from '../../base/errors';
 import { disposeAll } from '../../base/lifecycle';
 import type { LogPort, WorkspaceFolderInfo } from '../../core/ports';
@@ -29,6 +26,8 @@ import { DaemonError, type OrchestratorLink } from './types';
 import { openRustWorkspace } from './workspace';
 
 declare const FACADE_TEST_MODE: boolean;
+
+type MachineInfo = DaemonTopics['machines']['snapshot'][number];
 
 interface OrchestratorDeps {
 	readonly root: string;
@@ -63,7 +62,7 @@ function registerDaemonLog(link: OrchestratorLink): vscode.Disposable {
 		vscode.workspace.registerTextDocumentContentProvider(scheme, {
 			onDidChange: changed.event,
 			provideTextDocumentContent: async () => {
-				const { lines } = await link.call<DaemonLogResult>('daemon.log', { lines: 200 });
+				const { lines } = await link.call('daemon.log', { lines: 200 });
 				return lines.length ? `${lines.join('\n')}\n` : `${vscode.l10n.t('No agent events yet')}\n`;
 			}
 		}),
@@ -113,14 +112,14 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		const locations = new OrchestratorLocations({
 			folders: workspaceFolders,
 			onDidChangeFolders: listener => vscode.workspace.onDidChangeWorkspaceFolders(() => listener(undefined)),
-			list: args => link.call<V3LocationListResult>('location.list', args),
+			list: args => link.call('location.list', args),
 			log
 		});
 		disposables.push(locations);
 
-		const machines = new Map<string, V3MachineInfo>();
+		const machines = new Map<string, MachineInfo>();
 		const machineNames = new vscode.EventEmitter<void>();
-		disposables.push(machineNames, link.watch<readonly V3MachineInfo[], V3MachinesChange>('machines', {}, {
+		disposables.push(machineNames, link.watch('machines', {}, {
 			snapshot: rows => {
 				machines.clear();
 				for (const row of rows) { machines.set(row.machine_id, row); }
@@ -137,12 +136,11 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 		}));
 		const environmentAt = (folder: string | undefined) =>
 			startEnvironment(folder ? { uri: vscode.Uri.file(folder).toString() } : undefined, deps.root);
-		const isHost = (selector: string | undefined) => selector === undefined || selector === machines.get(link.machineId)?.selector;
-		const onMachine = async <T>(machine: string | undefined, call: () => Promise<T>): Promise<T> => {
+		const withSettingsError = async <T>(local: boolean, call: () => Promise<T>): Promise<T> => {
 			try {
 				return await call();
 			} catch (error) {
-				if (isHost(machine) && error instanceof DaemonError && error.reason === 'configuration_invalid') {
+				if (local && error instanceof DaemonError && error.reason === 'configuration_invalid') {
 					throw new HostSettingsError(error.message, { cause: error });
 				}
 				throw error;
@@ -160,7 +158,7 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 			link, terminals, workspace, locations,
 			onDidChangeMachineNames: machineNames.event,
 			machineName: machineId => machines.get(machineId)?.name,
-			environment: environmentAt, isHost,
+			environment: environmentAt,
 			notifyError, log
 		});
 		disposables.push(human, agents);
@@ -176,26 +174,26 @@ export async function activateOrchestrator(context: vscode.ExtensionContext, dep
 			const knownRuns = members.flatMap(reference => [
 				agentKey(reference), `#${reference.agent_id}@id:${reference.machine_id.replaceAll('-', '')}`
 			]);
-			// A partial import can already have saved Pins. Keep an empty pending round available for another window.
+			// A pending legacy roster can already have local Pins available for recovery.
 			if (imported || pins.length) { await agents.restorePins(); }
 			await terminals.pinnedSequenceOver(knownRuns);
 		}).catch(notifyError);
-		const settings = rustSettings({ status: () => link.call<StatusResult>('daemon.status', {}), log });
+		const settings = rustSettings({ status: () => link.call('daemon.status', {}), log });
 		disposables.push(...registerOrchestratorUi({
 			agents, locations, ready, log,
 			pickers: {
 				hostMachineId: () => link.machineId,
 				machines: () => [...machines.values()],
-				listAgents: () => link.call<V3AgentListResult>('agent.list', {}),
-				listLocations: args => link.call<V3LocationListResult>('location.list', args),
-				listClis: args => onMachine(args.machine, () => link.call<CliListResult>('cli.list', {
-					...args,
-					env: isHost(args.machine) ? environmentAt(args.folder) : {}
-				})),
-				listResumes: args => link.call<ResumeListResult>('agent.resume_list', args),
-				start: args => onMachine(args.machine, () => agents.start(args)),
+				listAgents: () => link.call('agent.list', {}),
+				listLocations: args => link.call('location.list', args),
+				listClis: args => {
+					const local = args.scope?.kind !== 'machine';
+					return withSettingsError(local, () => link.call('cli.list', { ...args, env: local ? environmentAt(args.folder) : undefined }));
+				},
+				listResumes: args => link.call('agent.resume_list', args),
+				start: args => withSettingsError(args.scope?.kind !== 'machine', () => agents.start(args)),
 				open: entry => agents.goTo(entry),
-				resume: target => onMachine(target.machine, () => agents.resume(target)),
+				resume: candidate => withSettingsError(candidate.machine_id === link.machineId, () => agents.resume(candidate)),
 				notifyError,
 				icons: cli => cli
 			},

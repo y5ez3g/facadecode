@@ -56,11 +56,16 @@ service:
 - When the keeper ends, the daemon keeps every terminal and starts another keeper, which takes the CLIs over.
 - The daemon pings the keeper every second. A daemon silent for 15 seconds is killed and started again.
 
-**A newer build takes over.** The newer program uses a compatible handshake to request takeover from the older
-daemon. The old daemon checks keeper compatibility before it installs the new build, points the launchers at it,
-drains, sends every client `closing` and exits. The keeper starts the new daemon. The CLIs keep running and the new
-daemon recovers their terminals, records and screens. Ordinary requests use the new protocol. The newer program
-reports a refusal if it cannot complete the takeover.
+**A newer build takes over.** The newer program negotiates the daemon API and offers its independent daemon and
+keeper API version sets to `daemon.upgrade`. The running daemon checks that its enabled set overlaps the target daemon
+set. When the keeper holds CLIs, the target keeper set must include the version on the authenticated keeper connection.
+The old daemon installs the compatible build, points the launchers at it, drains, sends clients `closing` and exits.
+The same keeper starts the replacement daemon and retains its CLIs and terminals. The replacement recovers the
+records and screens. A version refusal leaves the running build, keeper and CLIs in place.
+
+The [daemon takeover](../../core/protocol/DAEMON.md#daemon-takeover) and
+[keeper replacement](../../core/protocol/KEEPER.md#exit-and-replacement) references define version checks and the
+formal API support window for each endpoint.
 
 **A machine connects on demand.** A reachable list or scoped stop probes saved SSH connections without starting
 sleeping daemons. An explicit action such as starting an agent on a named machine can wake it through a saved route.
@@ -83,13 +88,13 @@ Idle saved sessions close after 30 seconds. The machine table keeps the saved se
 
 | Between | Interface | Defined in |
 | --- | --- | --- |
-| A client and the daemon | JSON-RPC 2.0 with one object per line on `/tmp/facade-core-<uid>/daemon-<key>.sock`, or on Windows `\\.\pipe\facade-core-daemon-<key>`. After `hello`, clients use `call`, `watch`, `unwatch` and `cancel`. The daemon sends `changed` and `closing`. | [PROTOCOL](../../core/protocol/PROTOCOL.md) |
-| The daemon and the keeper | The keeper protocol, on the keeper's socket beside the daemon's: `hello`, `agent.start`, `agent.stop`, `agent.sync`, `daemon.ping`. A terminal rides along with its line: a PTY master, or on Windows its handles, duplicated into the receiving process and named in the line | [KEEPER](../../core/protocol/KEEPER.md) |
-| A relay and the daemon | The daemon protocol's relay contract: a `hello` that names the relay contract, then MCP lines both ways. `closing` hands the calls without a response over to the next daemon | [PROTOCOL: The relay](../../core/protocol/PROTOCOL.md#the-relay) |
+| A client and the daemon | Daemon API v1 uses one JSON-RPC 2.0 object per line on `/tmp/facade-core-<uid>/daemon-<key>.sock` or Windows `\\.\pipe\facade-core-daemon-<key>`. Clients negotiate `api_versions` in `hello`, then use `call`, `watch`, `unwatch` and `cancel`. The daemon sends `changed` and `closing`. | [Daemon API](../../core/protocol/DAEMON.md) |
+| The daemon and the keeper | Keeper API v1 negotiates its own version on the keeper socket. The daemon calls `agent.start`, `agent.stop`, `agent.sync` and `daemon.ping`, and the keeper reports exits with `changed`. The associated terminal is a PTY master or, on Windows, handles duplicated into the receiving process and carried in the same line. | [KEEPER](../../core/protocol/KEEPER.md) |
+| A relay and the daemon | The external connection starts with `hello` using `relay:1`, then exchanges MCP lines. The daemon opens a separate authenticated API v1 session for its internal actor. `closing` lets the relay reconnect to the new daemon with its outstanding calls. | [The relay](../../core/protocol/DAEMON.md#the-relay) |
 | A CLI and its relay | MCP over standard input and output: Facade's eight tools | [MCP](../extension/engineering/MCP.md) |
 | A CLI and its hooks | The CLI runs `facade hook <event> …` with its hook input. The hook saves the session the input reports in the run's session file, which the daemon follows, and prints, in the CLI's own format, the instructions the run's start wrote | [facade](islands/facade.md), [rules](islands/rules.md) |
-| Two daemons | The daemon protocol with a `machine` hello, then calls, watches and changes in both directions. A machine session runs over SSH to `facade machine serve` and can forward traffic along a route. | [PROTOCOL: Machine sessions](../../core/protocol/PROTOCOL.md#machine-sessions) |
-| A CLI and the daemon | What the CLI draws in its terminal, and its own reports of what it does, the Program Status Protocol (OSC 7501) | [PROTOCOL: States](../../core/protocol/PROTOCOL.md#states) |
+| Two daemons | Daemon API v1 with an authenticated `machine` hello, followed by calls, watches and changes in both directions. A machine session runs over SSH to the installed `facade machine serve` and can forward traffic along a route. The API version determines compatibility. | [Machine sessions](../../core/protocol/DAEMON.md#machine-sessions) |
+| A CLI and the daemon | What the CLI draws in its terminal, and its own reports of what it does, the Program Status Protocol (OSC 7501) | [States](../../core/protocol/DAEMON.md#states) |
 
 The protocols' types, framing and client live in [base](islands/base.md); `core/protocol/` is generated from them. The
 relay depends on no other Facade crate, so it reckons the daemon's socket path itself, by the same rule as base;
@@ -191,7 +196,7 @@ on no other Facade crate. Inside base, texts may use protocol, and protocol and 
 - **Machine boundaries.** Agents and messages are known by their machine ID and number, never by a process ID or a local
   path. A relay's process ID and start time only show that its connection is still the same live relay. A machine
   session uses the same operations as a local caller, with its origin and target carried by the protocol. Socket paths
-  follow [PROTOCOL](../../core/protocol/PROTOCOL.md). Connected clients, including VS Code, get machine and agent
+  follow [Daemon API](../../core/protocol/DAEMON.md). Connected clients, including VS Code, get machine and agent
   data through the daemon protocol. Offline Shell help and service status use the daemon's read-only local name
   helper.
 

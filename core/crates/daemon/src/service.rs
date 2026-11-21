@@ -5,10 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use facade_base::daemon::{
-    self, AgentState, HelloParams, HelloResult, InputInfo, InputState, ScreenBuffer,
-};
-use facade_base::daemon_client::Identity;
+use facade_base::api_v1::{self, ApiVersion, daemon as wire};
+use facade_base::daemon::{self, AgentState, InputInfo, InputState, ScreenBuffer};
 use facade_base::jsonrpc::{ErrorBody, Reason, decode_arguments};
 use facade_base::machine::{AgentRef, MachineQueryStatus};
 use facade_base::operations::{CallParams, Operation};
@@ -16,18 +14,18 @@ use facade_base::process::ProcessState;
 use facade_base::sockets::{ServerReader, ServerWriter};
 use facade_base::v3::{self, AgentTarget, Caller, ForwardCall};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::BufReader;
 use tokio::sync::{oneshot, watch};
 
 use crate::agent::{AgentCommand, AgentHandle, Input, MAX_INPUT_BYTES, Typing, TypingAnswer};
+use crate::api;
 use crate::delivery::InputWait;
 use crate::lifecycle::{Work, WorkGuard};
 use crate::machine_service::MachineStream;
 use crate::network_operations::{machine_query_result, machine_selector, require_person};
 use crate::operations::StartOrigin;
 use crate::records::{self, LookupCandidate, OperationTarget, Reach};
-use crate::resume::ResumeListOrigin;
 use crate::server::{self, Client, RelayLines, WhenFull};
 use crate::store::CreationSource;
 use crate::{Cancel, Daemon, Sender, blocking_in_place};
@@ -37,7 +35,7 @@ const INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) struct Forwarded {
     pub(crate) recipient: Option<AgentRef>,
     pub(crate) from_name: Option<String>,
-    pub(crate) request_id: Option<String>,
+    pub(crate) start_result: Option<wire::MessageRef>,
     pub(crate) remaining: Option<Duration>,
 }
 
@@ -69,17 +67,18 @@ impl server::Service for Daemon {
 
     async fn machine_hello(
         self: &Arc<Self>,
-        hello: HelloParams,
+        hello: wire::HelloParams,
+        api_version: ApiVersion,
         _peer_pid: Option<u32>,
-    ) -> Result<(HelloResult, Self::Machine), ErrorBody> {
-        self.machine_hello_plan(hello)
+    ) -> Result<(wire::HelloResult, Self::Machine), api_v1::ErrorBody> {
+        self.machine_hello_plan(hello, api_version)
     }
 
     async fn machine_connect(
         self: &Arc<Self>,
         client: &Client,
-        args: Value,
-    ) -> Result<(Value, Self::Machine), ErrorBody> {
+        args: wire::MachineConnectArgs,
+    ) -> Result<(wire::MachineConnectResult, Self::Machine), api_v1::ErrorBody> {
         self.machine_connect_plan(client, args)
     }
 
@@ -94,31 +93,28 @@ impl server::Service for Daemon {
 
     async fn hello(
         self: &Arc<Self>,
-        hello: HelloParams,
+        hello: wire::HelloParams,
+        api_version: ApiVersion,
         _peer_pid: Option<u32>,
-    ) -> Result<(HelloResult, Client, ()), ErrorBody> {
-        let result = HelloResult {
-            machine: None,
-            protocol: v3::DAEMON_PROTOCOL_RANGE[1],
+    ) -> Result<(wire::HelloResult, Client, ()), api_v1::ErrorBody> {
+        let result = wire::HelloResult {
+            api_version,
             build: facade_base::build_id(),
             machine_id: self.machine_id.clone(),
-            window: None,
             pid: std::process::id(),
-            agent: None,
-            agent_count: self.active_count(),
-            keeper: self.runs.keeper_info(),
-            topics: v3::topic_names(),
-            ops: v3::operation_names(),
-            capabilities: crate::daemon_capabilities(),
+            agent_count: self.active_count() as u64,
+            keeper: self.runs.keeper_info().map(|keeper| wire::KeeperInfo {
+                pid: keeper.pid,
+                build: keeper.build,
+            }),
+            machine: None,
+            topics: wire::topic_names(hello.kind),
+            ops: wire::operation_names(hello.kind),
         };
         let client = Client {
-            identity: Identity {
-                kind: hello.kind,
-                agent: None,
-                sessions: Vec::new(),
-            },
+            kind: hello.kind,
+            api_version,
             verified_actor: None,
-            capabilities: hello.capabilities,
         };
         Ok((result, client, ()))
     }
@@ -126,56 +122,25 @@ impl server::Service for Daemon {
     async fn call(
         self: &Arc<Self>,
         client: &Client,
-        operation: &str,
-        args: Value,
+        call: wire::DaemonCall,
         when_full: WhenFull,
         cancel: Cancel,
-    ) -> Result<Value, ErrorBody> {
-        let work = if operation == v3::AgentSend::NAME {
-            Work::Send
-        } else {
-            Work::Call
-        };
-        let Some(_active) = self.lifecycle.begin(work) else {
-            return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
-        };
-        let caller = self.local_caller(client)?;
-        let result = if operation == v3::AgentResumeList::NAME {
-            let origin = if matches!(caller, Caller::Terminal { .. })
-                && client_declares(client, v3::CAP_RESUME_LIST_LOCAL)
-            {
-                ResumeListOrigin::CandidateShell
-            } else {
-                ResumeListOrigin::Local
-            };
-            self.resume_candidates(&caller, decode_or_default(args)?, origin)
-                .await
-                .map(value_of)
-        } else {
-            self.run_operation(&caller, operation, args, when_full, cancel, None)
-                .await
-        };
-        if accepts_disconnected(client) {
-            return result;
-        }
-        result
-            .map(legacy_machine_result)
-            .map_err(legacy_machine_error)
+    ) -> Result<Value, api_v1::ErrorBody> {
+        let caller = self.local_caller(client).map_err(api::project_error)?;
+        self.run_api_call(&caller, call, when_full, cancel, None)
+            .await
     }
 
     async fn watch(
         self: &Arc<Self>,
         client: &Client,
-        topic: &str,
-        args: Value,
+        watch: wire::DaemonWatch,
         viewer: u64,
-    ) -> Result<server::Watch, ErrorBody> {
-        let result = self.start_watch(client, topic, args, viewer).await;
-        if accepts_disconnected(client) {
-            result
-        } else {
-            result.map_err(legacy_machine_error)
-        }
+    ) -> Result<server::Watch, api_v1::ErrorBody> {
+        let caller = self.local_caller(client).map_err(api::project_error)?;
+        self.start_watch(&caller, watch, viewer, false)
+            .await
+            .map_err(api::project_error)
     }
 
     async fn unwatch(self: &Arc<Self>, _client: &Client, _topic: &str, viewer: u64) {
@@ -186,35 +151,41 @@ impl server::Service for Daemon {
         self: &Arc<Self>,
         client: &Client,
         viewer: u64,
-        size: v3::ScreenSize,
-        colors: Option<v3::TerminalColors>,
-    ) -> Result<(), ErrorBody> {
+        size: api_v1::Size,
+        colors: Option<wire::TerminalColors>,
+    ) -> Result<(), api_v1::ErrorBody> {
         let Some(_active) = self.lifecycle.begin(Work::Call) else {
-            return Err(ErrorBody::new(Reason::Unavailable, "Facade is exiting"));
+            return Err(api::error("unavailable", "Facade is exiting"));
         };
-        let result = self
-            .resize_active_viewer(&self.local_caller(client)?, viewer, size, colors)
-            .await;
-        if accepts_disconnected(client) {
-            result
-        } else {
-            result.map_err(legacy_machine_error)
-        }
+        let caller = self.local_caller(client).map_err(api::project_error)?;
+        self.resize_active_viewer(
+            &caller,
+            viewer,
+            v3::ScreenSize {
+                cols: size.cols,
+                rows: size.rows,
+            },
+            colors,
+        )
+        .await
+        .map_err(api::project_error)
     }
 
     async fn relay(
         self: &Arc<Self>,
         params: Value,
         peer_pid: Option<u32>,
-    ) -> Result<(Value, Arc<dyn RelayLines>), ErrorBody> {
-        self.accept_relay(params, peer_pid).await
+    ) -> Result<(Value, Arc<dyn RelayLines>), api_v1::ErrorBody> {
+        self.accept_relay(params, peer_pid)
+            .await
+            .map_err(api::project_error)
     }
 
     fn closing(&self) -> watch::Receiver<Option<String>> {
         self.lifecycle.closing()
     }
 
-    fn draining(&self) -> Option<ErrorBody> {
+    fn draining(&self) -> Option<api_v1::ErrorBody> {
         self.lifecycle.draining()
     }
 
@@ -224,131 +195,311 @@ impl server::Service for Daemon {
 }
 
 impl Daemon {
-    pub(crate) async fn run_operation(
+    pub(crate) async fn run_api_call(
         self: &Arc<Self>,
         caller: &Caller,
-        operation: &str,
-        args: Value,
+        call: wire::DaemonCall,
         when_full: WhenFull,
         cancel: Cancel,
         incoming: Option<Forwarded>,
+    ) -> Result<Value, api_v1::ErrorBody> {
+        let work = if matches!(call, wire::DaemonCall::AgentSend(_)) {
+            Work::Send
+        } else {
+            Work::Call
+        };
+        let Some(_active) = self.lifecycle.begin(work) else {
+            return Err(api::error("unavailable", "Facade is exiting"));
+        };
+        if let wire::DaemonCall::DaemonUpgrade(args) = call {
+            if incoming.is_some() || !matches!(caller, Caller::Terminal { .. }) {
+                return Err(api::error(
+                    "refused",
+                    "only a local terminal can upgrade the daemon",
+                ));
+            }
+            return self
+                .lifecycle
+                .take_over(args, self.clone())
+                .await
+                .map(value_of);
+        }
+        self.dispatch_api_call(caller, call, when_full, cancel, incoming)
+            .await
+            .map_err(api::project_error)
+    }
+
+    async fn dispatch_api_call(
+        self: &Arc<Self>,
+        caller: &Caller,
+        call: wire::DaemonCall,
+        when_full: WhenFull,
+        cancel: Cancel,
+        mut incoming: Option<Forwarded>,
     ) -> Result<Value, ErrorBody> {
+        use wire::DaemonCall::*;
         let forwarded = incoming.is_some();
-        match operation {
-            v3::AgentList::NAME if !forwarded => Ok(value_of(
-                self.list_agents_v3(caller, decode_or_default(args)?)
-                    .await?,
+        match call {
+            AgentList(args) => {
+                let scope = args.scope.map_or(v3::Scope::Reachable, api::scope);
+                let result = self.list_scoped_agents(caller, scope).await?;
+                Ok(api::list_result(result))
+            }
+            AgentStop(args) => {
+                let selection = api::stop_selection(args.selection);
+                let result = if forwarded {
+                    self.stop_forwarded(caller, selection, cancel).await?
+                } else {
+                    self.stop_selection(caller, selection, cancel).await?
+                };
+                Ok(api::stop_result(result))
+            }
+            AgentResumeList(args) => Ok(api::resume_list_result(
+                self.api_resume_candidates(caller, args, forwarded).await?,
             )),
-            v3::List::NAME if !forwarded => {
-                let args: v3::ListArgs = decode_or_default(args)?;
-                Ok(value_of(self.list_scoped_agents(caller, args.scope).await?))
-            }
-            v3::Stop::NAME if !forwarded => {
-                let args: v3::StopArgs = decode_arguments(args)?;
-                Ok(value_of(
-                    self.stop_selection(caller, args.selection, cancel).await?,
-                ))
-            }
-            v3::AgentStart::NAME | v3::AgentCheckStart::NAME => {
-                let started = self
-                    .start_request(caller, operation, decode_arguments(args)?, incoming, cancel)
-                    .await?;
-                Ok(started)
-            }
-            v3::AgentResume::NAME => Ok(value_of(
-                self.resume_request(caller, decode_arguments(args)?, forwarded)
-                    .await?,
+            AgentResume(args) => Ok(api::project_call_result(
+                v3::AgentResume::NAME,
+                value_of(self.api_resume(caller, args, forwarded).await?),
             )),
-            v3::AgentSend::NAME => {
-                self.route_send(caller, decode_arguments(args)?, incoming, cancel)
-                    .await
-            }
-            v3::AgentDeliverStartResult::NAME if forwarded => {
-                self.accept_start_result(
-                    caller,
-                    decode_arguments(args)?,
-                    incoming.and_then(|call| call.remaining),
-                )
-                .await?;
-                Ok(value_of(v3::EmptyResult {}))
-            }
-            v3::WorkspaceImportLegacy::NAME if !forwarded => Ok(value_of(
-                self.import_legacy_workspace(caller, decode_arguments(args)?)
-                    .await?,
-            )),
-            v3::CliList::NAME => {
-                self.cli_list_request(caller, decode_or_default(args)?, forwarded)
-                    .await
-            }
-            v3::LocationList::NAME => {
-                self.location_request(caller, decode_or_default(args)?, forwarded)
-                    .await
-            }
-            v3::DaemonStatus::NAME => {
-                self.status_request(caller, decode_or_default(args)?, forwarded)
-                    .await
-            }
-            v3::MachineList::NAME if !forwarded => Ok(value_of(v3::MachineListResult {
-                machines: self.public_machines()?,
-            })),
-            v3::MachineAdd::NAME if !forwarded => {
-                require_person(caller)?;
-                Ok(value_of(
-                    self.add_machine_v3(decode_arguments(args)?).await?,
-                ))
-            }
-            v3::MachineRemove::NAME if !forwarded => {
-                require_person(caller)?;
-                if args.get("expected_machine_id").is_some_and(Value::is_null) {
+            AgentStart(args) => {
+                if forwarded && matches!(args.scope, Some(wire::SingleMachineScope::Machine { .. }))
+                {
                     return Err(ErrorBody::invalid_argument(
-                        "expected_machine_id must be a machine ID",
+                        "a forwarded start needs local scope",
                     ));
                 }
-                Ok(value_of(
-                    self.remove_machine(decode_arguments(args)?).await?,
+                Ok(api::project_call_result(
+                    v3::AgentStart::NAME,
+                    self.start_request(caller, api::start_args(args), incoming, cancel)
+                        .await?,
                 ))
             }
-            v3::MachineRename::NAME => {
+            AgentSend(args) => {
+                let (mut args, recipient) = api::send_args(args)?;
+                if let Some(call) = &mut incoming {
+                    if let Some(recipient) = &recipient {
+                        args.to = recipient.agent_id.clone();
+                    }
+                    call.recipient = recipient.clone();
+                }
+                self.route_send(caller, args, recipient, incoming, cancel)
+                    .await
+                    .map(|result| api::project_call_result(v3::AgentSend::NAME, result))
+            }
+            AgentInspect(args) => {
+                self.api_agent_operation(
+                    caller,
+                    v3::AgentInspect::NAME,
+                    args.target,
+                    Value::Null,
+                    when_full,
+                    cancel,
+                    incoming,
+                )
+                .await
+            }
+            AgentRemove(args) => {
+                self.api_agent_operation(
+                    caller,
+                    v3::AgentRemove::NAME,
+                    args.target,
+                    Value::Null,
+                    when_full,
+                    cancel,
+                    incoming,
+                )
+                .await
+            }
+            AgentRename(args) => {
+                self.api_agent_operation(
+                    caller,
+                    v3::AgentRename::NAME,
+                    args.target,
+                    json!({"name": args.name}),
+                    when_full,
+                    cancel,
+                    incoming,
+                )
+                .await
+            }
+            AgentScreen(args) => {
+                self.api_agent_operation(
+                    caller,
+                    v3::AgentScreen::NAME,
+                    args.target,
+                    json!({"lines": args.lines}),
+                    when_full,
+                    cancel,
+                    incoming,
+                )
+                .await
+            }
+            AgentType(args) => {
+                let fields = api::type_fields(args.input);
+                self.api_agent_operation(
+                    caller,
+                    v3::AgentType::NAME,
+                    args.target,
+                    fields,
+                    when_full,
+                    cancel,
+                    incoming,
+                )
+                .await
+            }
+            CliList(args) => {
+                self.cli_list_request(
+                    caller,
+                    v3::CliListArgs {
+                        machine: api::single_machine(args.scope),
+                        folder: args.folder,
+                        env: args.env.unwrap_or_default(),
+                    },
+                    forwarded,
+                )
+                .await
+            }
+            LocationList(args) => {
+                self.location_request(
+                    caller,
+                    v3::LocationListArgs {
+                        machine: api::single_machine(args.scope),
+                        folders: args.folders,
+                    },
+                    forwarded,
+                )
+                .await
+            }
+            DaemonStatus(args) => self
+                .status_request(
+                    caller,
+                    v3::StatusArgs {
+                        machine: api::single_machine(args.scope),
+                    },
+                    forwarded,
+                )
+                .await
+                .map(|result| api::project_call_result(v3::DaemonStatus::NAME, result)),
+            MachineList(_) => {
+                let disclose = matches!(caller, Caller::Terminal { .. } | Caller::Ide { .. });
+                let machines: Vec<_> = self
+                    .public_machines()?
+                    .into_iter()
+                    .map(|machine| api::project_machine(machine, disclose))
+                    .collect();
+                Ok(json!({ "machines": machines }))
+            }
+            MachineRemove(args) => {
                 require_person(caller)?;
-                let request: facade_base::machine::MachineRenameArgs = decode_arguments(args)?;
+                Ok(value_of(self.remove_machine(args).await?))
+            }
+            MachineRename(args) => {
+                require_person(caller)?;
                 if !forwarded {
-                    let target = self.select_machine(machine_selector(&request.machine)?)?;
+                    let target = self.select_machine(machine_selector(&args.machine)?)?;
                     if target.machine_id != self.machine_id {
-                        self.ensure_machine_route(&target.machine_id).await?;
+                        self.ensure_machine_route(&target.machine_id, caller)
+                            .await?;
                         return self
                             .network_call(
                                 &target.machine_id,
                                 caller.clone(),
-                                operation,
-                                value_of(request),
+                                v3::MachineRename::NAME,
+                                value_of(args),
                                 None,
                                 None,
                             )
                             .await;
                     }
                 }
-                Ok(value_of(self.rename_local_machine(request.name).await?))
+                Ok(value_of(self.rename_local_machine(args.name).await?))
             }
-            v3::DaemonUpgrade::NAME if !forwarded && matches!(caller, Caller::Terminal { .. }) => {
-                Ok(value_of(
-                    self.lifecycle
-                        .take_over(decode_arguments(args)?, self.clone())
-                        .await?,
-                ))
-            }
-            v3::LogRead::NAME if !forwarded => {
+            DaemonLog(args) => {
                 require_person(caller)?;
-                let args: daemon::DaemonLogArgs = decode_or_default(args)?;
                 let lines = args.lines.unwrap_or(crate::lifecycle::MAX_LOG_LINES);
                 Ok(value_of(daemon::DaemonLogResult {
                     lines: blocking_in_place(|| crate::lifecycle::last_lines(lines))?,
                 }))
             }
-            _ => {
-                self.agent_operation(caller, operation, args, when_full, cancel, incoming)
-                    .await
+            InternalAgentRecords(args) if forwarded => {
+                let records = self.local_agent_records(caller, args.active)?;
+                Ok(value_of(
+                    records
+                        .into_iter()
+                        .map(|record| {
+                            let mut agent = value_of(record.info);
+                            api::project_agent(&mut agent);
+                            json!({ "agent": agent, "has_rule": record.has_rule })
+                        })
+                        .collect::<Vec<_>>(),
+                ))
             }
+            InternalResumeRecords(_) if forwarded => {
+                require_person(caller)?;
+                let records = self
+                    .local_resume_candidates(
+                        &v3::ResumeListArgs {
+                            all: true,
+                            ..Default::default()
+                        },
+                        false,
+                    )
+                    .await?;
+                Ok(value_of(
+                    records
+                        .into_iter()
+                        .map(api::resume_candidate)
+                        .collect::<Vec<_>>(),
+                ))
+            }
+            InternalAttachResize(args) if forwarded => {
+                self.resize_forwarded_viewer(caller, args).await?;
+                Ok(json!({}))
+            }
+            InternalDeliverStartResult(args) if forwarded => {
+                let mut message = value_of(&args.message);
+                api::receive_message(&mut message);
+                self.accept_start_result(
+                    caller,
+                    v3::AgentDeliverStartResultArgs {
+                        recipient: api::agent_ref(args.recipient),
+                        message: decode_arguments(message)?,
+                    },
+                    incoming.and_then(|call| call.remaining),
+                )
+                .await?;
+                Ok(json!({}))
+            }
+            InternalDeliverWaitNotice(args) if forwarded => {
+                self.deliver_wait_notice(
+                    caller,
+                    decode_arguments(value_of(args))?,
+                    incoming.and_then(|call| call.remaining),
+                )
+                .await?;
+                Ok(json!({}))
+            }
+            _ => Err(ErrorBody::refused(
+                "the operation is unavailable on this connection",
+            )),
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn api_agent_operation(
+        self: &Arc<Self>,
+        caller: &Caller,
+        operation: &str,
+        target: wire::AgentTarget,
+        args: Value,
+        when_full: WhenFull,
+        cancel: Cancel,
+        incoming: Option<Forwarded>,
+    ) -> Result<Value, ErrorBody> {
+        let target = api::target(target);
+        self.agent_operation(caller, operation, target, args, when_full, cancel, incoming)
+            .await
+            .map(|result| api::project_call_result(operation, result))
     }
 
     async fn stop_selection(
@@ -399,6 +550,7 @@ impl Daemon {
                 Vec::new()
             }
             v3::StopSelection::All { scope } => {
+                require_person(caller)?;
                 let (mut agents, machines) = self.query_scoped_agents(caller, scope).await?;
                 agents.sort_by(|a, b| {
                     b.info
@@ -433,6 +585,23 @@ impl Daemon {
         Ok(v3::BatchStopResult { items, machines })
     }
 
+    async fn stop_forwarded(
+        self: &Arc<Self>,
+        caller: &Caller,
+        selection: v3::StopSelection,
+        cancel: Cancel,
+    ) -> Result<v3::BatchStopResult, ErrorBody> {
+        if !matches!(&selection, v3::StopSelection::Targets { targets }
+            if targets.iter().all(|target| matches!(target, AgentTarget::Reference { reference }
+                if reference.machine_id == self.machine_id)))
+        {
+            return Err(ErrorBody::invalid_argument(
+                "a forwarded stop needs exact references on this machine",
+            ));
+        }
+        self.stop_selection(caller, selection, cancel).await
+    }
+
     async fn stop_selected(
         self: &Arc<Self>,
         caller: &Caller,
@@ -446,9 +615,10 @@ impl Daemon {
                 "the stop was cancelled before it ran",
             ));
         }
-        let args = value_of(AgentTarget::Reference {
+        let target = AgentTarget::Reference {
             reference: reference.clone(),
-        });
+        };
+        let args = value_of(&target);
         let response =
             if matches!(route, StopRoute::Live) && reference.machine_id != self.machine_id {
                 // A scoped stop uses the existing exact operation without a waking lookup.
@@ -467,6 +637,7 @@ impl Daemon {
                 self.agent_operation(
                     caller,
                     v3::AgentStop::NAME,
+                    target,
                     args,
                     WhenFull::Refuse,
                     cancel,
@@ -522,12 +693,10 @@ impl Daemon {
     async fn start_request(
         self: &Arc<Self>,
         caller: &Caller,
-        operation: &str,
         mut args: v3::StartArgs,
         incoming: Option<Forwarded>,
         cancel: Cancel,
     ) -> Result<Value, ErrorBody> {
-        let preflight = operation == v3::AgentCheckStart::NAME;
         let by_model = matches!(caller, Caller::Agent { .. });
         if by_model && !args.args.is_empty() {
             return Err(ErrorBody::invalid_argument(
@@ -554,20 +723,20 @@ impl Daemon {
             && let Some(machine) = self.machine_for(args.machine.as_deref())?
             && machine != self.machine_id
         {
-            self.ensure_machine_route(&machine).await?;
+            self.ensure_machine_route(&machine, caller).await?;
             args.machine = None;
             args.env.clear();
             if args.folder_is_default {
                 args.folder = None;
             }
-            if !preflight && by_model && args.prompt.is_some() {
+            if by_model && args.prompt.is_some() {
                 args.result_message_id = Some(self.messages.reserve_result()?.message_id);
                 args.result_message_machine_id = Some(self.machine_id.clone());
             }
             let request_id = args.request_id.clone();
             let forwarded = ForwardCall {
                 call: CallParams {
-                    op: operation.to_owned(),
+                    op: v3::AgentStart::NAME.to_owned(),
                     args: value_of(args),
                 },
                 by_model,
@@ -577,26 +746,19 @@ impl Daemon {
             let result = self
                 .forward_call(&machine, caller.clone(), forwarded, None, request_id)
                 .await?;
-            if preflight {
-                return Ok(result);
-            }
             let mut result: v3::StartResult = decode_arguments(result)?;
             result.agent.address = self.agent_address(&result.agent.reference())?;
             return Ok(value_of(result));
         }
         if let Some(incoming) = incoming.as_ref() {
-            args.request_id = incoming.request_id.clone();
-            if args.result_message_id.is_some() || args.result_message_machine_id.is_some() {
-                let valid = !preflight
-                    && by_model
-                    && args.prompt.is_some()
-                    && args.result_message_machine_id.as_deref() == Some(caller.machine_id())
-                    && args.result_message_id.is_some();
-                if !valid {
+            if let Some(result) = &incoming.start_result {
+                if !by_model || args.prompt.is_none() || result.machine_id != caller.machine_id() {
                     return Err(ErrorBody::invalid_argument(
                         "the start result is not reserved on the creator's machine",
                     ));
                 }
+                args.result_message_id = Some(result.message_id.clone());
+                args.result_message_machine_id = Some(result.machine_id.clone());
             }
             args.env.clear();
             if args.folder_is_default {
@@ -621,10 +783,6 @@ impl Daemon {
         let (env, folder) = self.launch_context(folder, args.env).await?;
         args.folder = Some(folder);
         args.env = env;
-        if preflight {
-            self.preflight_start(&args, by_model).await?;
-            return Ok(value_of(v3::EmptyResult {}));
-        }
 
         let origin = StartOrigin {
             caller: caller.clone(),
@@ -643,10 +801,12 @@ impl Daemon {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn agent_operation(
         self: &Arc<Self>,
         caller: &Caller,
         operation: &str,
+        target: AgentTarget,
         mut args: Value,
         when_full: WhenFull,
         cancel: Cancel,
@@ -657,7 +817,7 @@ impl Daemon {
             v3::AgentStop::NAME => OperationTarget::Stop,
             v3::AgentRemove::NAME => OperationTarget::Remove,
             v3::AgentScreen::NAME => OperationTarget::ReadScreen,
-            v3::AgentType::NAME | v3::AgentResize::NAME => OperationTarget::Type,
+            v3::AgentType::NAME => OperationTarget::Type,
             v3::AgentRename::NAME => OperationTarget::Rename,
             _ => {
                 return Err(ErrorBody::invalid_argument(format!(
@@ -665,22 +825,7 @@ impl Daemon {
                 )));
             }
         };
-        let screen = operation == v3::AgentScreen::NAME;
-        let target = if screen {
-            let args: v3::AgentScreenArgs = decode_arguments(args.clone())?;
-            if incoming.is_some() {
-                AgentTarget::Reference {
-                    reference: AgentRef {
-                        machine_id: self.machine_id.clone(),
-                        agent_id: args.agent,
-                    },
-                }
-            } else {
-                AgentTarget::Address { agent: args.agent }
-            }
-        } else {
-            decode_arguments(args.clone())?
-        };
+        let mut fields = api::object(args);
         let reference = if incoming.is_some() {
             match target {
                 AgentTarget::Reference { reference } if reference.machine_id == self.machine_id => {
@@ -695,17 +840,11 @@ impl Daemon {
         } else {
             self.addressed_agent(caller, target, capability).await?
         };
+        fields.insert("reference".into(), value_of(&reference));
+        args = Value::Object(fields);
         if reference.machine_id != self.machine_id {
-            self.ensure_machine_route(&reference.machine_id).await?;
-            let object = args
-                .as_object_mut()
-                .expect("agent arguments decode from an object");
-            if screen {
-                object.insert("agent".into(), value_of(&reference.agent_id));
-            } else {
-                object.remove("agent");
-                object.insert("reference".into(), value_of(&reference));
-            }
+            self.ensure_machine_route(&reference.machine_id, caller)
+                .await?;
             let name = sender_from(caller, self.caller_name(caller)).from_name;
             let call = ForwardCall {
                 call: CallParams {
@@ -747,7 +886,11 @@ impl Daemon {
                     value_of(v3::RemoveResult { reference, address })
                 }
                 v3::AgentScreen::NAME => {
-                    let request: v3::AgentScreenArgs = decode_arguments(args)?;
+                    #[derive(serde::Deserialize)]
+                    struct ScreenLines {
+                        lines: Option<u16>,
+                    }
+                    let request: ScreenLines = decode_arguments(args)?;
                     value_of(self.read_screen_of(&agent, request.lines, address).await?)
                 }
                 v3::AgentType::NAME => {
@@ -769,22 +912,6 @@ impl Daemon {
                     )
                     .await?;
                     value_of(v3::TypeResult { agent: label })
-                }
-                v3::AgentResize::NAME => {
-                    let request: v3::AgentResizeArgs = decode_arguments(args)?;
-                    check_size(request.cols, request.rows)?;
-                    let command = match terminal_colors(caller, request.colors)? {
-                        Some(colors) => AgentCommand::ResizeTerminal {
-                            cols: request.cols,
-                            rows: request.rows,
-                            colors: Some(colors),
-                        },
-                        None => AgentCommand::Resize(request.cols, request.rows),
-                    };
-                    if !agent.send(command).await {
-                        return Err(actor_stopped(&agent));
-                    }
-                    value_of(v3::EmptyResult {})
                 }
                 v3::AgentRename::NAME => {
                     let request: v3::AgentRenameArgs = decode_arguments(args)?;
@@ -847,12 +974,17 @@ impl Daemon {
         reference: &AgentRef,
         mut response: Value,
     ) -> Result<Value, ErrorBody> {
+        if operation == v3::AgentScreen::NAME {
+            let mut screen: wire::ScreenText = decode_arguments(response)?;
+            if api::agent_ref(screen.reference.clone()) != *reference {
+                return Err(ErrorBody::refused("the machine reported a different agent"));
+            }
+            screen.address = self.agent_address(reference)?;
+            return Ok(value_of(screen));
+        }
         if matches!(
             operation,
-            v3::AgentStop::NAME
-                | v3::AgentRemove::NAME
-                | v3::AgentScreen::NAME
-                | v3::AgentRename::NAME
+            v3::AgentStop::NAME | v3::AgentRemove::NAME | v3::AgentRename::NAME
         ) {
             response["address"] = value_of(self.agent_address(reference)?);
         }
@@ -1141,7 +1273,7 @@ impl Daemon {
         agent: &AgentHandle,
         lines: Option<u16>,
         address: String,
-    ) -> Result<v3::ScreenText, ErrorBody> {
+    ) -> Result<wire::ScreenText, ErrorBody> {
         let lines = lines.unwrap_or(daemon::DEFAULT_SCREEN_LINES);
         if !(1..=daemon::MAX_SCREEN_LINES).contains(&lines) {
             return Err(ErrorBody::invalid_argument(format!(
@@ -1164,11 +1296,11 @@ impl Daemon {
             .exit
             .as_ref()
             .map_or_else(facade_base::time::iso_now, |exit| exit.at.clone());
-        Ok(v3::ScreenText {
-            agent_id: agent.id().to_owned(),
+        Ok(wire::ScreenText {
+            reference: api::wire_ref(&info.reference()),
             address,
             name: Some(info.name),
-            process: info.process,
+            process: info.process.into(),
             observed_at,
             buffer: if screen.alternate {
                 ScreenBuffer::Alternate
@@ -1222,7 +1354,7 @@ impl Daemon {
             && let Some(id) = self.machine_for(args.machine.as_deref())?
             && id != self.machine_id
         {
-            self.ensure_machine_route(&id).await?;
+            self.ensure_machine_route(&id, caller).await?;
             args.machine = None;
             args.env.clear();
             return self
@@ -1249,7 +1381,7 @@ impl Daemon {
             && let Some(id) = self.machine_for(args.machine.as_deref())?
             && id != self.machine_id
         {
-            self.ensure_machine_route(&id).await?;
+            self.ensure_machine_route(&id, caller).await?;
             args.machine = None;
             return self
                 .network_call(
@@ -1303,7 +1435,7 @@ impl Daemon {
             && let Some(id) = self.machine_for(args.machine.as_deref())?
             && id != self.machine_id
         {
-            self.ensure_machine_route(&id).await?;
+            self.ensure_machine_route(&id, caller).await?;
             return self
                 .network_call(
                     &id,
@@ -1337,10 +1469,13 @@ impl Daemon {
         }))
     }
 
-    fn active_count(&self) -> usize {
+    pub(crate) fn active_count(&self) -> usize {
         self.agents()
             .iter()
-            .filter(|agent| agent.info().process == ProcessState::Running)
+            .filter(|agent| {
+                let info = agent.info();
+                !info.guest && info.process == ProcessState::Running
+            })
             .count()
     }
 }
@@ -1411,61 +1546,18 @@ pub(crate) fn stored_message(message: v3::Message) -> daemon::Message {
     }
 }
 
-pub(crate) fn accepts_disconnected(client: &Client) -> bool {
-    client_declares(client, v3::CAP_MACHINE_DISCONNECTED)
-}
-
-pub(crate) fn client_declares(client: &Client, capability: &str) -> bool {
-    client
-        .capabilities
-        .iter()
-        .any(|offered| offered == capability)
-}
-
-fn legacy_machine_result(mut value: Value) -> Value {
-    project_legacy_machine_rows(value.get_mut("machines"));
-    if let Some(items) = value.get_mut("items").and_then(Value::as_array_mut) {
-        for item in items {
-            project_legacy_machine_rows(
-                item.get_mut("error")
-                    .and_then(|error| error.get_mut("data"))
-                    .and_then(|data| data.get_mut("machines")),
-            );
-        }
-    }
-    value
-}
-
-fn project_legacy_machine_rows(rows: Option<&mut Value>) {
-    if let Some(machines) = rows.and_then(Value::as_array_mut) {
-        for machine in machines {
-            if machine["state"] == "disconnected" {
-                machine["state"] = value_of(v3::MachineState::Unreachable);
-            }
-        }
-    }
-}
-
-pub(crate) fn legacy_machine_error(mut error: ErrorBody) -> ErrorBody {
-    for machine in &mut error.data.machines {
-        project_legacy_machine_state(&mut machine.state);
-    }
-    error
-}
-
-pub(crate) fn project_legacy_machine_state(state: &mut v3::MachineState) {
-    if *state == v3::MachineState::Disconnected {
-        *state = v3::MachineState::Unreachable;
-    }
-}
-
 pub(crate) fn terminal_colors(
     caller: &Caller,
-    colors: Option<v3::TerminalColors>,
+    colors: Option<wire::TerminalColors>,
 ) -> Result<Option<facade_screen::TerminalColors>, ErrorBody> {
     match colors {
         Some(colors) if matches!(caller, Caller::Ide { .. }) => {
-            crate::presence::terminal_colors(&colors).map(Some)
+            crate::presence::terminal_colors(&v3::TerminalColors {
+                foreground: colors.foreground,
+                background: colors.background,
+                cursor: colors.cursor,
+            })
+            .map(Some)
         }
         Some(_) => Err(ErrorBody::refused("only an editor sets terminal colors")),
         None => Ok(None),
@@ -1626,15 +1718,4 @@ pub(crate) fn actor_stopped(agent: &AgentHandle) -> ErrorBody {
 
 pub(crate) fn value_of(value: impl Serialize) -> Value {
     serde_json::to_value(value).expect("protocol value must serialize")
-}
-
-/// Arguments that may be left out, read as their defaults then.
-pub(crate) fn decode_or_default<T: serde::de::DeserializeOwned + Default>(
-    args: Value,
-) -> Result<T, ErrorBody> {
-    if args.is_null() {
-        Ok(T::default())
-    } else {
-        decode_arguments(args)
-    }
 }

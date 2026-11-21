@@ -3,10 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type {
-	AgentListEntry, CliInfo, CliListArgs, CliListResult, LocationListArgs, ResumeCandidate, ResumeListArgs,
-	ResumeListResult, ResumeTarget, V3AgentListResult, V3LocationListResult, V3MachineInfo, V3StartArgs
-} from '../../base/coreProtocol';
+import type { DaemonOperations, DaemonTopics } from '../../base/coreProtocol';
 import { normalizeName } from '../../core/names';
 import type { Location, LocationId, LocationPort, RunId } from '../../core/ports';
 import { COMMANDS } from '../catalog';
@@ -15,18 +12,31 @@ import { askLaunchBranch, chooseWorkspaceLocation, launchWorktreeButton } from '
 import { changeLocationItem, changeNameItem, defaultLocation } from './newAgent';
 import { BACK, Flow } from './stepping';
 
+type AgentListResult = DaemonOperations['agent.list']['result'];
+type AgentListEntry = AgentListResult['agents'][number];
+type CliListArgs = DaemonOperations['cli.list']['args'];
+type CliListResult = DaemonOperations['cli.list']['result'];
+type CliInfo = CliListResult['clis'][number];
+type LocationListArgs = DaemonOperations['location.list']['args'];
+type LocationListResult = DaemonOperations['location.list']['result'];
+type ResumeListArgs = DaemonOperations['agent.resume_list']['args'];
+type ResumeListResult = DaemonOperations['agent.resume_list']['result'];
+type ResumeCandidate = ResumeListResult['items'][number];
+type MachineInfo = DaemonTopics['machines']['snapshot'][number];
+type StartArgs = DaemonOperations['agent.start']['args'];
+
 export interface RustPickerDeps {
 	readonly media: vscode.Uri;
 	readonly locations: LocationPort;
 	readonly hostMachineId: () => string;
-	readonly machines: () => readonly V3MachineInfo[];
-	readonly listAgents: () => Promise<V3AgentListResult>;
-	readonly listLocations: (args: LocationListArgs) => Promise<V3LocationListResult>;
+	readonly machines: () => readonly MachineInfo[];
+	readonly listAgents: () => Promise<AgentListResult>;
+	readonly listLocations: (args: LocationListArgs) => Promise<LocationListResult>;
 	readonly listClis: (args: CliListArgs) => Promise<CliListResult>;
 	readonly listResumes: (args: ResumeListArgs) => Promise<ResumeListResult>;
-	readonly start: (args: V3StartArgs) => Promise<RunId>;
+	readonly start: (args: StartArgs) => Promise<RunId>;
 	readonly open: (entry: AgentListEntry) => Promise<RunId>;
-	readonly resume: (target: ResumeTarget) => Promise<RunId>;
+	readonly resume: (candidate: ResumeCandidate) => Promise<RunId>;
 	readonly select: (run: RunId) => void;
 	readonly notifyError: (error: unknown) => void;
 	readonly icons: (cli: string) => string;
@@ -104,8 +114,8 @@ async function goToAgent(deps: RustPickerDeps, flow: Flow): Promise<void> {
 		load: async () => {
 			const { agents } = await deps.listAgents();
 			const items = agents.filter(agent => agent.type === 'managed').map(agent => ({
-				label: rowText(agent.name || agent.id),
-				description: rowText(agent.name ? agent.id : undefined, agent.cli, agent.folder, agent.title),
+				label: rowText(agent.name || agent.address),
+				description: rowText(agent.name ? agent.address : undefined, agent.cli, agent.folder, agent.title),
 				iconPath: cliIcon(deps.media, deps.icons(agent.cli)), agent
 			}));
 			return { items, placeholder: items.length ? undefined : vscode.l10n.t("No running agents to attach to") };
@@ -118,7 +128,7 @@ async function goToAgent(deps: RustPickerDeps, flow: Flow): Promise<void> {
 }
 
 function resumeKey(candidate: ResumeCandidate): string {
-	const ref = candidate.agent;
+	const ref = candidate.target.kind === 'agent' ? candidate.target.reference : undefined;
 	return ref ? JSON.stringify([ref.machine_id, ref.agent_id]) : JSON.stringify([candidate.machine_id, candidate.cli, candidate.session]);
 }
 
@@ -128,19 +138,27 @@ async function resumeAgent(deps: RustPickerDeps, flow: Flow): Promise<void> {
 		placeholder: vscode.l10n.t("Search by title, name, CLI, or location"),
 		load: async () => {
 			const folders = deps.locations.snapshot().folders;
-			// With no folder, omitting the scope lets the host resolve its own default directory.
+			// With no workspace folder, the host resolves its default directory.
 			const queries = folders.length ? folders.map(({ path }) => ({ folder: path })) : [{}];
-			const results = await Promise.all(queries.map(query => deps.listResumes(query)));
+			const results = await Promise.all(queries.map(query => deps.listResumes({ ...query, scope: { kind: 'local' }, folder_scope: 'cwd' })));
 			const seen = new Set<string>();
 			const timeOf = (candidate: ResumeCandidate) => candidate.at === undefined ? -Infinity : Date.parse(candidate.at);
-			const items = results.flatMap(result => result.items).sort((a, b) => timeOf(b) - timeOf(a)).flatMap(candidate => {
+			const candidates = results.flatMap(({ items, machines }) => items.map(candidate => ({
+				candidate, selector: machines.find(machine => machine.machine_id === candidate.machine_id)?.selector
+			})));
+			const items = candidates.sort((a, b) => timeOf(b.candidate) - timeOf(a.candidate)).flatMap(({ candidate, selector }) => {
+				const { target } = candidate;
+				if (target.kind !== 'agent' && target.kind !== 'session') { return []; }
 				const key = resumeKey(candidate);
 				if (seen.has(key)) { return []; }
 				seen.add(key);
+				const reference = target.kind === 'agent'
+					? [target.reference.agent_id, selector].filter(Boolean).join('@')
+					: `${target.cli}:${target.session}`;
 				return [{
 					label: rowText(candidate.title?.trim() || vscode.l10n.t("Untitled session")),
-					description: rowText(candidate.cli, candidate.folder, candidate.target.reference),
-					iconPath: cliIcon(deps.media, deps.icons(candidate.cli)), target: candidate.target
+					description: rowText(candidate.cli, candidate.folder, reference),
+					iconPath: cliIcon(deps.media, deps.icons(candidate.cli)), candidate
 				}];
 			});
 			return { items, placeholder: items.length ? undefined : vscode.l10n.t("No agents or saved sessions to resume") };
@@ -148,14 +166,14 @@ async function resumeAgent(deps: RustPickerDeps, flow: Flow): Promise<void> {
 	});
 	if (picked && picked !== BACK) {
 		flow.close();
-		deps.select(await deps.resume(picked.item.target));
+		deps.select(await deps.resume(picked.item.candidate));
 	}
 }
 
 interface LaunchPlace {
 	readonly folder: string;
 	readonly label: string;
-	readonly machine?: V3MachineInfo;
+	readonly machine?: MachineInfo;
 	readonly local?: Location;
 	readonly worktree?: string;
 }
@@ -211,7 +229,7 @@ async function newAgent(deps: RustPickerDeps, flow: Flow, startAt?: LocationId):
 	let place: LaunchPlace | undefined;
 	let name = '';
 	let loaded = false;
-	let clis: { readonly query: CliListArgs; readonly result: CliListResult } | undefined;
+	let clis: { readonly machine?: string; readonly folder: string; readonly result: CliListResult } | undefined;
 	for (;;) {
 		const choice = await pickLoaded<CliRow>(flow, deps, {
 			title: vscode.l10n.t("New Agent"), placeholder: vscode.l10n.t("Select a CLI"), accepts: row => row.does !== undefined,
@@ -223,9 +241,9 @@ async function newAgent(deps: RustPickerDeps, flow: Flow, startAt?: LocationId):
 					loaded = true;
 				}
 				const machine = place?.machine?.selector;
-				if (place && (!clis || clis.query.machine !== machine || clis.query.folder !== place.folder)) {
-					const query = { folder: place.folder, ...(machine ? { machine } : {}) };
-					clis = { query, result: await deps.listClis(query) };
+				if (place && (!clis || clis.machine !== machine || clis.folder !== place.folder)) {
+					const folder = place.folder;
+					clis = { machine, folder, result: await deps.listClis({ folder, scope: machine ? { kind: 'machine', machine } : undefined }) };
 				}
 				return cliRows(deps, place, name, clis?.result);
 			}
@@ -235,8 +253,8 @@ async function newAgent(deps: RustPickerDeps, flow: Flow, startAt?: LocationId):
 		if (picked.does === 'start' && place && picked.cli) {
 			flow.close();
 			deps.select(await deps.start({
-				cli: picked.cli.cli, folder: place.folder, cols: 80, rows: 24,
-				...(place.machine ? { machine: place.machine.selector } : {}),
+				cli: picked.cli.cli, folder: place.folder, size: { cols: 80, rows: 24 },
+				...(place.machine ? { scope: { kind: 'machine', machine: place.machine.selector } } : {}),
 				...(name ? { name } : {}), ...(place.worktree ? { worktree: place.worktree } : {})
 			}));
 			return;
@@ -290,19 +308,19 @@ async function chooseWorkingLocation(deps: RustPickerDeps, flow: Flow, current?:
 	}
 }
 
-async function chooseRemoteLocation(deps: RustPickerDeps, flow: Flow, machine: V3MachineInfo, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
+async function chooseRemoteLocation(deps: RustPickerDeps, flow: Flow, machine: MachineInfo, current?: LaunchPlace): Promise<LaunchPlace | typeof BACK | undefined> {
 	type Row = vscode.QuickPickItem & { readonly place?: LaunchPlace };
 	const title = vscode.l10n.t("New Agent · Working Location");
 	const worktree = launchWorktreeButton();
 	const direct: Row = { label: vscode.l10n.t("Enter Path..."), iconPath: new vscode.ThemeIcon('edit') };
-	let catalog: Promise<V3LocationListResult> | undefined;
+	let catalog: Promise<LocationListResult> | undefined;
 	let focused = current?.folder;
 	let directPath = current?.folder ?? '';
 	for (;;) {
 		const picked = await pickLoaded<Row>(flow, deps, {
 			title, placeholder: vscode.l10n.t("Select a working location"), back: true,
 			load: async () => {
-				const result = await (catalog ??= deps.listLocations({ machine: machine.selector, folders: [] }));
+				const result = await (catalog ??= deps.listLocations({ scope: { kind: 'machine', machine: machine.selector }, folders: [] }));
 				const items: Row[] = result.locations.map(row => ({
 					label: plainText(row.label), description: plainText(row.path),
 					iconPath: new vscode.ThemeIcon(row.kind === 'main' ? 'repo' : row.kind === 'worktree' ? 'worktree' : 'folder'),
@@ -342,7 +360,7 @@ async function chooseEnteredPath(deps: RustPickerDeps, flow: Flow, title: string
 	const picked = await pickLoaded<vscode.QuickPickItem & { readonly worktree: boolean }>(flow, deps, {
 		title, placeholder: vscode.l10n.t("Select a working location"), back: true,
 		load: async () => {
-			const { locations } = await deps.listLocations({ machine, folders: [folder] });
+			const { locations } = await deps.listLocations({ scope: { kind: 'machine', machine }, folders: [folder] });
 			const current = { label: plainText(folder), iconPath: new vscode.ThemeIcon('folder'), worktree: false };
 			const items = [current];
 			if (locations.some(location => location.kind !== 'folder')) {

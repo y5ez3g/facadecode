@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { tempDir } from './util';
 import { folderKeyOf } from '../base/files';
-import type { AgentListEntry, CliListArgs, LocationListArgs, ResumeCandidate, ResumeListArgs, ResumeTarget, V3MachineInfo, V3StartArgs } from '../base/coreProtocol';
+import type { AgentListEntry, CliListArgs, LocationListArgs, MachineInfo, ResumeCandidate, ResumeListArgs, StartArgs } from '../base/coreProtocol';
 import { locationIdOf } from '../core/locations/catalog';
 import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunChange, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
@@ -434,7 +434,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		test('RULES-6.5: New Agent chooses a saved machine and folder before loading its CLIs; the branch is sent at launch', async () => {
 			const { OrchestratorLocations } = load<typeof import('../host/orchestrator/catalog')>(require.resolve('../host/orchestrator/catalog'));
 			const calls: unknown[][] = [];
-			const starts: V3StartArgs[] = [];
+			const starts: StartArgs[] = [];
+			const remoteScope = { kind: 'machine', machine: '1234abcd' } as const;
 			const foldersChanged = new TestEmitter<void>();
 			ui.workspaceFolders = [SHOP, DOCS];
 			const locations = new OrchestratorLocations({
@@ -456,8 +457,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				const pickers = rustPickers({
 					locations,
 					machines: () => [
-						{ machine_id: 'local-id', name: 'mbp', selector: 'mbp', state: 'online', connections: [] },
-						{ machine_id: 'gpu-id', name: 'gpu', selector: '1234abcd', state: 'sleeping', connections: [] }
+						{ machine_id: 'local-id', short_id: '11111111', name: 'mbp', selector: 'mbp', state: 'online', connections: [] },
+						{ machine_id: 'gpu-id', short_id: '1234abcd', name: 'gpu', selector: '1234abcd', state: 'sleeping', connections: [] }
 					],
 					listLocations: async (args: LocationListArgs) => {
 						calls.push(['remote locations', args]);
@@ -473,7 +474,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					listClis: async args => {
 						calls.push(['clis', args]);
 						const overrides = { model: false, effort: false };
-						return { clis: args.machine ? [
+						return { clis: args.scope?.kind === 'machine' ? [
 							{ cli: 'muse', display_name: 'Muse Code', available: true, overrides },
 							{ cli: 'codex', display_name: 'Codex', available: false, not_installed: true, overrides },
 							{ cli: 'claude', display_name: 'Claude Code', available: false, problem: 'Disabled in facade.json', overrides }
@@ -488,7 +489,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				await settle();
 				assert.strictEqual(ui.current!.title, 'New Agent · login-fix');
 				assert.deepStrictEqual(locations.resolve(LOGIN.id)?.folders, [SHOP, DOCS]);
-				assert.deepStrictEqual(calls, [['local locations', { folders: [SHOP.path, DOCS.path] }], ['clis', { folder: LOGIN.path }]]);
+				assert.deepStrictEqual(calls, [['local locations', { folders: [SHOP.path, DOCS.path] }], ['clis', { folder: LOGIN.path, scope: undefined }]]);
 				ui.current!.accept('Change Name...');
 				await settle();
 				ui.current!.type('  Chosen Name  ');
@@ -504,8 +505,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					['dev', '/home/dev'], ['GPU workspace', '/server/app'], ['Enter Path...', undefined]
 				]);
 				assert.deepStrictEqual(buttonsOf(ui.current!), [['GPU workspace', 'git-branch: New Worktree...']]);
-				const remoteList = ['remote locations', { machine: '1234abcd', folders: [] }];
-				const enteredPath = ['remote locations', { machine: '1234abcd', folders: ['/another/work path'] }];
+				const remoteList = ['remote locations', { scope: remoteScope, folders: [] }];
+				const enteredPath = ['remote locations', { scope: remoteScope, folders: ['/another/work path'] }];
 				assert.deepStrictEqual(calls.slice(2), [remoteList]);
 				ui.current!.accept('Enter Path...');
 				await settle();
@@ -528,8 +529,10 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				assert.deepStrictEqual(starts, []);
 				ui.current!.accept('Muse Code');
 				await done;
-				assert.deepStrictEqual(calls.slice(2), [remoteList, enteredPath, ['clis', { machine: '1234abcd', folder: '/another/work path' }]]);
-				assert.deepStrictEqual(starts, [{ cli: 'muse', machine: '1234abcd', folder: '/another/work path', name: 'Chosen Name', worktree: 'feat/ui', cols: 80, rows: 24 }]);
+				assert.deepStrictEqual(calls.slice(2), [remoteList, enteredPath, ['clis', { scope: remoteScope, folder: '/another/work path' }]]);
+				assert.deepStrictEqual(starts, [{
+					cli: 'muse', scope: remoteScope, folder: '/another/work path', name: 'Chosen Name', worktree: 'feat/ui', size: { cols: 80, rows: 24 }
+				}]);
 				assert.deepStrictEqual(selected, ['remote-run']);
 			} finally {
 				locations.dispose();
@@ -539,17 +542,23 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		test('RULES-6.5: same-name machines keep their canonical selectors, including a saved sleeping machine', async () => {
 			const { OrchestratorLocations } = load<typeof import('../host/orchestrator/catalog')>(require.resolve('../host/orchestrator/catalog'));
 			const localId = '11111111-0000-4000-8000-000000000000';
-			const first: V3MachineInfo = { machine_id: '22222222-0000-4000-8000-000000000000', name: 'buildbox', selector: '22222222', state: 'online', connections: [] };
-			const second: V3MachineInfo = { machine_id: '33333333-0000-4000-8000-000000000000', name: 'buildbox', selector: '33333333-0000-4000-8000-000000000000', state: 'sleeping', connections: [] };
-			const local: V3MachineInfo = { machine_id: localId, name: 'editor', selector: 'editor', state: 'online', route: [], connections: [
-				{ machine_id: second.machine_id, initiator_machine_id: localId, kind: 'saved', ssh_destination: 'buildbox', state: 'unavailable' }
+			const first: MachineInfo = {
+				machine_id: '22222222-0000-4000-8000-000000000000', short_id: '22222222', name: 'buildbox', selector: '22222222', state: 'online', connections: []
+			};
+			const second: MachineInfo = {
+				machine_id: '33333333-0000-4000-8000-000000000000', short_id: '33333333', name: 'buildbox',
+				selector: '33333333-0000-4000-8000-000000000000', state: 'sleeping', connections: []
+			};
+			const local: MachineInfo = { machine_id: localId, short_id: '11111111', name: 'editor', selector: 'editor', state: 'online', route: [], connections: [
+				{ machine_id: second.machine_id, initiator_machine_id: localId, kind: 'saved', transport: { kind: 'ssh', ssh_destination: 'buildbox', ssh_args: [] }, state: 'disconnected' }
 			] };
 			const targets = [
 				{ machine: first, home: '/home/first', folders: [] },
 				{ machine: second, home: '/home/second', folders: [DOCS] }
 			];
 			const queries: [string, LocationListArgs | CliListArgs][] = [];
-			const starts: V3StartArgs[] = [];
+			const starts: StartArgs[] = [];
+			const scope = (machine: string) => ({ kind: 'machine', machine });
 			const locations = new OrchestratorLocations({
 				folders: () => ui.workspaceFolders,
 				onDidChangeFolders: changed.event,
@@ -564,13 +573,14 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					locations, hostMachineId: () => local.machine_id, machines: () => [local, first, second],
 					listLocations: async args => {
 						queries.push(['location.list', args]);
-						const found = targets.find(({ machine }) => machine.selector === args.machine);
+						const selector = args.scope?.kind === 'machine' ? args.scope.machine : undefined;
+						const found = targets.find(({ machine }) => machine.selector === selector);
 						assert.ok(found);
 						return { locations: [{ location_id: 'loc-home', path: found.home, label: 'Login home', kind: 'folder' }] };
 					},
 					listClis: async args => {
 						queries.push(['cli.list', args]);
-						return { clis: [{ cli: 'claude', display_name: args.machine ? 'Remote Claude' : 'Claude Code', available: true, overrides: { model: false, effort: false } }] };
+						return { clis: [{ cli: 'claude', display_name: args.scope?.kind === 'machine' ? 'Remote Claude' : 'Claude Code', available: true, overrides: { model: false, effort: false } }] };
 					},
 					start: async args => { starts.push(args); return 'remote-run'; },
 					select: run => selected.push(run)
@@ -616,13 +626,13 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					await done;
 				}
 				assert.deepStrictEqual(queries, [
-					['location.list', { machine: first.selector, folders: [] }], ['cli.list', { machine: first.selector, folder: targets[0].home }],
-					['cli.list', { folder: DOCS.path }],
-					['location.list', { machine: second.selector, folders: [] }], ['cli.list', { machine: second.selector, folder: targets[1].home }],
-					['cli.list', { folder: DOCS.path }],
-					['location.list', { machine: second.selector, folders: [] }], ['cli.list', { machine: second.selector, folder: targets[1].home }]
+					['location.list', { scope: scope(first.selector), folders: [] }], ['cli.list', { scope: scope(first.selector), folder: targets[0].home }],
+					['cli.list', { folder: DOCS.path, scope: undefined }],
+					['location.list', { scope: scope(second.selector), folders: [] }], ['cli.list', { scope: scope(second.selector), folder: targets[1].home }],
+					['cli.list', { folder: DOCS.path, scope: undefined }],
+					['location.list', { scope: scope(second.selector), folders: [] }], ['cli.list', { scope: scope(second.selector), folder: targets[1].home }]
 				]);
-				assert.deepStrictEqual(starts, targets.map(({ machine, home }) => ({ machine: machine.selector, folder: home, cli: 'claude', cols: 80, rows: 24 })));
+				assert.deepStrictEqual(starts, targets.map(({ machine, home }) => ({ scope: scope(machine.selector), folder: home, cli: 'claude', size: { cols: 80, rows: 24 } })));
 				assert.deepStrictEqual(selected, ['remote-run', 'remote-run']);
 			} finally {
 				locations.dispose();
@@ -1617,32 +1627,40 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		test('LIFECYCLE-5.4: Resume uses one query per root and preserves distinct agents with the same session', async () => {
 			ui.workspaceFolders = [SHOP, DOCS];
 			const candidate = { cli: 'claude', folder: MAIN.path, machine_id: 'local-id', session: 'shared', title: 'Saved title' };
-			const first: ResumeCandidate = { ...candidate, target: { reference: 'a1@mbp' }, agent: { machine_id: 'local-id', agent_id: 'a1' } };
-			const second: ResumeCandidate = { ...candidate, target: { reference: 'a2@mbp' }, agent: { machine_id: 'local-id', agent_id: 'a2' } };
-			const history: ResumeCandidate = { ...candidate, session: 'session', title: 'CLI history', target: { reference: 'claude:session', folder: MAIN.path } };
+			const firstRef = { machine_id: candidate.machine_id, agent_id: 'a1' };
+			const secondRef = { machine_id: candidate.machine_id, agent_id: 'a2' };
+			const first: ResumeCandidate = { ...candidate, target: { kind: 'agent', reference: firstRef }, agent: firstRef };
+			const second: ResumeCandidate = { ...candidate, target: { kind: 'agent', reference: secondRef }, agent: secondRef };
+			const history: ResumeCandidate = {
+				...candidate, session: 'session', title: 'CLI history',
+				target: { kind: 'session', machine_id: candidate.machine_id, cli: candidate.cli, session: 'session', folder: MAIN.path }
+			};
 			const queries: ResumeListArgs[] = [];
-			const picked: ResumeTarget[] = [];
+			const picked: ResumeCandidate[] = [];
 			const selected: string[] = [];
 			const { resumeAgent } = rustPickers({
 				listResumes: async args => {
 					queries.push(args);
-					return { items: args.folder === SHOP.path ? [first, second, history] : [second, history], machines: [] };
+					return {
+						items: args.folder === SHOP.path ? [first, second, history] : [second, history],
+						machines: [{ machine_id: candidate.machine_id, short_id: '11111111', name: 'mbp', selector: 'mbp', state: 'online', status: 'answered' }]
+					};
 				},
-				resume: async target => { picked.push(target); return target.reference; },
+				resume: async entry => { picked.push(entry); return 'resumed'; },
 				select: run => selected.push(run)
 			});
 			const done = resumeAgent();
 			await settle();
 			const picker = ui.current!;
 			assert.strictEqual(picker.title, 'Resume Agent');
-			assert.deepStrictEqual(queries, [{ folder: SHOP.path }, { folder: DOCS.path }]);
+			assert.deepStrictEqual(queries, [SHOP.path, DOCS.path].map(folder => ({ folder, scope: { kind: 'local' }, folder_scope: 'cwd' })));
 			assert.deepStrictEqual(picker.items.map(item => item.description?.split(' · ').at(-1)), ['a1@mbp', 'a2@mbp', 'claude:session']);
 			picker.activate(1);
 			picker.accept();
 			await done;
-			assert.deepStrictEqual(picked, [second.target]);
-			assert.strictEqual(picked[0], second.target);
-			assert.deepStrictEqual(selected, ['a2@mbp']);
+			assert.deepStrictEqual(picked, [second]);
+			assert.strictEqual(picked[0], second);
+			assert.deepStrictEqual(selected, ['resumed']);
 		});
 	});
 
@@ -1997,20 +2015,20 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 
 		test('LIFECYCLE-5.2: Go to Agent lists managed rows in roster order and opens the exact matching record', async () => {
 			const local: AgentListEntry = {
-				reference: { machine_id: 'local-id', agent_id: 'a1' }, id: 'a1@mbp', name: 'Ada', type: 'managed',
+				reference: { machine_id: 'local-id', agent_id: 'a1' }, address: 'a1@mbp', name: 'Ada', type: 'managed',
 				state: 'working', cli: 'claude', folder: MAIN.path, started_at: '2026-11-19T01:00:00Z'
 			};
 			const remote: AgentListEntry = {
-				...local, reference: { machine_id: 'gpu-id', agent_id: 'a1' }, id: 'a1@1234abcd', name: 'Remote Ada',
+				...local, reference: { machine_id: 'gpu-id', agent_id: 'a1' }, address: 'a1@1234abcd', name: 'Remote Ada',
 				title: 'Fix\nlogin', folder: '/server/app', started_at: '2026-11-19T01:01:00Z'
 			};
-			const guest: AgentListEntry = { ...local, reference: { machine_id: 'local-id', agent_id: 'a2' }, id: 'a2@mbp', type: 'guest', state: 'online' };
+			const guest: AgentListEntry = { ...local, reference: { machine_id: 'local-id', agent_id: 'a2' }, address: 'a2@mbp', type: 'guest', state: 'online' };
 			const opened: AgentListEntry[] = [];
 			const selected: string[] = [];
 			let queries = 0;
 			const { goToAgent } = rustPickers({
 				listAgents: async () => { queries++; return { agents: [remote, guest, local], machines: [] }; },
-				open: async entry => { opened.push(entry); return entry.id; },
+				open: async entry => { opened.push(entry); return entry.address; },
 				select: run => selected.push(run)
 			});
 			assert.strictEqual(queries, 0);

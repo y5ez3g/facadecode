@@ -953,6 +953,63 @@ fn command_from_config(config: &serde_json::Value) -> anyhow::Result<Command> {
     mcp_command(config, &home, |program| Command::new(program))
 }
 
+/// The native launch rules supply these relay arguments beside the fixture's program.
+fn stand_in_mcp_args(arguments: &[String]) -> anyhow::Result<Vec<String>> {
+    if let Some(args) = arguments
+        .iter()
+        .find_map(|word| word.strip_prefix("mcp_servers.facade.args="))
+    {
+        return serde_json::from_str(args).context("reading Codex's test relay arguments");
+    }
+    if let Some(entry) = arguments
+        .iter()
+        .find_map(|word| word.strip_prefix("mcpServers.facade="))
+    {
+        let entry: serde_json::Value =
+            serde_json::from_str(entry).context("reading Muse Code's test relay entry")?;
+        return serde_json::from_value(entry["args"].clone())
+            .context("reading Muse Code's test relay arguments");
+    }
+    if let Ok(config) = std::env::var("OPENCODE_CONFIG_CONTENT") {
+        let config: serde_json::Value =
+            serde_json::from_str(&config).context("reading OpenCode's test relay entry")?;
+        if let Some(words) = config["mcp"]["facade"]["command"].as_array() {
+            let words: Vec<String> = serde_json::from_value(words.clone().into())
+                .context("reading OpenCode's test relay command")?;
+            return Ok(words.into_iter().skip(1).collect());
+        }
+    }
+    let pi = arguments.windows(2).find_map(|pair| {
+        let file = std::path::Path::new(&pair[1]);
+        (pair[0] == "-e" && file.file_name().is_some_and(|name| name == "facade-pi.mjs"))
+            .then_some(file)
+    });
+    if let Some(file) = pi {
+        let home = std::env::var_os("FACADE_HOME")
+            .map(PathBuf::from)
+            .context("the Pi stand-in needs an isolated Facade home")?;
+        anyhow::ensure!(
+            file.canonicalize()?
+                .starts_with(home.join("core/runs").canonicalize()?),
+            "the Pi stand-in's extension must be in its run directory"
+        );
+        let extension = std::fs::read_to_string(file)?;
+        let entry = extension
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("pi.registerMcpServer(\"facade\", ")
+                    .and_then(|line| line.strip_suffix(");"))
+            })
+            .context("the Pi stand-in has no Facade relay entry")?;
+        let entry: serde_json::Value =
+            serde_json::from_str(entry).context("reading Pi's test relay entry")?;
+        return serde_json::from_value(entry["args"].clone())
+            .context("reading Pi's test relay arguments");
+    }
+    Ok(Vec::new())
+}
+
 fn configured_server(arguments: &[String]) -> anyhow::Result<Option<Command>> {
     let Some(index) = arguments.iter().rposition(|arg| arg == "--mcp-config") else {
         let Some(program) = std::env::var_os("FAKECLI_MCP") else {
@@ -962,7 +1019,9 @@ fn configured_server(arguments: &[String]) -> anyhow::Result<Option<Command>> {
             std::path::Path::new(&program).is_absolute(),
             "FAKECLI_MCP needs an absolute path"
         );
-        return Ok(Some(Command::new(program)));
+        let mut command = Command::new(program);
+        command.args(stand_in_mcp_args(arguments)?);
+        return Ok(Some(command));
     };
     let file = arguments
         .get(index + 1)

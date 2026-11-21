@@ -10,7 +10,7 @@
 //! - `messages`: messages being delivered, and their numbers;
 //! - `runs`: the keeper link, the runs it holds, and how a run is prepared;
 //! - `records`: agent numbers, names and reach;
-//! - `windows`: editor windows and their locations;
+//! - `windows`: working locations;
 //! - `guests`: sessions people start that join, MCP members, and integrations;
 //! - `lifecycle`: work under way, idle exit, takeover and the daemon log;
 //! - `network`: SSH sessions, machine routes and forwarding;
@@ -19,6 +19,11 @@
 //! This level keeps the list of agents, the store and every write across its tables, and the
 //! order in which the parts are called (`operations.rs`, `delivery.rs`, `presence.rs`,
 //! `topics.rs`, `relays.rs`, `service.rs`, `recovery.rs`).
+
+#![expect(
+    clippy::result_large_err,
+    reason = "The API v1 boundaries use the shared structured wire error by value."
+)]
 
 mod agent;
 mod guests;
@@ -31,6 +36,7 @@ mod runs;
 mod server;
 mod windows;
 
+mod api;
 mod command_line;
 mod delivery;
 mod machine_service;
@@ -53,13 +59,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use facade_base::daemon::{AgentsUpdate, WindowRef};
+use facade_base::api_v1::{ApiVersion, daemon as wire};
+use facade_base::daemon::AgentsUpdate;
 use facade_base::jsonrpc::ErrorBody;
-use facade_base::machine::{MachineHello, new_boot_id};
+use facade_base::machine::new_boot_id;
 use facade_base::process::ProcessState;
 use facade_base::programs::Held;
 use facade_base::service::{self as base_service, Locked, StartupChannel};
-use facade_base::v3::AgentLabel;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -226,15 +232,6 @@ pub(crate) struct Daemon {
     watch_ends: Mutex<HashMap<u64, topics::ViewerBinding>>,
 }
 
-impl Daemon {
-    fn local_window(&self, window_id: impl Into<String>) -> WindowRef {
-        WindowRef {
-            machine_id: self.machine_id.clone(),
-            window_id: window_id.into(),
-        }
-    }
-}
-
 impl LifecycleActivity for Daemon {
     async fn announce_machine_sleeping(&self) {
         self.network.announce_sleeping().await;
@@ -260,7 +257,7 @@ impl LifecycleActivity for Daemon {
         agent::screen_writes()
     }
 
-    fn running_managed_agents(&self) -> Vec<AgentLabel> {
+    fn running_managed_agents(&self) -> Vec<wire::AgentLabel> {
         self.agents()
             .into_iter()
             .filter_map(|agent| {
@@ -275,24 +272,26 @@ impl LifecycleActivity for Daemon {
                         &reference.machine_id,
                     )
                 });
-                Some(service::agent_label_of(
-                    info,
-                    address,
-                    agent.rule().is_some(),
-                ))
+                let label = service::agent_label_of(info, address, agent.rule().is_some());
+                Some(wire::AgentLabel {
+                    reference: api::wire_ref(&label.reference),
+                    address: label.address,
+                    kind: wire::AgentKind::Managed,
+                    name: label.name,
+                    cli: label.cli,
+                    state: label.state,
+                    resumable: label.resumable,
+                })
             })
             .collect()
     }
 
     fn running_count(&self) -> usize {
-        self.agents()
-            .iter()
-            .filter(|agent| agent.exit().borrow().is_none())
-            .count()
+        self.active_count()
     }
 
-    fn keeper_protocol_range(&self) -> Option<[u32; 2]> {
-        self.runs.keeper_protocol_range()
+    fn keeper_api_version(&self) -> Option<ApiVersion> {
+        self.runs.keeper_api_version()
     }
 
     fn keeper_build(&self) -> Option<String> {
@@ -320,21 +319,6 @@ impl LifecycleActivity for Daemon {
         }
         all_quiet
     }
-}
-
-pub(crate) fn daemon_capabilities() -> Vec<String> {
-    use facade_base::v3;
-    [
-        v3::CAP_RESUME_LIST_LOCAL,
-        v3::CAP_MACHINE_DISCONNECTED,
-        v3::CAP_MACHINE_CONNECT_EXPECTED_ID,
-        v3::CAP_MACHINE_REMOVE_EXPECTED_ID,
-        v3::CAP_MACHINE_PROBE_ROUTE,
-        v3::CAP_ATTACH,
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
 }
 
 /// Reads the committed name of the local machine while its daemon is sleeping.
@@ -438,16 +422,14 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
     let home = core.parent().expect("core is inside the Facade home");
     let control_dir = facade_base::ssh::ssh_control_dir(home)?;
     let network = Network::new(
-        MachineHello {
+        wire::ConnectedMachine {
             machine_id: opened.machine_id.clone(),
             boot_id: new_boot_id(),
             name: opened.machine_name,
             build: facade_base::build_id(),
-            protocol_range: facade_base::v3::DAEMON_PROTOCOL_RANGE,
             ssh_cleans_processes: facade_base::system::ssh_cleans_processes(Duration::from_secs(1))
                 .await,
         },
-        daemon_capabilities(),
         control_dir,
         network_events,
     );
@@ -508,7 +490,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
             .map(|guard| Box::new(guard) as network::SessionHold)
     });
     let weak_daemon = Arc::downgrade(&daemon);
-    daemon.network.set_target_v3(move |request| {
+    daemon.network.set_target(move |request| {
         let Some(daemon) = weak_daemon.upgrade() else {
             return false;
         };

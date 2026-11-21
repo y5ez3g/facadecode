@@ -2,7 +2,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use facade_base::daemon_client::DaemonClient;
+use facade_base::api_v1::daemon_client::DaemonClient;
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::machine::AgentRef;
 use facade_base::v3::AgentKind;

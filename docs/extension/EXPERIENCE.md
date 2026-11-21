@@ -67,8 +67,8 @@ Use the card's Pin or Unpin action to change the saved intent. See LIFECYCLE-5.4
 
 **Reopen the workspace to see its agents and Pins again.**
 
-The first open after upgrade brings forward the old window's agent list and Pins. The Window Component can clean up
-stale terminal tabs. Remote-SSH works against the Orchestrator on the remote editor host. See RULES-6.1 and RULES-6.8.
+A reopened workspace uses its saved agent list and Pins. The Window Component can clean up stale terminal tabs.
+Remote-SSH works against the Orchestrator on the remote editor host. See RULES-6.1 and RULES-6.8.
 
 ## Checks
 

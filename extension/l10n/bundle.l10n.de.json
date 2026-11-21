@@ -390,8 +390,6 @@
 	"Invalid Facade workspace roster: {0}": "Ungültige Facade-Agentenliste dieses Arbeitsbereichs: {0}",
 	"Invalid Facade workspace state: {0}": "Ungültiger Facade-Arbeitsbereichsstatus: {0}",
 	"Invalid Facade Pin recovery record: {0}": "Ungültiger Facade-Eintrag zur Pin-Wiederherstellung: {0}",
-	"The previous Facade home has workspace data. Set FACADE_HOME to {0} on this extension host and reopen the workspace to import it.": "Der bisherige Facade-Stammordner enthält Arbeitsbereichsdaten. Setzen Sie FACADE_HOME auf diesem Erweiterungshost auf {0} und öffnen Sie den Arbeitsbereich erneut, um die Daten zu importieren.",
-	"Could not finish importing this workspace from {0}. Restore access with facade machine add if needed, then reopen the workspace to finish the import.": "Der Arbeitsbereich konnte nicht vollständig von {0} importiert werden. Stellen Sie den Zugriff bei Bedarf mit facade machine add wieder her und öffnen Sie den Arbeitsbereich erneut, um den Import abzuschließen.",
 	"The old engine is active on {0}. {1} Fix the problem, set {2} to `auto`, and reload the window to try the Rust engine again.": "Auf {0} ist die alte Engine aktiv. {1} Beheben Sie das Problem, setzen Sie {2} auf `auto` und laden Sie das Fenster neu, um die Rust-Engine erneut zu versuchen.",
 	"Could not open {0}: {1}": "{0} konnte nicht geöffnet werden: {1}",
 	"Could not hide {0}: {1}": "{0} konnte nicht ausgeblendet werden: {1}",
@@ -408,6 +406,5 @@
 	"Not installed": "Nicht installiert",
 	"Enter Path...": "Pfad eingeben...",
 	"Enter a path.": "Geben Sie einen Pfad ein.",
-	"Could not identify the previous empty window. Enable the Facade Code Window Component in that window and reload it to finish importing.": "Das vorherige leere Fenster konnte nicht identifiziert werden. Aktivieren Sie dort die Facade Code-Fensterkomponente und laden Sie das Fenster neu, um den Import abzuschließen.",
 	"Leave blank to choose a name automatically": "Leer lassen, um automatisch einen Namen zu wählen"
 }

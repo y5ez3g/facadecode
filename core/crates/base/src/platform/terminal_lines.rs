@@ -4,8 +4,8 @@
 //! byte (`SCM_RIGHTS`, through [`super::descriptors`]). On Windows it is the line's top-level
 //! `terminal` member, `{"input": …, "output": …, "signal": …, "job": …}`: each value is a handle
 //! that the sender duplicated into the receiving process before it wrote the line, and `signal` is
-//! absent where the sender had let go of its copy for a stop. The receiver owns the handles from
-//! the line on.
+//! absent where the sender had let go of its copy for a stop. The sender retains ownership until
+//! the whole line is delivered. The receiver authenticates the peer before reading its handles.
 
 use std::io;
 
@@ -23,7 +23,9 @@ mod windows;
 use windows as imp;
 
 #[cfg(windows)]
-pub use windows::{PeerProcess, add_terminal, take_terminal};
+pub use windows::{
+    InvalidTerminalEnvelope, PeerProcess, PreparedTerminal, add_terminal, take_terminal,
+};
 
 /// Writes lines, each with the terminal it carries, to the process `receiver` at the other end.
 pub struct LineSender(imp::Sender);
@@ -46,6 +48,7 @@ impl LineSender {
 pub struct LineReceiver(imp::Receiver);
 
 impl LineReceiver {
+    /// On Windows, the caller must authenticate the peer before reading from this socket.
     pub fn new(socket: ClientSocket) -> LineReceiver {
         LineReceiver(imp::Receiver::new(socket))
     }

@@ -4,8 +4,8 @@ use std::io::{self, Write as _};
 use std::process::Stdio;
 
 use anyhow::{Context, anyhow, bail};
+use facade_base::api_v1::daemon::AgentLabel;
 use facade_base::install;
-use facade_base::v3::AgentLabel;
 
 use crate::single_line;
 

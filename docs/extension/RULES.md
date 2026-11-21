@@ -491,10 +491,10 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 The list contains agents started or opened there through Go to Agent, and their descendants in the creation tree.
 Descendants appear as cards automatically and open a terminal only on request. Store the list and Pins across
-reloads and reopens. On the first open after upgrade, start importing the prior workspace's agents and Pins under
-ARCHITECTURE-6.2. Keep confirmed entries while the import is pending. The Orchestrator owns agent records, processes
-and terminal state. The extension owns cards, Pins and tab placement. A remote extension host connects to the
-Orchestrator on the machine where it runs.
+reloads and reopens. Keep the Facade home and editor workspace storage when changing builds. The editor reads
+workspace members and Pins under ARCHITECTURE-6.2 and keeps confirmed entries while a source is unavailable. The Orchestrator
+owns agent records, processes and terminal state. The extension owns cards, Pins and tab placement. A remote
+extension host connects to the Orchestrator on the machine where it runs.
 
 ### 6.2 References and results
 
@@ -512,8 +512,7 @@ in use. The Panel shows the CLI's TITLE and the same state as the list; details 
 
 Each open view reports the rows and columns its pane can fit. The Orchestrator takes the smallest capacity in each
 dimension across live Attach viewers that have reported it. Each view draws at the confirmed grid size. Closing a tab
-recalculates the grid for the remaining views and leaves the agent running. While a legacy screen watch is active,
-the last Attach or resize controls the terminal size. Use VS Code for terminal colors.
+recalculates the grid for the remaining views and leaves the agent running. Use VS Code for terminal colors.
 
 Input entered during a disconnect is dropped. The reconnected view reports the number of input bytes dropped after
 displaying the current screen. Hide removes the card from this workspace and clears its Pin. Stop ends the agent's run
@@ -574,8 +573,8 @@ an editor whose extension host uses that machine's Orchestrator.
 **The Window Component cleans up stale terminal tabs after reconnect or extension restart.**
 
 Its existing old-engine duties apply during the transition. In the VS Code entry point, the Orchestrator has no
-window membership or automatic Remote-SSH registration. The extension uses the one-time upgrade import in 6.1
-to read previous workspace visibility.
+window membership or automatic Remote-SSH registration. The extension reads persisted workspace visibility under
+6.1 and uses the Window Component's native key to locate saved Pins for a folderless window.
 
 ## Checks
 

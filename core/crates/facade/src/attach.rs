@@ -11,26 +11,26 @@ use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use facade_base::api_v1::daemon::{
+    AgentInfo, AgentInspect, AgentRef, AgentTarget, AgentTargetArgs, AttachArgs, AttachResizeArgs,
+    AttachTopic, MachineQuery, ProcessState, ScreenChange, ScreenSnapshot, attach_resize_line,
+    raw_input_line,
+};
+use facade_base::api_v1::daemon_client::DaemonClient;
+use facade_base::api_v1::{ErrorBody, ProcessExit, Size};
 use facade_base::console::{
     ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes, visible_content_end,
 };
-use facade_base::daemon;
-use facade_base::daemon_client::{Cut, DaemonClient, RECONNECT_DELAY, takeover_timeout};
-use facade_base::jsonrpc::{self, ErrorBody, Reason};
-use facade_base::operations::{CallParams, Operation, Topic};
+use facade_base::daemon_client::{Cut, RECONNECT_DELAY, takeover_timeout, transient_transport};
 use facade_base::paths::ClientSocket;
-use facade_base::process::{ProcessExit, ProcessState};
 use facade_base::unix_process::signal_number;
-use facade_base::v3::{
-    self, AgentRef, AgentTarget, AttachResize, AttachTopic, ScreenChange, ScreenSnapshot,
-    ScreenTopic,
-};
+use facade_base::v3::address::exact_machine_selector;
 use facade_base::{base64, service, system};
 use facade_screen::{REDRAW_SCROLLBACK_ROWS, Screen};
 use unicode_width::UnicodeWidthChar;
 
 use crate::daemon_client::{ConnectFailure, Reconnect};
-use crate::errors::{AgentCommand, agent_failed, agent_label, cause};
+use crate::errors::{AgentCommand, agent_failed, agent_label, cause, machine_query_detail};
 use crate::{ExitText, Opening, single_line};
 
 /// Ctrl-], as plain input and in the kitty keyboard encoding. In win32-input-mode it comes as a
@@ -52,10 +52,7 @@ static VT_MODES: Mutex<Option<VtModes>> = Mutex::new(None);
 static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Held while writing to the person's terminal and while restoring it, so that none of the agent's
 /// output lands in the middle of the restoration or after it.
-static TERMINAL: Mutex<Display> = Mutex::new(Display {
-    shared: None,
-    visible_frame: false,
-});
+static TERMINAL: Mutex<Display> = Mutex::new(Display { shared: None });
 
 /// The person's terminal size, when both dimensions are nonzero.
 pub(crate) fn console_size() -> Option<(u16, u16)> {
@@ -76,19 +73,19 @@ pub(crate) fn attach(
     let hostname = system::hostname().unwrap_or_else(|_| client.hello_result.machine_id.clone());
     let viewer = format!("Terminal on {hostname}");
     let address = match &target {
-        AgentTarget::Address { agent } => agent.clone(),
-        AgentTarget::Reference { reference } => v3::address::format_agent_address(
-            reference,
-            &v3::address::exact_machine_selector(&reference.machine_id),
+        AgentTarget::Selector(agent) => agent.clone(),
+        AgentTarget::Reference(reference) => format!(
+            "{}@{}",
+            reference.agent_id,
+            exact_machine_selector(&reference.machine_id)
         ),
     };
     let allow_ended =
-        !matches!(opening, Opening::Attached) && matches!(target, AgentTarget::Reference { .. });
+        !matches!(opening, Opening::Attached) && matches!(target, AgentTarget::Reference(_));
     // The person's scrollback stays above the agent's screen, which brings its own.
     let watched = match watch_first(&mut client, &target, &viewer, allow_ended, reconnect) {
         Ok(watched) => watched,
-        // An older daemon may refuse an ended run even with an exact target and allow_ended.
-        Err(error) if allow_ended && watch_reason(&error) == Some(Reason::Ended) => {
+        Err(error) if allow_ended && watch_reason(&error) == Some("ended") => {
             let agent = inspect_agent(&mut client, target);
             let shown = agent.as_ref().map_or_else(
                 || single_line(&address),
@@ -114,7 +111,7 @@ pub(crate) fn attach(
     let snapshot = &watched.snapshot;
     let shown = agent_label(snapshot.name.as_deref(), &snapshot.address);
     let input = Arc::new(AgentInput::new(
-        snapshot.reference(),
+        snapshot.reference.clone(),
         snapshot.address.clone(),
     ));
     input.lock().agent_name.clone_from(&snapshot.name);
@@ -236,36 +233,18 @@ fn lost_connection(shown: &str, address: &str, why: &str) -> String {
 
 /// Presents a refusal of the first watch using only records visible to this caller.
 fn opening_error(address: &str, error: anyhow::Error) -> anyhow::Error {
-    if let Some(body) = error.downcast_ref::<ErrorBody>()
+    let unavailable_address = address.contains('@')
         && matches!(
-            body.data.reason,
-            Reason::Unavailable | Reason::SshInteractionRequired
+            watch_reason(&error),
+            Some("unavailable" | "ssh_interaction_required")
         )
-    {
-        if let [agent] = body.data.agents.as_slice() {
-            let shown = agent_label(Some(&agent.name), &agent.address);
-            return anyhow::anyhow!(lost_connection(
-                &shown,
-                &agent.address,
-                &connection_reason(&error)
-            ));
-        }
-        // If the caller gave a machine, even an unavailable peer's address can be useful.
-        if address.contains('@')
-            && body
-                .data
-                .unavailable
-                .as_ref()
-                .is_none_or(|unavailable| unavailable.unanswered.is_empty())
-        {
-            let address = single_line(address);
-            return anyhow::anyhow!(lost_connection(
-                &address,
-                &address,
-                &connection_reason(&error)
-            ));
-        }
-    } else if error.is::<Cut>() {
+        && error
+            .downcast_ref::<ErrorBody>()
+            .and_then(|body| body.data.details.as_ref())
+            .and_then(|details| details.get("unanswered"))
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(Vec::is_empty);
+    if unavailable_address || error.is::<Cut>() {
         let address = single_line(address);
         return anyhow::anyhow!(lost_connection(
             &address,
@@ -278,22 +257,28 @@ fn opening_error(address: &str, error: anyhow::Error) -> anyhow::Error {
 
 /// Prefers the current query's SSH diagnostic when the daemon has one.
 fn connection_reason(error: &anyhow::Error) -> String {
-    machine_connection_reason(error).map_or_else(|| cause(error), str::to_owned)
+    machine_connection_reason(error).unwrap_or_else(|| cause(error))
 }
 
-fn machine_connection_reason(error: &anyhow::Error) -> Option<&str> {
+fn machine_connection_reason(error: &anyhow::Error) -> Option<String> {
     let body = error.downcast_ref::<ErrorBody>()?;
-    if let Some(ssh) = &body.data.ssh_interaction {
-        return Some(&ssh.reason);
+    let details = body.data.details.as_ref()?;
+    if body.data.reason == "ssh_interaction_required" {
+        return details.get("message")?.as_str().map(str::to_owned);
     }
-    let detail = match body.data.machines.as_slice() {
-        [machine] => machine.error.as_deref(),
-        _ => None,
-    };
-    detail.or_else(|| {
-        body.data.unavailable.as_ref()?.machine.as_ref()?;
-        Some(body.message.as_str())
-    })
+    if let Some(machines) = details
+        .get("machines")
+        .and_then(serde_json::Value::as_array)
+        && let [machine] = machines.as_slice()
+        && let Ok(machine) = serde_json::from_value::<MachineQuery>(machine.clone())
+        && machine.error.is_some()
+    {
+        return Some(machine_query_detail(&machine));
+    }
+    details
+        .get("machine")?
+        .is_object()
+        .then(|| body.message.clone())
 }
 
 /// The final warning when typed input was left waiting or dropped.
@@ -324,32 +309,10 @@ struct ScreenWatch {
 }
 
 struct WatchedScreen {
-    watch: Watch,
+    watch: u64,
     snapshot: ScreenSnapshot,
     capacity: Option<(u16, u16)>,
     include_scrollback: bool,
-}
-
-#[derive(Clone, Copy)]
-enum Watch {
-    Legacy(u64),
-    Shared(u64),
-}
-
-impl Watch {
-    fn attach_id(self) -> Option<u64> {
-        match self {
-            Self::Shared(watch) => Some(watch),
-            Self::Legacy(_) => None,
-        }
-    }
-
-    fn next_change(self, client: &mut DaemonClient) -> anyhow::Result<Option<ScreenChange>> {
-        match self {
-            Self::Shared(watch) => client.next_change::<AttachTopic>(watch),
-            Self::Legacy(watch) => client.next_change::<ScreenTopic>(watch),
-        }
-    }
 }
 
 /// An initial watch refused during takeover starts again with the replacement's hello.
@@ -360,12 +323,10 @@ fn watch_first(
     allow_ended: bool,
     reconnect: &Reconnect,
 ) -> anyhow::Result<WatchedScreen> {
-    // A transparent retry would replay the topic selected from the previous daemon's hello.
-    client.disable_auto_reconnect();
     let watched = watch_screen(client, target.clone(), viewer, true, allow_ended);
     if watched
         .as_ref()
-        .is_err_and(|error| watch_reason(error) == Some(Reason::Upgrading))
+        .is_err_and(|error| watch_reason(error) == Some("upgrading"))
     {
         *client = reconnect(Instant::now() + takeover_timeout(), &|| false, &mut |_| {
             true
@@ -384,8 +345,10 @@ fn watch_screen(
     include_scrollback: bool,
     allow_ended: bool,
 ) -> anyhow::Result<WatchedScreen> {
+    // Attach manages reconnection so input stays bound to the socket and watch that drew the view.
+    client.disable_auto_reconnect();
     let capacity = console_size();
-    let args = v3::ScreenWatchArgs {
+    let args = AttachArgs {
         target,
         keep_scrollback: true,
         include_scrollback,
@@ -394,60 +357,15 @@ fn watch_screen(
         report_activity: true,
         size: capacity
             .filter(|&(cols, _)| cols >= 2)
-            .map(|(cols, rows)| v3::ScreenSize { cols, rows }),
+            .map(|(cols, rows)| Size { cols, rows }),
     };
-    let (watch, snapshot) = if client
-        .hello_result
-        .topics
-        .iter()
-        .any(|name| name == AttachTopic::NAME)
-        && client
-            .hello_result
-            .ops
-            .iter()
-            .any(|name| name == AttachResize::NAME)
-    {
-        let (watch, snapshot) = client.watch::<AttachTopic>(args)?;
-        (Watch::Shared(watch), snapshot)
-    } else {
-        let (watch, snapshot) = watch_legacy(client, args)?;
-        (Watch::Legacy(watch), snapshot)
-    };
+    let (watch, snapshot) = client.watch::<AttachTopic>(args)?;
     Ok(WatchedScreen {
         watch,
         snapshot,
         capacity,
         include_scrollback,
     })
-}
-
-fn watch_legacy(
-    client: &mut DaemonClient,
-    args: v3::ScreenWatchArgs,
-) -> anyhow::Result<(u64, ScreenSnapshot)> {
-    let (watch, snapshot) = client.watch::<ScreenTopic>(args.clone())?;
-    // An older daemon may ignore the initial size. Request a fresh snapshot with its
-    // scrollback after resizing; a regular redraw has only the visible screen.
-    if let Some(size) = args.size
-        && args.include_scrollback
-        && snapshot.process != Some(ProcessState::Ended)
-        && snapshot.exit.is_none()
-        && snapshot.exit_status.is_none()
-        && (snapshot.cols > size.cols || snapshot.rows > size.rows)
-    {
-        let target = AgentTarget::Reference {
-            reference: snapshot.reference(),
-        };
-        client.unwatch(watch)?;
-        client.call::<v3::AgentResize>(v3::AgentResizeArgs {
-            target: target.clone(),
-            cols: size.cols,
-            rows: size.rows,
-            colors: None,
-        })?;
-        return client.watch::<ScreenTopic>(v3::ScreenWatchArgs { target, ..args });
-    }
-    Ok((watch, snapshot))
 }
 
 /// Shows the agent through one connection after another until the attachment ends.
@@ -505,26 +423,15 @@ fn show_snapshot(
     };
     let watched = &mut screen.watched;
     let snapshot = &mut watched.snapshot;
-    let grid = (snapshot.cols, snapshot.rows);
+    let grid = (snapshot.size.cols, snapshot.size.rows);
     let capacity = console_size();
-    let attach_id = watched.watch.attach_id();
-    terminal.draw_frame(
-        &snapshot.redraw,
-        grid,
-        capacity,
-        attach_id.is_some(),
-        watched.include_scrollback,
-    );
+    terminal.draw_frame(&snapshot.redraw, grid, capacity, watched.include_scrollback);
     show_activity(snapshot.working.unwrap_or_default());
     {
         let mut queue = input.lock();
         queue.agent_name.clone_from(&snapshot.name);
         queue.address.clone_from(&snapshot.address);
-        queue.reported_size = if attach_id.is_some() {
-            watched.capacity
-        } else {
-            Some(grid)
-        };
+        queue.reported_size = watched.capacity;
         queue
             .waiting
             .retain(|item| !matches!(item, Outgoing::Resize));
@@ -539,7 +446,7 @@ fn show_snapshot(
         }));
     }
     input.push_resize(capacity);
-    let Some(loss) = input.connected(screen.client.writer.try_clone()?, attach_id) else {
+    let Some(loss) = input.connected(screen.client.writer.try_clone()?, watched.watch) else {
         return Ok(Some(AttachEnd::Detached));
     };
     if loss.queued > 0 || loss.disconnected > 0 {
@@ -565,7 +472,7 @@ fn show_until_closed(
     input: &AgentInput,
 ) -> anyhow::Result<Option<AttachEnd>> {
     let watch = screen.watched.watch;
-    while let Some(change) = watch.next_change(&mut screen.client)? {
+    while let Some(change) = screen.client.next_change::<AttachTopic>(watch)? {
         // Detaching shuts the connection down, whatever the read returned.
         if input.is_detached() {
             return Ok(Some(AttachEnd::Detached));
@@ -577,15 +484,9 @@ fn show_until_closed(
                 }
                 continue;
             }
-            ScreenChange::Redraw { data, cols, rows } => {
+            ScreenChange::Redraw { data, size } => {
                 if let Some(mut terminal) = attached_terminal() {
-                    terminal.draw_frame(
-                        &data,
-                        (cols, rows),
-                        console_size(),
-                        watch.attach_id().is_some(),
-                        false,
-                    );
+                    terminal.draw_frame(&data, (size.cols, size.rows), console_size(), false);
                 }
                 continue;
             }
@@ -648,8 +549,8 @@ fn reconnect_screen(
             Err(error) => error,
         };
         match watch_reason(&error) {
-            Some(Reason::NotFound) => return Err(AttachEnd::Removed),
-            Some(Reason::Ended) => {
+            Some("not_found") => return Err(AttachEnd::Removed),
+            Some("ended") => {
                 let exit = set_watch_timeout(&client, deadline)
                     .ok()
                     .and_then(|()| inspect_agent(&mut client, input.target()))
@@ -716,10 +617,10 @@ fn set_watch_timeout(client: &DaemonClient, deadline: Instant) -> std::io::Resul
     client.writer.set_write_timeout(Some(remaining))
 }
 
-/// Older daemons refuse ended snapshots even when a foreground watch opts in.
-fn inspect_agent(client: &mut DaemonClient, target: AgentTarget) -> Option<v3::AgentInfo> {
+/// Reads the run's exit record if the watch returned an ended refusal.
+fn inspect_agent(client: &mut DaemonClient, target: AgentTarget) -> Option<AgentInfo> {
     client
-        .call::<v3::AgentInspect>(v3::AgentSelectorArgs { target })
+        .call::<AgentInspect>(AgentTargetArgs { target })
         .ok()
         .map(|inspected| inspected.agent)
 }
@@ -727,18 +628,18 @@ fn inspect_agent(client: &mut DaemonClient, target: AgentTarget) -> Option<v3::A
 fn retryable_watch(error: &anyhow::Error) -> bool {
     matches!(
         watch_reason(error),
-        Some(Reason::Unavailable | Reason::Upgrading | Reason::SshInteractionRequired)
+        Some("unavailable" | "upgrading" | "ssh_interaction_required")
     ) || error.is::<Cut>()
         || error
             .downcast_ref::<std::io::Error>()
-            .is_some_and(facade_base::daemon_client::transient_transport)
+            .is_some_and(transient_transport)
 }
 
 /// The daemon's reason for refusing the watch.
-fn watch_reason(error: &anyhow::Error) -> Option<Reason> {
+fn watch_reason(error: &anyhow::Error) -> Option<&str> {
     error
         .downcast_ref::<ErrorBody>()
-        .map(|body| body.data.reason)
+        .map(|body| body.data.reason.as_str())
 }
 
 /// Queues a resize on each size change; on a termination signal, restores the terminal and exits
@@ -862,7 +763,7 @@ struct InputQueue {
     /// Display identity from the snapshot most recently drawn.
     agent_name: Option<String>,
     address: String,
-    /// The last capacity sent or queued, initially the watch size (legacy uses the snapshot grid).
+    /// The last capacity sent or queued, initially the watch size.
     reported_size: Option<(u16, u16)>,
     waiting: VecDeque<Outgoing>,
     /// The key bytes in `waiting`.
@@ -872,15 +773,19 @@ struct InputQueue {
     reconnect_loss: ReconnectLoss,
     /// The connection to send on; none while disconnected. A failed write ends it only if it is
     /// still the one the write used.
-    connection: Option<Arc<ClientSocket>>,
-    /// The Attach watch on `connection`, or none when it uses the legacy resize operation.
-    attach_watch: Option<u64>,
+    connection: Option<InputConnection>,
     /// Whether the writer is sending something it took from `waiting`.
     writing: bool,
     /// A connection opening or finishing a takeover write; detaching shuts it down.
     opening: Option<Arc<ClientSocket>>,
     /// Ctrl-], the end of the person's input or the end of the attachment.
     detached: bool,
+}
+
+#[derive(Clone)]
+struct InputConnection {
+    socket: Arc<ClientSocket>,
+    watch: u64,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -896,7 +801,7 @@ impl InputQueue {
     fn clear_connection(&mut self) -> Option<Arc<ClientSocket>> {
         self.reconnect_loss.queued += std::mem::take(&mut self.waiting_key_bytes);
         self.waiting.clear();
-        self.connection.take()
+        self.connection.take().map(|connection| connection.socket)
     }
 }
 
@@ -910,46 +815,19 @@ enum Outgoing {
 
 impl Outgoing {
     /// The notification for this connection, if it accepts the reported size.
-    fn line(self, target: AgentTarget, attach_watch: Option<u64>) -> Option<Vec<u8>> {
+    fn line(self, reference: &AgentRef, watch: u64) -> Option<Vec<u8>> {
         match self {
-            Outgoing::Keys(keys) => Some(notification::<v3::AgentType>(v3::AgentTypeArgs {
-                target,
-                raw: Some(base64::encode(&keys)),
-                text: None,
-                enter: false,
-                keys: None,
-            })),
+            Outgoing::Keys(keys) => Some(raw_input_line(reference.clone(), &keys)),
             Outgoing::Resize => {
-                let (cols, rows) = console_size()?;
-                match attach_watch {
-                    Some(watch) if cols >= 2 => {
-                        Some(notification::<AttachResize>(v3::AttachResizeArgs {
-                            watch,
-                            cols,
-                            rows,
-                            colors: None,
-                        }))
-                    }
-                    Some(_) => None,
-                    None => Some(notification::<v3::AgentResize>(v3::AgentResizeArgs {
-                        target,
-                        cols,
-                        rows,
-                        colors: None,
-                    })),
-                }
+                let (cols, rows) = console_size().filter(|&(cols, _)| cols >= 2)?;
+                Some(attach_resize_line(AttachResizeArgs {
+                    watch,
+                    size: Size { cols, rows },
+                    colors: None,
+                }))
             }
         }
     }
-}
-
-/// An operation as a notification line: a call without an ID, which the daemon does not respond to.
-fn notification<O: Operation>(args: O::Args) -> Vec<u8> {
-    let params = CallParams {
-        op: O::NAME.into(),
-        args: serde_json::to_value(args).expect("protocol value must serialize"),
-    };
-    jsonrpc::encode_line(&jsonrpc::Request::new(None, daemon::methods::CALL, params))
 }
 
 impl AgentInput {
@@ -965,9 +843,7 @@ impl AgentInput {
     }
 
     fn target(&self) -> AgentTarget {
-        AgentTarget::Reference {
-            reference: self.reference.clone(),
-        }
+        AgentTarget::Reference(self.reference.clone())
     }
 
     fn lock(&self) -> MutexGuard<'_, InputQueue> {
@@ -1045,18 +921,16 @@ impl AgentInput {
     }
 
     /// Enables the writer and takes the unsent counts to report after the redraw.
-    fn connected(
-        &self,
-        connection: ClientSocket,
-        attach_watch: Option<u64>,
-    ) -> Option<ReconnectLoss> {
+    fn connected(&self, socket: ClientSocket, watch: u64) -> Option<ReconnectLoss> {
         let mut queue = self.lock();
         if queue.detached {
             return None;
         }
         queue.opening = None;
-        queue.connection = Some(Arc::new(connection));
-        queue.attach_watch = attach_watch;
+        queue.connection = Some(InputConnection {
+            socket: Arc::new(socket),
+            watch,
+        });
         self.wake.notify_all();
         Some(std::mem::take(&mut queue.reconnect_loss))
     }
@@ -1109,7 +983,7 @@ impl AgentInput {
     /// the screen reader and interrupts a blocked write.
     fn end(&self, mut queue: MutexGuard<'_, InputQueue>) {
         queue.detached = true;
-        let current = queue.connection.as_deref();
+        let current = queue.connection.as_ref().map(|conn| conn.socket.as_ref());
         for stream in current.into_iter().chain(queue.opening.as_deref()) {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
@@ -1127,9 +1001,9 @@ impl AgentInput {
 
     /// The writer thread: sends the waiting input in order until the attachment ends.
     fn send_queued(&self) {
-        while let Some((connection, attach_watch, outgoing)) = self.next_to_send() {
-            let sent = match outgoing.line(self.target(), attach_watch) {
-                Some(line) => (&*connection).write_all(&line),
+        while let Some((connection, outgoing)) = self.next_to_send() {
+            let sent = match outgoing.line(&self.reference, connection.watch) {
+                Some(line) => (&*connection.socket).write_all(&line),
                 None => Ok(()),
             };
             let mut queue = self.lock();
@@ -1137,10 +1011,10 @@ impl AgentInput {
             let still_current = queue
                 .connection
                 .as_ref()
-                .is_some_and(|current| Arc::ptr_eq(current, &connection));
+                .is_some_and(|current| Arc::ptr_eq(&current.socket, &connection.socket));
             if sent.is_err() && still_current {
                 let _ = queue.clear_connection();
-                let _ = connection.shutdown(std::net::Shutdown::Both);
+                let _ = connection.socket.shutdown(std::net::Shutdown::Both);
             }
             // Ctrl-] or a takeover may wait for this write.
             self.wake.notify_all();
@@ -1149,7 +1023,7 @@ impl AgentInput {
 
     /// Waits for input and a connection, then takes the next input with the connection to send it
     /// on. None once the attachment has ended.
-    fn next_to_send(&self) -> Option<(Arc<ClientSocket>, Option<u64>, Outgoing)> {
+    fn next_to_send(&self) -> Option<(InputConnection, Outgoing)> {
         let mut queue = self.lock();
         while !queue.detached {
             if let Some(connection) = queue.connection.clone()
@@ -1159,7 +1033,7 @@ impl AgentInput {
                     queue.waiting_key_bytes -= keys.len();
                 }
                 queue.writing = true;
-                return Some((connection, queue.attach_watch, outgoing));
+                return Some((connection, outgoing));
             }
             queue = self.wake.wait(queue).unwrap();
         }
@@ -1202,8 +1076,6 @@ fn show_activity(working: bool) {
 /// The terminal drawing for the current watch, held under the same lock as its writes.
 struct Display {
     shared: Option<SharedScreen>,
-    /// The legacy stream can continue only after a frame fit on the console.
-    visible_frame: bool,
 }
 
 impl Display {
@@ -1212,49 +1084,35 @@ impl Display {
         data: &str,
         grid: (u16, u16),
         capacity: Option<(u16, u16)>,
-        shared: bool,
         include_scrollback: bool,
     ) {
-        if shared {
-            let Ok(bytes) = base64::decode(data) else {
-                return;
-            };
-            let scrollback = if include_scrollback {
-                REDRAW_SCROLLBACK_ROWS
-            } else {
-                0
-            };
-            let mut frame = SharedScreen {
-                screen: Screen::new(grid.0, grid.1, scrollback),
-                capacity,
-            };
-            frame.screen.feed(&bytes);
-            frame.draw(Some(&bytes), include_scrollback);
-            self.shared = Some(frame);
-        } else {
-            self.visible_frame = fits(grid, capacity);
-            if self.visible_frame {
-                self.write_output(data);
-            } else {
-                show_too_small(grid);
-            }
-        }
-    }
-
-    fn write_output(&mut self, data: &str) {
-        if self.shared.is_none() && !self.visible_frame {
-            return;
-        }
         let Ok(bytes) = base64::decode(data) else {
             return;
         };
-        if let Some(shared) = &mut self.shared {
-            shared.screen.feed(&bytes);
-            if fits(shared.grid(), shared.capacity) {
-                shared.draw(Some(&bytes), false);
-            }
+        let scrollback = if include_scrollback {
+            REDRAW_SCROLLBACK_ROWS
         } else {
-            write_screen(&bytes);
+            0
+        };
+        let mut frame = SharedScreen {
+            screen: Screen::new(grid.0, grid.1, scrollback),
+            capacity,
+        };
+        frame.screen.feed(&bytes);
+        frame.draw(Some(&bytes), include_scrollback);
+        self.shared = Some(frame);
+    }
+
+    fn write_output(&mut self, data: &str) {
+        let Some(shared) = &mut self.shared else {
+            return;
+        };
+        let Ok(bytes) = base64::decode(data) else {
+            return;
+        };
+        shared.screen.feed(&bytes);
+        if fits(shared.grid(), shared.capacity) {
+            shared.draw(Some(&bytes), false);
         }
     }
 }
@@ -1473,6 +1331,7 @@ mod tests {
     use super::*;
 
     const MACHINE_ID: &str = "11111111-2222-4333-8444-555555555555";
+    const WATCH_ID: u64 = 7;
 
     /// The daemon's end of a connection, read on a runtime of its own.
     struct Daemon {
@@ -1489,18 +1348,17 @@ mod tests {
             .block_on(async { tokio::time::timeout(Duration::from_secs(5), read).await });
         read.unwrap().unwrap();
         let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(
-            (request["params"]["op"].as_str(), request.get("id")),
-            (Some("agent.type"), None),
-            "{request}"
-        );
+        assert_eq!(request["jsonrpc"], "2.0");
+        assert_eq!(request["method"], "call");
+        assert_eq!(request["params"]["op"], "agent.type");
+        assert!(request.get("id").is_none(), "{request}");
         let args = &request["params"]["args"];
         assert_eq!(
-            args["reference"],
+            args["target"],
             json!({ "machine_id": MACHINE_ID, "agent_id": "a1" })
         );
-        assert!(args.get("agent").is_none(), "{request}");
-        base64::decode(request["params"]["args"]["raw"].as_str().unwrap()).unwrap()
+        assert_eq!(args["input"]["kind"], "raw");
+        base64::decode(args["input"]["raw"].as_str().unwrap()).unwrap()
     }
 
     /// An input queue with the target fixed by its first snapshot.
@@ -1532,7 +1390,7 @@ mod tests {
         let input = input();
         let (old_writer, _old_daemon) = connection();
         assert_eq!(
-            input.connected(old_writer, None),
+            input.connected(old_writer, WATCH_ID),
             Some(ReconnectLoss::default())
         );
         input.push_keys(&vec![b'x'; MAX_QUEUED_KEY_BYTES]);
@@ -1547,7 +1405,7 @@ mod tests {
         );
         let (writer, mut daemon) = connection();
         assert_eq!(
-            input.connected(writer, None),
+            input.connected(writer, WATCH_ID),
             Some(ReconnectLoss {
                 queued: MAX_QUEUED_KEY_BYTES,
                 disconnected: 6,
@@ -1571,7 +1429,7 @@ mod tests {
         spawn_with(&input, AgentInput::send_queued);
         let (writer, daemon) = connection();
         assert_eq!(
-            input.connected(writer, None),
+            input.connected(writer, WATCH_ID),
             Some(ReconnectLoss::default())
         );
         drop(daemon);
@@ -1587,7 +1445,7 @@ mod tests {
         input.push_keys(b"offline");
         let (writer, mut daemon) = connection();
         assert_eq!(
-            input.connected(writer, None),
+            input.connected(writer, WATCH_ID),
             Some(ReconnectLoss {
                 queued: 0,
                 disconnected: 7,
@@ -1606,7 +1464,7 @@ mod tests {
         // The daemon reads nothing, so the writer soon blocks in a write.
         let (writer, daemon) = connection();
         assert_eq!(
-            input.connected(writer, None),
+            input.connected(writer, WATCH_ID),
             Some(ReconnectLoss::default())
         );
         let chunk = vec![b'k'; 64 * 1024];

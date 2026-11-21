@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-use facade_base::machine::MachineIdentity;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::Store;
@@ -159,23 +158,6 @@ impl Store {
         })
     }
 
-    pub(crate) fn legacy_machines(&self) -> anyhow::Result<Vec<MachineIdentity>> {
-        self.with(
-            || "read the legacy workspace source machines".to_owned(),
-            |connection| {
-                connection
-                    .prepare("SELECT machine_id, name FROM legacy_machines ORDER BY machine_id")?
-                    .query_map([], |row| {
-                        Ok(MachineIdentity {
-                            machine_id: row.get(0)?,
-                            name: row.get(1)?,
-                        })
-                    })?
-                    .collect()
-            },
-        )
-    }
-
     pub(crate) fn rename_machine(&self, name: &str) -> anyhow::Result<()> {
         self.with(
             || "save this machine's name".to_string(),
@@ -189,16 +171,16 @@ impl Store {
     pub(crate) fn delete_connection(
         &self,
         machine_id: &str,
-    ) -> anyhow::Result<Option<SavedConnection>> {
-        self.with(
+    ) -> anyhow::Result<Option<crate::network::SavedSsh>> {
+        self.transaction(
             || format!("delete the saved connection to {machine_id}"),
             |connection| {
                 connection
                     .query_row(
                         "DELETE FROM saved_connections WHERE machine_id = ?1
-                         RETURNING machine_id, ssh_destination, remote_home",
+                         RETURNING machine_id, ssh_destination, remote_home, ssh_args",
                         [machine_id],
-                        read_connection,
+                        read_saved_ssh,
                     )
                     .optional()
             },
@@ -309,11 +291,10 @@ mod tests {
         );
         for connection in restored {
             let id = &connection.config.machine_id;
-            assert_eq!(
-                store.delete_connection(id).unwrap().as_ref(),
-                Some(&connection.config)
-            );
-            assert_eq!(store.delete_connection(id).unwrap(), None);
+            let removed = store.delete_connection(id).unwrap().unwrap();
+            assert_eq!(removed.config, connection.config);
+            assert_eq!(removed.argv, connection.argv);
+            assert!(store.delete_connection(id).unwrap().is_none());
         }
         assert!(store.saved_ssh().unwrap().is_empty());
     }
