@@ -380,7 +380,7 @@ fn write_typescript_maps(out: &mut String, ops: &[OperationDoc], topics: &[Topic
     );
     for topic in topics {
         out.push_str(&format!(
-            "\treadonly {}: {{ readonly args: {}; readonly snapshot: {}; readonly change: {} }};\n",
+            "\treadonly \"{}\": {{ readonly args: {}; readonly snapshot: {}; readonly change: {} }};\n",
             topic.name,
             typescript_type(&topic.args),
             typescript_type(&topic.snapshot),

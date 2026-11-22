@@ -673,6 +673,7 @@ fn read_keys(input: &AgentInput) {
                     input.resized();
                     continue;
                 }
+                Ok(ConsoleRead::Wheel { .. }) => continue,
                 Ok(ConsoleRead::Keys(read @ 1..)) => read,
                 Ok(ConsoleRead::Keys(0)) | Err(_) => break,
             };

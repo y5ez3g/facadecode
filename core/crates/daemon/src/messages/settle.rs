@@ -246,6 +246,7 @@ fn result_message(
         to: prompt.from.clone(),
         text: start_result_text(&outcome),
         reply_to: None,
+        command_line_reply: false,
         from_window: None,
         call_id: prompt.call_id.clone(),
         result: Some(outcome),

@@ -87,6 +87,7 @@ impl ResumeCandidate {
             name: self.name,
             stopped: self.stopped,
             title: self.title,
+            session_name: None,
             at: self.at,
         }
     }

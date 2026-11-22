@@ -6,7 +6,7 @@ use facade_base::address::{
     is_machine_name,
     selector::{self as addresses, MachineSelector},
 };
-use facade_base::api_v1::{self, ApiVersion, daemon as wire};
+use facade_base::api_v1::{self, ApiVersion, Operation, daemon as wire};
 use facade_base::model::error::{ErrorBody, Reason};
 use facade_base::model::machine::MachineQueryResult;
 use facade_base::sockets::{ServerReader, ServerWriter};
@@ -113,7 +113,10 @@ impl Daemon {
                 agent_count: self.active_count() as u64,
                 keeper: None,
                 topics: wire::topic_names(wire::ClientKind::Machine),
-                ops: wire::operation_names(wire::ClientKind::Machine),
+                ops: wire::operation_names(wire::ClientKind::Machine)
+                    .into_iter()
+                    .filter(|op| op != wire::InternalCommandReply::NAME)
+                    .collect(),
             },
             MachineStream::Incoming(greeting, self.hold_machine_handoff()?),
         ))

@@ -74,6 +74,12 @@ pub struct MessageAddress<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandReplyAddress<'a> {
+    pub number: &'a str,
+    pub machine: Option<MachineSelector<'a>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddressError {
     InvalidMachine,
     InvalidMessage,
@@ -162,12 +168,37 @@ pub fn parse_message_address(input: &str) -> Result<MessageAddress<'_>, AddressE
     })
 }
 
+pub fn parse_command_reply_address(
+    input: &str,
+) -> Result<Option<CommandReplyAddress<'_>>, AddressError> {
+    let input = input.trim_matches(is_space);
+    let (address, machine) = match input.split_once('@') {
+        Some((address, machine)) => (address, Some(machine)),
+        None => (input, None),
+    };
+    let Some(number) = address.strip_prefix("#c") else {
+        return Ok(None);
+    };
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Ok(None);
+    }
+    let machine = machine.map(parse_machine_selector).transpose()?;
+    Ok(Some(CommandReplyAddress { number, machine }))
+}
+
 pub fn format_agent_address(agent_id: &str, machine: &str) -> String {
     format!("{agent_id}@{machine}")
 }
 
 pub fn format_message_address(message_id: &str, machine: &str) -> String {
     format!("{message_id}@{machine}")
+}
+
+pub fn format_command_reply_address(message_id: &str, machine: &str) -> String {
+    let number = message_id
+        .strip_prefix('m')
+        .expect("an assigned message ID starts with m");
+    format!("#c{number}@{machine}")
 }
 
 /// The full machine ID, with no address prefix. Use `display_machine_selector` for a checked

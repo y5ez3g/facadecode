@@ -181,6 +181,9 @@ pub struct Message {
     /// The replied-to message's machine, when different from the one that stored this message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to_machine_id: Option<String>,
+    /// Whether the sender requested a command-line reply.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub command_line_reply: bool,
     /// The sender's window name if it had a single member window and the recipient did not belong
     /// to that window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -520,6 +523,8 @@ pub enum DeliveredVia {
     /// A message to the person: delivered to one or more member windows' subscriptions.
     #[serde(rename = "notified")]
     DeliveredToWindows,
+    /// Returned to the sending command as its reply.
+    ReturnedToRequest,
     /// A way this build does not recognize.
     #[serde(other)]
     #[schemars(skip)]
@@ -635,6 +640,7 @@ mod tests {
             (DeliveredVia::TypedIntoInput, "terminal"),
             (DeliveredVia::ReadByRecipient, "read"),
             (DeliveredVia::DeliveredToWindows, "notified"),
+            (DeliveredVia::ReturnedToRequest, "returned_to_request"),
         ] {
             assert_eq!(serde_json::to_value(via).unwrap(), json!(name));
             assert_eq!(
@@ -667,6 +673,7 @@ mod tests {
             to: "a2".into(),
             text: "message 42".into(),
             reply_to: None,
+            command_line_reply: false,
             from_window: None,
             call_id: None,
             result: None,
@@ -858,6 +865,7 @@ mod tests {
             to: "a1".into(),
             text: words(&agent, typed),
             reply_to: None,
+            command_line_reply: false,
             from_window: None,
             call_id: Some("7".into()),
             result: None,

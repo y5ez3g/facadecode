@@ -75,6 +75,7 @@ pub(super) fn send_verified(
             reply_to: optional(arguments, "reply_to").map(ReplyTo::Address),
             request_id: Some(call.request_id.clone()),
             time_left_ms: left.map(|left| left.as_millis() as u64),
+            wait_for: None,
             allow_unsupported_receipt: false,
         },
         |sent, _| delivered_verified(sent, actor.kind),

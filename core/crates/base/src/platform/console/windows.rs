@@ -1,16 +1,20 @@
 //! The person's console on Windows: its virtual terminal modes and its input records.
 
+use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Console::{
     CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, COORD, DISABLE_NEWLINE_AUTO_RETURN,
-    ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+    ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT,
+    ENABLE_PROCESSED_INPUT, ENABLE_QUICK_EDIT_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT,
     ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, GetConsoleMode,
-    GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, KEY_EVENT, PeekConsoleInputW,
-    ReadConsoleInputW, ReadConsoleOutputCharacterW, STD_HANDLE, STD_INPUT_HANDLE,
-    STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+    GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED,
+    LEFT_CTRL_PRESSED, MOUSE_EVENT, MOUSE_EVENT_RECORD, MOUSE_WHEELED, PeekConsoleInputW,
+    RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, ReadConsoleOutputCharacterW,
+    SHIFT_PRESSED, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
+    WINDOW_BUFFER_SIZE_EVENT,
 };
 
 use super::{ConsoleRead, ConsoleSignal};
@@ -45,6 +49,21 @@ impl VtModes {
             output,
             restored: AtomicBool::new(false),
         })
+    }
+
+    pub(super) fn set_mouse_capture(&self, enabled: bool) -> io::Result<()> {
+        let input = mode(STD_INPUT_HANDLE)?;
+        let quick_edit = ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS;
+        let mouse = if enabled {
+            ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS
+        } else {
+            // Give the wheel back to the host and restore its Quick Edit preference.
+            self.input & quick_edit
+        };
+        set_mode(
+            STD_INPUT_HANDLE,
+            (input & !(ENABLE_MOUSE_INPUT | quick_edit)) | mouse,
+        )
     }
 
     pub(super) fn restore(&self) {
@@ -84,13 +103,18 @@ fn set_mode(which: STD_HANDLE, mode: CONSOLE_MODE) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn visible_content_end() -> Option<u16> {
-    let output = std_handle(STD_OUTPUT_HANDLE).ok()?;
+fn screen_buffer_info(output: HANDLE) -> Option<CONSOLE_SCREEN_BUFFER_INFO> {
     let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
     // SAFETY: `info` is writable and the console API checks the handle.
     if unsafe { GetConsoleScreenBufferInfo(output, &mut info) } == 0 {
         return None;
     }
+    Some(info)
+}
+
+pub(super) fn visible_content_end() -> Option<u16> {
+    let output = std_handle(STD_OUTPUT_HANDLE).ok()?;
+    let info = screen_buffer_info(output)?;
     let window = info.srWindow;
     let width = u16::try_from(i32::from(window.Right) - i32::from(window.Left) + 1).ok()?;
     if width == 0 || window.Top > window.Bottom {
@@ -132,38 +156,46 @@ pub(super) fn visible_content_end() -> Option<u16> {
 /// How many input records one read takes at most.
 const RECORDS_PER_READ: usize = 64;
 
+enum PendingInput {
+    Keys(Vec<u8>),
+    Event(ConsoleRead),
+}
+
 pub(super) struct ConsoleReader {
-    /// Key bytes read and not yet given, in order.
-    pending: Vec<u8>,
+    pending: VecDeque<PendingInput>,
     /// The first half of a character above U+FFFF, until its second half comes.
     high: Option<u16>,
-    /// Whether the console changed size since the last `Resized`.
-    resized: bool,
 }
 
 impl ConsoleReader {
     pub(super) fn new() -> io::Result<ConsoleReader> {
         std_handle(STD_INPUT_HANDLE)?;
         Ok(ConsoleReader {
-            pending: Vec::new(),
+            pending: VecDeque::new(),
             high: None,
-            resized: false,
         })
     }
 
-    /// Keys come before a size change read with them.
     pub(super) fn read(&mut self, buf: &mut [u8]) -> io::Result<ConsoleRead> {
         loop {
-            if !self.pending.is_empty() {
-                let given = buf.len().min(self.pending.len());
-                buf[..given].copy_from_slice(&self.pending[..given]);
-                self.pending.drain(..given);
-                return Ok(ConsoleRead::Keys(given));
-            }
-            if std::mem::take(&mut self.resized) {
-                return Ok(ConsoleRead::Resized);
-            }
-            self.read_records()?;
+            let event = match self.pending.front_mut() {
+                Some(PendingInput::Keys(keys)) => {
+                    let given = buf.len().min(keys.len());
+                    buf[..given].copy_from_slice(&keys[..given]);
+                    keys.drain(..given);
+                    if !keys.is_empty() {
+                        return Ok(ConsoleRead::Keys(given));
+                    }
+                    ConsoleRead::Keys(given)
+                }
+                Some(PendingInput::Event(event)) => *event,
+                None => {
+                    self.read_records()?;
+                    continue;
+                }
+            };
+            self.pending.pop_front();
+            return Ok(event);
         }
     }
 
@@ -205,7 +237,8 @@ impl ConsoleReader {
         Ok(read == count)
     }
 
-    /// Waits for input records, and keeps what their key-down records and size changes bring.
+    /// Batches consecutive key bytes. Wheel events stay between their surrounding key batches,
+    /// and size changes still coalesce into one event after the batch.
     fn read_records(&mut self) -> io::Result<()> {
         // SAFETY: an all-zero INPUT_RECORD is valid.
         let mut records: [INPUT_RECORD; RECORDS_PER_READ] = unsafe { std::mem::zeroed() };
@@ -223,6 +256,8 @@ impl ConsoleReader {
         if got == 0 {
             return Err(io::Error::last_os_error());
         }
+        let mut keys = Vec::new();
+        let mut resized = false;
         for record in &records[..read as usize] {
             match u32::from(record.EventType) {
                 KEY_EVENT => {
@@ -232,19 +267,37 @@ impl ConsoleReader {
                     let unit = unsafe { key.uChar.UnicodeChar };
                     if key.bKeyDown != 0 && unit != 0 {
                         for _ in 0..key.wRepeatCount.max(1) {
-                            self.push_unit(unit);
+                            self.push_unit(unit, &mut keys);
                         }
                     }
                 }
-                WINDOW_BUFFER_SIZE_EVENT => self.resized = true,
+                MOUSE_EVENT => {
+                    // SAFETY: a MOUSE_EVENT record holds a mouse event.
+                    let mouse = unsafe { record.Event.MouseEvent };
+                    if let Some(wheel) = vertical_wheel(mouse) {
+                        if !keys.is_empty() {
+                            self.pending
+                                .push_back(PendingInput::Keys(std::mem::take(&mut keys)));
+                        }
+                        self.pending.push_back(PendingInput::Event(wheel));
+                    }
+                }
+                WINDOW_BUFFER_SIZE_EVENT => resized = true,
                 _ => {}
             }
+        }
+        if !keys.is_empty() {
+            self.pending.push_back(PendingInput::Keys(keys));
+        }
+        if resized {
+            self.pending
+                .push_back(PendingInput::Event(ConsoleRead::Resized));
         }
         Ok(())
     }
 
     /// Adds one UTF-16 unit of a key's character, as UTF-8.
-    fn push_unit(&mut self, unit: u16) {
+    fn push_unit(&mut self, unit: u16, keys: &mut Vec<u8>) {
         let units: Vec<u16> = match (self.high.take(), unit) {
             (None, 0xD800..=0xDBFF) => {
                 self.high = Some(unit);
@@ -256,10 +309,31 @@ impl ConsoleReader {
         for character in char::decode_utf16(units) {
             let character = character.unwrap_or(char::REPLACEMENT_CHARACTER);
             let mut bytes = [0u8; 4];
-            self.pending
-                .extend_from_slice(character.encode_utf8(&mut bytes).as_bytes());
+            keys.extend_from_slice(character.encode_utf8(&mut bytes).as_bytes());
         }
     }
+}
+
+fn vertical_wheel(mouse: MOUSE_EVENT_RECORD) -> Option<ConsoleRead> {
+    if mouse.dwEventFlags != MOUSE_WHEELED {
+        return None;
+    }
+    let output = std_handle(STD_OUTPUT_HANDLE).ok()?;
+    let window = screen_buffer_info(output)?.srWindow;
+    let COORD { X: x, Y: y } = mouse.dwMousePosition;
+    if !(window.Left..=window.Right).contains(&x) || !(window.Top..=window.Bottom).contains(&y) {
+        return None;
+    }
+    let state = mouse.dwControlKeyState;
+    let modifiers = (u8::from(state & SHIFT_PRESSED != 0) << 2)
+        | (u8::from(state & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED) != 0) << 3)
+        | (u8::from(state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0) << 4);
+    Some(ConsoleRead::Wheel {
+        col: u16::try_from(i32::from(x) - i32::from(window.Left) + 1).ok()?,
+        row: u16::try_from(i32::from(y) - i32::from(window.Top) + 1).ok()?,
+        delta: (mouse.dwButtonState >> 16) as i16,
+        modifiers,
+    })
 }
 
 /// No signals reach a console program on Windows that attach follows.

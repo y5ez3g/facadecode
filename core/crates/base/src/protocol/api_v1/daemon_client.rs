@@ -1,7 +1,7 @@
 //! Blocking client for the authenticated daemon API v1 connection.
 
 use std::collections::VecDeque;
-use std::io::{self, BufReader, ErrorKind, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -152,6 +152,26 @@ impl DaemonClient {
         self.exchange(methods::CALL, &call_params::<O>(args)?)
     }
 
+    /// Calls once on this connection within an absolute deadline, including partial socket
+    /// transfers and closing acknowledgments. Discard the connection after a timeout because a
+    /// request or response frame may be incomplete.
+    pub fn call_until<O: Operation>(
+        &mut self,
+        args: O::Args,
+        until: Instant,
+    ) -> anyhow::Result<O::Result> {
+        let params = call_params::<O>(args)?;
+        let result = self
+            .ask(methods::CALL, &params, Some(until))
+            .and_then(|id| self.answer_to(id, Some(until)));
+        let reset_read = self.reader.get_ref().set_read_timeout(None);
+        let reset_write = self.writer.set_write_timeout(None);
+        let result = result?;
+        reset_read?;
+        reset_write?;
+        Ok(result)
+    }
+
     /// Repeats an interrupted start or send with its original business request ID.
     pub fn call_with_request_id<O: Operation>(
         &mut self,
@@ -185,11 +205,11 @@ impl DaemonClient {
 
     /// Starts a call without waiting, returning its connection-local request ID.
     pub fn begin_call<O: Operation>(&mut self, args: O::Args) -> anyhow::Result<u64> {
-        self.ask(methods::CALL, &call_params::<O>(args)?)
+        self.ask(methods::CALL, &call_params::<O>(args)?, None)
     }
 
     pub fn result<O: Operation>(&mut self, id: u64) -> anyhow::Result<O::Result> {
-        self.answer_to(id)
+        self.answer_to(id, None)
     }
 
     pub fn watch<T: Topic>(&mut self, args: T::Args) -> anyhow::Result<(u64, T::Snapshot)> {
@@ -203,8 +223,8 @@ impl DaemonClient {
 
     /// Ends this connection's watch and waits for its acknowledgment.
     pub fn unwatch(&mut self, watch: u64) -> anyhow::Result<()> {
-        let id = self.ask(methods::UNWATCH, &UnwatchParams { watch })?;
-        let _: EmptyResult = self.answer_to(id)?;
+        let id = self.ask(methods::UNWATCH, &UnwatchParams { watch }, None)?;
+        let _: EmptyResult = self.answer_to(id, None)?;
         self.unread.retain(|notification| {
             !matches!(
                 notification.method.as_str(),
@@ -271,10 +291,12 @@ impl DaemonClient {
 
     /// Acknowledges closing after the caller has stopped any concurrent writer.
     pub fn respond_to_closing(&mut self) {
-        let _ = self.writer.write_all(&encode_line(&Notification::new(
-            methods::CLOSING,
-            NoArgs {},
-        )));
+        let _ = self.acknowledge_closing(None);
+    }
+
+    fn acknowledge_closing(&mut self, until: Option<Instant>) -> io::Result<()> {
+        let frame = encode_line(&Notification::new(methods::CLOSING, NoArgs {}));
+        write_frame(&mut self.writer, &frame, until)
     }
 
     fn record_closing(&mut self, notification: Notification) -> anyhow::Result<()> {
@@ -289,8 +311,8 @@ impl DaemonClient {
         params: &impl Serialize,
     ) -> anyhow::Result<T> {
         loop {
-            let id = self.ask(method, params)?;
-            let answer = self.answer_to(id);
+            let id = self.ask(method, params, None)?;
+            let answer = self.answer_to(id, None);
             if !matches!(&answer, Err(error) if upgrading(error)) || self.origin.is_none() {
                 return answer;
             }
@@ -298,19 +320,38 @@ impl DaemonClient {
         }
     }
 
-    fn ask(&mut self, method: &str, params: &impl Serialize) -> anyhow::Result<u64> {
+    fn ask(
+        &mut self,
+        method: &str,
+        params: &impl Serialize,
+        until: Option<Instant>,
+    ) -> anyhow::Result<u64> {
         let id = self.next_id;
         self.next_id = id
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("request IDs exhausted"))?;
-        self.writer
-            .write_all(&encode_line(&Request::new(Some(id), method, params)))?;
+        let frame = encode_line(&Request::new(Some(id), method, params));
+        write_frame(&mut self.writer, &frame, until)?;
         Ok(id)
     }
 
-    fn answer_to<T: DeserializeOwned>(&mut self, id: u64) -> anyhow::Result<T> {
+    fn answer_to<T: DeserializeOwned>(
+        &mut self,
+        id: u64,
+        until: Option<Instant>,
+    ) -> anyhow::Result<T> {
         loop {
-            match read_server_message(&mut self.reader, &mut self.line) {
+            let message = match until {
+                Some(until) => read_server_message(
+                    &mut DeadlineReader {
+                        reader: &mut self.reader,
+                        until,
+                    },
+                    &mut self.line,
+                ),
+                None => read_server_message(&mut self.reader, &mut self.line),
+            };
+            match message {
                 Ok(Some(ServerMessage::Response(response))) if answers(&response, id) => {
                     return response_result(response);
                 }
@@ -318,12 +359,20 @@ impl DaemonClient {
                 Ok(Some(ServerMessage::Notification(notification))) => {
                     if notification.method == methods::CLOSING {
                         self.record_closing(notification)?;
-                        self.respond_to_closing();
+                        if let Err(error) = self.acknowledge_closing(until)
+                            && until.is_some()
+                            && error.kind() == ErrorKind::TimedOut
+                        {
+                            return Err(error.into());
+                        }
                     } else {
                         self.unread.push_back(notification);
                     }
                 }
                 Err(error) if error.kind() == ErrorKind::InvalidData => return Err(error.into()),
+                Err(error) if until.is_some() && error.kind() == ErrorKind::TimedOut => {
+                    return Err(error.into());
+                }
                 Ok(None) | Err(_) => return Err(Cut.into()),
             }
         }
@@ -340,6 +389,73 @@ impl DaemonClient {
         }
         Ok(None)
     }
+}
+
+// Adjust the transport timeout at each refill without replacing the client's buffer.
+struct DeadlineReader<'a> {
+    reader: &'a mut BufReader<ClientSocket>,
+    until: Instant,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let count = self.fill_buf()?.read(buffer)?;
+        self.consume(count);
+        Ok(count)
+    }
+}
+
+impl BufRead for DeadlineReader<'_> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        let time = remaining(self.until)?;
+        if self.reader.buffer().is_empty() {
+            self.reader.get_ref().set_read_timeout(Some(time))?;
+        }
+        self.reader.fill_buf().map_err(transfer_error)
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.reader.consume(amount);
+    }
+}
+
+struct DeadlineWriter<'a> {
+    writer: &'a mut ClientSocket,
+    until: Instant,
+}
+
+impl Write for DeadlineWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.writer
+            .set_write_timeout(Some(remaining(self.until)?))?;
+        self.writer.write(buffer).map_err(transfer_error)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+fn write_frame(writer: &mut ClientSocket, frame: &[u8], until: Option<Instant>) -> io::Result<()> {
+    match until {
+        Some(until) => DeadlineWriter { writer, until }.write_all(frame),
+        None => writer.write_all(frame),
+    }
+}
+
+fn remaining(until: Instant) -> io::Result<Duration> {
+    let time = until.saturating_duration_since(Instant::now());
+    if time.is_zero() {
+        return Err(io::Error::from(ErrorKind::TimedOut));
+    }
+    Ok(time)
+}
+
+fn transfer_error(error: io::Error) -> io::Error {
+    if error.kind() == ErrorKind::WouldBlock {
+        return io::Error::new(ErrorKind::TimedOut, error);
+    }
+    error
 }
 
 fn call_params<O: Operation>(args: O::Args) -> anyhow::Result<CallParams> {

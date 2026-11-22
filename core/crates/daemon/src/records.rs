@@ -378,6 +378,7 @@ pub(crate) fn list_row(info: &wire::AgentInfo) -> wire::AgentListEntry {
         state: info.state,
         cli: info.cli.clone(),
         title: info.title.clone(),
+        session_name: None,
         folder: info.cwd.clone(),
         started_at: info.started_at.clone(),
     }

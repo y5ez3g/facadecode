@@ -254,6 +254,7 @@ fn read_message(row: &Row) -> rusqlite::Result<KeptMessage> {
             text: row.get("text")?,
             reply_to: reply_to.map(|reply| format!("m{reply}")),
             reply_to_machine_id: row.get("reply_to_machine_id")?,
+            command_line_reply: false,
             from_window: row.get("from_window")?,
             call_id: row.get("call_id")?,
             result: result.and_then(|facts| serde_json::from_str(&facts).ok()),

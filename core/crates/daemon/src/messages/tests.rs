@@ -55,6 +55,7 @@ pub(crate) fn message(number: u64, to: &str) -> Message {
         to: to.into(),
         text: format!("message {number}"),
         reply_to: None,
+        command_line_reply: false,
         from_window: None,
         call_id: None,
         result: None,

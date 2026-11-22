@@ -82,6 +82,7 @@ pub(crate) fn pending_message(
         to: to.to_string(),
         text,
         reply_to,
+        command_line_reply: false,
         from_window: None,
         call_id: None,
         result: None,
@@ -288,6 +289,12 @@ impl Daemon {
         incoming: Option<Forwarded>,
         mut cancel: Cancel,
     ) -> Result<wire::SendResult, ErrorBody> {
+        if args.wait_for.is_some() {
+            return Err(ErrorBody::new(
+                Reason::Unsupported,
+                "this daemon does not support explicit send wait modes",
+            ));
+        }
         if args.allow_unsupported_receipt && !matches!(caller, Caller::Terminal { .. }) {
             return Err(ErrorBody::refused(
                 "only a terminal can request an unsupported delivery receipt",
@@ -518,6 +525,7 @@ impl Daemon {
             repeated: sent.repeated,
             withdrawn: sent.withdrawn,
             expected_reply_to: expected_reply_to.map(api::wire_message_ref),
+            reply: None,
         })
     }
 

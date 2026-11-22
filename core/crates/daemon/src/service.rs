@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facade_base::api_v1::daemon::Caller;
-use facade_base::api_v1::{self, ApiVersion, Operation, daemon as wire};
+use facade_base::api_v1::{self, ApiVersion, Operation, Topic, daemon as wire};
 use facade_base::model::agent::AgentCreator;
 use facade_base::model::agent::AgentKind;
 use facade_base::model::agent::AgentLabel;
@@ -140,7 +140,10 @@ impl server::Service for Daemon {
             agent_count: self.active_count() as u64,
             keeper: self.runs.keeper_info(),
             machine: None,
-            topics: wire::topic_names(hello.kind),
+            topics: wire::topic_names(hello.kind)
+                .into_iter()
+                .filter(|topic| topic != wire::AttachShellTopic::NAME)
+                .collect(),
             ops: wire::operation_names(hello.kind),
         };
         let client = Client {
@@ -340,6 +343,12 @@ impl Daemon {
                 .await
             }
             AgentType(args) => {
+                if matches!(args.input, wire::TerminalInput::Sequence { .. }) {
+                    return Err(ErrorBody::new(
+                        Reason::Unsupported,
+                        "this daemon does not support ordered terminal input",
+                    ));
+                }
                 self.agent_operation(
                     caller,
                     AgentAction::Type(args.input),
@@ -400,6 +409,7 @@ impl Daemon {
                         .map(|record| wire::AgentLookupCandidate {
                             agent: record.info,
                             has_rule: record.has_rule,
+                            session_name: None,
                         })
                         .collect::<Vec<_>>(),
                 ))
@@ -440,6 +450,10 @@ impl Daemon {
                 .await?;
                 Ok(json!({}))
             }
+            InternalCommandReply(_) if forwarded => Err(ErrorBody::new(
+                Reason::Unsupported,
+                "this daemon does not support command-line replies",
+            )),
             _ => Err(ErrorBody::refused(
                 "the operation is unavailable on this connection",
             )),
@@ -1416,6 +1430,7 @@ pub(crate) fn stored_message(message: wire::Message) -> Message {
         text: message.text,
         reply_to: message.reply_to,
         reply_to_machine_id: message.reply_to_machine_id,
+        command_line_reply: false,
         from_window: None,
         call_id: message.call_id,
         result,
@@ -1505,6 +1520,12 @@ fn input_of(
         }
         wire::TerminalInput::Text { text, enter } => Typing::text(text, enter, sender),
         wire::TerminalInput::Keys { keys } => Typing::keys(&keys),
+        wire::TerminalInput::Sequence { .. } => {
+            return Err(ErrorBody::new(
+                Reason::Unsupported,
+                "this daemon does not support ordered terminal input",
+            ));
+        }
     };
     let (typing, typed) = typing.map_err(ErrorBody::invalid_argument)?;
     Ok((Input::Typed(typing), Some(typed)))

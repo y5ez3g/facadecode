@@ -441,6 +441,7 @@ pub(crate) fn send(client: &mut DaemonClient, to: String, text: String) -> anyho
         reply_to: None,
         request_id: Some(made_request_id()),
         time_left_ms: None,
+        wait_for: None,
         allow_unsupported_receipt: true,
     };
     let (result, _) = client

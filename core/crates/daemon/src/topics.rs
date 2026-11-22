@@ -101,6 +101,10 @@ impl Daemon {
                 caller,
                 Caller::Terminal { .. } | Caller::Ide { .. }
             )),
+            wire::DaemonWatch::AttachShell(_) => Err(ErrorBody::new(
+                Reason::Unsupported,
+                "this daemon does not support dedicated shell attach",
+            )),
             _ => Err(ErrorBody::refused(
                 "this topic has no forwarded subscription",
             )),

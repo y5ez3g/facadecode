@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::api_v1::daemon::{
-    AgentRef, AgentTypeArgs, AgentsTopic, AttachResizeArgs, AttachTopic, CancelParams, ClientKind,
-    ClosingParams, DaemonCall, DaemonWatch, HelloParams, MachinesTopic, TerminalInput,
-    UnwatchParams, WatchEndedParams, WatchParams, WatchResult, decode_call, decode_hello,
-    decode_watch, methods, select_version,
+    AgentRef, AgentTypeArgs, AgentsTopic, AttachResizeArgs, AttachShellTopic, AttachTopic,
+    CancelParams, ClientKind, ClosingParams, DaemonCall, DaemonWatch, HelloParams, MachinesTopic,
+    TerminalInput, UnwatchParams, WatchEndedParams, WatchParams, WatchResult, decode_call,
+    decode_hello, decode_watch, methods, select_version,
 };
 use facade_base::api_v1::{
     ApiVersion, CallParams, EmptyResult, ErrorBody, MAX_LINE_BYTES, Notification, Response, Topic,
@@ -506,6 +506,7 @@ impl<S: Service> Connection<S> {
             DaemonWatch::Agents(_) => AgentsTopic::NAME,
             DaemonWatch::Machines(_) => MachinesTopic::NAME,
             DaemonWatch::Attach(_) => AttachTopic::NAME,
+            DaemonWatch::AttachShell(_) => AttachShellTopic::NAME,
         };
         if let Some(refused) = self.service.draining() {
             return Err(refused);

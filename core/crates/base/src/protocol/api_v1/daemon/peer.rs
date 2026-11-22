@@ -13,8 +13,8 @@ use super::agents::{
     agent_ref_input, agent_ref_input_schema, message_ref_input, message_ref_input_schema,
 };
 use super::{
-    AgentInfo, AgentRef, CallParams, MachineInfo, Message, MessageRef, SingleMachineScope,
-    StartOutcome, TerminalColors, WaitKind, methods,
+    AgentInfo, AgentRef, CallParams, CommandReply, MachineInfo, Message, MessageRef,
+    SingleMachineScope, StartOutcome, TerminalColors, WaitKind, methods,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -191,6 +191,34 @@ pub struct InternalAttachResizeArgs {
 #[serde(deny_unknown_fields)]
 pub struct InternalAgentRecordsArgs {
     pub active: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CommandReplyArgs {
+    pub request_id: String,
+    #[serde(deserialize_with = "message_ref_input")]
+    #[schemars(schema_with = "message_ref_input_schema")]
+    pub original: MessageRef,
+    #[serde(deserialize_with = "command_reply_input")]
+    #[schemars(with = "CommandReplyInput")]
+    pub reply: CommandReply,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CommandReplyInput {
+    #[serde(deserialize_with = "message_ref_input")]
+    #[schemars(schema_with = "message_ref_input_schema")]
+    reference: MessageRef,
+    text: String,
+}
+
+fn command_reply_input<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<CommandReply, D::Error> {
+    let CommandReplyInput { reference, text } = object_only(deserializer)?;
+    Ok(CommandReply { reference, text })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
