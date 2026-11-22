@@ -773,7 +773,10 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     std::fs::write(unavailable.folder().join("ssh-needs-login"), []).unwrap();
     assert!(sleeping.hello_result().is_none() && unavailable.hello_result().is_none());
     let session = "3182c480-42a0-4aa0-b112-58e2c865031c";
-    let worker = awake.start_fake_with("Worker", &[("FAKECLI_SESSION", session)]);
+    let worker = awake.start_fake_with(
+        "Worker",
+        &[("FAKECLI_SESSION", session), ("FAKECLI_STATUS", "1")],
+    );
     assert!(wait_until(LOADED_TIMEOUT, || awake
         .inspect_agent(&worker.address)["agent"]["session"]
         == session));
@@ -807,6 +810,20 @@ fn reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones() {
     );
     assert_eq!(ssh_serves(&sleeping), format!("{previous}no-start\n"));
     assert!(sleeping.hello_result().is_none());
+
+    assert!(wait_until(LOADED_TIMEOUT, || awake
+        .inspect_agent(&worker.address)["agent"]["state"]
+        == "idle"));
+    let remote_only = local.run_facade(&["list", "--machine", "devbox"]);
+    assert_eq!(
+        (remote_only.status.code(), stderr(&remote_only)),
+        (Some(0), String::new())
+    );
+    let remote_only = Table::parse(&stdout(&remote_only));
+    assert_eq!(remote_only.column("REF"), [worker.address.as_str()]);
+    assert_eq!(remote_only.column("NAME"), ["Worker"]);
+    assert_eq!(remote_only.column("STATE"), ["Idle"]);
+    assert!(alive(&worker.process) && alive(&pixel.process));
 
     let previous = ssh_serves(&sleeping);
     let stopped = local.run_facade(&["stop", "--all"]);

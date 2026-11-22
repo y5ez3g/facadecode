@@ -107,8 +107,14 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/configuration.rs:166",
-        "core/tests/tests/configuration.rs:533"
-      ]
+        "core/tests/tests/configuration.rs:533",
+        "core/tests/tests/configuration.rs:185"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "a_custom_cli_runs_its_program_as_it_is"
+      }
     },
     {
       "id": "core/configuration/cli-field/type",
@@ -149,8 +155,14 @@
         "core/tests/tests/yolo.rs",
         "core/tests/tests/configuration.rs:640",
         "core/tests/tests/configuration.rs:853",
-        "core/crates/base/src/settings.rs:634"
-      ]
+        "core/crates/base/src/settings.rs:634",
+        "core/tests/tests/configuration.rs:1081"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "configuration",
+        "name": "a_start_its_settings_refuse_makes_no_worktree"
+      }
     },
     {
       "id": "core/configuration/setting/clis",
@@ -472,8 +484,14 @@
         "core/tests/tests/configuration.rs:139",
         "core/tests/tests/machines.rs",
         "core/tests/tests/mcp.rs:635",
-        "core/tests/tests/probes.rs:276"
-      ]
+        "core/tests/tests/probes.rs:276",
+        "core/tests/tests/cli.rs:308"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "cli",
+        "name": "agent_list_inspect_and_status_agree_on_the_record"
+      }
     },
     {
       "id": "core/daemon/operation/agent.list",
@@ -481,8 +499,14 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/machines.rs",
-        "core/tests/tests/windows.rs:238"
-      ]
+        "core/tests/tests/windows.rs:238",
+        "core/tests/tests/yolo.rs:227"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "yolo",
+        "name": "an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree"
+      }
     },
     {
       "id": "core/daemon/operation/agent.remove",
@@ -505,8 +529,14 @@
       "existing_tests": [
         "core/tests/tests/configuration.rs:806",
         "core/tests/tests/messages.rs:479",
-        "core/tests/tests/upgrade.rs:1116"
-      ]
+        "core/tests/tests/upgrade.rs:1116",
+        "core/tests/tests/messages.rs:429"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "messages",
+        "name": "rename_trims_a_name_and_gives_a_blank_one_a_default"
+      }
     },
     {
       "id": "core/daemon/operation/agent.resume",
@@ -540,8 +570,14 @@
         "core/tests/tests/input.rs:269",
         "core/tests/tests/keeper.rs:377",
         "core/tests/tests/machines.rs",
-        "core/tests/tests/mcp.rs:297"
-      ]
+        "core/tests/tests/mcp.rs:297",
+        "core/tests/tests/mcp.rs:254"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "mcp",
+        "name": "a_long_screen_is_complete_and_inline"
+      }
     },
     {
       "id": "core/daemon/operation/agent.send",
@@ -1083,8 +1119,14 @@
         "core/tests/tests/mcp.rs:2035",
         "core/tests/tests/mcp.rs:2346",
         "core/tests/tests/guests.rs",
-        "core/tests/tests/yolo.rs"
-      ]
+        "core/tests/tests/yolo.rs",
+        "core/tests/tests/yolo.rs:227"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "yolo",
+        "name": "an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree"
+      }
     },
     {
       "id": "core/mcp/tool/press_keys",
@@ -1106,8 +1148,14 @@
       "existing_tests": [
         "core/tests/tests/mcp.rs:80",
         "core/tests/tests/mcp.rs:2035",
-        "core/tests/tests/mcp.rs:2346"
-      ]
+        "core/tests/tests/mcp.rs:2346",
+        "core/tests/tests/guests.rs:166"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "guests",
+        "name": "a_guest_cannot_fetch_another_guests_pending_reply"
+      }
     },
     {
       "id": "core/mcp/tool/read_screen",
@@ -1117,7 +1165,12 @@
         "core/tests/tests/mcp.rs:254",
         "core/tests/tests/mcp.rs:2035",
         "core/tests/tests/mcp.rs:2346"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "mcp",
+        "name": "a_long_screen_is_complete_and_inline"
+      }
     },
     {
       "id": "core/mcp/tool/send_message",
@@ -1142,8 +1195,14 @@
       "existing_tests": [
         "core/tests/tests/mcp.rs:1585",
         "core/tests/tests/mcp.rs:2035",
-        "core/tests/tests/guests.rs"
-      ]
+        "core/tests/tests/guests.rs",
+        "core/tests/tests/mcp.rs:1642"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "mcp",
+        "name": "an_agent_started_through_facade_mcp_gets_its_creator_s_environment"
+      }
     },
     {
       "id": "core/mcp/tool/stop_agent",
@@ -1152,8 +1211,14 @@
       "existing_tests": [
         "core/tests/tests/mcp.rs:324",
         "core/tests/tests/mcp.rs:2035",
-        "core/tests/tests/yolo.rs"
-      ]
+        "core/tests/tests/yolo.rs",
+        "core/tests/tests/mcp.rs:254"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "mcp",
+        "name": "a_long_screen_is_complete_and_inline"
+      }
     },
     {
       "id": "core/mcp/tool/type_text",
@@ -1412,8 +1477,14 @@
       "assertion": "Replace a pinned compatible v1 build in place, preserve the live PID and resume its interaction.",
       "stage": "native",
       "existing_tests": [
+        "ci/check_prior_build.py",
         "core/tests/tests/upgrade.rs"
-      ]
+      ],
+      "test": {
+        "runner": "core-prior",
+        "target": "linux-x64",
+        "name": "hot-qa"
+      }
     },
     {
       "id": "core/p0/prior-build/incompatible-version",
@@ -1665,8 +1736,14 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/commands.rs:118",
-        "core/tests/tests/machines.rs"
-      ]
+        "core/tests/tests/machines.rs",
+        "core/tests/tests/machines.rs:745"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "machines",
+        "name": "reachable_list_and_stop_query_awake_peers_without_waking_sleeping_ones"
+      }
     },
     {
       "id": "core/shell/command/machine",
@@ -1744,8 +1821,14 @@
         "core/tests/tests/cli.rs",
         "core/tests/tests/configuration.rs:790",
         "core/tests/tests/help.rs:18",
-        "core/tests/tests/machines.rs"
-      ]
+        "core/tests/tests/machines.rs",
+        "core/tests/tests/messages.rs:429"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "messages",
+        "name": "rename_trims_a_name_and_gives_a_blank_one_a_default"
+      }
     },
     {
       "id": "core/shell/command/resume",
@@ -1772,7 +1855,12 @@
         "core/tests/tests/commands.rs:118",
         "core/tests/tests/cli.rs",
         "core/tests/tests/mcp.rs:254"
-      ]
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "mcp",
+        "name": "a_long_screen_is_complete_and_inline"
+      }
     },
     {
       "id": "core/shell/command/send",
@@ -1811,8 +1899,14 @@
       "stage": "pr",
       "existing_tests": [
         "core/tests/tests/cli.rs",
-        "core/tests/tests/commands.rs:118"
-      ]
+        "core/tests/tests/commands.rs:118",
+        "core/tests/tests/cli.rs:308"
+      ],
+      "test": {
+        "runner": "core-scenario",
+        "target": "cli",
+        "name": "agent_list_inspect_and_status_agree_on_the_record"
+      }
     },
     {
       "id": "core/shell/command/stop",

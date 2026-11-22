@@ -312,6 +312,64 @@ fn an_agent_whose_run_has_yolo_off_reaches_only_its_creation_tree() {
         home.run_facade_ok(&["screen", "bob"]).contains("fakecli"),
         "the person reaches every agent"
     );
+
+    let (_guest, guest_list, joined) = guest(&home);
+    let visible = guest_list["data"]["agents"].as_array().unwrap();
+    assert_eq!(visible.len(), 6, "{guest_list}");
+    for (name, number) in [
+        ("ada", "a1"),
+        ("bob", "a2"),
+        ("cy", "a3"),
+        ("dan", "a4"),
+        ("eve", "a5"),
+    ] {
+        let address = format!("{number}@{host}");
+        let row = visible.iter().find(|row| row["id"] == address).unwrap();
+        assert_eq!(
+            (row["name"].as_str(), row["type"].as_str()),
+            (Some(name), Some("managed"))
+        );
+        assert_eq!(row["cli"], "fake", "{row}");
+    }
+    let guest_row = visible
+        .iter()
+        .find(|row| row["id"] == joined["address"])
+        .unwrap();
+    assert_eq!(guest_row["type"], "guest", "{guest_row}");
+    assert_eq!(guest_row["state"], "online", "{guest_row}");
+    let roster = connect(&home).call_ok("agent.list", json!({}));
+    let records = roster["agents"].as_array().unwrap();
+    assert_eq!(records.len(), visible.len(), "{roster}");
+    for mcp in visible {
+        let row = records
+            .iter()
+            .find(|row| row["address"] == mcp["id"])
+            .unwrap();
+        for key in ["name", "type", "cli"] {
+            assert_eq!(row[key], mcp[key], "{row}");
+        }
+        assert_eq!(
+            row["reference"]["machine_id"], joined["reference"]["machine_id"],
+            "{row}"
+        );
+        assert_eq!(
+            row["reference"]["agent_id"].as_str(),
+            mcp["id"]
+                .as_str()
+                .and_then(|address| address.split_once('@').map(|(id, _)| id)),
+            "{row}"
+        );
+    }
+    let restricted = ada.call("list_agents", json!({}));
+    assert_eq!(restricted["status"], "success", "{restricted}");
+    let mut names: Vec<&str> = restricted["data"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["ada", "cy", "eve"], "{restricted}");
 }
 
 /// Refused calls to an unrelated peer agent leave its run, inbox and saved connection intact.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run native Linux x64 Core cold cutover with an explicitly identified prior build."""
+"""Replay Linux x64 Core compatibility with identified native program pairs."""
 
 import argparse
 from hashlib import sha256
@@ -17,7 +17,7 @@ import tempfile
 import time
 import tomllib
 
-from catalog import AcceptanceError, NATIVE_PRIOR_CASE, read_json
+from catalog import AcceptanceError, NATIVE_HOT_CASE, NATIVE_PRIOR_CASE, read_json
 from evidence import digest, execute, git, observed_core_tests, run_identity
 from native_core import (
     ROOT, SYSTEM_PATH, clean_native_scope, hash_file, interrupted, read_markers,
@@ -30,6 +30,7 @@ PRIOR_MAIN = '870891350e49c75dec316b9df37554557e257263'
 TARGET = 'x86_64-unknown-linux-musl'
 PROGRAMS = ('facade', 'facade-mcp')
 TRACE = 'Facade cold cutover evidence '
+HOT_TRACE = 'Facade hot takeover evidence '
 SUCCESS_MARKER = 'Facade native prior build test '
 RUN_LOG = 'cold-cutover.log'
 HOME_LOG = 'scenario-homes.txt'
@@ -41,12 +42,18 @@ PRIOR_BUILD_ARGS = ('build', '--locked', '--release', '--target', TARGET, '-p', 
 PRIOR_BUILD_LOGS = ('prior-source.log', 'prior-rustc.log', 'prior-build.log')
 CANDIDATE_BUILD_LOGS = ('candidate-facade-fakecli.log', 'candidate-machines.log')
 TEST_ARGS = ('--show-output', '--ignored', '--exact', '--test-threads=1', SELECTOR)
+HOT_SELECTOR = 'a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover'
+HOT_SESSION = '065e033f-12fe-4bac-9870-dc4e3d4971af'
+HOT_CONTROLS = (
+    'the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one',
+    'v1_takeover_refuses_disjoint_daemon_and_keeper_sets_before_installing',
+)
 
 
-def harness_hashes():
+def harness_hashes(target='machines'):
     return {path: hash_file(ROOT / path) for path in (
         'ci/check_prior_build.py', 'ci/native_core.py', 'ci/evidence.py',
-        'core/tests/tests/machines.rs', 'core/tests/src/bin/facade-fakecli.rs',
+        f'core/tests/tests/{target}.rs', 'core/tests/src/bin/facade-fakecli.rs',
     )}
 
 
@@ -137,8 +144,10 @@ def validate_trace(trace, homes):
         raise AcceptanceError('cold-cutover trace is incomplete or malformed') from error
 
 
-def prior_success(receipt):
-    return {'case': NATIVE_PRIOR_CASE, 'selector': SELECTOR, 'role': receipt['prior']['role'],
+def prior_success(receipt, *, role=None):
+    hot = role == 'hot-qa'
+    return {'case': NATIVE_HOT_CASE if hot else NATIVE_PRIOR_CASE,
+            'selector': HOT_SELECTOR if hot else SELECTOR, 'role': role or receipt['prior']['role'],
             'evidence_sha256': digest({key: value for key, value in receipt.items() if key != 'success'})}
 
 
@@ -222,7 +231,7 @@ def pinned_programs(directory, manifest):
             raise AcceptanceError(f'unexpected or duplicate prior binary entry {path}')
         expected[path.name] = match[1]
     if expected != binary_hashes(directory):
-        raise AcceptanceError('the prior Shell and MCP must both match the externally pinned manifest')
+        raise AcceptanceError(f'the Shell and MCP in {directory} must both match {manifest}')
     return {'role': 'pinned-binaries', 'manifest_sha256': sha256(manifest_text).hexdigest(),
             'program_sha256': expected}
 
@@ -233,6 +242,15 @@ def stage_programs(source, target, expected):
         shutil.copy2(source / name, target / name)
     if binary_hashes(target) != expected:
         raise AcceptanceError('staged programs changed after digest verification')
+
+
+def require_linux_programs(directory):
+    for name in PROGRAMS:
+        with (directory / name).open('rb') as executable:
+            header = executable.read(20)
+        if (header[:6] != b'\x7fELF\x02\x01' or int.from_bytes(header[16:18], 'little') not in (2, 3)
+                or int.from_bytes(header[18:20], 'little') != 62):
+            raise AcceptanceError(f'{directory / name} is not a Linux x64 ELF executable')
 
 
 def logged_command(command, cwd, env, log, receipt, *, timeout=900):
@@ -288,10 +306,10 @@ def cargo_artifact(log, name, *, test):
     return matches[0]
 
 
-def compile_candidate(cargo, env, output, receipt):
+def compile_candidate(cargo, env, output, receipt, target):
     commands = (
         ('facade-fakecli', False, ['build', '--bin', 'facade-fakecli']),
-        ('machines', True, ['test', '--test', 'machines', '--no-run']),
+        (target, True, ['test', '--test', target, '--no-run']),
     )
     artifacts = []
     for name, test, args in commands:
@@ -309,7 +327,49 @@ def scenario_sockets(home_log, test_tmp):
     }
 
 
-def run_cold_cutover(args, output, receipt, scope, home_log, test_tmp):
+def observe_hot_takeover(output, home_log, test_tmp, receipt):
+    log = output / 'hot-takeover.log'
+    if not observed_core_tests([HOT_SELECTOR], log.read_text()):
+        raise AcceptanceError('expected exactly one passing hot takeover selector')
+    traces = read_markers(log, HOT_TRACE)
+    homes = owned_homes(home_log, test_tmp)
+    if len(traces) != 1 or len(homes) != 1:
+        raise AcceptanceError('expected one hot takeover trace and one scoped fixture home')
+    trace = traces[0]
+    before, after = trace['from_build'], trace['to_build']
+    if not all(isinstance(version, str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version)
+               for version in (before, after)) or tuple(map(int, after.split('.'))) <= tuple(map(int, before.split('.'))):
+        raise AcceptanceError('the hot takeover did not identify a higher numeric build')
+    identities = [trace[key] for key in ('daemon_before', 'daemon_after', 'keeper', 'cli')]
+    if (len({item['pid'] for item in identities}) != 4
+            or not all(type(item['pid']) is int and item['pid'] > 0 and str(item['birth']).isdigit() for item in identities)
+            or trace['daemon_api_version'] != 1 or trace['session'] != HOT_SESSION
+            or trace['reference']['agent_id'] != 'a1' or not trace['reference']['machine_id']):
+        raise AcceptanceError('the hot takeover did not establish the live process identities and session')
+    label = trace['receipt'].removeprefix('m1@')
+    if not label or trace['receipt'] != f'm1@{label}' or trace['fresh_receipt'] != f'm2@{label}':
+        raise AcceptanceError('the hot takeover did not settle the original and fresh requests separately')
+
+    bin_dir = homes[0] / 'core/bin'
+    installed = {build: binary_hashes(bin_dir / build) for build in (before, after)}
+    if any(installed[build] != receipt[role]['program_sha256'] for role, build in (('candidate', before), ('higher', after))):
+        raise AcceptanceError('the installed programs did not match both pinned build pairs')
+    if any((bin_dir / name).readlink() != Path(after) / name for name in PROGRAMS):
+        raise AcceptanceError('the installed launchers did not switch to the higher build')
+    daemon_log = output / 'hot-daemon.log'
+    shutil.copy2(homes[0] / 'core/logs/daemon.log', daemon_log)
+    daemon_text = daemon_log.read_text()
+    for side in ('daemon_before', 'daemon_after'):
+        handshake = (f'daemon[{trace[side]["pid"]}] info: connected to keeper {trace["keeper"]["pid"]}'
+                     f' (Keeper API 1, build {before})')
+        if handshake not in daemon_text:
+            raise AcceptanceError(f'missing Keeper API 1 handshake for {side}')
+    return {'log': log.name, 'sha256': hash_file(log), 'trace': trace,
+            'installed_sha256': installed, 'keeper_api_version': 1, 'daemon_log_sha256': hash_file(daemon_log)}
+
+
+def run_compatibility(args, output, receipt, scope, home_log, test_tmp, target):
+    hot = args.role == 'hot-qa'
     home, runtime, build_home, build_tmp = (
         scope / name for name in ('home', 'runtime', 'build-home', 'build-tmp')
     )
@@ -329,14 +389,14 @@ def run_cold_cutover(args, output, receipt, scope, home_log, test_tmp):
     }
     if args.offline:
         env['CARGO_NET_OFFLINE'] = 'true'
-    if args.role == 'prior-main':
-        prior = compile_prior(scope, cargo, env, output, receipt)
+    if hot:
+        stage_programs(args.higher_bin, scope / 'higher-bin', receipt['higher']['program_sha256'])
     else:
-        prior = args.prior_bin
-    stage_programs(prior, scope / 'prior-bin', receipt['prior']['program_sha256'])
+        prior = compile_prior(scope, cargo, env, output, receipt) if args.role == 'prior-main' else args.prior_bin
+        stage_programs(prior, scope / 'prior-bin', receipt['prior']['program_sha256'])
     stage_programs(args.candidate_bin, scope / 'candidate-bin', receipt['candidate']['program_sha256'])
-    fake, test = compile_candidate(cargo, env, output, receipt)
-    staged_fake, staged_test = (scope / 'candidate-bin' / name for name in ('facade-fakecli', 'machines'))
+    fake, test = compile_candidate(cargo, env, output, receipt, target)
+    staged_fake, staged_test = (scope / 'candidate-bin' / name for name in ('facade-fakecli', target))
     for source, staged in ((fake, staged_fake), (test, staged_test)):
         shutil.copy2(source, staged)
         receipt['candidate'][f'{staged.name}_sha256'] = hash_file(staged)
@@ -345,18 +405,28 @@ def run_cold_cutover(args, output, receipt, scope, home_log, test_tmp):
         'PATH': SYSTEM_PATH, 'HOME': str(home), 'TMPDIR': str(test_tmp),
         'CI_ACCEPTANCE_ROOT': str(scope), 'XDG_RUNTIME_DIR': str(runtime), 'LC_ALL': 'C.UTF-8',
         'FACADE_HOME': str(home / '.facade'), 'FACADE_SCENARIO_HOME_LOG': str(home_log),
-        'FACADE_TEST_API_V1_PRERELEASE': str(scope / 'prior-bin/facade'),
     }
-    log = output / RUN_LOG
-    logged_command([staged_test, *TEST_ARGS],
-                   ROOT / 'core/tests', test_env, log, receipt, timeout=180)
+    if hot:
+        hot_env = {**test_env, 'FACADE_TEST_API_V1_NEXT': str(scope / 'higher-bin/facade'), 'FACADE_SCENARIO_KEEP': '1'}
+        logged_command([staged_test, *TEST_ARGS[:-1], HOT_SELECTOR], ROOT / 'core/tests', hot_env,
+                       output / 'hot-takeover.log', receipt, timeout=180)
+        receipt['observation'] = observe_hot_takeover(output, home_log, test_tmp, receipt)
+        control = output / 'hot-refusals.log'
+        logged_command([staged_test, '--show-output', '--exact', '--test-threads=1', *HOT_CONTROLS],
+                       ROOT / 'core/tests', test_env, control, receipt, timeout=180)
+        if not observed_core_tests(HOT_CONTROLS, control.read_text()):
+            raise AcceptanceError('the hot refusal controls did not run exactly the expected selectors')
+        receipt['controls'] = {'log': control.name, 'sha256': hash_file(control), 'selectors': HOT_CONTROLS}
+    else:
+        cold_env = {**test_env, 'FACADE_TEST_API_V1_PRERELEASE': str(scope / 'prior-bin/facade')}
+        logged_command([staged_test, *TEST_ARGS], ROOT / 'core/tests', cold_env, output / RUN_LOG, receipt, timeout=180)
+        if not home_log.is_file():
+            raise AcceptanceError('the fixture did not record its scoped homes')
+        shutil.copyfile(home_log, output / HOME_LOG)
+        receipt['observation'] = cold_observation(output, scope)
     if any(home.iterdir()):
         raise AcceptanceError('the scenario wrote to the fallback HOME')
     receipt['fallback_home_empty'] = True
-    if not home_log.is_file():
-        raise AcceptanceError('the fixture did not record its scoped homes')
-    shutil.copyfile(home_log, output / HOME_LOG)
-    receipt['observation'] = cold_observation(output, scope)
 
 
 def main():
@@ -370,15 +440,27 @@ def main():
     pinned.add_argument('--prior-bin', required=True, type=lambda path: Path(path).resolve())
     pinned.add_argument('--manifest', required=True, type=lambda path: Path(path).resolve())
     modes.add_parser('prior-main', help='compile the immutable prior main revision for this run')
+    hot = modes.add_parser('hot-qa', help='replay two digest-pinned compatible Linux x64 QA builds')
+    hot.add_argument('--candidate-manifest', required=True, type=Path)
+    hot.add_argument('--higher-bin', required=True, type=lambda path: Path(path).resolve())
+    hot.add_argument('--higher-manifest', required=True, type=Path)
     args = parser.parse_args()
+    is_hot = args.role == 'hot-qa'
+    target = 'upgrade' if is_hot else 'machines'
     if (sys.platform != 'linux' or os.uname().machine != 'x86_64'
             or not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal')):
         parser.error('requires Linux x64 and pidfds')
     try:
         os.close(os.pidfd_open(os.getpid()))
         receipt = {'source': source_identity(run_identity(args.run_id, os.environ)), 'commands': []}
-        receipt['harness_sha256'] = harness_hashes()
-        receipt['candidate'] = {'program_sha256': binary_hashes(args.candidate_bin)}
+        receipt['harness_sha256'] = harness_hashes(target)
+        if is_hot:
+            receipt['candidate'] = pinned_programs(args.candidate_bin, args.candidate_manifest)
+            receipt['higher'] = pinned_programs(args.higher_bin, args.higher_manifest)
+            require_linux_programs(args.candidate_bin)
+            require_linux_programs(args.higher_bin)
+        else:
+            receipt['candidate'] = {'program_sha256': binary_hashes(args.candidate_bin)}
         if args.role == 'pinned-binaries':
             receipt['prior'] = pinned_programs(args.prior_bin, args.manifest)
         args.output_dir.mkdir(parents=True)
@@ -393,7 +475,7 @@ def main():
     passed = False
     try:
         try:
-            run_cold_cutover(args, args.output_dir, receipt, scope, home_log, test_tmp)
+            run_compatibility(args, args.output_dir, receipt, scope, home_log, test_tmp, target)
         finally:
             sockets = {}
             try:
@@ -402,13 +484,14 @@ def main():
                 clean_native_scope(scope, sockets, receipt)
         verify_native_cleanup(receipt)
         passed = True
-    except (AcceptanceError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError, KeyboardInterrupt) as error:
+    except (AcceptanceError, OSError, KeyError, TypeError, RuntimeError, ValueError,
+            subprocess.CalledProcessError, KeyboardInterrupt) as error:
         receipt['error'] = str(error)
         print(f'native prior build: {error}', file=sys.stderr)
     finally:
         receipt['elapsed_seconds'] = round(time.monotonic() - started, 3)
         if passed:
-            receipt['success'] = prior_success(receipt)
+            receipt['success'] = prior_success(receipt, role=args.role)
         write_receipt(args.output_dir / 'receipt.json', receipt)
     if 'success' not in receipt:
         return 1

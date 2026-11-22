@@ -252,6 +252,14 @@ fn facade_mcp_serves_its_agent_until_its_input_ends() {
 /// threshold. Read Screen can still read the saved screen after the agent has stopped.
 #[test]
 fn a_long_screen_is_complete_and_inline() {
+    let empty = TestHome::new("mcp-screen-empty");
+    for count in ["0", "2001", "-1"] {
+        let refused = empty.run_facade(&["screen", "a1", "--lines", count]);
+        assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+        assert!(stdout(&refused).is_empty());
+        assert!(stderr(&refused).contains("must be between 1 and 2,000"));
+        assert!(!socket_exists(&empty.daemon_socket()) && empty.processes().is_empty());
+    }
     let home = TestHome::new("mcp-screen-inline");
     let screen_file = home.folder().join("initial-screen.txt");
     let expected = (1..=120)
@@ -260,15 +268,21 @@ fn a_long_screen_is_complete_and_inline() {
         .join("\n");
     assert!(expected.chars().count() > 8_000);
     std::fs::write(&screen_file, &expected).unwrap();
-    home.start_named_fake(
+    let target = home.start_named_fake(
         "long",
         &[("FAKECLI_SCREEN_FILE", screen_file.to_str().unwrap())],
     );
     let observer = home.start_named_fake("observer", &[]);
+    let unrelated = home.start_named_fake("unrelated", &[]);
     let mut reader = McpTestClient::open_configured(&home, &observer.id);
-    let read = reader.call("read_screen", json!({ "agent": "long", "lines": 200 }));
+    let read = reader.call(
+        "read_screen",
+        json!({ "agent": target.address, "lines": 200 }),
+    );
     assert_eq!(read["status"], "success", "{read}");
     let data = &read["data"];
+    assert_eq!(data["address"], target.address, "{read}");
+    assert_eq!(data["agent_id"], target.id, "{read}");
     assert!(data.get("file").is_none() && data.get("next_cursor").is_none());
     let text = data["text"].as_str().expect("inline screen text");
     assert!(
@@ -283,10 +297,53 @@ fn a_long_screen_is_complete_and_inline() {
         .expect("inline screen minimum");
     let lines: Vec<_> = text.lines().collect();
     assert_eq!(tail, lines[lines.len() - 4..].join("\n"));
+    assert_eq!(shorter["data"]["line_count"], 4, "{shorter}");
     assert!(shorter["data"].get("next_cursor").is_none());
+    let reference = home.inspect_agent(&target.address)["agent"]["reference"].clone();
+    let wire = connect(&home).call_ok("agent.screen", json!({ "target": reference, "lines": 4 }));
+    assert_eq!(wire["reference"], reference, "{wire}");
+    assert_eq!(wire["line_count"], 4, "{wire}");
+    assert_eq!(wire["text"], tail, "{wire}");
+    assert_eq!(
+        home.run_facade_ok(&["screen", &target.address, "--lines", "4"]),
+        facade_base::model::terminal::plain(tail)
+    );
 
-    let stopped = reader.call("stop_agent", json!({ "agent": "long" }));
+    let mut guest = McpTestClient::spawn(&home, home.command(&test_binaries().mcp));
+    assert_eq!(guest.call("list_agents", json!({}))["status"], "success");
+    let roster = home.agent_list();
+    let guests: Vec<&Value> = roster["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|agent| agent["type"] == "guest")
+        .collect();
+    assert_eq!(guests.len(), 1, "{guests:?}");
+    let guest_address = guests[0]["address"].as_str().unwrap();
+    let no_terminal = reader.call("read_screen", json!({ "agent": guest_address }));
+    assert_eq!(no_terminal["status"], "failure", "{no_terminal}");
+    assert_eq!(no_terminal["reason"], "unsupported", "{no_terminal}");
+    assert!(
+        no_terminal["message"]
+            .as_str()
+            .unwrap()
+            .contains("Guest without a terminal"),
+        "{no_terminal}"
+    );
+
+    let stopped = reader.call("stop_agent", json!({ "agent": target.address }));
     assert_eq!(stopped["status"], "success", "{stopped}");
+    assert_eq!(
+        stopped["data"],
+        json!({ "id": target.address, "state": "ended" })
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || !alive(&target.process)));
+    for other in [&observer, &unrelated] {
+        let live = home.inspect_agent(&other.address);
+        assert_eq!(live["agent"]["pid"], other.pid, "{live}");
+        assert_eq!(live["agent"]["process"], "running", "{live}");
+        assert_eq!(process_identity(other.pid), other.process);
+    }
     let after = reader.call("read_screen", json!({ "agent": "long", "lines": 200 }));
     assert_eq!(after["status"], "success", "{after}");
     assert!(
@@ -1584,21 +1641,54 @@ fn reconnect_diagnostics(
 #[test]
 fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     let home = TestHome::new("mcpenv");
-    let agent = home.start_named_fake("boss", &[("FAKECLI_NAME", "named by the boss")]);
+    let launches = home.folder().join("launches");
+    let agent = home.start_named_fake(
+        "boss",
+        &[
+            ("FAKECLI_NAME", "named by the boss"),
+            ("FAKECLI_STARTS", launches.to_str().unwrap()),
+        ],
+    );
     let mut boss = McpTestClient::open_stripped(&home, &agent.id);
-    let cwd = home.listed_agent("boss").unwrap()["folder"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let requested = home.folder().join("requested-folder");
+    std::fs::create_dir(&requested).unwrap();
+    let cwd = facade_base::files::real_path(&requested).unwrap();
     let start = |name: &str| json!({ "name": name, "cli": "fake", "folder": cwd });
     let started = boss.call("start_agent", start("helper"));
     assert_eq!(started["status"], "success", "{started}");
+    let address = started["data"]["id"].as_str().expect("the child address");
     assert!(
         wait_until(secs(30), || home
-            .screen("helper")
+            .screen(address)
             .contains("named by the boss (Facade test CLI)")),
         "{}",
-        home.screen("helper")
+        home.screen(address)
+    );
+    let child = home.inspect_agent(address)["agent"].clone();
+    let parent = home.inspect_agent(&agent.address)["agent"]["reference"].clone();
+    assert_eq!(child["address"], address, "{child}");
+    assert_eq!(child["name"], "helper", "{child}");
+    assert_eq!(child["type"], "managed", "{child}");
+    assert_eq!(child["cli"], "fake", "{child}");
+    assert_eq!(child["cwd"], json!(cwd), "{child}");
+    assert_eq!(started["data"]["folder"], child["cwd"], "{started}");
+    assert_eq!(
+        started["data"]["machine_id"], parent["machine_id"],
+        "{started}"
+    );
+    assert_eq!(child["creator"], parent, "{child}");
+    assert_eq!(home.agents().len(), 2);
+    let child_pid = child["pid"].as_i64().unwrap() as i32;
+    assert!(alive(&process_identity(child_pid)), "{child}");
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        std::fs::read_link(format!("/proc/{child_pid}/cwd")).unwrap(),
+        cwd
+    );
+    let expected_launches = format!("{}\n{child_pid}\n", agent.pid);
+    assert_eq!(
+        std::fs::read_to_string(&launches).unwrap(),
+        expected_launches
     );
     home.run_facade_ok(&["stop", "boss"]);
     let ended = boss.call("start_agent", start("late"));
@@ -1611,6 +1701,10 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     assert!(
         home.agent_from_watch("late").is_none(),
         "nothing more started"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&launches).unwrap(),
+        expected_launches
     );
 }
 

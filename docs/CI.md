@@ -494,9 +494,39 @@ same candidate directory and attempt to recheck the two fixture homes, original 
 result, session, SSH route, delivery replay and post-cleanup marker. Binary replay also takes
 the original `--prior-bin` and `--manifest`.
 
+### Native Core hot takeover QA
+
+The Linux x64 replay takes two digest-pinned pairs of `facade` and `facade-mcp` from builds
+with compatible v1 APIs. To produce a source QA pair, build the current checkout and a
+separate numbered worktree at the same revision. Raise only the workspace package version
+in the second worktree and update only the affected workspace package entries in `Cargo.lock`.
+Keep the source revision, version diff, build logs and a SHA-256 manifest from each build.
+
+```sh
+# Run in core/ in both worktrees, with the pinned Rust toolchain.
+cargo build --locked --target x86_64-unknown-linux-gnu \
+    -p facade -p facade-relay --bin facade --bin facade-mcp
+# In each target/x86_64-unknown-linux-gnu/debug directory, save these checksums.
+sha256sum facade facade-mcp
+```
+
+```sh
+python3 -B ci/check_prior_build.py --candidate-bin "$lower_bin" \
+    --output-dir "$work/hot-qa" --run-id hot-qa-local hot-qa \
+    --candidate-manifest "$lower_manifest" --higher-bin "$higher_bin" \
+    --higher-manifest "$higher_manifest"
+```
+
+The exact scenario verifies a new Daemon, the original Keeper, CLI and session, the
+restored terminal watch, the original receipt and one fresh delivery to the same CLI.
+The runner verifies both installed program pairs, their launchers, the two Keeper API
+handshakes and owned cleanup. Separate tests exercise same-version, older-version and
+disjoint offers. This is opt-in source QA. Actual incompatible builds and signed release
+artifacts have their own catalog rows.
+
 Each successful native PR package job records the VSIX pair, Core archive and checksum file
 digests with the checked-out revision, tree and GitHub attempt. Run
-\`extension/scripts/native-package-evidence.mjs verify\` on the downloaded \`extension-*\`
+`extension/scripts/native-package-evidence.mjs verify` on the downloaded `extension-*`
 artifacts to require an exact set of targets and recheck their bytes. The CI canary refuses a
 missing target, a wrong-version VSIX, a stale tree or attempt, and a changed archive even when
 its checksum file has also changed. It reads the Core archive's version and checks its executable

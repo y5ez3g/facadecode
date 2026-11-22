@@ -185,12 +185,23 @@ fn without_wiring(home: &TestHome, mut args: Vec<String>) -> Vec<String> {
 fn a_custom_cli_runs_its_program_as_it_is() {
     let home = TestHome::new("configprogram");
     let file = args_file(&home, "tool");
-    let program = test_binaries().fakecli.to_string_lossy().into_owned();
+    let launches = format!("{file}.pids");
+    let program = home
+        .folder()
+        .join(format!("chosen-program{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(&test_binaries().fakecli, &program).unwrap();
+    let missing = home.project.join("no-facade-ci-program");
     let entry = json!({
         "type": "custom", "program": program, "args": ["--resume-like", ""],
-        "env": { "FAKECLI_ARGS": file },
+        "env": { "FAKECLI_ARGS": file, "FAKECLI_STARTS": launches },
     });
-    settings(&home, &json!({ "clis": { "tool": entry } }));
+    settings(
+        &home,
+        &json!({ "clis": {
+        "tool": entry,
+        "unavailable": { "type": "custom", "program": missing, "env": { "FAKECLI_STARTS": launches } },
+    } }),
+    );
     let launched = facade(
         &home,
         &[
@@ -212,6 +223,18 @@ fn a_custom_cli_runs_its_program_as_it_is() {
     );
     let inspected = home.inspect_agent("tool");
     assert_eq!(inspected["agent"]["cli"], "tool");
+    let pid = inspected["agent"]["pid"].as_i64().unwrap() as i32;
+    let expected_launches = format!("{pid}\n");
+    assert_eq!(
+        std::fs::read_to_string(&launches).unwrap(),
+        expected_launches
+    );
+    assert!(alive(&process_identity(pid)), "{inspected}");
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        std::fs::read_link(format!("/proc/{pid}/exe")).unwrap(),
+        facade_base::files::real_path(&program).unwrap()
+    );
     assert_eq!(
         (inspected.get("rule"), &inspected["agent"]["tools_state"]),
         (None, &json!("not_injected")),
@@ -222,6 +245,25 @@ fn a_custom_cli_runs_its_program_as_it_is() {
     assert!(
         home.listed_agent("prompted").is_none(),
         "nothing started: {prompted}"
+    );
+
+    let catalog = connect(&home).call_ok("cli.list", json!({}));
+    let unavailable = catalog["clis"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["cli"] == "unavailable")
+        .unwrap();
+    assert_eq!(unavailable["available"], false, "{unavailable}");
+    let issue = unavailable["problem"].as_str().unwrap();
+    assert!(issue.contains("clis.unavailable.program"), "{unavailable}");
+    assert!(issue.contains(&*missing.to_string_lossy()), "{unavailable}");
+    let refused = refused(&home, "unavailable");
+    assert!(refused.contains("no-facade-ci-program"), "{refused}");
+    assert_eq!(home.agents().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(&launches).unwrap(),
+        expected_launches
     );
 }
 
@@ -1038,6 +1080,24 @@ fn a_blank_rename_and_a_guest_are_named_from_names() {
 #[test]
 fn a_start_its_settings_refuse_makes_no_worktree() {
     let home = TestHome::new("configworktree");
+    let file = home.path.join("facade.json");
+    assert!(!file.exists());
+    let missing = home.start_fake("missing-settings");
+    assert_eq!(home.inspect_agent(&missing.address)["agent"]["yolo"], true);
+    std::fs::write(&file, "// all defaults\n/* still a comment */\n").unwrap();
+    let comments = home.start_fake("comment-settings");
+    assert_eq!(home.inspect_agent(&comments.address)["agent"]["yolo"], true);
+    std::fs::write(
+        &file,
+        "{\n  \"yolo\": false, // selected by the fixture\n}\n",
+    )
+    .unwrap();
+    let jsonc = home.start_fake("jsonc-settings");
+    assert_eq!(home.inspect_agent(&jsonc.address)["agent"]["yolo"], false);
+    for agent in [missing, comments, jsonc] {
+        assert!(alive(&agent.process));
+        home.run_facade_ok(&["stop", &agent.address]);
+    }
     let git = |folder: &std::path::Path, args: &[&str]| {
         let done = std::process::Command::new("git")
             .arg("-C")
@@ -1079,7 +1139,9 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
     );
     let repo = facade_base::files::real_path(&repo).unwrap();
     let folder = repo.to_string_lossy().into_owned();
-    let boss = home.start_fake("boss");
+    let launches = home.folder().join("unexpected-launches");
+    let boss = home.start_fake_with("boss", &[("FAKECLI_STARTS", launches.to_str().unwrap())]);
+    let started_pid = format!("{}\n", boss.pid);
     let mut boss = McpTestClient::open(&home, &boss.id);
     let mut start = |cli: &str, more: Value| {
         let mut call = json!({
@@ -1100,6 +1162,33 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
     );
     settings(&home, &json!({ "yolo": "no" }));
     assert_eq!(start("fake", json!({}))["reason"], "invalid_settings");
+    let shown = facade_base::files::real_path(&file).unwrap();
+    for (content, location) in [
+        (
+            "{\"yolo\": true,,}",
+            "1:15: this is not valid JSON with comments",
+        ),
+        (
+            "{\n  \"yolo\": true,\n  \"yolo\": false\n}",
+            "3:3: \"yolo\" appears twice in the same object",
+        ),
+    ] {
+        std::fs::write(&file, content).unwrap();
+        let denied = start("fake", json!({}));
+        assert_eq!(denied["reason"], "invalid_settings", "{denied}");
+        assert!(
+            denied["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("{}:{location}", shown.display())),
+            "{denied}"
+        );
+        assert!(
+            !home.agents().iter().any(|agent| agent["name"] == "w"),
+            "{denied}"
+        );
+        assert_eq!(std::fs::read_to_string(&launches).unwrap(), started_pid);
+    }
     assert_eq!(
         git(&repo, &["worktree", "list"]).lines().count(),
         1,

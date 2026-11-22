@@ -193,6 +193,23 @@ fn a_guest_cannot_fetch_another_guests_pending_reply() {
     assert_eq!(request["status"], "success", "{request}");
     let original = request["data"]["id"].as_str().unwrap();
     let (original_number, machine) = original.split_once('@').unwrap();
+    let owner_history = ada.call("read_messages", json!({ "last": 10 }));
+    assert_eq!(owner_history["status"], "success", "{owner_history}");
+    let owner_inbox = owner_history["data"]["messages"].as_array().unwrap();
+    assert_eq!(owner_inbox.len(), 1, "{owner_history}");
+    assert_eq!(owner_inbox[0]["id"], original_number, "{owner_history}");
+    assert_eq!(owner_inbox[0]["from"], address, "{owner_history}");
+    assert_eq!(
+        owner_inbox[0]["text"], "request from the recipient",
+        "{owner_history}"
+    );
+    let owner_unread = ada.call("read_messages", json!({}));
+    assert_eq!(owner_unread["status"], "success", "{owner_unread}");
+    assert_eq!(
+        owner_unread["data"]["messages"],
+        json!([]),
+        "{owner_unread}"
+    );
     let reply = "reply for the recipient only";
     let pending = ada.send(
         "tools/call",
@@ -233,6 +250,9 @@ fn a_guest_cannot_fetch_another_guests_pending_reply() {
     assert_eq!(sent["data"]["delivery"], "read_by_recipient", "{sent}");
     let number = messages[0]["id"].as_str().unwrap();
     assert_eq!(sent["data"]["id"], format!("{number}@{machine}"), "{sent}");
+    let settled = recipient.call("read_messages", json!({ "reply_to": original }));
+    assert_eq!(settled["status"], "success", "{settled}");
+    assert_eq!(settled["data"]["messages"], json!([]), "{settled}");
     let history = other.call("read_messages", json!({ "last": 10 }));
     assert_eq!(history["status"], "success", "{history}");
     assert_eq!(history["data"]["messages"], json!([]), "{history}");

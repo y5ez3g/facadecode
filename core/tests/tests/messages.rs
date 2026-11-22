@@ -431,6 +431,8 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     let worker = home.start_named_fake("worker", &[]);
     home.start_named_fake("other", &[]);
     let worker_address = address(&home, &worker.id);
+    let original = home.inspect_agent(&worker_address);
+    let reference = &original["agent"]["reference"];
     let mut agents = DaemonTestClient::open(&home);
     agents.hello("terminal", DAEMON_API_VERSIONS, json!({}));
     let watch =
@@ -438,7 +440,7 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
             .as_u64()
             .unwrap();
     assert_eq!(
-        home.run_facade_ok(&["rename", "worker", "  Neo  "]),
+        home.run_facade_ok(&["rename", &worker_address, "  Neo  "]),
         format!("Renamed \"worker\" to \"Neo\" ({worker_address}).\n")
     );
     let updated = |name: &str| {
@@ -458,6 +460,11 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
             .is_some_and(|row| table.cell(row, "REF") == worker_address),
         "{table:?}"
     );
+    let shell_readback = home.run_facade_ok(&["status", &worker_address]);
+    assert_eq!(
+        shell_readback.lines().next().unwrap(),
+        format!("Neo ({worker_address})")
+    );
     let sent =
         tools_of(&home, &worker.id).call("send_message", json!({ "to": "other", "text": "hi" }));
     assert_eq!(sent["status"], "success", "{sent}");
@@ -476,11 +483,28 @@ fn rename_trims_a_name_and_gives_a_blank_one_a_default() {
     );
     assert_eq!(home.agent_record("a1").unwrap()["name"], "Neo");
 
+    let chosen = agents.call_ok(
+        "agent.rename",
+        json!({ "target": reference, "name": "Renamed over the API" }),
+    );
+    assert_eq!(chosen["agent"]["reference"], *reference, "{chosen}");
+    assert_eq!(chosen["agent"]["name"], "Renamed over the API", "{chosen}");
+    let read_back = agents.call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(read_back["agent"]["reference"], *reference, "{read_back}");
+    assert_eq!(read_back["agent"]["address"], worker_address, "{read_back}");
+    assert_eq!(
+        read_back["agent"]["name"], "Renamed over the API",
+        "{read_back}"
+    );
+    assert_eq!(read_back["agent"]["pid"], worker.pid, "{read_back}");
     let renamed = agents.call_ok("agent.rename", json!({ "target": "a1", "name": " " }));
     let name = renamed["agent"]["name"]
         .as_str()
         .expect("the replacement name");
-    assert!(!name.is_empty() && name != "Neo", "{renamed}");
+    assert!(
+        !name.is_empty() && name != "Neo" && name != "Renamed over the API",
+        "{renamed}"
+    );
     assert_eq!(
         home.agent_from_watch(name).unwrap()["reference"]["agent_id"],
         "a1"

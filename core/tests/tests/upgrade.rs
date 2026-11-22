@@ -1973,6 +1973,14 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     let current = home.lock_record("daemon").unwrap();
     assert_ne!(current.0, daemon.0);
     assert_ne!(current.1, daemon.1);
+    let old_daemon = facade_base::process::ProcessIdentity {
+        pid: daemon.0 as u32,
+        birth: daemon.1,
+    };
+    assert!(
+        wait_until(LOADED_TIMEOUT, || !alive(&old_daemon)),
+        "the old Daemon is still live: {old_daemon:?}"
+    );
     assert_eq!(keeper(&home), keeper_before);
     assert_eq!(process_identity(agent.pid), agent.process);
     let inspected = reconnected.call_ok("agent.inspect", json!({ "target": reference }));
@@ -1994,16 +2002,54 @@ fn a_higher_v1_build_keeps_the_process_session_and_receipt_through_takeover() {
     let repeated = reconnected.call_ok("agent.send", send);
     assert_eq!(repeated["id"], receipt["id"], "{repeated}");
     assert_eq!(repeated["repeated"], true, "{repeated}");
+    assert_eq!(repeated["message"], receipt["message"], "{repeated}");
+    assert_eq!(receipt["recipient"]["reference"], reference, "{receipt}");
+    for key in ["reference", "address", "name", "cli"] {
+        assert_eq!(
+            repeated["recipient"][key], receipt["recipient"][key],
+            "{repeated}"
+        );
+    }
     let message_id = receipt["message"]["message_id"].as_str().unwrap();
+    let original = format!(
+        "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
+    );
+    assert_eq!(home.submitted_messages(), [original.clone()]);
+    let fresh_text = "fresh message after hot takeover";
+    let fresh = reconnected.call_ok(
+        "agent.send",
+        json!({
+            "to": reference, "text": fresh_text, "request_id": "qa-v1-takeover-fresh",
+        }),
+    );
+    let delivery = &fresh["message"]["delivery"];
+    assert_eq!(delivery["status"], "success", "{fresh}");
+    assert_eq!(delivery["text_written"], "full", "{fresh}");
+    assert_eq!(delivery["enter_written"], true, "{fresh}");
+    assert_eq!(fresh["recipient"]["reference"], reference, "{fresh}");
+    assert_eq!(fresh["message"]["text"], fresh_text, "{fresh}");
+    let fresh_id = fresh["message"]["message_id"].as_str().unwrap();
+    assert_ne!(fresh["id"], receipt["id"], "{fresh}");
     assert_eq!(
         home.submitted_messages(),
-        [format!(
-            "📨 Message from the command line · {message_id}\nreceipt before the live takeover"
-        )]
+        [
+            original,
+            format!("📨 Message from the command line · {fresh_id}\n{fresh_text}")
+        ]
     );
+    assert_eq!(process_identity(agent.pid), agent.process);
     println!(
-        "daemon {daemon:?} -> {current:?}, keeper {keeper_before:?}, CLI {:?}, receipt {}",
-        agent.process, receipt["id"]
+        "Facade hot takeover evidence {}",
+        json!({
+            "from_build": CURRENT, "to_build": next_build,
+            "daemon_api_version": DAEMON_API_VERSIONS[0],
+            "daemon_before": old_daemon,
+            "daemon_after": {"pid": current.0, "birth": current.1},
+            "keeper": {"pid": keeper_before.pid, "birth": keeper_before.birth},
+            "cli": {"pid": agent.process.pid, "birth": agent.process.birth},
+            "reference": reference, "session": session,
+            "receipt": receipt["id"], "fresh_receipt": fresh["id"],
+        })
     );
 }
 

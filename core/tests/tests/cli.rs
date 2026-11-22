@@ -307,8 +307,13 @@ fn detached_start_names_the_running_agent() {
 #[test]
 fn agent_list_inspect_and_status_agree_on_the_record() {
     let home = TestHome::new("agentviews");
-    let worker = home.start_fake("worker");
+    assert_status_starts_nothing(&home);
+    let worker = home.start_fake_with("worker", &[("FAKECLI_STATUS", "1")]);
     assert!(wait_for_screen_text(&home, &worker.id, "❯"));
+    assert_status_shows_running(&home);
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .inspect_agent(&worker.address)["agent"]["state"]
+        == "idle"));
     let record = home.agent_record(&worker.id).unwrap();
     let listed = home.agent_list();
     let row = &listed["agents"][0];
@@ -330,11 +335,19 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
     ] {
         assert_eq!(agent[key], record[key], "{inspected}");
     }
+    let selected = home.inspect_agent(&worker.address);
+    let reference = &record["reference"];
+    assert_eq!(selected["agent"]["reference"], *reference, "{selected}");
+    assert_eq!(selected["agent"]["address"], worker.address, "{selected}");
+    assert_eq!(selected["agent"]["state"], "idle", "{selected}");
+    assert_eq!(selected["agent"]["process"], "running", "{selected}");
+    assert_eq!(selected["agent"]["pid"], worker.pid, "{selected}");
+    assert!(selected.get("attachments").is_none(), "{selected}");
     let table = home.list_table();
     let row = table.row("NAME", "worker").expect("the active worker");
     assert_eq!(table.cell(row, "REF"), worker.address);
     assert_eq!(table.cell(row, "WORKING DIRECTORY"), agent["cwd"]);
-    let detail = home.run_facade_ok(&["status", &worker.id]);
+    let detail = home.run_facade_ok(&["status", &worker.address]);
     assert_eq!(
         detail.lines().next().unwrap(),
         format!("worker ({})", worker.address)
@@ -349,6 +362,46 @@ fn agent_list_inspect_and_status_agree_on_the_record() {
         Some(worker.pid.to_string().as_str()),
         "{detail}"
     );
+    assert_eq!(status_field(&detail, "State"), Some("Idle"), "{detail}");
+
+    let mut terminal = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", &worker.address]),
+        100,
+        30,
+    );
+    assert!(
+        terminal.wait_for(LOADED_TIMEOUT, |screen| screen.contains("❯")),
+        "{}",
+        terminal.text()
+    );
+    let expected = json!([{ "kind": "shell", "machine_id": reference["machine_id"] }]);
+    let mut wire = connect(&home);
+    let viewed = wire.call_ok("agent.inspect", json!({ "target": reference }));
+    assert_eq!(viewed["agent"]["reference"], *reference, "{viewed}");
+    assert_eq!(viewed["agent"]["address"], worker.address, "{viewed}");
+    assert_eq!(viewed["agent"]["pid"], worker.pid, "{viewed}");
+    assert_eq!(viewed["agent"]["state"], "idle", "{viewed}");
+    assert_eq!(viewed["attachments"], expected, "{viewed}");
+    let attached = home.run_facade_ok(&["status", &worker.address]);
+    let (_, machine) = worker.address.rsplit_once('@').expect("machine in address");
+    let shown = format!("Shell ({machine})");
+    assert_eq!(
+        status_field(&attached, "Attached in"),
+        Some(shown.as_str()),
+        "{attached}"
+    );
+    terminal.send(b"\x1d");
+    assert!(
+        terminal
+            .wait_exit(LOADED_TIMEOUT)
+            .is_some_and(|status| status.success())
+    );
+    assert!(wait_until(LOADED_TIMEOUT, || home
+        .inspect_agent(&worker.address)
+        .get("attachments")
+        .is_none()));
+    assert_eq!(process_identity(worker.pid), worker.process);
 }
 
 /// CLI arguments and a name can begin with a dash, even when a word spells an option of Facade.
@@ -613,6 +666,10 @@ fn machine_list_and_remove_on_a_lone_machine() {
 #[test]
 fn status_on_an_empty_home_starts_nothing() {
     let home = TestHome::new("statusempty");
+    assert_status_starts_nothing(&home);
+}
+
+fn assert_status_starts_nothing(home: &TestHome) {
     let version = env!("CARGO_PKG_VERSION");
     let (out, err, code) = said(&home.run_facade(&["status"]));
     assert_eq!((err.as_str(), code), ("", Some(0)));
@@ -649,10 +706,14 @@ fn status_on_an_empty_home_starts_nothing() {
 fn status_shows_a_running_facade() {
     let home = TestHome::new("statusrunning");
     home.start_fake("w1");
+    assert_status_shows_running(&home);
+}
+
+fn assert_status_shows_running(home: &TestHome) {
     let hello = home.hello_result().unwrap();
     let daemon = hello["pid"].as_i64().unwrap();
     let keeper = hello["keeper"]["pid"].as_i64().unwrap();
-    let local = connect(&home).call_ok("machine.list", json!({}))["machines"][0].clone();
+    let local = connect(home).call_ok("machine.list", json!({}))["machines"][0].clone();
     let name = local["name"].as_str().unwrap();
     let version = env!("CARGO_PKG_VERSION");
     let (out, err, code) = said(&home.run_facade(&["status"]));
@@ -689,7 +750,7 @@ fn status_shows_a_running_facade() {
         Some(format!("Add \"{}\" as a stdio server.", launcher.display()).as_str()),
         "{out}"
     );
-    let result = connect(&home).call_ok("daemon.status", json!({}));
+    let result = connect(home).call_ok("daemon.status", json!({}));
     assert_eq!(result["home"], home.path.to_str().unwrap());
     assert_eq!(
         result["settings_file"],
