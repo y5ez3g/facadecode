@@ -660,31 +660,69 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		if (!RUST && started.data.prompt?.path === 'post_start') {
 			await script(alias, [{ tool: 'read_messages', arguments: { all: true }, until: 'after startup', wait: 30_000 }]);
 		}
-		const sending = await script(alias, [
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello from your creator.\nTwo lines, one message.' } },
+		const greeting = 'Hello from your creator.\nTwo lines, one message.';
+		const forbidden = 'Second message.';
+		const drafting: Step[] = [
+			{ tool: 'send_message', arguments: { to: '$child', text: greeting } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Two lines, one message.' },
 			// A draft left in its box: the next message never goes over it, waiting for it within its thirty seconds (RULES-1.4, 1.5)
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'half-written' } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'half-written' },
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Second message.' }, ...RUST ? {} : { save: { second: 'data.message_id' } } },
-			{ tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } }
-		]);
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'half-written' }
+		];
+		const askHuman: Step = { tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } };
 
 		if (RUST) {
-			// Core's results: a send answers how it went in, a refused one why (MCP-1.2, RULES-1.4, 1.5)
-			const [delivered, held, human] = [0, 1, 2].map(nth => sending.content('send_message', nth));
+			const drafted = await script(alias, drafting);
+			const delivered = drafted.content('send_message');
 			await expectSent(delivered, childAlias, started.data.id);
 			assert.strictEqual(delivered.data.delivery, 'typed_into_input', JSON.stringify(delivered));
-			assert.ok(received(childAlias).some(each => each.includes('Hello from your creator.\nTwo lines, one message.')), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
-			assert.ok(JSON.stringify(sending.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
-			assert.deepStrictEqual([held?.status, held?.reason], ['failure', 'input_draft'], JSON.stringify(held));
+			assert.ok(received(childAlias).some(each => each.includes(greeting)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
+			assert.ok(JSON.stringify(drafted.content('read_screen')).includes('Two lines, one message.'), 'its screen shows the message');
+			const inspectInput = async () => (await coreCall(process.env.FACADE_HOME!, 'agent.inspect', { target: started.data.id })).input;
+			const draft = await until('Core to recognize the listener’s draft', async () => {
+				const input = await inspectInput();
+				return input.state === 'draft' ? input : undefined;
+			}, 10_000);
+			const rawBytes = () => fs.readFileSync(`${RECORD}.bytes.${childAlias}`);
+			const before = rawBytes();
+			assert.ok(before.includes('half-written'), 'the listener received the controlled draft');
+			const submitted = received(childAlias);
+			assert.ok(submitted.every(text => !text.includes('half-written')), 'the held draft has never been submitted');
+			const sending = await script(alias, [
+				{ tool: 'send_message', arguments: { to: '$child', text: forbidden } },
+				askHuman
+			]);
+			const held = sending.content('send_message');
+			const human = sending.content('send_message', 1);
+			assert.strictEqual(held?.status, 'failure', JSON.stringify(held));
+			if (held.reason === 'timeout') {
+				// The deadline can win before the typist reports the blocking state (RULES-1.5).
+				const recipient = childAlias.slice(1);
+				assert.strictEqual(held.message, `the deadline passed before ${recipient} took the message; nothing was typed; it was withdrawn from ${recipient}'s inbox, so it is safe to send it again later`);
+			} else {
+				assert.strictEqual(held.reason, 'input_draft', JSON.stringify(held));
+			}
 			assert.strictEqual(human?.status, 'failure', JSON.stringify(human));
 			assert.strictEqual(human?.data?.window_delivery, undefined);
-			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
-			await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
+			assert.deepStrictEqual(rawBytes(), before, 'no terminal bytes reached the listener during the blocked send');
+			assert.strictEqual((await inspectInput()).state, 'draft', 'Core still sees the original draft');
+			const cleared = await script(alias, [
+				{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
+				{ tool: 'read_screen', arguments: { agent: '$child' }, untilAbsent: 'half-written' }
+			]);
+			assert.strictEqual(cleared.content('press_keys')?.status, 'success');
+			const screenAfterClear = cleared.content('read_screen');
+			assert.strictEqual(screenAfterClear?.status, 'success', JSON.stringify(screenAfterClear));
+			assert.ok(!screenAfterClear.data.text.includes('half-written'), 'the draft cleared');
 			await new Promise(resolve => setTimeout(resolve, 8_000));
-			assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'a failed message is never typed later');
-			assert.ok(received(childAlias).every(each => !each.includes('half-written')), 'the person\'s draft was never submitted');
+			assert.deepStrictEqual(rawBytes(), Buffer.concat([before, Buffer.from([0x15])]), 'only Ctrl+U reached the listener after the failed send');
+			assert.deepStrictEqual(received(childAlias), submitted, 'clearing the draft did not submit any input');
+			const inbox = (await script(childAlias, [{ tool: 'read_messages', arguments: { last: 10 } }])).content('read_messages');
+			assert.strictEqual(inbox?.status, 'success', JSON.stringify(inbox));
+			const texts = (inbox.data.messages as { text: string }[]).map(message => message.text);
+			assert.ok(texts.includes(greeting), 'the listener’s history contains the delivered message');
+			assert.ok(!texts.includes(forbidden), 'the withdrawn message is absent from the listener’s history');
+			console.log(`      Rust ${CLI} draft: ${draft.state}, ${held.reason}, zero bytes while blocked, only Ctrl+U afterward, no submission or inbox entry`);
 			// An input its reader cannot recognize: the send fails within its thirty seconds
 			fs.writeFileSync(`${RECORD}.quirks.${childAlias}`, JSON.stringify({ garble: true }));
 			const third = (await script(alias, [
@@ -698,6 +736,11 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			await vscode.commands.executeCommand('facade.stopAgent', { run_id: card.runId });
 			return;
 		}
+		const sending = await script(alias, [
+			...drafting,
+			{ tool: 'send_message', arguments: { to: '$child', text: forbidden }, save: { second: 'data.message_id' } },
+			askHuman
+		]);
 		const sent = sending.content('send_message');
 		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
 		assert.deepStrictEqual([sent.effects.outcome, sent.effects.text_written, sent.effects.enter_written, sent.data.disposition], ['confirmed', 'full', true, 'submitted_to_cli']);
