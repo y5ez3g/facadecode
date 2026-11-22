@@ -63,35 +63,48 @@ jobs:
           rustup toolchain install
           rustup target add x86_64-unknown-linux-musl
           docker -H unix:///var/run/docker.sock version --format '{{.Server.Version}}'
-      - name: Build the candidate editor and Core fixtures
-        working-directory: extension
-        run: |
-          npm ci
-          npm run compile
-          npm run bundle
-          node scripts/build-it.mjs
-      - name: Download the pinned desktop editor and Remote SSH inputs
+      - name: Download and verify pinned Remote SSH inputs
         run: |
           assets="$RUNNER_TEMP/facade-remote-assets"
           mkdir "$assets"
           server=ci/fixtures/remote-ssh/official-server-linux-x64.json
           version=$(jq -er .name "$server")
+          jq -er '
+            if length != 3 or any(.[];
+              ((.id // "") | test("^[a-z0-9.-]+$") | not) or
+              ((.version // "") | test("^[0-9]+\\.[0-9]+\\.[0-9]+$") | not) or
+              ((.asset // "") | startswith("https://") | not) or
+              ((.sha256 // "") | test("^[0-9a-f]{64}$") | not)) then
+              error("expected three Marketplace packages with HTTPS asset URLs and SHA-256 pins")
+            else .[] | [.id, .version, .asset, .sha256] | @tsv end
+          ' ci/fixtures/remote-ssh/pinned-marketplace.json > "$assets/providers.tsv"
           fetch() {
+            printf 'Downloading %s\n' "$1"
             curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
               --connect-timeout 10 --max-time 180 --output "$assets/$1" "$2"
+            printf '%s  %s\n' "$3" "$assets/$1" | sha256sum --check
           }
-          fetch "vscode-server-linux-x64-$version.tar.gz" "$(jq -er .url "$server")"
-          jq -er '.[] | [.id, .version, .url] | @tsv' ci/fixtures/remote-ssh/pinned-marketplace.json > "$assets/providers.tsv"
-          while IFS=$'\t' read -r id release url; do
-            fetch "$id-$release.vsix" "$url"
+          fetch "vscode-server-linux-x64-$version.tar.gz" "$(jq -er .url "$server")" "$(jq -er .sha256hash "$server")"
+          while IFS=$'\t' read -r id release url checksum; do
+            fetch "$id-$release.vsix" "$url" "$checksum"
           done < "$assets/providers.tsv"
-          cd extension
+      - name: Install editor build dependencies and the pinned desktop editor
+        working-directory: extension
+        run: |
+          npm ci
+          version=$(jq -er .name ../ci/fixtures/remote-ssh/official-server-linux-x64.json)
           node - "$version" "$RUNNER_TEMP/facade-remote-editor.txt" <<'JS'
           const fs = require('node:fs');
           require('@vscode/test-electron').downloadAndUnzipVSCode(process.argv[2]).then(executable => {
             fs.writeFileSync(process.argv[3], executable);
           }).catch(error => { console.error(error); process.exitCode = 1; });
           JS
+      - name: Build the candidate editor and Core fixtures
+        working-directory: extension
+        run: |
+          npm run compile
+          npm run bundle
+          node scripts/build-it.mjs
       - name: Observe ownership in the actual Remote SSH workspace
         run: |
           ci/check_remote_editor.sh "$RUNNER_TEMP/facade-remote-assets" \
