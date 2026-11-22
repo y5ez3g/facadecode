@@ -26,7 +26,11 @@ pub(super) fn open(cols: u16, rows: u16) -> Result<Terminal, ErrorBody> {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    let opened = openpty(&window, None).map_err(|errno| no_terminal(errno.into()))?;
+    #[cfg(target_os = "macos")]
+    let opened = retry_macos_pty_open(|| openpty(&window, None));
+    #[cfg(not(target_os = "macos"))]
+    let opened = openpty(&window, None);
+    let opened = opened.map_err(|errno| no_terminal(errno.into()))?;
     let terminal = Terminal {
         master: opened.master,
         slave: opened.slave,
@@ -42,6 +46,16 @@ pub(super) fn open(cols: u16, rows: u16) -> Result<Terminal, ErrorBody> {
         )
     })?;
     Ok(terminal)
+}
+
+/// XNU can return ENXIO if a slot is freed after /dev/ptmx selects a new minor.
+/// Open a fresh pair once. A failed openpty leaves no descriptors or spawned process.
+#[cfg(any(target_os = "macos", test))]
+fn retry_macos_pty_open<T>(mut allocate: impl FnMut() -> nix::Result<T>) -> nix::Result<T> {
+    match allocate() {
+        Err(nix::errno::Errno::ENXIO) => allocate(),
+        result => result,
+    }
 }
 
 /// Cooked mode with echo, signals from Ctrl+C and friends, CR/NL translation and UTF-8 input:
@@ -154,6 +168,35 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::errno::Errno;
+
+    #[test]
+    fn macos_pty_allocation_retries_enxio_once() {
+        let mut recovered = [Err(Errno::ENXIO), Ok(1)].into_iter();
+        assert_eq!(
+            retry_macos_pty_open(|| recovered.next().expect("at most two allocation attempts")),
+            Ok(1)
+        );
+        assert_eq!(recovered.next(), None);
+
+        let mut failed = [Err(Errno::ENXIO), Err(Errno::EMFILE), Ok(1)].into_iter();
+        assert_eq!(
+            retry_macos_pty_open(|| failed.next().expect("at most two allocation attempts")),
+            Err(Errno::EMFILE)
+        );
+        assert_eq!(failed.next(), Some(Ok(1)));
+    }
+
+    #[test]
+    fn macos_pty_allocation_keeps_other_results() {
+        for result in [Ok(1), Err(Errno::EMFILE)] {
+            let mut attempt = Some(result);
+            assert_eq!(
+                retry_macos_pty_open(|| attempt.take().expect("only one allocation attempt")),
+                result
+            );
+        }
+    }
 
     #[test]
     fn a_terminal_takes_utf8_lines_with_the_usual_control_keys() {
