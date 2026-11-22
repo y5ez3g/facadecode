@@ -444,9 +444,11 @@ leave the current owner, both running agents and their terminals intact. The cur
 changes only its selected agent.
 The Linux x64 PR package job also installs the candidate Core archive with default activation.
 It starts and queries a fake CLI through the installed Shell, checks the installed MCP relay,
-and proves two bad digests leave the install and the same live agent usable. The separate
-native receipt binds the archive and checksum file to the reviewed tree and run attempt. It
-records Linux x64 coverage for these two rows. The other targets and signed candidate are
+and proves two bad digests leave the install and the same live agent usable. The verifier
+reads the candidate archive and checksum file again, checks the installed programs and
+live identities, and reconciles each refusal with the unchanged state and later screen output.
+The completion marker binds those observations and cleanup to the reviewed tree and run
+attempt. It records Linux x64 coverage for these two rows. The other targets and signed candidate are
 tracked in their native and release lanes.
 
 The Linux x64 Core job starts a separate loopback OpenSSH peer with disposable keys and homes.
